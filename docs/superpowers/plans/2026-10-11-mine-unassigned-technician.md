@@ -1458,7 +1458,7 @@ export async function setTaskAssigneeAction(accountId: string, taskId: string, a
     - `assignContactsAction` from a Technician returns `{ ok: false, error: "assign.refused" }` and never calls `assignContacts` (mutation: drop the role check -> FAILS);
     - from Staff, calls `assignContacts(requestDb, acct, ids, target, clerkUserId)` and returns its previous list; more than 500 ids -> `assign.failed` without a call; a non-UUID id -> `assign.failed`;
     - an RLS/trigger refusal (`assignContacts` rejects with an error whose message contains `row-level security` or code `42501`) maps to `assign.refused`, anything else to `assign.failed`, logged with `loggableError`;
-    - `undoAssignContactsAction` groups `previous` by assignee and calls `assignContacts` once per group;
+    - `undoAssignContactsAction` (CORRECTED 2026-10-11 after Task 2's review): from a Technician -> `assign.refused` with no call; from Staff, calls `undoAssignContacts(requestDb, acct, previous, clerkUserId)` ONCE with the full `PreviousAssignee[]` passed through whole (`contactId`, `assignee`, `target`, `movedTaskIds`) — never regrouped into `assignContacts` calls (mutation: regroup by assignee and call `assignContacts` -> FAILS); `previous` comes from the browser, so a non-array, more than 500 entries, or any non-UUID `contactId`/`assignee`/`target`/`movedTaskIds` element -> `assign.failed` without a call; a `not a member` rejection maps to `assign.failed`, an RLS/42501 one to `assign.refused`;
     - `createContactAction` passes `assignedTo: personId` (the caller's `readPersonId`), and for a Technician passes `serviceDb()` as `flagDb` and then calls `flagMatchesOf(serviceDb(), acct, newId)` (only when `existing` is false); a `flagMatchesOf` failure is logged and the action still returns `created`. For Staff, `flagDb` is the request client and `flagMatchesOf` is not called.
   - `contacts/[contactId]/actions.test.ts`: `addTaskAction` passes `assignedTo: await taskAssigneeFor(db, acct, contactId, personId)`.
   - `tasks/actions.test.ts`: `setTaskAssigneeAction` from a Technician -> `assign.refused`; from Staff, handing a task whose contact is NOT assigned to the target to a member whose role is `technician` -> `assign.customerFirst` with no write (mutation: skip the check -> FAILS); handing a contact-less task to a Technician is allowed; success returns `previous`.
@@ -1520,14 +1520,29 @@ export async function assignContactsAction(accountId: string, contactIds: string
   }
 }
 
-export async function undoAssignContactsAction(accountId: string, previous: PreviousAssignee[]) {
-  const groups = new Map<string | null, string[]>();
-  for (const p of Array.isArray(previous) ? previous : []) groups.set(p.assignee, [...(groups.get(p.assignee) ?? []), p.contactId]);
-  for (const [assignee, ids] of groups) {
-    const r = await assignContactsAction(accountId, ids, assignee);
-    if (!r.ok) return { ok: false as const, error: r.error };
+// CORRECTED 2026-10-11 (Task 2 review): Undo is exact only through undoAssignContacts, which moves back
+// ONLY movedTaskIds and acts only while each customer is still with the call's `target`. Regrouping into
+// assignContacts would pull the new holder's own earlier tasks over (Task 2 review m1).
+const uuidOrNull = (v: unknown) => v === null || (typeof v === "string" && UUID.test(v));
+function isPrevious(p: unknown): p is PreviousAssignee {
+  const x = p as PreviousAssignee;
+  return !!x && typeof x.contactId === "string" && UUID.test(x.contactId) && uuidOrNull(x.assignee) && uuidOrNull(x.target)
+    && Array.isArray(x.movedTaskIds) && x.movedTaskIds.every((id) => typeof id === "string" && UUID.test(id));
+}
+export async function undoAssignContactsAction(accountId: string, previous: PreviousAssignee[]): Promise<{ ok: true } | { ok: false; error: AssignError }> {
+  const { userId, role } = await requireAccountAccess(accountId);
+  if (role === "technician") return { ok: false, error: "assign.refused" };
+  if (!Array.isArray(previous) || previous.length === 0 || previous.length > MAX_ASSIGN || !previous.every(isPrevious)) {
+    return { ok: false, error: "assign.failed" };
   }
-  return { ok: true as const };
+  try {
+    await undoAssignContacts(await dbForRequest(), accountId, previous, userId);
+    revalidatePath(contactsPath(accountId));
+    return { ok: true };
+  } catch (e) {
+    console.error(`undoAssignContactsAction: account ${accountId}: ${loggableError(e)}`);
+    return { ok: false, error: isRefusal(e) ? "assign.refused" : "assign.failed" };
+  }
 }
 ```
 
@@ -1619,6 +1634,7 @@ export type AssigneeOption = { userId: string; label: string };
 const NONE = "__unassigned__";
 
 /** Inline assignee (DESIGN.md Record views + rule 6): pick, saved at once, Undo toast. Read-only for a Technician (M4). */
+> **CORRECTED 2026-10-11 (orchestrator, after Task 2 review):** `AssigneeField`'s `save` contract becomes `save: (next: string | null) => Promise<{ ok: true; undo: null | (() => Promise<{ ok: true } | { ok: false; error: AssignError }>) } | { ok: false; error: AssignError }>`. `undo: null` means nothing changed: no toast. The caller builds the undo: for a customer, `undo: r.previous.length ? () => undoAssignContactsAction(accountId, r.previous) : null`; for a task (`setTaskAssigneeAction` returns `previous: string | null`), `undo: () => setTaskAssigneeAction(accountId, taskId, r.previous)` when `r.previous !== next`, else `null`. The toast's Undo calls `undo()`; tests pin both callers. This supersedes the `save(previous)` Undo wording in this task.
 export function AssigneeField({ label, value, options, readOnly, save }: {
   label: string; value: string | null; options: AssigneeOption[]; readOnly: boolean;
   save: (next: string | null) => Promise<{ ok: true; previous: string | null } | { ok: false; error: AssignError }>;
@@ -1683,7 +1699,7 @@ export function WhoFilter({ base, current, showMine, params }: { base: string; c
 `params` excludes `before` (a filter change returns to page one) and keeps `q`, `sort` and `dir`. Check `@/lib/utils` exports `cn` (the contacts page imports it).
 
 - [ ] **Step 5: Wire them in.**
-  - Contact drawer and record page: an "Assigned to" row (`m["assign.field.label"]`) in the same `grid-cols-[92px_minmax(0,1fr)]` shape `SourceField` uses, rendering `AssigneeField` with `save={async (next) => { const r = await assignContactsAction(accountId, [contactId], next); return r.ok ? { ok: true, previous: r.previous[0]?.assignee ?? null } : r; }}`.
+  - Contact drawer and record page: an "Assigned to" row (`m["assign.field.label"]`) in the same `grid-cols-[92px_minmax(0,1fr)]` shape `SourceField` uses, rendering `AssigneeField`. CORRECTED 2026-10-11 (Task 2 review): `assignContacts` returns only the customers it CHANGED, so re-picking the current holder returns `previous = []` — that means "nothing changed": no Undo toast, and never record `previous: null` (whose Undo would unassign the customer). The field's Undo must call `undoAssignContactsAction(accountId, previous)` with the returned `PreviousAssignee[]` passed through whole (including `target` and `movedTaskIds`) — never replay `save(previousAssignee)`, which goes back through `assignContacts` and pulls the new holder's own earlier tasks over. Shape: `save={async (next) => { const r = await assignContactsAction(accountId, [contactId], next); return r.ok ? { ok: true, previous: r.previous } : r; }}` with `AssigneeField` toasting "Assigned to {name}." + Undo only when `previous.length > 0`, Undo calling `undoAssignContactsAction(accountId, previous)`. Test both: re-pick the current holder -> no toast, no undo call; Undo after a real change -> `undoAssignContactsAction` called with the exact array (mutation: Undo calls `assignContactsAction` -> FAILS).
   - Task rows (contact record's task list and the To do list): `AssigneeField` with `setTaskAssigneeAction(accountId, taskId, next)`; read-only for a Technician.
   - Bulk bar: an "Assign to…" `DropdownMenu` (`components/ui/dropdown-menu.tsx`) beside the tag controls, shown when `canAssign`; ghost button (rule 8: the bar has no primary).
   - Contacts, To do and Conversations pages: `WhoFilter` above the list when `canAssign`; empty states per Step 2; a Technician's empty Contacts uses `assign.empty.technician`.
