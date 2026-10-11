@@ -6,6 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { InlineField } from "./inline-field";
 import { LANGUAGE_OPTIONS } from "@/lib/i18n/language-options";
+import { formatDateUTC } from "@/lib/format";
+import { m } from "@/lib/messages";
 
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "inline-field.tsx"), "utf8");
 const save = async () => ({ ok: true as const });
@@ -68,7 +70,7 @@ describe("InlineField delegates Undo and the saved view to lib/contacts/inline-s
     expect(src).not.toMatch(/commitInlineUndo/);
   });
   it("shows the server's stored spelling and its message (mutation: show the typed text -> FAILS)", () => {
-    expect(src).toMatch(/const view = inlineSavedView\(norm\.value, label, result\);/);
+    expect(src).toMatch(/const view = inlineSavedView\(norm\.value, label, result, locale\);/);
     expect(src).toMatch(/committed\.current = view\.shown;\s*setShown\(view\.shown\);/);
   });
 });
@@ -106,5 +108,35 @@ describe("InlineField reports every editing change through onEditingChange", () 
     expect(src).toContain("const [editing, setEditingState] = useState(false);");
     expect(src.match(/setEditingState\(/g)).toHaveLength(1);
     expect(src).toContain("const setEditing = (next: boolean) => { setEditingState(next); onEditingChange?.(next); };");
+  });
+});
+
+describe("InlineField's rule arm, date display and locale (places spec §8)", () => {
+  const html = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(createElement(InlineField, { label: "Dirección", value: null, save, rule: { kind: "text", max: 300, required: false }, ...props } as never));
+
+  it("at rest a date field prints the date in the reader's language, never the stored YYYY-MM-DD (mutation: ignore display -> FAILS)", () => {
+    const en = html({ label: "Installed", value: "2019-03-03", rule: { kind: "date", required: false }, inputType: "date", display: "date" });
+    expect(en).toContain(`>${formatDateUTC("2019-03-03", "en")}</button>`);
+    expect(en).not.toContain(">2019-03-03<");
+    const es = html({ label: "Instalado", value: "2019-03-03", rule: { kind: "date", required: false }, inputType: "date", display: "date", locale: "es" });
+    expect(es).toContain(`>${formatDateUTC("2019-03-03", "es")}</button>`);
+  });
+  it("locale es: the accessible name and the empty text are Spanish (mutation: read m[...] without the locale -> FAILS)", () => {
+    const out = html({ locale: "es" });
+    expect(out).toContain(`>${m["inline.empty.es"]}</button>`);
+    expect(out).toContain(`aria-label="${m["inline.edit.es"].replace("{label}", "Dirección")}: ${m["inline.empty.es"]}"`);
+  });
+  it("no locale is English, as every existing caller expects", () => {
+    expect(html({})).toContain('aria-label="Edit Dirección: Add…"');
+  });
+});
+
+describe("InlineField multiline at rest keeps its line breaks", () => {
+  const html = (props: Record<string, unknown>) =>
+    renderToStaticMarkup(createElement(InlineField, { label: "How to get there", value: "Past the canal\nGate code 1234", save, rule: { kind: "text", max: 1000, required: false }, ...props } as never));
+  it("a multiline field's button preserves the typed line breaks, a single-line one does not need to (mutation: drop the multiline whitespace class -> FAILS)", () => {
+    expect(html({ inputType: "multiline" })).toMatch(/<button[^>]*class="[^"]*\bwhitespace-pre-line\b/);
+    expect(html({})).not.toContain("whitespace-pre-line");
   });
 });

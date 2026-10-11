@@ -292,6 +292,7 @@ export const m = {
   "common.save": "Save",
   "common.cancel": "Cancel",
   "common.undo": "Undo",
+  "common.undo.es": "Deshacer",
   "common.retry": "Retry",
   "common.add": "Add",
   "common.import": "Import",
@@ -330,15 +331,30 @@ export const m = {
 
   // InlineField component (Task 4): click-to-edit for contact fields.
   // "{label}" is the field name (e.g., "Email"); the component .replace()s it.
+  // .es twins (S-02 B2): the component's own chrome follows its `locale` prop.
   "inline.saved": "{label} saved",
+  "inline.saved.es": "Guardado: {label}",
   "inline.edit": "Edit {label}",
+  "inline.edit.es": "Editar {label}",
   "inline.empty": "Add…",
+  "inline.empty.es": "Agregar…",
   "inline.crashed": "Save didn't go through — the page may be out of date. Reload and try again.",
+  "inline.crashed.es": "No se guardó; puede que la página esté desactualizada. Vuelva a cargarla e intente de nuevo.",
   // The `options` arm's own rejection (validateEnumValue) — a value typed or
   // posted that is not one of the <select>'s own <option>s, e.g. a forged
   // form post past the Language field below.
   "inline.invalidOption": "Choose one of the options shown.",
   "inline.invalidOption.es": "Elija una de las opciones mostradas.",
+  // The `rule` arm's own rejections (lib/inline-rule.ts's validateInlineRule);
+  // the server action behind a rule field runs the same check, so both say the same.
+  "inline.rule.required": "This can't be empty.",
+  "inline.rule.required.es": "Esto no puede quedar vacío.",
+  "inline.rule.tooLong": "Keep it to {max} characters.",
+  "inline.rule.tooLong.es": "Use {max} caracteres como máximo.",
+  "inline.rule.badDate": "Pick a real date.",
+  "inline.rule.badDate.es": "Elija una fecha válida.",
+  "inline.rule.future": "Pick a date that isn't in the future.",
+  "inline.rule.future.es": "Elija una fecha que no sea futura.",
 
   "accounts.title": "Companies",
   "accounts.add": "Add company",

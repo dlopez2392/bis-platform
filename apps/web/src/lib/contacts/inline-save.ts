@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import type { EditableField } from "./field-input";
 import { commitInlineUndo, type PhoneInlineUndo, type InlinePhoneUndoWrite } from "./inline-phone-undo";
 
@@ -58,13 +60,16 @@ export function planInlineUndo(a: {
  * text; and the toast. A save that changed nothing (`undoPayload` absent)
  * because the business is already on the list under another spelling says
  * so in words, rather than "saved" over a value it did not write.
+ *
+ * `locale` (default "en", so every caller that predates it reads English)
+ * picks the "saved" message's language; the "already" branch is unchanged.
  */
 export function inlineSavedView(
-  typed: string, label: string, result: { shown?: string; undoPayload?: unknown },
+  typed: string, label: string, result: { shown?: string; undoPayload?: unknown }, locale: Locale = "en",
 ): { shown: string; kind: "saved" | "already"; message: string } {
   const shown = result.shown ?? typed;
   if (result.shown !== undefined && result.undoPayload === undefined && shown !== "" && shown !== typed) {
     return { shown, kind: "already", message: m["contact.business.alreadyAs"].replace("{name}", shown) };
   }
-  return { shown, kind: "saved", message: m["inline.saved"].replace("{label}", label) };
+  return { shown, kind: "saved", message: t(m, "inline.saved", locale, { label }) };
 }
