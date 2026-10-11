@@ -125,6 +125,9 @@ export function stopTexts(ctx: TextsContext, expectNewest: string | null): Promi
 /** The Undo of "Stop texts": only that staff stop, and only while it is still the newest row. */
 export function undoStopTexts(ctx: TextsContext, eventId: string): Promise<TextsActionResult> {
   return guarded("undoStopTexts", ctx, async () => {
+    // On ctx.db, deliberately: an Undo acts only on this caller's own row (actor_id is
+    // checked below), written against ctx.contactId, the contact textsContextFor proved,
+    // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
     if (!undoable(ctx, row)) return undoExpired();
@@ -181,6 +184,9 @@ export function notAStop(ctx: TextsContext, holdEventId: string): Promise<TextsA
 /** The Undo of either: held / staff_undo, back On hold (spec §4.2), and the To-dos it closed reopened. */
 export function undoHoldDecision(ctx: TextsContext, eventId: string, reopenTaskIds: readonly string[]): Promise<TextsActionResult> {
   return guarded("undoHoldDecision", ctx, async () => {
+    // On ctx.db, deliberately: an Undo acts only on this caller's own row (actor_id is
+    // checked below), written against ctx.contactId, the contact textsContextFor proved,
+    // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     const isDecision = !!row && row.address === ctx.address
       && ((row.action === "revoked" && row.method === "free_text") || (row.action === "hold_released" && row.method === "staff"));

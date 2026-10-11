@@ -8,8 +8,10 @@ import type { SmsRecipientState, EmailRecipientState } from "./composer-state";
 /**
  * The contact page's read for the text composer (spec §6): the ledger state
  * of the contact's number and F-009's country flag — the same two facts the
- * send gate checks (gate.ts steps 4 and 5), read under the caller's own
- * client (consent_events grants `authenticated` SELECT under RLS). NEVER
+ * send gate checks (gate.ts steps 4 and 5). `db` is the ledger client
+ * (ledgerDb(), F-085 spec §7.3), passed only after getContact on the caller's
+ * own client proved the contact: consent is keyed by address, and the
+ * caller's own client would show a Technician only part of it. NEVER
  * throws: a read that fails is `unknown`, which the composer shows as its
  * error line rather than an open form (it fails closed, like the gate).
  *
@@ -36,7 +38,7 @@ export async function smsRecipientState(
 
 /**
  * The contact page's read for the EMAIL composer (spec §6, choice 22): the
- * ledger state of the contact's address, under the caller's own client.
+ * ledger state of the contact's address, on the ledger client (as above).
  * NEVER throws: a read that fails is `unknown`, which the composer states.
  */
 export async function emailRecipientState(

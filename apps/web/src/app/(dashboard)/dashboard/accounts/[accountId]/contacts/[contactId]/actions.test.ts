@@ -28,6 +28,10 @@ vi.mock("@/lib/db", () => ({
     },
   })),
 }));
+/** F-085: the ledger client completeTask's hold check takes — a stable
+ *  sentinel, told apart from the request client by identity. */
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => LEDGER }));
 const completeTask = vi.hoisted(() => vi.fn());
 const addTask = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({})));
 const getContactMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ id: "c1", custom: {} })));
@@ -54,6 +58,20 @@ describe("completeTaskAction — the timeline's 'complete' (review R3-I1)", () =
   it("any other failure still throws, as before (mutation: swallow every error → FAILS)", async () => {
     completeTask.mockRejectedValueOnce(new Error("update failed"));
     await expect(completeTaskAction("a1", form("t2"))).rejects.toThrow("update failed");
+  });
+
+  // F-085 (spec §7.3): the page decides which To-dos show Done from the
+  // ledger client (holdOpenTaskIds(…, ledgerDb())), so the Done itself must
+  // judge the hold on the SAME client. On the RLS client a Technician cannot
+  // see a hold tied to no contact: Done would close an undecided hold, or the
+  // two would disagree and the button would silently do nothing.
+  it("judges the hold on the ledger client while the task write stays on the request client, like To do's completeWorkTask (F-085; mutation: completeTask without the sixth argument → FAILS)", async () => {
+    completeTask.mockReset().mockResolvedValue(undefined);
+    await completeTaskAction("a1", form("t3"));
+    const call = completeTask.mock.calls[0] as unknown[];
+    expect(call.slice(1, 5)).toEqual(["a1", "t3", "user_1", "user"]);
+    expect(call[0]).not.toBe(LEDGER);
+    expect(call[5]).toBe(LEDGER);
   });
 });
 

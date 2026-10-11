@@ -52,7 +52,9 @@ export function emailViewOf(rows: readonly ConsentHistoryRow[], hasAddress: bool
   return { kind: "allowed", newestId: newestDecidingRow(rows)?.id ?? null };
 }
 
-/** The contact's Email row, read. THROWS on an unreadable ledger (the row shows its error line). */
+/** The contact's Email row, read. THROWS on an unreadable ledger (the row shows its error line).
+ *  `db` is the ledger client (ledgerDb(), F-085 spec §7.3), passed only after the contact was
+ *  proven on the caller's own client: the history is keyed by address, not by contact. */
 export async function readEmailView(db: SupabaseClient, accountId: string, contact: { email: string | null }): Promise<EmailView> {
   const address = emailLedgerAddress(contact.email);
   if (!address) return { kind: "no_email" };

@@ -7,6 +7,7 @@ import { renderZone } from "@/lib/zone";
 import { zonedTimeToUtc } from "@/lib/booking/slots";
 import { updateContact, getContact, addTagToContact, removeTagFromContact,
          addNote, addTask, completeTask, listCustomFields, HoldUndecidedError } from "@bis/db";
+import { ledgerDb } from "@/lib/consent/ledger-db";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 
 function ids(accountId: string, formData: FormData) {
@@ -161,7 +162,12 @@ export async function completeTaskAction(accountId: string, formData: FormData):
   const { userId } = await requireAccountAccess(accountId);
   const { path } = ids(accountId, formData);
   try {
-    await completeTask(await dbForRequest(), accountId, String(formData.get("taskId")), userId);
+    // The task write stays on the request client (RLS decides which tasks the
+    // caller may close). The hold check reads the ledger client, the same
+    // one the page's holdOpenTaskIds used to decide whether to offer Done
+    // (F-085, spec §7.3): a held number can be tied to no contact, so a
+    // Technician's own client would not see the row the task links.
+    await completeTask(await dbForRequest(), accountId, String(formData.get("taskId")), userId, "user", ledgerDb());
   } catch (e) {
     // Review R3-I1, R3-N1: a hold's To-do is closed by deciding the hold,
     // and the timeline shows a hint instead of Done for one (Task 12), so

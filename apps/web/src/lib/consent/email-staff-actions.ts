@@ -92,6 +92,9 @@ export function stopEmails(ctx: EmailContext, expectNewest: string | null): Prom
 /** The Undo of "Stop emails": only that staff member's own stop, young, still newest. */
 export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<EmailActionResult> {
   return guarded("undoStopEmails", ctx, async () => {
+    // On ctx.db, deliberately: an Undo acts only on this caller's own row (actor_id is
+    // checked below), written against ctx.contactId, the contact emailContextFor proved,
+    // so the caller's own client sees it; a row it cannot see is not theirs to undo.
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
     if (!undoable(ctx, row)) return { ok: false, error: m["contact.email.undoExpired"] };
