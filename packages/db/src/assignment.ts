@@ -13,8 +13,13 @@ import { emit } from "./events";
  */
 export type AssigneeFilter = { who: "mine"; userId: string } | { who: "unassigned" };
 export type ReleasedAssignments = { contacts: string[]; tasks: string[] };
-/** What one contact had before assignContacts, and the open task ids that call moved: exactly what undoAssignContacts takes. */
-export type PreviousAssignee = { contactId: string; assignee: string | null; movedTaskIds: string[] };
+/**
+ * One customer assignContacts CHANGED: who had it (`assignee`), who the call
+ * gave it to (`target`), and the open task ids that moved with it. Exactly
+ * what undoAssignContacts takes; it acts only while the customer is still
+ * with `target` (review residual 5).
+ */
+export type PreviousAssignee = { contactId: string; assignee: string | null; target: string | null; movedTaskIds: string[] };
 
 /** The caller's own users.id. Null for a person with no users row (the agency, A5). */
 export async function readPersonId(db: SupabaseClient, clerkUserId: string): Promise<string | null> {
@@ -55,8 +60,9 @@ function groupBy<T>(items: readonly T[], key: (t: T) => string | null): Map<stri
 
 /**
  * Sets each contact's assignee and moves that contact's OPEN tasks that were
- * the previous assignee's along with it (A4). Returns what each contact had
- * and the task ids that moved, which is exactly what undoAssignContacts takes.
+ * the previous assignee's along with it (A4). Returns one entry per customer
+ * it actually CHANGED (one already held by the target is left out, so an Undo
+ * can never touch it), which is exactly what undoAssignContacts takes.
  *
  * The order is load-bearing; it is what makes a retry heal (review I-3):
  *   1. the open tasks move (old holder -> target), one statement per old holder;
@@ -80,10 +86,10 @@ export async function assignContacts(
   if (assignee !== null) await assertMember(db, accountId, assignee);
   const { data, error } = await db.from("contacts").select("id, assigned_to").eq("account_id", accountId).in("id", [...contactIds]);
   if (error) throw new Error(`assignContacts read failed: ${error.message}`);
-  const previous: PreviousAssignee[] = ((data ?? []) as ContactRow[])
-    .map((r) => ({ contactId: r.id, assignee: r.assigned_to, movedTaskIds: [] }));
-  const changing = previous.filter((p) => p.assignee !== assignee);
-  if (changing.length === 0) return previous;
+  const changing: PreviousAssignee[] = ((data ?? []) as ContactRow[])
+    .filter((r) => r.assigned_to !== assignee)
+    .map((r) => ({ contactId: r.id, assignee: r.assigned_to, target: assignee, movedTaskIds: [] }));
+  if (changing.length === 0) return [];
 
   // 1. Tasks first, one statement per holder they are leaving.
   for (const [from, group] of groupBy(changing, (p) => p.assignee)) {
@@ -107,14 +113,17 @@ export async function assignContacts(
   for (const p of changing) {
     await emit(db, accountId, "contact.assigned", actorId, { contactId: p.contactId, from: p.assignee, to: assignee });
   }
-  return previous;
+  return changing;
 }
 
 /**
- * The Undo for assignContacts (review m1). Puts each contact back with its
- * previous assignee and moves back ONLY the task ids that call moved, and of
- * those only the ones the contact's current holder still has, so a task the
- * new holder had before the reassignment stays with them. Same tasks-first
+ * The Undo for assignContacts (review m1). Acts on a customer only while it
+ * is still with the target that call gave it to, as the removal's Undo acts
+ * only on what is still Unassigned (review residual 5): one reassigned since
+ * stays where it went. Puts each such customer back with its previous
+ * assignee and moves back ONLY the task ids that call moved, and of those only
+ * the ones the target still holds, so a task the target had before the
+ * reassignment, or one handed on since, stays where it is. Same tasks-first
  * order as assignContacts, so a retry after a partial failure finishes. A
  * previous assignee who is no longer a member of this account is refused (A5)
  * rather than given the customer back.
@@ -128,13 +137,13 @@ export async function undoAssignContacts(
   if (error) throw new Error(`undoAssignContacts read failed: ${error.message}`);
   const current = new Map(((data ?? []) as ContactRow[]).map((r) => [r.id, r.assigned_to]));
   const work = previous
-    .filter((p) => current.has(p.contactId) && current.get(p.contactId) !== p.assignee)
-    .map((p) => ({ ...p, holder: current.get(p.contactId) ?? null }));
+    .filter((p) => p.target !== p.assignee && current.has(p.contactId) && current.get(p.contactId) === p.target)
+    .map((p) => ({ ...p, holder: p.target }));
   if (work.length === 0) return;
   const restoring = groupBy(work, (w) => w.assignee);
   for (const who of restoring.keys()) if (who !== null) await assertMember(db, accountId, who);
 
-  // 1. The moved tasks, back from whoever holds the contact now.
+  // 1. The moved tasks, back from the target (the guard keeps one handed on since where it is).
   for (const w of work) {
     if (w.movedTaskIds.length === 0) continue;
     let q = db.from("tasks").update({ assigned_to: w.assignee })

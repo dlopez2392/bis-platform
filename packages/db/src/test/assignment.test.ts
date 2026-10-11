@@ -111,7 +111,7 @@ describe("assignment core (spec §8)", () => {
       const t1 = await task(db, accountId, c1, a.id, "x");
       const tOwner = await task(db, accountId, c1, owner.id, "y");
       const previous = await assignContacts(db, accountId, [c1], b.id, owner.clerk);
-      expect(previous).toEqual([{ contactId: c1, assignee: a.id, movedTaskIds: [t1] }]);
+      expect(previous).toEqual([{ contactId: c1, assignee: a.id, target: b.id, movedTaskIds: [t1] }]);
       expect(await holder(db, "contacts", c1)).toBe(b.id);
       expect(await holder(db, "tasks", t1)).toBe(b.id);
       expect(await holder(db, "tasks", tOwner)).toBe(owner.id);
@@ -121,10 +121,10 @@ describe("assignment core (spec §8)", () => {
       const b = await person(db, accountId, "u", "staff");
       const c = await contact(db, accountId, null);
       const tu = await task(db, accountId, c, null, "nobody's");
-      expect(await assignContacts(db, accountId, [c], b.id, b.clerk)).toEqual([{ contactId: c, assignee: null, movedTaskIds: [tu] }]);
+      expect(await assignContacts(db, accountId, [c], b.id, b.clerk)).toEqual([{ contactId: c, assignee: null, target: b.id, movedTaskIds: [tu] }]);
       expect(await holder(db, "contacts", c)).toBe(b.id);
       expect(await holder(db, "tasks", tu)).toBe(b.id);
-      expect(await assignContacts(db, accountId, [c], null, b.clerk)).toEqual([{ contactId: c, assignee: b.id, movedTaskIds: [tu] }]);
+      expect(await assignContacts(db, accountId, [c], null, b.clerk)).toEqual([{ contactId: c, assignee: b.id, target: null, movedTaskIds: [tu] }]);
       expect(await holder(db, "contacts", c)).toBeNull();
       expect(await holder(db, "tasks", tu)).toBeNull();
     }));
@@ -149,11 +149,64 @@ describe("assignment core (spec §8)", () => {
       const tA = await task(db, accountId, c1, a.id, "A's");
       const tB = await task(db, accountId, c1, b.id, "B's own, from before");
       const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
-      expect(previous).toEqual([{ contactId: c1, assignee: a.id, movedTaskIds: [tA] }]);
+      expect(previous).toEqual([{ contactId: c1, assignee: a.id, target: b.id, movedTaskIds: [tA] }]);
       await undoAssignContacts(db, accountId, previous, b.clerk);
       expect(await holder(db, "contacts", c1)).toBe(a.id);
       expect(await holder(db, "tasks", tA)).toBe(a.id);
       expect(await holder(db, "tasks", tB)).toBe(b.id);
+    }));
+  it("undoAssignContacts refuses to give the customer back to a previous assignee who has left, and changes nothing (A5, review I-4; mutation: drop the Undo's membership check -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "la", "technician");
+      const b = await person(db, accountId, "lb", "technician");
+      const c1 = await contact(db, accountId, a.id);
+      const tA = await task(db, accountId, c1, a.id, "A's");
+      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      const { error } = await db.from("memberships").delete().eq("account_id", accountId).eq("user_id", a.id);
+      if (error) throw error;
+      await expect(undoAssignContacts(db, accountId, previous, b.clerk)).rejects.toThrow(/not a member/);
+      expect(await holder(db, "contacts", c1)).toBe(b.id);
+      expect(await holder(db, "tasks", tA)).toBe(b.id);
+    }));
+  it("undoAssignContacts leaves a moved task that was handed to someone else since (review m9; mutation: drop the current-holder guard on the task move-back -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "ga", "technician");
+      const b = await person(db, accountId, "gb", "technician");
+      const c = await person(db, accountId, "gc", "staff");
+      const c1 = await contact(db, accountId, a.id);
+      const tA = await task(db, accountId, c1, a.id, "A's");
+      const previous = await assignContacts(db, accountId, [c1], b.id, b.clerk);
+      expect(await setTaskAssignee(db, accountId, tA, c.id, b.clerk)).toEqual({ previous: b.id });
+      await undoAssignContacts(db, accountId, previous, b.clerk);
+      expect(await holder(db, "contacts", c1)).toBe(a.id);
+      expect(await holder(db, "tasks", tA)).toBe(c.id);
+    }));
+  it("assignContacts reports only the customers it changed: in a bulk assign, one already held by the target is not in the Undo, so moving it on and undoing leaves it moved (review residual 5; mutation: return every customer read -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "ba", "technician");
+      const b = await person(db, accountId, "bb", "technician");
+      const c = await person(db, accountId, "bc", "staff");
+      const x = await contact(db, accountId, a.id);
+      const y = await contact(db, accountId, b.id);
+      const previous = await assignContacts(db, accountId, [x, y], b.id, b.clerk);
+      expect(previous).toEqual([{ contactId: x, assignee: a.id, target: b.id, movedTaskIds: [] }]);
+      await assignContacts(db, accountId, [y], c.id, c.clerk);
+      await undoAssignContacts(db, accountId, previous, b.clerk);
+      expect(await holder(db, "contacts", x)).toBe(a.id);
+      expect(await holder(db, "contacts", y)).toBe(c.id);
+    }));
+  it("undoAssignContacts acts only while the customer is still with the call's target: reassigned since, it stays where it went (review residual 5; mutation: drop the still-the-target check -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "ta", "technician");
+      const b = await person(db, accountId, "tb", "technician");
+      const c = await person(db, accountId, "tc", "staff");
+      const x = await contact(db, accountId, a.id);
+      const tX = await task(db, accountId, x, a.id, "A's");
+      const previous = await assignContacts(db, accountId, [x], b.id, b.clerk);
+      await assignContacts(db, accountId, [x], c.id, c.clerk);
+      await undoAssignContacts(db, accountId, previous, b.clerk);
+      expect(await holder(db, "contacts", x)).toBe(c.id);
+      expect(await holder(db, "tasks", tX)).toBe(c.id);
     }));
   it("assignContacts refuses a target who is a member of ANOTHER account, and changes nothing (A5, review m2; mutation: drop .eq(account_id) from the membership check -> FAILS)", () =>
     withAssignAccount(async (db, accountId) => {
