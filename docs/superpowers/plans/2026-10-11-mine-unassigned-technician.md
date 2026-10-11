@@ -1620,6 +1620,8 @@ export function WhoFilter(props: { base: string; current: Who; showMine: boolean
 
 - [ ] **Step 4: Implement the components.**
 
+> **CORRECTED 2026-10-11 (orchestrator, after Task 2 review):** `AssigneeField`'s `save` contract becomes `save: (next: string | null) => Promise<{ ok: true; undo: null | (() => Promise<{ ok: true } | { ok: false; error: AssignError }>) } | { ok: false; error: AssignError }>`. `undo: null` means nothing changed: no toast. The caller builds the undo: for a customer, `undo: r.previous.length ? () => undoAssignContactsAction(accountId, r.previous) : null`; for a task (`setTaskAssigneeAction` returns `previous: string | null`), `undo: () => setTaskAssigneeAction(accountId, taskId, r.previous)` when `r.previous !== next`, else `null`. The toast's Undo calls `undo()`; tests pin both callers. This supersedes the `save(previous)` Undo wording in this task.
+
 ```tsx
 // components/assign/assignee-field.tsx
 "use client";
@@ -1634,7 +1636,6 @@ export type AssigneeOption = { userId: string; label: string };
 const NONE = "__unassigned__";
 
 /** Inline assignee (DESIGN.md Record views + rule 6): pick, saved at once, Undo toast. Read-only for a Technician (M4). */
-> **CORRECTED 2026-10-11 (orchestrator, after Task 2 review):** `AssigneeField`'s `save` contract becomes `save: (next: string | null) => Promise<{ ok: true; undo: null | (() => Promise<{ ok: true } | { ok: false; error: AssignError }>) } | { ok: false; error: AssignError }>`. `undo: null` means nothing changed: no toast. The caller builds the undo: for a customer, `undo: r.previous.length ? () => undoAssignContactsAction(accountId, r.previous) : null`; for a task (`setTaskAssigneeAction` returns `previous: string | null`), `undo: () => setTaskAssigneeAction(accountId, taskId, r.previous)` when `r.previous !== next`, else `null`. The toast's Undo calls `undo()`; tests pin both callers. This supersedes the `save(previous)` Undo wording in this task.
 export function AssigneeField({ label, value, options, readOnly, save }: {
   label: string; value: string | null; options: AssigneeOption[]; readOnly: boolean;
   save: (next: string | null) => Promise<{ ok: true; previous: string | null } | { ok: false; error: AssignError }>;
