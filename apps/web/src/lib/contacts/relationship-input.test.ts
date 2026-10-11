@@ -23,6 +23,33 @@ describe("cleanCustomLabel", () => {
   });
 });
 
+describe("cleanCustomLabel's edge class matches 0070's CHECK (PG17 ICU en_US.UTF-8 POSIX [:space:])", () => {
+  // Every code point PG's [:space:] treats as space in that locale (production/bis-ci), so
+  // app-side cleaning never leaves something the database's CHECK (contact_relationships_custom)
+  // still calls leading/trailing space, which would otherwise surface as a misleading 23514.
+  const POSIX_SPACE_POINTS = [
+    0x0009, 0x000a, 0x000b, 0x000c, 0x000d, // U+0009-000D
+    0x001c, 0x001d, 0x001e, 0x001f, // U+001C-001F
+    0x0020, // U+0020
+    0x0085, // U+0085
+    0x00a0, // U+00A0
+    0x1680, // U+1680
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, // U+2000-200A
+    0x2028, // U+2028
+    0x2029, // U+2029
+    0x202f, // U+202F
+    0x205f, // U+205F
+    0x3000, // U+3000
+  ];
+  for (const cp of POSIX_SPACE_POINTS) {
+    const hex = `U+${cp.toString(16).toUpperCase().padStart(4, "0")}`;
+    it(`${hex} at the edges is stripped (mutation: remove U+0085 from EDGE_SPACE -> FAILS naming U+0085)`, () => {
+      const ch = String.fromCodePoint(cp);
+      expect(cleanCustomLabel(`${ch}Vecina${ch}`)).toBe("Vecina");
+    });
+  }
+});
+
 describe("parseAddInput (the server re-validates what the browser sent)", () => {
   it("accepts a well-formed add", () => expect(parseAddInput(ok)).toEqual({ ok: true, input: ok }));
   it("refuses oneself as self", () => expect(parseAddInput({ ...ok, other: { kind: "existing", contactId: S } })).toEqual({ ok: false, error: "self" }));
