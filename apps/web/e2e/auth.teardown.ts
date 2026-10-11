@@ -26,6 +26,15 @@ type ClientFixture = {
    *  SAME org, recorded into this same file rather than a sidecar of its
    *  own — see auth.setup.ts's "authenticate as staff user" test. */
   staffClerkUserId?: string;
+  /** F-085 part 1: the per-run Technician login, same shape as
+   *  staffClerkUserId above — see auth.setup.ts's "authenticate as
+   *  technician user" test. Its `memberships` row goes with the account
+   *  delete below (memberships.account_id is ON DELETE CASCADE, 0066); its
+   *  `users` row is a global person record with no account_id and is left
+   *  behind, same as every other per-run login's (Owner, Staff) already is —
+   *  not a new gap this task introduces. Only the Clerk user needs its own
+   *  delete here, same as Staff. */
+  technicianClerkUserId?: string;
 };
 
 // The `teardown` project attached to "setup" (see playwright.config.ts).
@@ -107,6 +116,17 @@ teardown("delete the client-access e2e fixture", async () => {
       await clerk.users.deleteUser(fixture.staffClerkUserId);
     } catch (e) {
       console.error(`e2e teardown: failed to delete Clerk staff user ${fixture.staffClerkUserId}: ${String(e)}`);
+    }
+  }
+  // F-085 part 1: the per-run Technician login — same optionality reasoning
+  // as staffClerkUserId above (a run that died before "authenticate as
+  // technician user" reached its own write-then-create order never recorded
+  // one).
+  if (fixture.technicianClerkUserId) {
+    try {
+      await clerk.users.deleteUser(fixture.technicianClerkUserId);
+    } catch (e) {
+      console.error(`e2e teardown: failed to delete Clerk technician user ${fixture.technicianClerkUserId}: ${String(e)}`);
     }
   }
 });
