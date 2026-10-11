@@ -1,6 +1,6 @@
 "use server";
 
-import { serviceDb, sumUnreadCount, getVoiceProfile, type SupabaseClient } from "@bis/db";
+import { serviceDb, sumUnreadCount, getVoiceProfile, hasActiveCallSince, type SupabaseClient } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { gatherSetupInputs } from "@/lib/setup/setup-inputs";
@@ -35,9 +35,18 @@ export type ShellSnapshot = {
   // the profile in hand from the `profile.enabled` gate just above it.
   //
   // `showCount` (F-085 part 1, spec §7.2): false for a Technician, whose
-  // topbar keeps the on-a-call pulse but not the account's week total.
-  presence: (VoicePresence & { personaName: string; showCount: boolean }) | null;
+  // topbar keeps the on-a-call pulse but not the account's week total. Their
+  // reply carries no `weekCount` at all (fix round 1, review I1): hiding a
+  // number the browser still receives is not refusing it.
+  presence: ShellPresence | null;
 };
+
+export type ShellPresence =
+  | (VoicePresence & { personaName: string; showCount: true })
+  | { onCall: boolean; personaName: string; showCount: false };
+
+/** The same floor getVoicePresence uses for "on a call" (an unfinished row ages out). */
+const ON_CALL_FLOOR_MS = 60 * 60 * 1000;
 
 /**
  * The shell's one background read per in-account navigation — the sidebar's
@@ -125,10 +134,10 @@ export async function getShellSnapshot(accountId: string): Promise<ShellSnapshot
   const [unreadTotal, setup, presence] = await Promise.all([
     readUnreadTotal(unreadDb, accountId),
     readSetupProgress(db, accountId, isAgency),
-    readPresence(db, accountId),
+    readPresence(db, accountId, technician),
   ]);
 
-  return { unreadTotal, setup, presence: presence ? { ...presence, showCount: !technician } : null };
+  return { unreadTotal, setup, presence };
 }
 
 async function readUnreadTotal(db: () => Promise<SupabaseClient>, accountId: string): Promise<number> {
@@ -159,11 +168,20 @@ async function readSetupProgress(
 }
 
 async function readPresence(
-  db: ReturnType<typeof serviceDb>, accountId: string,
-): Promise<(VoicePresence & { personaName: string }) | null> {
+  db: ReturnType<typeof serviceDb>, accountId: string, technician: boolean,
+): Promise<ShellPresence | null> {
   try {
     const profile = await getVoiceProfile(db, accountId);
     if (!profile || !profile.enabled) return null;
+    // A Technician (spec §7.2, fix round 1 I1): only the on-a-call check
+    // runs. The account's weekly answered-calls count is never read for them,
+    // so it cannot reach their browser; nor is the zone, which only that
+    // count's week boundary needs.
+    if (technician) {
+      const since = new Date(Date.now() - ON_CALL_FLOOR_MS).toISOString();
+      const onCall = await hasActiveCallSince(db, accountId, since);
+      return { onCall, personaName: profile.persona_name, showCount: false };
+    }
     // D-075: "this week" is measured in the ACCOUNT's own zone, not UTC —
     // read only now that a presence read is actually going to happen (an
     // account with no enabled voice profile never pays for this query).
@@ -193,7 +211,7 @@ async function readPresence(
     // D-063 follow-up: the topbar's own "{name} · on a call" needs this
     // account's configured persona too — already in hand from the
     // `profile.enabled` gate above, never a second read.
-    return { ...presence, personaName: profile.persona_name };
+    return { ...presence, personaName: profile.persona_name, showCount: true };
   } catch (error) {
     console.error(
       `getShellSnapshot: presence read failed for account ${accountId}: ${error instanceof Error ? error.message : String(error)}`,

@@ -17,7 +17,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * providably unchanged by either read.
  */
 
-const dbMocks = vi.hoisted(() => ({ sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn(), hasActiveCallSince: vi.fn() }));
 // D-075 review follow-up: `serviceDb()` used to return the fixed
 // `{ __serviceDb: true }` placeholder, which has no `.from` — every test in
 // this file reached `readPresence` through a `getVoiceProfile` that resolved
@@ -199,6 +199,7 @@ describe("getShellSnapshot per role (spec §7.2)", () => {
     dbMocks.sumUnreadCount.mockReset().mockResolvedValue(4);
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue({ enabled: true, persona_name: "Sofía" });
     voicePresenceMock.mockReset().mockResolvedValue({ onCall: true, weekCount: 12 });
+    dbMocks.hasActiveCallSince.mockReset().mockResolvedValue(true);
     dbForRequestMock.mockClear();
     dbFixture.accountRow = { timezone: "America/Chicago" };
     dbFixture.accountError = null;
@@ -212,6 +213,31 @@ describe("getShellSnapshot per role (spec §7.2)", () => {
     expect(dbMocks.sumUnreadCount.mock.calls[0]![1]).toBe("a1");
     expect(snapshot.unreadTotal).toBe(4);
     expect(snapshot.presence).toMatchObject({ onCall: true, showCount: false });
+  });
+
+  // Fix round 1 (review I1): hiding the count in the topbar is not refusing
+  // it. A Technician's reply carries no weekCount at all, and the account's
+  // weekly answered-calls read (getVoicePresence) never runs for them: only
+  // the on-a-call check does, over the same one-hour floor.
+  it("a Technician's presence carries no weekCount field, and the weekly count is never read (mutation: return the count, or run getVoicePresence -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    const before = Date.now();
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.presence).toEqual({ onCall: true, personaName: "Sofía", showCount: false });
+    expect(snapshot.presence && "weekCount" in snapshot.presence).toBe(false);
+    expect(voicePresenceMock).not.toHaveBeenCalled();
+    expect(dbMocks.hasActiveCallSince).toHaveBeenCalledTimes(1);
+    const [, acct, since] = dbMocks.hasActiveCallSince.mock.calls[0]!;
+    expect(acct).toBe("a1");
+    const ageMs = before - Date.parse(since as string);
+    expect(ageMs).toBeGreaterThanOrEqual(60 * 60 * 1000 - 5_000);
+    expect(ageMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5_000);
+  });
+
+  it("a Technician idle (no call in progress) still gets presence with onCall false, no count", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    dbMocks.hasActiveCallSince.mockResolvedValue(false);
+    expect((await getShellSnapshot("a1")).presence).toEqual({ onCall: false, personaName: "Sofía", showCount: false });
   });
 
   it("Staff keep the service client and the count, exactly as before (mutation: use the request client for everyone -> FAILS)", async () => {

@@ -118,7 +118,16 @@ describe("requireNotTechnician (spec §7.1)", () => {
     asClient("technician");
     await expect(requireNotTechnician(OWN)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/tasks`);
   });
-  it.each(["owner", "staff", null] as const)("passes a client whose role is %s through with exactly what requireAccountAccess returns (mutation: refuse Staff too -> FAILS)", async (role) => {
+  // Fix round 1 (review M6): fails closed like the database. A client whose
+  // role could not be settled (Clerk down, no membership yet) is admitted
+  // only where a Technician is, and sent to To do, never to the dashboard,
+  // which would refuse them again (To do never calls this guard: the
+  // loop guard in technician-guards.test.ts).
+  it("sends a client whose role could not be settled (null) to To do too, never the dashboard (mutation: admit null, or send it to accountHome(null) -> FAILS)", async () => {
+    asClient(null);
+    await expect(requireNotTechnician(OWN)).rejects.toThrow(`REDIRECT:/dashboard/accounts/${OWN}/tasks`);
+  });
+  it.each(["owner", "staff"] as const)("passes a client whose role is %s through with exactly what requireAccountAccess returns (mutation: refuse Staff too -> FAILS)", async (role) => {
     asClient(role);
     const expected = await requireAccountAccess(OWN);
     expect(expected).toMatchObject({ userId: "user_client", isAgency: false, role });

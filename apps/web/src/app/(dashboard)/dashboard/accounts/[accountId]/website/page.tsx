@@ -47,8 +47,10 @@ export default async function WebsitePage({
 }) {
   const { accountId } = await params;
   const { period: rawPeriod } = await searchParams;
-  // Authorization happened in [accountId]/layout.tsx; this call only learns
-  // the role, which decides the unlinked state's single action.
+  // [accountId]/layout.tsx admitted the caller to this account; THIS call is
+  // the Technician boundary for Website (F-085 part 1, spec §7.1), sending a
+  // Technician, or a client whose role could not be settled, to To do before
+  // anything is read. Its isAgency decides the unlinked state's single action.
   const { isAgency } = await requireNotTechnician(accountId);
   const db = await dbForRequest();
   const period = parsePeriod(rawPeriod);

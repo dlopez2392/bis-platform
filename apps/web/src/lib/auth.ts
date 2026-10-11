@@ -112,12 +112,20 @@ export function accountHome(accountId: string, role: AccountRole | null): string
  * (requireAccountAccess's reason). The database already refuses their reads
  * of other people's customers (0068); this keeps them out of screens whose
  * totals and settings are not theirs.
+ *
+ * Fails closed, like the database (fix round 1, review M6): it admits only
+ * the agency, an Owner and Staff. A client whose role could not be settled
+ * (null) is sent where a Technician is, To do, never to the dashboard, which
+ * would only refuse them again. To do never calls this guard, so neither
+ * redirect can loop (technician-guards.test.ts pins that).
  */
 export async function requireNotTechnician(
   accountId: string,
 ): Promise<{ userId: string; isAgency: boolean; role: AccountRole | null; canManage: boolean }> {
   const access = await requireAccountAccess(accountId);
-  if (access.role === "technician") redirect(accountHome(accountId, access.role));
+  const admitted = access.isAgency || access.role === "owner" || access.role === "staff";
+  // accountHome(…, "technician") is To do: the least-privileged home.
+  if (!admitted) redirect(accountHome(accountId, "technician"));
   return access;
 }
 

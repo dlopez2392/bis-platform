@@ -248,8 +248,10 @@ export async function setTeamLanguageAction(
  * go, their customers and open tasks are released to Unassigned
  * (releaseMemberAssignments, 0068) and the ids ride in the removal record
  * for the undo. A release that fails never undoes the removal: it is logged
- * and tried once more after the sweep (it is idempotent); until it lands,
- * the person who left reads nothing (A1).
+ * and tried once more straight away (it is idempotent), BEFORE the removal is
+ * recorded, so the ids a successful retry released are in the record the
+ * undo reads (fix round 1, review M1). If both fail, the record says nothing
+ * was released; until a release lands, the person who left reads nothing (A1).
  */
 export async function removeTeamMemberAction(
   accountId: string, userId: string,
@@ -277,10 +279,13 @@ export async function removeTeamMemberAction(
   }
   revalidateTeam(accountId);
   let released: ReleasedAssignments | undefined;
-  try {
-    released = await releaseMemberAssignments(db, accountId, userId);
-  } catch (e) {
-    console.error(`team: assignments not released (${ids}): ${loggableError(e)}`);
+  for (const attempt of ["", " on the retry either"]) {
+    try {
+      released = await releaseMemberAssignments(db, accountId, userId);
+      break;
+    } catch (e) {
+      console.error(`team: assignments not released${attempt} (${ids}): ${loggableError(e)}`);
+    }
   }
   let recorded = true;
   try {
@@ -295,14 +300,25 @@ export async function removeTeamMemberAction(
   } catch (e) {
     console.error(`team: post-removal sweep failed (${ids}): ${loggableError(e)}`);
   }
-  if (released === undefined) {
-    try {
-      await releaseMemberAssignments(db, accountId, userId);
-    } catch (e) {
-      console.error(`team: assignments not released on the retry either (${ids}): ${loggableError(e)}`);
-    }
-  }
   return recorded ? { ok: true, undo: { userId } } : { ok: true };
+}
+
+/**
+ * The removal's give-back (spec §8): only the ids it recorded, only those
+ * still Unassigned (reassignReleased). Never fails the undo: by the time it
+ * runs the person is back on the team, so a failure is logged with the
+ * account, the person and the ids, and a second Undo runs it again
+ * (fix round 1, review I2).
+ */
+async function giveBackReleased(
+  db: SupabaseClient, accountId: string, userId: string, released: ReleasedAssignments,
+): Promise<void> {
+  if (released.contacts.length === 0 && released.tasks.length === 0) return;
+  try {
+    await reassignReleased(db, accountId, userId, released);
+  } catch (e) {
+    console.error(`team undo: the member is back but their released customers and tasks were not given back (account ${accountId}, user ${userId}; contacts ${released.contacts.join(",") || "none"}; tasks ${released.tasks.join(",") || "none"}): ${loggableError(e)}`);
+  }
 }
 
 /**
@@ -316,7 +332,10 @@ export async function removeTeamMemberAction(
  *
  * Then (F-085 part 1, spec §8) the customers and open tasks the removal
  * released go back to the person, only those still Unassigned
- * (reassignReleased): anyone handed to someone else since stays where they are.
+ * (reassignReleased): anyone handed to someone else since stays where they
+ * are. That give-back runs on its own (giveBackReleased): its failure never
+ * turns a restored membership into a failed undo, and the double-click path
+ * runs it too, so a second Undo heals a give-back the first one missed.
  */
 export async function undoRemoveTeamMemberAction(accountId: string, userId: string): Promise<TeamResult> {
   await requireAccountOwner(accountId);
@@ -331,6 +350,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
   const clerk = await restoreToOrganization(account.orgId, removed.clerkUserId, removed.role);
   if (!clerk.ok) {
     if (clerk.code === "already_a_member_in_organization" && (await findMember(db, accountId, userId))?.role === removed.role) {
+      await giveBackReleased(db, accountId, userId, removed.released);
       return { ok: true };
     }
     return { ok: false, error: "team.undo.failed" };
@@ -342,11 +362,11 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
       if (set !== "ok") console.error(`team undo: existing row not set to ${removed.role}: ${set} (${ids})`);
     }
     await setMemberLanguage(db, accountId, userId, removed.language);
-    if (removed.released) await reassignReleased(db, accountId, userId, removed.released);
   } catch (e) {
-    console.error(`team undo: Clerk restored the member but the BIS write failed (${ids}): ${loggableError(e)}`);
+    console.error(`team undo: Clerk restored the member but the BIS membership was not restored (${ids}): ${loggableError(e)}`);
     return { ok: false, error: "team.undo.failed" };
   }
+  await giveBackReleased(db, accountId, userId, removed.released);
   revalidateTeam(accountId);
   return { ok: true };
 }

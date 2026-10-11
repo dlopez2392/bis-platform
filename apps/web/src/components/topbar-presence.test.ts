@@ -125,14 +125,14 @@ describe("TopbarPresence and showCount", () => {
   };
 
   it("idle with showCount false renders nothing (mutation: ignore showCount -> FAILS)", () => {
-    expect(render({ onCall: false, weekCount: 12, personaName: "Sofía", showCount: false })).toBe("");
+    expect(render({ onCall: false, personaName: "Sofía", showCount: false })).toBe("");
   });
 
   it("on a call with showCount false still shows the pulse, with no count", () => {
-    const html = render({ onCall: true, weekCount: 12, personaName: "Sofía", showCount: false });
+    const html = render({ onCall: true, personaName: "Sofía", showCount: false });
     expect(html).toContain('data-testid="topbar-presence"');
     expect(html).toContain("animate-pulse");
-    expect(html).not.toContain("12");
+    expect(html).not.toMatch(/this week/);
   });
 
   it("idle with showCount true still says the week's count", () => {

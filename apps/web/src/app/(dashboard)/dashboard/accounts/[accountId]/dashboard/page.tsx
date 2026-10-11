@@ -61,9 +61,12 @@ export default async function AccountDashboardPage({
 }) {
   const { accountId } = await params;
   const { locale: localeParam } = (await searchParams) ?? {};
-  // Authorization already happened in [accountId]/layout.tsx; this call is
-  // only to learn the role for rendering — the activation checklist is the
-  // agency's onboarding worklist about the client, not client data (spec §6.1).
+  // [accountId]/layout.tsx admitted the caller to this account; THIS call is
+  // the Technician boundary for the dashboard (F-085 part 1, spec §7.1): it
+  // sends a Technician, or a client whose role could not be settled, to To
+  // do before anything is read. It also gives the role for rendering: the
+  // activation checklist is the agency's onboarding worklist about the
+  // client, not client data (spec §6.1).
   const [{ isAgency }, prefs] = await Promise.all([requireNotTechnician(accountId), getPersonPrefs()]);
   const db = await dbForRequest();
 

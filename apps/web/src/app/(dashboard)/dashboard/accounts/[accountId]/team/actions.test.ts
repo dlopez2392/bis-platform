@@ -549,19 +549,23 @@ describe("removeTeamMemberAction releases the person's assignments (spec §8, A3
     await removeTeamMemberAction(ACCT, STAFF_C.userId);
     expect(db.releaseMemberAssignments).not.toHaveBeenCalled();
   });
-  it("a release that throws is logged by id, the removal still stands (ok, with its undo), and the release is tried once more after the sweep (mutation: let it throw, or skip the retry -> FAILS)", async () => {
+  // Fix round 1 (review M1): the retry runs BEFORE the removal is recorded,
+  // so the ids a successful retry released are in the record the Undo reads.
+  it("a release that throws is logged by id, the removal still stands (ok, with its undo), and the release is retried BEFORE the record, whose ids are recorded (mutations: let it throw, skip the retry, or retry after the record -> FAILS)", async () => {
     db.releaseMemberAssignments.mockRejectedValueOnce(new Error("releaseMemberAssignments failed: down")).mockResolvedValueOnce(RELEASED);
     expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true, undo: { userId: STAFF_C.userId } });
     expect(logged()).toMatch(new RegExp(`not released[^\\n]*${STAFF_C.userId}`));
-    expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
-      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es", released: undefined });
     expect(db.releaseMemberAssignments).toHaveBeenCalledTimes(2);
-    expect(order(db.deleteAccountMembership)).toBeLessThan(order(db.releaseMemberAssignments, 1));
+    expect(order(db.releaseMemberAssignments, 1)).toBeLessThan(order(log.recordRemoval));
+    expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
+      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es", released: RELEASED });
   });
-  it("a retry that also throws is logged and still never thrown", async () => {
+  it("a retry that also throws is logged and still never thrown; the record then says nothing was released", async () => {
     db.releaseMemberAssignments.mockRejectedValue(new Error("releaseMemberAssignments failed: down"));
     expect(await removeTeamMemberAction(ACCT, STAFF_C.userId)).toEqual({ ok: true, undo: { userId: STAFF_C.userId } });
     expect(logged().match(new RegExp(`not released[^\\n]*${STAFF_C.userId}`, "g"))?.length).toBe(2);
+    expect(log.recordRemoval).toHaveBeenCalledWith(expect.anything(), ACCT, "user_A",
+      { userId: STAFF_C.userId, clerkUserId: "user_C", role: "staff", language: "es", released: undefined });
   });
   it("a release that worked the first time is not repeated", async () => {
     await removeTeamMemberAction(ACCT, STAFF_C.userId);
@@ -578,11 +582,51 @@ describe("undoRemoveTeamMemberAction gives back what the removal released", () =
     expect(order(db.setMemberLanguage)).toBeLessThan(order(db.reassignReleased));
     expect(clerk.restoreToOrganization).toHaveBeenCalledWith("org_1", "user_D", "technician");
   });
-  it("a reassign that throws is caught and logged by id, never thrown", async () => {
+  // Fix round 1 (review I2): the person is back once the membership is, so a
+  // give-back that fails is logged (account, user and the ids) and the undo
+  // still succeeds; a second Undo heals it.
+  it("a reassign that throws is logged with the account, the user and the ids, and the undo still succeeds: membership restored, team revalidated (mutation: share the membership's try -> FAILS)", async () => {
     log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
     db.reassignReleased.mockRejectedValue(new Error("reassignReleased contacts failed: down"));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(db.addAccountMember).toHaveBeenCalledWith(expect.anything(), { accountId: ACCT, userId: TECH_D.userId, role: "technician" });
+    expect(db.setMemberLanguage).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, null);
+    expect(cache.revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${ACCT}/team`);
+    const line = logged();
+    for (const part of [ACCT, TECH_D.userId, RELEASED.contacts[0]!, RELEASED.tasks[0]!, "reassignReleased contacts failed: down"]) expect(line).toContain(part);
+    expect(line).not.toMatch(/BIS write failed/);
+  });
+  it("a second Undo (Clerk: already a member, BIS role matches) gives the recorded ids back again, so a failed give-back heals (mutation: return ok without reassigning -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "already_a_member_in_organization" });
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(db.reassignReleased).toHaveBeenCalledWith(expect.anything(), ACCT, TECH_D.userId, RELEASED);
+    expect(db.addAccountMember).not.toHaveBeenCalled();
+  });
+  it("first Undo's give-back fails, second Undo runs it again and it lands", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    db.reassignReleased.mockRejectedValueOnce(new Error("down")).mockResolvedValueOnce(undefined);
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "already_a_member_in_organization" });
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(db.reassignReleased).toHaveBeenCalledTimes(2);
+  });
+  it("a removal that released nothing (or an old record) gives nothing back, on either path", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    await undoRemoveTeamMemberAction(ACCT, TECH_D.userId);
+    clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "already_a_member_in_organization" });
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    await undoRemoveTeamMemberAction(ACCT, TECH_D.userId);
+    expect(db.reassignReleased).not.toHaveBeenCalled();
+  });
+  it("a membership write that throws is still team.undo.failed, logged as the membership, and gives nothing back", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
+    db.addAccountMember.mockRejectedValue(new Error("down"));
     expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
-    expect(logged()).toContain(TECH_D.userId);
+    expect(logged()).toMatch(/membership/);
+    expect(db.reassignReleased).not.toHaveBeenCalled();
   });
   it("Clerk refusing the undo never reassigns", async () => {
     log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));

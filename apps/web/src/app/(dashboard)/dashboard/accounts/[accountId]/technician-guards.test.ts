@@ -90,10 +90,16 @@ function bodyFrom(src: string, start: number): string {
   throw new Error("unbalanced body");
 }
 
-/** Why `body` is not guarded first, or null when it is. */
+/**
+ * Why `body` is not guarded first, or null when it is. The guard must be
+ * AWAITED (fix round 1, review M2): directly, or as a member of an awaited
+ * Promise.all. Called without an await, its redirect stops nothing.
+ */
 function guardProblem(body: string): string | null {
-  const guard = body.indexOf("requireNotTechnician(accountId)");
-  if (guard < 0) return "never calls requireNotTechnician(accountId)";
+  if (body.indexOf("requireNotTechnician(accountId)") < 0) return "never calls requireNotTechnician(accountId)";
+  const awaited = /await\s+(?:Promise\.all\(\[\s*)?requireNotTechnician\(accountId\)/.exec(body);
+  if (!awaited) return "calls requireNotTechnician(accountId) but it is not awaited";
+  const guard = awaited.index;
   for (const read of ["dbForRequest(", "serviceDb("]) {
     const at = body.indexOf(read);
     if (at >= 0 && at < guard) return `calls ${read} before requireNotTechnician(accountId)`;
@@ -149,5 +155,14 @@ describe("the scanner itself", () => {
     expect(guardProblem(stripComments("{\n  // await requireNotTechnician(accountId);\n  const db = await dbForRequest();\n}"))).toMatch(/never calls/);
     expect(guardProblem("{\n  const x = await listThings(db);\n  await requireNotTechnician(accountId);\n}")).toMatch(/awaits `listThings/);
     expect(guardProblem("{\n  const { accountId } = await params;\n  const [{ isAgency }, prefs] = await Promise.all([requireNotTechnician(accountId), getPersonPrefs()]);\n  const db = await dbForRequest();\n}")).toBeNull();
+  });
+  // Fix round 1 (review M2): a guard that is called but not awaited redirects
+  // nobody: its rejection floats while the page reads on.
+  it("rejects a guard that is called but not awaited (mutation: accept any call -> FAILS)", () => {
+    expect(guardProblem("{\n  const { accountId } = await params;\n  requireNotTechnician(accountId);\n  const db = await dbForRequest();\n}")).toMatch(/not awaited/);
+    expect(guardProblem("{\n  void requireNotTechnician(accountId);\n}")).toMatch(/not awaited/);
+    expect(guardProblem("{\n  const p = requireNotTechnician(accountId);\n  const db = await dbForRequest();\n  await p;\n}")).toMatch(/not awaited/);
+    expect(guardProblem("{\n  Promise.all([requireNotTechnician(accountId), getPersonPrefs()]);\n}")).toMatch(/not awaited/);
+    expect(guardProblem("{\n  const { userId } = await requireNotTechnician(accountId);\n}")).toBeNull();
   });
 });
