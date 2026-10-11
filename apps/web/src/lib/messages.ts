@@ -547,6 +547,14 @@ export const m = {
   // is usually one person entered twice — but not always, and the product has
   // no merge screen yet, so it must not promise a resolution it cannot offer.
   "contacts.import.flagged": "{flagged} possible duplicates flagged for review.",
+  // Shown on the done screen only when they happened (final review I-C), summed
+  // across every batch. The contacts themselves were saved either way.
+  "contacts.import.businessTooLong": "{count} business names were too long to save (120 characters max).",
+  "contacts.import.businessTooLong.es": "{count} nombres de negocio eran demasiado largos para guardarse (máximo 120 caracteres).",
+  "contacts.import.businessTooLongOne": "1 business name was too long to save (120 characters max).",
+  "contacts.import.businessTooLongOne.es": "1 nombre de negocio era demasiado largo para guardarse (máximo 120 caracteres).",
+  "contacts.import.businessLinkFailed": "Business names didn't save for some rows — import again to retry.",
+  "contacts.import.businessLinkFailed.es": "Los nombres de negocio no se guardaron en algunas filas. Vuelva a importar para intentarlo de nuevo.",
   "contacts.import.partial": "Stopped after {done} rows. Nothing after that was imported.",
   "contacts.import.failed": "That import didn't go through. Nothing was changed. Please try again.",
   "contacts.import.tooMany": "That's too many rows at once. Try a smaller file.",

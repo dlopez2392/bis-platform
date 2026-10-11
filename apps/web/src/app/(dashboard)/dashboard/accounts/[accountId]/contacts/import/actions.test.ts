@@ -100,6 +100,17 @@ describe("importContactsBatchAction business writer", () => {
     expect(r).toEqual({ ok: true, created: 1, updated: 0, flagged: 0, businessLinkFailed: true });
   });
 
+  // Final review I-C: the too-long count reaches the wizard too (mutation: drop the businessTooLong spread -> FAILS).
+  it("carries businessTooLong through, beside the real counts", async () => {
+    dbMocks.applyImportBatch.mockResolvedValue({ created: 2, updated: 0, flagged: 0, businessTooLong: 2 });
+
+    const r = await importContactsBatchAction("acct_9",
+      [{ line: 2, values: { email: "a@b.com", company: "Acme" } }],
+      { mapping: { email: "email", company: "company_name" }, createTags: false });
+
+    expect(r).toEqual({ ok: true, created: 2, updated: 0, flagged: 0, businessTooLong: 2 });
+  });
+
   it("omits businessLinkFailed entirely when applyImportBatch never reports one", async () => {
     dbMocks.applyImportBatch.mockResolvedValue({ created: 1, updated: 0, flagged: 0 });
 
@@ -109,5 +120,6 @@ describe("importContactsBatchAction business writer", () => {
 
     expect(r).toEqual({ ok: true, created: 1, updated: 0, flagged: 0 });
     expect("businessLinkFailed" in r).toBe(false);
+    expect("businessTooLong" in r).toBe(false);
   });
 });
