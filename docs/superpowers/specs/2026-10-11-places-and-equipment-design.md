@@ -27,18 +27,32 @@ Owner (danlo, 2026-10-11), given in the brief:
 | P5 | Ownership | A property belongs to a person or is shared through a household or business group (0069). The smallest model that serves HVAC, plumbing, landscaping and pest control in the Valley |
 | P6 | Address | Lenient (F-015): free text, optional structured parts, landmarks, "Cómo llegar". No geocoding service |
 
-Choices this spec makes (the owner can overturn any in §13):
+Choices this spec makes; **(owner, 2026-10-11)** marks the ones ruled on in §13:
 
 | # | Choice |
 |---|---|
-| C1 | **The word is "Property" / "Propiedad"**; the tables are `places` and `equipment`. "Propiedad" is what Valley trades and landlords say ("en la propiedad", "tengo tres propiedades") and fits a home, a rental and a commercial site. Rejected: "Lugar" (vague; reads like a form's "lugar de nacimiento"), "Ubicación" (a phone's GPS word), "Domicilio" (legal residence, wrong for a rental or a branch), "Dirección" (the address field itself, and also "management"). The table is `places`, not `properties` (in code that means object fields, and it is HubSpot's word for fields), nor the study's unbuilt `service_locations` |
-| C2 | **One owner per property, a person OR a group** (`num_nonnulls(contact_id, client_group_id) = 1`), the study's own model (`:224`). Sharing reuses 0069 rather than adding a second sharing mechanism: a household's house belongs to the household, a business's sites to the business customer, a landlord's rentals to the landlord. No join table this release (tenants: §13.4) |
+| C1 | **(owner, 2026-10-11, O1)** **The word is "Property" / "Propiedad"**; the tables are `places` and `equipment`. "Propiedad" is what Valley trades and landlords say ("en la propiedad", "tengo tres propiedades") and fits a home, a rental and a commercial site. Rejected: "Lugar" (vague; reads like a form's "lugar de nacimiento"), "Ubicación" (a phone's GPS word), "Domicilio" (legal residence, wrong for a rental or a branch), "Dirección" (the address field itself, and also "management"). The table is `places`, not `properties` (in code that means object fields, and it is HubSpot's word for fields), nor the study's unbuilt `service_locations` |
+| C2 | **(owner, 2026-10-11, O4)** **One owner per property, a person OR a group** (`num_nonnulls(contact_id, client_group_id) = 1`), the study's own model (`:224`). Sharing reuses 0069 rather than adding a second sharing mechanism: a household's house belongs to the household, a business's sites to the business customer, a landlord's rentals to the landlord. No join table this release (tenants: not yet, O4) |
 | C3 | **Equipment status is derived, not stored.** A replacement is a new row whose `replaces_id` names the old unit at the same place; a unit is "replaced" when a row replaces it, and "when" is the new unit's `installed_on`, which a replacement must carry (CHECK). A replacement is ONE insert (atomic without a function), its Undo one delete, and the two facts cannot disagree |
 | C4 | **Client-written under RLS (0070's C4), not server-only (0069's A1).** Operator-entered state, like `notes`, `contact_tags` and relationships. None of 0069's reasons apply: no find-or-create across rows a Technician cannot see, no multi-statement transaction (C3), no derived column to sync. Every Technician fence is then the database's, with no service-client proof step and no new `in-account-service-reads.test.ts` entry |
 | C5 | **Removing a property deletes it when it has no equipment, and otherwise moves it to "Removed properties"** (`archived_at`), where "Put back" restores it. A click never destroys equipment history; a restrictive delete policy makes the database refuse to delete a place that has equipment |
 | C6 | **Removing a unit deletes it** (Undo re-inserts it with the same id). Only a unit nothing has replaced can go: the database refuses the rest (`equipment_replaces_fkey`), so history rows have no Remove |
-| C7 | **One card, "Properties", with each property's equipment nested under it**, not a second Equipment card: equipment exists only at a property, so a second card would repeat every property as a header and need the first card's data to add a unit. One read, one boundary (§13.9) |
+| C7 | **(owner, 2026-10-11, O9)** **One card, "Properties", with each property's equipment nested under it**, not a second Equipment card: equipment exists only at a property, so a second card would repeat every property as a header and need the first card's data to add a unit. One read, one boundary |
 | C8 | **`created_by` is stamped by the database** (a trigger sets `app.current_user_id()` on every `authenticated` insert, whatever the client sent). Not shown this release; stored now so S-03's timeline can give each row its author mark (DESIGN.md Provenance) without an impossible backfill. A Technician cannot read `events` (0068 4e), so provenance must live on the row |
+
+Owner rulings (danlo, 2026-10-11, after reading this spec; each took the recommendation in §13):
+
+| # | Ruling |
+|---|---|
+| O1 | The word is "Property" / "Propiedad" (C1) |
+| O2 | A Technician may edit, remove and put back a property shared by a household or business, with Undo. They still cannot change who it belongs to (§5.3) |
+| O3 | Deleting a customer deletes the properties only they own, with their equipment (cascade, §5.1) |
+| O4 | Tenants: not yet. No link between a tenant and a place this release |
+| O5 | No CSV import or export of properties this release (§9) |
+| O6 | Search by address is deferred |
+| O7 | A unit taken out with nothing replacing it uses Remove for now |
+| O8 | "Open map" is a Google Maps link, labelled as an assumption (§5.1) |
+| O9 | One "Properties" card, with equipment nested under each property (C7) |
 
 ## 3. Non-goals
 
@@ -47,7 +61,7 @@ needs this table). The portal's property view (F-062, F-063). Geocoding, pins, d
 Gate and alarm codes as fields (held until roles, study `:224`; F-004). Colonias, municipios and Mexican
 formats as structured parts (F-015 owns the component and widens §5.1's parts additively). A job address
 on bookings or forms (F-047). Properties on the timeline, in ⌘K or contact search, CSV (§9), blueprints,
-segments or Sofía. Tenants linked to a place (§13.4). Moving a property to another customer, and merge
+segments or Sofía. Tenants linked to a place (O4). Moving a property to another customer, and merge
 (S-12). Equipment kinds from a fixed list (packs add them). Permanent purge of a removed property (S-04).
 
 ## 4. Roles
@@ -55,7 +69,7 @@ segments or Sofía. Tenants linked to a place (§13.4). Moving a property to ano
 | Capability | Owner | Staff | Technician | Agency |
 |---|---|---|---|---|
 | See properties and equipment | all | all | only of their own customers and those customers' groups (P3) | all |
-| Add, edit, remove (C5), put back a property | yes | yes | on any property they can see (§13.2) | yes |
+| Add, edit, remove (C5), put back a property | yes | yes | on any property they can see (O2) | yes |
 | Change who a property belongs to | yes | yes | **no** (trigger, §5.3) | yes |
 | Add, edit, replace, remove equipment | yes | yes | on any property they can see | yes |
 
@@ -110,7 +124,7 @@ needing no API key and opening the Maps app on phones. The user starts the navig
 **Keys and cascades.** Composite FKs (0050's shape; `contacts_account_id_id_key` 0050:93,
 `client_groups_account_id_id_key` 0069:56) make a crossed row unwritable. `equipment_replaces_fkey` on
 `(place_id, replaces_id)` also keeps a replacement at the SAME place (unchecked when NULL, MATCH SIMPLE). A
-deleted contact or group takes the places it owns and their equipment (§13.3); a deleted account takes all
+deleted contact or group takes the places it owns and their equipment (O3); a deleted account takes all
 (an old build's teardown still succeeds, 0069 §5.1's reason). Deleting a unit something replaced is refused;
 a place's cascade removes the whole chain in one statement, which the end-of-statement check accepts. No
 cycle is possible: `replaces_id` is not updatable (§5.2), so a row only points at an older one.
@@ -279,7 +293,7 @@ in the language it was typed, never translated.
 
 ## 9. CSV, blueprints, search and AI
 
-**CSV import and export: out of this release** (§13.5). The contact CSV is one row per person and its
+**CSV import and export: out of this release** (O5). The contact CSV is one row per person and its
 columns are pinned to the export (`IMPORT_FIELDS`, `lib/contacts/csv.ts:87`, by `csv.test.ts`). Properties
 are one-to-many and equipment a level deeper, so neither fits a contact row without inventing which property
 a column means, and export, import, export would no longer be identical. A client switching from Jobber
@@ -348,32 +362,29 @@ Effort: about 1.5–2 of S-02's 5–6 engineer-weeks (the siblings estimate 2–
 - **A delete racing an equipment insert.** Under READ COMMITTED, `places_delete_empty` cannot see a unit
   another session has not committed, so a removal in the same instant could cascade it. It needs two people
   on one property within milliseconds; accepted and recorded.
-- **Deleting a customer deletes the properties only they own, with their equipment** (§13.3). Contact delete
+- **Deleting a customer deletes the properties only they own, with their equipment** (O3). Contact delete
   is Owner-only (0066:84) and rare, but a duplicate deleted before merge exists could hold the history.
 - **The map link is Google's** (assumption, §5.1): pressing it sends the address to Google from the user's
   browser, and the URL form could change. One builder function, one test.
 - `listContactPlaces` makes four small reads per load; fine at today's sizes (production held 53 contacts on
   2026-09-24, 0050:58). The caps (100 places, 500 units) are stated with real counts when reached.
 
-## 13. Open questions for the owner (recommendation first)
+## 13. Owner rulings (2026-10-11)
 
-1. **The word.** Recommend "Property" / "Propiedad" (C1). Alternative: "Place" / "Lugar".
-2. **May a Technician edit, remove and put back a property shared by a household or business?** Recommend
-   yes: it is where they stand, every change has Undo, and removal keeps the history under Removed
-   properties. They still cannot change who it belongs to (§5.3). Alternative: their customer's own only.
-3. **Deleting a customer: cascade the properties only they own, or refuse?** Recommend cascade, as
-   memberships and relationships do: refusing would leave the Owner stuck, since moving a property to another
-   customer waits for S-12's merge, which must re-point places. Alternative: add `places` to `deleteContacts`'
-   blocked pre-read (`contacts.ts:1018`) and count it as skipped.
-4. **Tenants.** A landlord's rental belongs to the landlord; the tenant reaches it through Related people's
-   "Landlord" chip (0070), and a Technician assigned only the tenant does not see it. Recommend deferring a
-   `place_contacts` link (tenant, on-site contact) until a landlord-heavy or property-manager client asks; it
-   is additive to this model.
-5. **CSV.** Recommend no properties in import or export this release (§9).
-6. **Search by address** ("I'm at 1204 Nolana"). Recommend deferring to the ⌘K follow-up after S-03; it
-   changes the search route's contract.
-7. **A unit taken out with nothing replacing it.** Recommend Remove for now; a "Taken out" mark later if a
-   client asks.
-8. **"Open map" via Google Maps.** Recommend yes: free, no key, nothing called by BIS (assumption, §5.1).
-9. **One card or two.** Recommend one "Properties" card with equipment nested (C7). Alternative: a second
-   "Equipment" card grouped by property.
+Each question was put to danlo with the recommendation first; every recommendation was taken (O1 to O9, §2).
+
+1. **The word.** DECIDED: "Property" / "Propiedad" (O1, C1).
+2. **May a Technician edit, remove and put back a property shared by a household or business?** DECIDED
+   yes, with Undo (O2): it is where they stand, and removal keeps the history under Removed properties.
+   They still cannot change who it belongs to (§5.3).
+3. **Deleting a customer: cascade the properties only they own, or refuse?** DECIDED: cascade, with their
+   equipment (O3), as memberships and relationships do. Refusing would leave the Owner stuck, since moving a
+   property to another customer waits for S-12's merge, which must re-point places.
+4. **Tenants.** DECIDED: not yet (O4). A landlord's rental belongs to the landlord; the tenant reaches it
+   through Related people's "Landlord" chip (0070), and a Technician assigned only the tenant does not see
+   it. A `place_contacts` link stays additive for later.
+5. **CSV.** DECIDED: no properties in import or export this release (O5, §9).
+6. **Search by address** ("I'm at 1204 Nolana"). DECIDED: deferred (O6), to the ⌘K follow-up after S-03.
+7. **A unit taken out with nothing replacing it.** DECIDED: Remove for now (O7).
+8. **"Open map" through Google Maps.** DECIDED: yes, labelled as an assumption (O8, §5.1).
+9. **One card or two.** DECIDED: one "Properties" card with equipment nested under each property (O9, C7).
