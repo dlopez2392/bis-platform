@@ -9,7 +9,7 @@ import {
 import { requireAccountOwner } from "@/lib/auth";
 import {
   teamCapacity, createTeamInvitation, revokeTeamInvitation, removeFromOrganization,
-  restoreToOrganization, setOrganizationRole, clerkRefused,
+  restoreToOrganization, setOrganizationRole, reassertClerkRole, clerkRefused,
 } from "@/lib/team/clerk-team";
 import {
   roomLeft, inviteDefaultLanguage, clerkInviteError, undoStillOpen,
@@ -359,6 +359,20 @@ async function takeBackRestore(
 }
 
 /**
+ * Once BIS holds the restored role, Clerk follows it (final re-review): an
+ * `organizationMembership.created` webhook can settle the restored membership
+ * before its `bis_role` lands, create the BIS row as Staff and re-assert
+ * "staff" onto Clerk; the undo then sets BIS to the recorded role, and this
+ * puts Clerk's role and `bis_role` back in step with it (reassertClerkRole
+ * writes only what disagrees). The person is back either way, so a failure is
+ * logged by id and never fails the undo.
+ */
+async function reassertRestoredRole(orgId: string, clerkUserId: string, role: AccountRole, ids: string): Promise<void> {
+  const r = await reassertClerkRole(orgId, clerkUserId, role);
+  if (!r.ok) console.error(`team undo: the Clerk re-assert of the restored role ${role} failed (${ids}): ${r.code ?? "no code"}`);
+}
+
+/**
  * Restores exactly what the newest system-written removal of this person
  * from THIS account says (Clerk id, role, language), and only within
  * UNDO_WINDOW_MS of it. A person never removed from this account is refused
@@ -367,7 +381,8 @@ async function takeBackRestore(
  * I-1: without it a restored Technician settles as Staff), then the BIS
  * membership, set explicitly to the event's role when a row already existed
  * (the webhook can get there first). If that BIS write fails, the Clerk
- * restore is taken back (takeBackRestore). The language is restored after;
+ * restore is taken back (takeBackRestore); if it lands, Clerk is re-asserted
+ * to the restored role (reassertRestoredRole). The language is restored after;
  * its failure is logged and does not fail an undo whose membership is back.
  * A double-clicked undo (Clerk: already a member, BIS already at that role)
  * is a success.
@@ -392,6 +407,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
   const clerk = await restoreToOrganization(account.orgId, removed.clerkUserId, removed.role);
   if (!clerk.ok) {
     if (clerk.code === "already_a_member_in_organization" && (await findMember(db, accountId, userId))?.role === removed.role) {
+      await reassertRestoredRole(account.orgId, removed.clerkUserId, removed.role, ids);
       await giveBackReleased(db, accountId, userId, removed.released);
       return { ok: true };
     }
@@ -408,6 +424,7 @@ export async function undoRemoveTeamMemberAction(accountId: string, userId: stri
     await takeBackRestore(db, account.orgId, accountId, userId, removed.clerkUserId);
     return { ok: false, error: "team.undo.failed" };
   }
+  await reassertRestoredRole(account.orgId, removed.clerkUserId, removed.role, ids);
   try {
     await setMemberLanguage(db, accountId, userId, removed.language);
   } catch (e) {

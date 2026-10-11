@@ -24,7 +24,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 const clerk = vi.hoisted(() => ({
   teamCapacity: vi.fn(), createTeamInvitation: vi.fn(), revokeTeamInvitation: vi.fn(),
-  removeFromOrganization: vi.fn(), restoreToOrganization: vi.fn(), setOrganizationRole: vi.fn(),
+  removeFromOrganization: vi.fn(), restoreToOrganization: vi.fn(), setOrganizationRole: vi.fn(), reassertClerkRole: vi.fn(),
 }));
 // clerkRefused is the real one (a pure function of the result): the role
 // action's rollback turns on it, so a fake here would test the fake.
@@ -96,6 +96,7 @@ beforeEach(() => {
   clerk.removeFromOrganization.mockResolvedValue({ ok: true });
   clerk.restoreToOrganization.mockResolvedValue({ ok: true });
   clerk.setOrganizationRole.mockResolvedValue({ ok: true });
+  clerk.reassertClerkRole.mockResolvedValue({ ok: true, changed: false });
   log.recordRemoval.mockResolvedValue(undefined);
   log.latestRemoval.mockResolvedValue(removal(STAFF_C));
 });
@@ -687,6 +688,38 @@ describe("undoRemoveTeamMemberAction gives back what the removal released", () =
     clerk.removeFromOrganization.mockResolvedValue({ ok: false, code: "internal", status: 500 });
     expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: false, error: "team.undo.failed" });
     expect(logged()).toMatch(new RegExp(`still in Clerk[^\\n]*${TECH_D.userId}`));
+  });
+  // Final re-review: a `created` webhook can settle the restored membership
+  // before bis_role lands and re-assert "staff" onto Clerk. Once BIS holds the
+  // role, Clerk is made to follow it.
+  it("once the BIS membership is back, Clerk is re-asserted to the restored role (mutation: skip the reassert -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(clerk.reassertClerkRole).toHaveBeenCalledWith("org_1", "user_D", "technician");
+    expect(order(db.addAccountMember)).toBeLessThan(order(clerk.reassertClerkRole));
+  });
+  it("…after the existing row's role is set, when the webhook made the row first (mutation: reassert before the role set -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    db.addAccountMember.mockResolvedValue("existed");
+    await undoRemoveTeamMemberAction(ACCT, TECH_D.userId);
+    expect(order(db.setAccountMemberRole)).toBeLessThan(order(clerk.reassertClerkRole));
+  });
+  it("a double-clicked Undo re-asserts too, so a second Undo heals stale Clerk metadata", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    clerk.restoreToOrganization.mockResolvedValue({ ok: false, code: "already_a_member_in_organization" });
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(clerk.reassertClerkRole).toHaveBeenCalledWith("org_1", "user_D", "technician");
+  });
+  it("a reassert that fails is logged by id and the undo still succeeds; a failed BIS write never reasserts (mutation: fail the undo on it -> FAILS)", async () => {
+    log.latestRemoval.mockResolvedValue(removal(TECH_D));
+    clerk.reassertClerkRole.mockResolvedValue({ ok: false, code: "internal", status: 500 });
+    expect(await undoRemoveTeamMemberAction(ACCT, TECH_D.userId)).toEqual({ ok: true });
+    expect(logged()).toMatch(new RegExp(`re-assert[^\\n]*${TECH_D.userId}`));
+    clerk.reassertClerkRole.mockClear();
+    db.addAccountMember.mockRejectedValue(new Error("down"));
+    await undoRemoveTeamMemberAction(ACCT, TECH_D.userId);
+    expect(clerk.reassertClerkRole).not.toHaveBeenCalled();
   });
   it("a language write that throws after the membership is back does not fail the undo or take anyone out of Clerk (mutation: share the membership's try -> FAILS)", async () => {
     log.latestRemoval.mockResolvedValue(removal(TECH_D, 10_000, RELEASED));
