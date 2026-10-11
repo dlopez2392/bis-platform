@@ -83,4 +83,31 @@ describe("importContactsBatchAction business writer", () => {
     expect(rows).toEqual([{ input: { email: "a@b.com" }, tags: [], company: "Acme" }]);
     expect(opts).toEqual({ createTags: false, groupWriter: { service: true } });
   });
+
+  // Coordinator review fix: setContactsBusiness runs after the batch's
+  // contacts are already committed. applyImportBatch reports a transient
+  // failure there as businessLinkFailed rather than throwing (its own test
+  // in packages/db), and this action must pass that fact through as a known
+  // fact rather than drop it (mutation: drop the businessLinkFailed spread
+  // from the action's return -> FAILS).
+  it("still reports ok:true with created/updated/flagged when applyImportBatch flags a failed business link", async () => {
+    dbMocks.applyImportBatch.mockResolvedValue({ created: 1, updated: 0, flagged: 0, businessLinkFailed: true });
+
+    const r = await importContactsBatchAction("acct_9",
+      [{ line: 2, values: { email: "a@b.com", company: "Acme" } }],
+      { mapping: { email: "email", company: "company_name" }, createTags: false });
+
+    expect(r).toEqual({ ok: true, created: 1, updated: 0, flagged: 0, businessLinkFailed: true });
+  });
+
+  it("omits businessLinkFailed entirely when applyImportBatch never reports one", async () => {
+    dbMocks.applyImportBatch.mockResolvedValue({ created: 1, updated: 0, flagged: 0 });
+
+    const r = await importContactsBatchAction("acct_9",
+      [{ line: 2, values: { email: "a@b.com" } }],
+      { mapping: { email: "email" }, createTags: false });
+
+    expect(r).toEqual({ ok: true, created: 1, updated: 0, flagged: 0 });
+    expect("businessLinkFailed" in r).toBe(false);
+  });
 });

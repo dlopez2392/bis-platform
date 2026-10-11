@@ -21,7 +21,10 @@ export async function importContactsBatchAction(
   accountId: string,
   rows: ParsedRow[],
   opts: { mapping: Record<string, string | null>; createTags: boolean },
-): Promise<{ ok: true; created: number; updated: number; flagged: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; created: number; updated: number; flagged: number; businessLinkFailed?: boolean }
+  | { ok: false; error: string }
+> {
   const { userId } = await requireNotTechnician(accountId);
   if (!Array.isArray(rows)) return { ok: false, error: m["contacts.import.failed"] };
   if (rows.length > MAX_ROWS_PER_CALL) return { ok: false, error: m["contacts.import.tooMany"] };
@@ -41,7 +44,7 @@ export async function importContactsBatchAction(
     // database when the next batch builds its index, so cross-batch duplicates
     // are caught with no server-side session state to hold or invalidate.
     const index = await buildMatchIndex(db, accountId);
-    const { created, updated, flagged } = await applyImportBatch(
+    const { created, updated, flagged, businessLinkFailed } = await applyImportBatch(
       db, accountId,
       mapped.map((row) => ({ input: row.input, tags: row.tags, ...(row.company ? { company: row.company } : {}) })),
       index, userId, { createTags: opts.createTags, groupWriter: serviceDb() },
@@ -64,7 +67,10 @@ export async function importContactsBatchAction(
     }
 
     revalidatePath(`/dashboard/accounts/${accountId}/contacts`);
-    return { ok: true, created, updated, flagged };
+    // businessLinkFailed is a known fact (applyImportBatch already logged
+    // the transient failure), carried through rather than dropped — it does
+    // not change the outcome: created/updated/flagged are real results.
+    return { ok: true, created, updated, flagged, ...(businessLinkFailed ? { businessLinkFailed: true } : {}) };
   } catch {
     return { ok: false, error: m["contacts.import.failed"] };
   }

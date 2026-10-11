@@ -3,6 +3,19 @@ import { createContact, updateContact, addTagToContacts, listTags, phoneDigits, 
          type ContactInput } from "./contacts";
 import { setContactsBusiness } from "./client-groups";
 
+/** Anything shaped like an email address, so a transient RPC error's own
+ *  message can never put one in a log line. Mirrors apps/web's
+ *  loggableError, which this package cannot import (web depends on db, not
+ *  the other way around) — contacts.ts's own console.error calls take the
+ *  same "code only, never the message" approach for this reason; here the
+ *  underlying error is a plain Error with no `.code`, so the message itself
+ *  is redacted instead of dropped. */
+const EMAIL_LIKE = /[^\s<>()[\]{},;:"'`]+@[^\s<>()[\]{},;:"'`]+/g;
+function loggableMessage(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw.replace(EMAIL_LIKE, "[email]").slice(0, 300);
+}
+
 /**
  * A snapshot of the account's email/phone -> contact id, built once per
  * import batch (never once per row) so a re-import of an exported file does
@@ -122,7 +135,7 @@ export type ImportRow = { input: ContactInput; tags: string[]; company?: string 
 export async function applyImportBatch(
   db: SupabaseClient, accountId: string, rows: ImportRow[], index: MatchIndex,
   actorId: string, opts: { createTags: boolean; groupWriter?: SupabaseClient },
-): Promise<{ created: number; updated: number; flagged: number }> {
+): Promise<{ created: number; updated: number; flagged: number; businessLinkFailed?: boolean }> {
   let created = 0;
   let updated = 0;
   // Pairs this RUN flagged, not the table's lifetime total — every other
@@ -200,9 +213,22 @@ export async function applyImportBatch(
   // One call per batch (S-02 §6 row 8). The client groups are server-written
   // (0069), so this runs on the service client the caller hands over, and only
   // for contacts this batch itself just wrote through `db`.
+  //
+  // Coordinator review fix: this runs AFTER every contact above is already
+  // committed. A transient failure here (the RPC rejecting, or PostgREST
+  // answering an error) must never turn a batch that genuinely created and
+  // updated contacts into a reported failure — the same mistake
+  // import/actions.ts already avoids for its `emit` call, by never letting a
+  // post-write side effect rewrite the outcome of the write it followed.
+  let businessLinkFailed = false;
   if (businesses.length > 0) {
-    await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+    try {
+      await setContactsBusiness(opts.groupWriter ?? db, accountId, businesses, actorId);
+    } catch (e) {
+      businessLinkFailed = true;
+      console.error(`applyImportBatch: setContactsBusiness failed for account ${accountId}: ${loggableMessage(e)}`);
+    }
   }
 
-  return { created, updated, flagged };
+  return { created, updated, flagged, ...(businessLinkFailed ? { businessLinkFailed: true } : {}) };
 }
