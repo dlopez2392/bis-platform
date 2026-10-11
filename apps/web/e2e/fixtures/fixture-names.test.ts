@@ -93,6 +93,10 @@ const NOT_SWEPT_BY_NAME: Record<string, string> = {
     "a message body on the per-run fixture account",
   "booking.spec.ts: E2E booking note ${stamp}": "a booking note on the per-run fixture account",
   "messaging.spec.ts: E2E ${Date.now()}": "an email subject line, not a name",
+  "relationships.spec.ts: E2E ${MOTHER_LAST}":
+    "a contact on the PER-RUN fixture account, removed in afterAll and by that account's own " +
+    "cascade (contacts is in ACCOUNT_OWNED_TABLES) — not an account, Clerk org, form or " +
+    "blueprint name itself, so no leg of the sweep ever queries by it",
 };
 
 type Found = { key: string; file: string; line: number; literal: string; sample: string };
