@@ -17,6 +17,11 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => ({}) }));
+// F-085 part 1 (spec §7.3): every booking write below first proves the
+// booking through the caller's own client. Default: visible, so the rest of
+// this file tests today's behaviour; the "caller cannot see" block flips it.
+const visible = vi.hoisted(() => ({ callerCanSee: vi.fn() }));
+vi.mock("@/lib/auth/visible", () => ({ callerCanSee: visible.callerCanSee }));
 // F-048: the notice is scheduled with after(), and its origin read from the
 // request. The callback is captured and run by hand: cancel-notice.test.ts
 // covers what the notice itself does.
@@ -62,6 +67,7 @@ function baseFormData(followupBody: string): FormData {
 }
 
 beforeEach(() => {
+  visible.callerCanSee.mockReset().mockResolvedValue(true);
   dbMocks.updateCalendarSettings.mockReset();
   dbMocks.updateCalendarSettings.mockResolvedValue(undefined);
   owner.allowed = true;
@@ -529,5 +535,67 @@ describe("cancelNoticeOptionAction — the server's answer before the dialog ope
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await cancelNoticeOptionAction("acct_1", "bk_1"))
       .toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+  });
+});
+
+/**
+ * F-085 part 1, spec §7.3: "prove the target through the request client, then
+ * write through the service client". These four actions write (or read) with
+ * serviceDb(), which RLS does not bind, so a Technician whose 0068 policies
+ * hide another person's customer could otherwise change that customer's
+ * booking by id. Each must ask `callerCanSee("bookings", …)` FIRST, and on a
+ * "no" or a failed proof answer the generic refusal and touch nothing.
+ */
+describe("booking actions prove the booking through the caller's own client first (F-085, spec §7.3)", () => {
+  const V = "2026-10-09T18:00:00.123Z";
+  const REFUSED = { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+
+  beforeEach(() => {
+    dbMocks.setBookingStatus.mockReset().mockResolvedValue({ updatedAt: V });
+    dbMocks.undoOperatorCancel.mockReset().mockResolvedValue(undefined);
+    dbMocks.discardQueuedNotice.mockReset().mockResolvedValue(true);
+    notice.availability.mockReset().mockResolvedValue("available");
+    notice.queue.mockReset().mockResolvedValue({ messageId: "msg_1", email: { to: "maria@example.com" } });
+    notice.send.mockReset().mockResolvedValue("sent");
+    nextMocks.after.mockReset();
+    nextMocks.headers.mockReset().mockResolvedValue(new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }));
+  });
+
+  function expectNothingTouched() {
+    expect(dbMocks.setBookingStatus).not.toHaveBeenCalled();
+    expect(dbMocks.undoOperatorCancel).not.toHaveBeenCalled();
+    expect(dbMocks.discardQueuedNotice).not.toHaveBeenCalled();
+    expect(notice.queue).not.toHaveBeenCalled();
+    expect(notice.availability).not.toHaveBeenCalled();
+    expect(nextMocks.after).not.toHaveBeenCalled();
+  }
+
+  const actions = [
+    ["setBookingStatusAction", () => setBookingStatusAction("acct_1", "bk_1", "cancelled")],
+    ["cancelNoticeOptionAction", () => cancelNoticeOptionAction("acct_1", "bk_1")],
+    ["cancelBookingAction", () => cancelBookingAction("acct_1", "bk_1", { send: true, locale: "en", message: "" })],
+    ["undoCancelBookingAction", () => undoCancelBookingAction("acct_1", "bk_1", V, "msg_1")],
+  ] as const;
+
+  it.each(actions)("%s: a booking the caller cannot see is refused and nothing is written or read with the service key (mutation: check after the write → FAILS)", async (_name, run) => {
+    visible.callerCanSee.mockResolvedValue(false);
+    expect(await run()).toEqual(REFUSED);
+    expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+    expectNothingTouched();
+  });
+
+  it.each(actions)("%s: a proof that cannot be made (read error) is a refusal, never a write (mutation: swallow the throw and carry on → FAILS)", async (name, run) => {
+    visible.callerCanSee.mockRejectedValue(new Error("db down"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await run()).toEqual(REFUSED);
+    expectNothingTouched();
+    expect(err.mock.calls.some(([line]) => String(line).startsWith(`${name}: booking bk_1 could not be proven`))).toBe(true);
+    err.mockRestore();
+  });
+
+  it.each(actions)("%s: a booking the caller can see goes through as today, after the proof", async (_name, run) => {
+    const r = await run();
+    expect(r.ok).toBe(true);
+    expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
   });
 });

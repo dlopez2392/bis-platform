@@ -10,6 +10,7 @@ import {
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
+import { callerCanSee } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
@@ -161,6 +162,12 @@ export async function setBookingStatusAction(
   accountId: string, bookingId: string, status: BookingStatus,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  } catch (e) {
+    console.error(`setBookingStatusAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
 
   // D-036: the way back to "booked" is `undoCancelBookingAction` below and
   // only that, because only it carries the un-cancel guard (`onlyFrom`).
@@ -208,6 +215,12 @@ export async function cancelNoticeOptionAction(
 ): Promise<CancelNoticeOptionResult> {
   await requireAccountAccess(accountId);
   try {
+    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  } catch (e) {
+    console.error(`cancelNoticeOptionAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
+  try {
     return { ok: true, notice: await cancelNoticeAvailability(await dbForRequest(), serviceDb(), accountId, bookingId) };
   } catch (e) {
     console.error(`cancelNoticeOptionAction: failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
@@ -238,6 +251,12 @@ export async function cancelBookingAction(
   accountId: string, bookingId: string, notice: CancelNoticeChoice,
 ): Promise<CancelBookingResult> {
   const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  } catch (e) {
+    console.error(`cancelBookingAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
 
   const message = String(notice?.message ?? "").replace(/\r\n/g, "\n").trim();
   if (message.length > NOTICE_MESSAGE_MAX) return { ok: false, error: m["calendar.cancelDialog.messageTooLong"] };
@@ -314,6 +333,12 @@ export async function undoCancelBookingAction(
   accountId: string, bookingId: string, version: string, noticeMessageId?: string,
 ): Promise<ActionResult> {
   const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await callerCanSee("bookings", accountId, bookingId))) return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  } catch (e) {
+    console.error(`undoCancelBookingAction: booking ${bookingId} could not be proven (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
+  }
   if (typeof version !== "string" || version === "") {
     return { ok: false, error: m["calendar.bookings.statusUpdateFailed"] };
   }
