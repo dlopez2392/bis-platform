@@ -3349,8 +3349,8 @@ export const m = {
   "relationships.error.refused.es": "No puede cambiar ese cliente.",
   "relationships.error.self": "Pick someone else.",
   "relationships.error.self.es": "Elija a otra persona.",
-  "relationships.error.gone": "That changed since. Reload to see it.",
-  "relationships.error.gone.es": "Eso cambió. Vuelva a cargar para verlo.",
+  "relationships.error.gone": "Someone changed or removed this. Reload the page to see it.",
+  "relationships.error.gone.es": "Alguien cambió o quitó esto. Vuelva a cargar la página para verlo.",
   "relationships.error.restore": "Couldn't put it back.",
   "relationships.error.restore.es": "No se pudo deshacer.",
   "relationships.error.invalid": "That doesn't look right. Check it and try again.",
@@ -3423,10 +3423,14 @@ export const m = {
   "relationships.dialog.cancel": "Cancel",
   "relationships.dialog.cancel.es": "Cancelar",
   // Task 4 review, finding 5: the two people already have a row, so the flag on it says the same thing.
-  "relationships.dialog.flagOnRow": "Already on this record: {row}. Turn on “{flag}” there instead.",
-  "relationships.dialog.flagOnRow.es": "Ya está en este registro: {row}. Active “{flag}” ahí mismo.",
-  "relationships.dialog.flagAlreadyOn": "Already on this record: {row}, with “{flag}” on.",
-  "relationships.dialog.flagAlreadyOn.es": "Ya está en este registro: {row}, con “{flag}” activado.",
+  "relationships.dialog.flagOnRow": "Already on this record as “{row}”. Turn on “{flag}” there instead.",
+  "relationships.dialog.flagOnRow.es": "Ya está en este registro como “{row}”. En vez de agregar otra relación, active “{flag}” ahí.",
+  "relationships.dialog.flagAlreadyOn": "Already on this record as “{row}”, with “{flag}” on.",
+  "relationships.dialog.flagAlreadyOn.es": "Ya está en este registro como “{row}”, con “{flag}” activado.",
+  // After a "New person" add failed but the person was saved (final review item 7): only when
+  // this add created them, never when it matched someone already saved.
+  "relationships.dialog.personSaved": "{name} is saved as a customer. The relationship isn't added yet.",
+  "relationships.dialog.personSaved.es": "Se guardó a {name} como cliente. La relación todavía no se agregó.",
 } as const;
 
 export type MessageKey = keyof typeof m;

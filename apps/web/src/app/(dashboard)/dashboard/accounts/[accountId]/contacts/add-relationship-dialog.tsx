@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Notice } from "@/components/ui/notice";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLocale } from "@/components/locale-provider";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { t } from "@/lib/i18n/t";
@@ -16,13 +16,30 @@ import { cn } from "@/lib/utils";
 import type { RelationshipKey, WordForm } from "@bis/db/relationship-keys";
 import { relationshipOptions, formChoices, chipText, personName, type FormChoice } from "@/lib/contacts/relationship-labels";
 import { previewPair, type RelationshipView } from "@/lib/contacts/relationship-view";
-import { otherForSubmit, flagHintFor, flagHintText } from "@/lib/contacts/relationship-dialog";
+import {
+  otherForSubmit, flagHintFor, flagHintText, hitsToShow, afterFailedAdd, type SearchAnswer, type FailedAddState,
+} from "@/lib/contacts/relationship-dialog";
 import { addRelationshipAction, searchRelatableContactsAction, type RelatableHit } from "./relationship-actions";
 
 type Name = { firstName: string | null; lastName: string | null };
 
 const radioClass = "size-4 shrink-0 accent-[var(--accent)] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
 const hintClass = "text-xs text-muted-foreground";
+
+/**
+ * A line the dialog wants heard without interrupting: a POLITE live region, never Notice's
+ * role="alert" (final review item 7). The region is always mounted, empty when there is nothing to
+ * say, so the words that arrive in it are announced.
+ */
+function PoliteNote({ kind, text, className }: { kind: "flag-hint" | "person-saved"; text: string | null; className: string }) {
+  return (
+    <div aria-live="polite" data-relationship-note={kind}>
+      {text ? <p className={className}>{text}</p> : null}
+    </div>
+  );
+}
+// The tinted ground of Notice's warn tone with the foreground ink Notice prescribes for a sentence.
+const flagHintClass = "rounded-[var(--radius-ctl)] bg-[var(--warn-bg)] p-2 text-xs text-foreground";
 
 /** One person's word form for this relationship (spec C1): neutral preselected. */
 function WordsRow({ group, legend, words, value, onChange }: {
@@ -54,11 +71,13 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"find" | "new">("find");
   const [term, setTerm] = useState("");
-  const [hits, setHits] = useState<RelatableHit[] | "failed">([]);
+  /** The picker's last answer, with the term it answered (final review item 7: never shown under another). */
+  const [answer, setAnswer] = useState<SearchAnswer<RelatableHit> | null>(null);
   const [picked, setPicked] = useState<RelatableHit | null>(null);
   const [fresh, setFresh] = useState({ firstName: "", lastName: "", phone: "" });
-  /** The "New person" the server already created when the add itself failed (finding 3). */
-  const [createdId, setCreatedId] = useState<string | null>(null);
+  /** The "New person" the server already saved or matched when the add itself failed (finding 3), and whether it saved them. */
+  const [failed, setFailed] = useState<FailedAddState>({ createdId: null, personSaved: false });
+  const { createdId } = failed;
   const [choice, setChoice] = useState("");
   const [customLabel, setCustomLabel] = useState("");
   const [otherForm, setOtherForm] = useState<WordForm | null>(null);
@@ -71,11 +90,11 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
     const id = setTimeout(() => {
       void searchRelatableContactsAction(accountId, contactId, term)
         .catch(() => ({ ok: false as const }))
-        .then((r) => { if (!stale) setHits(r.ok ? r.hits : "failed"); });
+        .then((r) => { if (!stale) setAnswer({ term, hits: r.ok ? r.hits : "failed" }); });
     }, 250);
     return () => { stale = true; clearTimeout(id); };
   }, [accountId, contactId, searching, term]);
-  const shownHits = searching ? hits : [];
+  const shownHits = mode === "find" ? hitsToShow(answer, term) : "idle";
 
   const subjectName = personName(subject, tt("relationships.noName"));
   const other: Name = mode === "new" ? { firstName: fresh.firstName || null, lastName: fresh.lastName || null } : (picked ?? { firstName: null, lastName: null });
@@ -93,7 +112,8 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
   const hint = mode === "find" ? flagHintFor(views, picked?.id ?? null, key, side) : null;
 
   const reset = () => {
-    setMode("find"); setTerm(""); setHits([]); setPicked(null); setFresh({ firstName: "", lastName: "", phone: "" }); setCreatedId(null);
+    setMode("find"); setTerm(""); setAnswer(null); setPicked(null); setFresh({ firstName: "", lastName: "", phone: "" });
+    setFailed({ createdId: null, personSaved: false });
     setChoice(""); setCustomLabel(""); setOtherForm(null); setSubjectForm(null);
   };
 
@@ -107,7 +127,7 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
       labelKey: key, side, customLabel: key === "other" ? customLabel : null, otherForm, subjectForm,
     }).catch(() => ({ ok: false as const, error: "relationships.error.failed" as const, contactId: undefined }));
     if (!r.ok) {
-      if (mode === "new" && r.contactId) setCreatedId(r.contactId);
+      setFailed((prev) => afterFailedAdd(prev, mode, r));
       toast.error(tt(r.error));
       return;
     }
@@ -128,8 +148,10 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
             <div className="space-y-2">
               <Label htmlFor="rel-search">{tt("relationships.dialog.search")}</Label>
               <Input id="rel-search" value={term} onChange={(e) => { setTerm(e.target.value); setPicked(null); }} autoComplete="off" />
-              {shownHits === "failed" ? <p className={hintClass}>{tt("relationships.dialog.searchFailed")}</p>
-                : searching && shownHits.length === 0 ? <p className={hintClass}>{tt("relationships.dialog.searchEmpty")}</p>
+              {shownHits === "idle" ? null
+                : shownHits === "pending" ? <Skeleton data-relationship-search-pending className="h-5 w-full rounded-[var(--radius-ctl)]" />
+                : shownHits === "failed" ? <p className={hintClass}>{tt("relationships.dialog.searchFailed")}</p>
+                : shownHits.length === 0 ? <p className={hintClass}>{tt("relationships.dialog.searchEmpty")}</p>
                 : (
                   <ul className="space-y-1">
                     {shownHits.map((h) => (
@@ -155,9 +177,15 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
                 <Input id="rel-last" readOnly={createdId !== null} value={fresh.lastName} onChange={(e) => setFresh({ ...fresh, lastName: e.target.value })} /></div>
               <div className="space-y-1 sm:col-span-2"><Label htmlFor="rel-phone">{tt("relationships.dialog.phone")}</Label>
                 <Input id="rel-phone" type="tel" readOnly={createdId !== null} value={fresh.phone} onChange={(e) => setFresh({ ...fresh, phone: e.target.value })} /></div>
-              {createdId === null ? (
-                <Button type="button" size="sm" variant="ghost" className="justify-self-start sm:col-span-2" onClick={() => setMode("find")}>{tt("relationships.dialog.findPerson")}</Button>
-              ) : null}
+              <div className="space-y-1 sm:col-span-2">
+                {createdId === null ? (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setMode("find")}>{tt("relationships.dialog.findPerson")}</Button>
+                ) : null}
+                {/* Only when this dialog's add CREATED them: a match on someone already saved
+                    says nothing of the kind (final review item 7). */}
+                <PoliteNote kind="person-saved" className={hintClass}
+                  text={failed.personSaved ? tt("relationships.dialog.personSaved", { name: otherName }) : null} />
+              </div>
             </div>
           )}
 
@@ -168,8 +196,8 @@ export function AddRelationshipDialog({ accountId, contactId, subject, views, on
               <option value="" disabled>{tt("relationships.dialog.pick")}</option>
               {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
+            <PoliteNote kind="flag-hint" className={flagHintClass} text={hint ? flagHintText(hint, locale, names) : null} />
           </div>
-          {hint ? <Notice tone="warn" className="p-2 text-xs" data-relationship-flag-hint>{flagHintText(hint, locale, names)}</Notice> : null}
           {key === "other" ? (
             <div className="space-y-1">
               <Label htmlFor="rel-custom">{tt("relationships.dialog.otherLabel")}</Label>

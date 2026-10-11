@@ -346,4 +346,9 @@ describe("relationship error copy", () => {
     }
     expect(catalogue["relationships.error.duplicate"]).toBe("That relationship is already there.");
   });
+  it("'gone' reads as natural English and Spanish, not 'That changed since.' (final review item 7; mutation: restore the old line -> FAILS)", () => {
+    const catalogue = m as Record<string, string>;
+    expect(catalogue["relationships.error.gone"]).toBe("Someone changed or removed this. Reload the page to see it.");
+    expect(catalogue["relationships.error.gone.es"]).toBe("Alguien cambió o quitó esto. Vuelva a cargar la página para verlo.");
+  });
 });

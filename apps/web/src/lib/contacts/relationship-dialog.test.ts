@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { otherForSubmit, flagHintFor, flagHintText } from "./relationship-dialog";
+import { otherForSubmit, flagHintFor, flagHintText, hitsToShow, afterFailedAdd } from "./relationship-dialog";
 import type { RelationshipView } from "./relationship-view";
 
 const ANA = "abcdef12-2222-4222-8222-22222222222a";
@@ -49,13 +49,45 @@ describe("flagHintFor: the two people already have a row (Task 4 review, finding
 });
 
 describe("flagHintText: one short line naming the row and the flag", () => {
-  it("names the row as its chip reads and the flag to turn on, in English and Spanish", () => {
+  it("names the row as its chip reads, with one colon only, and the flag to turn on INSTEAD, in English and Spanish (final review item 7; mutation: restore 'Already on this record: {row}' or Spanish 'ahí mismo' -> FAILS)", () => {
     const hint = { view: view({}), flag: "isEmergency" as const, on: false };
-    expect(flagHintText(hint, "en", names)).toBe("Already on this record: Mother: Ana Ramírez. Turn on “Emergency contact” there instead.");
-    expect(flagHintText(hint, "es", names)).toBe("Ya está en este registro: Madre: Ana Ramírez. Active “Contacto de emergencia” ahí mismo.");
+    expect(flagHintText(hint, "en", names)).toBe("Already on this record as “Mother: Ana Ramírez”. Turn on “Emergency contact” there instead.");
+    expect(flagHintText(hint, "es", names)).toBe("Ya está en este registro como “Madre: Ana Ramírez”. En vez de agregar otra relación, active “Contacto de emergencia” ahí.");
   });
   it("says the flag is already on when it is (mutation: always say 'Turn on' -> FAILS)", () => {
     const hint = { view: view({ canPickUp: true }), flag: "canPickUp" as const, on: true };
-    expect(flagHintText(hint, "en", names)).toBe("Already on this record: Mother: Ana Ramírez, with “Can pick up” on.");
+    expect(flagHintText(hint, "en", names)).toBe("Already on this record as “Mother: Ana Ramírez”, with “Can pick up” on.");
+  });
+});
+
+describe("hitsToShow: a result list belongs to the term it was searched for (final review item 7)", () => {
+  const ana = { id: ANA, firstName: "Ana", lastName: "Ramírez", phone: null };
+  it("shows nothing below two characters", () => {
+    expect(hitsToShow({ term: "Ana", hits: [ana] }, "A")).toBe("idle");
+  });
+  it("hits for an earlier term are never shown under a new one: the list waits for its own answer (mutation: show the last answer whatever its term -> FAILS)", () => {
+    expect(hitsToShow({ term: "Ana", hits: [ana] }, "Anab")).toBe("pending");
+    expect(hitsToShow(null, "Ana")).toBe("pending");
+  });
+  it("the answer for this very term is shown, a failure included", () => {
+    expect(hitsToShow({ term: "Ana", hits: [ana] }, "Ana")).toEqual([ana]);
+    expect(hitsToShow({ term: "Ana", hits: "failed" }, "Ana")).toBe("failed");
+  });
+});
+
+describe("afterFailedAdd: what the dialog keeps when an add fails (final review item 7)", () => {
+  const start = { createdId: null, personSaved: false };
+  it("a new person this call saved: retry by their id, and say they are saved", () => {
+    expect(afterFailedAdd(start, "new", { contactId: ANA, created: true })).toEqual({ createdId: ANA, personSaved: true });
+  });
+  it("a new person who matched someone already saved: retry by their id, but never say 'saved' (mutation: personSaved whenever an id comes back -> FAILS)", () => {
+    expect(afterFailedAdd(start, "new", { contactId: ANA, created: false })).toEqual({ createdId: ANA, personSaved: false });
+  });
+  it("a second failure on the retry keeps both: the person is still saved", () => {
+    expect(afterFailedAdd({ createdId: ANA, personSaved: true }, "new", {})).toEqual({ createdId: ANA, personSaved: true });
+  });
+  it("nothing changes for a found customer, or when no one was made", () => {
+    expect(afterFailedAdd(start, "find", { contactId: ANA, created: true })).toEqual(start);
+    expect(afterFailedAdd(start, "new", {})).toEqual(start);
   });
 });

@@ -57,3 +57,32 @@ export function flagHintText(hint: FlagHint, locale: Locale, names: { hidden: st
   const params = { row: chipText(hint.view, locale, names), flag: t(m, FLAG_WORD[hint.flag], locale) };
   return t(m, hint.on ? "relationships.dialog.flagAlreadyOn" : "relationships.dialog.flagOnRow", locale, params);
 }
+
+/** The picker's last answer, paired with the exact term it was searched for. */
+export type SearchAnswer<H> = { term: string; hits: readonly H[] | "failed" };
+
+/**
+ * What the picker shows for the term in the box (final review item 7): an answer for an earlier
+ * term is never shown under a new one, so a person picked from the list is always someone the
+ * current term found. "pending" until this term's own answer arrives.
+ */
+export function hitsToShow<H>(answer: SearchAnswer<H> | null, term: string): readonly H[] | "failed" | "pending" | "idle" {
+  if (term.trim().length < 2) return "idle";
+  if (!answer || answer.term !== term) return "pending";
+  return answer.hits;
+}
+
+export type FailedAddState = { createdId: string | null; personSaved: boolean };
+
+/**
+ * What the dialog keeps after a failed add (final review item 7). A "New person" the server
+ * already saved or matched is retried by id (finding 3); the "saved" line shows only when this
+ * dialog's add CREATED them, never when the hand-add matched someone already saved, and it stays
+ * through a second failure on the retry.
+ */
+export function afterFailedAdd(
+  prev: FailedAddState, mode: "find" | "new", r: { contactId?: string; created?: boolean },
+): FailedAddState {
+  if (mode !== "new" || !r.contactId) return prev;
+  return { createdId: r.contactId, personSaved: prev.personSaved || r.created === true };
+}
