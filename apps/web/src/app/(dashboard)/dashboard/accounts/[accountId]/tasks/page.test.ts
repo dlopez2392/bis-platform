@@ -60,6 +60,20 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+// Task 7 fix round 1 (I3): the task picker is a client component whose own
+// behaviour is tested in components/assign/assign.test.ts; here only what a
+// row HANDS it is pinned (the raw task id, this account), so it is captured.
+const taskFieldProps = vi.hoisted(() => [] as Record<string, unknown>[]);
+vi.mock("@/components/assign/assignee-field", async () => {
+  const { createElement: h } = await import("react");
+  return {
+    TaskAssigneeField: (p: Record<string, unknown>) => {
+      taskFieldProps.push(p);
+      return h("span", { "data-task-assignee": String(p.taskId) });
+    },
+  };
+});
+
 let workRows: WorkRow[] = [];
 /** This account's own pending proposals (Important 3) — defaults to none so
  *  every pre-existing test below is unaffected by this mock's addition. A
@@ -633,35 +647,41 @@ describe("TasksPage — ?who= (Mine / Unassigned)", () => {
 // and the filtered empty states.
 describe("WorkList — Assigned to on task rows (F-085)", () => {
   const ANA = { userId: "11111111-1111-4111-8111-111111111111", label: "Ana Ruiz", role: "staff" as const };
-  const list = (rows: WorkRow[], canAssign: boolean) => renderToStaticMarkup(createElement(WorkList, {
-    buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE,
-    canAssign, members: [ANA],
-  }));
+  const list = (rows: WorkRow[], canAssign: boolean) => {
+    taskFieldProps.length = 0;
+    return renderToStaticMarkup(createElement(WorkList, {
+      buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE,
+      canAssign, members: [ANA],
+    }));
+  };
   const rowOf = (html: string, text: string) => html.split("<li").slice(1).find((r) => r.includes(text)) ?? "";
 
-  it("a task row carries a picker reading as its holder, for someone who may hand tasks on (mutation: drop the picker -> FAILS)", () => {
-    const r = rowOf(list([taskRow({ assigneeId: ANA.userId })], true), "Call about the estimate");
-    expect(r).toContain('role="combobox"');
-    expect(r).toContain(`aria-label="${m["assign.field.label"]}"`);
-    expect(renderedText(r)).toContain(ANA.label);
+  it("a task row hands TaskAssigneeField the task's RAW id, this account, its holder and the team (fix round 1, I3; mutation: taskId={row.id} -> FAILS)", () => {
+    list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], true);
+    expect(taskFieldProps).toHaveLength(1);
+    expect(taskFieldProps[0]).toMatchObject({ accountId: ACCOUNT_ID, taskId: "t1", value: ANA.userId, options: [ANA] });
   });
 
-  it("an unassigned task reads Unassigned", () => {
-    expect(renderedText(rowOf(list([taskRow({ assigneeId: null })], true), "Call about the estimate"))).toContain(m["assign.unassigned"]);
+  it("an unassigned task hands value null, never undefined", () => {
+    list([taskRow({ id: "task:t1", assigneeId: null })], true);
+    expect(taskFieldProps[0]!.value).toBeNull();
   });
 
   it("without canAssign (a Technician) no row carries a picker (mutation: render it for everyone -> FAILS)", () => {
-    expect(list([taskRow({ assigneeId: ANA.userId })], false)).not.toContain('role="combobox"');
+    list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], false);
+    expect(taskFieldProps).toHaveLength(0);
   });
 
   it("a conversation or booking row carries none: their holder is the customer's, set on the customer", () => {
-    expect(list([conversationRow(), bookingRow()], true)).not.toContain('role="combobox"');
+    list([conversationRow(), bookingRow()], true);
+    expect(taskFieldProps).toHaveLength(0);
   });
 
   it("the picker sits outside the row's link: a control inside an <a> is invalid and ambiguous", () => {
-    const r = rowOf(list([taskRow({ assigneeId: ANA.userId })], true), "Call about the estimate");
-    const link = r.match(/<a\b[\s\S]*?<\/a>/)?.[0] ?? "";
-    expect(link).not.toContain('role="combobox"');
+    const r = rowOf(list([taskRow({ id: "task:t1", assigneeId: ANA.userId })], true), "Call about the estimate");
+    const picker = r.indexOf('data-task-assignee="t1"');
+    expect(picker).toBeGreaterThan(-1);
+    expect(picker).toBeGreaterThan(r.indexOf("</a>"));
   });
 });
 

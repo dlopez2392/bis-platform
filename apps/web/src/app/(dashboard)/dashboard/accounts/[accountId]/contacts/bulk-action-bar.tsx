@@ -12,7 +12,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { m } from "@/lib/messages";
-import { fill } from "@/components/team/team-copy";
+import { plural } from "@/lib/i18n/t";
 import { ASSIGN_TOAST_MS } from "@/components/assign/assign-handlers";
 import type { AssignMember } from "@/lib/assign/view";
 import {
@@ -44,9 +44,9 @@ export async function applyBulkTag(
   return { ok: true, applied: r.applied, undo: () => bulkRemoveTagAction(accountId, r.addedIds, r.tagId) };
 }
 
-/** The "Assign to…" menu (F-085, spec §9): each person by name, then Unassigned. */
+/** The "Assign to…" menu (F-085, spec §9): Unassigned first, then each person by name, the field's own order. */
 export function bulkAssignChoices(members: { userId: string; label: string }[]): { assignee: string | null; label: string }[] {
-  return [...members.map((p) => ({ assignee: p.userId, label: p.label })), { assignee: null, label: m["assign.unassigned"] }];
+  return [{ assignee: null, label: m["assign.unassigned"] }, ...members.map((p) => ({ assignee: p.userId, label: p.label }))];
 }
 
 /**
@@ -70,11 +70,11 @@ export async function assignSelected(
   }
   if (!r.ok) { toast.error(m[r.error]); return; }
   onDone();
+  // plural() picks the One twin by the locale's own rule. These screens
+  // speak English today (m, not the request locale); the .es twins are in.
   const message = assignee === null
-    ? m["assign.doneUnassigned"]
-    : ids.length === 1
-      ? fill(m["assign.bulkDoneOne"], { name })
-      : fill(m["assign.bulkDone"], { count: ids.length, name });
+    ? plural(m, "assign.bulkUnassigned", ids.length, "en", { count: ids.length })
+    : plural(m, "assign.bulkDone", ids.length, "en", { count: ids.length, name });
   const previous = r.previous;
   if (previous.length === 0) { toast.success(message); return; }
   toast.success(message, {

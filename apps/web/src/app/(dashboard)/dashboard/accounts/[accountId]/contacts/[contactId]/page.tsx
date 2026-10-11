@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { contactDisplayName, formatCurrency } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
-import { loadAssignView } from "@/lib/assign/view";
+import { loadAssignView, type AssignView } from "@/lib/assign/view";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
@@ -25,6 +25,11 @@ import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-s
 import { renderZone } from "@/lib/zone";
 
 export const dynamic = "force-dynamic";
+
+/** "Assigned to" with nothing known: no picker, no team, no viewer (M4). */
+const READ_ONLY_ASSIGN: AssignView = {
+  who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [],
+};
 
 export default async function ContactDetailPage({
   params,
@@ -63,8 +68,13 @@ export default async function ContactDetailPage({
     // on the ledger client. Never throws; a failed read is "unknown", which
     // closes the form.
     smsRecipientState(ledger, accountId, contact),
-    // The team the "Assigned to" pickers offer; none for a Technician.
-    loadAssignView(db, accountId, access, undefined, { members: true }),
+    // The team the "Assigned to" pickers offer (none for a Technician), and
+    // the viewer's own person for a read-only "You" (fix round 1, I1). A
+    // failed read costs the field its picker, never the page (M4).
+    loadAssignView(db, accountId, access, undefined, { members: true, viewer: true }).catch((e: unknown) => {
+      console.error(`contact page: assignment read failed for account ${accountId}, Assigned to is read-only: ${loggableError(e)}`);
+      return READ_ONLY_ASSIGN;
+    }),
   ]);
   // The email composer's read (spec §6, choice 22): whether this contact's
   // email is stopped, and by whom. Never throws.
@@ -126,6 +136,7 @@ export default async function ContactDetailPage({
           texts={texts}
           canAssign={assign.canAssign}
           members={assign.members}
+          viewerId={assign.personId}
         />
         <ActivityTimeline
           accountId={accountId}

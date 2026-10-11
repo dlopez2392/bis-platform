@@ -47,6 +47,7 @@ export function ContactFieldsPanel({
   texts,
   canAssign = false,
   members = [],
+  viewerId = null,
 }: {
   accountId: string;
   contactId: string;
@@ -63,6 +64,8 @@ export function ContactFieldsPanel({
   canAssign?: boolean;
   /** The people the "Assigned to" picker offers (lib/assign/view.ts). */
   members?: AssignMember[];
+  /** The viewer's own person here: "You" on a read-only line only for their own customer. */
+  viewerId?: string | null;
 }) {
   const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
@@ -122,6 +125,7 @@ export function ContactFieldsPanel({
                   value={contact.assigned_to ?? null}
                   options={members}
                   readOnly={!canAssign}
+                  viewerId={viewerId}
                   onSaved={() => router.refresh()}
                 />
               </dd>

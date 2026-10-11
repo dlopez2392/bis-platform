@@ -62,3 +62,21 @@ describe("loadAssignView: what a list page needs for Mine / Unassigned (spec §8
     expect(v).toMatchObject({ who: "unassigned", assignee: { who: "unassigned" } });
   });
 });
+
+// Task 7 fix round 1 (I1): a read-only viewer's "Assigned to" says "You" only
+// for the customers that ARE theirs, so the screens that show that field ask
+// for the viewer's own person, still with no filter and no team.
+describe("loadAssignView: the viewer's own person for a read-only screen (opts.viewer)", () => {
+  it("a Technician with viewer: their person is read (account-scoped), still no filter, no team, no Mine (mutation: skip the read -> FAILS)", async () => {
+    readPersonId.mockResolvedValueOnce("p-t");
+    const v = await loadAssignView(DB, "a1", { userId: "u1", isAgency: false, role: "technician" }, "mine", { members: true, viewer: true });
+    expect(readPersonId).toHaveBeenCalledWith(DB, "a1", "u1");
+    expect(v).toEqual({ who: "all", personId: "p-t", assignee: undefined, canAssign: false, showMine: false, members: [] });
+    expect(listAccountTeam).not.toHaveBeenCalled();
+  });
+
+  it("without viewer a Technician's page still reads nothing (the list pages)", async () => {
+    await loadAssignView(DB, "a1", { userId: "u1", isAgency: false, role: "technician" }, undefined, { members: true });
+    expect(readPersonId).not.toHaveBeenCalled();
+  });
+});

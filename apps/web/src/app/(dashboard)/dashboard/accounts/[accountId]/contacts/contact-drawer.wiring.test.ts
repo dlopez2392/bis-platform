@@ -419,6 +419,11 @@ describe("the drawer's Assigned to line (F-085)", () => {
     expect(table).toMatch(/<ContactDrawer[\s\S]{0,400}?canAssign=\{canAssign\}[\s\S]{0,100}?members=\{members\}/);
   });
 
+  it("the drawer hands the field the viewer's own person, and the table hands it to the drawer (fix round 1, I1; mutation: drop either -> FAILS)", () => {
+    expect(drawer).toMatch(/<ContactAssigneeField[\s\S]{0,400}?viewerId=\{viewerId\}/);
+    expect(table).toMatch(/<ContactDrawer[\s\S]{0,500}?viewerId=\{viewerId\}/);
+  });
+
   it("an unauthorised default: with no canAssign passed the drawer is read-only (mutation: default canAssign to true -> FAILS)", () => {
     expect(drawer).toMatch(/accountId, row, onClose, canAssign = false, members = \[\],/);
     expect(table).toMatch(/canAssign = false,\s*members = \[\],/);

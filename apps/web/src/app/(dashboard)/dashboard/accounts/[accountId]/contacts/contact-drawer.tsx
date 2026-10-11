@@ -67,7 +67,7 @@ export const FIELDS: { field: Exclude<EditableField, "source">; labelKey: keyof 
 ];
 
 export function ContactDrawer({
-  accountId, row, onClose, canAssign = false, members = [],
+  accountId, row, onClose, canAssign = false, members = [], viewerId = null,
 }: {
   accountId: string;
   row: ContactRow | null;
@@ -77,6 +77,8 @@ export function ContactDrawer({
   canAssign?: boolean;
   /** The people the "Assigned to" picker offers (lib/assign/view.ts). */
   members?: AssignMember[];
+  /** The viewer's own person here: "You" on a read-only line only for their own customer. */
+  viewerId?: string | null;
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
@@ -312,6 +314,7 @@ export function ContactDrawer({
                             value={load.summary.assignedTo}
                             options={members}
                             readOnly={!canAssign}
+                            viewerId={viewerId}
                           />
                         </dd>
                       </div>

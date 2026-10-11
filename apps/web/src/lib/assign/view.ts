@@ -16,7 +16,10 @@ export type AssignMember = { userId: string; label: string; role: AccountRole };
  *
  * A Technician, and a client whose role could not be settled, get no filter
  * at all: RLS (0068) already makes their lists theirs, so "Unassigned" would
- * always be empty and "Mine" the same as All. Nothing is read for them.
+ * always be empty and "Mine" the same as All. Nothing is read for them,
+ * unless `opts.viewer` asks for their own person: a screen with a read-only
+ * "Assigned to" says "You" only for a holder who IS the viewer (Task 7 fix
+ * round 1, I1), and a role read that failed leaves an Owner here too.
  */
 export type AssignView = {
   who: Who;
@@ -30,10 +33,11 @@ export type AssignView = {
 export async function loadAssignView(
   db: SupabaseClient, accountId: string,
   access: { userId: string; isAgency: boolean; role: AccountRole | null },
-  rawWho: string | undefined, opts: { members: boolean },
+  rawWho: string | undefined, opts: { members: boolean; viewer?: boolean },
 ): Promise<AssignView> {
   if (!seesWholeAccount(access)) {
-    return { who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [] };
+    const personId = opts.viewer ? await readPersonId(db, accountId, access.userId) : null;
+    return { who: "all", personId, assignee: undefined, canAssign: false, showMine: false, members: [] };
   }
   const [personId, team] = await Promise.all([
     readPersonId(db, accountId, access.userId),

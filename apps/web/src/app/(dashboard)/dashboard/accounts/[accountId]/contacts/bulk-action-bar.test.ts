@@ -110,11 +110,11 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     expect(html).toContain(m["bulk.addTag"]);
   });
 
-  it("the menu lists each member by name, then Unassigned, and choosing one assigns the selection (mutation: drop Unassigned -> FAILS)", () => {
+  it("the menu lists Unassigned FIRST, then each member by name, the field's own order (fix round 1, M5), and choosing one assigns the selection (mutation: put Unassigned last -> FAILS)", () => {
     expect(bulkAssignChoices([ANA, TOM])).toEqual([
+      { assignee: null, label: m["assign.unassigned"] },
       { assignee: ANA.userId, label: ANA.label },
       { assignee: TOM.userId, label: TOM.label },
-      { assignee: null, label: m["assign.unassigned"] },
     ]);
     expect(BAR_SRC).toMatch(/bulkAssignChoices\(members\)\.map\(\(c\) => \([\s\S]{0,200}?assignSelected\(accountId, \[\.\.\.selectedIds\], c\.assignee, c\.label, onDone\)/);
   });
@@ -145,11 +145,25 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     expect(undoAssignContactsAction).toHaveBeenCalledWith("a1", PREVIOUS);
   });
 
-  it("Unassigned says 'Now unassigned.'", async () => {
+  it("Unassigned on several says how many, explicitly (fix round 1, M6; mutation: the thin 'Now unassigned.' -> FAILS)", async () => {
     assignContactsAction.mockResolvedValue({ ok: true, previous: PREVIOUS });
     await assignSelected("a1", ["c1", "c2"], null, m["assign.unassigned"], () => {});
     expect(assignContactsAction).toHaveBeenCalledWith("a1", ["c1", "c2"], null);
-    expect(toasts.success.mock.calls[0]![0]).toBe(m["assign.doneUnassigned"]);
+    expect(toasts.success.mock.calls[0]![0]).toBe("2 customers are now unassigned.");
+  });
+
+  it("…and on one says it in the singular", async () => {
+    assignContactsAction.mockResolvedValue({ ok: true, previous: [PREVIOUS[0]!] });
+    await assignSelected("a1", ["c1"], null, m["assign.unassigned"], () => {});
+    expect(toasts.success.mock.calls[0]![0]).toBe("1 customer is now unassigned.");
+  });
+
+  it("the sentences are chosen by plural() over the One twins, both with Spanish (fix round 1, M6; mutation: hand-pick by ids.length === 1 -> FAILS)", () => {
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkDone", ids.length, "en", { count: ids.length, name })');
+    expect(BAR_SRC).toContain('plural(m, "assign.bulkUnassigned", ids.length, "en", { count: ids.length })');
+    const cat = m as Record<string, string>;
+    expect(cat["assign.bulkUnassigned.es"]).toBe("{count} clientes ahora están sin asignar.");
+    expect(cat["assign.bulkUnassignedOne.es"]).toBe("1 cliente ahora está sin asignar.");
   });
 
   it("nothing changed (previous = []) still confirms, but offers no Undo (mutation: offer Undo on an empty array -> FAILS)", async () => {

@@ -104,13 +104,33 @@ describe("AssigneeField: editable", () => {
   });
 });
 
-describe("ContactAssigneeField: a Technician's own customer", () => {
-  it("reads as You when the page has no team to name them by (RLS shows a Technician only their own) (mutation: drop the You option -> FAILS)", () => {
-    const html = renderToStaticMarkup(createElement(ContactAssigneeField, {
-      accountId: ACCT, contactId: CONTACT, value: TOM.userId, options: [], readOnly: true,
-    }));
+describe("ContactAssigneeField: 'You' only for the viewer's own customer (fix round 1, I1/M2)", () => {
+  const render = (over: Partial<Parameters<typeof ContactAssigneeField>[0]>) => renderToStaticMarkup(createElement(ContactAssigneeField, {
+    accountId: ACCT, contactId: CONTACT, value: TOM.userId, options: [], readOnly: true, viewerId: TOM.userId, ...over,
+  }));
+
+  it("a read-only viewer who IS the holder reads You, as text (mutation: drop the You option -> FAILS)", () => {
+    const html = render({});
     expect(renderedText(html).trim()).toBe(m["assign.you"]);
     expect(html).not.toContain('role="combobox"');
+  });
+
+  it("a read-only viewer looking at someone ELSE's customer (an Owner whose role read failed: RLS still shows every customer) reads 'Someone on the team', never You (mutation: You for any unlisted holder -> FAILS)", () => {
+    const text = renderedText(render({ viewerId: ANA.userId })).trim();
+    expect(text).toBe(m["assign.someone"]);
+    expect(text).not.toBe(m["assign.you"]);
+  });
+
+  it("a read-only viewer whose own person is unknown (null) never reads You", () => {
+    expect(renderedText(render({ viewerId: null })).trim()).toBe(m["assign.someone"]);
+  });
+
+  it("an EDITABLE field with an unlisted holder offers no You, even when the holder is the viewer: You is a read-only label, never a choice (mutation: drop the readOnly guard -> FAILS)", () => {
+    const UNLISTED = "99999999-9999-4999-8999-999999999999";
+    const html = render({ readOnly: false, options: OPTIONS, value: UNLISTED, viewerId: UNLISTED });
+    expect(html).toContain('role="combobox"');
+    expect(renderedText(html).trim()).toBe(m["assign.someone"]);
+    expect(FIELD_SRC).toMatch(/readOnly && value !== null && value === viewerId && !options\.some/);
   });
 });
 

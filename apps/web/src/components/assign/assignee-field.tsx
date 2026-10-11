@@ -74,20 +74,26 @@ export function AssigneeField({ label, value, options, readOnly, save }: {
 /**
  * A customer's "Assigned to" (the drawer and the record page). A read-only
  * viewer's page carries no team (lib/assign/view.ts reads none for a
- * Technician, nor for a client whose role is unsettled), and RLS (0068) shows
- * such a viewer only the customers assigned to THEM, so a holder the options
- * do not name is the viewer: "You".
+ * Technician, nor for a client whose role could not be settled), so it cannot
+ * name a holder by the team list. It says "You" only when the holder IS the
+ * viewer (`viewerId`, their own person in this account). Being read-only does
+ * not make every customer theirs: an Owner whose stored-role read failed is
+ * read-only here while RLS still shows them every customer (Task 7 review,
+ * I1), so any other holder is "Someone on the team". "You" is a read-only
+ * label, never a choice in the editable picker.
  */
-export function ContactAssigneeField({ accountId, contactId, value, options, readOnly, onSaved }: {
+export function ContactAssigneeField({ accountId, contactId, value, options, readOnly, viewerId, onSaved }: {
   accountId: string;
   contactId: string;
   value: string | null;
   options: AssigneeOption[];
   readOnly: boolean;
+  /** The viewer's own person in this account (readPersonId), or null when unknown. */
+  viewerId: string | null;
   /** After a save that changed something, e.g. the record page's refresh (its task rows move with the customer, A4). */
   onSaved?: () => void;
 }) {
-  const shown = readOnly && value !== null && !options.some((o) => o.userId === value)
+  const shown = readOnly && value !== null && value === viewerId && !options.some((o) => o.userId === value)
     ? [...options, { userId: value, label: m["assign.you"] }]
     : options;
   return (

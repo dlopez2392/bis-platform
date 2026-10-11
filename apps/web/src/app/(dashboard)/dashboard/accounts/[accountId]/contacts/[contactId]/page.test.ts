@@ -443,11 +443,38 @@ describe("ContactDetailPage: Assigned to (F-085)", () => {
 
   it("a Technician reads their own customer as You, as text, with no picker and no team read (mutation: hand a Technician the picker -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    readPersonIdMock.mockResolvedValueOnce("p-t");
     getContactMock.mockResolvedValue({ ...CONTACT, assigned_to: "p-t" });
     const r = row(await render());
     expect(renderedText(r)).toContain(m["assign.you"]);
     expect(r).not.toContain('role="combobox"');
     expect(listAccountTeamMock).not.toHaveBeenCalled();
+  });
+
+  it("a read-only viewer looking at someone else's customer (a failed role read leaves an Owner here) reads 'Someone on the team', never You (fix round 1, I1; mutation: You for any unlisted holder -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: null, canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-owner");
+    getContactMock.mockResolvedValue({ ...CONTACT, assigned_to: "p-t" });
+    const text = renderedText(row(await render()));
+    expect(text).toContain(m["assign.someone"]);
+    expect(text).not.toContain(m["assign.you"]);
+  });
+
+  it("a team read that fails degrades the field to read-only and keeps the page, logged (fix round 1, M4: one card's fault never blanks the page; mutation: let it throw -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(STAFF);
+    listAccountTeamMock.mockRejectedValueOnce(new Error("team read down"));
+    getContactMock.mockResolvedValue({ ...CONTACT, assigned_to: "p-me" });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      const r = row(html);
+      expect(renderedText(r)).toContain(m["assign.field.label"]);
+      expect(r).not.toContain('role="combobox"');
+      expect(timelineProps.mock.calls[0]![0]).toMatchObject({ canAssign: false, members: [] });
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("team read down");
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("the timeline's task rows get canAssign and the team (mutation: hand them nothing -> FAILS)", async () => {

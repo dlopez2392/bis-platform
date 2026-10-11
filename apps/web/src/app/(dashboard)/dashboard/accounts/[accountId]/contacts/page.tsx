@@ -156,7 +156,9 @@ export default async function ContactsPage({
   // describe the filtered rows. Never for a Technician (their list is
   // already theirs). `assign.members`/`canAssign` feed the assignment
   // controls in ContactsTable.
-  const assign = await loadAssignView(db, accountId, access, rawWho, { members: true });
+  // `viewer`: a read-only viewer's own person too, so the drawer's
+  // "Assigned to" says "You" only for customers that are theirs (fix round 1, I1).
+  const assign = await loadAssignView(db, accountId, access, rawWho, { members: true, viewer: true });
 
   // Validated once, reused twice: as the query's own cursor below, and as the
   // signal that decides which empty state a zero-row result means (see the
@@ -294,6 +296,7 @@ export default async function ContactsPage({
               who={assign.who}
               canAssign={assign.canAssign}
               members={assign.members}
+              viewerId={assign.personId}
             />
             {newerHref || olderHref ? (
               <div className="mt-4 flex items-center justify-between">

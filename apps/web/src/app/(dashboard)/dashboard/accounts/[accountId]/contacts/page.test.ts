@@ -418,8 +418,20 @@ describe("?who= (Mine / Unassigned)", () => {
     expect((listContactsMock.mock.calls[0]![2] as { assignee?: unknown }).assignee).toBeUndefined();
     expect((countContactsMock.mock.calls[0]![2] as { assignee?: unknown }).assignee).toBeUndefined();
     expect(listAccountTeamMock).not.toHaveBeenCalled();
-    expect(readPersonIdMock).not.toHaveBeenCalled();
+    // Task 7 fix round 1 (I1): ONE account-scoped read of their own person,
+    // so the drawer's read-only "Assigned to" can say "You" for their own
+    // customers and nobody else's. It does not become a filter.
+    expect(readPersonIdMock).toHaveBeenCalledTimes(1);
+    expect(readPersonIdMock).toHaveBeenCalledWith(expect.anything(), "a1", "u1");
     expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ canAssign: false, members: [], who: "all" }));
+  });
+
+  it("the table gets the viewer's own person, for the drawer's You (fix round 1, I1; mutation: pass null -> FAILS)", async () => {
+    resetMocks();
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    readPersonIdMock.mockResolvedValueOnce("p-t");
+    await render({});
+    expect(contactsTableMock).toHaveBeenCalledWith(expect.objectContaining({ viewerId: "p-t" }));
   });
 
   it("a client whose role could not be settled gets the Technician's view (fails closed)", async () => {
