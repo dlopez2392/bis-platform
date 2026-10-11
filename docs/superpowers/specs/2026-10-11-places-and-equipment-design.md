@@ -76,8 +76,8 @@ segments or Sofía. Tenants linked to a place (O4). Moving a property to another
 ## 5. Data: migration 0071
 
 `0071_places_and_equipment.sql`, by bis-db-schema. Depends on 0068 and 0069 (merged), not on 0070.
-**Numbering:** whichever of 0070 and this lands second keeps the higher number, settled BEFORE the
-CI-project apply (a version on bis-ci cannot be taken back, `.github/scripts/ci-migrations-applied.sh`).
+**Numbering (settled 2026-10-11):** the relationships lane (0070) merges first, so this is 0071, and 0070
+reaches bis-ci before it (a version on bis-ci cannot be taken back, `.github/scripts/ci-migrations-applied.sh`).
 ASCII only, no backslash (0050:86). `set local lock_timeout = '5s'`.
 
 ### 5.1 Tables
