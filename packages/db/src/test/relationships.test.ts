@@ -15,6 +15,13 @@ const base = (a: string, b: string, labelKey: RelationshipKey = "parent"): NewRe
 });
 const person = async (db: Parameters<typeof createContact>[0], accountId: string, firstName: string) =>
   (await createContact(db, accountId, { firstName, lastName: "Ramírez" }, "user_test")).id;
+// user-client.ts marks a client via Symbol.for("@bis/db:user-client") — a GLOBAL registry key,
+// so this test can set the SAME mark on an otherwise perfectly ordinary, fully-working client
+// (no fake/invalid JWT involved, which would fail the write for an unrelated reason and make the
+// probe vacuous). Only the guard under test can still stop a write through a client marked this way.
+const USER_CLIENT_MARK = Symbol.for("@bis/db:user-client");
+const markAsUserClient = (db: Parameters<typeof createContact>[0]) =>
+  Object.defineProperty(db, USER_CLIENT_MARK, { value: true, configurable: true });
 
 describe("relationships (spec §6)", () => {
   it("one row reads from both records, each with the OTHER person (mutation: return people for both ids -> FAILS)", () =>
@@ -30,14 +37,45 @@ describe("relationships (spec §6)", () => {
       expect(onAna.people).toEqual([{ id: sofia, first_name: "Sofía", last_name: "Ramírez" }]);
     }));
 
+  it("an uppercase-but-valid id still names the OTHER person, not the subject (mutation: drop the lowercase step -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = await person(db, accountId, "Ana");
+      const sofia = await person(db, accountId, "Sofía");
+      await addRelationship(db, accountId, base(ana, sofia), "user_test");
+      // PostgREST always echoes ids back lowercase; a caller who forwards Ana's id uppercase
+      // must still see Sofía as the OTHER person, never Ana named on her own record.
+      const { people } = await listContactRelationships(db, accountId, ana.toUpperCase());
+      expect(people).toEqual([{ id: sofia, first_name: "Sofía", last_name: "Ramírez" }]);
+    }));
+
   it("a customer with none reads empty", () => withTestAccount(async (db, accountId) => {
     const solo = await person(db, accountId, "Solo");
     expect(await listContactRelationships(db, accountId, solo)).toEqual({ rows: [], people: [] });
   }));
 
-  it("a non-uuid id is refused before any query is built (mutation: drop assertUuid -> FAILS with a PostgREST error instead)", () =>
+  it("a malformed id is refused by the guard itself, not merely by Postgres's uuid cast, and never leaks an unrelated stored row (mutation: drop assertUuid -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
-      await expect(listContactRelationships(db, accountId, "x,contact_id.neq.0")).rejects.toMatchObject({ code: "22P02", name: "RelationshipDbError" });
+      const ana = await person(db, accountId, "Ana");
+      const sofia = await person(db, accountId, "Sofía");
+      await addRelationship(db, accountId, base(ana, sofia), "user_test");
+      // An unrelated pair, stored in the SAME account. A payload of just "x,..." dies on
+      // Postgres's own uuid cast (22P02) regardless of the guard, which would still pass with
+      // assertUuid deleted — proving nothing. This payload is a VALID uuid plus an extra or=
+      // branch that survives the cast (`contact_id.not.is.null` needs no cast at all), so with
+      // the guard removed the filter becomes "match everything in the account".
+      const carlos = await person(db, accountId, "Carlos");
+      const dana = await person(db, accountId, "Dana");
+      const unrelated = await addRelationship(db, accountId, base(carlos, dana, "sibling"), "user_test");
+      const malicious = `${ana},contact_id.not.is.null`;
+      let thrown: unknown;
+      let resolved: { rows: { id: string }[] } | undefined;
+      try {
+        resolved = await listContactRelationships(db, accountId, malicious);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toMatchObject({ code: "22P02", name: "RelationshipDbError" });
+      expect((resolved?.rows ?? []).map((r) => r.id)).not.toContain(unrelated.id);
     }));
 
   it("a duplicate keeps its SQLSTATE (mutation: throw a plain Error -> FAILS)", () => withTestAccount(async (db, accountId) => {
@@ -48,6 +86,25 @@ describe("relationships (spec §6)", () => {
     expect(e).toBeInstanceOf(RelationshipDbError);
     expect((e as RelationshipDbError).code).toBe("23505");
   }));
+
+  it("a support label is directional: the same direction twice is refused (23505, contact_relationships_directed), the reverse direction is a separate row (R7, mutation: swap which index backs it -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      // contact_relationships_emergency (0070): an emergency_contact row must carry
+      // contact_is_emergency: true on the side it's filed under.
+      const emergency = { ...base(a, b, "emergency_contact"), contactIsEmergency: true };
+      await addRelationship(db, accountId, emergency, "user_test");
+      const e = await addRelationship(db, accountId, emergency, "user_test").catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(RelationshipDbError);
+      expect((e as RelationshipDbError).code).toBe("23505");
+      // Unlike a family/symmetric label (the test above), the REVERSE direction of a support
+      // label is a distinct, allowed row: "B is A's emergency contact" too.
+      const reverse = await addRelationship(
+        db, accountId, { ...base(b, a, "emergency_contact"), contactIsEmergency: true }, "user_test");
+      expect(reverse.contact_id).toBe(b);
+      expect((await listContactRelationships(db, accountId, a)).rows).toHaveLength(2);
+    }));
 
   it("setRelationshipSides changes only side columns and hands back what they were (mutation: previous read after the write -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
@@ -62,7 +119,7 @@ describe("relationships (spec §6)", () => {
       await expect(setRelationshipSides(db, accountId, row.id, { label_key: "spouse" } as never, "user_test")).rejects.toMatchObject({ code: "22023" });
     }));
 
-  it("remove returns the row, a second remove finds nothing, restore puts back the same id (mutation: restore without id -> FAILS)", () =>
+  it("remove returns the row, a second remove finds nothing, restore puts back the same id AND says so in its own event (mutation: restore without id, or drop restored:true -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const a = await person(db, accountId, "A");
       const b = await person(db, accountId, "B");
@@ -73,6 +130,64 @@ describe("relationships (spec §6)", () => {
       const back = await restoreRelationship(db, accountId, removed as typeof row, "user_test");
       expect(back.id).toBe(row.id);
       expect((await listContactRelationships(db, accountId, a)).rows.map((r) => r.id)).toEqual([row.id]);
+      const { data, error } = await db.from("events").select("type, payload").eq("account_id", accountId)
+        .eq("type", "contact.relationship_added").order("id", { ascending: false }).limit(1);
+      if (error) throw new Error(error.message);
+      expect(data?.[0]).toMatchObject({
+        type: "contact.relationship_added",
+        payload: { relationshipId: row.id, contactId: a, relatedContactId: b, labelKey: "godparent", restored: true },
+      });
+    }));
+
+  it("remove's Undo snapshot comes from the DELETE's own RETURNING, not the earlier existence read (mutation: narrow the delete's select to id -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "caregiver"), "user_test");
+      const sided = await setRelationshipSides(db, accountId, row.id, { contact_can_pick_up: true }, "user_test");
+      if (typeof sided === "string") throw new Error(`unexpected ${sided}`);
+      const removed = await removeRelationship(db, accountId, row.id, "user_test");
+      // If the delete's own select were narrowed back to "id" (the pre-fix shape), the snapshot
+      // used for both the Undo return value and the removed event would be missing every column
+      // but id, even though the row visibly has contact_can_pick_up: true at the moment it's
+      // deleted.
+      expect(removed).toMatchObject({ id: row.id, label_key: "caregiver", contact_can_pick_up: true });
+    }));
+
+  it("restore builds its insert from NAMED columns: an extra field is ignored, created_at carries over, updated_at is refreshed (mutation: spread {...row} again -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "landlord"), "user_test");
+      const removed = await removeRelationship(db, accountId, row.id, "user_test");
+      if (typeof removed === "string") throw new Error(`unexpected ${removed}`);
+      const withExtra = { ...removed, notAColumn: "should never reach postgrest" } as unknown as typeof removed;
+      const back = await restoreRelationship(db, accountId, withExtra, "user_test");
+      expect(back.id).toBe(row.id);
+      expect(back.created_at).toBe(row.created_at);
+      expect(back.updated_at).not.toBe(row.updated_at);
+      expect((back as unknown as Record<string, unknown>).notAColumn).toBeUndefined();
+    }));
+
+  it("a non-user actor on a user client is refused before any write — the insert is never attempted (mutation: drop assertActorAllowed in addRelationship -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      markAsUserClient(db);
+      await expect(addRelationship(db, accountId, base(a, b), "automation_x", "system"))
+        .rejects.toMatchObject({ name: "RelationshipDbError" });
+      expect((await listContactRelationships(db, accountId, a)).rows).toEqual([]);
+    }));
+
+  it("a non-user actor on a user client is refused before any write — an existing row survives a refused remove (mutation: drop assertActorAllowed in removeRelationship -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "A");
+      const b = await person(db, accountId, "B");
+      const row = await addRelationship(db, accountId, base(a, b, "landlord"), "user_test");
+      markAsUserClient(db);
+      await expect(removeRelationship(db, accountId, row.id, "automation_x", "system"))
+        .rejects.toMatchObject({ name: "RelationshipDbError" });
+      expect(await getRelationship(db, accountId, row.id)).toMatchObject({ id: row.id });
     }));
 
   it("restoring when one person was deleted meanwhile keeps 23503 (mutation: swallow the error -> FAILS)", () => withTestAccount(async (db, accountId) => {
