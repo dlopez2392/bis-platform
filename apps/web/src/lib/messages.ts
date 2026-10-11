@@ -638,6 +638,10 @@ export const m = {
   "contact.company.es": "Nombre del negocio",
   "contact.business.tooLong": "Business names can be up to 120 characters.",
   "contact.business.tooLong.es": "El nombre del negocio puede tener hasta 120 caracteres.",
+  // I3: a Business name save that changed nothing because the business is
+  // already on the list under another spelling says so, instead of "saved".
+  "contact.business.alreadyAs": "Already on your list as “{name}”.",
+  "contact.business.alreadyAs.es": "Ya está en su lista como “{name}”.",
   // F-157's drawer line (docs/crm-features.md §4.3 rider 6): the owner's own
   // free-text note on where this lead came from ("contact.source.label",
   // inline-editable like the fields above) plus the auto-detected hint next

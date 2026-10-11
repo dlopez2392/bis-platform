@@ -170,26 +170,47 @@ export type BusinessUndo = { added: string | null; removed: GroupMemberSnapshot 
  * request client proves the contact first (a Technician cannot see someone
  * else's customer), then the service client writes, because the group tables
  * are server-written. The column the list shows is kept by the database.
+ *
+ * `shown` is the name the database STORED (I3): a business already on the
+ * list under another spelling keeps ITS spelling ("Beta Roofing" for a typed
+ * "beta roofing"), so the field shows that rather than the typed text. An
+ * unchanged save reports the spelling the proof read already holds; a real
+ * change reads it back after the write. The 120 limit counts characters, as
+ * the database's char_length does, not UTF-16 units (M1).
  */
 export async function setContactBusinessAction(
   accountId: string, contactId: string, value: string,
-): Promise<{ ok: true; undoPayload?: BusinessUndo } | { ok: false; error: string }> {
+): Promise<{ ok: true; shown: string; undoPayload?: BusinessUndo } | { ok: false; error: string }> {
   const { userId } = await requireAccountAccess(accountId);
   const name = value.trim();
-  if (name.length > GROUP_NAME_MAX) return { ok: false, error: m["contact.business.tooLong"] };
+  if ([...name].length > GROUP_NAME_MAX) return { ok: false, error: m["contact.business.tooLong"] };
+  let db: Awaited<ReturnType<typeof dbForRequest>>;
+  let r: Awaited<ReturnType<typeof setContactsBusiness>>[number] | undefined;
+  let before: Awaited<ReturnType<typeof getContact>>;
   try {
-    const db = await dbForRequest();
-    if (!(await getContact(db, accountId, contactId))) return { ok: false, error: "Save failed — please try again." };
-    const [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
+    db = await dbForRequest();
+    before = await getContact(db, accountId, contactId);
+    if (!before) return { ok: false, error: "Save failed — please try again." };
+    [r] = await setContactsBusiness(serviceDb(), accountId, [{ contactId, name }], userId);
     if (!r || r.status === "not_found") return { ok: false, error: "Save failed — please try again." };
     if (r.status === "too_long") return { ok: false, error: m["contact.business.tooLong"] };
-    revalidatePath(contactsPath(accountId));
-    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
-    return r.status === "unchanged" ? { ok: true } : { ok: true, undoPayload: { added: r.added, removed: r.removed } };
   } catch (e) {
     console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
     return { ok: false, error: "Save failed — please try again." };
   }
+  if (r.status === "unchanged") return { ok: true, shown: before.company_name ?? "" };
+  // The write has committed by here: a failed read-back costs the canonical
+  // spelling (the typed name is shown instead), never the truth that it saved.
+  let shown = name;
+  try {
+    const after = await getContact(db, accountId, contactId);
+    shown = after?.company_name ?? "";
+  } catch (e) {
+    console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: read-back after save failed: ${loggableError(e)}`);
+  }
+  revalidatePath(contactsPath(accountId));
+  revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+  return { ok: true, shown, undoPayload: { added: r.added, removed: r.removed } };
 }
 
 export async function undoContactBusinessAction(

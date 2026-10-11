@@ -294,20 +294,24 @@ describe("the inline phone Undo is server-authoritative", () => {
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
 
-  it("inline-field.tsx hands the SAVE's own undo payload to commitInlineUndo, never a client-captured flag (mutation: capture phoneUnconfirmed client-side again → FAILS)", () => {
-    expect(inlineField).toContain("const phoneUndo = result.undo;");
-    expect(inlineField).toMatch(/commitInlineUndo\(field, prior, phoneUndo, save, undoPhone\)/);
+  it("inline-field.tsx hands the SAVE's own undo payload to the Undo planner, never a client-captured flag (mutation: capture phoneUnconfirmed client-side again → FAILS)", () => {
+    // S-02 Task 3c moved the Undo decision into planInlineUndo
+    // (lib/contacts/inline-save.ts); the component still hands it THIS
+    // save's own payload, and the planner routes phone to commitInlineUndo.
+    expect(inlineField).toMatch(/planInlineUndo\(\{[^}]*phoneUndo: result\.undo,/);
     expect(inlineField).not.toMatch(/phoneUnconfirmed/);
   });
 
-  /** #9: the phone field's `undoable` is "did the save hand back a
+  /** #9: the phone field's Undo is offered when "the save handed back a
    *  payload", never the generic "does the prior value pass validation" —
    *  offering Undo without a payload is offering a button whose only
-   *  possible outcome is commitInlineUndo's own "failed" refusal. */
-  it("inline-field.tsx's phone undoable check is 'has a payload', never the generic prior-validates check (mutation: undoable = normalize(prior).ok for phone too → FAILS)", () => {
-    // S-02 Task 3c split the ternary across lines (an `undoWith` arm sits
-    // between phone and the generic rule); phone still decides first, by payload.
-    expect(inlineField).toMatch(/const undoable = field === "phone" \? phoneUndo !== undefined\s*:/);
+   *  possible outcome is commitInlineUndo's own "failed" refusal. Since
+   *  S-02 Task 3c that rule is pinned BY BEHAVIOUR in inline-save.test.ts
+   *  ("phone with no payload offers no Undo, even when the prior
+   *  validates"); here, the component offers Undo only when one is planned. */
+  it("inline-field.tsx offers Undo only when planInlineUndo planned one (the phone rule itself: inline-save.test.ts)", () => {
+    expect(inlineField).toMatch(/const undo = planInlineUndo\(/);
+    expect(inlineField).toMatch(/action: undo\s*\?/);
   });
 
   it("the drawer's phone Undo calls the dedicated action and bumps retryNonce on success (mutation: drop the nonce bump after Undo → FAILS)", () => {

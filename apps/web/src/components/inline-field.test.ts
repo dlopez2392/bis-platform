@@ -47,18 +47,22 @@ describe("InlineField's options <select> uses nativeFieldClass", () => {
 });
 
 /**
- * S-02 §6 row 3: a field whose save hands back its OWN server-built undo
- * (the Business name) undoes with exactly that payload through `undoWith`,
- * never by re-saving the prior text — re-saving "Acme" would create a new
- * group rather than restore the membership the save replaced. Source-text
- * pin, the file's house pattern (no DOM harness in this package).
+ * S-02 §6 row 3: whether Undo is offered and which ONE writer it runs is
+ * decided by planInlineUndo (lib/contacts/inline-save.ts, pinned there by
+ * behaviour). What is left to pin here, by source text (no DOM harness in
+ * this package), is that the component asks it and runs nothing else.
  */
-describe("InlineField.undoWith routes Undo to the save's own payload", () => {
-  it("Undo calls undoWith with the payload this save returned (mutation: always commitInlineUndo → FAILS)", () => {
-    expect(src).toMatch(/const ownUndo = undoWith \? result\.undoPayload : undefined;/);
-    expect(src).toMatch(/undoWith && ownUndo !== undefined\s*\?\s*undoWith\(ownUndo\)/);
+describe("InlineField delegates Undo and the saved view to lib/contacts/inline-save", () => {
+  it("plans Undo from THIS save's own payloads (mutation: hand it a client-captured value -> FAILS)", () => {
+    expect(src).toMatch(/const undo = planInlineUndo\(\{[^}]*phoneUndo: result\.undo,[^}]*ownUndo: result\.undoPayload,[^}]*undoWith,?[^}]*\}\);/);
   });
-  it("an undoWith field offers Undo only when the save returned a payload (mutation: fall back to normalize(prior).ok → FAILS)", () => {
-    expect(src).toMatch(/: undoWith \? ownUndo !== undefined\s*: normalize\(prior\)\.ok/);
+  it("offers Undo exactly when one is planned, and runs only that write (mutation: a second write beside it -> FAILS)", () => {
+    expect(src).toMatch(/action: undo\s*\?/);
+    expect(src).toMatch(/onClick: \(\) => \{\s*void undo\(\)\.then\(\(r\) => \{/);
+    expect(src).not.toMatch(/commitInlineUndo/);
+  });
+  it("shows the server's stored spelling and its message (mutation: show the typed text -> FAILS)", () => {
+    expect(src).toMatch(/const view = inlineSavedView\(norm\.value, label, result\);/);
+    expect(src).toMatch(/committed\.current = view\.shown;\s*setShown\(view\.shown\);/);
   });
 });

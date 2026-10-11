@@ -794,22 +794,52 @@ describe("setContactBusinessAction", () => {
     expect(r.ok).toBe(false);
     expect(dbMocks.setContactsBusiness).not.toHaveBeenCalled();
   });
-  it("returns the server's own undo payload; an unchanged name returns none", async () => {
-    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+  it("returns the server's own undo payload and the spelling it stored, read back after the write (I3: linking an existing business keeps ITS spelling; mutation: shown = the typed name -> FAILS)", async () => {
     const removed = { id: "m1", account_id: "a1", client_group_id: "g1", contact_id: "c1", role: null, is_primary: true, is_billing: false, created_at: "2026-01-01" };
+    dbMocks.getContact
+      .mockResolvedValueOnce({ id: "c1", company_name: "Old Co" })
+      .mockResolvedValueOnce({ id: "c1", company_name: "Beta Roofing" });
     dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "ok", added: "m2", removed }]);
-    expect(await setContactBusinessAction("a1", "c1", "Beta")).toEqual({ ok: true, undoPayload: { added: "m2", removed } });
+    expect(await setContactBusinessAction("a1", "c1", "beta roofing")).toEqual({ ok: true, shown: "Beta Roofing", undoPayload: { added: "m2", removed } });
+  });
+  it("an unchanged name returns no undo, and the spelling already stored (I3; mutation: shown = the typed name -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", company_name: "Beta" });
     dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "unchanged", added: null, removed: null }]);
-    expect(await setContactBusinessAction("a1", "c1", "beta")).toEqual({ ok: true });
+    expect(await setContactBusinessAction("a1", "c1", "  beta ")).toEqual({ ok: true, shown: "Beta" });
+  });
+  it("a read-back that fails after the write committed still reports the save, showing the typed name", async () => {
+    dbMocks.getContact.mockResolvedValueOnce({ id: "c1", company_name: null }).mockRejectedValueOnce(new Error("read failed"));
+    dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
+    expect(await setContactBusinessAction("a1", "c1", "Beta")).toEqual({ ok: true, shown: "Beta", undoPayload: { added: "m2", removed: null } });
   });
   it("refuses a name over 120 characters with plain words", async () => {
     const r = await setContactBusinessAction("a1", "c1", "x".repeat(121));
     expect(r).toEqual({ ok: false, error: m["contact.business.tooLong"] });
   });
+  it("counts the 120 limit in characters as the database does, not UTF-16 units (M1; mutation: name.length -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1", company_name: null });
+    dbMocks.setContactsBusiness.mockResolvedValue([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
+    expect((await setContactBusinessAction("a1", "c1", "🏠".repeat(120))).ok).toBe(true);
+    expect(dbMocks.setContactsBusiness).toHaveBeenCalledTimes(1);
+    expect(await setContactBusinessAction("a1", "c1", "🏠".repeat(121))).toEqual({ ok: false, error: m["contact.business.tooLong"] });
+  });
   it("undo refuses a snapshot for another contact before any write", async () => {
     dbMocks.getContact.mockResolvedValue({ id: "c1" });
     const bad = { added: null, removed: { contact_id: "c2" } } as never;
     expect((await undoContactBusinessAction("a1", "c1", bad)).ok).toBe(false);
+    expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
+  });
+  const ADDED = "00000000-0000-4000-8000-000000000002";
+  it("undo hands the server exactly its own payload (the control for the refusal below)", async () => {
+    dbMocks.getContact.mockResolvedValue({ id: "c1" });
+    dbMocks.undoSetBusiness.mockResolvedValue("ok");
+    expect(await undoContactBusinessAction("a1", "c1", { added: ADDED, removed: null })).toEqual({ ok: true });
+    expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", ADDED, null);
+  });
+  it("undo refuses a contact the request client cannot see, before any service write (I1; mutation: drop the undo's getContact proof -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(null);
+    dbMocks.undoSetBusiness.mockResolvedValue("ok");
+    expect((await undoContactBusinessAction("a1", "c9", { added: ADDED, removed: null })).ok).toBe(false);
     expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
   });
 });
