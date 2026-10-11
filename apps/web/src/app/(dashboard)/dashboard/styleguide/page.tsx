@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 import { RailStates } from "./rail-states";
 import { ChoiceTilesDemo } from "./choice-tiles-demo";
 import { AssignDemo } from "./assign-demo";
+import { RelationshipsDemo } from "./relationships-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -241,6 +242,12 @@ export default async function StyleguidePage({
             this page. */}
         <Section title={m["assign.field.label"]} file="components/assign/assignee-field.tsx">
           <AssignDemo />
+        </Section>
+
+        {/* Relationships spec §7: the Related people card on the drawer and the record, loaded
+            (English and Spanish), empty, loading and error. */}
+        <Section title={m["relationships.title"]} file="accounts/[accountId]/contacts/relationships-card.tsx">
+          <RelationshipsDemo />
         </Section>
 
         <Section title={m["assign.filter.label"]} file="components/assign/who-filter.tsx">

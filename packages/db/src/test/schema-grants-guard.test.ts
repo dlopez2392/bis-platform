@@ -72,6 +72,10 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]).sort(),
   "authenticated checklist_items": IUD,
   "authenticated contact_duplicate_flags": IUD,
+  "authenticated contact_relationships": insertDeleteAndUpdate([
+    "contact_can_pick_up", "contact_form", "contact_is_emergency", "related_can_pick_up", "related_form",
+    "related_is_emergency", "updated_at",
+  ]),
   "authenticated contact_tags": IUD,
   "authenticated contacts": insertDeleteAndUpdate([
     "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",

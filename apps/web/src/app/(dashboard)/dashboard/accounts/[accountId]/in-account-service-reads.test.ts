@@ -77,7 +77,9 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
-  // createContactAction: flags written by the service client for a row the caller just created.
+  // setContactBusinessAction / undoContactBusinessAction: the group writes run on the service client
+  // only after getContact on the request client found the contact (0069's tables are server-written).
+  // createContactAction's narrow-caller flag write moved to lib/contacts/add-contact-by-hand.ts.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   // The Groups card: every service write follows a request-client read of its contact, membership or group;
   // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
@@ -109,6 +111,10 @@ const ALLOWED: Record<string, Reason> = {
   "lib/consent/email-gate.ts": "proven-target",
   "lib/consent/ledger-db.ts": "proven-target",
   "lib/consent/texts-context.ts": "proven-target",
+  // addContactByHand (moved from createContactAction; also the Relationships dialog's "New person",
+  // spec R4): a narrow caller's duplicate flags are written by the service client, for a row the
+  // caller just created.
+  "lib/contacts/add-contact-by-hand.ts": "proven-target",
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
   "lib/ops/stamp.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",

@@ -20,6 +20,13 @@ import { fileURLToPath } from "node:url";
  */
 const effects: Array<() => void | (() => void)> = [];
 const states: { initial: unknown; set: ReturnType<typeof vi.fn> }[] = [];
+/**
+ * Opt-in for the one block that must reach the drawer's READY branch (the Related people card):
+ * when set, the `fetched` state (the one starting at null) answers this value instead of null,
+ * and the Sheet renders its children. Every other block leaves both off, so they behave exactly
+ * as before.
+ */
+const harness: { readyFetched: unknown; openSheet: boolean } = { readyFetched: undefined, openSheet: false };
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   return {
@@ -29,14 +36,21 @@ vi.mock("react", async (importOriginal) => {
       const initial = typeof init === "function" ? (init as () => unknown)() : init;
       const set = vi.fn();
       states.push({ initial, set });
-      return [initial, set];
+      return [initial === null && harness.readyFetched !== undefined ? harness.readyFetched : initial, set];
     },
   };
 });
 vi.mock("@/components/ui/sheet", () => {
+  const pass = ({ children }: { children?: unknown }) => (harness.openSheet ? children : null);
   const none = () => null;
-  return { Sheet: none, SheetContent: none, SheetDescription: none, SheetHeader: none, SheetTitle: none };
+  return { Sheet: pass, SheetContent: pass, SheetDescription: none, SheetHeader: none, SheetTitle: none };
 });
+const relationshipsCardProps: unknown[] = [];
+vi.mock("./relationships-card", () => ({ RelationshipsCard: (p: unknown) => { relationshipsCardProps.push(p); return null; } }));
+// The Groups card (S-02 part 1) has its own tests and calls useRouter, which has no app router to
+// read once the Related people block opens the Sheet. Stubbed by identity: the Groups block below
+// imports "./groups-card" too, so the element it finds in the drawer's tree is this same function.
+vi.mock("./groups-card", () => ({ GroupsCard: () => null }));
 vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
@@ -433,6 +447,42 @@ describe("the drawer's Assigned to line (F-085)", () => {
   it("an unauthorised default: with no canAssign passed the drawer is read-only (mutation: default canAssign to true -> FAILS)", () => {
     expect(drawer).toMatch(/accountId, row, onClose, canAssign = false, members = \[\],/);
     expect(table).toMatch(/canAssign = false,\s*members = \[\],/);
+  });
+});
+
+/**
+ * Relationships spec §7: the Related people card sits in the drawer's READY branch, for the
+ * drawer's own contact. Rendered for real (the harness's opt-in above opens the Sheet and seeds
+ * the summary as loaded), with the card itself recorded rather than run: it has its own tests.
+ */
+describe("the drawer's Related people card (relationships spec §7)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; relationshipsCardProps.length = 0; });
+  function renderDrawer(fetched: unknown) {
+    effects.length = 0;
+    states.length = 0;
+    harness.openSheet = true;
+    harness.readyFetched = fetched;
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+  }
+
+  it("renders the card for THIS contact once the summary has loaded (mutation: delete the card line from the drawer -> FAILS)", () => {
+    renderDrawer({ contactId: "c1", result: { status: "ready", summary: GOOD, nowMs: 1_700_000_000_000 } });
+    expect(relationshipsCardProps).toContainEqual({ accountId: "a1", contactId: "c1" });
+  });
+
+  it("never over the drawer's own loading or error state (mutation: mount the card outside the ready branch -> FAILS)", () => {
+    renderDrawer(undefined);
+    expect(relationshipsCardProps).toHaveLength(0);
+    renderDrawer({ contactId: "c1", result: { status: "error" } });
+    expect(relationshipsCardProps).toHaveLength(0);
+  });
+
+  it("sits after Tags and before Recent (spec §7: after Assigned to, before Recent)", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.join(here, "contact-drawer.tsx"), "utf8");
+    const card = src.indexOf("<RelationshipsCard");
+    expect(card).toBeGreaterThan(src.indexOf("<TagsRow"));
+    expect(card).toBeLessThan(src.indexOf('m["drawer.recent"]'));
   });
 });
 

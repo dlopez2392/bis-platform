@@ -10,6 +10,8 @@ import { loadAssignView, type AssignView } from "@/lib/assign/view";
 import { m } from "@/lib/messages";
 import { STATUS_LABEL } from "@/lib/labels";
 import { ContactFieldsPanel } from "./contact-fields-panel";
+import { RelationshipsCard } from "../relationships-card";
+import { Card } from "@/components/ui/card";
 import { ActivityTimeline } from "./activity-timeline";
 import { GroupsCard } from "../groups-card";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
@@ -127,18 +129,25 @@ export default async function ContactDetailPage({
     <>
       <PageHeader title={contactDisplayName(contact)} />
       <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)_280px]">
-        <ContactFieldsPanel
-          accountId={accountId}
-          contactId={contactId}
-          contact={contact}
-          tags={tags}
-          fieldDefs={fieldDefs}
-          email={email}
-          texts={texts}
-          canAssign={assign.canAssign}
-          members={assign.members}
-          viewerId={assign.personId}
-        />
+        {/* One grid column: the fields panel's cards, then Related people under them (relationships
+            spec §7). A bare sibling would take the grid's middle track from the timeline. */}
+        <div className="min-w-0 space-y-4">
+          <ContactFieldsPanel
+            accountId={accountId}
+            contactId={contactId}
+            contact={contact}
+            tags={tags}
+            fieldDefs={fieldDefs}
+            email={email}
+            texts={texts}
+            canAssign={assign.canAssign}
+            members={assign.members}
+            viewerId={assign.personId}
+          />
+          <Card className="gap-0 px-6 py-4">
+            <RelationshipsCard accountId={accountId} contactId={contactId} />
+          </Card>
+        </div>
         <ActivityTimeline
           accountId={accountId}
           contactId={contactId}
