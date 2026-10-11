@@ -204,7 +204,8 @@ export async function setContactBusinessAction(
   let shown = name;
   try {
     const after = await getContact(db, accountId, contactId);
-    shown = after?.company_name ?? "";
+    // No row read back (not a throw) is the same lost read: keep the typed name.
+    shown = after ? (after.company_name ?? "") : name;
   } catch (e) {
     console.error(`setContactBusinessAction: account ${accountId} contact ${contactId}: read-back after save failed: ${loggableError(e)}`);
   }

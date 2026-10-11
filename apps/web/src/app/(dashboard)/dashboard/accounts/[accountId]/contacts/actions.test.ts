@@ -812,6 +812,11 @@ describe("setContactBusinessAction", () => {
     dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
     expect(await setContactBusinessAction("a1", "c1", "Beta")).toEqual({ ok: true, shown: "Beta", undoPayload: { added: "m2", removed: null } });
   });
+  it("a read-back that finds no row after the write committed shows the typed name, never a blank (mutation: shown = after?.company_name ?? \"\" -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValueOnce({ id: "c1", company_name: null }).mockResolvedValueOnce(null);
+    dbMocks.setContactsBusiness.mockResolvedValueOnce([{ contactId: "c1", status: "ok", added: "m2", removed: null }]);
+    expect(await setContactBusinessAction("a1", "c1", "Beta")).toEqual({ ok: true, shown: "Beta", undoPayload: { added: "m2", removed: null } });
+  });
   it("refuses a name over 120 characters with plain words", async () => {
     const r = await setContactBusinessAction("a1", "c1", "x".repeat(121));
     expect(r).toEqual({ ok: false, error: m["contact.business.tooLong"] });

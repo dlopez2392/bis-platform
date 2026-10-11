@@ -54,7 +54,13 @@ describe("InlineField's options <select> uses nativeFieldClass", () => {
  */
 describe("InlineField delegates Undo and the saved view to lib/contacts/inline-save", () => {
   it("plans Undo from THIS save's own payloads (mutation: hand it a client-captured value -> FAILS)", () => {
-    expect(src).toMatch(/const undo = planInlineUndo\(\{[^}]*phoneUndo: result\.undo,[^}]*ownUndo: result\.undoPayload,[^}]*undoWith,?[^}]*\}\);/);
+    const call = src.match(/const undo = planInlineUndo\(\{[^}]*\}\);/)?.[0] ?? "";
+    expect(call).toMatch(/phoneUndo: result\.undo,/);
+    expect(call).toMatch(/ownUndo: result\.undoPayload,/);
+    // `undoWith` exactly as the prop arrived: the shorthand, never `undoWith: <anything>`
+    // (mutations: `undoWith: undefined`; `undoWith: field === "phone" ? undoWith : undefined` -> FAIL).
+    expect(call).toMatch(/[\s,{]undoWith,?\s*\}\);$/);
+    expect(call).not.toMatch(/undoWith\s*:/);
   });
   it("offers Undo exactly when one is planned, and runs only that write (mutation: a second write beside it -> FAILS)", () => {
     expect(src).toMatch(/action: undo\s*\?/);
