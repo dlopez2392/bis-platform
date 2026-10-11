@@ -32,7 +32,8 @@ Choices this spec makes:
 | C2 | **Flags belong to a side**, like the word forms: four booleans, `contact_can_pick_up`, `contact_is_emergency`, `related_can_pick_up`, `related_is_emergency`. Each says what the NAMED person may do for the other (§5.1) |
 | C3 | **Labels live in a typed code registry**; the database holds only the key, pinned by a CHECK and a parity test (§4.1) |
 | C4 | **Client-written under RLS**, like `notes` and `contact_tags`, not server-only (§5.4) |
-| C5 | A Technician sees a hidden person's chip as "someone not on your list", and may add, edit or remove a relationship only when BOTH people are theirs (§5.3, §11 Q1) |
+| C5 | **(owner, 2026-10-11)** A Technician sees a hidden person's chip WITHOUT the name, "Mother: someone not on your list" / "Madre: alguien que no está en su lista", not hidden; and may add, edit or remove a relationship only when BOTH people are theirs (§5.3, §11.1) |
+| C7 | **(owner, 2026-10-11)** Neutral Spanish uses the "X o Y" form: "Madre o padre", "Hijo o hija", never "Madre/padre" (§4.2, §11.2) |
 | C6 | The label is not edited in place. To change "Godparent" to "Parent", remove (with Undo) and add again; the word forms and flags are inline edits |
 
 ## 3. Non-goals
@@ -291,9 +292,9 @@ Effort: about 1.5–2 of S-02's 5–6 engineer-weeks, mostly §9's tests and the
 all, Technicians included; the hint discourages it, F-004 closes it. §9's registry test is its only
 `.es` gate. One person's word form can differ across relationships (a contact default could come later).
 
-Owner questions:
+Owner rulings (danlo, 2026-10-11, after reading this spec):
 
-1. **A Technician's chip for a person not on their list:** show "Mother: someone not on your list"
-   (recommended, §5.3), or hide the relationship entirely?
-2. **Spanish neutral wording:** "Madre o padre" (recommended: it reads aloud and a screen reader says
-   it right) or the form-style "Madre/padre"?
+1. **A Technician's chip for a person not on their list:** DECIDED, shown without the name ("Mother:
+   someone not on your list" / "Madre: alguien que no está en su lista"), not hidden (C5).
+2. **Spanish neutral wording:** DECIDED, the "X o Y" form, "Madre o padre" (C7): it reads aloud and a
+   screen reader says it right.
