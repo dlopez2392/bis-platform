@@ -87,7 +87,7 @@ The orchestrator sequences these. This lane's card lives in its own files (`rela
 
 **Interfaces**
 - Consumes (SQL, from 0068): `app.sees_all_customers(uuid)`, `app.my_contact_ids()`, `app.is_agency()`, `app.current_account_id()`; `contacts_account_id_id_key` (0050:93-94).
-- Produces (SQL): table `public.contact_relationships`; constraints `contact_relationships_contact_fkey`, `contact_relationships_related_fkey`, `contact_relationships_label_key`, `contact_relationships_forms`, `contact_relationships_not_self`, `contact_relationships_custom`, `contact_relationships_emergency`, `contact_relationships_pickup`; indexes `contact_relationships_pair` (unique), `contact_relationships_by_contact`, `contact_relationships_by_related`; policies `contact_relationships_member_all`, `contact_relationships_technician_read|insert|update|delete`.
+- Produces (SQL): table `public.contact_relationships`; constraints `contact_relationships_contact_fkey`, `contact_relationships_related_fkey`, `contact_relationships_label_key`, `contact_relationships_forms`, `contact_relationships_not_self`, `contact_relationships_custom`, `contact_relationships_custom_trimmed`, `contact_relationships_emergency`, `contact_relationships_pickup`; indexes `contact_relationships_pair` (unique, family and symmetric labels, order-free), `contact_relationships_directed` (unique, support labels, per direction; R7), `contact_relationships_by_contact`, `contact_relationships_by_related` (corrected by the final review: the list predated R7 and the edge-space CHECK); policies `contact_relationships_member_all`, `contact_relationships_technician_read|insert|update|delete`.
 - Produces (TS, `@bis/db/relationship-keys`):
 
 ```ts
@@ -1736,7 +1736,8 @@ export type RelationshipError = "relationships.error.duplicate" | "relationships
 export function relationshipErrorFor(e: unknown): RelationshipError;
 // contacts/relationship-actions.ts ("use server")
 export type RelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError };
-export async function addRelationshipAction(accountId: string, raw: unknown): Promise<RelationshipResult>;
+export type AddRelationshipResult = { ok: true; view: RelationshipView } | { ok: false; error: RelationshipError; contactId?: string; created?: boolean }; // final review: shipped shape
+export async function addRelationshipAction(accountId: string, raw: unknown): Promise<AddRelationshipResult>;
 export async function setRelationshipAction(accountId: string, subjectId: string, relationshipId: string, rawPatch: unknown): Promise<{ ok: true; view: RelationshipView; undo: RelationshipSidesPatch } | { ok: false; error: RelationshipError }>;
 export async function undoSetRelationshipAction(accountId: string, subjectId: string, relationshipId: string, rawPrevious: unknown): Promise<RelationshipResult>;
 export async function removeRelationshipAction(accountId: string, relationshipId: string): Promise<{ ok: true; snapshot: RelationshipRow } | { ok: false; error: RelationshipError }>;
@@ -1815,10 +1816,13 @@ export function relationshipErrorFor(e: unknown): RelationshipError {
   if (code === "23505") return "relationships.error.duplicate";
   if (code === "42501") return "relationships.error.refused";
   if (code === "23503") return "relationships.error.gone";
-  if (code === "23514" || code === "22023" || code === "22P02") return "relationships.error.invalid";
+  if (code === "23514") return "relationships.error.self";
+  if (code === "22023" || code === "22P02") return "relationships.error.invalid";
   return "relationships.error.failed";
 }
 ```
+
+Corrected by the final review: this step first mapped 23514 to `invalid`, against spec §6. Shipped (and right): 23514 is "Pick someone else.", because every other CHECK is re-checked before a write, so the one a write can still reach is `contact_relationships_not_self`; `fail()` in the actions logs every code but 23505 and 42501, so a 23514 from any other CHECK still reaches the log (spec §6's 23514 note).
 
 - [ ] **Step 3: Write the failing tests.**
 
@@ -2256,7 +2260,7 @@ Add one assertion to `relationship-actions.test.ts`: every `RelationshipError` v
 
 - [ ] **Step 9: The `vi.mock("@bis/db")` factory check.** `contacts/actions.ts` lost names from its `@bis/db` import and gained none, so its factory needs no addition. Run `grep -rln 'vi.mock("@bis/db"' apps/web/src | xargs grep -ln "add-contact-by-hand\|relationship-actions"` and confirm the only hits are this task's own test files.
 
-- [ ] **Step 10: Mutation probes:** (a) in `addRelationshipAction` delete the subject `getContact` check → "refuses when the record is not the caller's to see…" fails; (b) in the route return `rows` instead of `views` → "a person the caller cannot read reaches the browser with no name and no id" fails; (c) in `undoRemoveRelationshipAction` drop `snapshot.account_id !== accountId` → "the Undo refuses another account's snapshot…" fails. Paste each, revert.
+- [ ] **Step 10: Mutation probes:** (a) in `addRelationshipAction` delete the subject `getContact` check → "refuses when the record is not the caller's to see…" fails; (b) in the route return `rows` instead of `views` → "a person the caller cannot read reaches the browser with no name and no id" fails; (c) in `undoRemoveRelationshipAction` drop `snapshot.account_id !== accountId` → "the Undo refuses another account's snapshot…" fails. Added by the final review (the Task 4 review ran them; kept here so a re-plan keeps them): P5, drop `bothVisible` in `setRelationshipAction` → "a Technician with the other person hidden is refused before any write" fails; P6, drop it in `removeRelationshipAction` → "a Technician cannot remove a relationship with a hidden person, before any write" fails; P7, drop it in `undoRemoveRelationshipAction` → "a narrow caller cannot restore a pair they cannot fully see: refused before the write" fails; P13, drop it in `undoSetRelationshipAction` → "the Undo of an edit is refused for a role that could not be settled when a person is hidden, before any write" fails. Paste each, revert.
 
 - [ ] **Step 11: Commit.**
 
@@ -2288,8 +2292,10 @@ export type RelationshipsLoad = { status: "loading" } | { status: "error" } | { 
 export async function relationshipsLoadFrom(res: Response): Promise<RelationshipsLoad>;
 export function RelationshipsCard(props: { accountId: string; contactId: string }): JSX.Element;
 export function RelationshipsCardView(props: CardViewProps): JSX.Element; // pure, for tests
-export function AddRelationshipDialog(props: { accountId: string; contactId: string; subject: { firstName: string | null; lastName: string | null }; onAdded: (view: RelationshipView) => void }): JSX.Element;
+export function AddRelationshipDialog(props: { accountId: string; contactId: string; subject: { firstName: string | null; lastName: string | null }; views: readonly RelationshipView[]; onAdded: (view: RelationshipView) => void }): JSX.Element;
 ```
+
+Corrected by the final review: `AddRelationshipDialog` takes the record's `views` (so the flag hint can point at an existing row, Task 4 review finding 5), and `addRelationshipAction` answers `AddRelationshipResult` (`{ ok: true; view } | { ok: false; error; contactId?; created? }`, Task 4's Interfaces), not `RelationshipResult`. The card's change/remove/Undo logic shipped in `relationships-card-handlers.ts` (`relationshipHandlers`), with a per-relationship in-flight lock.
 
 - [ ] **Step 1: UI copy.** Append before `} as const;` in `messages.ts` (after Task 4's block):
 
@@ -3006,6 +3012,7 @@ If more than one Owner membership exists on the fixture account, select the one 
 ## Task 7: Rollout (orchestrator; not a coding task)
 
 - [ ] **0. Settle the number with Lane A, before anything is applied.** Fetch; if Lane A's 0069 has merged, this lane keeps 0070. If this lane goes first, decide with the orchestrator of Lane A which number each takes; if they swap, rename the file (`git mv`) and every path in this plan and the spec, and re-run Task 1 step 7 on a fresh replica. Never apply a number to bis-ci that the other lane has taken; a version on bis-ci cannot be taken back.
+  **Added by the final review: whoever reaches bis-ci first must hold the LOWER number.** `db:push:ci` refuses `--include-all`, so it will not push a version below the project's newest: 0069 (Lane A) must reach bis-ci BEFORE 0070, or 0069 can never be pushed after it. If Lane A is not ready, settle a renumber with its orchestrator before pushing 0070.
 - [ ] **1. Merge prep.** Merge `main` into the branch; run `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` one at a time on the combined tree.
 - [ ] **2. CI project, dry run.** `gh workflow run ci-project-setup.yml --ref spec/s02-relationships -f step=push-dry-run` (or the implementation branch). Read the run: it must list exactly `0070_contact_relationships.sql` (plus Lane A's 0069 if that is also pending and agreed).
 - [ ] **3. CI project, push.** `gh workflow run ci-project-setup.yml --ref <branch> -f step=push`. Read the run for success. The PR's `e2e` job fails until this is done (`.github/scripts/ci-migrations-applied.sh`).

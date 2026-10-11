@@ -226,14 +226,26 @@ db test pins the policy list (`policyname, permissive, cmd`), as `server-only-wr
 - **Display:** a pure `chipFor(row, subjectId, people, locale)` picks the side, the form (the
   subject's for `agreesWith`), the flags and the hidden-person text. Names use `contactDisplayName`
   (`lib/format.ts:119`), whose English "no name" fallback this card localises.
-- **Actions** (`contacts/relationship-actions.ts`, `requireAccountAccess` + `dbForRequest()`):
-  `addRelationshipAction(accountId, subjectId, { otherId | newPerson: { name, phone? }, labelKey,
-  side, customLabel?, otherForm?, subjectForm? })` re-validates everything (key, side, custom label,
-  forms, not self). **Inline create (R4)** extracts `createContactAction`'s block (`contacts/actions.ts:64-88`)
-  into one shared helper: `readPersonId(db, accountId, userId)` (`assignment.ts:51`) as `assignedTo`,
-  and for a caller who does not see the whole account (`lib/auth-role.ts:15`) the service client as
-  `flagDb` plus `flagMatchesOf`. An `existing` answer (`contacts.ts:418`) relates that contact. Also
-  `setRelationshipSidesAction`, `removeRelationshipAction` (Undo snapshot), `undoRemoveRelationshipAction`.
+- **Actions** (`contacts/relationship-actions.ts`, `requireAccountAccess` + `dbForRequest()`; corrected
+  2026-10-11 by the final review to the names that shipped):
+  `addRelationshipAction(accountId, { subjectId, other: { kind: "existing", contactId } | { kind: "new",
+  firstName, lastName, phone }, labelKey, side, customLabel, otherForm, subjectForm })` re-validates
+  everything (`parseAddInput`: key, side, custom label, forms, not self) and answers
+  `AddRelationshipResult`: `{ ok: true, view }` or `{ ok: false, error, contactId?, created? }`.
+  `contactId` names a "New person" the hand-add already saved or matched when the add failed after
+  that, so the dialog retries as `{ kind: "existing" }` and never makes them twice; `created` is true
+  only when this call made them (the dialog then says they are saved) and false when the hand-add
+  matched someone already saved. **Inline create (R4)** extracts `createContactAction`'s block
+  (`contacts/actions.ts:64-88`) into one shared helper, `addContactByHand`
+  (`lib/contacts/add-contact-by-hand.ts`): `readPersonId(db, accountId, userId)` (`assignment.ts:51`)
+  as `assignedTo`, and for a caller who does not see the whole account (`lib/auth-role.ts:15`) the
+  service client as `flagDb` plus `flagMatchesOf`. An `existing` answer (`contacts.ts:418`) relates
+  that contact. Also `setRelationshipAction(accountId, subjectId, relationshipId, patch)` (forms and
+  flags as the record sees them; answers the Undo payload) with `undoSetRelationshipAction`,
+  `removeRelationshipAction` (answers the Undo snapshot), `undoRemoveRelationshipAction(accountId,
+  subjectId, snapshot)` (the snapshot re-checked as 0070 would; the same id, `created_at` stamped by
+  the server, never the snapshot's) and `searchRelatableContactsAction` (the dialog's picker, on the
+  caller's own RLS).
 - **Errors** become copy (logged, `loggableError`): `23505` "That relationship is already there." is
   a duplicate under R7: the same family or symmetric label for these two people written EITHER way
   round (`contact_relationships_pair`, "Sofía is Ana's mother" when "Ana is Sofía's mother" exists,
@@ -242,6 +254,11 @@ db test pins the policy list (`policyname, permissive, cmd`), as `server-only-wr
   so neither the dialog nor the action pre-checks a pair; the database decides, and the copy names no
   direction, so it holds for both indexes;
   `42501` "You can't change that customer." (0068's), `23503` on Undo "Couldn't put it back.", `23514` "Pick someone else."
+  **The 23514 note (final review):** every other CHECK on 0070's table (the forms, the custom label
+  and its edge space, the two locked flags) is re-checked by the app before a write, so the one a
+  write can still reach is `contact_relationships_not_self`; a 23514 from any other CHECK means the
+  app and 0070 disagree. The person still reads "Pick someone else.", but every code except `23505`
+  and `42501` is logged (`loggableError`), so that disagreement reaches the log.
 - **Read route** `api/accounts/[accountId]/contacts/[contactId]/relationships/route.ts`, the texts
   route's shape: `apiAccountAccess`, `getContact` on the request client (404 if hidden), the two reads,
   never `serviceDb` (0068 §7.2's guard test is unaffected).
@@ -249,9 +266,10 @@ db test pins the policy list (`policyname, permissive, cmd`), as `server-only-wr
 ## 7. Screens
 
 **One card, two surfaces (R2).** `RelationshipsCard` fetches the route itself, so it loads, empties and
-fails on its own (DESIGN.md Record page: rule 5 per card). Drawer: after "Assigned to"
-(`contact-drawer.tsx:308`), before Recent (`:331`); its paired-fetch state needs a starting value of
-its own shape (`:109-112`). Detail page: under the fields panel. Item 3 moves the same component.
+fails on its own (DESIGN.md Record page: rule 5 per card). Drawer: after Tags (which itself sits
+after "Assigned to"), before Recent (corrected by the final review: shipped after `<TagsRow`, pinned
+by `contact-drawer.wiring.test.ts`); its paired-fetch state needs a starting value of its own shape
+(`:109-112`). Detail page: under the fields panel. Item 3 moves the same component.
 
 - **Loaded:** a chip per relationship: label, name (links to that record), the named person's flags
   as dot-plus-word pills ("Can pick up", "Emergency contact"; rule 3), a remove button with
@@ -265,7 +283,12 @@ its own shape (`:109-112`). Detail page: under the fields panel. Item 3 moves th
   gendered side, neutral preselected; a live preview of both chips; one primary "Add" (rule 8); Esc closes.
 - **Empty:** "No related people yet. Add a parent, a spouse, a padrino or an emergency contact, and it
   shows on both records." **Loading:** two skeleton chips (rule 7). **Error:** "Couldn't load related
-  people." with Retry (`common.retry`). Tokens only, both themes, blur fallback, no hero (rule 11).
+  people." with Retry (`relationships.retry`; the toasts' Undo is `relationships.undo`, both with
+  their `.es` twins). Tokens only, both themes, blur fallback, no hero (rule 11).
+- **The dialog's notes (final review):** the flag hint and, after a failed "New person" add that
+  CREATED the person, the line "{name} is saved as a customer. The relationship isn't added yet." are
+  polite live regions, never `role="alert"`; a search result list is shown only under the term it
+  answered.
 
 Copy under `relationships.*` in `messages.ts`, each key with a `.es` twin (usted): "Related people" /
 "Personas relacionadas"; "Add a person" / "Agregar a una persona"; empty / "Todavía no hay personas
@@ -307,7 +330,12 @@ order-free for family labels, per direction for support labels) or turn into sel
   404s an invisible contact and drops a hidden id; `request-locale-callers.test.ts`; drawer wiring test.
 - **e2e** `relationships.spec.ts` (bis-e2e-qa runs it), per-run fixture account only, never Test Client
   One, names in `e2e/fixtures/fixture-names.test.ts`: inline-create a mother; both chips right; toggle
-  "Can pick up"; remove and Undo; `?locale=es` (QA override, `request-locale.ts:31-32`) shows "Madre:".
+  "Can pick up"; remove and Undo; the Owner's own `users.language` set to Spanish (and reset, every
+  read and write checked) shows "Madre:" (corrected by the final review: it shipped that way, not as
+  `?locale=es`); a customer found through the dialog's search, related, chip and row checked; a second
+  "New person" with the same phone and label refused as a duplicate, the names read-only, another
+  label then added, and that person existing once; a Technician's chip for a related person not
+  theirs: no name, link or control, "Ask your team…", and their id absent from the read and the page.
 
 ## 10. Rollout and deploy order
 
@@ -319,6 +347,12 @@ customers. Served-HTML marker: the card's title on a contact detail page.
 the table never exists without them. **App before migration:** reads and writes hit a missing table
 (assumed PGRST205), so the card shows its error state; nothing is exposed, so **data-safe** but not
 usable. **Rollback:** revert the app and leave the table; dropping it destroys what operators typed.
+
+**Teardown without 0070 (final review):** `contact_relationships` is in `ACCOUNT_OWNED_TABLES`, and
+`deleteAccountCascade` checks every delete's error and throws, so on a database that lacks 0070 it
+throws on that table: the demo re-seed (`demo/seed.ts`'s `dropDemoAccount`) and any teardown or
+sweep built on the list fail there. Harmless under the order above (0070 reaches each database
+before this app does); it is the reason that order is not optional.
 
 ## 11. Effort, open risks and owner questions
 
