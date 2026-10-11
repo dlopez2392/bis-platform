@@ -10,7 +10,8 @@ A customer can belong to a **household** or a **business customer**, with a role
 "Dueño"), one group marked as their main one, and a flag for who pays. Today's free-text
 `contacts.company_name` becomes a real business group: every existing name is backfilled into one,
 and from now on the contact's Business name, CSV import and export, and the forms' business
-question read and write the group. The old column is kept in step by the database for one release.
+question read and write the group. The old column stays, as a copy the database maintains: written
+by the app for nothing after this release, and read-only to clients from the follow-up on (G9).
 
 ## 2. Decisions (owner, 2026-10-11)
 
@@ -20,18 +21,21 @@ question read and write the group. The old column is kept in step by the databas
 | G2 | Where it shows | Each part ships a WORKING card on today's contact drawer and contact page. No new top-level page. Item 3 (the record page) later moves the cards into its card registry |
 | G3 | Suggested groups (shared email domain, phone, surname and address) | DEFERRED to item 8 (the review tray). Not here |
 | G4 | Kinds in the first cut | `household` and `business` only. Labels per reader language: "Household" / "Familia", "Business customer" / "Cliente comercial". NEVER "Company": that word names the BIS client in the UI. Facility and referrer wait for their packs |
-| G5 | `company_name` | Backfill one business group per distinct name per account (trimmed, case-insensitive). From then on the Business name field, CSV import and export, and the forms `core.company_name` answer read and write the group. The old column is kept in sync for ONE release, then dropped in a follow-up |
+| G5 | `company_name` | Backfill one business group per distinct name per account (trimmed, case-insensitive). From then on the Business name field, CSV import and export, and the forms `core.company_name` answer read and write the group. The old column is kept in sync for ONE release (dual-write), then **kept as a database-maintained, read-only copy** rather than dropped (amended by G9) |
 | G6 | Memberships | A person can be in several groups. Exactly one membership is primary (shown first). Each has a free-text role label and an `is_billing` flag |
 | G7 | Notes, tasks and deals on a group | DEFERRED to item 3 (relaxing NOT NULLs touches ~25 readers of `opportunities`) |
 | G8 | Technician (0068) | Sees a group and its memberships only through customers assigned to them: the group a customer of theirs is in, and THAT member, never other members unless also theirs. Groups have no assignee |
+| G9 | After the dual-write release (ruled on §13.1, 2026-10-11) | KEEP `contacts.company_name` as a read-only copy the database maintains, for server-side sort and paging. Not dropped |
+| G10 | Business names (ruled on §13.2) | YES: one business customer per name per client company, case- and space-insensitive (A3). Households are not unique |
+| G11 | A Technician types a business that already exists (ruled on §13.3, by the orchestrator, following the Technician spec's ruling 13.3) | YES: it links to the existing group |
 
-Choices this spec makes (not yet owner-confirmed; §13 asks the three that are open):
+Choices this spec makes; **(owner, 2026-10-11)** marks the ones ruled in §13:
 
 | # | Choice |
 |---|---|
 | A1 | **Server-only writes (0053's pattern), not the contacts table's client writes.** `authenticated` gets SELECT only on both tables. Every write is a server action that proves the contact (or membership, or group) through the request client, then writes through the service client: the house rule of the Technician spec §7.3. Reasons: find-or-create by name, the primary swap and removal-with-promotion are multi-statement and need one transaction, which a PostgREST client call cannot give; a Technician must be able to link their customer to a business they cannot see (§13.3); and the column sync stays in one place |
 | A2 | **The column is kept in sync by a database trigger, not by each writer.** `contacts.company_name` = the name of the contact's business group, primary first, then oldest. No app path writes `company_name` after this release; `ContactInput` loses `companyName`, so every old writer is a compile error, not a line to remember |
-| A3 | Business names are unique per account by their trimmed, lowercased key (a partial unique index); household names are not ("Garcia" is many families). This makes find-or-create race-safe (`on conflict do nothing`) |
+| A3 | **(owner, 2026-10-11, G10)** Business names are unique per account by their trimmed, lowercased key (a partial unique index); household names are not ("Garcia" is many families). This makes find-or-create race-safe (`on conflict do nothing`) |
 | A4 | The backfill is an idempotent function, `public.reconcile_business_groups()`, called at the end of 0069 and ONCE more by the orchestrator after the new app is live, to fold in names the old build wrote between the migration and the deploy (§11) |
 | A5 | The contact field's label becomes "Business name" / "Nombre del negocio" (`contact.company`, `messages.ts:637`, says "Company" today; the list column already says "Business name", `:565`). The forms editor's kind label follows (`:1222`) |
 | A6 | Renaming a group and its billing address: Owner, Staff and the agency only. A group can hold customers a Technician does not serve. Deleting a group is not in this release (§3) |
@@ -42,7 +46,7 @@ Suggested groups (G3); notes, tasks and deals on a group (G7); facility and refe
 relationships, properties and equipment (Lane B); a group page or a Groups list (G2; F-002); group
 custom fields (`custom` exists but `custom_fields.model` is not widened); deleting or merging groups;
 searching contacts or ⌘K by group name; collapsing inner spaces in a name ("Acme  Roofing" and "Acme
-Roofing" stay two keys, per G5's "trimmed"); dropping `company_name` (the follow-up, §11).
+Roofing" stay two keys, per G5's "trimmed"); the follow-up that makes `company_name` read-only (§11).
 
 ## 4. Roles
 
@@ -291,12 +295,12 @@ created with its business answer left on the submission and `setSubmissionProces
 stamped, and an import writes its contacts then reports failure (a re-run is harmless). The order
 is fixed anyway.
 
-**The follow-up release:** revoke `UPDATE (company_name)` from `authenticated` and update the guard
-(`:77`), drop the reconcile function, then drop the column or keep it read-only (§13.1).
+**The follow-up release (G9):** revoke `UPDATE (company_name)` from `authenticated` and drop it from
+the guard (`:77`); a `before insert or update` trigger on `contacts` resets a direct write to the
+derived value, so only the sync sets it; drop the reconcile function. The column is NOT dropped.
 
 ## 12. Open risks
 
-- The Business name sort needs a column (§13.1).
 - An app path missed in §6 that writes `company_name` directly would disagree with the group until
   that contact's next group change. Mitigated by the compile break, the reconcile run and review
   against §6; closed by the follow-up's revoke.
@@ -305,16 +309,15 @@ is fixed anyway.
 - Assumption, not verified: the generated `name_key` with `chr()` applies on hosted Postgres as on
   the PG18 replica; check on the replica and the CI project before production.
 
-## 13. Owner questions
+## 13. Owner rulings (2026-10-11, after reading this spec)
 
-1. **After the dual-write release, keep `company_name` as a read-only copy the database maintains,
-   rather than dropping it?** Recommended: yes. PostgREST cannot order contacts by a to-many embed
-   and cursor paging needs one value per row, so without a column "sort by business" becomes a lie
-   past the first page (DESIGN.md, Paged lists). The follow-up would revoke client writes so only
-   the trigger sets it. Dropping it means a derived column under another name: the same, plus a migration.
-2. **One business customer per name per client (A3)?** Recommended: yes. Two different businesses
-   sharing a name are rare and can be told apart ("Acme Roofing (Edinburg)"); without it, an import
-   or a form cannot know which Acme to link, and races make duplicates.
-3. **A Technician who types a business that already exists: link it (A1)?** Recommended: yes.
-   Refusing would reveal a customer they cannot see (the same reasoning as ruling 13.3 of the
-   Technician spec), and a business's name and billing address are not a person's private data.
+1. **Keep `company_name` after the dual-write release as a read-only copy the database maintains?**
+   DECIDED yes (danlo; G9). PostgREST cannot order contacts by a to-many embed and cursor paging
+   needs one value per row, so without the column "sort by business" would be a lie past the first
+   page (DESIGN.md, Paged lists). The follow-up revokes client writes so only the sync sets it.
+2. **One business customer per name per client?** DECIDED yes, case- and space-insensitive;
+   households not unique (danlo; G10, A3). Without it an import or a form cannot know which Acme
+   to link, and races make duplicates; two real businesses can be told apart by name.
+3. **A Technician who types a business that already exists: link it?** DECIDED yes (orchestrator;
+   G11), following the Technician spec's ruling 13.3: refusing would reveal a customer they cannot
+   see. They then see that group's name and billing address, which are not a person's private data.
