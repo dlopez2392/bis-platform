@@ -15,7 +15,7 @@
 --
 -- ROLLBACK (revert the app first; this drops what people typed, so only on an owner decision,
 -- after an export):
---   drop table public.equipment; drop table public.places;
+--   drop table public.equipment, public.places;
 --   drop function app.places_owner_guard(), app.stamp_created_by(), app.my_place_ids(), app.tidy_text(text, int);
 --
 -- ASCII only, no backslash anywhere.
@@ -47,7 +47,7 @@ create table public.places (
   postal_code text constraint places_postal_code_check check (app.tidy_text(postal_code, 12)),
   country text constraint places_country_check check (country is null or country in ('US', 'MX')),
   archived_at timestamptz,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint places_contact_fkey foreign key (account_id, contact_id)
@@ -71,7 +71,7 @@ create table public.equipment (
   installed_on date,
   warranty_until date,
   replaces_id uuid,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint equipment_place_fkey foreign key (account_id, place_id)
@@ -133,11 +133,16 @@ create policy places_delete_empty on public.places as restrictive for delete to 
   using (not exists (select 1 from public.equipment e where e.place_id = places.id));
 
 -- 7. Triggers. Plain, not definer, so current_user is the caller (0068's tasks_assignee_guard).
+--    created_by is the author's Clerk subject, the convention of notes.author_id (0003) and
+--    events.actor_id (0053's record_event reads the same claim), so an agency author, who has no
+--    users row, is still named. Whatever the client sent is discarded; NULL only for the service role.
 create function app.stamp_created_by() returns trigger
 language plpgsql set search_path = '' as $$
 begin
   if current_user = 'authenticated' then
-    new.created_by := app.current_user_id();
+    new.created_by := nullif(btrim(app.jwt() ->> 'sub'), '');
+  else
+    new.created_by := null;
   end if;
   return new;
 end $$;

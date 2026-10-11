@@ -580,7 +580,7 @@ Expected: every case fails with `relation "places" does not exist` (or `function
 --
 -- ROLLBACK (revert the app first; this drops what people typed, so only on an owner decision,
 -- after an export):
---   drop table public.equipment; drop table public.places;
+--   drop table public.equipment, public.places;
 --   drop function app.places_owner_guard(), app.stamp_created_by(), app.my_place_ids(), app.tidy_text(text, int);
 --
 -- ASCII only, no backslash anywhere.

@@ -97,7 +97,11 @@ describe("O2: the Technician writes on what they can see, and nowhere else", () 
   }));
   it("on another customer's place: an insert raises 42501, an update or a delete touches no row", () => withRollback(async (c) => {
     const s = await seed(c);
+    // EMPTY, so places_delete_empty would allow it: only the Technician fence can make this delete touch nothing.
+    const { rows: [e] } = await c.query<{ id: string }>(
+      "insert into places (account_id, contact_id, address) values ($1,$2,'8 Empty St') returning id", [s.acct, s.theirs]);
     await actAs(c, claims("tech"));
+    expect((await attempt(c, "delete from places where id = $1", [e!.id])).rowCount).toBe(0);
     await expect(attempt(c, "insert into places (account_id, contact_id, address) values ($1,$2,'5 New St')", [s.acct, s.theirs]))
       .rejects.toMatchObject({ code: "42501" });
     await expect(attempt(c, "insert into equipment (account_id, place_id, name) values ($1,$2,'AC')", [s.acct, s.pTheirs]))

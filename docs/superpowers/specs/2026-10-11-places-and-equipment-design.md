@@ -38,7 +38,7 @@ Choices this spec makes; **(owner, 2026-10-11)** marks the ones ruled on in §13
 | C5 | **Removing a property deletes it when it has no equipment, and otherwise moves it to "Removed properties"** (`archived_at`), where "Put back" restores it. A click never destroys equipment history; a restrictive delete policy makes the database refuse to delete a place that has equipment |
 | C6 | **Removing a unit deletes it** (Undo re-inserts it with the same id). Only a unit nothing has replaced can go: the database refuses the rest (`equipment_replaces_fkey`), so history rows have no Remove |
 | C7 | **(owner, 2026-10-11, O9)** **One card, "Properties", with each property's equipment nested under it**, not a second Equipment card: equipment exists only at a property, so a second card would repeat every property as a header and need the first card's data to add a unit. One read, one boundary |
-| C8 | **`created_by` is stamped by the database** (a trigger sets `app.current_user_id()` on every `authenticated` insert, whatever the client sent). Not shown this release; stored now so S-03's timeline can give each row its author mark (DESIGN.md Provenance) without an impossible backfill. A Technician cannot read `events` (0068 4e), so provenance must live on the row |
+| C8 | **`created_by` is stamped by the database** with the author's Clerk subject as text (a trigger sets the JWT `sub`, trimmed, on every `authenticated` insert, discarding whatever the client sent; NULL only for the service role). The convention of `notes.author_id` (0003) and `events.actor_id`, so an agency author, who has no `users` row, is still named; a `users.id` would have stored NULL for them, which reads like the demo seed. S-03 shows the author by resolving the sub, as notes do. Not shown this release; stored now so S-03's timeline can give each row its author mark (DESIGN.md Provenance) without an impossible backfill. A Technician cannot read `events` (0068 4e), so provenance must live on the row |
 
 Owner rulings (danlo, 2026-10-11, after reading this spec; each took the recommendation in §13):
 
@@ -73,6 +73,10 @@ segments or Sofía. Tenants linked to a place (O4). Moving a property to another
 | Change who a property belongs to | yes | yes | **no** (trigger, §5.3) | yes |
 | Add, edit, replace, remove equipment | yes | yes | on any property they can see | yes |
 
+A Technician MAY add a property owned by their own customer OR by a household or business group that one
+of their customers belongs to: `places_technician_scope`'s with-check is the same reach as its read (§5.2),
+consistent with O2. Once it exists they still cannot change who it belongs to (`places_owner_guard`, §5.3).
+
 ## 5. Data: migration 0071
 
 `0071_places_and_equipment.sql`, by bis-db-schema. Depends on 0068 and 0069 (merged), not on 0070.
@@ -90,7 +94,7 @@ places: id uuid pk default gen_random_uuid(); account_id uuid not null -> accoun
   landmark text null (1-200)    -- "the blue house past the canal"
   directions text null (1-1000) -- "Cómo llegar": the gate, the dogs, where to park
   city, region text null (1-80); postal_code text null (1-12); country text null check (in ('US','MX'))
-  archived_at timestamptz null; created_by uuid null -> users(id) on delete set null; created_at, updated_at;
+  archived_at timestamptz null; created_by text null (the author's Clerk subject, C8); created_at, updated_at;
   places_contact_fkey (account_id, contact_id) -> contacts(account_id, id) on delete cascade;
   places_group_fkey (account_id, client_group_id) -> client_groups(account_id, id) on delete cascade;
   check places_one_owner (num_nonnulls(contact_id, client_group_id) = 1);
@@ -99,7 +103,7 @@ places: id uuid pk default gen_random_uuid(); account_id uuid not null -> accoun
 equipment: id uuid pk default gen_random_uuid(); account_id uuid not null -> accounts(id) on delete cascade;
   place_id uuid not null; name text not null (1-80)    -- "AC upstairs", "Calentador de agua"
   make, model, serial text null (1-60); notes text null (1-1000); installed_on, warranty_until date null;
-  replaces_id uuid null; created_by uuid null -> users(id) on delete set null; created_at, updated_at;
+  replaces_id uuid null; created_by text null (the author's Clerk subject, C8); created_at, updated_at;
   equipment_place_fkey (account_id, place_id) -> places(account_id, id) on delete cascade;
   equipment_replaces_fkey (place_id, replaces_id) -> equipment(place_id, id);   -- no action
   constraint equipment_place_id_id_key unique (place_id, id);
@@ -132,7 +136,7 @@ cycle is possible: `replaces_id` is not updatable (§5.2), so a row only points 
 **Indexes:** `places_by_contact (account_id, contact_id) where contact_id is not null`; `places_by_group
 (account_id, client_group_id) where client_group_id is not null`; `equipment_by_place (account_id, place_id)`;
 `equipment_one_successor unique (replaces_id) where replaces_id is not null` (no unit replaced twice; it also
-serves the no-action check). `created_by` is unindexed (a `users` delete is rare).
+serves the no-action check). `created_by` is unindexed (nothing filters by author this release).
 
 ### 5.2 RLS, grants and the Technician
 
@@ -161,8 +165,10 @@ serves the no-action check). `created_by` is unindexed (a `users` delete is rare
 ### 5.3 Triggers, teardown and guards
 
 - `app.stamp_created_by()`, `before insert` on both: `if current_user = 'authenticated' then new.created_by
-  := app.current_user_id(); end if`. Plain (not definer), so `current_user` is the caller, as
-  `app.tasks_assignee_guard` (0068:172-183); the service role (demo seed, tests) keeps its own value (C8).
+  := nullif(btrim(app.jwt() ->> 'sub'), ''); else new.created_by := null; end if` (the claim 0053's
+  `record_event` reads for `events.actor_id`). Plain (not definer), so `current_user` is the caller, as
+  `app.tasks_assignee_guard` (0068:172-183). A client-sent value is always discarded, and the service role
+  (demo seed, tests) stores NULL (C8). `created_by` stays out of every UPDATE grant (§5.2).
 - `app.places_owner_guard()`, `before update of contact_id, client_group_id on places`: raises `42501` when
   either changes, `current_user = 'authenticated'` and `not coalesce(app.sees_all_customers(new.account_id),
   false)`. Moving a property between a person and a group takes it off, or puts it on, other members'
@@ -206,7 +212,8 @@ serves the no-action check). `created_by` is unindexed (a `users` delete is rare
   and field names, **never typed text**: an address is personal data and `events` is append-only.
 - **Timeline and provenance.** Nothing here reaches the record timeline this release (the relationships spec
   made the same call; the unified timeline is S-03's). When S-03 adds "Replaced the AC" rows, every
-  person-written row has its author in `created_by` (C8); NULL comes only from the service role (the demo
+  person-written row has its author's Clerk subject in `created_by` (C8), an agency author's included.
+  S-03 shows the author by resolving the sub, as notes do. NULL comes only from the service role (the demo
   seed), and S-03 must give those a mark from DESIGN.md's closed set, never leave them unmarked.
 
 ## 7. Undo, action by action (rule 6: everything runs at once; nothing asks "Are you sure?")
@@ -307,12 +314,15 @@ the CSV wizard, blueprints (setup, not customer data), ⌘K, contact search, Sof
   neither 23514; address, landmark and directions all NULL 23514; an edge space, a blank, an over-long value
   23514, with `app.tidy_text` on each boundary and a newline inside directions accepted; country `'CA'`
   23514; a replacement of a unit at another place 23503 (probe: FK on `replaces_id` alone → accepted →
-  FAILS); a second successor 23505; a replacement without `installed_on`, a warranty before install 23514;
+  FAILS); a second successor 23505; a unit naming its own id as `replaces_id` 23514 `equipment_not_self`
+  (probe: drop it; the self-reference satisfies the FK); a replacement without `installed_on`, a warranty before install 23514;
   deleting a replaced unit 23503, its successor allowed; deleting a place with equipment affects 0 rows,
   without 1 (probe: drop `places_delete_empty`); a contact, a group and an account delete remove their places
   and every unit, chain included (the RI-bypasses-RLS pin); client UPDATE of `place_id`, `replaces_id` or
-  `created_by` 42501; an insert naming another user's `created_by` stores the caller's (probe: drop the
-  trigger); exact `pg_policies` rows (`server-only-writes-grants.test.ts`'s shape); the guard entries.
+  `created_by` 42501; an Owner's insert stores their Clerk subject, an agency insert the agency's (trimmed,
+  with no `users` row), a client-sent `created_by` is discarded, and the service role stores NULL (one
+  probe each: drop the trigger, stamp `app.current_user_id()`, keep a sent value, stamp only for
+  `authenticated`); exact `pg_policies` rows (`server-only-writes-grants.test.ts`'s shape); the guard entries.
 - **RLS** `packages/db/src/test/places-rls.test.ts` (its own seed, as the groups spec needed: a household
   shared by the Technician's customer and someone else's): a Technician reads and writes their customer's
   place and their customer's household's place; reads 0 of another customer's and of a group with none of
@@ -349,8 +359,9 @@ for every account; never shown to customers. Served-HTML marker: the card's titl
 migration:** the route fails (assumed PGRST205) and the card shows its error state; data-safe, not usable.
 But `ACCOUNT_OWNED_TABLES` names the tables and `deleteAccountCascade` throws on a missing one, so a teardown
 or demo re-seed on a database without 0071 fails (the relationships spec's note): the order is not optional.
-**Rollback:** revert the app and leave the tables. Dropping them (`drop table public.equipment; drop table
-public.places;` and the four functions) destroys what people typed: only on an owner decision, after an export.
+**Rollback:** revert the app and leave the tables. Dropping them (the single statement `drop table
+public.equipment, public.places;`, since each table depends on the other through `places_delete_empty` and
+`equipment_place_fkey`, then the four functions) destroys what people typed: only on an owner decision, after an export.
 
 ## 12. Effort and open risks
 

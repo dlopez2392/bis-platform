@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
+import { randomUUID } from "node:crypto";
 import { withRollback, actAs } from "./db";
 
 /**
@@ -12,6 +13,7 @@ const ORG = `org_pl_${RUN}`;
 const ORG_B = `org_plb_${RUN}`;
 const OWNER_SUB = `user_pl_owner_${RUN}`;
 const STAFF_SUB = `user_pl_staff_${RUN}`;
+const AGENCY_SUB = `user_pl_agency_${RUN}`;
 
 /** Runs one statement under a savepoint: a refusal otherwise aborts the whole transaction (25P02). */
 async function attempt(c: Client, sql: string, args: unknown[] = []) {
@@ -128,6 +130,14 @@ describe("equipment: the replacement chain (spec §5.1, C3)", () => {
     await unit(c, s.acct, p.id, { replaces_id: u1.id, installed_on: "2026-10-01" });
     await expect(unit(c, s.acct, p.id, { replaces_id: u1.id, installed_on: "2026-10-02" })).rejects.toMatchObject({ code: "23505" });
   }));
+  it("a unit cannot replace itself (mutation: drop equipment_not_self -> FAILS)", () => withRollback(async (c) => {
+    // A row naming its own id satisfies equipment_replaces_fkey (it references itself), so only the CHECK refuses it.
+    const s = await seed(c);
+    const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR });
+    const id = randomUUID();
+    await expect(unit(c, s.acct, p.id, { id, replaces_id: id, installed_on: "2026-10-01" }))
+      .rejects.toMatchObject({ code: "23514", constraint: "equipment_not_self" });
+  }));
   it("a replacement carries its date, and a warranty never ends before install", () => withRollback(async (c) => {
     const s = await seed(c);
     const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR });
@@ -186,20 +196,43 @@ describe("cascades (spec §5.1, O3)", () => {
 });
 
 describe("grants, triggers and policies (spec §5.2, §5.3)", () => {
-  it("an Owner's insert stamps created_by with the caller, whatever the client sent (mutation: drop trigger places_stamp_created_by -> FAILS)", () =>
+  // created_by is the author's Clerk subject (text), as notes.author_id and events.actor_id are, so an
+  // agency author (no users row) is still named. NULL only for the service role.
+  it("an Owner's insert stamps their Clerk subject on a place and a unit (mutation: drop trigger places_stamp_created_by -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await actAs(c, { org_id: ORG, sub: OWNER_SUB });
-      const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR, created_by: s.staff });
-      expect(p.created_by).toBe(s.owner);
-      const u = await insert(c, "equipment", { account_id: s.acct, place_id: p.id, name: "AC", created_by: s.staff });
-      expect(u.created_by).toBe(s.owner);
+      const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR });
+      expect(p.created_by).toBe(OWNER_SUB);
+      const u = await insert(c, "equipment", { account_id: s.acct, place_id: p.id, name: "AC" });
+      expect(u.created_by).toBe(OWNER_SUB);
     }));
-  it("the service role keeps the created_by it sends", () => withRollback(async (c) => {
-    const s = await seed(c);
-    await c.query("set local role service_role");
-    expect((await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR, created_by: s.staff })).created_by).toBe(s.staff);
-  }));
+  it("an agency insert stamps the agency's subject, trimmed, though agency users have no users row (mutation: stamp app.current_user_id() -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      expect((await c.query("select 1 from users where clerk_user_id = $1", [AGENCY_SUB])).rowCount).toBe(0); // control
+      await actAs(c, { app_role: "agency_admin", sub: AGENCY_SUB });
+      expect((await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR })).created_by).toBe(AGENCY_SUB);
+      await actAs(c, { app_role: "agency_admin", sub: `  ${AGENCY_SUB}  ` });
+      expect((await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR })).created_by).toBe(AGENCY_SUB);
+    }));
+  it("a created_by the client sends is discarded, never stored (mutation: keep a client-sent created_by -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await actAs(c, { org_id: ORG, sub: OWNER_SUB });
+      const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR, created_by: STAFF_SUB });
+      expect(p.created_by).toBe(OWNER_SUB);
+      const u = await insert(c, "equipment", { account_id: s.acct, place_id: p.id, name: "AC", created_by: STAFF_SUB });
+      expect(u.created_by).toBe(OWNER_SUB);
+    }));
+  it("the service role's insert stores NULL, whatever it sends (mutation: stamp only for authenticated, keeping other values -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query("set local role service_role");
+      const p = await insert(c, "places", { account_id: s.acct, contact_id: s.ana, address: ADDR, created_by: STAFF_SUB });
+      expect(p.created_by).toBeNull();
+      expect((await insert(c, "equipment", { account_id: s.acct, place_id: p.id, name: "AC", created_by: STAFF_SUB })).created_by).toBeNull();
+    }));
   it("the client role updates only the granted columns (mutation: grant update (place_id) on public.equipment to authenticated -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
