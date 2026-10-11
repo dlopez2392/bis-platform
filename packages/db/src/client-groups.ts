@@ -37,6 +37,27 @@ async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unkno
 }
 
 /**
+ * 0069's `app.group_ws()`: space, tab, LF, VT, FF, CR, U+00A0 — spelled with
+ * the same code points, not JS's `.trim()`. `.trim()` strips a DIFFERENT
+ * set (ECMA-262 WhiteSpace plus LineTerminator), which includes every
+ * character here but ALSO others this database's class does not, U+FEFF
+ * among them. That is not merely imprecise: a role of 58 ordinary
+ * characters plus three U+FEFF is 61 characters by `app.group_ws()` (none
+ * of them trimmed) but only 58 by `.trim()` (all three trimmed) — so a
+ * `.trim()`-based guard reports it as fine while the database's own
+ * `client_group_members_role_check` would still raise 23514 on it. Matches
+ * `app.group_ws()` exactly, not a superset and not a subset.
+ */
+const GROUP_WS = /[ \t\n\v\f\r ]/;
+function dbTrimmedLength(value: string): number {
+  let start = 0;
+  let end = value.length;
+  while (start < end && GROUP_WS.test(value[start]!)) start++;
+  while (end > start && GROUP_WS.test(value[end - 1]!)) end--;
+  return end - start;
+}
+
+/**
  * `client_group_members.role`'s own check (migration 0069,
  * `client_group_members_role_check`) is `char_length(role) between 1 and 60`
  * on the TRIMMED value `app.link_member` actually stores. Unguarded, a role
@@ -46,7 +67,7 @@ async function rpc<T>(db: SupabaseClient, fn: string, args: Record<string, unkno
  * Checked here, before the RPC, so both still return a graceful status.
  */
 function roleTooLong(role: string | null): boolean {
-  return role !== null && role.trim().length > GROUP_ROLE_MAX;
+  return role !== null && dbTrimmedLength(role) > GROUP_ROLE_MAX;
 }
 
 type MemberRow = {
@@ -90,6 +111,12 @@ export async function searchGroups(db: SupabaseClient, accountId: string, term: 
   const trimmed = term.trim();
   if (!trimmed) return [];
   const s = sanitizeSearchTerm(trimmed);
+  // A bare "%", "*" or "\" survives term.trim() (none are whitespace) but
+  // sanitizes to "" — and `%${s}%` with s = "" is the pattern "%%", which
+  // ILIKE matches against EVERY row, not none (contacts.ts's withSearch
+  // idiom, :744-746). Same reasoning as the `!trimmed` guard above, one
+  // step later: no real content left after sanitizing means no query.
+  if (!s) return [];
   const { data, error } = await db.from("client_groups").select("id, kind, name")
     .eq("account_id", accountId).ilike("name", `%${s}%`).order("name_key", { ascending: true }).limit(8);
   if (error) throw new Error(`searchGroups failed: ${error.message}`);
