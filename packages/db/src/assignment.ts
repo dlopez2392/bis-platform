@@ -273,6 +273,42 @@ export async function setTaskAssignee(
   return { previous };
 }
 
+/**
+ * A person just made a Technician (final review, A4 for a demotion): the open
+ * tasks they hold on customers that are NOT theirs go back to Unassigned,
+ * because 0068's tasks_technician_scope now hides those tasks from them (a
+ * Technician sees a task only on their own customer, or with no customer and
+ * assigned to them). A task with no customer stays theirs: they still see it.
+ * Returns the released task ids. Pass serviceDb(): the role change is the
+ * Team's (server-only) write, and the person whose role changed is not the
+ * caller.
+ *
+ * Three steps, not one statement (PostgREST cannot filter an update on a
+ * joined row): their open tasks that have a customer, then which of those
+ * customers are theirs, then the release, guarded at the write by holder and
+ * still open, so a task finished or handed on meanwhile is left alone. A
+ * customer handed to them between the read and the write can lose a task
+ * they should have kept; it is Unassigned, not hidden, and anyone can pick it.
+ */
+export async function releaseTasksOffCustomers(db: SupabaseClient, accountId: string, userId: string): Promise<string[]> {
+  const { data, error } = await db.from("tasks").select("id, contact_id")
+    .eq("account_id", accountId).eq("assigned_to", userId).is("completed_at", null).not("contact_id", "is", null);
+  if (error) throw dbError("releaseTasksOffCustomers read failed", error);
+  const open = (data ?? []) as { id: string; contact_id: string }[];
+  if (open.length === 0) return [];
+  const theirs = new Set((await readHolders(db, accountId, [...new Set(open.map((t) => t.contact_id))], "releaseTasksOffCustomers"))
+    .filter((r) => r.assigned_to === userId).map((r) => r.id));
+  const off = open.filter((t) => !theirs.has(t.contact_id)).map((t) => t.id);
+  const released: string[] = [];
+  for (const batch of batches(off)) {
+    const { data: done, error: upErr } = await db.from("tasks").update({ assigned_to: null })
+      .eq("account_id", accountId).in("id", batch).eq("assigned_to", userId).is("completed_at", null).select("id");
+    if (upErr) throw dbError("releaseTasksOffCustomers failed", upErr);
+    released.push(...((done ?? []) as { id: string }[]).map((r) => r.id));
+  }
+  return released;
+}
+
 const isIdList = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
 /**

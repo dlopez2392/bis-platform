@@ -3,6 +3,7 @@ import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import {
   readPersonId, taskAssigneeFor, assignContacts, undoAssignContacts, setTaskAssignee, releaseMemberAssignments, reassignReleased,
+  releaseTasksOffCustomers,
 } from "../assignment";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -281,6 +282,27 @@ describe("assignment core (spec §8)", () => {
         await expect(setTaskAssignee(db, accountId, t, stranger.id, a.clerk)).rejects.toThrow(/not a member/);
       });
       expect(await holder(db, "tasks", t)).toBe(a.id);
+    }));
+  it("releaseTasksOffCustomers: someone made a Technician lets go of open tasks on customers not theirs, and keeps the rest (final review, A4 for a demotion; mutation: release every open task -> FAILS)", () =>
+    withAssignAccount(async (db, accountId) => {
+      const a = await person(db, accountId, "d1", "technician");
+      const b = await person(db, accountId, "d2", "staff");
+      const mine = await contact(db, accountId, a.id);
+      const theirs = await contact(db, accountId, b.id);
+      const nobodys = await contact(db, accountId, null);
+      const tMine = await task(db, accountId, mine, a.id, "on my customer");
+      const tTheirs = await task(db, accountId, theirs, a.id, "on B's customer");
+      const tNobody = await task(db, accountId, nobodys, a.id, "on an unassigned customer");
+      const tLoose = await task(db, accountId, null, a.id, "no customer");
+      const tDone = await task(db, accountId, theirs, a.id, "done already");
+      const { error } = await db.from("tasks").update({ completed_at: new Date().toISOString() }).eq("id", tDone);
+      if (error) throw error;
+      expect((await releaseTasksOffCustomers(db, accountId, a.id)).sort()).toEqual([tTheirs, tNobody].sort());
+      expect(await holder(db, "tasks", tTheirs)).toBeNull();
+      expect(await holder(db, "tasks", tNobody)).toBeNull();
+      expect(await holder(db, "tasks", tMine)).toBe(a.id);
+      expect(await holder(db, "tasks", tLoose)).toBe(a.id);
+      expect(await holder(db, "tasks", tDone)).toBe(a.id);
     }));
   it("releaseMemberAssignments then reassignReleased restores only what is still Unassigned", () => withAssignAccount(async (db, accountId) => {
     const a = await person(db, accountId, "r", "technician");

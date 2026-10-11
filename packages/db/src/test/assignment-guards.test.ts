@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  assignContacts, undoAssignContacts, setTaskAssignee, reassignReleased, ASSIGN_IN_BATCH_SIZE,
+  assignContacts, undoAssignContacts, setTaskAssignee, reassignReleased, releaseTasksOffCustomers, ASSIGN_IN_BATCH_SIZE,
 } from "../assignment";
 
 /**
@@ -191,5 +191,50 @@ describe("setTaskAssignee's optional expected holder, which the task Undo passes
     const { db, calls } = task(C);
     expect(await setTaskAssignee(db, "acct", "t1", A, "actor")).toEqual({ previous: C });
     expect(updates(calls, "tasks")[0]!.steps.some(([k, a]) => (k === "eq" || k === "is") && a[0] === "assigned_to")).toBe(false);
+  });
+});
+
+describe("releaseTasksOffCustomers: a person made a Technician lets go of open tasks on customers that are not theirs (final review, A4 for a demotion)", () => {
+  const T1 = uuid(1), T2 = uuid(2), T3 = uuid(3), K1 = uuid(11), K2 = uuid(12), K3 = uuid(13);
+  const answering = (tasks: { id: string; contact_id: string }[], contacts: { id: string; assigned_to: string | null }[]) =>
+    recordingDb((c) => {
+      if (c.table === "tasks" && !has(c, "update")) return tasks;
+      if (c.table === "contacts") return contacts.filter((k) => inList(c, "id").includes(k.id));
+      if (c.table === "tasks") return inList(c, "id").map((id) => ({ id }));
+      return null;
+    });
+  it("releases exactly the open tasks whose customer is someone else's or nobody's, guarded by holder and still open (mutations: release every open task, or drop the holder guard -> FAILS)", async () => {
+    const { db, calls } = answering(
+      [{ id: T1, contact_id: K1 }, { id: T2, contact_id: K2 }, { id: T3, contact_id: K3 }],
+      [{ id: K1, assigned_to: A }, { id: K2, assigned_to: B }, { id: K3, assigned_to: null }]);
+    expect((await releaseTasksOffCustomers(db, "acct", A)).sort()).toEqual([T2, T3].sort());
+    const [u] = updates(calls, "tasks");
+    expect(inList(u!, "id").sort()).toEqual([T2, T3].sort());
+    expect(u!.steps.find(([k]) => k === "update")?.[1][0]).toEqual({ assigned_to: null });
+    expect(arg(u!, "eq", "assigned_to")).toBe(A);
+    expect(arg(u!, "is", "completed_at")).toBeNull();
+    expect(arg(u!, "eq", "account_id")).toBe("acct");
+  });
+  it("reads only this person's OPEN tasks that HAVE a customer: a task with no customer stays theirs, since they still see it (mutation: drop the contact_id filter -> FAILS)", async () => {
+    const { db, calls } = answering([], []);
+    await releaseTasksOffCustomers(db, "acct", A);
+    const [r] = reads(calls, "tasks");
+    expect(arg(r!, "eq", "assigned_to")).toBe(A);
+    expect(arg(r!, "is", "completed_at")).toBeNull();
+    expect(r!.steps.some(([k, a]) => k === "not" && a[0] === "contact_id" && a[1] === "is" && a[2] === null)).toBe(true);
+  });
+  it("every task on their own customers: nothing is written (mutation: write an empty .in() -> FAILS)", async () => {
+    const { db, calls } = answering([{ id: T1, contact_id: K1 }], [{ id: K1, assigned_to: A }]);
+    expect(await releaseTasksOffCustomers(db, "acct", A)).toEqual([]);
+    expect(updates(calls, "tasks")).toHaveLength(0);
+  });
+  it("201 tasks are read back and released in batches of at most 200 (m4)", async () => {
+    const tasks = Array.from({ length: 201 }, (_, i) => ({ id: uuid(20_000 + i), contact_id: uuid(30_000 + i) }));
+    const { db, calls } = answering(tasks, []);
+    expect(await releaseTasksOffCustomers(db, "acct", A)).toHaveLength(201);
+    for (const c of [...reads(calls, "contacts"), ...updates(calls, "tasks")]) {
+      expect(inList(c, "id").length).toBeLessThanOrEqual(ASSIGN_IN_BATCH_SIZE);
+    }
+    expect(updates(calls, "tasks")).toHaveLength(2);
   });
 });

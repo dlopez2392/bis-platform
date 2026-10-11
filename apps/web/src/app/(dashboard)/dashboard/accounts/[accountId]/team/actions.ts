@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, listAccountTeam, setAccountMemberRole, setMemberLanguage, removeAccountMember, addAccountMember,
-  deleteAccountMembership, releaseMemberAssignments, reassignReleased,
+  deleteAccountMembership, releaseMemberAssignments, reassignReleased, releaseTasksOffCustomers,
   type AccountRole, type PersonLanguage, type ReleasedAssignments, type SupabaseClient, type TeamMember,
 } from "@bis/db";
 import { requireAccountOwner } from "@/lib/auth";
@@ -124,7 +124,11 @@ export async function inviteTeamMemberAction(accountId: string, formData: FormDa
  * out may still land later, which leaves the same safe pair. Once BIS holds
  * the new role, Clerk is set to it AGAIN (review I2): a concurrent
  * promotion's org:admin write may have landed between this action's two
- * writes.
+ * writes. A move to Technician then releases the person's open tasks on
+ * customers that are not theirs to Unassigned (releaseTasksOffCustomers,
+ * final review: A4 for a demotion), since RLS now hides them from that
+ * person; a failure there is logged and never fails the role change. An
+ * Undo of the role change does not give those tasks back.
  *
  * Promotion to Owner: BIS first (no last-Owner risk), then Clerk to
  * org:admin. Only a DEFINITIVE Clerk refusal (a 4xx, `clerkRefused`) rolls
@@ -171,6 +175,16 @@ export async function setTeamRoleAction(
     }
     const again = await setOrganizationRole(account.orgId, member.clerkUserId, role);
     if (!again.ok) console.error(`team: the demotion's repeat Clerk write failed; BIS ${role}, Clerk possibly admin (${ids}): ${again.code ?? "no code"}`);
+    if (role === "technician") {
+      // A4 for a demotion (final review): a Technician sees a task only on their own customer,
+      // so what they held on anyone else's goes back to Unassigned rather than out of sight.
+      // Never fails the role change, which has landed; logged by id, and idempotent to re-run.
+      try {
+        await releaseTasksOffCustomers(db, accountId, userId);
+      } catch (e) {
+        console.error(`team: made a Technician, but their open tasks on customers not theirs were not released (${ids}): ${loggableError(e)}`);
+      }
+    }
     revalidateTeam(accountId);
     return { ok: true, previous };
   }

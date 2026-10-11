@@ -18,7 +18,7 @@ const db = vi.hoisted(() => ({
   serviceDb: vi.fn(),
   listAccountTeam: vi.fn(), setAccountMemberRole: vi.fn(), setMemberLanguage: vi.fn(),
   removeAccountMember: vi.fn(), addAccountMember: vi.fn(), deleteAccountMembership: vi.fn(),
-  releaseMemberAssignments: vi.fn(), reassignReleased: vi.fn(),
+  releaseMemberAssignments: vi.fn(), reassignReleased: vi.fn(), releaseTasksOffCustomers: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
@@ -88,6 +88,7 @@ beforeEach(() => {
   db.deleteAccountMembership.mockResolvedValue(undefined);
   db.releaseMemberAssignments.mockResolvedValue(RELEASED);
   db.reassignReleased.mockResolvedValue(undefined);
+  db.releaseTasksOffCustomers.mockResolvedValue([]);
   selected.length = 0;
   clerk.teamCapacity.mockResolvedValue({ maxAllowed: 5, members: 3, pending: 0 });
   clerk.createTeamInvitation.mockResolvedValue({ ok: true });
@@ -511,6 +512,40 @@ describe("setTeamRoleAction: a move to Technician is a demotion", () => {
     expect(clerk.setOrganizationRole.mock.calls).toEqual([["org_1", "user_D", "owner"], ["org_1", "user_D", "technician"]]);
     expect(db.setAccountMemberRole.mock.calls).toEqual([
       [expect.anything(), ACCT, TECH_D.userId, "owner"], [expect.anything(), ACCT, TECH_D.userId, "technician"]]);
+  });
+});
+
+// Final review (A4 for a demotion): a Technician sees a task only on their own
+// customer (or with no customer), so the open tasks someone held on anyone
+// else's customers go back to Unassigned the moment they become a Technician.
+describe("setTeamRoleAction: a person made a Technician lets go of tasks on customers that are not theirs", () => {
+  it.each([["Owner", OWNER_B], ["Staff", STAFF_C]] as const)("%s to Technician releases them through the service client, AFTER the BIS role write returned ok (mutations: skip it, or run it before the BIS write -> FAILS)", async (_label, who) => {
+    expect(await setTeamRoleAction(ACCT, who.userId, "technician")).toEqual({ ok: true, previous: who.role });
+    expect(db.releaseTasksOffCustomers).toHaveBeenCalledTimes(1);
+    const [releaseDb, acct, user] = db.releaseTasksOffCustomers.mock.calls[0]!;
+    expect(releaseDb).toBe(db.serviceDb.mock.results.at(-1)!.value);
+    expect([acct, user]).toEqual([ACCT, who.userId]);
+    expect(order(db.setAccountMemberRole)).toBeLessThan(order(db.releaseTasksOffCustomers));
+  });
+  it("a move to Staff or Owner releases nothing (mutation: release on every role change -> FAILS)", async () => {
+    await setTeamRoleAction(ACCT, OWNER_B.userId, "staff");
+    db.listAccountTeam.mockResolvedValue([OWNER_A, TECH_D]);
+    await setTeamRoleAction(ACCT, TECH_D.userId, "owner");
+    expect(db.releaseTasksOffCustomers).not.toHaveBeenCalled();
+  });
+  it("a refused or failed demotion releases nothing (mutation: release before checking the BIS result -> FAILS)", async () => {
+    db.setAccountMemberRole.mockResolvedValueOnce("last_owner");
+    await setTeamRoleAction(ACCT, OWNER_A.userId, "technician");
+    clerk.setOrganizationRole.mockResolvedValueOnce({ ok: false, code: "internal", status: 500 });
+    await setTeamRoleAction(ACCT, STAFF_C.userId, "technician");
+    db.setAccountMemberRole.mockRejectedValueOnce(new Error("down"));
+    await expect(setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).rejects.toThrow("down");
+    expect(db.releaseTasksOffCustomers).not.toHaveBeenCalled();
+  });
+  it("a release that throws is logged by id and the role change still stands (mutation: let it throw -> FAILS)", async () => {
+    db.releaseTasksOffCustomers.mockRejectedValue(new Error("releaseTasksOffCustomers failed: down"));
+    expect(await setTeamRoleAction(ACCT, STAFF_C.userId, "technician")).toEqual({ ok: true, previous: "staff" });
+    expect(logged()).toMatch(new RegExp(`tasks[^\\n]*${STAFF_C.userId}[^\\n]*releaseTasksOffCustomers failed: down`));
   });
 });
 
