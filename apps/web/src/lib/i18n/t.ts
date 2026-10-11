@@ -21,8 +21,9 @@ function interpolate(raw: string, params?: Record<string, string | number>): str
   if (!params) return raw;
   let out = raw;
   // A replacer FUNCTION, never the value as a string (final review N1): a
-  // string replacement reads   for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, String(v));, $1, $ and the like as patterns, so a name
-  // such as "Ana   for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, String(v)); Co." would come out mangled.
+  // string replacement reads `$&`, `$1`, `` $` `` and the like as patterns,
+  // so a name such as "Ana $& Co." would garble; the replacer function's
+  // return value is inserted literally.
   for (const [k, v] of Object.entries(params)) out = out.replaceAll(`{${k}}`, () => String(v));
   return out;
 }
