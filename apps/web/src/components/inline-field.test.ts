@@ -72,3 +72,25 @@ describe("InlineField delegates Undo and the saved view to lib/contacts/inline-s
     expect(src).toMatch(/committed\.current = view\.shown;\s*setShown\(view\.shown\);/);
   });
 });
+
+/**
+ * S-02 §8: an empty field may name what belongs there ("Role, like Madre or
+ * Dueño") instead of the generic "Add…". The placeholder is shown, never
+ * stored: a filled field shows its value, and the accessible name still
+ * carries the label first.
+ */
+describe("InlineField's placeholder", () => {
+  const html = (value: string | null, placeholder?: string) =>
+    renderToStaticMarkup(createElement(InlineField, { label: "Role", value, field: "source", save, placeholder }));
+
+  it("an empty field shows the placeholder in place of the generic empty text (mutation: ignore the prop -> FAILS)", () => {
+    const out = html(null, "Role, like Madre");
+    expect(out).toContain(">Role, like Madre</button>");
+    expect(out).toContain('aria-label="Edit Role: Role, like Madre"');
+  });
+
+  it("a filled field shows its value, and no placeholder means the generic empty text (mutation: always show the placeholder -> FAILS)", () => {
+    expect(html("Madre", "Role, like Madre")).toContain(">Madre</button>");
+    expect(html(null)).toContain(">Add…</button>");
+  });
+});

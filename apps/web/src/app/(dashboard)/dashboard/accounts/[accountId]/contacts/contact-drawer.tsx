@@ -27,6 +27,7 @@ import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { SourceField } from "./source-field";
 import { BusinessInlineField } from "./business-field";
+import { GroupsCard } from "./groups-card";
 import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
 
@@ -262,6 +263,10 @@ export function ContactDrawer({
                 onChanged={() => setRetryNonce((n) => n + 1)}
                 onRetry={() => setRetryNonce((n) => n + 1)}
               />
+              {/* S-02 §8: its own read, skeleton and Retry, so it loads and
+                  fails on its own. `canAssign` is Owner, Staff or the agency:
+                  the same people A6 lets rename a group. */}
+              <GroupsCard key={`${row.id}:groups`} accountId={accountId} contactId={row.id} canManageGroups={canAssign} />
 
               {load.status === "loading" ? (
                 <div className="space-y-2" data-testid="drawer-skeleton">

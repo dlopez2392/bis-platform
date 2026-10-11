@@ -85,9 +85,13 @@ export function InlineField(
      *  name, S-02 §6 row 3): Undo calls this with exactly that payload instead
      *  of re-saving the prior text. Absent: the default `save(prior)` undo. */
     undoWith?: (payload: unknown) => Promise<{ ok: true } | { ok: false; error: string }>;
+    /** What an EMPTY field shows in place of the generic "Add…", and the
+     *  input's placeholder while editing (the Groups card's role, S-02 §8:
+     *  "Role, like Madre or Dueño"). Shown, never stored. */
+    placeholder?: string;
   },
 ) {
-  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith } = props;
+  const { label, field, required, options, value, save, inputType = "text", undoPhone, undoWith, placeholder } = props;
   // `field` is guaranteed defined whenever neither `required` nor `options`
   // is — the three-way union above enforces that at every call site; this
   // is what lets commit() and the undo guard below share ONE rule instead
@@ -160,7 +164,7 @@ export function InlineField(
     // I9: an options field shows the option's LABEL ("Español"), never its
     // stored value ("es") — on the button and in its accessible name. An
     // unknown stored value is still shown as-is rather than hidden.
-    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || m["inline.empty"];
+    const display = (options?.find((o) => o.value === shown)?.label ?? shown) || placeholder || m["inline.empty"];
     return (
       <button
         type="button"
@@ -202,6 +206,7 @@ export function InlineField(
       type={inputType}
       defaultValue={shown}
       aria-label={label}
+      placeholder={placeholder}
       className="h-8"
       onBlur={(e) => {
         if (cancelled.current) { cancelled.current = false; return; }
