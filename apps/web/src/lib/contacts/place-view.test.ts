@@ -115,4 +115,8 @@ describe("sharedWith", () => {
     expect(sharedWith({ client_group_id: GROUP_MAIN }, groups)).toEqual(groups[0]);
     expect(sharedWith({ client_group_id: null }, groups)).toBeNull();
   });
+  it("a group not among the supplied groups (one the reader cannot see) is null, never a guessed group", () => {
+    const groups: ContactPlaceGroup[] = [{ id: GROUP_MAIN, kind: "household", name: "The Garcias", isPrimary: true }];
+    expect(sharedWith({ client_group_id: GROUP_OTHER }, groups)).toBeNull();
+  });
 });

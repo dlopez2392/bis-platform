@@ -108,6 +108,12 @@ describe("equipmentRule / parseEquipmentFields / parseEquipmentPatch", () => {
     });
   });
 
+  it("an unknown equipment field is refused (mutation: drop the field guard in parseEquipmentPatch -> FAILS)", () => {
+    const current = { installed_on: "2026-01-01", warranty_until: null, replaces_id: null };
+    expect(parseEquipmentPatch("notAField", "x", today, current)).toEqual({ ok: false, error: { key: "inline.invalidOption" } });
+    expect(parseEquipmentPatch("replaces_id", OLD_EQUIP_ID, today, current)).toEqual({ ok: false, error: { key: "inline.invalidOption" } });
+  });
+
   it("a warranty date in the future is fine", () => {
     expect(parseEquipmentFields({ name: "AC", warranty_until: "2099-01-01" }, today, { replacement: false })).toEqual({
       ok: true,
@@ -144,5 +150,14 @@ describe("parseEquipmentSnapshot", () => {
     expect(parseEquipmentSnapshot(row, ACCOUNT)).toEqual(row);
     expect(parseEquipmentSnapshot({ ...row, account_id: OTHER_ACCOUNT }, ACCOUNT)).toBeNull();
     expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID, installed_on: null }, ACCOUNT)).toBeNull();
+  });
+
+  it("refuses a unit that replaces itself, in either case (0071 equipment_not_self; mutation: drop the self check -> FAILS)", () => {
+    // An id with hex LETTERS, so its upper- and lowercase forms differ: Postgres compares uuids by value.
+    const LETTERED = "abcdef12-5555-4555-8555-55555555555a";
+    const row = baseEquipmentRow({ id: LETTERED, installed_on: "2026-01-01" });
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID }, ACCOUNT)).toEqual({ ...row, replaces_id: OLD_EQUIP_ID });
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED }, ACCOUNT)).toBeNull();
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED.toUpperCase() }, ACCOUNT)).toBeNull();
   });
 });

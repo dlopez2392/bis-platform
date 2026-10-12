@@ -258,6 +258,8 @@ export function parseEquipmentSnapshot(v: unknown, accountId: string): Equipment
     if (r[field] !== null && (typeof r[field] !== "string" || !DATE_ONLY.test(r[field] as string))) return null;
   }
   if (r.replaces_id !== null && !isUuid(r.replaces_id)) return null;
+  // equipment_not_self; Postgres compares uuids by value, so case does not make it another unit.
+  if (r.replaces_id !== null && (r.replaces_id as string).toLowerCase() === (r.id as string).toLowerCase()) return null;
   if (r.replaces_id !== null && r.installed_on === null) return null; // equipment_replacement_dated
   if (!warrantyOrdered(r.installed_on as string | null, r.warranty_until as string | null)) return null;
   if (r.created_by !== null && typeof r.created_by !== "string") return null;
