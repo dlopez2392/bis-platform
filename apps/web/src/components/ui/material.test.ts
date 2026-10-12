@@ -414,11 +414,19 @@ describe("wave 2 — contacts", () => {
     expect(bar).not.toContain("rounded-lg");
     expect(bar).not.toMatch(/\bglass\b/);
   });
-  it("the opportunities aside is glass and its rows are rules, never boxes", () => {
+  // S-03 part 1: the record page's cards (Deals among them) wear ONE chrome, the record kit's
+  // RecordCard, and the Deals rows moved to deals-card.tsx. So the glass is pinned on the kit, the
+  // page is pinned to render through it with no box of its own, and the rules on the rows' file.
+  it("the Deals card is glass through the record kit's one card chrome, and its rows are rules, never boxes", () => {
+    expect(hasGlassCard(src("../record/record-card.tsx"))).toBe(true);
     const page = src(`${ACCT}/contacts/[contactId]/page.tsx`);
-    expect(hasGlassCard(page)).toBe(true);
-    expect(page).toContain("border-t border-[var(--row-line)] py-[7px] first:border-t-0");
-    expect(page).not.toContain('className="rounded-md border border-border p-2"');
+    expect(page).toContain("<RecordCard ");
+    expect(page).not.toMatch(/\bbg-card\b|\bglass\b/);
+    const deals = src(`${ACCT}/contacts/[contactId]/deals-card.tsx`);
+    expect(deals).toContain("border-t border-[var(--row-line)] py-[7px] first:border-t-0");
+    expect(deals).not.toContain('className="rounded-md border border-border p-2"');
+    // A second glass inside the RecordCard's would double the card shadow.
+    expect(deals).not.toMatch(/\bglass\b/);
   });
   it("the five timeline events are ROWS in the one Card, not five stacked cards", () => {
     const tl = src(`${ACCT}/contacts/[contactId]/activity-timeline.tsx`);
