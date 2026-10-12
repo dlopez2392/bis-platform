@@ -253,12 +253,16 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       const same = "2026-10-09T16:12:00.123456+00:00";
       const n = (await addNote(db, accountId, ana, "n", ACTOR)).id;
       const t = (await addTask(db, accountId, { contactId: ana, title: "t" }, ACTOR)).id;
-      await db.from("notes").update({ created_at: same }).eq("id", n);
-      await db.from("tasks").update({ created_at: same }).eq("id", t);
+      const noteTie = await db.from("notes").update({ created_at: same }).eq("id", n);
+      if (noteTie.error) throw new Error(`note tie update failed: ${noteTie.error.message}`);
+      const taskTie = await db.from("tasks").update({ created_at: same }).eq("id", t);
+      if (taskTie.error) throw new Error(`task tie update failed: ${taskTie.error.message}`);
       const p1 = await listContactTimelinePage(db, accountId, ana, undefined, { limit: 1 });
       expect(p1.older).not.toBeNull();
       const p2 = await listContactTimelinePage(db, accountId, ana, p1.older!, { limit: 1 });
       expect(p2.older).toBeNull();
+      // The page boundary really is a tie across two tables: without it the and(...) half is never exercised.
+      expect(p2.items[0]!.at).toBe(p1.items[0]!.at);
       expect([...p1.items, ...p2.items].map((i) => i.id).sort()).toEqual([n, t].sort());
       expect(p1.items[0]!.id > p2.items[0]!.id).toBe(true);
     }));
