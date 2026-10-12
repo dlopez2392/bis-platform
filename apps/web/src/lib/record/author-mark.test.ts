@@ -75,3 +75,30 @@ describe("personIdsOf: the ids one names read asks for (spec §6)", () => {
     expect(personIdsOf(entries).sort()).toEqual(["user_dan"]);
   });
 });
+
+describe("authorMark names the staff member behind a message or a booking (review I1)", () => {
+  // user_ana appears on no other row, so personIdsOf's dedupe cannot hide a dropped id.
+  const named = ctx({ names: { user_dan: "Dan López", user_ana: "Ana Ruiz" } });
+  it("a staff email carries its writer's name (mutation: a message's person is always unnamed -> FAILS)", () => {
+    expect(authorMark(message({ author_kind: "person", author_id: "user_ana", channel: "email" }), named))
+      .toEqual({ kind: "person", label: "Ana Ruiz" });
+    expect(personIdsOf([message({ author_kind: "person", author_id: "user_ana" })])).toEqual(["user_ana"]);
+  });
+  it("a booking a person made carries their name (mutation: a booking's person is always unnamed -> FAILS)", () => {
+    const b = booking("person");
+    (b as { booking: { author_id: string | null } }).booking.author_id = "user_ana";
+    expect(authorMark(b, named)).toEqual({ kind: "person", label: "Ana Ruiz" });
+    expect(personIdsOf([b])).toEqual(["user_ana"]);
+  });
+});
+
+describe("an author_kind outside the five is the person mark, unnamed: never a sixth kind, never blank (review minor 3)", () => {
+  it.each([
+    ["message", message({ author_kind: "robot", author_id: "user_dan" })],
+    ["booking", booking("robot")],
+    ["submission", { kind: "submission", id: "s9", at: AT, submission: { id: "s9", created_at: AT, formName: "Q", answers: [], author_kind: "robot" } } as unknown as TimelineEntry],
+  ])("%s (mutation: pass the column through unchecked -> FAILS)", (_n, entry) => {
+    expect(authorOf(entry)).toEqual({ kind: "person", personId: null });
+    expect(authorMark(entry, ctx())).toEqual({ kind: "person", label: "Someone on the team" });
+  });
+});

@@ -103,15 +103,19 @@ export function parseTimeCursor(raw: string | undefined): string | undefined {
 const TIMELINE_INSTANT =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
 
-/** A real calendar day and clock. `Date.parse` rolls "2026-02-30" over to Mar 2 rather than
- *  refusing it (so does packages/db's isTimelineInstant), so the fields are checked one by one. */
+/** A real calendar day and clock that Postgres also accepts. `Date.parse` rolls "2026-02-30" over to
+ *  Mar 2 rather than refusing it (so does packages/db's isTimelineInstant), so the fields are checked
+ *  one by one. Postgres refuses year 0000 and an offset past ±15:59 (bis-ci `pg_input_is_valid`:
+ *  +16:00 false, +15:59 true, 0000-01-01 false); either would make every source fail, not cold-start. */
 function isRealInstant(v: string): boolean {
   const m = TIMELINE_INSTANT.exec(v);
   if (!m) return false;
   const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number];
+  // Date.UTC maps years 0-99 to 1900-1999; from year 1 on, that keeps the leap-year pattern.
   const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
-  const offsetOk = m[7] === undefined || (Number(m[7]) <= 23 && Number(m[8]) <= 59);
-  return mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth && h <= 23 && mi <= 59 && s <= 59 && offsetOk
+  const offsetOk = m[7] === undefined || (Number(m[7]) <= 15 && Number(m[8]) <= 59);
+  return y >= 1 && mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth && h <= 23 && mi <= 59 && s <= 59 && offsetOk
+    // Date.parse is the backstop behind the field checks: whatever they miss, an unparseable string is still refused.
     && !Number.isNaN(Date.parse(v));
 }
 

@@ -35,6 +35,13 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
 };
 
 /** A known value is a dot and a word (rule 3); an unmapped future one still shows, as itself (D-014). */
+/** A deal's amount, or null when it has none: 0 and null are not an amount anyone entered
+ *  (DESIGN.md: omitted, never zeroed), and "$0" would read as a free job. */
+function amountText(value: number | string | null | undefined, tr: Tr): string | null {
+  const n = value === null || value === undefined || value === "" ? Number.NaN : Number(value);
+  return Number.isFinite(n) && n !== 0 ? formatCurrency(n, tr.locale) : null;
+}
+
 function statusOf(map: StatusMap, value: string, tr: Tr): TimelineStatus {
   const hit = Object.hasOwn(map, value) ? map[value] : undefined;
   return hit ? { tone: hit[1], word: tr.text(hit[0]) } : { tone: "muted", word: value };
@@ -54,7 +61,7 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
     case "deal": return {
       verb: tr.text("timeline.deal", { name: entry.deal.name }),
       status: statusOf(DEAL_STATUS, entry.deal.status, tr),
-      detail: formatCurrency(Number(entry.deal.monetary_value), tr.locale),
+      detail: amountText(entry.deal.monetary_value, tr),
     };
     case "submission": return {
       verb: mark.kind === "ai" ? tr.text("timeline.chat") : tr.text("timeline.form", { form: entry.submission.formName }),

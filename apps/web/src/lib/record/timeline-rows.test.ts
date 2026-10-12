@@ -57,3 +57,37 @@ describe("timelineFailedText (spec §9.4: some sources failed)", () => {
     expect(timelineFailedText([], makeTr("en"))).toBeNull();
   });
 });
+
+describe("timelineRows: every other kind's verb, status and detail (review I1)", () => {
+  const AT = "2026-10-09T16:12:00Z";
+  const parts = (e: TimelineEntry) => { const [r] = rows([e]); return { verb: r!.verb, status: r!.status, detail: r!.detail }; };
+  const submission = (author_kind: string): TimelineEntry => ({ kind: "submission", id: "s1", at: AT,
+    submission: { id: "s1", created_at: AT, formName: "Quote", answers: [], author_kind } as never });
+  const task = (call_id: string | null): TimelineEntry => ({ kind: "task", id: "t1", at: AT, task: { id: "t1", title: "x", due_at: null,
+    completed_at: null, created_at: AT, consent_event_id: null, call_id, assigned_to: null, created_by: null } });
+  const deal = (monetary_value: unknown, status = "won"): TimelineEntry => ({ kind: "deal", id: "d1", at: AT,
+    deal: { id: "d1", name: "Deck", status, monetary_value, created_at: AT, created_by: null } as never });
+  it("the website chat is a request the receptionist took; a typed form is the form the customer sent (mutation: chat reads as a form -> FAILS)", () => {
+    expect(parts(submission("ai"))).toEqual({ verb: "took a request in the website chat", status: null, detail: null });
+    expect(parts(submission("customer"))).toEqual({ verb: "sent the Quote form", status: null, detail: null });
+  });
+  it("a callback To-do says so; a typed one does not (mutation: callback reads 'added a To-do' -> FAILS)", () => {
+    expect(parts(task("c1"))).toEqual({ verb: "left a callback To-do", status: null, detail: null });
+    expect(parts(task(null))).toEqual({ verb: "added a To-do", status: null, detail: null });
+  });
+  it("a deal names itself, its status as a dot and a word, and its amount (mutation: drop the amount or the status -> FAILS)", () => {
+    expect(parts(deal(1500))).toEqual({ verb: "added a deal: Deck", status: { tone: "good", word: "Won" }, detail: "$1,500" });
+    expect(parts(deal("2500.00", "open"))).toEqual({ verb: "added a deal: Deck", status: { tone: "accent", word: "Open" }, detail: "$2,500" });
+  });
+  it("a deal with no amount omits it, never '$0' (DESIGN.md: omitted, never zeroed; mutation: format 0 -> FAILS)", () => {
+    for (const v of [0, "0", null]) expect(parts(deal(v)).detail, String(v)).toBeNull();
+  });
+  it("an email reads emailed, with its delivery state (mutation: every message reads texted -> FAILS)", () => {
+    const email: TimelineEntry = { kind: "message", id: "m2", at: AT, message: { id: "m2", channel: "email", direction: "outbound",
+      status: "delivered", subject: "Hi", body: "x", error: null, created_at: AT, author_kind: "person", author_id: null } };
+    expect(parts(email)).toEqual({ verb: "emailed", status: { tone: "good", word: "Delivered" }, detail: null });
+  });
+  it("a row's time is the ACCOUNT's clock (mutation: format row.time in UTC -> 4:12 PM, FAILS)", () => {
+    expect(rows([task(null)])[0]!.time).toBe("Oct 9, 2026, 11:12 AM");
+  });
+});

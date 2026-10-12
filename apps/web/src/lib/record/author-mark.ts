@@ -6,6 +6,14 @@ export type AuthorMarkView = { kind: AuthorKind; label: string };
  *  person column stores; `names` comes from ONE listPeopleNames read on the request client. */
 export type AuthorCtx = { viewerId: string | null; names: Readonly<Record<string, string>>; personaName: string | null; tr: Tr };
 
+// The closed set (DESIGN.md, Provenance), keyed by @bis/db's AuthorKind, so a sixth or a dropped kind
+// is a compile error here. Type-locked rather than a value import of AUTHOR_KINDS: the contact page's
+// tests mock @bis/db with explicit factories, where an unlisted AUTHOR_KINDS would be undefined.
+const KINDS: Readonly<Record<AuthorKind, true>> = { person: true, ai: true, automation: true, customer: true, import: true };
+const isAuthorKind = (v: unknown): v is AuthorKind => typeof v === "string" && Object.hasOwn(KINDS, v);
+/** A column outside the five (bad data) is the person mark, unnamed: never a sixth kind, never blank. */
+const unnamed = (): { kind: AuthorKind; personId: string | null } => ({ kind: "person", personId: null });
+
 /**
  * Who made a row (spec §6): the kind, from the row's own columns (0073), and the person to name.
  * A NULL author_kind exists only for a row the build before 1b wrote, until 0074; it reads as the
@@ -20,13 +28,18 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
       if (entry.task.consent_event_id) return { kind: "automation", personId: null };
       return { kind: "person", personId: entry.task.created_by };
     case "deal": return { kind: "person", personId: entry.deal.created_by };
-    case "submission": return { kind: entry.submission.author_kind, personId: null };
+    case "submission": {
+      const kind: unknown = entry.submission.author_kind;
+      return isAuthorKind(kind) ? { kind, personId: null } : unnamed();
+    }
     case "message": {
-      const kind = entry.message.author_kind ?? (entry.message.direction === "inbound" ? "customer" : "person");
+      const kind: unknown = entry.message.author_kind ?? (entry.message.direction === "inbound" ? "customer" : "person");
+      if (!isAuthorKind(kind)) return unnamed();
       return { kind, personId: kind === "person" ? entry.message.author_id : null };
     }
     case "booking": {
-      const kind = entry.booking.author_kind ?? "customer";
+      const kind: unknown = entry.booking.author_kind ?? "customer";
+      if (!isAuthorKind(kind)) return unnamed();
       return { kind, personId: kind === "person" ? entry.booking.author_id : null };
     }
     case "call": return { kind: "ai", personId: null };

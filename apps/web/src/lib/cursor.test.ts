@@ -105,13 +105,14 @@ describe("parseTimelineCursor (S-03 1b, spec §11: a ?before= that does not pars
   // Date.parse rolls an impossible date over ("Feb 30" is Mar 2), so the shape check and a finite
   // Date.parse both pass it; packages/db's isTimelineInstant does the same. A hand-edited ?before=
   // must still be a cold start here, never a page that throws or silently pages from March.
-  it("an impossible calendar date or clock is a cold start (mutation: drop the calendar check -> Feb 30 passes, FAILS)", () => {
+  it("an impossible calendar date or clock, or one Postgres refuses, is a cold start (mutation: drop the calendar check -> Feb 30 passes; offset hours <= 23 or year 0000 -> FAILS)", () => {
     for (const v of ["2026-02-30T00:00:00Z", "2026-02-29T00:00:00Z", "2026-04-31T12:00:00+00:00", "2026-13-01T00:00:00Z",
       "2026-00-10T00:00:00Z", "2026-10-00T00:00:00Z", "2026-10-09T24:00:00Z", "2026-10-09T23:60:00Z",
-      "2026-10-09T23:59:60Z", "2026-10-09T16:12:00+24:00", "2026-10-09T16:12:00+05:60"]) {
+      "2026-10-09T23:59:60Z", "2026-10-09T16:12:00+24:00", "2026-10-09T16:12:00+05:60",
+      "2026-10-09T16:12:00+16:00", "2026-10-09T16:12:00-16:00", "0000-01-01T00:00:00Z"]) {
       expect(parseTimelineCursor(encodeCursor({ v, id: ID })), v).toBeUndefined();
     }
-    for (const v of ["2028-02-29T00:00:00Z", "2026-12-31T23:59:59.999999-06:00", "2026-01-01T00:00:00+14:00"]) {
+    for (const v of ["2028-02-29T00:00:00Z", "2026-12-31T23:59:59.999999-06:00", "2026-01-01T00:00:00+14:00", "2026-10-09T16:12:00+15:59", "2026-10-09T16:12:00-15:59", "0001-01-01T00:00:00Z"]) {
       expect(parseTimelineCursor(encodeCursor({ v, id: ID })), v).toEqual({ v, id: ID });
     }
   });
