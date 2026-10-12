@@ -1,4 +1,6 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * The ONE marker the Resend webhook (`api/webhooks/resend/route.ts`, D-016)
@@ -53,17 +55,17 @@ const SUPPRESSED_ACCOUNT_BLOCK_MESSAGE = "email not sent: suppressed_account";
  * forbids.
  */
 export function messageFailureReason(
-  message: { status: string; error: string | null },
+  message: { status: string; error: string | null }, locale: Locale = "en",
 ): string | null {
   if (message.status === "bounced") {
     return message.error === COMPLAINT_ERROR_MARKER
-      ? m["conversations.failureReason.complained"]
-      : m["conversations.failureReason.bounced"];
+      ? t(m, "conversations.failureReason.complained", locale)
+      : t(m, "conversations.failureReason.bounced", locale);
   }
   if (message.status === "failed") {
-    if (message.error === SUPPRESSED_BLOCK_MESSAGE) return m["conversations.failureReason.suppressed"];
-    if (message.error === SUPPRESSED_ACCOUNT_BLOCK_MESSAGE) return m["automations.reason.accountSuppressed"];
-    return m["conversations.failureReason.failed"];
+    if (message.error === SUPPRESSED_BLOCK_MESSAGE) return t(m, "conversations.failureReason.suppressed", locale);
+    if (message.error === SUPPRESSED_ACCOUNT_BLOCK_MESSAGE) return t(m, "automations.reason.accountSuppressed", locale);
+    return t(m, "conversations.failureReason.failed", locale);
   }
   return null;
 }

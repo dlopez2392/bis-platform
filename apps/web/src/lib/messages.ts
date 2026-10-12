@@ -295,11 +295,13 @@ export const m = {
   "common.undo.es": "Deshacer",
   "common.retry": "Retry",
   "common.add": "Add",
+  "common.add.es": "Agregar",
   "common.import": "Import",
   "common.filters": "Filters",
   "common.sort": "Sort",
   "common.none": "—",
   "common.saving": "Saving…",
+  "common.saving.es": "Guardando…",
   "common.actionCrashed": "That didn't go through — this page may be out of date. Reload it and try again.",
   // Twin added by mis preferencias (F-096, Task 6): the Preferences page
   // speaks the person's own locale, including this house sentence.
@@ -662,6 +664,7 @@ export const m = {
   "contact.notes": "Notes",
   "contact.tasks": "Tasks",
   "contact.addNote": "Add a note…",
+  "contact.addNote.es": "Escriba una nota…",
   "contact.addTask": "New task…",
   "contact.done": "done",
   "contact.company": "Business name",
@@ -1099,55 +1102,85 @@ export const m = {
   "pipeline.dropHere": "Drop an opportunity here",
 
   "compose.note": "Note",
+  "compose.note.es": "Nota",
   "compose.email": "Email",
+  "compose.email.es": "Correo",
   "compose.subject": "Subject",
+  "compose.subject.es": "Asunto",
   "compose.emailPlaceholder": "Write an email…",
+  "compose.emailPlaceholder.es": "Escriba un correo…",
   "compose.send": "Send",
+  "compose.send.es": "Enviar",
   "compose.sending": "Sending…",
+  "compose.sending.es": "Enviando…",
   "compose.sent": "Email sent.",
+  "compose.sent.es": "Correo enviado.",
   "compose.sendFailed": "Could not send that email. It is saved as failed in the thread.",
+  "compose.sendFailed.es": "No se pudo enviar ese correo. Quedó guardado como fallido en la conversación.",
   "compose.sendRejected": "Could not send that email. Check the contact has an email address.",
+  "compose.sendRejected.es": "No se pudo enviar ese correo. Revise que el contacto tenga correo.",
   "compose.noteFailed": "Could not save that note. Try again.",
+  "compose.noteFailed.es": "No se pudo guardar esa nota. Intente de nuevo.",
   "compose.noEmailOnContact": "This contact has no email address.",
+  "compose.noEmailOnContact.es": "Este contacto no tiene correo.",
   "compose.sms": "Text",
+  "compose.sms.es": "Texto",
   "compose.smsPlaceholder": "Write a text…",
+  "compose.smsPlaceholder.es": "Escriba un texto…",
   "compose.smsSent": "Text sent",
+  "compose.smsSent.es": "Texto enviado",
   "compose.smsFailed": "Could not send the text",
+  "compose.smsFailed.es": "No se pudo enviar el texto",
   // Mirrors compose.sendRejected's shape: a fixed, generic line shown whenever
   // the server refuses the send before anything reached the provider — never
   // the raw internal reason (see send-errors.ts).
   "compose.smsSendRejected": "Could not send that text. Check the contact has a phone number.",
+  "compose.smsSendRejected.es": "No se pudo enviar ese texto. Revise que el contacto tenga número de teléfono.",
   // Mirrors compose.noEmailOnContact in wording and tone. Covers both an
   // empty phone field and one that couldn't be turned into a number we can
   // actually text (see lib/voice/phone-number.ts's toE164).
   "compose.noPhoneOnContact": "This contact has no phone number.",
+  "compose.noPhoneOnContact.es": "Este contacto no tiene número de teléfono.",
   // Says WHO is holding it up and what unblocks it, rather than "unavailable".
   "compose.smsBlockedA2p": "Texting is off until this company's A2P registration is approved",
+  "compose.smsBlockedA2p.es": "Los textos están apagados hasta que se apruebe el registro de mensajes de esta empresa",
   "compose.smsBlockedNoNumber": "Texting needs a live phone number on this company",
+  "compose.smsBlockedNoNumber.es": "Para mandar textos, esta empresa necesita un número de teléfono activo",
   // The consent gate (lib/consent/composer-state.ts): the one line the text
   // composer shows in place of its form, and the toast a refused send gives.
   "compose.smsStopped": "They stopped texts on {date}. You can't text this number until they text START.",
+  "compose.smsStopped.es": "Dejó de recibir textos el {date}. No puede mandarle textos a este número hasta que mande START.",
   "compose.smsStoppedUndated": "They stopped texts from you. You can't text this number until they text START.",
+  "compose.smsStoppedUndated.es": "Dejó de recibir sus textos. No puede mandarle textos a este número hasta que mande START.",
   "compose.smsHeld": "Texts to them are on hold while you check whether they asked to stop.",
+  "compose.smsHeld.es": "Los textos a esta persona están en pausa mientras revisa si pidió que se detuvieran.",
   "compose.smsCheckNumber": "This number could be Mexican or US. Pick its country on their contact before you text it.",
+  "compose.smsCheckNumber.es": "Este número podría ser de México o de EE. UU. Elija su país en el contacto antes de mandarle un texto.",
   "compose.smsStateUnknown": "Couldn't check whether they can get texts. Reload the page to try again.",
+  "compose.smsStateUnknown.es": "No se pudo revisar si puede recibir textos. Vuelva a cargar la página para intentar de nuevo.",
   // Consent chain PR-3 (spec §6, choice 22; plan G15): the email composer
   // stays usable and says why the operator should keep it to their matter.
   "compose.emailUnsubscribed": "They unsubscribed from your emails on {date}. Write only about something they asked you for.",
+  "compose.emailUnsubscribed.es": "Se dio de baja de sus correos el {date}. Escríbale solo sobre algo que le haya pedido.",
   "compose.emailStoppedByYou": "You stopped emails to them on {date}. Write only about something they asked you for.",
+  "compose.emailStoppedByYou.es": "Usted detuvo los correos a esta persona el {date}. Escríbale solo sobre algo que le haya pedido.",
   // D-016 item 4: the provider's own facts about the address (a hard bounce,
   // a complaint) read differently to the composer than a stop anyone CHOSE —
   // the one line still fits the same "on {date}" shape as the two above, so
   // the undated fallback (composer-state.ts's catch branch) keeps working.
   "compose.emailBounced": "This address bounced on {date} — emails to it won't send. Fix the address to start again.",
+  "compose.emailBounced.es": "Este correo rebotó el {date}: los correos a esta dirección no se enviarán. Corrija la dirección para empezar de nuevo.",
   // Review item 7(i): same caveat as contact.email.complainedExplain —
   // Resend's own TEAM-wide suppression list is a separate thing we don't
   // control, so this states OUR policy, never a delivery guarantee.
   "compose.emailComplained": "This person marked an email as spam on {date} — we won't email them again unless they resubscribe.",
+  "compose.emailComplained.es": "Esta persona marcó un correo como spam el {date}; no le volveremos a escribir a menos que se vuelva a suscribir.",
   "compose.emailStateUnknown": "Couldn't check whether they unsubscribed. Write only about something they asked you for.",
+  "compose.emailStateUnknown.es": "No se pudo revisar si se dio de baja. Escríbale solo sobre algo que le haya pedido.",
   // {n} segments — SMS bills per segment, and a single non-GSM character
   // (an accent, a curly apostrophe) drops the whole message to 70 per segment.
   "compose.smsSegments": "{chars} characters · {segments} message(s)",
+  "compose.smsSegments.es": "{chars} caracteres · {segments} mensaje(s)",
 
   "conversations.empty.title": "No conversations yet",
   // Named against every real ensureConversation() caller: voice
@@ -1158,11 +1191,17 @@ export const m = {
   "conversations.empty.body": "Calls, texts, emails, bookings and form submissions with a contact show up here.",
   "conversations.pickThread": "Select a conversation to read it.",
   "conversations.status.queued": "Queued",
+  "conversations.status.queued.es": "En cola",
   "conversations.status.sent": "Sent",
+  "conversations.status.sent.es": "Enviado",
   "conversations.status.delivered": "Delivered",
+  "conversations.status.delivered.es": "Entregado",
   "conversations.status.opened": "Opened",
+  "conversations.status.opened.es": "Abierto",
   "conversations.status.bounced": "Bounced",
+  "conversations.status.bounced.es": "Rebotó",
   "conversations.status.failed": "Failed",
+  "conversations.status.failed.es": "No se envió",
   // D-019's pager (DESIGN.md "Paged lists"): exactly one, Older/Newer,
   // carrying `?before=`.
   "conversations.older": "Older",
@@ -1177,11 +1216,15 @@ export const m = {
   // failure-reason.ts's own doc comment for what it needs). A promise this
   // code does not keep would be a worse defect than the one D-016 fixed.
   "conversations.failureReason.complained": "They marked this email as spam.",
+  "conversations.failureReason.complained.es": "Marcó este correo como spam.",
   "conversations.failureReason.bounced": "This address couldn't be reached.",
+  "conversations.failureReason.bounced.es": "No se pudo llegar a esta dirección.",
   "conversations.failureReason.failed": "This didn't go through.",
+  "conversations.failureReason.failed.es": "Esto no se envió.",
   // D-016 review item 4: the gate refused to even try — this address
   // already bounced or was marked as spam on an earlier message.
   "conversations.failureReason.suppressed": "Already bounced or marked as spam — nothing was sent.",
+  "conversations.failureReason.suppressed.es": "Ya rebotó o lo marcaron como spam; no se envió nada.",
 
   "forms.title": "Forms",
   "forms.add": "New form",

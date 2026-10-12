@@ -48,7 +48,9 @@ describe("the spec's own words (§6)", () => {
     // Stopped), the hours sentence, the textback title, the 2 held
     // text-back bodies, and 9 automations.reason lines (PR-3 adds
     // `emailLedgerRetry` and `emailSetupRetry`; D-061 adds `accountSuppressed`).
-    expect(keys.length).toBe(37);
+    // The count is of the ENGLISH lines; a Spanish twin (`<key>.es`, S-03 1b) matches the same
+    // prefixes and is scanned below like its English line, but does not move the 37.
+    expect(keys.filter((k) => !k.endsWith(".es")).length).toBe(37);
     for (const k of keys) {
       const text = m[k as keyof typeof m];
       expect(text).not.toMatch(/\{\{|40300|unconfirmed_number|ledger|automation\./);

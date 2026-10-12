@@ -3,6 +3,8 @@ import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
+import { messageAuthor, type AuthorKind } from "./provenance";
+import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -130,6 +132,9 @@ export async function createMessage(
   db: SupabaseClient, accountId: string, input: NewMessage, actorId: string,
   actorType: ActorType = "user",
 ): Promise<{ id: string }> {
+  // Who wrote it (0073, spec §5.2): from the actor the caller already passes, one mapping for all
+  // thirteen writers (provenance.ts; the backfill's SQL twin is pinned by provenance-parity.test.ts).
+  const author = messageAuthor(actorType, actorId, input.direction);
   const { data, error } = await db.from("messages")
     .insert({
       account_id: accountId,
@@ -139,6 +144,8 @@ export async function createMessage(
       subject: input.subject ?? null,
       body: input.body,
       provider_message_id: input.providerMessageId ?? null,
+      author_kind: author.authorKind,
+      author_id: author.authorId,
       ...(input.status !== undefined ? { status: input.status } : {}),
     })
     .select("id").single();
@@ -734,13 +741,32 @@ export async function getConversationSummary(
  */
 export async function listContactMessages(
   db: SupabaseClient, accountId: string, contactId: string,
-) {
+  page?: TimelinePageOpts & { channels?: readonly NewMessage["channel"][] },
+): Promise<ContactMessageRow[]> {
   const { data: conversation, error } = await db.from("conversations")
     .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
   if (error) throw new Error(`listContactMessages failed: ${error.message}`);
   if (!conversation) return [];
-  return listMessages(db, accountId, conversation.id as string);
+  if (!page) return listMessages(db, accountId, conversation.id as string);
+  // The record timeline (S-03 1b): one page, newest first, with who wrote each (0073). `channels`
+  // keeps the inbox's form/voice copies out (spec C4): those events have rows of their own there.
+  // postgrest-js types a column list built by a template as a ParserError, so the argument is
+  // typed as MESSAGE_COLS and ContactMessageRow adds the author pair as optional (activities.ts's
+  // listContactTasks does the same with created_by).
+  let q = db.from("messages")
+    .select(`${MESSAGE_COLS}, author_kind, author_id` as typeof MESSAGE_COLS)
+    .eq("account_id", accountId).eq("conversation_id", conversation.id as string);
+  if (page.channels) q = q.in("channel", [...page.channels]);
+  const { data, error: mErr } = await withTimelinePage(q, "created_at", page);
+  if (mErr) throw new Error(`listContactMessages failed: ${mErr.message}`);
+  return (data ?? []) as ContactMessageRow[];
 }
+
+/** One message as the record reads it; the author pair (0073) is present in page mode only. */
+export type ContactMessageRow = Awaited<ReturnType<typeof listMessages>>[number] & {
+  author_kind?: AuthorKind | null;
+  author_id?: string | null;
+};
 
 export async function listMessages(
   db: SupabaseClient, accountId: string, conversationId: string,

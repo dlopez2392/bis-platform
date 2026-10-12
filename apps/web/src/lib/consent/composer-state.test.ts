@@ -85,3 +85,18 @@ describe("composerEmailNotice — the email composer's one line (spec §6, choic
       .toBe("This address bounced — emails to it won't send. Fix the address to start again.");
   });
 });
+
+describe("the composer's lines in the page's language (S-03 1b, spec §10.2)", () => {
+  it("a stopped number reads Spanish with a Spanish date; English stays the default (mutation: ignore locale -> FAILS)", () => {
+    const es = composerStateLine({ kind: "stopped", since: "2026-10-04T15:00:00Z" }, "America/Chicago", "es");
+    expect(es).toBe(`Dejó de recibir textos el ${formatDateInZone("2026-10-04T15:00:00Z", "America/Chicago", "es")}. No puede mandarle textos a este número hasta que mande START.`);
+    expect(es).not.toContain("Oct");
+    expect(composerStateLine({ kind: "held", since: "x" }, "UTC")).toBe(m["compose.smsHeld"]);
+  });
+  it("the email notice drops an unformattable date in either language (mutation: strip only \" on {date}\" -> the Spanish line keeps \"el {date}\", FAILS)", () => {
+    expect(composerEmailNotice({ kind: "stopped", since: "nope", byCustomer: true }, "UTC", "es"))
+      .toBe("Se dio de baja de sus correos. Escríbale solo sobre algo que le haya pedido.");
+    expect(composerEmailNotice({ kind: "stopped", since: "nope", byCustomer: true }, "UTC"))
+      .toBe("They unsubscribed from your emails. Write only about something they asked you for.");
+  });
+});

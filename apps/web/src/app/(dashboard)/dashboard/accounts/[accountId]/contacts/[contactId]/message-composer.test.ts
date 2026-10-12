@@ -7,6 +7,7 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { MessageComposer, composeModeFromHash, smsFormBlock } from "./message-composer";
 import { m } from "@/lib/messages";
+import { LocaleProvider } from "@/components/locale-provider";
 
 /**
  * D-015. Same defect as the Conversations EmailComposer
@@ -78,5 +79,20 @@ describe("smsFormBlock: the one line the Text tab shows instead of the form", ()
     expect(smsFormBlock(open, false, "held")).toEqual({ text: m["compose.noPhoneOnContact"], consent: false });
     expect(smsFormBlock(open, true, "held")).toEqual({ text: "held", consent: true });
     expect(smsFormBlock(open, true, null)).toBeNull();
+  });
+});
+
+describe("the composer in Spanish (S-03 1b, spec §10.2)", () => {
+  it("smsFormBlock answers in the page's language (mutation: drop the locale -> English, FAILS)", () => {
+    expect(smsFormBlock(null, true, null, "es")).toEqual({ text: "No se pudo revisar si puede recibir textos. Vuelva a cargar la página para intentar de nuevo.", consent: false });
+    expect(smsFormBlock({ ok: true, from: "+19565550199", ownedNumbers: [] } as never, false, null, "es"))
+      .toEqual({ text: "Este contacto no tiene número de teléfono.", consent: false });
+  });
+  it("its tabs read Spanish under a Spanish LocaleProvider (mutation: keep m[...] for the tab labels -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as never, createElement(MessageComposer, {
+      contactId: "c1", contactHasEmail: true, contactHasPhone: true, smsGate: null, smsBlockedLine: null, emailNoticeLine: null,
+      noteAction: async () => {}, emailAction: async () => {}, smsAction: async () => {},
+    } as never)));
+    for (const word of [">Nota<", ">Correo<", ">Texto<"]) expect(html).toContain(word);
   });
 });

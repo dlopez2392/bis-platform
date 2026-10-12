@@ -86,3 +86,10 @@ describe("messageFailureReason", () => {
       .toBe(m["automations.reason.accountSuppressed"]);
   });
 });
+
+describe("failure reasons in Spanish (S-03 1b)", () => {
+  it("a failed message reads its Spanish reason; English is the default (mutation: ignore locale -> FAILS)", () => {
+    expect(messageFailureReason({ status: "failed", error: "provider said no" }, "es")).toBe("Esto no se envió.");
+    expect(messageFailureReason({ status: "failed", error: "provider said no" })).toBe(m["conversations.failureReason.failed"]);
+  });
+});
