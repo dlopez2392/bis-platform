@@ -11,10 +11,8 @@ async function seedAccount(c: Client, org: string) {
     [agency!.id, org]);
   return a!.id;
 }
-const contact = async (c: Client, acct: string, first: string, company: string | null = null, createdAt = "2026-01-01T00:00:00Z") =>
-  (await c.query<{ id: string }>(
-    "insert into contacts (account_id, first_name, company_name, created_at) values ($1,$2,$3,$4) returning id",
-    [acct, first, company, createdAt])).rows[0]!.id;
+const contact = async (c: Client, acct: string, first: string) =>
+  (await c.query<{ id: string }>("insert into contacts (account_id, first_name) values ($1,$2) returning id", [acct, first])).rows[0]!.id;
 const call = async (c: Client, sql: string, args: unknown[]) => (await c.query<{ r: unknown }>(`select ${sql} as r`, args)).rows[0]!.r;
 const members = async (c: Client, ct: string) =>
   (await c.query<{ name: string; is_primary: boolean; role: string | null; is_billing: boolean }>(
@@ -138,69 +136,8 @@ describe("set_contacts_business, undo, main, remove, restore", () => {
   }));
 });
 
-describe("reconcile_business_groups (spec §5.4)", () => {
-  it("one group per key, named by the oldest; blanks make nothing; two accounts make two; a second run returns zeros (mutation: order the distinct-on by c.created_at desc -> the naming case FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, `org_r_a_${RUN}`);
-      const b = await seedAccount(c, `org_r_b_${RUN}`);
-      const late = await contact(c, a, "Late", " acme roofing ", "2026-03-01T00:00:00Z");
-      const old = await contact(c, a, "Old", "Acme Roofing", "2026-01-01T00:00:00Z");
-      const tab = await contact(c, a, "Tab", "ACME ROOFING\t", "2026-02-01T00:00:00Z");
-      const blanks = [await contact(c, a, "N", null), await contact(c, a, "E", ""), await contact(c, a, "S", "   "), await contact(c, a, "B", "\u00a0")];
-      const other = await contact(c, b, "Bea", "Acme Roofing");
-      // Scoped per account: a NULL scope would sweep every row the shared test database holds.
-      const first = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
-      await call(c, "public.reconcile_business_groups($1)", [b]);
-      const { rows: groups } = await c.query<{ account_id: string; name: string }>(
-        "select account_id, name from client_groups where account_id = any($1::uuid[]) order by account_id", [[a, b]]);
-      expect(groups.filter((g) => g.account_id === a)).toEqual([{ account_id: a, name: "Acme Roofing" }]);
-      expect(groups.filter((g) => g.account_id === b)).toHaveLength(1);
-      for (const ct of [late, old, tab]) expect(await companyOf(c, ct)).toBe("Acme Roofing");
-      for (const ct of blanks) expect(await members(c, ct)).toEqual([]);
-      expect(await companyOf(c, blanks[2]!)).toBe("   "); // left as it is
-      expect(await members(c, other)).toHaveLength(1);
-      expect(first).toMatchObject({ groups_created: 1, members_added: 3, respelled: 0 });
-      const second = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
-      expect(second).toEqual({
-        groups_created: 0, members_added: 0, members_replaced: 0, members_removed: 0, skipped_too_long: 0, respelled: 0 });
-    }));
-  it("repairs what an old build wrote directly: relinks a changed name, unlinks a cleared one, restores a respelling", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, `org_r_${RUN}`);
-      const ana = await contact(c, a, "Ana", "Acme Roofing");
-      const luis = await contact(c, a, "Luis", "Acme Roofing");
-      const eva = await contact(c, a, "Eva", "Acme Roofing");
-      await call(c, "public.reconcile_business_groups($1)", [a]);
-      await c.query("update contacts set company_name = 'Beta Pools' where id = $1", [ana]);
-      await c.query("update contacts set company_name = null where id = $1", [luis]);
-      await c.query("update contacts set company_name = 'ACME roofing' where id = $1", [eva]);
-      const r = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
-      expect(r).toMatchObject({ members_replaced: 1, members_removed: 1, respelled: 1 });
-      expect(await members(c, ana)).toEqual([{ name: "Beta Pools", is_primary: true, role: null, is_billing: false }]);
-      expect(await members(c, luis)).toEqual([]);
-      expect(await companyOf(c, eva)).toBe("Acme Roofing");
-    }));
-  it("skips a name too long to be a group and leaves its column alone", () => withRollback(async (c) => {
-    const a = await seedAccount(c, `org_r_${RUN}`);
-    const long = "L".repeat(130);
-    const ct = await contact(c, a, "Lo", long);
-    const r = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
-    expect(r.skipped_too_long).toBe(1);
-    expect(await companyOf(c, ct)).toBe(long);
-  }));
-  it("reconcile leaves a too-long column alone even with a business membership (mutation: drop the too-long exclusion from the final respell -> FAILS)", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, `org_r_${RUN}`);
-      const ct = await contact(c, a, "Lo");
-      await call(c, "public.create_group_with_member($1,$2,'business','Acme Roofing')", [a, ct]);
-      const long = "Q".repeat(130);
-      await c.query("update contacts set company_name = $2 where id = $1", [ct, long]); // an old build's direct write
-      const r = await call(c, "public.reconcile_business_groups($1)", [a]) as Record<string, number>;
-      expect(r).toMatchObject({ skipped_too_long: 1, respelled: 0 });
-      expect(await companyOf(c, ct)).toBe(long);
-      expect(await members(c, ct)).toEqual([{ name: "Acme Roofing", is_primary: true, role: null, is_billing: false }]);
-    }));
-});
+// reconcile_business_groups (spec §5.4) and its tests went with 0072 (S-02 G9), after its last run:
+// company_name is read-only now, so there is no direct write left to fold in.
 
 /*
  * Two sessions at once. Each write function serialises on the contact row (app.lock_contact); these
@@ -299,17 +236,6 @@ describe("two sessions at once (I2, minors 3 and 4)", () => {
         { name: "Garcia", is_primary: false, role: null, is_billing: false },
         { name: "Reyes", is_primary: true, role: null, is_billing: false },
       ]);
-    }));
-  it("reconcile waits for a direct write in flight and folds it in, never overwriting it (mutation: drop the lock or the re-read in the reconcile loop -> FAILS)", () =>
-    withCommittedAccount(async (c, acct) => {
-      const ana = await contact(c, acct, "Ana", "Acme Roofing");
-      await one(c, "public.reconcile_business_groups($1)", [acct]);
-      const { r2 } = await race(
-        (c1) => c1.query("update contacts set company_name = 'Beta Pools' where id = $1", [ana]), // an old build's write
-        (c2) => one(c2, "public.reconcile_business_groups($1)", [acct]));
-      expect(r2).toMatchObject({ ok: true, v: { members_replaced: 1 } });
-      expect(await companyOf(c, ana)).toBe("Beta Pools");
-      expect(await members(c, ana)).toEqual([{ name: "Beta Pools", is_primary: true, role: null, is_billing: false }]);
     }));
   it("two batches naming the same contacts in opposite orders both finish, no deadlock (mutation: process p_contact_ids in input order -> one FAILS 40P01)", () =>
     withCommittedAccount(async (c, acct) => {

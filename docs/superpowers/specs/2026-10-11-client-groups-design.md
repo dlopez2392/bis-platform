@@ -36,7 +36,7 @@ Choices this spec makes; **(owner, 2026-10-11)** marks the ones ruled in §13:
 | A1 | **Server-only writes (0053's pattern), not the contacts table's client writes.** `authenticated` gets SELECT only on both tables. Every write is a server action that proves the contact (or membership, or group) through the request client, then writes through the service client: the house rule of the Technician spec §7.3. Reasons: find-or-create by name, the primary swap and removal-with-promotion are multi-statement and need one transaction, which a PostgREST client call cannot give; a Technician must be able to link their customer to a business they cannot see (§13.3); and the column sync stays in one place |
 | A2 | **The column is kept in sync by a database trigger, not by each writer.** `contacts.company_name` = the name of the contact's business group, primary first, then oldest. No app path writes `company_name` after this release; `ContactInput` loses `companyName`, so every old writer is a compile error, not a line to remember |
 | A3 | **(owner, 2026-10-11, G10)** Business names are unique per account by their trimmed, lowercased key (a partial unique index); household names are not ("Garcia" is many families). This makes find-or-create race-safe (`on conflict do nothing`) |
-| A4 | The backfill is an idempotent function, `public.reconcile_business_groups()`, called at the end of 0069 and TWICE more by the orchestrator after the new app is live (right after the deploy is verified, and again once Vercel Skew Protection's maximum age has passed), to fold in names the old build wrote between the migration and the deploy, then any an old tab wrote after it (§11) |
+| A4 | The backfill is an idempotent function, `public.reconcile_business_groups()`, called at the end of 0069 and TWICE more by the orchestrator after the new app is live (right after the deploy is verified, and again once Vercel Skew Protection's maximum age has passed), to fold in names the old build wrote between the migration and the deploy, then any an old tab wrote after it (§11). Migration 0072 (G9) runs it a last time inside its own transaction and then drops it |
 | A5 | The contact field's label becomes "Business name" / "Nombre del negocio" (`contact.company`, `messages.ts:637`, says "Company" today; the list column already says "Business name", `:565`). The forms editor's kind label follows (`:1222`) |
 | A6 | Renaming a group and its billing address: Owner, Staff and the agency only. A group can hold customers a Technician does not serve. Deleting a group is not in this release (§3) |
 
@@ -146,6 +146,8 @@ touch `updated_at` and emits nothing. A household never changes the column.
 ### 5.4 The backfill: `public.reconcile_business_groups(p_account_id uuid default null) returns jsonb`
 
 Service-role only. Set-based, scoped to one account or all. The last statement of 0069 calls it.
+**Dropped by 0072 (G9)** after one final run inside that migration (§11); what follows describes it
+as it ran from 0069 to 0072.
 
 1. **Source:** contacts whose `btrim(company_name, WS)` is not empty. NULL, `''`, spaces, tabs or
    NBSP alone are skipped: no group, no membership, and the column is left as it is.
@@ -302,7 +304,9 @@ after the deploy is verified, and reconcile #2 once Vercel Skew Protection's max
 (read from the project's settings, or 24 hours if it cannot be read). Both runs are idempotent; a
 non-zero `members_replaced`, `members_removed` or `respelled` in #2 is a write from a tab still on
 the old build. Proposed runbook line for `docs/runbooks/ci-supabase-project.md`, landed by
-bis-platform.
+bis-platform. Migration 0072 (G9) runs it a third and last time inside its own transaction, after
+its trigger holds `contacts`, then drops the function (owner ruling 2026-10-12), so nothing written
+between reconcile #2 and that apply is stranded.
 
 **Old app with 0069 (the hours between the production apply and the deploy):** safe. The old
 build reads `company_name`, which the backfill filled. Its direct writes (inline edits, imports,
@@ -330,15 +334,27 @@ created with its business answer left on the submission and `setSubmissionProces
 stamped, and an import writes its contacts then reports failure (a re-run is harmless). The order
 is fixed anyway.
 
-**The follow-up release (G9):** revoke `UPDATE (company_name)` from `authenticated` and drop it from
-the guard (`:77`); a `before insert or update` trigger on `contacts` resets a direct write to the
-derived value, so only the sync sets it; drop the reconcile function. The column is NOT dropped.
+**The follow-up release (G9), as shipped in 0072:** `UPDATE (company_name)` is revoked from
+`authenticated` and dropped from the guard (`schema-grants-guard.test.ts`'s `EXPECTED_WRITES`), so a
+client-role UPDATE of the column is refused with 42501. A `before insert or update OF company_name`
+trigger on `contacts` (`contacts_company_name_derived`, SECURITY DEFINER) puts every other direct
+write back to `app.company_name_for(id)`, for every role: a client-role INSERT carrying the column
+starts silently NULL (a new contact has no memberships), and a `service_role` or table-owner write is
+silently reset, so only the sync sets it. A stored value the sync never set (an over-long name the
+reconcile skipped, or a whitespace-only one) survives every write that does not change the column,
+EXCEPT an upsert that sets it: the upsert's INSERT half resets `excluded.company_name` first, so its
+UPDATE half sees a change even when it sends the stored value back (no app code upserts contacts).
+A write that changes the column, or a business membership change, replaces it. The migration then
+runs the reconcile one last time and drops the function. Owner ruling 2026-10-12: keep those legacy
+values until the column changes, and keep the in-migration final reconcile. The column is NOT dropped.
 
 ## 12. Open risks
 
 - An app path missed in §6 that writes `company_name` directly would disagree with the group until
   that contact's next group change. Mitigated by the compile break, the reconcile run and review
-  against §6; closed by the follow-up's revoke.
+  against §6; closed by 0072: the revoke (the client role, refused loudly with 42501) and the trigger
+  (server paths, reset silently). A server writer added later would therefore lose its value
+  without an error; it must write the group (`set_contacts_business`), never the column.
 - `searchGroups` is an unindexed `ilike` per account; fine at today's sizes (production held 53
   contacts on 2026-09-24, 0050:58), revisit with a trigram index when a client passes ~5,000 groups.
 - Assumption, not verified: the generated `name_key` with `chr()` applies on hosted Postgres as on
