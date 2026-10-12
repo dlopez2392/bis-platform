@@ -97,19 +97,35 @@ function assertPatchKeys(keys: string[], allowed: readonly string[], what: strin
   }
 }
 
+/**
+ * The most groups whose places one record reads. A person belongs to a household and perhaps a
+ * business or two, so this is far past any real record; it bounds the membership read, the group
+ * read and the `or=` filter (each id adds 37 characters to the request URL). Primary first, then
+ * the order they joined (listContactGroups' order), so a cap could only ever drop the newest.
+ */
+const MAX_GROUPS_READ = 25;
+
+/**
+ * placeCount is the exact number of places the caller may see. equipmentCount is the exact number
+ * of units at the places RETURNED (at most MAX_PLACES_READ): the units of a place the card does not
+ * show are not counted, and the `in` list of place ids is bounded by that same cap.
+ */
 export async function listContactPlaces(db: SupabaseClient, accountId: string, contactId: string): Promise<ContactPlaces> {
+  // The id is interpolated into the or= filter below, so it is checked first. Its case does not
+  // matter: Postgres compares uuids by value, so an uppercase id matches the same rows.
   assertUuid(contactId, "listContactPlaces");
-  const id = contactId.toLowerCase(); // PostgREST echoes ids lowercase; the or= filter is built from it
   const { data: mem, error: mErr } = await db.from("client_group_members").select("client_group_id, is_primary")
-    .eq("account_id", accountId).eq("contact_id", id);
+    .eq("account_id", accountId).eq("contact_id", contactId)
+    .order("is_primary", { ascending: false }).order("created_at", { ascending: true }).order("id", { ascending: true })
+    .limit(MAX_GROUPS_READ);
   if (mErr) throw dbError("listContactPlaces memberships read failed", mErr);
   const memberships = (mem ?? []) as { client_group_id: string; is_primary: boolean }[];
   const groupIds = memberships.map((m) => m.client_group_id);
 
   const base = db.from("places").select(PLACE_COLUMNS, { count: "exact" }).eq("account_id", accountId);
   const owned = groupIds.length > 0
-    ? base.or(`contact_id.eq.${id},client_group_id.in.(${groupIds.join(",")})`)
-    : base.eq("contact_id", id);
+    ? base.or(`contact_id.eq.${contactId},client_group_id.in.(${groupIds.join(",")})`)
+    : base.eq("contact_id", contactId);
   // Active first (spec §6), so the cap never hides a current property behind removed ones.
   const { data: pData, count: placeCount, error: pErr } = await owned
     .order("archived_at", { ascending: true, nullsFirst: true })
@@ -133,11 +149,13 @@ export async function listContactPlaces(db: SupabaseClient, accountId: string, c
   let groups: ContactPlaceGroup[] = [];
   if (groupIds.length > 0) {
     const { data, error } = await db.from("client_groups").select("id, kind, name")
-      .eq("account_id", accountId).in("id", groupIds).order("name", { ascending: true });
+      .eq("account_id", accountId).in("id", groupIds).limit(MAX_GROUPS_READ);
     if (error) throw dbError("listContactPlaces groups read failed", error);
+    // The memberships' order (primary first, then joined), not the group read's.
+    const rank = (groupId: string) => groupIds.indexOf(groupId);
     groups = ((data ?? []) as { id: string; kind: GroupKind; name: string }[])
       .map((g) => ({ ...g, isPrimary: memberships.some((m) => m.client_group_id === g.id && m.is_primary) }))
-      .sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary));
+      .sort((a, b) => rank(a.id) - rank(b.id));
   }
   return { groups, places, placeCount: placeCount ?? places.length, equipment, equipmentCount };
 }
@@ -175,20 +193,39 @@ export async function updatePlace(
   db: SupabaseClient, accountId: string, placeId: string, patch: PlacePatch, ctx: PlaceCtx,
 ): Promise<{ previous: PlacePatch; row: PlaceRow } | "not_found" | "refused"> {
   assertActorAllowed(db, ctx.actorType ?? "user");
-  const keys = Object.keys(patch) as (keyof PlaceFields)[];
-  assertPatchKeys(keys, PLACE_FIELD_KEYS, "updatePlace");
+  assertPatchKeys(Object.keys(patch), PLACE_FIELD_KEYS, "updatePlace");
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
-  const previous: PlacePatch = {};
-  for (const k of keys) (previous as Record<string, unknown>)[k] = current[k];
-  const { data, error } = await db.from("places").update({ ...patch, updated_at: now() })
+  const { previous, changed, fields } = planPatch(patch, current);
+  if (fields.length === 0) return { previous, row: current };
+  const { data, error } = await db.from("places").update({ ...changed, updated_at: now() })
     .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
   if (error) throw dbError("updatePlace failed", error);
   const row = ((data ?? []) as unknown as PlaceRow[])[0];
   if (!row) return "refused";
-  await event(db, accountId, "place.updated", ctx, { placeId, fields: keys });
+  await event(db, accountId, "place.updated", ctx, { placeId, fields });
   return { previous, row };
 }
+
+/**
+ * Splits a validated patch against the stored row. `previous` holds the stored value of EVERY key
+ * the caller named (so its Undo can always be replayed: a replay of an unchanged key is a no-op);
+ * `changed` and `fields` hold only the keys whose defined value differs. Nothing differs: the
+ * caller writes nothing and appends no event (review round 1).
+ */
+function planPatch<P extends object>(patch: P, current: object) {
+  const stored = current as Record<string, unknown>;
+  const previous: Record<string, unknown> = {};
+  const changed: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    previous[k] = stored[k];
+    if (v !== undefined && v !== stored[k]) changed[k] = v;
+  }
+  return { previous: previous as P, changed, fields: Object.keys(changed) };
+}
+
+/** Postgres compares uuids by value, so the owner a caller names may differ only in case. */
+const sameId = (a: string | null, b: string | null) => (a === null || b === null ? a === b : a.toLowerCase() === b.toLowerCase());
 
 /**
  * Moves a place between a person and a group. 0071's places_owner_guard raises 42501 for a caller
@@ -204,6 +241,9 @@ export async function setPlaceOwner(
   const previous: PlaceOwner = current.contact_id !== null
     ? { contactId: current.contact_id, groupId: null }
     : { contactId: null, groupId: current.client_group_id as string };
+  if (sameId(current.contact_id, owner.contactId) && sameId(current.client_group_id, owner.groupId)) {
+    return { previous, row: current };
+  }
   const { data, error } = await db.from("places")
     .update({ contact_id: owner.contactId, client_group_id: owner.groupId, updated_at: now() })
     .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
@@ -245,9 +285,14 @@ export async function removePlace(
       await event(db, accountId, "place.removed", ctx, { placeId, mode: "deleted" });
       return { mode: "deleted", snapshot: deleted };
     }
-    // 0 rows: a unit arrived since the count (places_delete_empty refused), or the caller may not
-    // delete it at all. Keep it: archive, which RLS refuses in turn when the caller may not write.
+    // 0 rows. On a REQUEST client, places_delete_empty refused because a unit arrived since the
+    // count, or the caller may not delete the place at all: keep it and archive instead, which RLS
+    // refuses in turn when the caller may not write. A SERVICE client (the demo seed, tests) bypasses
+    // that policy, so for it a unit inserted between the count and the delete is cascaded away with
+    // the place: only the request client is protected against that race (spec §12).
   }
+  // Already archived: nothing to write, no event, the stored row as it is (review round 1).
+  if (current.archived_at !== null) return { mode: "archived", row: current };
   const row = await writeArchived(db, accountId, placeId, true);
   if (!row) return "refused";
   await event(db, accountId, "place.removed", ctx, { placeId, mode: "archived" });
@@ -261,6 +306,8 @@ export async function setPlaceArchived(
   assertActorAllowed(db, ctx.actorType ?? "user");
   const current = await getPlace(db, accountId, placeId);
   if (!current) return "not_found";
+  // Already in that state: no re-stamp of archived_at, no event (review round 1).
+  if ((current.archived_at !== null) === archived) return current;
   const row = await writeArchived(db, accountId, placeId, archived);
   if (!row) return "refused";
   if (archived) await event(db, accountId, "place.removed", ctx, { placeId, mode: "archived" });
@@ -327,18 +374,17 @@ export async function updateEquipment(
   db: SupabaseClient, accountId: string, equipmentId: string, patch: EquipmentPatch, ctx: PlaceCtx,
 ): Promise<{ previous: EquipmentPatch; row: EquipmentRow } | "not_found" | "refused"> {
   assertActorAllowed(db, ctx.actorType ?? "user");
-  const keys = Object.keys(patch) as (keyof EquipmentFields)[];
-  assertPatchKeys(keys, EQUIPMENT_FIELD_KEYS, "updateEquipment");
+  assertPatchKeys(Object.keys(patch), EQUIPMENT_FIELD_KEYS, "updateEquipment");
   const current = await getEquipment(db, accountId, equipmentId);
   if (!current) return "not_found";
-  const previous: EquipmentPatch = {};
-  for (const k of keys) (previous as Record<string, unknown>)[k] = current[k];
-  const { data, error } = await db.from("equipment").update({ ...patch, updated_at: now() })
+  const { previous, changed, fields } = planPatch(patch, current);
+  if (fields.length === 0) return { previous, row: current };
+  const { data, error } = await db.from("equipment").update({ ...changed, updated_at: now() })
     .eq("account_id", accountId).eq("id", equipmentId).select(EQUIPMENT_COLUMNS);
   if (error) throw dbError("updateEquipment failed", error);
   const row = ((data ?? []) as unknown as EquipmentRow[])[0];
   if (!row) return "refused";
-  await event(db, accountId, "equipment.updated", ctx, { placeId: row.place_id, equipmentId, fields: keys });
+  await event(db, accountId, "equipment.updated", ctx, { placeId: row.place_id, equipmentId, fields });
   return { previous, row };
 }
 

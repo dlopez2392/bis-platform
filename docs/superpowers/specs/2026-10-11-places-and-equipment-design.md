@@ -153,7 +153,8 @@ serves the no-action check). `created_by` is unindexed (nothing filters by autho
   0068 4b's shape. A no-membership client and a departed Technician get nothing (0068 A1).
 - Restrictive `places_delete_empty … for delete to authenticated using (not exists (select 1 from
   public.equipment e where e.place_id = places.id))`, every role (C5). A refused DELETE affects 0 rows rather
-  than raising, so the action reads the deleted rows back (`.select("id")`) and archives on 0. Cascades from
+  than raising, so the action reads the deleted row back whole (`.select(<every column>)`), which IS the Undo
+  snapshot, and archives on 0 rows. It counts the units first, because the service role bypasses the policy. Cascades from
   a contact, group or account delete are referential actions, which PG documents as bypassing row security
   (pinned by a test, §10).
 - Grants: `revoke all … from anon, authenticated`; `authenticated` gets `select, insert, delete` on both,
@@ -175,9 +176,9 @@ serves the no-action check). `created_by` is unindexed (nothing filters by autho
   records: 0069 A6's rule that group-level decisions are Owner and Staff work, in 0068's trigger shape. The
   with-check alone would let a Technician move it anywhere inside their reach.
 - The four functions `revoke all … from public, anon`, granted as 0068:90-97. No write function (C4).
-- `ACCOUNT_OWNED_TABLES` (`account-teardown.ts:19-28`) gains `"equipment", "places"` just before
-  `"client_group_members"`, so the demo leftovers check and the e2e sweep cover them (0070's branch adds
-  `"contact_relationships"` on the same line: an additive merge). `schema-grants-guard.test.ts`'s
+- `ACCOUNT_OWNED_TABLES` (`account-teardown.ts:19-28`) gains `"equipment", "places"` right after `"tags"`,
+  just before `"contact_relationships"` (and so ahead of `"client_group_members"`, `"client_groups"` and
+  `"contacts"`), so the demo leftovers check and the e2e sweep cover them. `schema-grants-guard.test.ts`'s
   `EXPECTED_WRITES` (`:62-91`) gains `"authenticated equipment"` and `"authenticated places"` entries,
   `insertDeleteAndUpdate` of the eight and twelve columns above.
 
@@ -187,7 +188,8 @@ serves the no-action check). `created_by` is unindexed (nothing filters by autho
   accountId, contactId)` reads the contact's group ids, then places `contact_id = X or client_group_id in
   (…)` (active first, limit 100, real counts), then their equipment `.in("place_id", ids)` (limit 500), then
   the group names: no embed, RLS alone trimming a Technician's view. Writes: `addPlace`, `updatePlace`,
-  `setPlaceOwner`, `removePlace` (answers `deleted` or `archived`), `putBackPlace`, `restorePlace` (same id),
+  `setPlaceOwner`, `removePlace` (answers `deleted` or `archived`), `setPlaceArchived(…, false)` (puts a removed property
+  back; `true` archives), `restorePlace` (same id),
   `addEquipment`, `replaceEquipment`, `updateEquipment`, `removeEquipment`, `restoreEquipment` (same id and
   `replaces_id`). Each returns the row or its snapshot and keeps the SQLSTATE.
 - **Input** `apps/web/src/lib/contacts/place-input.ts` (pure): trims, lengths, the at-least-one rule, country,

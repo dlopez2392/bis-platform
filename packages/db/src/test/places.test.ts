@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
-import { createGroupWithMember } from "../client-groups";
+import { createGroupWithMember, setPrimaryMembership } from "../client-groups";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
 import {
   listContactPlaces, addPlace, removePlace, setPlaceArchived, restorePlace, addEquipment, replaceEquipment,
   updatePlace, removeEquipment, restoreEquipment, PlaceDbError, type PlaceFields, type EquipmentFields,
+  getPlace, getEquipment, setPlaceOwner, updateEquipment, type PlacePatch, type EquipmentPatch,
 } from "../places";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const ACTOR = "user_test";
 const fields = (over: Partial<PlaceFields> = {}): PlaceFields => ({
@@ -145,4 +147,193 @@ describe("account teardown (spec §5.3)", () => {
     expect(at("places")).toBeLessThan(at("client_group_members"));
     expect(at("places")).toBeLessThan(at("contacts"));
   });
+});
+
+// ---- Review round 1: every event, tenant fences, refusals and no-op writes ----
+
+const EVENT_TYPES = [
+  "place.added", "place.updated", "place.owner_changed", "place.removed", "place.restored",
+  "equipment.added", "equipment.replaced", "equipment.updated", "equipment.removed", "equipment.restored",
+];
+async function placeEvents(db: SupabaseClient, accountId: string) {
+  const { data, error } = await db.from("events").select("type, actor_type, actor_id, payload")
+    .eq("account_id", accountId).in("type", EVENT_TYPES).order("created_at").order("id");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as { type: string; actor_type: string; actor_id: string; payload: Record<string, unknown> }[];
+}
+const isCode = (code: string) => (e: unknown) => e instanceof PlaceDbError && e.code === code;
+
+describe("events, every type (spec §6, review round 1)", () => {
+  it("each write appends exactly its own event: subject, ids, mode and field names, and none of the typed values (mutations: drop place.removed's emit, mark an archive 'deleted', drop equipment.restored's emit, add name or model to equipment.added -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      // Every value this test types, and so every value no event may carry.
+      const TYPED = {
+        label: "Casa grande", address: "4410 Jackson Rd", landmark: "blue gate", directions: "left at the canal",
+        city: "McAllen", region: "TX", postal_code: "78501", landmark2: "red gate", directions2: "right at the church",
+        unitName: "Attic furnace", unitMake: "Rheem", unitModel: "FX9", serial: "SN-778", notes: "filter under the stairs",
+        notes2: "filter by the door", newName: "Attic furnace two", newMake: "Lennox", newModel: "EL296",
+        emptyAddress: "77 Empty Rd", group: "Navarro",
+      };
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const home = await createGroupWithMember(db, accountId, ana, "household", TYPED.group, null, ACTOR);
+      if (home.status !== "ok") throw new Error("group");
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, {
+        label: TYPED.label, address: TYPED.address, landmark: TYPED.landmark, directions: TYPED.directions,
+        city: TYPED.city, region: TYPED.region, postal_code: TYPED.postal_code, country: "US",
+      }, ctx);
+      await updatePlace(db, accountId, p.id, { landmark: TYPED.landmark2, directions: TYPED.directions2 }, ctx);
+      await setPlaceOwner(db, accountId, p.id, { contactId: null, groupId: home.groupId }, ctx);
+      const u = await addEquipment(db, accountId, p.id, unit({
+        name: TYPED.unitName, make: TYPED.unitMake, model: TYPED.unitModel, serial: TYPED.serial, notes: TYPED.notes,
+      }), ctx);
+      await updateEquipment(db, accountId, u.id, { notes: TYPED.notes2 }, ctx);
+      const r = await replaceEquipment(db, accountId, u.id,
+        unit({ name: TYPED.newName, make: TYPED.newMake, model: TYPED.newModel, installed_on: "2026-10-11" }), ctx);
+      if (typeof r === "string") throw new Error("replace");
+      const snap = await removeEquipment(db, accountId, r.id, ctx);
+      if (typeof snap === "string") throw new Error("remove");
+      await restoreEquipment(db, accountId, snap, ctx);
+      await removePlace(db, accountId, p.id, ctx); // has units: archived
+      await setPlaceArchived(db, accountId, p.id, false, ctx);
+      await setPlaceArchived(db, accountId, p.id, true, ctx);
+      const empty = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ address: TYPED.emptyAddress }), ctx);
+      const gone = await removePlace(db, accountId, empty.id, ctx);
+      if (typeof gone === "string" || gone.mode !== "deleted") throw new Error("expected a delete");
+      await restorePlace(db, accountId, gone.snapshot, ctx);
+
+      const events = await placeEvents(db, accountId);
+      const s = { contactId: ana };
+      expect(events.map((e) => [e.type, e.payload])).toEqual([
+        ["place.added", { ...s, placeId: p.id }],
+        ["place.updated", { ...s, placeId: p.id, fields: ["landmark", "directions"] }],
+        ["place.owner_changed", { ...s, placeId: p.id, ownerContactId: null, ownerGroupId: home.groupId }],
+        ["equipment.added", { ...s, placeId: p.id, equipmentId: u.id }],
+        ["equipment.updated", { ...s, placeId: p.id, equipmentId: u.id, fields: ["notes"] }],
+        ["equipment.replaced", { ...s, placeId: p.id, equipmentId: r.id, replacedId: u.id }],
+        ["equipment.removed", { ...s, placeId: p.id, equipmentId: r.id }],
+        ["equipment.restored", { ...s, placeId: p.id, equipmentId: r.id }],
+        ["place.removed", { ...s, placeId: p.id, mode: "archived" }],
+        ["place.restored", { ...s, placeId: p.id }],
+        ["place.removed", { ...s, placeId: p.id, mode: "archived" }],
+        ["place.added", { ...s, placeId: empty.id }],
+        ["place.removed", { ...s, placeId: empty.id, mode: "deleted" }],
+        ["place.restored", { ...s, placeId: empty.id }],
+      ]);
+      for (const e of events) {
+        expect([e.actor_type, e.actor_id]).toEqual(["user", ACTOR]);
+        const text = JSON.stringify(e.payload);
+        for (const v of Object.values(TYPED)) expect(text, `${e.type} carries "${v}"`).not.toContain(v);
+      }
+    }));
+});
+
+describe("tenant fences (review round 1)", () => {
+  it("a wrong account id answers not_found or null for every read and write by id, and the row is untouched (mutation: drop getPlace's or getEquipment's account filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, otherId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
+      const u = await addEquipment(db, accountId, p.id, unit(), ctx);
+      expect(await getPlace(db, otherId, p.id)).toBeNull();
+      expect(await getEquipment(db, otherId, u.id)).toBeNull();
+      expect(await updatePlace(db, otherId, p.id, { landmark: "past the canal" }, ctx)).toBe("not_found");
+      expect(await setPlaceOwner(db, otherId, p.id, { contactId: ana, groupId: null }, ctx)).toBe("not_found");
+      expect(await setPlaceArchived(db, otherId, p.id, true, ctx)).toBe("not_found");
+      expect(await removePlace(db, otherId, p.id, ctx)).toBe("not_found");
+      expect(await updateEquipment(db, otherId, u.id, { notes: "x" }, ctx)).toBe("not_found");
+      expect(await replaceEquipment(db, otherId, u.id, unit({ installed_on: "2026-10-11" }), ctx)).toBe("not_found");
+      expect(await removeEquipment(db, otherId, u.id, ctx)).toBe("not_found");
+      expect(await getPlace(db, accountId, p.id)).toEqual(p);
+      expect(await getEquipment(db, accountId, u.id)).toEqual(u);
+      expect(await placeEvents(db, otherId)).toEqual([]);
+    })));
+  it("restorePlace and restoreEquipment refuse another account's snapshot with 22023 and write nothing (mutation: drop either account check -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, otherId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
+      const u = await addEquipment(db, accountId, p.id, unit(), ctx);
+      const unitSnap = await removeEquipment(db, accountId, u.id, ctx);
+      if (typeof unitSnap === "string") throw new Error("remove unit");
+      const gone = await removePlace(db, accountId, p.id, ctx);
+      if (typeof gone === "string" || gone.mode !== "deleted") throw new Error("expected a delete");
+      await expect(restorePlace(db, otherId, gone.snapshot, ctx)).rejects.toSatisfy(isCode("22023"));
+      expect(await getPlace(db, accountId, p.id)).toBeNull();
+      await restorePlace(db, accountId, gone.snapshot, ctx);
+      await expect(restoreEquipment(db, otherId, unitSnap, ctx)).rejects.toSatisfy(isCode("22023"));
+      expect(await getEquipment(db, accountId, u.id)).toBeNull();
+    })));
+});
+
+describe("refusals and order (review round 1)", () => {
+  it("updatePlace and updateEquipment refuse an empty patch or a field outside the editable set with 22023, writing nothing (mutation: drop the key check -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const luis = (await createContact(db, accountId, { firstName: "Luis" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
+      const other = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ address: "9 Other St" }), ctx);
+      const u = await addEquipment(db, accountId, p.id, unit(), ctx);
+      for (const bad of [{}, { contact_id: luis }, { archived_at: "2026-10-11T00:00:00Z" }]) {
+        await expect(updatePlace(db, accountId, p.id, bad as PlacePatch, ctx)).rejects.toSatisfy(isCode("22023"));
+      }
+      for (const bad of [{}, { place_id: other.id }, { replaces_id: u.id }]) {
+        await expect(updateEquipment(db, accountId, u.id, bad as EquipmentPatch, ctx)).rejects.toSatisfy(isCode("22023"));
+      }
+      expect(await getPlace(db, accountId, p.id)).toEqual(p);
+      expect(await getEquipment(db, accountId, u.id)).toEqual(u);
+      expect((await placeEvents(db, accountId)).map((e) => e.type)).not.toContain("place.updated");
+    }));
+  it("lists the person's primary group first, whatever the names or join order (mutation: drop the primary-first sort -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const alpha = await createGroupWithMember(db, accountId, ana, "household", "Alpha", null, ACTOR);
+      const zeta = await createGroupWithMember(db, accountId, ana, "business", "Zeta Roofing", null, ACTOR);
+      if (alpha.status !== "ok" || zeta.status !== "ok") throw new Error("groups");
+      expect(await setPrimaryMembership(db, accountId, zeta.memberId, ACTOR)).toMatchObject({ status: "ok" });
+      const r = await listContactPlaces(db, accountId, ana);
+      expect(r.groups).toEqual([
+        { id: zeta.groupId, kind: "business", name: "Zeta Roofing", isPrimary: true },
+        { id: alpha.groupId, kind: "household", name: "Alpha", isPrimary: false },
+      ]);
+    }));
+});
+
+describe("no-op writes append nothing (review round 1)", () => {
+  it("archiving an archived place, putting back a current one or giving a place the owner it has writes nothing and appends no event (mutations: drop the already-archived, already-current or same-owner guard -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields(), ctx);
+      await addEquipment(db, accountId, p.id, unit(), ctx);
+      await removePlace(db, accountId, p.id, ctx);
+      const archived = await getPlace(db, accountId, p.id);
+      expect(archived?.archived_at).not.toBeNull();
+      expect(await setPlaceArchived(db, accountId, p.id, true, ctx)).toEqual(archived);
+      expect(await removePlace(db, accountId, p.id, ctx)).toEqual({ mode: "archived", row: archived });
+      await setPlaceArchived(db, accountId, p.id, false, ctx);
+      const current = await getPlace(db, accountId, p.id);
+      expect(await setPlaceArchived(db, accountId, p.id, false, ctx)).toEqual(current);
+      expect(await setPlaceOwner(db, accountId, p.id, { contactId: ana.toUpperCase(), groupId: null }, ctx))
+        .toEqual({ previous: { contactId: ana, groupId: null }, row: current });
+      expect((await placeEvents(db, accountId)).map((e) => e.type))
+        .toEqual(["place.added", "equipment.added", "place.removed", "place.restored"]);
+    }));
+  it("an edit whose values equal the stored ones, or are undefined, writes nothing and appends no event; a mixed patch names only what changed (mutation: write every patched key -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const ctx = { subjectId: ana, actorId: ACTOR };
+      const p = await addPlace(db, accountId, { contactId: ana, groupId: null }, fields({ landmark: "blue gate" }), ctx);
+      const u = await addEquipment(db, accountId, p.id, unit(), ctx);
+      expect(await updatePlace(db, accountId, p.id, { landmark: "blue gate" }, ctx)).toEqual({ previous: { landmark: "blue gate" }, row: p });
+      expect(await updatePlace(db, accountId, p.id, { landmark: undefined }, ctx)).toEqual({ previous: { landmark: "blue gate" }, row: p });
+      expect(await updateEquipment(db, accountId, u.id, { model: "XR14", notes: undefined }, ctx))
+        .toEqual({ previous: { model: "XR14", notes: null }, row: u });
+      const mixed = await updatePlace(db, accountId, p.id, { landmark: "blue gate", directions: "by the canal" }, ctx);
+      expect(mixed).toMatchObject({ previous: { landmark: "blue gate", directions: null }, row: { directions: "by the canal" } });
+      const events = await placeEvents(db, accountId);
+      expect(events.map((e) => e.type)).toEqual(["place.added", "equipment.added", "place.updated"]);
+      expect(events[2]!.payload).toMatchObject({ fields: ["directions"] });
+    }));
 });
