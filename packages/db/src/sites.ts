@@ -114,7 +114,8 @@ export async function countTrafficDays(db: SupabaseClient, accountId: string): P
   const { count, error } = await db.from("site_traffic_daily")
     .select("day", { count: "exact", head: true }).eq("account_id", accountId);
   if (error) throw new Error(`countTrafficDays failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countTrafficDays failed: no count returned");
+  return count;
 }
 
 /** Removes the account's site and everything stored for it, in the order the

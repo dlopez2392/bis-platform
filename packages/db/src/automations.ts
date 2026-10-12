@@ -358,7 +358,8 @@ export async function countReviewRequestsSince(
     .eq("account_id", accountId)
     .gte("review_requested_at", sinceIso);
   if (error) throw new Error(`countReviewRequestsSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countReviewRequestsSince failed: no count returned");
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -519,7 +520,8 @@ export async function countNoShowNudgesSince(
     .eq("account_id", accountId)
     .gte("no_show_nudged_at", sinceIso);
   if (error) throw new Error(`countNoShowNudgesSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countNoShowNudgesSince failed: no count returned");
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -1142,7 +1144,8 @@ export async function countReferralAsksSince(
     .eq("account_id", accountId)
     .gte("referral_asked_at", sinceIso);
   if (error) throw new Error(`countReferralAsksSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countReferralAsksSince failed: no count returned");
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -1708,7 +1711,8 @@ export async function conversationQuietSince(
     .eq("conversation_id", (convo as { id: string }).id)
     .gt("created_at", sinceIso);
   if (mErr) throw new Error(`conversationQuietSince messages read failed: ${mErr.message}`);
-  return (count ?? 0) === 0;
+  if (count === null) throw new Error("conversationQuietSince messages read failed: no count returned");
+  return count === 0;
 }
 
 /** Send-then-stamp. ONE reactivation per contact, EVER — and this column is
@@ -1741,7 +1745,8 @@ export async function countReactivationsSince(
     .eq("account_id", accountId)
     .gte("reactivation_sent_at", sinceIso);
   if (error) throw new Error(`countReactivationsSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countReactivationsSince failed: no count returned");
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -2107,7 +2112,8 @@ export async function countQuoteFollowupsSince(
     .eq("account_id", accountId)
     .gte("quote_followup_sent_at", sinceIso);
   if (error) throw new Error(`countQuoteFollowupsSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countQuoteFollowupsSince failed: no count returned");
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -2160,5 +2166,6 @@ export async function countInstantRepliesSince(
     .eq("account_id", accountId)
     .gte("instant_reply_sent_at", sinceIso);
   if (error) throw new Error(`countInstantRepliesSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countInstantRepliesSince failed: no count returned");
+  return count;
 }

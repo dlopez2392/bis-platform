@@ -878,7 +878,8 @@ export async function countContacts(
   q = withAssignee(q, opts.assignee);
   const { count, error } = await q;
   if (error) throw new Error(`countContacts failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countContacts failed: no count returned");
+  return count;
 }
 
 /**

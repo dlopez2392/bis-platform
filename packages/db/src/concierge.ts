@@ -342,7 +342,8 @@ export async function countConciergeConversationsByIp(
     .select("id", { count: "exact", head: true })
     .eq("ip_hash", ipHash).gte("created_at", sinceIso);
   if (error) throw new Error(`countConciergeConversationsByIp failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countConciergeConversationsByIp failed: no count returned");
+  return count;
 }
 
 /** Conversations started against this account since `sinceIso`. The
@@ -354,7 +355,8 @@ export async function countConciergeConversationsForAccount(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).gte("created_at", sinceIso);
   if (error) throw new Error(`countConciergeConversationsForAccount failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countConciergeConversationsForAccount failed: no count returned");
+  return count;
 }
 
 /**

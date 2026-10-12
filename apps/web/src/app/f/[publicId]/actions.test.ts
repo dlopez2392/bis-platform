@@ -456,6 +456,17 @@ describe("submitFormAction — guard-ordering regressions (the two M1c Criticals
     );
     expect(createSubmissionMock).not.toHaveBeenCalled();
   });
+
+  it("a rate-limit count that THROWS (a count-less read, @bis/db's countRecentSubmissions) refuses: error, nothing written (mutation: catch the count as 0 → the submission is created, FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(formWithRequiredField());
+    countRecentSubmissionsMock.mockRejectedValue(new Error("countRecentSubmissions failed: no count returned"));
+
+    const result = await submitFormAction(PUBLIC_ID, IDLE, fd({ [REQUIRED_KEY]: "Maria", locale: "en" }));
+
+    expect(result.status).toBe("error");
+    expect(createSubmissionMock).not.toHaveBeenCalled();
+    expect(recordRejectedSubmissionMock).not.toHaveBeenCalled();
+  });
 });
 
 /**
