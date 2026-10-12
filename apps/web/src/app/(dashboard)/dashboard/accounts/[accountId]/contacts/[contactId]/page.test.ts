@@ -727,6 +727,26 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(html).not.toContain("#compose-email");
   });
 
+  it("Next up's Add a To-do is offered only while the timeline (which holds the To-do field) rendered (D3; mutation: always pass the label -> FAILS)", async () => {
+    const addTodo = `>${m["record.nextUp.addTodo"]}<`;
+    // The control: the timeline is ready, so the empty Next up offers the action.
+    expect(cardHtml(await render(), "next-up")).toContain(addTodo);
+    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+    expect(cardHtml(html, "next-up")).not.toContain(addTodo);
+  });
+
+  it("on a Spanish page the bodies that stay English carry lang=\"en\": the timeline, Details, Tags and Groups (§9.6; mutation: drop the Groups wrapper -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
+    const wrapped = (id: string) => /<div lang="en">/.test(cardHtml(html, id));
+    expect(["timeline", "details", "tags", "groups"].filter((id) => !wrapped(id))).toEqual([]);
+    // The converted cards inherit the page's Spanish.
+    expect(["summary", "next-up", "deals"].filter(wrapped)).toEqual([]);
+  });
+
   it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
     accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });

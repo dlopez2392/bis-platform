@@ -35,4 +35,11 @@ describe("NextUpBody (spec §9.3)", () => {
     expect(focusProps).toEqual([{ targetId: ADD_TODO_FIELD_ID, label: "Add a To-do" }]);
     expect(ADD_TODO_FIELD_ID).toBe("record-add-todo");
   });
+  it("no label (the timeline, and so its To-do field, is not on the page): no Add a To-do, the sentence stays (D3; mutation: render the button with a null label -> FAILS)", () => {
+    focusProps.length = 0;
+    const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, addTodoLabel: null, view: { rows: [], undated: null } }));
+    expect(html).toContain("Nothing coming up.");
+    expect(html).not.toContain("<button");
+    expect(focusProps).toEqual([]);
+  });
 });

@@ -2,15 +2,19 @@ import type { NextUpView } from "@/lib/record/next-up";
 import { ADD_TODO_FIELD_ID } from "./constants";
 import { FocusFieldButton } from "./focus-field-button";
 
-/** Next up (spec §9.3): read-only rows; Done stays on the timeline. Rows are --row-line rules. */
-export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView; emptyText: string; addTodoLabel: string }) {
+/**
+ * Next up (spec §9.3): read-only rows; Done stays on the timeline. Rows are --row-line rules.
+ * `addTodoLabel` is null when the timeline (which holds the To-do field) did not render: an action
+ * with nothing behind it is hidden (D3).
+ */
+export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView; emptyText: string; addTodoLabel: string | null }) {
   const undated = view.undated ? <p className="text-xs text-muted-foreground">{view.undated}</p> : null;
   if (view.rows.length === 0) {
     return (
       <div className="space-y-2">
         <p className="text-sm text-muted-foreground">{emptyText}</p>
         {undated}
-        <FocusFieldButton targetId={ADD_TODO_FIELD_ID} label={addTodoLabel} />
+        {addTodoLabel ? <FocusFieldButton targetId={ADD_TODO_FIELD_ID} label={addTodoLabel} /> : null}
       </div>
     );
   }

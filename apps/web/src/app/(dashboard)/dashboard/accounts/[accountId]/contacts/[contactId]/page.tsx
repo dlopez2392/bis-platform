@@ -178,7 +178,8 @@ export default async function ContactDetailPage({
       ? { node: <SummaryBody view={facts} retryLabel={tr.text("record.card.retry")} /> }
       : failed(tr.text("record.summary.failed")),
     "next-up": upNext
-      ? { node: <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={tr.text("record.nextUp.addTodo")} /> }
+      // Add a To-do focuses the timeline's To-do field: with no timeline there is nothing behind it (D3).
+      ? { node: <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={composerShown ? tr.text("record.nextUp.addTodo") : null} /> }
       : failed(tr.text("record.nextUp.failed")),
     timeline: timeline.status === "ready"
       ? {
@@ -210,7 +211,8 @@ export default async function ContactDetailPage({
         ),
       }
       : failed(tr.text("record.activity.failed")),
-    groups: { node: <GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /> },
+    // The Groups card's copy stays English in 1a, as the timeline's, Details' and Tags' (§9.6).
+    groups: { node: <div lang="en"><GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /></div> },
     properties: { node: <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} headingHidden /> },
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
     details: fieldDefs.status === "ready"

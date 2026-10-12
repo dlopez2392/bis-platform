@@ -180,10 +180,13 @@ describe("contactNextUp (S-03 part 1, spec §7, C9)", () => {
       expect(wide.datedTasks.map((t) => t.id)).toEqual([overdue.id, due20.id, due25.id, due28.id]);
     }));
 
+  // What each case pins differs: the broken dated read comes back as an ERROR, but the broken undated
+  // read is a HEAD request, and postgrest-js turns its empty 404 into `{ error: null, count: null }`,
+  // so that case is caught by the null-count guard, not by the error check.
   it.each([
-    ["dated", /contactNextUp To-dos failed/],
-    ["undated", /contactNextUp undated count failed/],
-  ] as const)("a failed %s To-do read rejects, never an empty card (mutation: drop that read's error check -> resolves, FAILS)", (which, message) =>
+    ["dated", "drop the To-dos read's error check -> resolves, FAILS", /contactNextUp To-dos failed/],
+    ["undated", "drop the undated null-count guard -> a missing count reads as none, FAILS", /contactNextUp undated count failed/],
+  ] as const)("a failed %s To-do read rejects, never an empty card (mutation: %s)", (which, _mutation, message) =>
     withTestAccount(async (db, accountId) => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
       // Both To-do reads start at from("tasks"); the undated one is the head count. Break only one.
