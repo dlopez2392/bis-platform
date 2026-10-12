@@ -65,8 +65,9 @@ describe("0049 contacts.marketing_email_opted_out_at", () => {
           where attrelid = 'public.contacts'::regclass and attnum > 0
             and not attisdropped and attacl is not null
           order by attname`);
+      // company_name left with 0072 (S-02 G9): revoking its only column grant leaves attacl NULL.
       expect(rows.map((r) => r.attname)).toEqual([
-        "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+        "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
         "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "sort_name", "source", "updated_at",
       ]);
     });
