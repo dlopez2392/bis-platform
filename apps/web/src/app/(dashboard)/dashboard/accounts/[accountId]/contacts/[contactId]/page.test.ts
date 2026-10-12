@@ -22,10 +22,18 @@ vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {
       if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
+      let cols: string[] = [];
       const chain = {
-        select: () => chain,
+        select: (c: string) => { cols = c.split(",").map((s) => s.trim()); return chain; },
         eq: (...args: unknown[]) => { accountsEq(...args); return chain; },
-        maybeSingle: () => accountRead(),
+        // As PostgREST does: only the columns the page SELECTED come back, so a column dropped
+        // from the select is a column the page never sees.
+        maybeSingle: async () => {
+          const r = await accountRead();
+          const data = r.data && typeof r.data === "object"
+            ? Object.fromEntries(Object.entries(r.data).filter(([k]) => cols.includes(k))) : r.data;
+          return { ...r, data };
+        },
       };
       return chain;
     },
@@ -58,13 +66,15 @@ const listContactOpportunitiesMock = vi.fn(async (..._a: unknown[]): Promise<unk
 const listNotesMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
 const timelineThrows = vi.hoisted(() => ({ on: false }));
+const listContactTagsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 vi.mock("@bis/db", () => ({
   getContact: (...args: unknown[]) => getContactMock(...args),
-  listContactTags: async () => [],
+  listContactTags: (...args: unknown[]) => listContactTagsMock(...args),
   listNotes: (...args: unknown[]) => listNotesMock(...args),
   listContactTasks: (...args: unknown[]) => listContactTasksMock(...args),
   holdOpenTaskIds: (...args: unknown[]) => holdOpenTaskIdsMock(...args),
-  listCustomFields: async () => [],
+  listCustomFields: (...args: unknown[]) => listCustomFieldsMock(...args),
   listContactOpportunities: (...args: unknown[]) => listContactOpportunitiesMock(...args),
   listContactSubmissions: async () => [],
   listContactMessages: async () => [],
@@ -221,12 +231,20 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     }
   });
 
-  it("404s for a contact this account does not have, before any read", async () => {
+  it("404s for a contact this account does not have, before any read (mutation: start the record page's reads before getContact -> FAILS)", async () => {
     getContactMock.mockResolvedValue(null);
+    const reads = {
+      contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
+      listNotes: listNotesMock, listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
+    };
+    for (const r of Object.values(reads)) r.mockClear();
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(renderZone).not.toHaveBeenCalled();
     expect(readEmailView).not.toHaveBeenCalled();
     expect(emailRowProps).not.toHaveBeenCalled();
+    // S-03 part 1: none of the record page's own reads run for a contact the caller cannot see.
+    expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
   });
 });
 
@@ -584,9 +602,21 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     listNotesMock.mockReset().mockResolvedValue([]);
     prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
     resolveSmsSenderMock.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    listContactTagsMock.mockReset().mockResolvedValue([]);
+    listCustomFieldsMock.mockReset().mockResolvedValue([]);
     timelineProps.mockClear();
     timelineThrows.on = false;
   });
+  /** A card's generic failure line ("Couldn't load {title}."), as the HTML escapes it. */
+  const failedCopy = (title: string) => m["record.card.failed"].replace("{title}", title).replaceAll("'", "&#x27;");
+  const actionIds = (html: string) => [...html.matchAll(/data-record-action="(\w+)"/g)].map((x) => x[1]);
+  const quietly = async <T,>(fn: () => Promise<T>): Promise<{ result: T; logged: string }> => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await fn();
+      return { result, logged: errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n") };
+    } finally { errors.mockRestore(); }
+  };
 
   it("renders the nine cards in the phone order, which is the DOM order on every width (C6; mutation: render the who column first -> FAILS)", async () => {
     expect(order(await render())).toEqual(["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"]);
@@ -632,8 +662,87 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     try {
       const html = await render();
       expect(cardHtml(html, "deals")).toContain("data-record-error");
+      expect(cardHtml(html, "deals")).toContain(failedCopy(m["record.card.deals"]));
       expect(timelineProps).toHaveBeenCalled();
     } finally { errors.mockRestore(); }
+  });
+
+  it("Tags failing is the Tags card's error, the rest stand (mutation: let loadTags rethrow -> FAILS)", async () => {
+    listContactTagsMock.mockRejectedValue(new Error("tags down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "tags")).toContain(failedCopy(m["contact.tags"]));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+  });
+
+  it("Details failing (its custom-field definitions) is the Details card's error, the rest stand (mutation: let loadFieldDefs rethrow -> FAILS)", async () => {
+    listCustomFieldsMock.mockRejectedValue(new Error("custom fields down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "details")).toContain(failedCopy(m["contact.details"]));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+  });
+
+  it("an invalid stored zone draws the summary and Next up in the zone renderZone resolved, never the raw one (review ruling; mutation: hand factsView or nextUpView the raw timezone -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "Mars/Olympus", language: null }, error: null });
+    renderZone.mockImplementationOnce(async () => ({ zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
+    contactFactsMock.mockResolvedValue({ ...READY_FACTS, lastTalked: { ok: true, value: { at: "2026-10-10T15:00:00Z", channel: "text" } } });
+    const { result: html } = await quietly(render);
+    expect(renderZone).toHaveBeenLastCalledWith("Mars/Olympus");
+    // 05:30Z on Jan 1 is January in UTC (the resolved zone), where Chicago would say December.
+    expect(cardHtml(html, "summary")).toContain("On your list since Jan 2026");
+    expect(cardHtml(html, "summary")).toContain("Last talked");
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+  });
+
+  it("a summary view that throws costs only the summary (C5: a malformed instant; mutation: build factsView outside its try -> the render rejects, FAILS)", async () => {
+    contactFactsMock.mockResolvedValue({ ...READY_FACTS, lastTalked: { ok: true, value: { at: "not-a-date", channel: "call" } } });
+    const { result: html, logged } = await quietly(render);
+    expect(cardHtml(html, "summary")).toContain(m["record.summary.failed"].replaceAll("'", "&#x27;"));
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+    expect(timelineProps).toHaveBeenCalled();
+    expect(logged).toContain("summary view failed for account acct1");
+    // The customer's id ("ct1") never names the line; `\b` because the account id "acct1" contains it.
+    expect(logged).not.toMatch(/\bct1\b/);
+  });
+
+  it("a Next up view that throws costs only Next up (C5: a malformed due date; mutation: build nextUpView outside its try -> the render rejects, FAILS)", async () => {
+    contactNextUpMock.mockResolvedValue({ bookings: [], datedTasks: [{ id: "t1", title: "Call back", due_at: "not-a-date" }], undatedCount: 0 });
+    const { result: html, logged } = await quietly(render);
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.failed"].replaceAll("'", "&#x27;"));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+    expect(logged).toContain("next up view failed for account acct1");
+  });
+
+  it("Text and Email are hidden while the timeline (and so its composer) failed; Call stays (D3: nothing behind them; mutation: drop the timeline-readiness condition -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    resolveSmsSenderMock.mockResolvedValue({ ok: true, from: "+19565550199", ownedNumbers: ["+19565550199"] });
+    // The control: with the timeline ready, all three are offered.
+    expect(actionIds(await render())).toEqual(["call", "text", "email"]);
+    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    const { result: html } = await quietly(render);
+    expect(actionIds(html)).toEqual(["call"]);
+    expect(html).not.toContain("#compose-sms");
+    expect(html).not.toContain("#compose-email");
+  });
+
+  it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
+    expect(html).toContain(`>${m["record.action.call.es"]}<`);
+  });
+
+  it("an agency operator on that Spanish account reads English (requestLocale's role split; mutation: pass isOperator false -> Spanish, FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="en"|lang="en"[^>]*data-record-layout/);
+    expect(html).toContain(`>${m["record.action.call"]}<`);
+    expect(html).not.toContain(m["record.card.nextUp.es"]);
   });
 
   it("a render throw inside one card is that card's skeleton on the server, and the page still renders (C5; mutation: drop RecordCardBoundary's Suspense -> the render rejects, FAILS)", async () => {

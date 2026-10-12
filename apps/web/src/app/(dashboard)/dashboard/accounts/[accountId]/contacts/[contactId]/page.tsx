@@ -105,7 +105,7 @@ export default async function ContactDetailPage({
   const emailRecipient = await emailRecipientState(ledger, accountId, contact);
   // Not a throw: one cosmetic date line must not 500 the page. `undefined` makes `renderZone` fall back.
   if (account.error) {
-    console.error(`contact page: account ${accountId} timezone read failed: ${account.error.message}`);
+    console.error(`contact page: account ${accountId} timezone and language read failed: ${account.error.message}`);
   }
   const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
   // Every date below is drawn in THIS zone, never `accounts.timezone` raw: an invalid stored zone
@@ -139,10 +139,13 @@ export default async function ContactDetailPage({
   const subtitle = mainGroup
     ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
     : null;
+  // Text and Email link to the composer inside the timeline card; when that card failed there is no
+  // composer behind them, so they hide (D3: an action with nothing behind it is hidden). Call stays.
+  const composerShown = timeline.status === "ready";
   const actions: RecordHeaderAction[] = headerActions({
     phone: contact.phone ?? null,
-    email: contact.email ?? null,
-    canText: canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
+    email: composerShown ? contact.email ?? null : null,
+    canText: composerShown && canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
     directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
   }).map((a) => ({
     ...a,
@@ -150,14 +153,32 @@ export default async function ContactDetailPage({
     ariaLabel: a.id === "call" ? tr.text("record.action.callAria", { name }) : undefined,
   }));
 
+  /**
+   * A view model is built HERE, in the page body, outside every card's boundary, so a throw while
+   * building one (a malformed instant from a read) would reject the whole page. Each is built in its
+   * own try instead: a failure costs only its own card (C5), logged by card and account (spec §11).
+   */
+  const viewOf = <T,>(card: string, build: () => T): T | null => {
+    try {
+      return build();
+    } catch (e) {
+      console.error(`record page: ${card} view failed for account ${accountId}: ${loggableError(e)}`);
+      return null;
+    }
+  };
+  const facts = summary.status === "ready"
+    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
+    : null;
+  const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
+
   const failed = (errorText: string): Slot => ({ node: null, state: "error", errorText });
   const cardFailed = (titleKey: MessageKey) => failed(tr.text("record.card.failed", { title: tr.text(titleKey) }));
   const slots = {
-    summary: summary.status === "ready"
-      ? { node: <SummaryBody view={factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr })} retryLabel={tr.text("record.card.retry")} /> }
+    summary: facts
+      ? { node: <SummaryBody view={facts} retryLabel={tr.text("record.card.retry")} /> }
       : failed(tr.text("record.summary.failed")),
-    "next-up": nextUp.status === "ready"
-      ? { node: <NextUpBody view={nextUpView(nextUp.data, { zone: zone.zone, now, tr })} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={tr.text("record.nextUp.addTodo")} /> }
+    "next-up": upNext
+      ? { node: <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={tr.text("record.nextUp.addTodo")} /> }
       : failed(tr.text("record.nextUp.failed")),
     timeline: timeline.status === "ready"
       ? {

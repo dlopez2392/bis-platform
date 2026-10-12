@@ -47,18 +47,20 @@ describe("record loaders", () => {
     } finally { errors.mockRestore(); }
   });
 
-  it("each failed fact is logged by name and account, never the customer (mutation: drop onError -> FAILS)", async () => {
+  it("each failed fact is logged by name and account, never the customer (mutation: drop onError -> FAILS; mutation: name the contact in the line -> FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       contactFactsMock.mockImplementationOnce(async (_db, _a, _c, opts: { onError: (n: string, e: unknown) => void }) => {
         opts.onError("talked", new Error("calls down"));
         return { bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: false }, openDeals: { ok: true, value: { count: 0, amount: null } } };
       });
-      await loadSummary(db, "acct1", "ct1");
+      await loadSummary(db, "acct1", "cust-42");
       const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
       expect(logged).toContain("summary (talked)");
       expect(logged).toContain("acct1");
       expect(logged).toContain("calls down");
+      // Spec §11: the account names the log line; the customer never does.
+      expect(logged).not.toContain("cust-42");
     } finally { errors.mockRestore(); }
   });
 
