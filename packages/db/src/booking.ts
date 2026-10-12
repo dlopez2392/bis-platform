@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { newPublicId, ALPHABET } from "./forms";
 import type { Branding } from "./branding";
+import { bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
+import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 
 export type CalendarRow = {
   id: string; account_id: string; public_id: string; enabled: boolean;
@@ -255,7 +257,7 @@ export async function createBooking(
   actorType: ActorType = "user",
 ): Promise<{ id: string; cancelToken: string }> {
   const cancelToken = newCancelToken();
-  const { data, error } = await insertBookingRow(db, accountId, input, cancelToken);
+  const { data, error } = await insertBookingRow(db, accountId, input, cancelToken, bookingAuthor(actorType, actorId));
   if (error || !data) {
     // Postgres SQLSTATE for an exclusion violation is 23P01. PostgREST
     // usually surfaces it as `error.code`, but some proxies drop it, so the
@@ -279,7 +281,7 @@ function isOverlapError(error: WriteError): boolean {
  *  `moveBooking`, which must tell a write that failed from an event that
  *  failed after the write landed (fix round 1, I2). */
 async function insertBookingRow(
-  db: SupabaseClient, accountId: string, input: CreateBookingInput, cancelToken: string,
+  db: SupabaseClient, accountId: string, input: CreateBookingInput, cancelToken: string, author: RowAuthor,
 ): Promise<{ data: { id: string } | null; error: WriteError }> {
   const { data, error } = await db.from("bookings")
     .insert({
@@ -294,6 +296,9 @@ async function insertBookingRow(
       ip_hash: input.ipHash ?? null,
       meeting_url: input.meetingUrl ?? null,
       rescheduled_from_id: input.rescheduledFromId ?? null,
+      // Who made it (0073, spec §5.2): bookingAuthor, from the actor the caller passes.
+      author_kind: author.authorKind,
+      author_id: author.authorId,
     })
     .select("id").single();
   return { data: (data as { id: string } | null) ?? null, error: (error as WriteError) ?? null };
@@ -721,7 +726,7 @@ export async function moveBooking(
     return last;
   };
 
-  const inserted = await insertBookingRow(db, accountId, input, cancelToken);
+  const inserted = await insertBookingRow(db, accountId, input, cancelToken, bookingAuthor(actorType, actorId));
   let newId: string;
   if (inserted.data && !inserted.error) {
     newId = inserted.data.id;
@@ -972,6 +977,43 @@ export async function listContactUpcomingBookings(
     .limit(limit);
   if (error) throw new Error(`listContactUpcomingBookings failed: ${error.message}`);
   return (data ?? []).map((r: UpcomingBooking) => ({ id: r.id, starts_at: r.starts_at }));
+}
+
+export type ContactBookingRow = {
+  id: string; created_at: string; starts_at: string; status: BookingStatus; note: string | null;
+  author_kind: AuthorKind | null; author_id: string | null; rescheduled_from_id: string | null;
+  /** The replaced booking's start ("Moved from …"), when this row is a reschedule and that row is readable. */
+  moved_from_starts_at: string | null;
+};
+
+/**
+ * The record timeline's bookings (S-03 part 1, 1b; spec §6): one page by (created_at desc, id desc).
+ * A booking row reads "booked an appointment for {when}": no calendar label, there is one calendar
+ * per account (`calendars_one_per_account`, 0016) and it has no name column. A reschedule (0061)
+ * carries the start it replaced, read in ONE extra query for the page. Runs on the caller's client,
+ * so RLS (0068's Technician fence) decides what is read. THROWS on a read error.
+ */
+export async function listContactBookings(
+  db: SupabaseClient, accountId: string, contactId: string, page: TimelinePageOpts,
+): Promise<ContactBookingRow[]> {
+  const { data, error } = await withTimelinePage(
+    db.from("bookings")
+      .select("id, created_at, starts_at, status, note, author_kind, author_id, rescheduled_from_id")
+      .eq("account_id", accountId).eq("contact_id", contactId),
+    "created_at", page);
+  if (error) throw new Error(`listContactBookings failed: ${error.message}`);
+  const rows = (data ?? []) as Omit<ContactBookingRow, "moved_from_starts_at">[];
+  const fromIds = [...new Set(rows.flatMap((r) => (r.rescheduled_from_id ? [r.rescheduled_from_id] : [])))];
+  const movedFrom = new Map<string, string>();
+  if (fromIds.length > 0) {
+    const { data: olds, error: oErr } = await db.from("bookings").select("id, starts_at")
+      .eq("account_id", accountId).in("id", fromIds);
+    if (oErr) throw new Error(`listContactBookings (moved from) failed: ${oErr.message}`);
+    for (const o of (olds ?? []) as { id: string; starts_at: string }[]) movedFrom.set(o.id, o.starts_at);
+  }
+  return rows.map((r) => ({
+    ...r, moved_from_starts_at: r.rescheduled_from_id ? movedFrom.get(r.rescheduled_from_id) ?? null : null,
+  }));
 }
 
 /** Rate limiting for the public booking submit: same shape as forms' countRecentSubmissions. */

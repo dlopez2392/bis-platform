@@ -51,6 +51,8 @@ export type RecordCardViewProps = {
   /** A phone disclosure (collapsible card on a phone); `open` is its state. */
   disclosure: boolean; open: boolean; onToggle: () => void;
   onRetry?: () => void; action?: ReactNode; children?: ReactNode;
+  /** Drawn in place of RecordCardSkeleton while loading (the timeline loads as rows, not lines). */
+  skeleton?: ReactNode;
 };
 
 /**
@@ -86,12 +88,12 @@ export function RecordCardView(p: RecordCardViewProps) {
       {closed ? null : (
         <div id={bodyId} className="mt-2">
           {p.state === "loading" ? (
-            <RecordCardSkeleton rows={p.skeletonRows} />
+            p.skeleton ?? <RecordCardSkeleton rows={p.skeletonRows} />
           ) : p.state === "error" ? (
             <RecordCardError text={p.errorText} retryLabel={p.retryLabel} onRetry={p.onRetry} />
           ) : (
             <RecordCardBoundary
-              skeleton={<RecordCardSkeleton rows={p.skeletonRows} />}
+              skeleton={p.skeleton ?? <RecordCardSkeleton rows={p.skeletonRows} />}
               fallback={(reset) => <RecordCardError text={p.errorText} retryLabel={p.retryLabel} onRetry={reset} />}
             >
               {p.children}
@@ -106,11 +108,13 @@ export function RecordCardView(p: RecordCardViewProps) {
 export type RecordCardProps = {
   id: string; title: string; collapsibleOnPhone?: boolean; state?: RecordCardState; skeletonRows?: number;
   errorText?: string; onRetry?: () => void; action?: ReactNode; children?: ReactNode;
+  /** Drawn in place of the default line skeleton while loading. */
+  skeleton?: ReactNode;
 };
 
 /** A record card: the chrome, its own boundary, and (when `collapsibleOnPhone`) a phone disclosure. */
 export function RecordCard({ id, title, collapsibleOnPhone = false, state = "ready", skeletonRows = 3,
-  errorText, onRetry, action, children }: RecordCardProps) {
+  errorText, onRetry, action, skeleton, children }: RecordCardProps) {
   const locale = useLocale();
   const phone = usePhone();
   const [open, setOpen] = useState(false);
@@ -119,7 +123,7 @@ export function RecordCard({ id, title, collapsibleOnPhone = false, state = "rea
       errorText={errorText ?? t(m, "record.card.failed", locale, { title })}
       retryLabel={t(m, "record.card.retry", locale)} showLabel={t(m, "record.card.show", locale, { title })}
       disclosure={collapsibleOnPhone && phone} open={open} onToggle={() => setOpen((o) => !o)}
-      onRetry={onRetry} action={action}>
+      onRetry={onRetry} action={action} skeleton={skeleton}>
       {children}
     </RecordCardView>
   );

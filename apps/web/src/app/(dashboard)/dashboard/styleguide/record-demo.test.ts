@@ -37,4 +37,10 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(html).toContain('data-sg-record-card="closed"');
     expect(html).toContain('aria-expanded="false"');
   });
+  it("AuthorMark in all five kinds and a TimelineItem with its skeleton (spec §15; mutation: drop the import mark -> FAILS)", () => {
+    for (const kind of ["person", "ai", "automation", "customer", "import"]) expect(html).toContain(`data-author-mark="${kind}"`);
+    expect(html).toContain(`>${m["provenance.customer"]}<`);
+    expect(html).toContain('data-timeline-item="booking"');
+    expect(html).toContain("data-timeline-skeleton");
+  });
 });

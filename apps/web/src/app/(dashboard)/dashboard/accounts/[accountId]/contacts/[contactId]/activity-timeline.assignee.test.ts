@@ -19,6 +19,7 @@ vi.mock("@/components/assign/assignee-field", async () => {
 });
 
 const { ActivityTimeline } = await import("./activity-timeline");
+const { legacyTimeline } = await import("./activity-timeline.fixture");
 
 const ACCOUNT = "a0000000-0000-4000-8000-000000000001";
 const ANA = { userId: "11111111-1111-4111-8111-111111111111", label: "Ana Ruiz", role: "staff" as const };
@@ -27,13 +28,13 @@ const task = (id: string, title: string, assigned_to: string | null, completed_a
 
 function render(canAssign: boolean, tasks: ReturnType<typeof task>[]) {
   taskFieldProps.length = 0;
-  return renderToStaticMarkup(createElement(ActivityTimeline, {
+  return renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
     accountId: ACCOUNT, contactId: "c1", contactHasEmail: false, contactHasPhone: false,
     smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
     notes: [], tasks, holdOpenTaskIds: [], opportunities: [], submissions: [], messages: [],
     emailAction: async () => {}, smsAction: async () => {}, timezone: "America/Chicago",
     canAssign, members: [ANA],
-  } as never));
+  }) as never));
 }
 
 /**

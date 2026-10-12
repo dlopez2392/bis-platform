@@ -1,7 +1,10 @@
-import { test, expect } from "./fixtures/test";
+import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, createContact, addPlace, getOrCreateCalendar } from "@bis/db";
+import {
+  serviceDb, createContact, addPlace, getOrCreateCalendar, createBooking, assignPhoneNumber, startCallRow, finishCallRow,
+  addNote, createForm, createSubmission, linkSubmissionContact, ensureConversation, createMessage,
+} from "@bis/db";
 import { m } from "../src/lib/messages";
 import { recordPage } from "./support";
 
@@ -15,6 +18,14 @@ loadEnv({ path: ".env.local" });
  * afterAll. The property goes with its contact (places cascade on contacts.id); the booking does NOT
  * (bookings.contact_id is `on delete restrict`, 0017 and 0050), so it is deleted first.
  * Spanish is the QA override `?locale=es`, so no person's language is written. Serial: one setup.
+ *
+ * 1b (the timeline): every row is seeded through the app's own writer, so it carries the author
+ * that writer stamps (0073): the booking page's booking (customer), a receptionist call (AI), a
+ * form submission plus the inbox's `form` copy of it (shown once, C4), and a third contact,
+ * "Pager", with 31 notes (one more than a page). afterAll deletes children first: messages, the
+ * conversation, the call, its number, the booking and the submission (both `on delete restrict`),
+ * the form, then the contacts. The call is gone before the next file runs, so calls.spec's
+ * "calls today" (which runs earlier) and the specs after this one never see it.
  */
 test.describe.configure({ mode: "serial", timeout: 60_000 });
 
@@ -28,8 +39,12 @@ const stamp = Date.now();
 const ACTOR = "e2e-record-page";
 const LAST = `Page ${stamp}`;
 const PHONE = `+1956292${String(Math.floor(Math.random() * 9000) + 1000)}`;
-const CANCEL_TOKEN = `e2e-record-${stamp}`;
-const made: { full?: string; bare?: string } = {};
+let cancelToken = "";
+const made: {
+  full?: string; bare?: string; pager?: string; phone?: string; call?: string; form?: string; submission?: string; conversation?: string;
+} = {};
+/** The form answer: typed words, so the "shown once" check counts them on the timeline. */
+const WORDS = `Fence quote ${stamp}`;
 const PHONE_ORDER = ["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"];
 const url = (id: string, q = "") => `/dashboard/accounts/${fixture().accountId}/contacts/${id}${q}`;
 /** A card's phone disclosure: the button in its title (h2), never a control inside its body. */
@@ -56,27 +71,60 @@ test.beforeAll(async () => {
   const cal = await getOrCreateCalendar(db, accountId, ACTOR);
   const start = new Date(Date.now() + 60 * 86_400_000);
   start.setUTCHours(15, stamp % 60, 0, 0);
-  const { error } = await db.from("bookings").insert({
-    account_id: accountId, calendar_id: cal.id, contact_id: made.full,
-    starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 3_600_000).toISOString(), cancel_token: CANCEL_TOKEN,
+  // The booking page's own writer, so the row is the customer's (0073: author_kind 'customer').
+  const booked = await createBooking(db, accountId, {
+    calendarId: cal.id, contactId: made.full, startsAt: start, endsAt: new Date(start.getTime() + 3_600_000), ipHash: `e2e-${stamp}`,
+  }, "public", "system");
+  cancelToken = booked.cancelToken;
+  // A receptionist call (calls.spec's path): every calls row is hers.
+  const number = await assignPhoneNumber(db, accountId, { e164: `+1557${String(stamp).slice(-7)}`, status: "testing" }, ACTOR);
+  made.phone = number.id;
+  made.call = (await startCallRow(db, accountId, { phoneNumberId: number.id, callerE164: PHONE })).id;
+  await finishCallRow(db, accountId, made.call, {
+    outcome: "booked", endedAt: new Date(), durationSecs: 180, turnCount: 0, transcript: [],
+    summary: `Roof leak, booked. Ref ${stamp}`, language: "en", contactId: made.full,
   });
-  if (error) throw new Error(`record-page e2e: booking seed failed: ${error.message}`);
+  // A form submission AND the inbox's copy of it: the timeline must show it once (C4).
+  const form = await createForm(db, accountId, { name: `Record form ${stamp}` }, ACTOR);
+  made.form = form.id;
+  made.submission = (await createSubmission(db, accountId, form.id, { answers: [{ key: "message", label: "Message", value: WORDS }] })).id;
+  await linkSubmissionContact(db, accountId, made.submission, made.full);
+  made.conversation = (await ensureConversation(db, accountId, made.full, ACTOR)).id;
+  await createMessage(db, accountId, { conversationId: made.conversation, channel: "form", direction: "inbound", body: WORDS }, "form", "system");
+  // 31 notes on their own contact: one more than a page.
+  const pager = await createContact(db, accountId, { firstName: "Pager", lastName: LAST }, ACTOR);
+  if (pager.existing) throw new Error("record-page e2e: the pager contact matched an existing one; refusing to use (or delete) it.");
+  made.pager = pager.id;
+  for (let i = 1; i <= 31; i++) await addNote(db, accountId, made.pager, `Pager note ${i}`, ACTOR);
 });
 
 test.afterAll(async () => {
   const { accountId } = fixture();
   const db = serviceDb();
-  const ids = [made.full, made.bare].filter((x): x is string => Boolean(x));
-  // The booking first: bookings.contact_id is `on delete restrict`, so the contact delete below
-  // would fail while it stands.
-  const booking = await db.from("bookings").delete().eq("account_id", accountId).eq("cancel_token", CANCEL_TOKEN);
-  if (booking.error) console.error(`record-page e2e: booking cleanup failed (the fixture sweep takes it): ${booking.error.message}`);
-  const { error } = await db.from("contacts").delete().eq("account_id", accountId).in("id", ids);
-  if (error) console.error(`record-page e2e: cleanup failed (the fixture sweep takes it): ${error.message}`);
+  // Every step checked and logged, none thrown before the last assertion: the fixture sweep takes leftovers.
+  const step = async (label: string, run: () => PromiseLike<{ error: { message: string } | null }>) => {
+    const { error } = await run();
+    if (error) console.error(`record-page e2e: ${label} cleanup failed (the fixture sweep takes it): ${error.message}`);
+  };
+  const ids = [made.full, made.bare, made.pager].filter((x): x is string => Boolean(x));
+  if (made.conversation) {
+    await step("messages", () => db.from("messages").delete().eq("account_id", accountId).eq("conversation_id", made.conversation!));
+    await step("conversation", () => db.from("conversations").delete().eq("account_id", accountId).eq("id", made.conversation!));
+  }
+  if (made.call) await step("call", () => db.from("calls").delete().eq("account_id", accountId).eq("id", made.call!));
+  if (made.phone) await step("phone number", () => db.from("phone_numbers").delete().eq("account_id", accountId).eq("id", made.phone!));
+  // bookings.contact_id is `on delete restrict`: the booking goes before its contact.
+  if (cancelToken) await step("booking", () => db.from("bookings").delete().eq("account_id", accountId).eq("cancel_token", cancelToken));
+  // form_submissions.form_id is `on delete restrict`: the submission goes before its form.
+  if (made.submission) await step("submission", () => db.from("form_submissions").delete().eq("account_id", accountId).eq("id", made.submission!));
+  if (made.form) await step("form", () => db.from("forms").delete().eq("account_id", accountId).eq("id", made.form!));
+  await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
   const { data: left } = await db.from("contacts").select("id").in("id", ids);
   expect(left ?? []).toEqual([]);
-  const { data: leftBooking } = await db.from("bookings").select("id").eq("cancel_token", CANCEL_TOKEN);
-  expect(leftBooking ?? []).toEqual([]);
+  if (cancelToken) {
+    const { data: leftBooking } = await db.from("bookings").select("id").eq("cancel_token", cancelToken);
+    expect(leftBooking ?? []).toEqual([]);
+  }
 });
 
 test("at 1280px the three columns hold their cards, and Call is the one primary", async ({ page }) => {
@@ -171,4 +219,51 @@ test("in Spanish the converted parts read Spanish and the page says so", async (
   await expect(rec).toHaveAttribute("lang", "es");
   await expect(rec.locator('[data-record-action="call"]')).toHaveText(m["record.action.call.es"]);
   await expect(rec.getByRole("heading", { name: m["record.card.nextUp.es"] })).toBeVisible();
+});
+
+/** S-03 1b: the timeline card, inside the rendered page (never the streamed hidden copy). */
+const timelineCard = (page: Page) => record(page).locator('[data-record-card="timeline"]');
+
+test("every timeline row says who made it: the booking page's booking is the customer's, the call is the receptionist's", async ({ page }) => {
+  await page.goto(url(made.full!));
+  const tl = timelineCard(page);
+  const items = tl.locator("[data-timeline-item]");
+  await expect(items.first()).toBeVisible();
+  // DESIGN.md, Provenance: a row with no mark is a defect.
+  await expect(tl.locator("[data-timeline-item]:not(:has([data-author-mark]))")).toHaveCount(0);
+  const booking = tl.locator('[data-timeline-item="booking"]');
+  await expect(booking).toHaveCount(1);
+  await expect(booking.locator('[data-author-mark="customer"]')).toHaveText(m["provenance.customer"]);
+  await expect(booking).toContainText(m["timeline.booked"].split("{when}")[0]!.trim());
+  const call = tl.locator('[data-timeline-item="call"]');
+  await expect(call.locator('[data-author-mark="ai"]')).toHaveText(/ · AI$/);
+  await expect(call).toContainText(m["timeline.answeredCall"]);
+  await expect(call.getByRole("link", { name: m["timeline.openCall"] })).toHaveAttribute("href", new RegExp(`/calls/${made.call}$`));
+});
+
+test("a form submission appears once, not twice: the inbox's copy is not a timeline row (C4, D15)", async ({ page }) => {
+  await page.goto(url(made.full!));
+  const tl = timelineCard(page);
+  await expect(tl.locator('[data-timeline-item="submission"]')).toHaveCount(1);
+  await expect(tl.locator('[data-timeline-item="message"]')).toHaveCount(0);
+  await expect(tl.getByText(WORDS, { exact: true })).toHaveCount(1);
+});
+
+test("Older pages the timeline on the server, and Newer returns to the head", async ({ page }) => {
+  await page.goto(url(made.pager!));
+  const tl = timelineCard(page);
+  await expect(tl.locator("[data-timeline-item]")).toHaveCount(30);
+  await expect(tl.locator("[data-timeline-pager]")).toHaveCount(1);
+  await tl.getByRole("link", { name: m["timeline.older"] }).click();
+  await expect(page).toHaveURL(/[?&]before=/);
+  await expect(timelineCard(page).locator("[data-timeline-item]")).toHaveCount(1);
+  await expect(timelineCard(page).getByText("Pager note 1", { exact: true })).toBeVisible();
+  await timelineCard(page).getByRole("link", { name: m["timeline.newer"] }).click();
+  await expect(page).not.toHaveURL(/[?&]before=/);
+  await expect(timelineCard(page).locator("[data-timeline-item]")).toHaveCount(30);
+});
+
+test("in Spanish a row reads Cliente", async ({ page }) => {
+  await page.goto(url(made.full!, "?locale=es"));
+  await expect(timelineCard(page).locator('[data-timeline-item="booking"] [data-author-mark="customer"]')).toHaveText(m["provenance.customer.es"]);
 });

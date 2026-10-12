@@ -10,7 +10,14 @@ import type { SupabaseClient } from "@bis/db";
 const contactFactsMock = vi.fn();
 const listContactTasksMock = vi.fn();
 const holdOpenTaskIdsMock = vi.fn();
+const listContactTimelinePageMock = vi.fn();
+const listPeopleNamesMock = vi.fn();
+const getVoiceProfileMock = vi.fn();
 vi.mock("@bis/db", () => ({
+  listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
+  listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
+  getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
   contactFacts: (...a: unknown[]) => contactFactsMock(...a),
   contactNextUp: async () => ({ bookings: [], datedTasks: [], undatedCount: 0 }),
   listNotes: async () => null,
@@ -34,6 +41,9 @@ describe("record loaders", () => {
     contactFactsMock.mockReset();
     listContactTasksMock.mockReset().mockResolvedValue([]);
     holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
+    listContactTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [] });
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
   });
 
   it("the summary is ready while any fact stands, and an error only when all three failed (mutation: error on any one failure -> FAILS)", async () => {
@@ -64,18 +74,50 @@ describe("record loaders", () => {
     } finally { errors.mockRestore(); }
   });
 
-  it("a null list is an empty list, and a failed hold read fails CLOSED onto every open linked To-do (mutation: pass [] on failure -> FAILS)", async () => {
+  const taskEntry = (id: string, completed_at: string | null, consent_event_id: string | null) => ({
+    kind: "task", id, at: "2026-10-01T00:00:00Z", task: { id, title: "x", due_at: null, completed_at, created_at: "2026-10-01T00:00:00Z",
+      consent_event_id, call_id: null, assigned_to: null, created_by: null } });
+
+  it("a failed hold read fails CLOSED onto every open linked To-do on the page, on the ledger client (mutation: pass [] on failure -> FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      listContactTasksMock.mockResolvedValue([
-        { id: "t_hold", completed_at: null, consent_event_id: "h1" },
-        { id: "t_done", completed_at: "2026-10-01T00:00:00Z", consent_event_id: "h2" },
-        { id: "t_plain", completed_at: null, consent_event_id: null },
-      ]);
+      listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", null, "h1"), taskEntry("t_done", "2026-10-01T00:00:00Z", "h2"), taskEntry("t_plain", null, null)], older: null, failed: [] });
       holdOpenTaskIdsMock.mockRejectedValue(new Error("ledger down"));
       const load = await loadTimeline(db, ledger, "acct1", "ct1");
-      expect(load).toMatchObject({ status: "ready", notes: [], opportunities: [], holdOpen: ["t_hold"] });
+      expect(load).toMatchObject({ status: "ready", holdOpen: ["t_hold"] });
       expect(holdOpenTaskIdsMock.mock.calls[0]![3]).toBe(ledger);
+    } finally { errors.mockRestore(); }
+  });
+
+  it("some sources failing is still ready; all seven failing is the card's error (spec §9.4; mutation: error on any failure -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["calls"] });
+    expect(await loadTimeline(db, ledger, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: ["calls"] } });
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+    expect(await loadTimeline(db, ledger, "acct1", "ct1")).toEqual({ status: "error" });
+  });
+
+  it("the cursor reaches the page read, and the names read asks for exactly the page's person ids (mutation: drop `before` -> FAILS)", async () => {
+    const before = { v: "2026-10-09T16:12:00Z", id: "0f8a7b2c-1d2e-4f3a-8b4c-5d6e7f8a9b0c" };
+    listContactTimelinePageMock.mockResolvedValue({ items: [
+      { kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-01T00:00:00Z" } },
+    ], older: null, failed: [] });
+    await loadTimeline(db, ledger, "acct1", "ct1", before);
+    expect(listContactTimelinePageMock.mock.calls[0]!.slice(0, 4)).toEqual([db, "acct1", "ct1", before]);
+    expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
+  });
+
+  it("the persona read goes through the page's own db client, never the ledger (M2; mutation: call getVoiceProfile(ledger, accountId) -> FAILS)", async () => {
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(getVoiceProfileMock).toHaveBeenCalledWith(db, "acct1");
+    expect(getVoiceProfileMock.mock.calls[0]![0]).not.toBe(ledger);
+  });
+
+  it("names and the persona failing cost nothing but the names (spec §11: never an error; mutation: rethrow -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listPeopleNamesMock.mockRejectedValue(new Error("users down"));
+      getVoiceProfileMock.mockRejectedValue(new Error("profile down"));
+      expect(await loadTimeline(db, ledger, "acct1", "ct1")).toMatchObject({ status: "ready", names: {}, personaName: null });
     } finally { errors.mockRestore(); }
   });
 

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
+import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 
 export type FormFieldKind =
   | "core.first_name" | "core.last_name" | "core.email" | "core.phone" | "core.company_name"
@@ -200,6 +201,9 @@ export type SubmissionInput = {
   ipHash?: string;
   userAgent?: string;
   answersHash?: string;
+  /** Who filled it (0073): omitted = the customer (the column's default); "ai" = the website chat
+   *  took it (lib/concierge/lead.ts). */
+  authorKind?: "customer" | "ai";
 };
 
 export type SubmissionRow = {
@@ -230,6 +234,7 @@ function submissionRow(accountId: string, formId: string, input: SubmissionInput
     ip_hash: input.ipHash ?? null,
     user_agent: input.userAgent ?? null,
     answers_hash: input.answersHash ?? null,
+    ...(input.authorKind ? { author_kind: input.authorKind } : {}),
   };
 }
 
@@ -512,14 +517,14 @@ export async function republishFormIfUnchanged(
 }
 
 export async function listContactSubmissions(
-  db: SupabaseClient, accountId: string, contactId: string,
-): Promise<(SubmissionRow & { formName: string })[]> {
-  const { data, error } = await db.from("form_submissions")
-    .select(`${SUBMISSION_COLS}, forms(name)`)
-    .eq("account_id", accountId).eq("contact_id", contactId)
-    .order("created_at", { ascending: false });
+  db: SupabaseClient, accountId: string, contactId: string, page?: TimelinePageOpts,
+): Promise<(SubmissionRow & { formName: string; author_kind?: "customer" | "ai" })[]> {
+  const q = db.from("form_submissions")
+    .select(`${SUBMISSION_COLS}, forms(name)${page ? ", author_kind" : ""}`)
+    .eq("account_id", accountId).eq("contact_id", contactId);
+  const { data, error } = await (page ? withTimelinePage(q, "created_at", page) : q.order("created_at", { ascending: false }));
   if (error) throw new Error(error.message);
   return ((data ?? []) as any[]).map((r) => ({
-    ...(r as SubmissionRow), formName: r.forms?.name ?? "",
+    ...(r as SubmissionRow & { author_kind?: "customer" | "ai" }), formName: r.forms?.name ?? "",
   }));
 }

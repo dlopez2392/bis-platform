@@ -18,6 +18,9 @@ import { headerActions, canTextFrom, firstMapUrl, type HeaderActionId } from "@/
 import {
   loadSummary, loadNextUp, loadTimeline, loadDeals, loadTags, loadFieldDefs, loadHeaderPlaces, softSmsGate,
 } from "@/lib/record/loaders";
+import { timelineRows, timelineFailedText } from "@/lib/record/timeline-rows";
+import { timelinePagerHrefs } from "@/lib/record/timeline-pager";
+import { parseTimelineCursor } from "@/lib/cursor";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import type { Locale } from "@/lib/i18n/locale";
@@ -55,19 +58,24 @@ const ACTION_KEY = {
 type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
 
 /**
- * The contact record page (S-03 part 1, 1a; spec §§8–9). Three columns on a desk (who they are |
+ * The contact record page (S-03 part 1; spec §§8–9). Three columns on a desk (who they are |
  * what is happening | what they have); one column on a phone in the order a person acts in. Every
- * card has its own loader (never throws) and its own boundary, so one card's fault never blanks the page.
+ * card has its own loader (never throws) and its own boundary, so one card's fault never blanks the
+ * page. 1b: the timeline is one server page across seven sources, every row marked with who made it.
  */
 export default async function ContactDetailPage({
   params, searchParams,
 }: {
   params: Promise<{ accountId: string; contactId: string }>;
-  // Optional, as dashboard/page.tsx's: the QA locale override (`?locale=es|pseudo`, BIS_I18N_QA only).
-  searchParams?: Promise<{ locale?: string }>;
+  // Optional, as dashboard/page.tsx's: the QA locale override (`?locale=es|pseudo`, BIS_I18N_QA only),
+  // and the timeline's cursor (1b).
+  searchParams?: Promise<{ locale?: string; before?: string }>;
 }) {
   const { accountId, contactId } = await params;
-  const { locale: localeParam } = (await searchParams) ?? {};
+  const { locale: localeParam, before: beforeParam } = (await searchParams) ?? {};
+  // 1b (spec §11): parsed before any read; a ?before= that does not parse is a cold start, never an
+  // error and never seven failed sources.
+  const before = parseTimelineCursor(beforeParam);
   // F-085 part 1 (spec §9): the caller's role decides whether "Assigned to" is a picker (Owner,
   // Staff, the agency) or read-only (a Technician, M4).
   const access = await requireAccountAccess(accountId);
@@ -97,7 +105,7 @@ export default async function ContactDetailPage({
     }),
     loadSummary(db, accountId, contactId),
     loadNextUp(db, accountId, contactId, now),
-    loadTimeline(db, ledger, accountId, contactId),
+    loadTimeline(db, ledger, accountId, contactId, before),
     loadDeals(db, accountId, contactId),
     loadHeaderPlaces(db, accountId, contactId),
   ]);
@@ -133,26 +141,6 @@ export default async function ContactDetailPage({
     email = { status: "error" };
   }
 
-  const smsBlockedLine = composerStateLine(smsRecipient, zone.zone);
-  const name = contactDisplayName(contact);
-  const mainGroup = places?.groups.find((g) => g.isPrimary) ?? places?.groups[0] ?? null;
-  const subtitle = mainGroup
-    ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
-    : null;
-  // Text and Email link to the composer inside the timeline card; when that card failed there is no
-  // composer behind them, so they hide (D3: an action with nothing behind it is hidden). Call stays.
-  const composerShown = timeline.status === "ready";
-  const actions: RecordHeaderAction[] = headerActions({
-    phone: contact.phone ?? null,
-    email: composerShown ? contact.email ?? null : null,
-    canText: composerShown && canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
-    directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
-  }).map((a) => ({
-    ...a,
-    label: tr.text(ACTION_KEY[a.id]),
-    ariaLabel: a.id === "call" ? tr.text("record.action.callAria", { name }) : undefined,
-  }));
-
   /**
    * A view model is built HERE, in the page body, outside every card's boundary, so a throw while
    * building one (a malformed instant from a read) would reject the whole page. Each is built in its
@@ -166,6 +154,35 @@ export default async function ContactDetailPage({
       return null;
     }
   };
+
+  // 1b: the composer's consent line in the page's language (Task 3's locale parameter).
+  const smsBlockedLine = composerStateLine(smsRecipient, zone.zone, locale);
+  const name = contactDisplayName(contact);
+  const mainGroup = places?.groups.find((g) => g.isPrimary) ?? places?.groups[0] ?? null;
+  const subtitle = mainGroup
+    ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
+    : null;
+  // 1b: the rows are built here, in their own guard (C5), so a malformed row costs the timeline card.
+  const timelineView = timeline.status === "ready"
+    ? viewOf("timeline", () => timelineRows(timeline.page.items, {
+      zone: zone.zone, tr,
+      author: { viewerId: access.userId, names: timeline.names, personaName: timeline.personaName, tr },
+    }))
+    : null;
+  // Text and Email link to the composer inside the timeline card; when that card failed there is no
+  // composer behind them, so they hide (D3: an action with nothing behind it is hidden). Call stays.
+  const composerShown = timelineView !== null;
+  const actions: RecordHeaderAction[] = headerActions({
+    phone: contact.phone ?? null,
+    email: composerShown ? contact.email ?? null : null,
+    canText: composerShown && canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
+    directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
+  }).map((a) => ({
+    ...a,
+    label: tr.text(ACTION_KEY[a.id]),
+    ariaLabel: a.id === "call" ? tr.text("record.action.callAria", { name }) : undefined,
+  }));
+
   const facts = summary.status === "ready"
     ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
     : null;
@@ -181,37 +198,40 @@ export default async function ContactDetailPage({
       // Add a To-do focuses the timeline's To-do field: with no timeline there is nothing behind it (D3).
       ? { node: <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={composerShown ? tr.text("record.nextUp.addTodo") : null} /> }
       : failed(tr.text("record.nextUp.failed")),
-    timeline: timeline.status === "ready"
+    // 1b: bilingual (no lang="en" wrapper), one server page, every row marked.
+    timeline: timeline.status === "ready" && timelineView
       ? {
         node: (
-          // The rows stay English in 1a (spec §9.6); 1b makes them bilingual.
-          <div lang="en">
-            <ActivityTimeline
-              accountId={accountId}
-              contactId={contactId}
-              contactHasEmail={Boolean(contact.email)}
-              // The same e164Of notion of "usable" sendSmsAction gates on, so SMS fails up front.
-              contactHasPhone={Boolean(e164Of(contact.phone))}
-              smsGate={smsGate}
-              smsBlockedLine={smsBlockedLine}
-              emailNoticeLine={composerEmailNotice(emailRecipient, zone.zone)}
-              notes={timeline.notes}
-              tasks={timeline.tasks}
-              holdOpenTaskIds={timeline.holdOpen}
-              opportunities={timeline.opportunities}
-              submissions={timeline.submissions}
-              messages={timeline.messages}
-              emailAction={sendEmailAction.bind(null, accountId)}
-              smsAction={sendSmsAction.bind(null, accountId)}
-              timezone={zone.zone}
-              canAssign={assign.canAssign}
-              members={assign.members}
-            />
-          </div>
+          <ActivityTimeline
+            accountId={accountId}
+            contactId={contactId}
+            contactHasEmail={Boolean(contact.email)}
+            // The same e164Of notion of "usable" sendSmsAction gates on, so SMS fails up front.
+            contactHasPhone={Boolean(e164Of(contact.phone))}
+            smsGate={smsGate}
+            smsBlockedLine={smsBlockedLine}
+            emailNoticeLine={composerEmailNotice(emailRecipient, zone.zone, locale)}
+            emailAction={sendEmailAction.bind(null, accountId)}
+            smsAction={sendSmsAction.bind(null, accountId)}
+            timezone={zone.zone}
+            canAssign={assign.canAssign}
+            members={assign.members}
+            rows={timelineView}
+            holdOpenTaskIds={timeline.holdOpen}
+            failedText={timelineFailedText(timeline.page.failed, tr)}
+            // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
+            emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}
+            // Task 9: a page where a source failed offers no Older (its cursor would skip that source's rows).
+            pager={timelinePagerHrefs({
+              basePath: `/dashboard/accounts/${accountId}/contacts/${contactId}`,
+              older: timeline.page.older, paged: Boolean(before), failed: timeline.page.failed, locale: localeParam,
+            })}
+            tr={tr}
+          />
         ),
       }
       : failed(tr.text("record.activity.failed")),
-    // The Groups card's copy stays English in 1a, as the timeline's, Details' and Tags' (§9.6).
+    // The Groups card's copy stays English in part 1, as Details' and Tags' (§9.6, D12).
     groups: { node: <div lang="en"><GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /></div> },
     properties: { node: <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} headingHidden /> },
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),

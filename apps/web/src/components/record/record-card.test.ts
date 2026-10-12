@@ -82,3 +82,23 @@ describe("RecordCard (spec §8): one chrome, its own states, a phone disclosure"
     expect(html).toContain(`>${m["record.card.retry"]}<`);
   });
 });
+
+describe("RecordCard's skeleton slot (S-03 1b: the timeline loads as rows, not lines)", () => {
+  it("a loading card draws the skeleton it is given, else its lines (mutation: ignore the prop -> FAILS)", () => {
+    const custom = view({ state: "loading", skeleton: createElement("div", { "data-custom-skeleton": "" }) } as never);
+    expect(custom).toContain("data-custom-skeleton");
+    expect(view({ state: "loading" })).toContain("data-record-skeleton");
+  });
+  it("a ready card whose body throws on the server falls back to the same given skeleton (mutation: keep RecordCardSkeleton in the boundary's skeleton prop -> FAILS)", () => {
+    const Boom = (): never => { throw new Error("card render failed"); };
+    const html = view({ state: "ready", skeleton: createElement("div", { "data-custom-skeleton": "" }) } as never, createElement(Boom));
+    expect(html).toContain("data-custom-skeleton");
+    expect(html).not.toContain("data-record-skeleton");
+  });
+  it("RecordCard hands its skeleton to the chrome (mutation: drop skeleton={skeleton} from RecordCard -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(RecordCard, {
+      id: "activity", title: "Activity", state: "loading", skeleton: createElement("div", { "data-custom-skeleton": "" }),
+    } as never));
+    expect(html).toContain("data-custom-skeleton");
+  });
+});

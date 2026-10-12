@@ -6,10 +6,11 @@ import { createContact } from "../contacts";
 import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, cancelBookingByToken } from "../booking";
 import { assignPhoneNumber } from "../voice";
-import { addTask } from "../activities";
+import { addNote, addTask } from "../activities";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity } from "../opportunities";
-import { contactFacts, contactNextUp } from "../record";
+import { createForm, createSubmission, linkSubmissionContact } from "../forms";
+import { contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES } from "../record";
 
 const ACTOR = "user_test";
 const iso = (v: string) => new Date(v).toISOString();
@@ -204,5 +205,108 @@ describe("contactNextUp (S-03 part 1, spec §7, C9)", () => {
         },
       }) as SupabaseClient;
       await expect(contactNextUp(broken, accountId, ana, "2026-10-12T15:00:00Z")).rejects.toThrow(message);
+    }));
+});
+
+describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
+  it("merges the seven sources newest first, each row its own kind (mutation: leave calls out of the merge -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const at = (d: number) => `2026-10-0${d}T15:00:00+00:00`;
+      const stamp = async (table: string, id: string, d: number) => {
+        const { error } = await db.from(table).update({ created_at: at(d) }).eq("id", id);
+        if (error) throw new Error(`stamp ${table}: ${error.message}`);
+      };
+      await stamp("notes", (await addNote(db, accountId, ana, "n", ACTOR)).id, 1);
+      await stamp("tasks", (await addTask(db, accountId, { contactId: ana, title: "t" }, ACTOR)).id, 2);
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      await stamp("opportunities", (await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "d" }, ACTOR)).id, 3);
+      const form = await createForm(db, accountId, { name: "Quote request" }, ACTOR);
+      const sub = await createSubmission(db, accountId, form.id, { answers: [] });
+      await linkSubmissionContact(db, accountId, sub.id, ana);
+      await stamp("form_submissions", sub.id, 4);
+      const { id: conv } = await ensureConversation(db, accountId, ana, ACTOR);
+      await seedMessage(db, accountId, conv, "sms", at(5), "delivered");
+      const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+      const b = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana, startsAt: new Date("2027-03-02T15:00:00Z"), endsAt: new Date("2027-03-02T16:00:00Z") }, ACTOR);
+      await stamp("bookings", b.id, 6);
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+      const { error } = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.id, contact_id: ana, started_at: at(7), outcome: "booked" });
+      if (error) throw new Error(error.message);
+      const page = await listContactTimelinePage(db, accountId, ana);
+      expect(page.items.map((i) => i.kind)).toEqual(["call", "booking", "message", "submission", "deal", "task", "note"]);
+      expect(page).toMatchObject({ older: null, failed: [] });
+    }));
+
+  it("the inbox's form and voice copies are not timeline rows (C4; mutation: drop the channels option -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: conv } = await ensureConversation(db, accountId, ana, ACTOR);
+      await seedMessage(db, accountId, conv, "form", "2026-10-05T15:00:00Z", "delivered");
+      await createMessage(db, accountId, { conversationId: conv, channel: "voice", direction: "inbound", body: "x" }, "voice", "ai");
+      expect((await listContactTimelinePage(db, accountId, ana)).items).toEqual([]);
+    }));
+
+  it("rows at one instant across a page boundary are neither lost nor repeated (mutation: compare `at` only in the cursor filter -> a row is lost, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const same = "2026-10-09T16:12:00.123456+00:00";
+      const n = (await addNote(db, accountId, ana, "n", ACTOR)).id;
+      const t = (await addTask(db, accountId, { contactId: ana, title: "t" }, ACTOR)).id;
+      const noteTie = await db.from("notes").update({ created_at: same }).eq("id", n);
+      if (noteTie.error) throw new Error(`note tie update failed: ${noteTie.error.message}`);
+      const taskTie = await db.from("tasks").update({ created_at: same }).eq("id", t);
+      if (taskTie.error) throw new Error(`task tie update failed: ${taskTie.error.message}`);
+      const p1 = await listContactTimelinePage(db, accountId, ana, undefined, { limit: 1 });
+      expect(p1.older).not.toBeNull();
+      const p2 = await listContactTimelinePage(db, accountId, ana, p1.older!, { limit: 1 });
+      expect(p2.older).toBeNull();
+      // The page boundary really is a tie across two tables: without it the and(...) half is never exercised.
+      expect(p2.items[0]!.at).toBe(p1.items[0]!.at);
+      expect([...p1.items, ...p2.items].map((i) => i.id).sort()).toEqual([n, t].sort());
+      expect(p1.items[0]!.id > p2.items[0]!.id).toBe(true);
+    }));
+
+  it("a source that fails is reported by name and the rest still load (spec §7; mutation: let one source's error reject the whole page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      await addNote(db, accountId, ana, "still here", ACTOR);
+      const failing = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === "from") {
+            return (table: string) => {
+              if (table === "calls") throw new Error("calls down");
+              return target.from(table);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const errors: string[] = [];
+      const page = await listContactTimelinePage(failing, accountId, ana, undefined, { onError: (s) => errors.push(s) });
+      expect(page.failed).toEqual(["calls"]);
+      expect(errors).toEqual(["calls"]);
+      expect(page.items.map((i) => i.kind)).toEqual(["note"]);
+      expect(TIMELINE_SOURCES).toHaveLength(7);
+    }));
+});
+
+describe("listPeopleNames (spec §6, Names)", () => {
+  it("name, else email, for the ids asked; an id with no row is simply absent (mutation: return the email even when a name exists -> FAILS)", () =>
+    withTestAccount(async (db) => {
+      const run = Math.random().toString(36).slice(2, 10);
+      const a = `user_names_a_${run}`;
+      const b = `user_names_b_${run}`;
+      const { error } = await db.from("users").insert([
+        { clerk_user_id: a, email: `${a}@example.com`, name: "Dan López" },
+        { clerk_user_id: b, email: `${b}@example.com`, name: null },
+      ]);
+      if (error) throw new Error(error.message);
+      try {
+        expect(await listPeopleNames(db, [a, b, `user_gone_${run}`, a])).toEqual({ [a]: "Dan López", [b]: `${b}@example.com` });
+        expect(await listPeopleNames(db, [])).toEqual({});
+      } finally {
+        await db.from("users").delete().in("clerk_user_id", [a, b]);
+      }
     }));
 });

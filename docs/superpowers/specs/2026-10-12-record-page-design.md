@@ -73,7 +73,7 @@ Choices this spec makes:
 | C8 | **Facts count with the dashboard's definitions.** "Booked {n} times" counts bookings made, not reschedules (D-035, `packages/db/src/booking.ts:915-930`, "the ONE read behind every bookings count"), so the record and the Monday report agree (D14) | 1a |
 | C9 | **Undated open To-dos are not in Next up.** The three are bookings still ahead and To-dos with a due date, overdue first; under them one plain line counts the rest, "{n} more To-dos have no date." (with no rows above it, "{n} To-dos have no date.", since "more" only reads right under rows: `record.nextUp.undatedOnly`/`.undatedOnlyOne`). Undated To-dos stay on the timeline. A To-do with no date has no "next" to sort by, and a count is honest where a guessed position is not | 1a |
 | C10 | **Status is a dot and a word** on every row that has one, rule 3. 1a: the Deals card's status. 1b: booking, outbound message and call rows on the timeline (today's message status is a bare word, `activity-timeline.tsx:386`, and stays so in 1a) | 1a, 1b |
-| C11 | **Customer-typed text carries `lang=""`** (HTML's "language unknown") until S-09 gives contacts a language; a caller's own words carry `lang={calls.language}` (`0019_voice_core.sql:52`). The row chrome carries the page's `lang` | 1b |
+| C11 | **Customer-typed text carries `lang=""`** (HTML's "language unknown") until S-09 gives contacts a language. The row chrome carries the page's `lang`. **Corrected 2026-10-12 (final review):** the caller's own words are `calls.caller_words`, shown on the call card (`call-card-panel.tsx:86`), not the timeline row — the row was wrongly specified here as carrying `lang={calls.language}`. The timeline's call row shows `calls.summary` (always English, owner decision A, 2026-10-10, `summary-service.ts:55-59`) or, failing that, `calls.reason` (staff-facing, of unknown language — a taken-message body or an English post-call reading, `call-card.ts:9-14,147,151`): `lang="en"` for the summary, `lang=""` for the reason | 1b |
 
 ## 3. Non-goals
 
@@ -145,18 +145,23 @@ one, which the backfill and the app mark `ai`. Nothing filters by author this re
 - **messages:** `createMessage` (`packages/db/src/messaging.ts:129-145`) writes `author_kind`/`author_id` from
   `messageAuthor(actorType, actorId, direction)`, a pure function in a new `packages/db/src/provenance.ts`:
   `ai` → `ai`; else `inbound` → `customer`; else `user` → `person` with `actorId`; else `automation`. Checked
-  against all thirteen callers: staff sends pass the signed-in user's id with the default `user`
+  against all fourteen callers (**corrected 2026-10-12, final review**: this spec counted thirteen, missing
+  the demo seed, `demo/seed.ts:538-543`, which passes only an actor id and so also defaults to `user` → `person`):
+  staff sends pass the signed-in user's id with the default `user`
   (`conversations/actions.ts:82-85`, `:197-199`; `calendar/cancel-notice.ts:128-130`), recipes pass
   `"automation"`/`system` (`lib/automations/send-sms.ts:19-20`, `:135-137`), stop replies `system`
   (`lib/consent/replies.ts:90`, `:125-127`), the missed-call text-back `voice`/`ai` (`lib/voice/textback.ts:44-45`,
-  `:279-281`), an inbound text `system` (`api/sms/inbound/route.ts:54-55`, `:181`). The function is the only place
-  the mapping lives; the backfill's CASE (§5.3) is pinned to it by a parity test (§12).
+  `:279-281`), an inbound text `system` (`api/sms/inbound/route.ts:54-55`, `:181`), and the demo seed `user`. The
+  function is the only place the mapping lives; the backfill's CASE (§5.3) is pinned to it by a parity test (§12).
 - **bookings:** `createBooking` and `moveBooking` (`booking.ts:253-270`, `:687`) write
   `bookingAuthor(actorType, actorId)`: `ai` → `ai`; `system` → `customer`; `user` → `person`. The three makers
   today: the public booking page (`"public"`/`system`, `b/[publicId]/actions.ts:48-49`, `:333-336`), its move page
   (same actor, `b/[publicId]/move/[token]/actions.ts:50-51`, `:145-146`), and the receptionist's book and
-  reschedule tools (`"voice"`/`ai`, `lib/voice/tools/registry.ts:480-485`, `:579-583`). **No staff path makes a
-  booking today**; `person` is in the set for when one does.
+  reschedule tools (`"voice"`/`ai`, `lib/voice/tools/registry.ts:480-485`, `:579-583`). No REAL staff path makes a
+  booking today; `person` is in the set for when one does. **Corrected 2026-10-12 (final review):** the demo seed
+  (`demo/seed.ts:33,735-739`) is a fourth maker, unintentionally — it calls `createBooking` with only an actor id
+  (`ACTOR = "system_demo_seed"`), so `actorType` defaults to `"user"`, and those rows ARE `person`, reading
+  "Someone on the team" (no `users` row names `system_demo_seed`); production holds 16 of them.
 - **form_submissions:** the web chat's intake (`lib/concierge/lead.ts:151-154`) passes `author_kind: 'ai'` to
   `createSubmission`; every other path takes the default.
 
@@ -175,7 +180,7 @@ In the same file, after the columns, one idempotent statement per table (re-run 
 | Deal | `created_by` from `opportunity.created` (`opportunities.ts:27-28`, `{opportunityId}`) where `actor_type = 'user'` | person, unnamed: the pipeline is the only maker besides the two seeds (`demo/seed.ts:798`, `ci-seed/seed.ts:229`) |
 | Submission | `'ai'` where `id in (select submission_id from concierge_conversations)` (the chat claims its one submission, `concierge.ts:323-335`, and deletes a loser, `lead.ts:156-163`) | `customer`: a person filled the form |
 | Message | `inbound` → `customer`, unless the `message.created` event (`messaging.ts:150-151`, `{messageId}`) says `ai`; `outbound` → the event mapped through the same CASE as `messageAuthor` | an outbound message with no event (an emit that failed after its insert) gets `person`, unnamed (D9). Expected count: zero or near it, measured before apply (§13) |
-| Booking | the `booking.created` event (`booking.ts:267-268`, `{bookingId}`) through `bookingAuthor`'s CASE | no event: `ip_hash is not null` → `customer` (only the two public paths pass one, `b/[publicId]/actions.ts:335`, `move/[token]/actions.ts:146`); else `ai` (the receptionist passes none, `registry.ts:480-485`; so does the demo seed, whose account is fiction) |
+| Booking | the `booking.created` event (`booking.ts:267-268`, `{bookingId}`) through `bookingAuthor`'s CASE | no event: `ip_hash is not null` → `customer` (only the two public paths pass one, `b/[publicId]/actions.ts:335`, `move/[token]/actions.ts:146`); else `ai` (the receptionist passes none, `registry.ts:480-485`). **Corrected 2026-10-12 (final review):** `createBooking` always emits `booking.created` (`booking.ts:269-270`), so the demo seed's bookings are NOT in this "no event" bucket — its call passes only an actor id (`demo/seed.ts:735-739`), defaulting `actorType` to `"user"`, so they resolve through the CASE above to `person`, not `ai` |
 | Call | none needed | `ai`: every `calls` row is a call the receptionist took. A call forwarded to a person and a call the platform refused are deliberately NOT `calls` rows (`0059_forwarded_calls.sql:85`, `0039_screened_calls.sql:76`) |
 
 The backfill raises a NOTICE with the count in each bucket; 1b's apply step reads them on bis-ci and on
@@ -195,7 +200,7 @@ locale.
 | Deal | person (`created_by`; unnamed when NULL) | **Dan López** · added a deal: Deck build · $2,400 · ● Open |
 | Submission | `author_kind` | **Customer** · sent the Quote request form · … / **Sofía · AI** · took a request in the website chat |
 | Message (email, sms) | `author_kind` | **Customer** · texted · … / **Dan López** · emailed · ● Delivered / **Automation** · texted / **Sofía · AI** · texted (the missed-call text-back) |
-| Booking | `author_kind` | **Customer** · booked Thu, Oct 16, 10:00 AM · Estimates · ● Booked; a reschedule adds "Moved from Tue, Oct 14, 9:00 AM" (`rescheduled_from_id`, 0061) |
+| Booking | `author_kind` | **Customer** · booked an appointment for Thu, Oct 16, 10:00 AM · ● Booked; a reschedule adds "Moved from Tue, Oct 14, 9:00 AM" (`rescheduled_from_id`, 0061). No calendar name: an account has one calendar and it has no name column (`calendars_one_per_account`, 0016), so a row reads "an appointment", as Next up's "Appointment · …" does |
 | Call | AI | **Sofía · AI** · answered a call · ● Booked · 3 min, then the call's reason or summary, and "Open call" to the call page |
 
 **Names.** One read per page: `users (clerk_user_id, name, email)` for the distinct person ids on the page, on the
@@ -245,9 +250,15 @@ one `Promise.all` whose failure fails the page (`[contactId]/page.tsx:57-82`).
 **1b:**
 
 - **Timeline sources** gain an additive options argument `{ before?: RowCursor; limit?: number }`, ordering
-  `(at desc, id desc)` and filtering `at <= before.v`; the composer drops rows at `before.v` whose id is not
-  below `before.id`. With no options a function behaves exactly as today, so the drawer's `/summary` route
-  (`summary/route.ts:60-74`) is unchanged. New: `listContactBookings` (booking.ts, with the calendar's name) and
+  `(at desc, id desc)` and filtering with the row-value comparison `at < before.v OR (at = before.v AND id <
+  before.id)`, done in SQL — the contact list's own idiom (`contacts.ts:783-805`) — rather than `at <= before.v`
+  with the composer dropping the tied-id rows afterward (**corrected 2026-10-12, final review**: this spec had
+  written the composer-drop form at §7; the plan departs from it at plan departure 5, and the SQL form is what
+  shipped, exact and never spending a row of the 31). With no options a function behaves exactly as today, so the
+  drawer's `/summary` route
+  (`summary/route.ts:60-74`) is unchanged. New: `listContactBookings` (booking.ts; no calendar name, there is one
+  calendar per account and it has no name column, so the row reads "an appointment"; it carries the replaced
+  booking's start for "Moved from") and
   `listContactCalls` widened to the row's columns (`voice.ts:937-946` reads three). `listContactMessages` takes
   `channels: ['email','sms']` (C4). Each source reads `limit + 1` (31); the merge keeps 30 and knows if there is
   an older page.
@@ -444,7 +455,7 @@ contacto) and `contact.tags.es` (Etiquetas).
 | `timeline.deal` | added a deal: {name} | agregó una oportunidad: {name} |
 | `timeline.form` · `.chat` | sent the {form} form · took a request in the website chat | envió el formulario {form} · tomó una solicitud en el chat del sitio web |
 | `timeline.texted` · `.emailed` | texted · emailed | mandó un texto · mandó un correo |
-| `timeline.booked` · `.movedFrom` | booked {when} · Moved from {when} | agendó una cita para {when} · Se movió del {when} |
+| `timeline.booked` · `.movedFrom` | booked an appointment for {when} · Moved from {when} | agendó una cita para {when} · Se movió del {when} |
 | `timeline.answeredCall` · `.openCall` · `.minutes` | answered a call · Open call · {count} min | contestó una llamada · Ver llamada · {count} min |
 | `timeline.empty` | Texts, calls, bookings, notes and To-dos with this customer show up here. | Aquí aparecen los textos, llamadas, citas, notas y pendientes con este cliente. |
 | `timeline.someFailed` | Couldn't load {what}. | No se pudo cargar: {what}. |

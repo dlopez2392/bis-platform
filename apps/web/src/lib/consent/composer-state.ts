@@ -1,5 +1,7 @@
 import { m } from "@/lib/messages";
 import { formatDateInZone } from "@/lib/format";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * Whether the text composer may text this contact, and the one line it shows
@@ -40,21 +42,21 @@ export function composerBlockedLine(
  * stop date that will not format falls back to the undated line rather than
  * throwing inside a render.
  */
-export function composerStateLine(state: SmsRecipientState, zone: string): string | null {
+export function composerStateLine(state: SmsRecipientState, zone: string, locale: Locale = "en"): string | null {
   switch (state.kind) {
     case "ok": return null;
     case "stopped": {
       let date: string | null = null;
       try {
-        date = formatDateInZone(state.since, zone);
+        date = formatDateInZone(state.since, zone, locale);
       } catch {
         date = null;
       }
-      return date === null ? m["compose.smsStoppedUndated"] : m["compose.smsStopped"].replace("{date}", date);
+      return date === null ? t(m, "compose.smsStoppedUndated", locale) : t(m, "compose.smsStopped", locale, { date });
     }
-    case "held": return m["compose.smsHeld"];
-    case "unconfirmed_number": return m["compose.smsCheckNumber"];
-    case "unknown": return m["compose.smsStateUnknown"];
+    case "held": return t(m, "compose.smsHeld", locale);
+    case "unconfirmed_number": return t(m, "compose.smsCheckNumber", locale);
+    case "unknown": return t(m, "compose.smsStateUnknown", locale);
   }
 }
 
@@ -77,15 +79,16 @@ export type EmailRecipientState =
  * the address, which is neither of those two. A date that will not format
  * drops the date rather than throwing inside a render.
  */
-export function composerEmailNotice(state: EmailRecipientState, zone: string): string | null {
+export function composerEmailNotice(state: EmailRecipientState, zone: string, locale: Locale = "en"): string | null {
   if (state.kind === "ok") return null;
-  if (state.kind === "unknown") return m["compose.emailStateUnknown"];
-  const line = state.suppressed === "bounced" ? m["compose.emailBounced"]
-    : state.suppressed === "complained" ? m["compose.emailComplained"]
-    : state.byCustomer ? m["compose.emailUnsubscribed"] : m["compose.emailStoppedByYou"];
+  if (state.kind === "unknown") return t(m, "compose.emailStateUnknown", locale);
+  const key = state.suppressed === "bounced" ? "compose.emailBounced"
+    : state.suppressed === "complained" ? "compose.emailComplained"
+    : state.byCustomer ? "compose.emailUnsubscribed" : "compose.emailStoppedByYou";
   try {
-    return line.replace("{date}", formatDateInZone(state.since, zone));
+    return t(m, key, locale, { date: formatDateInZone(state.since, zone, locale) });
   } catch {
-    return line.replace(" on {date}", "");
+    // Both languages phrase the date as " on {date}" / " el {date}": drop it rather than throw.
+    return t(m, key, locale).replace(/ (?:on|el) \{date\}/, "");
   }
 }

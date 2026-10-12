@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeCursor, parseCursor, parseTimeCursor } from "./cursor";
+import { encodeCursor, parseCursor, parseTimeCursor, parseTimelineCursor } from "./cursor";
 
 const ID = "6b503e2f-3cd3-4531-a0af-5cfaf9bc158e";
 
@@ -86,5 +86,34 @@ describe("cursor", () => {
     expect(parseTimeCursor("nonsense")).toBeUndefined();
     expect(parseTimeCursor("2026-13-45T99:99:99Z")).toBeUndefined(); // Date.parse rejects
     expect(parseTimeCursor(undefined)).toBeUndefined();
+  });
+});
+
+describe("parseTimelineCursor (S-03 1b, spec §11: a ?before= that does not parse is a cold start)", () => {
+  const ID = "0f8a7b2c-1d2e-4f3a-8b4c-5d6e7f8a9b0c";
+  it("round-trips a timestamp cursor exactly, never reformatting it", () => {
+    const c = { v: "2026-10-09T16:12:00.123456+00:00", id: ID };
+    expect(parseTimelineCursor(encodeCursor(c))).toEqual(c);
+  });
+  it("anything but a zoned timestamp and a uuid is a cold start (mutation: return parseCursor's result as is -> free text passes, FAILS)", () => {
+    for (const v of [null, "Garcia", "2026-10-09", "2026-10-09T16:12", "2026-10-09T16:12:00"]) {
+      expect(parseTimelineCursor(encodeCursor({ v, id: ID })), String(v)).toBeUndefined();
+    }
+    expect(parseTimelineCursor(["a", "b"] as unknown as string)).toBeUndefined();
+    expect(parseTimelineCursor("not-base64-json")).toBeUndefined();
+  });
+  // Date.parse rolls an impossible date over ("Feb 30" is Mar 2), so the shape check and a finite
+  // Date.parse both pass it; packages/db's isTimelineInstant does the same. A hand-edited ?before=
+  // must still be a cold start here, never a page that throws or silently pages from March.
+  it("an impossible calendar date or clock, or one Postgres refuses, is a cold start (mutation: drop the calendar check -> Feb 30 passes; offset hours <= 23 or year 0000 -> FAILS)", () => {
+    for (const v of ["2026-02-30T00:00:00Z", "2026-02-29T00:00:00Z", "2026-04-31T12:00:00+00:00", "2026-13-01T00:00:00Z",
+      "2026-00-10T00:00:00Z", "2026-10-00T00:00:00Z", "2026-10-09T24:00:00Z", "2026-10-09T23:60:00Z",
+      "2026-10-09T23:59:60Z", "2026-10-09T16:12:00+24:00", "2026-10-09T16:12:00+05:60",
+      "2026-10-09T16:12:00+16:00", "2026-10-09T16:12:00-16:00", "0000-01-01T00:00:00Z"]) {
+      expect(parseTimelineCursor(encodeCursor({ v, id: ID })), v).toBeUndefined();
+    }
+    for (const v of ["2028-02-29T00:00:00Z", "2026-12-31T23:59:59.999999-06:00", "2026-01-01T00:00:00+14:00", "2026-10-09T16:12:00+15:59", "2026-10-09T16:12:00-15:59", "0001-01-01T00:00:00Z"]) {
+      expect(parseTimelineCursor(encodeCursor({ v, id: ID })), v).toEqual({ v, id: ID });
+    }
   });
 });

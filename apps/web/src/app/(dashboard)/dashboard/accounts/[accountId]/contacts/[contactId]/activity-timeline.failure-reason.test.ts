@@ -9,19 +9,20 @@ vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), co
 vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
 
 const { ActivityTimeline } = await import("./activity-timeline");
+const { legacyTimeline } = await import("./activity-timeline.fixture");
 
 const message = (status: string, error: string | null) => ({
   id: "msg1", created_at: "2026-10-05T10:00:00Z", direction: "outbound",
   subject: null, body: "Hi there", status, channel: "sms", error,
 });
 
-const html = (status: string, error: string | null) => renderToStaticMarkup(createElement(ActivityTimeline, {
+const html = (status: string, error: string | null) => renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
   accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
   smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
   notes: [], tasks: [], holdOpenTaskIds: [], opportunities: [], submissions: [],
   messages: [message(status, error)],
   emailAction: async () => {}, smsAction: async () => {},
-} as never));
+}) as never));
 
 /**
  * D-017's contact-timeline half — same defect `message-thread.test.ts`
