@@ -1,5 +1,7 @@
-// replaced by @bis/db's AuthorKind once Task 1 lands
-export type AuthorKind = "person" | "ai" | "automation" | "customer" | "import";
+import type { AuthorKind } from "@bis/db";
+
+// Re-exported for timeline-item.tsx, which imports it from here.
+export type { AuthorKind };
 
 /**
  * Who made a timeline row (spec §6; DESIGN.md, Provenance): one of five kinds, always said in a

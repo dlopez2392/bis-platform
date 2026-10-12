@@ -97,3 +97,27 @@ export function parseTimeCursor(raw: string | undefined): string | undefined {
   if (!raw || !isTs(raw)) return undefined;
   return raw;
 }
+
+// The record timeline's cursor (S-03 1b, spec C3): a RowCursor whose `v` is a zoned timestamp, the
+// same shape packages/db's timeline-cursor.ts validates before building a filter.
+const TIMELINE_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+
+/** A real calendar day and clock. `Date.parse` rolls "2026-02-30" over to Mar 2 rather than
+ *  refusing it (so does packages/db's isTimelineInstant), so the fields are checked one by one. */
+function isRealInstant(v: string): boolean {
+  const m = TIMELINE_INSTANT.exec(v);
+  if (!m) return false;
+  const [y, mo, d, h, mi, s] = m.slice(1, 7).map(Number) as [number, number, number, number, number, number];
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const offsetOk = m[7] === undefined || (Number(m[7]) <= 23 && Number(m[8]) <= 59);
+  return mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth && h <= 23 && mi <= 59 && s <= 59 && offsetOk
+    && !Number.isNaN(Date.parse(v));
+}
+
+/** TOTAL, like its siblings: anything but a real zoned timestamp paired with a uuid is a cold start. */
+export function parseTimelineCursor(raw: string | undefined): { v: string; id: string } | undefined {
+  const c = parseCursor(raw);
+  if (!c || c.v === null || !isRealInstant(c.v)) return undefined;
+  return { v: c.v, id: c.id };
+}
