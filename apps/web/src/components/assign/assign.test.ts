@@ -102,6 +102,16 @@ describe("AssigneeField: editable", () => {
     expect(assigneeName(TOM.userId, OPTIONS)).toBe(TOM.label);
     expect(assigneeName("99999999-9999-4999-8999-999999999999", OPTIONS)).toBe(m["assign.someone"]);
   });
+
+  // DESIGN DoD (phone tap targets, min-h-11 md:min-h-8 the timeline's own idiom): the Technician
+  // assignment field (and so TaskAssigneeField, which renders through this same trigger in the
+  // record timeline's task rows) was still a fixed h-8.
+  it("the trigger is a 44px tap target on a phone, matching the record page's other inline controls (mutation: drop min-h-11 from INLINE_TRIGGER -> FAILS)", () => {
+    const html = field();
+    const trigger = html.match(/<button[^>]*role="combobox"[^>]*>/)?.[0] ?? "";
+    expect(trigger).toMatch(/[\s"]min-h-11[\s"]/);
+    expect(trigger).toMatch(/[\s"]md:min-h-8[\s"]/);
+  });
 });
 
 describe("ContactAssigneeField: 'You' only for the viewer's own customer (fix round 1, I1/M2)", () => {

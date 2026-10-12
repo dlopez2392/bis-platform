@@ -24,6 +24,21 @@ describe("instantKey: one total order across seven tables, to the microsecond (s
   });
 });
 
+describe("isTimelineInstant: a REAL instant, not just a string Date.parse tolerates (apps/web's cursor.ts carries the same rule)", () => {
+  it("rejects an impossible calendar date (mutation: drop the daysInMonth check -> FAILS, Date.parse rolls Feb 30 to Mar 2)", () => {
+    expect(isTimelineInstant("2026-02-30T00:00:00Z")).toBe(false);
+  });
+  it("rejects an offset past Postgres's +/-15:59 (mutation: drop the offsetOk check -> FAILS)", () => {
+    expect(isTimelineInstant("2026-10-09T16:12:00+16:00")).toBe(false);
+  });
+  it("accepts the boundary offset +/-15:59", () => {
+    expect(isTimelineInstant("2026-10-09T16:12:00+15:59")).toBe(true);
+  });
+  it("rejects year 0000, which Postgres also refuses (mutation: drop the y >= 1 check -> FAILS)", () => {
+    expect(isTimelineInstant("0000-01-01T00:00:00Z")).toBe(false);
+  });
+});
+
 describe("timelineBeforeFilter: strictly past (at, id), the contact list's row-value idiom", () => {
   it("is exactly `at < v OR (at = v AND id < id)`, quoted (mutation: drop the and(...) half -> FAILS)", () => {
     expect(timelineBeforeFilter("created_at", { v: "2026-10-09T16:12:00.123456+00:00", id: ID })).toBe(

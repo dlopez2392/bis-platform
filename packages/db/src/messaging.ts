@@ -133,7 +133,7 @@ export async function createMessage(
   actorType: ActorType = "user",
 ): Promise<{ id: string }> {
   // Who wrote it (0073, spec §5.2): from the actor the caller already passes, one mapping for all
-  // thirteen writers (provenance.ts; the backfill's SQL twin is pinned by provenance-parity.test.ts).
+  // fourteen writers (provenance.ts; the backfill's SQL twin is pinned by provenance-parity.test.ts).
   const author = messageAuthor(actorType, actorId, input.direction);
   const { data, error } = await db.from("messages")
     .insert({

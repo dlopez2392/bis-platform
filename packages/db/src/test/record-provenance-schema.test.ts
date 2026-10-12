@@ -3,8 +3,10 @@ import type { Client } from "pg";
 import { withRollback, actAs } from "./db";
 
 /**
- * Record provenance (spec §5, migration 0073). As the table owner inside a rolled-back transaction
- * unless a case switches role. A refused INSERT or a failed CHECK raises; one statement per savepoint.
+ * Record provenance (spec §5, migrations 0073 and 0074). As the table owner inside a rolled-back
+ * transaction unless a case switches role. A refused INSERT or a failed CHECK raises; one statement
+ * per savepoint. RED BEFORE 0074, legitimately: the NOT NULL case and three of the four task-link
+ * cases (the service-role case pins what 0074 must leave alone, so it is green either side).
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 const ORG = `org_rp_${RUN}`;
@@ -65,6 +67,16 @@ const message = (s: Awaited<ReturnType<typeof seed>>, direction: "inbound" | "ou
 const event = (c: Client, acct: string, type: string, actorType: string, actorId: string, payload: Record<string, string>) =>
   c.query("insert into events (account_id, type, actor_type, actor_id, payload) values ($1,$2,$3,$4,$5)",
     [acct, type, actorType, actorId, JSON.stringify(payload)]);
+/** Two calls and two consent rows in the account, as the owner: what a To-do's server-set links point at. */
+async function links(c: Client, s: Awaited<ReturnType<typeof seed>>) {
+  const one = async (sql: string, args: unknown[]) => (await c.query<{ id: string }>(sql, args)).rows[0]!.id;
+  // Country code 999 is assigned to no country (testPhoneNumber's rule): never dialable, even rolled back.
+  const e164 = `+999${String(Math.floor(Math.random() * 1e9)).padStart(9, "0")}`;
+  const phone = await one("insert into phone_numbers (account_id, e164) values ($1,$2) returning id", [s.acct, e164]);
+  const call = () => one("insert into calls (account_id, phone_number_id) values ($1,$2) returning id", [s.acct, phone]);
+  const consent = () => one("insert into consent_events (account_id, channel, address, action, method) values ($1,'sms','+19565550142','held','free_text') returning id", [s.acct]);
+  return { call1: await call(), call2: await call(), consent1: await consent(), consent2: await consent() };
+}
 
 describe("0073: who stamps tasks and deals (spec §5.2)", () => {
   it("a signed-in To-do and deal store the caller's sub, whatever was sent (mutation: drop trigger tasks_stamp_created_by -> FAILS; drop opportunities_stamp_created_by -> FAILS)", () =>
@@ -128,6 +140,11 @@ describe("0073: the closed set (spec §5.1, C2)", () => {
   it("an author_id only goes with a person, and an id with NO kind is refused too (mutation: write the check as `author_id is null or author_kind = 'person'` -> the NULL-kind row passes, FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
+      // Since 0074 NOT NULL refuses a NULL kind first (23502). Reopen it, rolled back with the test,
+      // so the CHECK's own NULL handling is still what refuses the id-with-no-kind row (0074's rollback
+      // path drops the NOT NULL, and the CHECK must still hold then).
+      await c.query("alter table public.messages alter column author_kind drop not null");
+      await c.query("alter table public.bookings alter column author_kind drop not null");
       for (const kind of ["ai", null]) {
         await expect(insert(c, "messages", message(s, "outbound", { author_kind: kind, author_id: OWNER_SUB })), String(kind))
           .rejects.toMatchObject({ code: "23514", constraint: "messages_author_id_person" });
@@ -141,11 +158,11 @@ describe("0073: the closed set (spec §5.1, C2)", () => {
       const s = await seed(c);
       expect((await insert(c, "form_submissions", { account_id: s.acct, form_id: s.form })).author_kind).toBe("customer");
     }));
-  it("messages and bookings still accept a row with no author (the build before 1b; 0074 closes it) (mutation: set messages.author_kind not null -> FAILS)", () =>
+  it("messages and bookings refuse a row with no author since 0074 (mutation: drop the set not null on bookings -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      expect((await insert(c, "messages", message(s, "inbound"))).author_kind).toBeNull();
-      expect((await insert(c, "bookings", booking(s))).author_kind).toBeNull();
+      await expect(insert(c, "messages", message(s, "inbound"))).rejects.toMatchObject({ code: "23502", column: "author_kind" });
+      await expect(insert(c, "bookings", booking(s))).rejects.toMatchObject({ code: "23502", column: "author_kind" });
     }));
 });
 
@@ -171,6 +188,9 @@ describe("0073: the backfill, bucket by bucket (spec §5.3)", () => {
   it("each historical row takes the kind its evidence gives, and a second run touches none of them (mutation: map an outbound system event to customer in app.message_author -> FAILS; drop `m.author_kind is null` -> the second run rewrites the messages, FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
+      // The window 0074 closes: rows the build before 1b wrote. Rolled back with the test.
+      await c.query("alter table public.messages alter column author_kind drop not null");
+      await c.query("alter table public.bookings alter column author_kind drop not null");
       const msg = async (direction: "inbound" | "outbound", actor: [string, string] | null) => {
         const m = await insert(c, "messages", message(s, direction));
         if (actor) await event(c, s.acct, "message.created", actor[0], actor[1], { messageId: m.id });
@@ -243,6 +263,71 @@ describe("0073: the backfill, bucket by bucket (spec §5.3)", () => {
       expect(before).toHaveLength(16);
       await c.query("select * from app.backfill_record_provenance()");
       expect(await versions()).toEqual(before);
+    }));
+});
+
+describe("0073: the tasks backfill leaves Sofía's and the automation's To-dos alone (0073 section 5)", () => {
+  it("a To-do linked to a call or a consent row keeps created_by NULL even with a person's task.created event; a plain one takes the person (mutation: drop `t.call_id is null` from the tasks bucket -> the call-linked To-do takes the person, FAILS; drop `t.consent_event_id is null` -> the consent-linked one does, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const l = await links(c, s);
+      const plain = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "plain" });
+      const byCall = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "call back", call_id: l.call1 });
+      const byConsent = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "hold", consent_event_id: l.consent1 });
+      for (const t of [plain, byCall, byConsent]) await event(c, s.acct, "task.created", "user", OWNER_SUB, { taskId: t.id });
+      await c.query("select * from app.backfill_record_provenance()");
+      const { rows } = await c.query<{ id: string; created_by: string | null }>(
+        "select id, created_by from tasks where id = any($1::uuid[])", [[plain.id, byCall.id, byConsent.id]]);
+      const by = Object.fromEntries(rows.map((r) => [r.id, r.created_by]));
+      expect({ plain: by[plain.id], byCall: by[byCall.id], byConsent: by[byConsent.id] })
+        .toEqual({ plain: OWNER_SUB, byCall: null, byConsent: null });
+    }));
+});
+
+describe("0074: a To-do's call and consent links are the server's to set (final review M1)", () => {
+  // The timeline reads a To-do with call_id as Sofía's and one with consent_event_id as the
+  // automation's (apps/web/src/lib/record/author-mark.ts). The client role holds table-wide INSERT
+  // and UPDATE on tasks, so without these triggers a member could relabel their own To-do.
+  it("a signed-in UPDATE cannot set, move or clear a To-do's call or consent link, and the rest of the row still updates (mutation: drop trigger tasks_keep_links -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const l = await links(c, s);
+      const own = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "mine" });
+      const server = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "call back", call_id: l.call1, consent_event_id: l.consent1 });
+      await actAs(c, { org_id: ORG, sub: OWNER_SUB });
+      const set = await attempt(c, "update tasks set call_id = $1, consent_event_id = $2, title = 'mine, renamed' where id = $3 returning call_id, consent_event_id, title",
+        [l.call2, l.consent2, own.id]);
+      expect(set.rows[0]).toEqual({ call_id: null, consent_event_id: null, title: "mine, renamed" });
+      const moved = await attempt(c, "update tasks set call_id = $1, consent_event_id = $2 where id = $3 returning call_id, consent_event_id",
+        [l.call2, l.consent2, server.id]);
+      expect(moved.rows[0]).toEqual({ call_id: l.call1, consent_event_id: l.consent1 });
+      const cleared = await attempt(c, "update tasks set call_id = null, consent_event_id = null where id = $1 returning call_id, consent_event_id", [server.id]);
+      expect(cleared.rows[0]).toEqual({ call_id: l.call1, consent_event_id: l.consent1 });
+    }));
+  it("a signed-in INSERT stores no call or consent link, whatever was sent (mutation: drop the INSERT branch of app.keep_task_links -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const l = await links(c, s);
+      await actAs(c, { org_id: ORG, sub: OWNER_SUB });
+      const t = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "x", call_id: l.call1, consent_event_id: l.consent1 });
+      expect({ call_id: t.call_id, consent_event_id: t.consent_event_id, title: t.title }).toEqual({ call_id: null, consent_event_id: null, title: "x" });
+    }));
+  it("the service role still sets both, on insert and on update (mutation: hold every role in app.keep_task_links -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const l = await links(c, s);
+      await c.query("set local role service_role");
+      const t = await insert(c, "tasks", { account_id: s.acct, contact_id: s.ana, title: "x", call_id: l.call1, consent_event_id: l.consent1 });
+      expect({ call_id: t.call_id, consent_event_id: t.consent_event_id }).toEqual({ call_id: l.call1, consent_event_id: l.consent1 });
+      const u = await attempt(c, "update tasks set call_id = $1, consent_event_id = $2 where id = $3 returning call_id, consent_event_id", [l.call2, l.consent2, t.id]);
+      expect(u.rows[0]).toEqual({ call_id: l.call2, consent_event_id: l.consent2 });
+    }));
+  it("the guard's function is closed to anon, open to the two roles that fire it (mutation: skip the revoke from anon -> FAILS)", () =>
+    withRollback(async (c) => {
+      const can = async (role: string) =>
+        (await c.query<{ ok: boolean }>("select has_function_privilege($1, 'app.keep_task_links()', 'execute') as ok", [role])).rows[0]!.ok;
+      expect({ anon: await can("anon"), authenticated: await can("authenticated"), service_role: await can("service_role") })
+        .toEqual({ anon: false, authenticated: true, service_role: true });
     }));
 });
 

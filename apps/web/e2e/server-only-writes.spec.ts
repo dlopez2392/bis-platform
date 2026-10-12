@@ -216,7 +216,7 @@ async function seed(db: Db, accountId: string, into: Partial<Seeded>): Promise<S
   });
   into.messageId = await one("messages", {
     account_id: accountId, conversation_id: into.conversationId, channel: "sms", direction: "outbound",
-    body: "boundary probe",
+    body: "boundary probe", author_kind: "person",
   });
   into.formId = await one("forms", {
     account_id: accountId, public_id: `sow_${newRun()}`, name: "Boundary probe form",

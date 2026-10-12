@@ -136,6 +136,17 @@ describe("Spanish copy review (M4)", () => {
 // business account's, so its Spanish never says "cuenta" (which in this app
 // is the business), and it calls the setting what the legend calls it,
 // "tema", never a second word ("aspecto").
+// S-03 1b minors: automations.reason.accountSuppressed reaches the operator
+// through sendSmsAction's rejection toast (conversations/actions.ts), which
+// had no Spanish twin at all — the ratchet's frozen baseline had it as a
+// known gap (deviation #11).
+describe("automations.reason.accountSuppressed has a Spanish twin", () => {
+  it("is plain Spanish, distinct from the English (mutation: copy the English string -> FAILS)", () => {
+    expect(m["automations.reason.accountSuppressed.es"]).toBe("Esta cuenta aún no está enviando");
+    expect(m["automations.reason.accountSuppressed.es"]).not.toBe(m["automations.reason.accountSuppressed"]);
+  });
+});
+
 describe("prefs theme copy in Spanish names the theme, not the account", () => {
   const themeEs = Object.entries(m).filter(([k]) =>
     (k.startsWith("prefs.theme.") || k.startsWith("prefs.saved.theme.")) && k.endsWith(".es"));

@@ -28,7 +28,7 @@ export function EmailSendButton({
   const status = useFormStatus();
   const pending = pendingProp ?? status.pending;
   return (
-    <Button type="submit" variant={variant} disabled={pending}>
+    <Button type="submit" variant={variant} disabled={pending} className="min-h-11 md:min-h-8">
       {pending ? pendingLabel : label}
     </Button>
   );

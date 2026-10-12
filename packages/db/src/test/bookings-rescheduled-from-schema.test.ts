@@ -177,8 +177,8 @@ async function insertBooking(
   slot += 1;
   const starts = new Date(Date.UTC(2032, 0, 1, 0) + slot * 3_600_000);
   const { rows } = await c.query<{ id: string }>(
-    `insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, rescheduled_from_id)
-     values ($1, $2, $3, $4, $5, $6, $7) returning id`,
+    `insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, rescheduled_from_id, author_kind)
+     values ($1, $2, $3, $4, $5, $6, $7, 'person') returning id`,
     [a.id, a.cal, a.contact, starts.toISOString(), new Date(starts.getTime() + 1_800_000).toISOString(),
       `test_0061_${Math.random().toString(36).slice(2)}`, rescheduledFrom]);
   return rows[0]!.id;

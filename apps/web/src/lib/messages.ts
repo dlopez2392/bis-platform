@@ -2273,6 +2273,7 @@ export const m = {
   // (same posture as "disabled" — logging it would be noise on a seeded
   // demo account, not a signal).
   "automations.reason.accountSuppressed": "This account isn't sending yet",
+  "automations.reason.accountSuppressed.es": "Esta cuenta aún no está enviando",
   "automations.activityLink": "See what went out",
   // The page's four group headings, in the order the customer lives it; the
   // last group is the one rule that holds every automation back.

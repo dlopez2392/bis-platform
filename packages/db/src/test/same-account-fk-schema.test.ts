@@ -164,8 +164,8 @@ const insertBooking = (c: Client, account: string, calendar: string, contact: st
   slot += 1;
   const starts = new Date(Date.UTC(2031, 0, 1, 0) + slot * 3_600_000);
   return c.query(
-    `insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token)
-     values ($1, $2, $3, $4, $5, $6)`,
+    `insert into public.bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind)
+     values ($1, $2, $3, $4, $5, $6, 'person')`,
     [account, calendar, contact, starts.toISOString(), new Date(starts.getTime() + 1_800_000).toISOString(),
       `test_0050_${Math.random().toString(36).slice(2)}`]);
 };

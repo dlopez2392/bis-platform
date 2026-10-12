@@ -102,7 +102,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
       const mk = (reply: string | null) => db.from("bookings").insert({
         account_id: accountId, calendar_id: calendarId, contact_id: contactId,
         starts_at: "2027-01-05T15:00:00Z", ends_at: "2027-01-05T16:00:00Z",
-        status: "cancelled", cancel_token: token(), confirm_reply: reply,
+        status: "cancelled", cancel_token: token(), confirm_reply: reply, author_kind: "person",
       }).select("id").maybeSingle();
 
       expect((await mk("yes")).error).toBeNull();
@@ -121,7 +121,7 @@ describe("0047 - the nine columns exist and carry their constraints", () => {
       const { data: bk, error: bkErr } = await db.from("bookings").insert({
         account_id: accountId, calendar_id: calendarId, contact_id: contactId,
         starts_at: "2027-01-06T15:00:00Z", ends_at: "2027-01-06T16:00:00Z",
-        status: "booked", cancel_token: token(),
+        status: "booked", cancel_token: token(), author_kind: "person",
       }).select("confirm_asked_at, confirm_reply, confirm_reply_at, confirm_sms_failed_at, referral_asked_at, referral_ask_sms_failed_at").single();
       expect(bkErr).toBeNull();
       expect(bk).toEqual({

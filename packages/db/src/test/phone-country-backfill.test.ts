@@ -34,7 +34,7 @@ async function seed(c: Client) {
   await c.query("insert into calls (account_id, phone_number_id, caller_e164) values ($1, $2, '+15512349999')", [account, num!.id]);
   const { rows: [conv] } = await c.query<{ id: string }>(
     "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, ids.texter]);
-  await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'inbound', 'hola')", [account, conv!.id]);
+  await c.query("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1, $2, 'sms', 'inbound', 'hola', 'customer')", [account, conv!.id]);
   return { account, ids };
 }
 
@@ -101,13 +101,13 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
       const outboundOnly = await contact("outbound sms only, could be Mexican", "+15512345690");
       const { rows: [convOut] } = await c.query<{ id: string }>(
         "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, outboundOnly]);
-      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'outbound', 'reminder')", [account, convOut!.id]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1, $2, 'sms', 'outbound', 'reminder', 'person')", [account, convOut!.id]);
 
       // (b) an inbound FORM submission only: not an sms reply, so not carrier proof.
       const formOnly = await contact("inbound form only, could be Mexican", "+15512345691");
       const { rows: [convForm] } = await c.query<{ id: string }>(
         "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, formOnly]);
-      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'form', 'inbound', 'submitted')", [account, convForm!.id]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1, $2, 'form', 'inbound', 'submitted', 'customer')", [account, convForm!.id]);
 
       // (c) a number that called a DIFFERENT account: must not leak across tenants.
       const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
@@ -134,7 +134,7 @@ describe("the 0054 phone-country backfill (read file + deciding module + emitted
         "insert into contacts (account_id, first_name, phone) values ($1, 'renamed texter', '+15512345693') returning id", [account])).rows[0]!.id;
       const { rows: [conv] } = await c.query<{ id: string }>(
         "insert into conversations (account_id, contact_id) values ($1, $2) returning id", [account, contactId]);
-      await c.query("insert into messages (account_id, conversation_id, channel, direction, body) values ($1, $2, 'sms', 'inbound', 'hola')", [account, conv!.id]);
+      await c.query("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1, $2, 'sms', 'inbound', 'hola', 'customer')", [account, conv!.id]);
       // Phone changed AFTER the inbound text: updated_at moves past the message's created_at.
       await c.query("update contacts set phone = '+15512345694', updated_at = now() + interval '1 minute' where id = $1", [contactId]);
       const listed = (await candidates(c, account)).map((r) => r.id);
