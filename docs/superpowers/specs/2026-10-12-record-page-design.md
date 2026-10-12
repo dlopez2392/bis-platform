@@ -68,10 +68,10 @@ Choices this spec makes:
 | C3 | **The timeline pages on the server**, merged across seven sources, with the contact list's cursor (`lib/cursor.ts`: `RowCursor {v, id}`, `encodeCursor`, `:32-47`): `v` = the row's time, `id` = its uuid, ordered `(at desc, id desc)`. One pager, "Older" carrying `?before=`, "Newer" back to the head (`contacts/page.tsx:73`'s `buildNewerHref` idiom). 30 rows a page | 1b |
 | C4 | **The timeline shows conversation messages only** (`channel in ('email','sms')`). The `form` and `voice` channel rows are the inbox's copies of a submission, a booking change or a call (`lib/forms/enrich.ts:164-167`, `b/[publicId]/actions.ts:400-403`, `lib/voice/finish-call.ts:421-424`, `lib/voice/tools/registry.ts:239-241`), which have rows of their own once 1b adds bookings and calls. Today a form submission shows twice on the timeline (its submission row and its `form` message row, `activity-timeline.tsx:149-170`); 1b fixes that (D15) | 1b |
 | C5 | **Every card's loader returns a load, never throws** (`{status: "ready", …} \| {status: "error"}`, the `TextsLoad`/`EmailLoad` shape, `[contactId]/page.tsx:96-113`), and a client error boundary wraps each card as the backstop for a render-time throw. The kit does not rely on a streamed RSC error reaching a client boundary as its only guard (an assumption about Next's runtime this spec does not lean on) | 1a |
-| C6 | **DOM order is the phone order.** On a desk `RecordLayout` places the cards into three columns with CSS grid areas; keyboard and screen-reader order follow the page's priority (summary, Next up, timeline, what they have, who they are) on every width. A visual-order/DOM-order mismatch on the desk is accepted for the left column; a skip link "Skip to details" (`record.skipToDetails`) goes straight to it | 1a |
+| C6 | **DOM order is the phone order.** On a desk `RecordLayout` places the column runs into three columns by `col-start-*` / `row-start-2` under an `@container` query at 1024px (not grid-template-areas), without reordering the DOM; keyboard and screen-reader order follow the page's priority (summary, Next up, timeline, what they have, who they are) on every width. A visual-order/DOM-order mismatch on the desk is accepted for the left column; a skip link "Skip to details" (`record.skipToDetails`) goes straight to it | 1a |
 | C7 | **The household or business in the header is plain text in part 1** ("García family · Household"). There is no group page until part 2, and a same-page anchor to the Groups card would change meaning when part 2 lands. Part 2 turns it into the link | 1a |
 | C8 | **Facts count with the dashboard's definitions.** "Booked {n} times" counts bookings made, not reschedules (D-035, `packages/db/src/booking.ts:915-930`, "the ONE read behind every bookings count"), so the record and the Monday report agree (D14) | 1a |
-| C9 | **Undated open To-dos are not in Next up.** The three are bookings still ahead and To-dos with a due date, overdue first; under them one plain line counts the rest, "{n} more To-dos have no date." Undated To-dos stay on the timeline. A To-do with no date has no "next" to sort by, and a count is honest where a guessed position is not | 1a |
+| C9 | **Undated open To-dos are not in Next up.** The three are bookings still ahead and To-dos with a due date, overdue first; under them one plain line counts the rest, "{n} more To-dos have no date." (with no rows above it, "{n} To-dos have no date.", since "more" only reads right under rows: `record.nextUp.undatedOnly`/`.undatedOnlyOne`). Undated To-dos stay on the timeline. A To-do with no date has no "next" to sort by, and a count is honest where a guessed position is not | 1a |
 | C10 | **Status is a dot and a word** on every row that has one, rule 3. 1a: the Deals card's status. 1b: booking, outbound message and call rows on the timeline (today's message status is a bare word, `activity-timeline.tsx:386`, and stays so in 1a) | 1a, 1b |
 | C11 | **Customer-typed text carries `lang=""`** (HTML's "language unknown") until S-09 gives contacts a language; a caller's own words carry `lang={calls.language}` (`0019_voice_core.sql:52`). The row chrome carries the page's `lang` | 1b |
 
@@ -124,7 +124,8 @@ form_submissions: author_kind text not null default 'customer'
 `notes.author_id` (`0003_crm_core.sql:99`) already exists and stays the notes author. `messages` and `bookings`
 are created nullable and become NOT NULL in a follow-up after 1b deploys (§13), because the build before 1b
 inserts without them. `form_submissions` takes a default: every submission is the customer's except a web-chat
-one, which the backfill and the app mark `ai`. No index: nothing filters by author this release.
+one, which the backfill and the app mark `ai`. Nothing filters by author this release; 1b's 0073 adds
+`(account_id, contact_id)` indexes on `bookings`, `tasks` and `calls`, for the record's per-customer reads.
 
 ### 5.2 Who writes them
 
@@ -224,15 +225,20 @@ one `Promise.all` whose failure fails the page (`[contactId]/page.tsx:57-82`).
   bookings made (`bookings`, `contact_id`, `rescheduled_from_id is null`); the newest `email`/`sms` message not
   `failed`/`bounced` (`messages` through the contact's conversation, a channel filter in this query only); the
   newest call not `spam` (`calls.started_at`); open deals (`count` plus `sum` over at most 100 open rows; past
-  100 the amount is left out rather than understated). Each fact is `number | null`, `null` meaning the read
-  failed. Every column read exists today (`0016_booking.sql:29-55`, `0061`, `0005_messaging.sql:30-45`,
+  100 the amount is left out rather than understated). Each fact is `Fact<T> = { ok: true; value: T } |
+  { ok: false }`, `{ ok: false }` meaning the read failed; a count the server did not return (postgrest-js turns
+  a HEAD request's empty 404 into `{ error: null, count: null }`) fails closed, never reads as a zero. Every
+  column read exists today (`0016_booking.sql:29-55`, `0061`, `0005_messaging.sql:30-45`,
   `0019_voice_core.sql:44-62`, `0003_crm_core.sql:76-91`): **none needs 0073.**
-- **Next up** (`contactNextUp`): bookings `status = 'booked' and starts_at >= now()` ascending, limit 3, with the
-  calendar's name; open To-dos with `due_at` ascending, limit 3; a head count of open To-dos with no `due_at`.
+- **Next up** (`contactNextUp`): bookings `status = 'booked' and starts_at >= now()` ascending, limit 3, as
+  `{ id, starts_at }` only (one calendar per account, and it has no name column, so a row names no calendar);
+  open To-dos with `due_at` ascending, limit 3; a head count of open To-dos with no `due_at`.
   **Nothing from 1b**: no author, no new kind, no paging.
-- **Header:** `getContact` (the authorisation), `listContactGroups` (`client-groups.ts:94-99`) for the main
-  group, and `listContactPlaces` (`places.ts:113`) for Directions. Both header reads are soft: a failure logs and
-  drops that line or that button, never the header. The text and email gates the header shares with the
+- **Header:** `getContact` (the authorisation) and ONE `listContactPlaces` read (`places.ts:113`), which
+  already returns the customer's groups, primary first with `isPrimary`: the main group comes from those groups,
+  and Directions from its places. `listContactGroups` is not used, because it costs one more read per group for
+  its "others" list. The read is soft: a failure logs and drops both the group line and Directions, never the
+  header. The text and email gates the header shares with the
   composer (`resolveSmsSender`, `smsRecipientState`, `emailRecipientState`) become soft loads too, failing
   closed (Text hidden, composer line "unknown"), as `composerStateLine`'s `unknown` already does.
 
@@ -258,8 +264,9 @@ Kit files under `apps/web/src/components/record/`, **owned by bis-frontend** (ru
 record page, the registry's contents, the facts and Next up, and the timeline's composition.
 
 - **`RecordLayout`** — a container-query grid. Below 1024px of container width: one column in DOM order.
-  From 1024px: three named areas, `who | happening | have`, `320px minmax(0,1fr) 280px` (today's tracks,
-  `[contactId]/page.tsx:132`). The header spans all three.
+  From 1024px (`@container`, `@min-[1024px]`): three tracks, `320px minmax(0,1fr) 280px` (the old page's
+  tracks), and each column run is PLACED with `col-start-1|2|3` and `row-start-2` (`who | happening | have`), not
+  grid-template-areas, so the DOM keeps the phone order (C6). The header spans all three.
 - **`RecordHeader`** — §9.1.
 - **`RecordCard`** — the one chrome: `rounded-xl border border-border bg-card glass`, title in UI 600 at
   13.5px (today's aside style, `[contactId]/page.tsx:178-187`), rows split by `--row-line` rules, never a box in
@@ -271,7 +278,10 @@ record page, the registry's contents, the facts and Next up, and the timeline's 
 - **[1b] `AuthorMark`** and **`TimelineItem`** — the row grammar: mark · verb phrase · time, then the body.
 
 **Registry** `apps/web/src/lib/record/record-cards.ts` (1a): `RecordCardDef = { id; column: 'who' |
-'happening' | 'have'; deskOrder; phoneOrder; collapsibleOnPhone; titleKey; Skeleton; render }`. Core cards:
+'happening' | 'have'; deskOrder; phoneOrder; collapsibleOnPhone; titleKey; skeletonRows }`. The registry
+holds no component: `RecordCard` draws `skeletonRows` skeleton lines, and the page binds each id to its body
+(`[contactId]/page.tsx`'s `slots`, typed `Record<RecordCardId, Slot>`, so a card without a body is a compile
+error). `columnRuns()` turns the phone order into the runs `RecordLayout` renders. Core cards:
 
 | id | Column | Desk order | Phone order | Collapsed on phone | Source |
 |---|---|---|---|---|---|
@@ -298,6 +308,12 @@ Their reads, states, handlers and tests are untouched.
 No hero (rule 11, a record page). Tokens only; both themes; the blur fallback; no hard-coded colour, radius or
 shadow; nothing animates on scroll.
 
+**Loading is real, and it is the route's.** The page awaits its loaders before it renders, so the "Loading"
+state of each card below is drawn by `[contactId]/loading.tsx`: `RecordLayout` with a skeleton header and every
+registry card in `state="loading"`, in the phone order, at its own `skeletonRows` (in the locale the account
+layout provides). Once the page renders, a card is ready, empty or failed. A render-time throw inside one card
+shows that card's skeleton on the server (`RecordCardBoundary`'s Suspense) and its error state on the client.
+
 ### 9.1 Header (1a)
 
 Name as the page's `<h1>` (Display 600, 22px). Under it, muted, the main group: "{group} · Household" or
@@ -308,11 +324,13 @@ width: **Call** (primary, `href="tel:{e164 or digits}"`, `aria-label` "Call {nam
 | Action | Shown when | Else |
 |---|---|---|
 | Call | `contact.phone` has digits | hidden |
-| Text | `e164Of(contact.phone)` resolves **and** `smsGate.ok` **and** `composerStateLine(...)` is null (`lib/consent/composer-state.ts:43`): exactly when the composer's text form would open | hidden: the Texts row in "who they are" already says why |
-| Email | `contact.email` is set (the email composer stays usable when the customer stopped email, `composer-state.ts:65-80`) | hidden |
+| Text | `e164Of(contact.phone)` resolves **and** `smsGate.ok` **and** `composerStateLine(...)` is null (`lib/consent/composer-state.ts:43`): exactly when the composer's text form would open; **and** the Activity card rendered | hidden: the Texts row in "who they are" already says why |
+| Email | `contact.email` is set (the email composer stays usable when the customer stopped email, `composer-state.ts:65-80`) **and** the Activity card rendered | hidden |
 | Directions | the first property in the card's order (`placesInOrder`) with a non-null `mapUrl` (`lib/contacts/place-view.ts:31`; D13) | hidden |
 
-Text and Email are links to `#compose-sms` and `#compose-email`. The composer opens on that channel and focuses
+Text and Email are links to `#compose-sms` and `#compose-email`, and the composer lives in the Activity card: while
+that card has failed there is nothing behind them, so both are hidden (D3), and Next up's "Add a To-do", which
+focuses the same card's To-do field, is hidden with them. Call and Directions do not depend on it. The composer opens on that channel and focuses
 its body (it opens on Note today, `message-composer.tsx:53`; §15). Without JavaScript the link still scrolls to
 the composer. On a phone the actions wrap to a row under the name with Call first, each at least 44px tall.
 
@@ -330,17 +348,19 @@ the composer. On a phone the actions wrap to a row under the name with Call firs
 A zero is left out (the line says what is true, not what is absent); a failed read is left out **and** the card
 says so under the line: "Couldn't count {what}." naming each missing fact, with "Try again". So a missing fact
 never reads as a zero (DESIGN.md, the weekly report: omitted, never zeroed). **Loading:** one skeleton line at
-the fact line's height. **Empty:** cannot happen (fact 1 always holds). **Error** (the contact read itself is the
+the fact line's height, from the route's `loading.tsx`. **Empty:** cannot happen (fact 1 always holds). **Error** (the contact read itself is the
 page's, so this is the counts failing together): "Couldn't load the summary." with "Try again".
 
 ### 9.3 Next up (`next-up`, 1a)
 
-**Loaded:** up to three rows, soonest first, overdue To-dos first: a booking as "{Thu, Oct 16} · {10:00 AM} ·
-{calendar}"; a To-do as its title and "Due {date}", or "● Overdue · was due {date}" (rule 3, `--warn`), or
-"Due today". Under them, when there are undated open To-dos, "{n} more To-dos have no date." (C9). Rows are
-read-only; Done stays on the timeline row. **Empty:** "Nothing coming up. Bookings ahead and To-dos with a due
-date show here." with a ghost "Add a To-do" that focuses the timeline's To-do field. **Loading:** three
-skeleton rows. **Error:** "Couldn't load what's next." with "Try again".
+**Loaded:** up to three rows, soonest first, overdue To-dos first: a booking as "Appointment · {Thu, Oct 16} ·
+{10:00 AM}" ("Cita · …"; no calendar name: an account has one calendar and it has no name column); a To-do as
+its title and "Due {date}", or "● Overdue · was due {date}" (rule 3, `--warn`), or "Due today". Under them,
+when there are undated open To-dos, "{n} more To-dos have no date." (C9); with no rows above, "{n} To-dos have
+no date." Rows are read-only; Done stays on the timeline row. **Empty:** "Nothing coming up. Bookings ahead and
+To-dos with a due date show here." with a ghost "Add a To-do" that focuses the timeline's To-do field, shown
+only while the Activity card rendered (with no timeline there is no field behind it, D3). **Loading:** three
+skeleton rows, from the route's `loading.tsx`. **Error:** "Couldn't load what's next." with "Try again".
 
 ### 9.4 Timeline (`timeline`)
 
@@ -349,7 +369,7 @@ card's foot, `activity-timeline.tsx:248-260`, so Text and Email land on it), the
 rows exactly as they render now — the same kinds (`:39-50`), the same day separators in the account's zone
 (`:211-218`), the same English copy, the callback To-do's mark (`:321`), the task holder picker and hold hint
 (`:319-353`), the failure reason (`:388-393`), no pager. Its states: today's empty state (`:197-202`); **loading**,
-five skeleton rows; **error**, "Couldn't load the activity." with "Try again" (new, because the reads moved
+five skeleton rows (the route's `loading.tsx`); **error**, "Couldn't load the activity." with "Try again" (new, because the reads moved
 into the card, C5).
 
 **1b.** Top to bottom: the composer, the add-To-do row, then the rows, newest first, under day separators in the
@@ -394,6 +414,8 @@ panel (D12).
 | `record.action.text` · `.email` · `.directions` | Text · Email · Directions | Mandar texto · Mandar correo · Cómo llegar |
 | `record.card.summary` · `.nextUp` · `.activity` · `.deals` | Summary · Next up · Activity · Deals | Resumen · Lo que sigue · Actividad · Oportunidades |
 | `record.card.retry` · `record.card.show` | Try again · Show {title} | Intentar de nuevo · Mostrar {title} |
+| `record.card.failed` | Couldn't load {title}. | No se pudo cargar: {title}. |
+| `styleguide.recordKit` | Record kit | Ficha del cliente |
 | `record.activity.failed` | Couldn't load the activity. | No se pudo cargar la actividad. |
 | `record.facts.since` | On your list since {month} | En su lista desde {month} |
 | `record.facts.booked` · `.bookedOne` | Booked {count} times · Booked once | Agendó {count} veces · Agendó una vez |
@@ -404,12 +426,15 @@ panel (D12).
 | `record.facts.what.bookings` · `.talked` · `.deals` | bookings · the last conversation · open deals | las citas · la última conversación · las oportunidades abiertas |
 | `record.summary.failed` | Couldn't load the summary. | No se pudo cargar el resumen. |
 | `record.nextUp.due` · `.dueToday` · `.overdue` | Due {date} · Due today · Overdue · was due {date} | Vence el {date} · Vence hoy · Atrasado · vencía el {date} |
+| `record.nextUp.booking` | Appointment · {when} | Cita · {when} |
 | `record.nextUp.undated` · `.undatedOne` | {count} more To-dos have no date. · 1 more To-do has no date. | {count} pendientes más no tienen fecha. · 1 pendiente más no tiene fecha. |
+| `record.nextUp.undatedOnly` · `.undatedOnlyOne` (no rows above) | {count} To-dos have no date. · 1 To-do has no date. | {count} pendientes no tienen fecha. · 1 pendiente no tiene fecha. |
 | `record.nextUp.empty` · `.addTodo` | Nothing coming up. Bookings ahead and To-dos with a due date show here. · Add a To-do | No hay nada próximo. Aquí aparecen las citas que vienen y los pendientes con fecha. · Agregar un pendiente |
 | `record.nextUp.failed` | Couldn't load what's next. | No se pudo cargar lo que sigue. |
 
 Twins 1a adds to existing keys (mine): `pipeline.status.*` (`messages.ts:645-647`; Abierta, Ganada, Perdida),
-`contact.opportunities`, `contact.noOpportunities`.
+`contact.opportunities`, `contact.noOpportunities`, and the two card titles `contact.details.es` (Datos de
+contacto) and `contact.tags.es` (Etiquetas).
 
 ### 10.2 1b
 
@@ -453,7 +478,10 @@ the ledger client only after `getContact` proved the contact (`[contactId]/page.
   reschedules (probe: drop the `rescheduled_from_id` filter → FAILS); "last talked" skips a `failed` text and a
   `spam` call, and ignores `form`/`voice` copies (probe: drop the channel filter → a booking-page copy wins →
   FAILS); open deals over the cap omit the amount; Next up's three, its overdue order and its undated count; a
-  Technician's client gets their customer's facts equal to an Owner's and nothing for another customer.
+  count the server did not return fails closed. **Technician parity** is not a new record test: the facts and
+  Next up read `bookings`, `messages`, `calls`, `tasks` and `opportunities` on the caller's client, and
+  `technician-scope.test.ts:123-131` already pins, table by table, that a Technician reads only their own
+  customers' rows (probe: drop any one table's restrictive policy → that table's case FAILS).
 - **Web, pure:** `record-facts.test.ts` (a zero omitted; a `null` omitted AND named in "Couldn't count"; "since"
   in the account's zone on Dec 31 at 11:30 PM Chicago, probe: format in UTC → January → FAILS; "yesterday" by
   calendar day, probe: 24-hour arithmetic → FAILS); `next-up.test.ts` (overdue first, cap three, undated counted
@@ -464,17 +492,25 @@ the ledger client only after `getContact` proved the contact (`[contactId]/page.
 - **Each card failing alone** `[contactId]/page.test.ts` (extended): for each server card — summary, Next up,
   timeline, deals — a loader that fails renders that card's error copy while every other card's content is
   present (probe: let the timeline's reads throw as today's `Promise.all` did → the page render rejects →
-  FAILS); a render throw inside one card is caught by its `RecordCardBoundary` (probe: remove the boundary →
-  FAILS). The existing ledger-client and Assigned-to pins carry over unchanged; the existing
-  `activity-timeline.*.test.ts` files pass untouched (the rows did not change).
+  FAILS); Details and Tags fail alone too (their custom-field and tag reads); a view model that throws (a
+  malformed instant) costs only its own card; an invalid stored zone draws the summary and Next up in the zone
+  `renderZone` resolved (probe: hand either the raw zone → FAILS); a render throw inside one card is caught by
+  its `RecordCardBoundary` (probe: remove the boundary's Suspense → FAILS). The 404 test lists every read the
+  page makes and asserts none ran (probe: start them before `getContact` → FAILS). The route's `loading.tsx`
+  renders one loading card per registry entry in the phone order (`[contactId]/loading.test.ts`). The existing
+  ledger-client and Assigned-to pins carry over unchanged; the existing `activity-timeline.*.test.ts` files pass
+  untouched (the rows did not change).
 - **Kit:** `record-card.test.ts` (a closed phone card mounts no body and fetches nothing; `aria-expanded`
   toggles). The ratchet, the accents guard and `INTERNAL_MILESTONE` over the 1a keys.
 - **e2e** `record-page.spec.ts` (bis-e2e-qa runs it; per-run fixture account, never Test Client One; names in
   `e2e/fixtures/fixture-names.test.ts`; rows removed in `afterAll`): at 1280px the three columns hold their
   cards; at 390px the order is header, summary, Next up, timeline, then the closed "have" cards, then details;
   Call is present and the only primary; a customer with no email has no Email; with no property address no
-  Directions; Text lands on the text composer; a seeded upcoming booking shows in Next up; with `users.language`
-  Spanish (reset after) the page reads "Llamar", "Lo que sigue". `contact-detail.spec.ts` stays read-only on Test
+  Directions; Text lands on the text composer (a cold load of `#compose-sms` opens the Text tab); a seeded
+  upcoming booking shows in Next up; under the QA override `?locale=es` (so no person's language is written) the
+  page reads "Llamar", "Lo que sigue". Its contact takes a random phone and the setup refuses one that matches
+  an existing contact, so it can never use or delete someone else's; teardown deletes the booking BEFORE the
+  contact, because `bookings.contact_id` is `on delete restrict`. `contact-detail.spec.ts` stays read-only on Test
   Client One and is updated for the moved composer. The record page is added to `i18n-overflow.spec.ts`.
 
 ### 12.2 1b
@@ -563,8 +599,8 @@ the facts and Next up, and the timeline's composition.
 - **bis-comms:** `MessageComposer` opening on the channel named by `#compose-sms`/`#compose-email` and focusing
   its body (`message-composer.tsx:53`); the newest-conversation-message read for "last talked", or leave it to
   `record.ts` reading `messages` through the request client (either is a read, no migration).
-- **bis-booking:** a per-contact count of bookings made and the next three booked, with the calendar's name, in
-  `booking.ts` (reads only).
+- **bis-booking:** a per-contact count of bookings made and the next three booked (`{ id, starts_at }`; no
+  calendar name, there is no name column), in `booking.ts` (reads only).
 - **bis-voice:** the newest non-spam call for one contact (an additive option on `listContactCalls`,
   `voice.ts:937-946`).
 

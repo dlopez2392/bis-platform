@@ -1146,8 +1146,10 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(html.match(/data-record-layout/g)).toHaveLength(2);
   });
   it("RecordHeader with every action and with none", () => {
-    expect(html.match(/data-record-header/g)).toHaveLength(2);
-    expect(html.match(/data-record-actions/g)).toHaveLength(1);
+    // Each of the two layouts carries its own header with every action, so the demo has FOUR headers
+    // (two in the layouts, one with every action, one with none) and three action rows.
+    expect(html.match(/data-record-header/g)).toHaveLength(4);
+    expect(html.match(/data-record-actions/g)).toHaveLength(3);
   });
   it("RecordCard loading, ready, empty, error and closed on a phone (mutation: drop a state -> FAILS)", () => {
     for (const s of ["loading", "ready", "empty", "error"]) expect(html).toContain(`data-sg-record-card="${s}"`);
@@ -2359,9 +2361,9 @@ export function ContactTagsBody({ accountId, contactId, tags }: { accountId: str
 
 `groups-card.tsx`: widen `type ViewProps` (`:35`) to `{ accountId: string; contactId: string; canManageGroups: boolean; headingHidden?: boolean }`, destructure `headingHidden` in `GroupsCardView` (`:219`), and set the `h3` (`:225`) to `className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}`. `GroupsCard` already spreads `props` into the view.
 
-`places-card.tsx`: add `headingHidden?: boolean` to `PlacesCardView`'s props (`:282-283`) and to `PlacesCard`'s (`:328`), and pass it through. The `h3` (`:296`) becomes `className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}`.
+`places-card.tsx`: add `headingHidden?: boolean` to `PlacesCardView`'s props (`:282-283`) and to `PlacesCard`'s (`:340`), and pass it through. The `h3` (`:295`) becomes `className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}`.
 
-`relationships-card.tsx`: add `headingHidden?: boolean;` to `CardViewProps` (`:22-30`) and to `RelationshipsCard`'s props (`:142`), and pass it. The `h3` (`:113`) becomes `className={headingHidden ? "sr-only" : "text-sm font-medium"}`.
+`relationships-card.tsx`: add `headingHidden?: boolean;` to `CardViewProps` (`:23-31`) and to `RelationshipsCard`'s props (`:138`), and pass it. The `h3` (`:111`) becomes `className={headingHidden ? "sr-only" : "text-sm font-medium"}`.
 
 `[contactId]/focus-field-button.tsx`:
 
@@ -2498,7 +2500,7 @@ pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accou
 pnpm --filter web typecheck
 pnpm --filter web exec eslint "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts"
 ```
-Expected: every file passes, including the untouched `activity-timeline.*.test.ts` (the spec requires they pass unchanged), `contact-drawer.wiring.test.ts` and `groups-card.wiring.test.ts`. `typecheck` **fails in `[contactId]/page.tsx`** (it still imports `ContactFieldsPanel`), which is expected until Task 8; paste that single error. The ratchet passes, since the new files' copy all goes through `tr`/props. Paste the probe lines: the composer at the foot, a kept Card, a dropped dot, an ignored `headingHidden`.
+Expected: every file passes **except `[contactId]/page.test.ts`, which stays red until Task 8** (the old page still imports the removed `ContactFieldsPanel`, so React gets `undefined` for it: "Element type is invalid"). That includes the untouched `activity-timeline.*.test.ts` (the spec requires they pass unchanged), `contact-drawer.wiring.test.ts` and `groups-card.wiring.test.ts`. `typecheck` **fails in `[contactId]/page.tsx`** (it still imports `ContactFieldsPanel`), which is expected until Task 8; paste that single error. The ratchet passes, since the new files' copy all goes through `tr`/props. Paste the probe lines: the composer at the foot, a kept Card, a dropped dot, an ignored `headingHidden`.
 
 - [ ] **Step 5: Commit**
 

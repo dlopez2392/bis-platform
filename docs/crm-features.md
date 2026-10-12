@@ -326,7 +326,7 @@ weakness is breadth: no merge, filters, roles, documents, editable pipeline or c
 | List search | **Partial** (runs on Enter, not as you type; misses full names, business names, accents and differently typed phones) | `packages/db/src/contacts.ts:323-329` |
 | Contact drawer with inline edits and undo | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx:54-234` |
 | Full record: details, custom fields, tags, timeline, composer, deals | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx:19-101` |
-| Activity timeline | **Partial** (no bookings; calls appear only as voice messages; dates in the server's zone) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx:84-127` |
+| Activity timeline | **Partial** (no bookings; calls appear only as voice messages. Dates have been drawn in the company's zone since D-010, `9bf19e0b`) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx:84-127` |
 | Notes and tasks on a contact | **Partial** (no edit, delete, assignee or reminder; the note's author is not shown) | `packages/db/src/activities.ts:4-38` |
 | Tags, including bulk add with undo | **Partial** (tags cannot be renamed or deleted, are not shown in the list and cannot be filtered on) | `packages/db/src/contacts.ts:484-510` |
 | CSV import wizard (parsed in the browser; batches of 200; never blanks a field) | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/import-wizard.tsx:43-124` |
@@ -2619,10 +2619,10 @@ Hoy on a phone, 390 px (proposed)
 
 - **For.** The owner's central ask: one place for each customer, with all their documents and
   information.
-- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions,
-  shows calls only as voice messages, prints raw statuses and draws dates in the server's zone, so
-  an evening call can show tomorrow's date. Deals cannot be opened from the record. There are no
-  documents.
+- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions
+  and shows calls only as voice messages. (Its dates are in the company's zone since D-010,
+  `9bf19e0b`, and its statuses are labels since D-014, `752c070f`.) Deals cannot be opened from the
+  record. There are no documents.
 - **What the owner sees first.** On a desk, the study's three columns: who they are, what is
   happening, what they have. On a phone: the header (language chip, status as dot and word, Llamar ·
   Mensaje · Cómo llegar), the summary (checked fact line first, prose marked "Generado por IA"), the
