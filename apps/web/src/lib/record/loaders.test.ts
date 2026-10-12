@@ -106,6 +106,12 @@ describe("record loaders", () => {
     expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
   });
 
+  it("the persona read goes through the page's own db client, never the ledger (M2; mutation: call getVoiceProfile(ledger, accountId) -> FAILS)", async () => {
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(getVoiceProfileMock).toHaveBeenCalledWith(db, "acct1");
+    expect(getVoiceProfileMock.mock.calls[0]![0]).not.toBe(ledger);
+  });
+
   it("names and the persona failing cost nothing but the names (spec §11: never an error; mutation: rethrow -> FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {

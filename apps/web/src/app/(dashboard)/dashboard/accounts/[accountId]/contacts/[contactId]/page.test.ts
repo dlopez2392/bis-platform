@@ -243,7 +243,8 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     getContactMock.mockResolvedValue(null);
     const reads = {
       contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
-      listContactTimelinePage: listContactTimelinePageMock, listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      listContactTimelinePage: listContactTimelinePageMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
+      listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
     };
     for (const r of Object.values(reads)) r.mockClear();
@@ -834,7 +835,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
     timelineProps.mockClear();
     timelineThrows.on = false;
   });
-  type Props = { rows: { verb: string; mark: { label: string } }[]; failedText: string | null; emptyText: string | null;
+  type Props = { rows: { verb: string; mark: { label: string }; day: string; time: string }[]; failedText: string | null; emptyText: string | null;
     pager: { olderHref: string | null; newerHref: string | null } };
   const props = () => timelineProps.mock.calls.at(-1)![0] as Props;
 
@@ -905,6 +906,18 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
     await render();
     expect(props().rows[0]!.verb).toBe("agregó una nota");
     expect(props().rows[0]!.mark.label).toBe("Alguien del equipo");
+  });
+
+  it("a row's day and time are drawn in the ACCOUNT's own zone, not UTC: an instant that is Oct 12 in UTC is still Oct 11 night in Chicago (DESIGN.md D-010; mutation: pass zone: \"UTC\" to timelineRows in page.tsx -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: null }, error: null });
+    const AT = "2026-10-12T03:30:00Z"; // Oct 12 in UTC; Oct 11, 10:30 PM in America/Chicago (CDT, UTC-5).
+    listContactTimelinePageMock.mockResolvedValue({
+      items: [{ kind: "note", id: "n1", at: AT, note: { id: "n1", body: "x", author_id: null, created_at: AT } }],
+      older: null, failed: [],
+    });
+    await render();
+    expect(props().rows[0]!.day).toBe("Oct 11, 2026");
+    expect(props().rows[0]!.time).toBe("Oct 11, 2026, 10:30 PM");
   });
 
   it("a row that cannot be drawn costs the timeline card, never the page, and its composer actions hide (C5, D3; mutation: build the rows outside viewOf -> the render rejects, FAILS)", async () => {

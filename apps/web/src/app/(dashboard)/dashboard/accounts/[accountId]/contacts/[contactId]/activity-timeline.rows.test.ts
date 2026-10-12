@@ -6,6 +6,15 @@ import type { TimelineEntry } from "@bis/db";
 vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), completeTaskAction: vi.fn() }));
 vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+// M1: records what the timeline card hands RecordCardRetry, so "Try again" with no onRetry (a plain
+// card refresh, which review judged right) is pinned, not just its label text.
+const retryProps: Record<string, unknown>[] = [];
+vi.mock("@/components/record/record-card", () => ({
+  RecordCardRetry: (p: Record<string, unknown>) => {
+    retryProps.push(p);
+    return createElement("button", { type: "button" }, p.label as string);
+  },
+}));
 
 const { ActivityTimeline } = await import("./activity-timeline");
 const { legacyTimeline } = await import("./activity-timeline.fixture");
@@ -59,9 +68,12 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     expect(html).toContain("Couldn&#x27;t load calls and bookings.");
     expect(html.indexOf("data-timeline-failed")).toBeLessThan(html.indexOf("data-timeline-item"));
   });
-  it("the failure notice carries Try again, a re-read of this same page, and only when something failed (orchestrator rule; mutation: drop the retry -> FAILS)", () => {
+  it("the failure notice's Try again renders RecordCardRetry with NO onRetry — a plain card refresh, which review judged right — and only when something failed (M1; mutation: pass onRetry={() => {}} in activity-timeline.tsx -> FAILS)", () => {
+    retryProps.length = 0;
     const notice = render({ failedText: "Couldn't load calls." }).match(/<div[^>]*data-timeline-failed[\s\S]*?<\/div>/)?.[0] ?? "";
     expect(notice).toContain(">Try again<");
+    expect(retryProps).toHaveLength(1);
+    expect(Object.hasOwn(retryProps[0]!, "onRetry")).toBe(false);
     expect(render()).not.toContain(">Try again<");
   });
   it("the empty state sells the timeline, only when told to (rule 5)", () => {
@@ -72,5 +84,27 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
   it("in Spanish the chrome and rows read Spanish (mutation: leave the To-do form on m[...] -> FAILS)", () => {
     const html = render({}, "es");
     for (const s of [">Agregar<", ">Cliente<", ">Usted<", "contestó una llamada", "Nuevo pendiente…"]) expect(html).toContain(s);
+  });
+  it("phone tap targets: the add-To-do title and due-date fields, its Add button and a row's Done button are each at least 44px tall on a phone (DESIGN DoD; mutation: drop min-h-11 from the title field -> FAILS)", () => {
+    const html = render();
+    const titleField = html.match(/<input[^>]*id="record-add-todo"[^>]*>/)?.[0] ?? "";
+    const dueField = html.match(/<input[^>]*name="dueAt"[^>]*>/)?.[0] ?? "";
+    const addButton = html.match(/<button[^>]*>Add<\/button>/)?.[0] ?? "";
+    for (const el of [titleField, dueField, addButton]) {
+      expect(el).toContain("min-h-11");
+      expect(el).toContain("md:min-h-8");
+    }
+
+    const taskEntries = [{ kind: "task", id: "t1", at: AT, task: {
+      id: "t1", title: "Follow up", due_at: null, completed_at: null, created_at: AT,
+      consent_event_id: null, call_id: null, assigned_to: null, created_by: null,
+    } }] as unknown as TimelineEntry[];
+    const tr = makeTr("en");
+    const taskRows = timelineRows(taskEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
+    const taskHtml = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows: taskRows, emptyText: null } as never));
+    const doneButton = taskHtml.match(/<button[^>]*>done<\/button>/)?.[0] ?? "";
+    expect(doneButton).toContain("min-h-11");
+    expect(doneButton).toContain("md:min-h-8");
   });
 });

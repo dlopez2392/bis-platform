@@ -86,9 +86,10 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
       <form action={boundAddTask} aria-label={tr.text("contact.tasks")}
         className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2">
         {hidden}
-        <Input id={ADD_TODO_FIELD_ID} name="title" placeholder={tr.text("contact.addTask")} className="h-8 min-w-[140px] flex-1 text-sm" />
-        <Input name="dueAt" type="date" className="h-8 w-36 text-sm" />
-        <Button type="submit" variant="outline" size="sm">{tr.text("common.add")}</Button>
+        <Input id={ADD_TODO_FIELD_ID} name="title" placeholder={tr.text("contact.addTask")}
+          className="h-8 min-w-[140px] min-h-11 flex-1 text-sm md:min-h-8" />
+        <Input name="dueAt" type="date" className="h-8 w-36 min-h-11 text-sm md:min-h-8" />
+        <Button type="submit" variant="outline" size="sm" className="min-h-11 md:min-h-8">{tr.text("common.add")}</Button>
       </form>
 
       {p.failedText ? (
@@ -154,7 +155,7 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
         <form action={completeAction}>
           {hidden}
           <input type="hidden" name="taskId" value={e.id} />
-          <Button type="submit" variant="outline" size="xs">{tr.text("contact.done")}</Button>
+          <Button type="submit" variant="outline" size="xs" className="min-h-11 md:min-h-8">{tr.text("contact.done")}</Button>
         </form>
       );
       return (
