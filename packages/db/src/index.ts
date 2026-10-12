@@ -250,3 +250,11 @@ export {
   RELATIONSHIP_KEYS, SIDE_COLUMNS, isRelationshipKey,
   type RelationshipKey, type WordForm, type RelationshipRow, type RelatedPerson, type RelationshipSidesPatch, type SideColumn,
 } from "./relationship-keys";
+// Properties and equipment (0071). See ./places.ts.
+export {
+  listContactPlaces, getPlace, getEquipment, addPlace, updatePlace, setPlaceOwner, removePlace, setPlaceArchived,
+  restorePlace, addEquipment, replaceEquipment, updateEquipment, removeEquipment, restoreEquipment,
+  PlaceDbError, MAX_PLACES_READ, MAX_EQUIPMENT_READ,
+  type PlaceRow, type EquipmentRow, type PlaceOwner, type PlaceFields, type PlacePatch, type EquipmentFields,
+  type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
+} from "./places";

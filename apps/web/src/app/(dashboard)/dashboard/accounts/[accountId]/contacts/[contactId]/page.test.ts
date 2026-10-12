@@ -88,6 +88,10 @@ vi.mock("../actions", () => ({
 // fetches its own route on the client and has its own tests (relationships-card.test.ts).
 const relationshipsCardProps: unknown[] = [];
 vi.mock("../relationships-card", () => ({ RelationshipsCard: (p: unknown) => { relationshipsCardProps.push(p); return null; } }));
+// S-02 B2 §8: the Properties card, between Groups and Deals. Recorded, not run: it fetches its own
+// route on the client and has its own tests (places-card.test.ts).
+const placesCardProps: unknown[] = [];
+vi.mock("../places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps.push(p); return null; } }));
 const timelineProps = vi.fn();
 vi.mock("./activity-timeline", () => ({
   ActivityTimeline: (props: Record<string, unknown>) => { timelineProps(props); return null; },
@@ -513,5 +517,36 @@ describe("ContactDetailPage: the Related people card (relationships spec §7)", 
   it("renders the card with the page's own accountId and contactId (mutation: drop the card line from the page -> FAILS)", async () => {
     await render();
     expect(relationshipsCardProps).toContainEqual({ accountId: "acct1", contactId: "ct1" });
+  });
+});
+
+describe("ContactDetailPage: the Properties card (S-02 part B2)", () => {
+  beforeEach(() => {
+    placesCardProps.length = 0;
+    getContactMock.mockReset();
+    getContactMock.mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+  });
+
+  it("renders the Properties card with the page's accountId, contactId and canMovePlace (mutation: drop the card line -> FAILS)", async () => {
+    const html = await render();
+    // The default access is the agency's, which may move a property.
+    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: true }]);
+    // Between the Groups card and Deals, in an aside of its own.
+    const groups = html.indexOf("data-groups-card");
+    const places = html.indexOf("data-places-aside");
+    expect(groups).toBeGreaterThan(-1);
+    expect(places).toBeGreaterThan(groups);
+    expect(places).toBeLessThan(html.indexOf(m["contact.opportunities"]));
+  });
+
+  it("a Technician's page hands the card canMovePlace false (mutation: pass true -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "technician", canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-t");
+    await render();
+    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: false }]);
   });
 });

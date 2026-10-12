@@ -83,6 +83,9 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]),
   "authenticated custom_fields": IUD,
   "authenticated custom_values": IUD,
+  "authenticated equipment": insertDeleteAndUpdate([
+    "installed_on", "make", "model", "name", "notes", "serial", "updated_at", "warranty_until",
+  ]),
   "authenticated forms": IUD,
   "authenticated notes": IUD,
   "authenticated opportunities": insertDeleteAndUpdate([
@@ -91,6 +94,10 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]),
   "authenticated pipeline_stages": IUD,
   "authenticated pipelines": IUD,
+  "authenticated places": insertDeleteAndUpdate([
+    "address", "archived_at", "city", "client_group_id", "contact_id", "country", "directions", "label",
+    "landmark", "postal_code", "region", "updated_at",
+  ]),
   "authenticated tags": IUD,
   "authenticated tasks": IUD,
 };

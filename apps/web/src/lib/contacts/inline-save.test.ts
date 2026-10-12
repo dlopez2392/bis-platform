@@ -100,6 +100,9 @@ describe("inlineSavedView", () => {
     expect(m["contact.business.alreadyAs"]).toBe("Already on your list as “{name}”.");
     expect(m["contact.business.alreadyAs.es"]).toBe("Ya está en su lista como “{name}”.");
   });
+
+  it("the saved message follows the locale (mutation: ignore locale -> FAILS)", () =>
+    expect(inlineSavedView("x", "Dirección", {}, "es").message).toBe(m["inline.saved.es"].replace("{label}", "Dirección")));
 });
 
 /**

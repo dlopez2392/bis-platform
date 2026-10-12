@@ -51,6 +51,9 @@ vi.mock("./relationships-card", () => ({ RelationshipsCard: (p: unknown) => { re
 // read once the Related people block opens the Sheet. Stubbed by identity: the Groups block below
 // imports "./groups-card" too, so the element it finds in the drawer's tree is this same function.
 vi.mock("./groups-card", () => ({ GroupsCard: () => null }));
+// The Properties card (S-02 part B2) has its own tests and imports server actions; recorded, not run.
+const placesCardProps: unknown[] = [];
+vi.mock("./places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps.push(p); return null; } }));
 vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
@@ -517,5 +520,47 @@ describe("ContactDrawer: the Groups card's changes re-read the drawer (fix round
     expect(nonce).toHaveLength(1);
     (card!.props.onChanged as () => void)();
     expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * S-02 B2 §8: the Properties card sits after the Groups card ("what they have" together), outside
+ * the summary's ready branch as the Groups card is, so it loads and fails on its own. The drawer is
+ * CALLED, not rendered, so its element tree can be walked in order (the Groups block's idiom).
+ */
+describe("ContactDrawer: the Properties card (S-02 part B2)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; placesCardProps.length = 0; });
+
+  it("the drawer mounts the Properties card after the Groups card, with canMovePlace from canAssign (mutation: drop the card line -> FAILS)", async () => {
+    const { isValidElement } = await import("react");
+    const { GroupsCard } = await import("./groups-card");
+    const { PlacesCard } = await import("./places-card");
+    const found: { type: unknown; props: Record<string, unknown> }[] = [];
+    const walk = (n: unknown): void => {
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (!isValidElement(n)) return;
+      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
+      found.push(el);
+      walk(el.props.children);
+    };
+    effects.length = 0;
+    states.length = 0;
+    walk(ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: true }));
+    const at = found.findIndex((e) => e.type === PlacesCard);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(found[at]!.props).toMatchObject({ accountId: "a1", contactId: "c1", canMovePlace: true });
+    expect(at).toBeGreaterThan(found.findIndex((e) => e.type === GroupsCard));
+    // A Technician's drawer (canAssign false) hands the card false.
+    found.length = 0;
+    walk(ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: false }));
+    expect(found.find((e) => e.type === PlacesCard)?.props).toMatchObject({ canMovePlace: false });
+  });
+
+  it("mounts while the drawer's own summary is still loading, so it never waits on it (mutation: move it into the ready branch -> FAILS)", () => {
+    effects.length = 0;
+    states.length = 0;
+    harness.openSheet = true;
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    expect(placesCardProps).toEqual([{ accountId: "a1", contactId: "c1", canMovePlace: false }]);
   });
 });
