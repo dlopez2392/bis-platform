@@ -125,13 +125,6 @@ export async function contactNextUp(
   return { bookings, datedTasks: (dated.data ?? []) as NextUpTask[], undatedCount: undated.count };
 }
 
-/**
- * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3). Seven sources, each read on the
- * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into
- * ONE page ordered (at desc, id desc) with the contact list's cursor. Each source reads limit + 1;
- * the merge keeps `limit` and knows whether an older page exists. A source that fails is reported
- * in `failed` (and to `onError` for the log), never thrown: the rest of the page still loads.
- */
 export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls";
 export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
 
@@ -174,6 +167,16 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
   return ia === ib ? 0 : ia < ib ? 1 : -1;
 }
 
+/**
+ * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3). Seven sources, each read on the
+ * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
+ * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
+ * past the cursor, so the merge of the SUCCESSFUL sources' rows can tell whether more exist: `older`
+ * is that next cursor exactly when the merge holds more than `limit` rows, `null` otherwise — a
+ * source that fails neither sets nor clears it. A failed source contributes zero rows to the merge
+ * (named in `failed`, and to `onError` for the log, never thrown): its own rows past this page stay
+ * unknown, neither promised as `older` nor denied.
+ */
 export async function listContactTimelinePage(
   db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
   opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},

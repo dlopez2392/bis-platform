@@ -306,7 +306,8 @@ describe("listPeopleNames (spec §6, Names)", () => {
         expect(await listPeopleNames(db, [a, b, `user_gone_${run}`, a])).toEqual({ [a]: "Dan López", [b]: `${b}@example.com` });
         expect(await listPeopleNames(db, [])).toEqual({});
       } finally {
-        await db.from("users").delete().in("clerk_user_id", [a, b]);
+        const { error: cleanupError } = await db.from("users").delete().in("clerk_user_id", [a, b]);
+        if (cleanupError) throw new Error(`record.test cleanup failed on users: ${cleanupError.message}`);
       }
     }));
 });
