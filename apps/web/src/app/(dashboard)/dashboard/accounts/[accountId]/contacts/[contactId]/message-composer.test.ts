@@ -5,7 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 // Imported at module scope by the composer; never called during a server render.
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import { MessageComposer } from "./message-composer";
+import { MessageComposer, composeModeFromHash, smsFormBlock } from "./message-composer";
+import { m } from "@/lib/messages";
 
 /**
  * D-015. Same defect as the Conversations EmailComposer
@@ -36,5 +37,35 @@ describe("MessageComposer's body field (D-015)", () => {
     const html = render();
     expect(html).toMatch(/<textarea[^>]*name="body"/);
     expect(html).not.toMatch(/<input[^>]*name="body"/);
+  });
+});
+
+describe("the header's Text and Email land on the composer (S-03 part 1, spec §9.1)", () => {
+  it("maps exactly the two hashes to their channels (mutation: return 'sms' for #compose-email -> FAILS)", () => {
+    expect(composeModeFromHash("#compose-sms")).toBe("sms");
+    expect(composeModeFromHash("#compose-email")).toBe("email");
+    expect(composeModeFromHash("")).toBeNull();
+    expect(composeModeFromHash("#record-who")).toBeNull();
+    expect(composeModeFromHash("#compose-note")).toBeNull();
+  });
+
+  it("carries both anchors, so the links scroll to the composer even without JavaScript (mutation: drop an anchor -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('id="compose-sms"');
+    expect(html).toContain('id="compose-email"');
+  });
+});
+
+describe("smsFormBlock: the one line the Text tab shows instead of the form", () => {
+  const open = { ok: true as const, from: "+19565550000", ownedNumbers: ["+19565550000"] };
+  it("an unreadable gate fails CLOSED with the unknown line, never an open form (spec §7; mutation: treat null as open -> FAILS)", () => {
+    expect(smsFormBlock(null, true, null)).toEqual({ text: m["compose.smsStateUnknown"], consent: false });
+  });
+  it("keeps today's order: gate, then number, then the consent line", () => {
+    expect(smsFormBlock({ ok: false, reason: "a2p_not_approved" }, true, null)).toEqual({ text: m["compose.smsBlockedA2p"], consent: false });
+    expect(smsFormBlock({ ok: false, reason: "no_live_number" }, true, null)).toEqual({ text: m["compose.smsBlockedNoNumber"], consent: false });
+    expect(smsFormBlock(open, false, "held")).toEqual({ text: m["compose.noPhoneOnContact"], consent: false });
+    expect(smsFormBlock(open, true, "held")).toEqual({ text: "held", consent: true });
+    expect(smsFormBlock(open, true, null)).toBeNull();
   });
 });
