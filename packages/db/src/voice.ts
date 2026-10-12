@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import { withTimelinePage, type TimelineCursor } from "./timeline-cursor";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -940,20 +941,26 @@ export async function getCall(
   return (data as unknown as CallDetailRow | null) ?? null;
 }
 
+export type ContactCallRow = {
+  id: string; started_at: string; outcome: string; duration_secs: number | null;
+  reason: string | null; summary: string; language: "en" | "es";
+};
+
 /** The contact drawer's recent-calls source: newest few for ONE contact. `excludeSpam` is the
  *  record page's "Last talked" read (S-03 part 1, spec §7): a call the receptionist marked spam
- *  is not talking with the customer. */
+ *  is not talking with the customer. `before` pages the record timeline (1b, spec C3); the row's
+ *  own columns are there for its timeline row (outcome, minutes, reason, the caller's language). */
 export async function listContactCalls(
   db: SupabaseClient, accountId: string, contactId: string, limit = 3,
-  opts: { excludeSpam?: boolean } = {},
-): Promise<{ id: string; started_at: string; outcome: string }[]> {
+  opts: { excludeSpam?: boolean; before?: TimelineCursor } = {},
+): Promise<ContactCallRow[]> {
   let query = db.from("calls")
-    .select("id, started_at, outcome")
+    .select("id, started_at, outcome, duration_secs, reason, summary, language")
     .eq("account_id", accountId).eq("contact_id", contactId);
   if (opts.excludeSpam) query = query.neq("outcome", "spam");
-  const { data, error } = await query.order("started_at", { ascending: false }).limit(limit);
+  const { data, error } = await withTimelinePage(query, "started_at", { before: opts.before, limit });
   if (error) throw new Error(`listContactCalls failed: ${error.message}`);
-  return (data ?? []) as { id: string; started_at: string; outcome: string }[];
+  return (data ?? []) as ContactCallRow[];
 }
 
 export async function getBookingById(

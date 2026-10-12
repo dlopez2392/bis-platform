@@ -2366,15 +2366,21 @@ export const m = {
   "calls.older": "Older calls",
   "calls.unknownCaller": "Unknown caller",
   "calls.outcome.booked": "Booked",
+  "calls.outcome.booked.es": "Agendó",
   "calls.outcome.lead": "Lead",
+  "calls.outcome.lead.es": "Cliente potencial",
   "calls.outcome.message": "Message",
+  "calls.outcome.message.es": "Mensaje",
   "calls.outcome.abandoned": "Abandoned",
+  "calls.outcome.abandoned.es": "Colgó",
   "calls.outcome.spam": "Spam",
+  "calls.outcome.spam.es": "Spam",
   // The caller reached a person (0037). One plain word, like its five
   // siblings — "Handed off" and "Escalated" are both things this product
   // would say to itself, not things a business owner says about their own
   // phone ringing.
   "calls.outcome.transferred": "Transferred",
+  "calls.outcome.transferred.es": "Transferida",
 
   // The missed-call text-back that never left the building. There is no retry
   // anywhere in that path — one cron, no queue — so saying so on the row the
