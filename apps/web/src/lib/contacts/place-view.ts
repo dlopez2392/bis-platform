@@ -1,23 +1,20 @@
 import type { PlaceRow, EquipmentRow, ContactPlaceGroup } from "@bis/db";
 import type { Locale } from "@/lib/i18n/locale";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 
 /**
- * Pure view helpers for a contact's Properties card (spec section 8). Client- and server-safe:
- * no fetch, no `t`/`m` — the two fixed EN/ES fallback strings below ("Property"/"Propiedad" and
- * the owner-option labels) are the exact words the spec's copy table gives `places.untitled`,
- * `places.onlyPerson` and `places.sharedWith`, which Task 5 adds to messages.ts; those keys do
- * not exist yet, and this task may not add them, so the words are literal here until Task 5 lands,
- * with no behavior change expected when they are swapped for `t(m, key, locale, …)` calls.
+ * Pure view helpers for a contact's Properties card (spec section 8). Client- and server-safe: no
+ * fetch. The fallback title and the owner-option labels are `places.untitled`, `places.onlyPerson`
+ * and `places.sharedWith` in messages.ts, in the reader's language.
  */
-
-const UNTITLED: Record<Locale, string> = { en: "Property", es: "Propiedad" };
 
 /** Title fallback: a stored label, else the address's own first line, else the landmark, else "Property". */
 export function placeTitle(p: Pick<PlaceRow, "label" | "address" | "landmark">, locale: Locale): string {
   if (p.label) return p.label;
   if (p.address) return p.address.split("\n")[0]!;
   if (p.landmark) return p.landmark;
-  return UNTITLED[locale];
+  return t(m, "places.untitled", locale);
 }
 
 function regionZipOf(p: Pick<PlaceRow, "region" | "postal_code">): string {
@@ -93,10 +90,9 @@ export function placesInOrder(
 export function ownerOptions(
   subject: { id: string; name: string }, groups: readonly ContactPlaceGroup[], locale: Locale,
 ): { value: string; label: string }[] {
-  const onlyPerson = locale === "es" ? `Solo de ${subject.name}` : `${subject.name} only`;
-  const out = [{ value: `contact:${subject.id}`, label: onlyPerson }];
+  const out = [{ value: `contact:${subject.id}`, label: t(m, "places.onlyPerson", locale, { name: subject.name }) }];
   for (const g of groups) {
-    out.push({ value: `group:${g.id}`, label: locale === "es" ? `Compartida con ${g.name}` : `Shared with ${g.name}` });
+    out.push({ value: `group:${g.id}`, label: t(m, "places.sharedWith", locale, { group: g.name }) });
   }
   return out;
 }

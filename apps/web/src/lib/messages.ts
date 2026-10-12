@@ -3531,6 +3531,30 @@ export const m = {
   // After the names the card shows, when a group has more members than it lists.
   "groups.othersMore": "and {count} more",
   "groups.othersMore.es": "y {count} más",
+  // Properties and equipment (S-02 part B2): errors
+  "places.refused": "You can't change that property.",
+  "places.refused.es": "No puede cambiar esa propiedad.",
+  "places.moveRefused": "Only an Owner or Staff can change who a property belongs to.",
+  "places.moveRefused.es": "Solo el Dueño o un Empleado puede cambiar de quién es una propiedad.",
+  "places.needOne": "Add an address, a landmark or how to get there.",
+  "places.needOne.es": "Agregue una dirección, una referencia o cómo llegar.",
+  "equipment.alreadyReplaced": "That unit was already replaced.",
+  "equipment.alreadyReplaced.es": "Ese equipo ya se reemplazó.",
+  "equipment.warrantyBeforeInstall": "The warranty can't end before the install date.",
+  "equipment.warrantyBeforeInstall.es": "La garantía no puede terminar antes de la fecha de instalación.",
+  "places.error.undoFailed": "Couldn't put it back.",
+  "places.error.undoFailed.es": "No se pudo deshacer.",
+  "places.error.invalid": "Check the details and try again.",
+  "places.error.invalid.es": "Revise los datos e intente de nuevo.",
+  "places.error.failed": "Couldn't save that. Try again.",
+  "places.error.failed.es": "No se pudo guardar. Intente de nuevo.",
+  // Properties (S-02 part B2): the words place-view.ts falls back to (spec §8's copy table).
+  "places.untitled": "Property",
+  "places.untitled.es": "Propiedad",
+  "places.onlyPerson": "{name} only",
+  "places.onlyPerson.es": "Solo de {name}",
+  "places.sharedWith": "Shared with {group}",
+  "places.sharedWith.es": "Compartida con {group}",
 } as const;
 
 export type MessageKey = keyof typeof m;
