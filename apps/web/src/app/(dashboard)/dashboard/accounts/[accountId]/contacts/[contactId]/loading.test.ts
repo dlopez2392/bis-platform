@@ -29,7 +29,7 @@ describe("contact record page loading.tsx", () => {
   });
 
   it("the titles and the page's lang follow the locale the account layout provided (mutation: hard-code English titles -> FAILS)", () => {
-    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es", children: createElement(Loading) }));
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as never, createElement(Loading)));
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     expect(html).toContain(m["record.card.nextUp.es"]);
   });

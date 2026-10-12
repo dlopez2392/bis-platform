@@ -465,10 +465,14 @@ text, a form answer) shows as typed, never translated.
 No new write action in either PR: the header's actions write nothing, and every existing action keeps its own
 errors and Undo. A failed card read logs with `loggableError` naming the card and the account, never the
 customer's data. **[1b]** A `?before=` that does not parse is a cold start (`lib/cursor.ts`, total parsers); a
-person id with no readable `users` row is "Someone on the team", never an error. The page 404s exactly as today
-when the contact is not the caller's to see, before any other read, and the consent display reads still use
-the ledger client only after `getContact` proved the contact (`[contactId]/page.tsx:49-56`, pinned by
-`page.test.ts:372-419`).
+person id with no readable `users` row is "Someone on the team", never an error. The page calls `notFound()`
+exactly as today when the contact is not the caller's to see, before any other read, and the consent display
+reads still use the ledger client only after `getContact` proved the contact (`[contactId]/page.tsx:75-81`,
+pinned by `page.test.ts:410-452`). **The status code, accepted (owner-side):** with the route's `loading.tsx`,
+Next streams the shell before the page settles, so that `notFound()` is expected to reach the browser as HTTP
+200 carrying the not-found page, not as a 404. No customer data is exposed either way. This was not measured
+in 1a. `contact-detail.spec.ts` asserts on content, never on status: on a real record the "Page not found"
+copy must be absent (`:50-66`). No spec loads a contact the caller cannot see.
 
 ## 12. Testing (every test can fail on wrong code; each names its probe)
 
@@ -495,8 +499,14 @@ the ledger client only after `getContact` proved the contact (`[contactId]/page.
   FAILS); Details and Tags fail alone too (their custom-field and tag reads); a view model that throws (a
   malformed instant) costs only its own card; an invalid stored zone draws the summary and Next up in the zone
   `renderZone` resolved (probe: hand either the raw zone → FAILS); a render throw inside one card is caught by
-  its `RecordCardBoundary` (probe: remove the boundary's Suspense → FAILS). The 404 test lists every read the
-  page makes and asserts none ran (probe: start them before `getContact` → FAILS). The route's `loading.tsx`
+  its `RecordCardBoundary` (probe: remove the boundary's Suspense → FAILS). The 404 tests assert, for a contact
+  the caller cannot see, that none of these ran: `contactFacts`, `contactNextUp`, `listContactPlaces`,
+  `listNotes`, `listContactOpportunities`, `resolveSmsSender`, `getPersonPrefs`, `listContactTags`,
+  `listCustomFields` (one list, probe: start them before `getContact` → FAILS), plus `renderZone` and
+  `readEmailView`, and, in the F-085 test, `ledgerDb`, `smsRecipientState`, `emailRecipientState`,
+  `readTextsView` and `holdOpenTaskIds`. The `accounts` read (zone and language) is covered only indirectly:
+  `renderZone` not running shows the page stopped before USING it, not that the read itself never started. `loadAssignView`'s reads (`readPersonId`, `listAccountTeam`) and
+  `listContactTasks`/`listContactSubmissions`/`listContactMessages` are not asserted. The route's `loading.tsx`
   renders one loading card per registry entry in the phone order (`[contactId]/loading.test.ts`). The existing
   ledger-client and Assigned-to pins carry over unchanged; the existing `activity-timeline.*.test.ts` files pass
   untouched (the rows did not change).
