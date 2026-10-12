@@ -62,7 +62,10 @@ describe("contact summary route", () => {
       { id: "n1", body: "hello", created_at: "2026-09-01T10:00:00.000Z" },
     ]);
     dbMocks.listContactCalls.mockResolvedValue([
-      { id: "k1", started_at: "2026-09-01T10:00:00+00:00", outcome: "booked" },
+      {
+        id: "k1", started_at: "2026-09-01T10:00:00+00:00", outcome: "booked",
+        duration_secs: 180, reason: null, summary: "Booked a visit for Thursday.", language: "en",
+      },
     ]);
     dbMocks.listContactSubmissions.mockResolvedValue([]);
     dbMocks.listContactMessages.mockResolvedValue([]);
@@ -250,7 +253,10 @@ describe("contact summary route: what it sends, the drawer's parser accepts", ()
     access.mockResolvedValue({ userId: "u1", isAgency: true });
     dbMocks.getContact.mockResolvedValue({ id: "c1" });
     dbMocks.listContactTags.mockResolvedValue([{ id: "t1", name: "vip" }]);
-    dbMocks.listContactCalls.mockResolvedValue([{ id: "k1", started_at: "2026-09-05T10:00:00+00:00", outcome: "booked" }]);
+    dbMocks.listContactCalls.mockResolvedValue([{
+      id: "k1", started_at: "2026-09-05T10:00:00+00:00", outcome: "booked",
+      duration_secs: 240, reason: null, summary: "Asked about pricing.", language: "en",
+    }]);
     dbMocks.listNotes.mockResolvedValue([{ id: "n1", body: "hi", created_at: "2026-09-04T10:00:00.000Z" }]);
     dbMocks.listContactSubmissions.mockResolvedValue([{ id: "s1", created_at: "2026-09-03T10:00:00+00:00" }]);
     dbMocks.listContactMessages.mockResolvedValue([{ id: "m1", created_at: "2026-09-02T10:00:00+00:00" }]);
