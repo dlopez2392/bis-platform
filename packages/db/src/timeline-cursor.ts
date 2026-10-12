@@ -9,11 +9,27 @@ export type TimelinePageOpts = { before?: TimelineCursor; limit: number };
 export const TIMELINE_PAGE_SIZE = 30;
 
 // PostgREST serialises timestamptz as ISO 8601 with T and an offset, up to six fractional digits.
-const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/;
+// Numbered groups double as the field-level check below (apps/web's tsconfig targets ES2017, which
+// cannot type a named group's `.groups`, and this file is typechecked through that config too, since
+// web imports db as source rather than a built package): `Date.parse` rolls "2026-02-30" over to
+// Mar 2 rather than refusing it, and tolerates an offset past Postgres's own +/-15:59 and year 0000
+// (bis-ci `pg_input_is_valid`: +16:00 false, +15:59 true, 0000-01-01 false), so isTimelineInstant
+// checks the fields itself instead of trusting Date.parse alone — the same rule
+// apps/web/src/lib/cursor.ts's isRealInstant applies; duplicated rather than imported, since db
+// cannot depend on web. Groups: 1 y, 2 mo, 3 d, 4 h, 5 mi, 6 s, 7 frac (optional), 8 offset-hh and
+// 9 offset-mm (both present together, or both absent for "Z").
+const INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|[+-](\d{2}):(\d{2}))$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function isTimelineInstant(v: string): boolean {
-  return INSTANT.test(v) && !Number.isNaN(Date.parse(v));
+  const m = INSTANT.exec(v);
+  if (!m || Number.isNaN(Date.parse(v))) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]), h = Number(m[4]), mi = Number(m[5]), s = Number(m[6]);
+  // Date.UTC maps years 0-99 to 1900-1999; from year 1 on, that keeps the leap-year pattern.
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const offsetOk = m[8] === undefined || (Number(m[8]) <= 15 && Number(m[9]) <= 59);
+  return y >= 1 && mo >= 1 && mo <= 12 && d >= 1 && d <= daysInMonth && h <= 23 && mi <= 59 && s <= 59 && offsetOk;
 }
 
 /**
@@ -25,7 +41,7 @@ export function instantKey(at: string): string {
   const m = INSTANT.exec(at);
   const whole = m ? Date.parse(at.replace(/\.\d+/, "")) : Number.NaN;
   if (!m || Number.isNaN(whole)) throw new TypeError(`instantKey: not a timestamp: ${JSON.stringify(at)}`);
-  return `${String(whole / 1000).padStart(12, "0")}.${(m[1] ?? "").padEnd(6, "0")}`;
+  return `${String(whole / 1000).padStart(12, "0")}.${(m[7] ?? "").padEnd(6, "0")}`;
 }
 
 /** `column < v OR (column = v AND id < id)`, for PostgREST's `.or()`. Validated, then quoted, so a
