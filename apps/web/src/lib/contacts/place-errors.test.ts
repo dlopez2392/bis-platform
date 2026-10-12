@@ -10,8 +10,8 @@ describe("placeErrorFor (spec §6: by SQLSTATE, never by wording)", () => {
   it("a second replacement of one unit (23505) is equipment.alreadyReplaced", () => {
     expect(placeErrorFor(new PlaceDbError("x", "23505"))).toBe("equipment.alreadyReplaced");
   });
-  it("a vanished target (23503) is places.error.undoFailed", () => {
-    expect(placeErrorFor(new PlaceDbError("x", "23503"))).toBe("places.error.undoFailed");
+  it("outside an Undo, a target that changed under the caller (23503) is places.refused, never the Undo's copy (mutation: map 23503 to places.error.undoFailed -> FAILS)", () => {
+    expect(placeErrorFor(new PlaceDbError("x", "23503"))).toBe("places.refused");
   });
   it("a CHECK the app should have caught first (23514) is places.error.invalid", () => {
     expect(placeErrorFor(new PlaceDbError("x", "23514"))).toBe("places.error.invalid");

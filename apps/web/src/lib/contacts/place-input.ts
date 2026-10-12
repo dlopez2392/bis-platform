@@ -243,8 +243,12 @@ const EQUIPMENT_ROW_KEYS = [
   "installed_on", "warranty_until", "replaces_id", "created_by", "created_at", "updated_at",
 ] as const;
 
-/** An Undo's snapshot comes back from the browser: every field is checked as 0071 would. */
-export function parseEquipmentSnapshot(v: unknown, accountId: string): EquipmentRow | null {
+/**
+ * An Undo's snapshot comes back from the browser: every field is checked as 0071 would, and the
+ * install date by the same not-after-the-account's-today rule an add or an edit runs, so a forged
+ * Undo cannot plant a future date.
+ */
+export function parseEquipmentSnapshot(v: unknown, accountId: string, today: string): EquipmentRow | null {
   if (!isRecord(v)) return null;
   const keys = Object.keys(v);
   if (keys.length !== EQUIPMENT_ROW_KEYS.length || EQUIPMENT_ROW_KEYS.some((k) => !(k in v))) return null;
@@ -257,6 +261,7 @@ export function parseEquipmentSnapshot(v: unknown, accountId: string): Equipment
   for (const field of ["installed_on", "warranty_until"] as const) {
     if (r[field] !== null && (typeof r[field] !== "string" || !DATE_ONLY.test(r[field] as string))) return null;
   }
+  if (r.installed_on !== null && !validateInlineRule(equipmentRule("installed_on", today), r.installed_on as string).ok) return null;
   if (r.replaces_id !== null && !isUuid(r.replaces_id)) return null;
   // equipment_not_self; Postgres compares uuids by value, so case does not make it another unit.
   if (r.replaces_id !== null && (r.replaces_id as string).toLowerCase() === (r.id as string).toLowerCase()) return null;

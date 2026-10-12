@@ -11,6 +11,8 @@ const PLACE_ID = "22222222-2222-4222-8222-222222222222";
 const CONTACT_ID = "33333333-3333-4333-8333-333333333333";
 const GROUP_ID = "44444444-4444-4444-8444-444444444444";
 const OLD_EQUIP_ID = "66666666-6666-4666-8666-666666666666";
+/** The account's today for the snapshot checks: an Undo may not plant an install date after it. */
+const TODAY = "2026-10-11";
 
 function basePlaceRow(overrides: Partial<PlaceRow> = {}): PlaceRow {
   return {
@@ -147,17 +149,24 @@ describe("parsePlaceSnapshot", () => {
 describe("parseEquipmentSnapshot", () => {
   it("round-trips a valid unit and refuses another account's snapshot or a replacement with no install date", () => {
     const row = baseEquipmentRow();
-    expect(parseEquipmentSnapshot(row, ACCOUNT)).toEqual(row);
-    expect(parseEquipmentSnapshot({ ...row, account_id: OTHER_ACCOUNT }, ACCOUNT)).toBeNull();
-    expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID, installed_on: null }, ACCOUNT)).toBeNull();
+    expect(parseEquipmentSnapshot(row, ACCOUNT, TODAY)).toEqual(row);
+    expect(parseEquipmentSnapshot({ ...row, account_id: OTHER_ACCOUNT }, ACCOUNT, TODAY)).toBeNull();
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID, installed_on: null }, ACCOUNT, TODAY)).toBeNull();
   });
 
   it("refuses a unit that replaces itself, in either case (0071 equipment_not_self; mutation: drop the self check -> FAILS)", () => {
     // An id with hex LETTERS, so its upper- and lowercase forms differ: Postgres compares uuids by value.
     const LETTERED = "abcdef12-5555-4555-8555-55555555555a";
     const row = baseEquipmentRow({ id: LETTERED, installed_on: "2026-01-01" });
-    expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID }, ACCOUNT)).toEqual({ ...row, replaces_id: OLD_EQUIP_ID });
-    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED }, ACCOUNT)).toBeNull();
-    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED.toUpperCase() }, ACCOUNT)).toBeNull();
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: OLD_EQUIP_ID }, ACCOUNT, TODAY)).toEqual({ ...row, replaces_id: OLD_EQUIP_ID });
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED }, ACCOUNT, TODAY)).toBeNull();
+    expect(parseEquipmentSnapshot({ ...row, replaces_id: LETTERED.toUpperCase() }, ACCOUNT, TODAY)).toBeNull();
+  });
+
+  it("refuses an install date after the account's today, as the add and edit do; today itself and a far warranty are fine (mutation: drop the snapshot's notAfter check -> FAILS)", () => {
+    const row = baseEquipmentRow();
+    expect(parseEquipmentSnapshot({ ...row, installed_on: "2026-10-12" }, ACCOUNT, TODAY)).toBeNull();
+    expect(parseEquipmentSnapshot({ ...row, installed_on: TODAY }, ACCOUNT, TODAY)).toEqual({ ...row, installed_on: TODAY });
+    expect(parseEquipmentSnapshot({ ...row, warranty_until: "2099-01-01" }, ACCOUNT, TODAY)).toEqual({ ...row, warranty_until: "2099-01-01" });
   });
 });

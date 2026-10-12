@@ -16,7 +16,7 @@ import {
   parsePlaceSnapshot, parseEquipmentSnapshot, type InputError,
 } from "@/lib/contacts/place-input";
 import { placeErrorFor, placeErrorCode, type PlaceErrorKey } from "@/lib/contacts/place-errors";
-import { accountToday } from "@/lib/contacts/account-today";
+import { accountTodayForWrite } from "@/lib/contacts/account-today";
 
 /**
  * Properties and equipment (spec §6). Every write runs on the request client, never the service
@@ -187,8 +187,8 @@ export async function removePlaceAction(
     const place = await placeOnRecord(db, accountId, subject, placeId);
     if (!place) return refused;
     // Already removed (stale card): places.ts would answer it unwritten, and its Undo would put back
-    // a property this call never removed.
-    if (place.archived_at !== null) return invalid;
+    // a property this call never removed. Refused: nothing is left for this call to remove.
+    if (place.archived_at !== null) return refused;
     const result = await removePlace(db, accountId, place.id, ctxFor(subject, access));
     if (result === "not_found" || result === "refused") return refused;
     return result.mode === "deleted"
@@ -263,7 +263,7 @@ export async function addEquipmentAction(
     if (!(await recordVisible(db, accountId, subject))) return refused;
     const place = await placeOnRecord(db, accountId, subject, placeId);
     if (!place) return refused;
-    const parsed = parseEquipmentFields(raw, await accountToday(db, accountId), { replacement: false });
+    const parsed = parseEquipmentFields(raw, await accountTodayForWrite(db, accountId), { replacement: false });
     if (!parsed.ok) return inputError(parsed.error);
     const row = await addEquipment(db, accountId, place.id, parsed.fields, ctxFor(subject, access));
     return { ok: true, unit: forBrowser(row) };
@@ -284,7 +284,7 @@ export async function replaceEquipmentAction(
     const old = await unitOnRecord(db, accountId, subject, equipmentId);
     if (!old) return refused;
     // A replacement must carry its date (0071's equipment_replacement_dated), not after the account's today.
-    const parsed = parseEquipmentFields(raw, await accountToday(db, accountId), { replacement: true });
+    const parsed = parseEquipmentFields(raw, await accountTodayForWrite(db, accountId), { replacement: true });
     if (!parsed.ok) return inputError(parsed.error);
     const result = await replaceEquipment(db, accountId, old.id, parsed.fields, ctxFor(subject, access));
     return result === "not_found" ? refused : { ok: true, unit: forBrowser(result) };
@@ -305,7 +305,7 @@ export async function updateEquipmentFieldAction(
     const unit = await unitOnRecord(db, accountId, subject, equipmentId);
     if (!unit) return refused;
     // The warranty order reads the unit as stored, so the other date is the database's, not the browser's.
-    const parsed = parseEquipmentPatch(field, value, await accountToday(db, accountId), unit);
+    const parsed = parseEquipmentPatch(field, value, await accountTodayForWrite(db, accountId), unit);
     if (!parsed.ok) return inputError(parsed.error);
     const result = await updateEquipment(db, accountId, unit.id, parsed.patch, ctxFor(subject, access));
     return result === "not_found" || result === "refused" ? refused : { ok: true };
@@ -334,12 +334,14 @@ export async function removeEquipmentAction(
 
 export async function undoRemoveEquipmentAction(accountId: string, subjectId: string, snapshot: unknown): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  const parsed = parseEquipmentSnapshot(snapshot, accountId);
-  if (!isUuid(subjectId) || !parsed) return invalid;
+  if (!isUuid(subjectId)) return invalid;
   const subject = subjectId.toLowerCase();
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
+    // Re-validated as an add would be, the account's today included: no future install date via Undo.
+    const parsed = parseEquipmentSnapshot(snapshot, accountId, await accountTodayForWrite(db, accountId));
+    if (!parsed) return invalid;
     // The unit is gone; the place it returns to must still be readable and on this record.
     if (!(await placeOnRecord(db, accountId, subject, parsed.place_id))) return refused;
     await restoreEquipment(db, accountId, parsed, ctxFor(subject, access));

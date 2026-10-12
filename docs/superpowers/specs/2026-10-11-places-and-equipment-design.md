@@ -197,10 +197,12 @@ serves the no-action check). `created_by` is unindexed (nothing filters by autho
   every action; the browser runs it for instant messages.
 - **Actions** `contacts/places-actions.ts`: `requireAccountAccess` + `dbForRequest()`, never `serviceDb()`.
   `addPlaceAction(accountId, subjectId, input)` checks the chosen owner is the subject or one of the subject's
-  groups, read through the request client. Every edit answers the prior values for its Undo (the
-  relationships spec's `setRelationshipAction` shape). Errors become copy, logged with `loggableError`:
+  groups, read through the request client. An inline edit and an owner change answer `{ ok: true }`:
+  Undo of an inline edit re-saves the prior value (`InlineField`'s default), and Undo of an owner
+  change sets the prior owner the card already holds. Errors become copy, logged with `loggableError`:
   the owner guard's `42501` → `places.moveRefused`; any other `42501` → `places.refused`; `23505` on
-  `equipment_one_successor` → `equipment.alreadyReplaced`; `23503` on an Undo → "Couldn't put it back.";
+  `equipment_one_successor` → `equipment.alreadyReplaced`; `23505` or `23503` on an Undo → "Couldn't put
+  it back."; `23503` anywhere else (a unit something has since replaced, C6) → `places.refused`;
   `23514` → "Check the details and try again." (the input module re-checks every CHECK first, so a 23514
   means the app and 0071 disagree).
 - **Read route** `api/accounts/[accountId]/contacts/[contactId]/places/route.ts`, the `email` route's shape:

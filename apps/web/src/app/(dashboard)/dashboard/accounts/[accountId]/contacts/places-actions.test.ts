@@ -28,6 +28,7 @@ const T = "2026-10-01T12:00:00.000Z";
  */
 let memberships: [contactId: string, groupId: string][] = [];
 let accountZone: string | null = "America/Chicago";
+let accountZoneError: { message: string; code: string } | null = null;
 const memberProbes: Record<string, unknown>[] = [];
 const REQUEST = {
   tag: "request-db",
@@ -45,7 +46,7 @@ const REQUEST = {
       },
       maybeSingle: async () => {
         if (table !== "accounts" || filters.id !== A) throw new Error(`unexpected read of ${table}`);
-        return { data: { timezone: accountZone }, error: null };
+        return accountZoneError ? { data: null, error: accountZoneError } : { data: { timezone: accountZone }, error: null };
       },
     };
     return builder;
@@ -110,6 +111,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   memberships = [[S, G]];
   accountZone = "America/Chicago";
+  accountZoneError = null;
   memberProbes.length = 0;
   requireAccountAccess.mockResolvedValue(OWNER);
   reads.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === S || id === OTHER ? { id, first_name: "Sofía" } : null));
@@ -264,9 +266,9 @@ describe("removing and putting back a property", () => {
     expect(writers.restorePlace).not.toHaveBeenCalled();
   });
 
-  it("removing a property already removed is refused before places.ts, which would answer it without a write and offer an Undo that puts it back", async () => {
+  it("removing a property already removed is refused before places.ts, which would answer it without a write and offer an Undo that puts it back (mutation: drop the pre-check -> FAILS)", async () => {
     reads.getPlace.mockResolvedValue({ ...PLACE, archived_at: T });
-    expect(await removePlaceAction(A, S, P)).toEqual({ ok: false, error: "places.error.invalid" });
+    expect(await removePlaceAction(A, S, P)).toEqual({ ok: false, error: "places.refused" });
     expect(writers.removePlace).not.toHaveBeenCalled();
   });
 
@@ -339,7 +341,57 @@ describe("equipment", () => {
   });
 });
 
+describe("the account's today on the write path (fix round 1)", () => {
+  it("a date-checked write refuses when the account's zone cannot be read, rather than check against a guessed zone (mutation: fall back as the read route does -> FAILS)", async () => {
+    accountZoneError = { message: "boom", code: "XX000" };
+    for (const [name, run] of [
+      ["addEquipmentAction", () => addEquipmentAction(A, S, P, { name: "AC", installed_on: "2026-10-01" })],
+      ["replaceEquipmentAction", () => replaceEquipmentAction(A, S, U, { name: "New AC", installed_on: "2026-10-01" })],
+      ["updateEquipmentFieldAction", () => updateEquipmentFieldAction(A, S, U, "installed_on", "2026-10-01")],
+      ["undoRemoveEquipmentAction", () => undoRemoveEquipmentAction(A, S, UNIT)],
+    ] as const) {
+      expect([name, await run()]).toEqual([name, { ok: false, error: "places.error.failed" }]);
+    }
+    expect(anyWriterCalled()).toBe(false);
+    expect(vi.mocked(console.error).mock.calls.map((c) => String(c[0]))).toEqual(Array(4).fill(expect.stringContaining(A)));
+  });
+
+  it("an Undo snapshot with an install date after the ACCOUNT's today is refused, so a forged Undo cannot plant one", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-12T03:30:00Z")); // still 2026-10-11 in Chicago
+    expect(await undoRemoveEquipmentAction(A, S, { ...UNIT, installed_on: "2026-10-12" })).toEqual({ ok: false, error: "places.error.invalid" });
+    expect(writers.restoreEquipment).not.toHaveBeenCalled();
+    expect(await undoRemoveEquipmentAction(A, S, { ...UNIT, installed_on: "2026-10-11" })).toEqual({ ok: true });
+  });
+});
+
 describe("errors, the service client and the actor", () => {
+  it("every action takes an uppercase record id as the same record: proven, matched and written lowercase (fix round 1; mutation: drop the subjectId .toLowerCase() in setPlaceOwnerAction, or any action -> FAILS)", async () => {
+    const UP = LETTERED.toUpperCase();
+    const mine: PlaceRow = { ...PLACE, contact_id: LETTERED };
+    memberships = [[LETTERED, G]];
+    reads.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? { id } : null));
+    reads.getPlace.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === P ? mine : null));
+    const runs: [string, () => Promise<{ ok: boolean }>][] = [
+      ["addPlaceAction", () => addPlaceAction(A, UP, { address: "1204 Nolana Ave" })],
+      ["updatePlaceFieldAction", () => updatePlaceFieldAction(A, UP, P, "label", "Casa")],
+      ["setPlaceOwnerAction", () => setPlaceOwnerAction(A, UP, P, `group:${G}`)],
+      ["removePlaceAction", () => removePlaceAction(A, UP, P)],
+      ["undoRemovePlaceAction (deleted)", () => undoRemovePlaceAction(A, UP, { mode: "deleted", snapshot: mine })],
+      ["undoRemovePlaceAction (archived)", () => undoRemovePlaceAction(A, UP, { mode: "archived", placeId: P })],
+      ["setPlaceArchivedAction", () => setPlaceArchivedAction(A, UP, P, false)],
+      ["addEquipmentAction", () => addEquipmentAction(A, UP, P, { name: "Water heater" })],
+      ["replaceEquipmentAction", () => replaceEquipmentAction(A, UP, U, { name: "New AC", installed_on: "2026-10-01" })],
+      ["updateEquipmentFieldAction", () => updateEquipmentFieldAction(A, UP, U, "make", "Carrier")],
+      ["removeEquipmentAction", () => removeEquipmentAction(A, UP, U)],
+      ["undoRemoveEquipmentAction", () => undoRemoveEquipmentAction(A, UP, UNIT)],
+    ];
+    for (const [name, run] of runs) expect([name, (await run()).ok]).toEqual([name, true]);
+    const ctxs = Object.entries(writers).flatMap(([name, w]) => w.mock.calls.map((c) => [name, c[c.length - 1]]));
+    expect(ctxs).toHaveLength(12);
+    for (const [name, ctx] of ctxs) expect([name, ctx]).toEqual([name, { subjectId: LETTERED, actorId: "user_1" }]);
+  });
+
   it("a database refusal, a duplicate replacement and a vanished target become their copy keys (mutation: map every code to places.error.failed -> FAILS)", async () => {
     writers.updatePlace.mockRejectedValueOnce(new PlaceDbError("rls", "42501"));
     expect(await updatePlaceFieldAction(A, S, P, "label", "Casa")).toEqual({ ok: false, error: "places.refused" });
@@ -349,6 +401,10 @@ describe("errors, the service client and the actor", () => {
     expect(await undoRemoveEquipmentAction(A, S, UNIT)).toEqual({ ok: false, error: "places.error.undoFailed" });
     writers.removePlace.mockRejectedValueOnce(new Error("socket hang up"));
     expect(await removePlaceAction(A, S, P)).toEqual({ ok: false, error: "places.error.failed" });
+    // Outside an Undo, 23503 is a target that changed under the caller (C6: a unit something has
+    // since replaced), never the Undo copy (fix round 1; mutation: map 23503 to undoFailed -> FAILS).
+    writers.removeEquipment.mockRejectedValueOnce(new PlaceDbError("equipment_replaces_fkey", "23503"));
+    expect(await removeEquipmentAction(A, S, U)).toEqual({ ok: false, error: "places.refused" });
     for (const key of ["places.refused", "equipment.alreadyReplaced", "places.error.undoFailed", "places.error.failed"] as const) {
       expect([key, m[key], m[`${key}.es`]]).toEqual([key, expect.any(String), expect.any(String)]);
     }
