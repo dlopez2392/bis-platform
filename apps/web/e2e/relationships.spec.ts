@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, addRelationship, setClientAccess, type NewRelationship } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly, not through a Next request.
@@ -142,7 +143,7 @@ test.describe.serial("relationships on the record", () => {
 
     test("1. an Owner adds a mother as a new person; both records read correctly", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${childId}`);
-      const card = page.locator("[data-relationships-card]");
+      const card = recordPage(page).locator("[data-relationships-card]");
       // Positive control: the card's own empty state, before anything has been added — otherwise a
       // card that silently rendered nothing (or errored) would make every assertion after it
       // meaningless.
@@ -182,7 +183,7 @@ test.describe.serial("relationships on the record", () => {
 
       // The reciprocal: the SAME row, read from the mother's own record, in her own word.
       await card.getByRole("link", { name: `Mother: ${named(MOTHER_LAST)}` }).click();
-      await expect(page.locator("[data-relationships-card]").getByText(`Son: ${named(CHILD_LAST)}`)).toBeVisible();
+      await expect(recordPage(page).locator("[data-relationships-card]").getByText(`Son: ${named(CHILD_LAST)}`)).toBeVisible();
     });
 
     test("2. a flag saves at once with Undo; remove has Undo and restores the same row", async ({ page }) => {
@@ -194,7 +195,7 @@ test.describe.serial("relationships on the record", () => {
         return r.data ?? [];
       };
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${childId}`);
-      const chip = page.locator("[data-relationship-chip]").filter({ hasText: `Mother: ${named(MOTHER_LAST)}` });
+      const chip = recordPage(page).locator("[data-relationship-chip]").filter({ hasText: `Mother: ${named(MOTHER_LAST)}` });
       // Positive control: the row step 1 made is really on the page before this step's own writes
       // (the toggle, then the remove) are asked to prove anything about it.
       await expect(chip).toBeVisible();
@@ -234,7 +235,7 @@ test.describe.serial("relationships on the record", () => {
       expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
       try {
         await page.goto(`/dashboard/accounts/${accountId}/contacts/${childId}`);
-        await expect(page.locator('[data-relationships-card][lang="es"]').getByText(`Madre: ${named(MOTHER_LAST)}`))
+        await expect(recordPage(page).locator('[data-relationships-card][lang="es"]').getByText(`Madre: ${named(MOTHER_LAST)}`))
           .toBeVisible();
       } finally {
         // Reset because every LATER spec in this same run uses this same per-run Owner (workers: 1,
@@ -247,7 +248,7 @@ test.describe.serial("relationships on the record", () => {
 
     test("4. an Owner finds an existing customer through the dialog's search and relates them", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${childId}`);
-      const card = page.locator("[data-relationships-card]");
+      const card = recordPage(page).locator("[data-relationships-card]");
       // Positive control: the card is loaded and showing step 1's row.
       await expect(card.getByText(`Mother: ${named(MOTHER_LAST)}`)).toBeVisible();
 
@@ -271,7 +272,7 @@ test.describe.serial("relationships on the record", () => {
 
     test("5. a second 'New person' with the same phone and label is a duplicate; the names lock, another label adds, and she exists once", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${childId}`);
-      const card = page.locator("[data-relationships-card]");
+      const card = recordPage(page).locator("[data-relationships-card]");
       await expect(card.getByText(`Mother: ${named(MOTHER_LAST)}`)).toBeVisible(); // positive control
       const dialog = page.getByRole("dialog");
       const openNewPerson = async (kind: string) => {
@@ -330,8 +331,8 @@ test.describe.serial("relationships on the record", () => {
       // Positive controls first: the read names the person who IS theirs, and the page shows the
       // record's own customer and that person's chip as a link.
       expect(body).toContain(techTooId);
-      await expect(page.getByText(named(TECH_MINE_LAST)).first()).toBeVisible();
-      const card = page.locator("[data-relationships-card]");
+      await expect(recordPage(page).getByText(named(TECH_MINE_LAST)).first()).toBeVisible();
+      const card = recordPage(page).locator("[data-relationships-card]");
       const sister = card.locator("[data-relationship-chip]").filter({ hasText: `Sister: ${named(TECH_TOO_LAST)}` });
       await expect(sister).toBeVisible();
       await expect(sister.getByRole("link")).toHaveCount(1);

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, recordPage } from "./support";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -234,8 +234,8 @@ test("a published form captures a lead into the CRM", async ({ page }) => {
 
     // --- And on the contact's own timeline -----------------------------
     await page.goto(`/dashboard/accounts/${accountId}/contacts/${contact!.id}`);
-    await expect(page.getByText(formName).first()).toBeVisible();
-    await expect(page.getByText(messageBody).first()).toBeVisible();
+    await expect(recordPage(page).getByText(formName).first()).toBeVisible();
+    await expect(recordPage(page).getByText(messageBody).first()).toBeVisible();
 
     // --- And the consent copy is readable back -------------------------
     // The pipeline stores the exact wording the person agreed to so it can be

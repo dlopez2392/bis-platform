@@ -6,6 +6,7 @@ import {
   startCallRow, finishCallRow, countCallsSince, type TranscriptEvent,
 } from "@bis/db";
 import { readLimitConfig, utcDayStart } from "../src/lib/voice/call-limits";
+import { recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next request.
@@ -200,7 +201,7 @@ test.describe("the Calls log, as the agency", () => {
     // Content only the real detail screen has — a 404 on this route renders
     // not-found.tsx, which still "loads" and would satisfy the URL check
     // above. Same guard contact-detail.spec.ts uses, for the same reason.
-    await expect(page.getByRole("heading", { name: callerName })).toBeVisible();
+    await expect(recordPage(page).getByRole("heading", { name: callerName })).toBeVisible();
     await expect(page.getByText("Page not found")).toHaveCount(0);
   });
 });

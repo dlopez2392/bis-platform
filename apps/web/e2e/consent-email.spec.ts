@@ -4,6 +4,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
 import { sealConsentToken } from "../src/lib/consent/token";
 import { m } from "../src/lib/messages";
+import { recordPage } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -177,7 +178,7 @@ test("after an unsubscribe, the email composer says so and still lets staff writ
   expect((await request.post(`/api/unsubscribe/${tokenFor(contactId, "composer")}`, { form: { "List-Unsubscribe": "One-Click" }, maxRedirects: 0 })).status()).toBe(200);
   await request.dispose();
   await page.goto(`/dashboard/accounts/${fixture().accountId}/contacts/${contactId}`);
-  await page.getByRole("button", { name: m["compose.email"], exact: true }).click();
-  await expect(page.getByTestId("composer-email-notice")).toContainText("They unsubscribed from your emails on");
-  await expect(page.getByPlaceholder(m["compose.subject"])).toBeVisible();                           // choice 22
+  await recordPage(page).getByRole("button", { name: m["compose.email"], exact: true }).click();
+  await expect(recordPage(page).getByTestId("composer-email-notice")).toContainText("They unsubscribed from your emails on");
+  await expect(recordPage(page).getByPlaceholder(m["compose.subject"])).toBeVisible();                           // choice 22
 });

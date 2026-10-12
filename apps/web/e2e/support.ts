@@ -121,6 +121,12 @@ export function readClientFixture(): { accountId: string; companyName: string } 
  * and the query was too wide: <main> excludes the parked copies, and `:has([data-record-header])`
  * excludes loading.tsx's skeleton layout, whose header is `data-record-skeleton-header`.
  * (work-queue.spec.ts scopes to <main> for the same streamed duplicate.)
+ *
+ * CONVENTION: any route with a loading.tsx must scope its spec locators to <main> (or, on the
+ * contact record page, to this `recordPage(page)`), because the streamed reveal can leave a hidden
+ * copy of the page outside <main>. Three instances so far: website.spec.ts, work-queue.spec.ts and
+ * record-page.spec.ts. Leave portals page-wide: dialogs, popover options, menus and toasts render
+ * outside <main> by design, and an absence check ("Page not found") is stricter page-wide.
  */
 export const RECORD_PAGE = "main [data-record-layout]:has([data-record-header])";
 export function recordPage(page: Page) {
