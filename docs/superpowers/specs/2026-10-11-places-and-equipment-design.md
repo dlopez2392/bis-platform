@@ -77,6 +77,16 @@ A Technician MAY add a property owned by their own customer OR by a household or
 of their customers belongs to: `places_technician_scope`'s with-check is the same reach as its read (§5.2),
 consistent with O2. Once it exists they still cannot change who it belongs to (`places_owner_guard`, §5.3).
 
+**§4 vs §8, stated plainly:** that reach is what the DATABASE and `addPlaceAction` permit, not what today's
+dialog offers. `PlaceDialog` only renders "Belongs to" when `canMovePlace` is true (§8's "A Technician has
+no 'Belongs to'"), so for a Technician it never renders at all, and `addPlaceAction`'s default owner (no
+`owner` sent) is the subject contact itself. A Technician's own ADD therefore always creates the person's
+own property through the UI, even though the row it writes would equally pass the database's with-check
+with a group owner named. Not a bug: nothing in §4's table promises a Technician a group-owner CONTROL,
+only that the database does not narrow their WRITE reach below their READ reach — and they already reach a
+group's existing property fully (edit, remove, put back, O2) once someone with "Belongs to" has put it
+there.
+
 ## 5. Data: migration 0071
 
 `0071_places_and_equipment.sql`, by bis-db-schema. Depends on 0068 and 0069 (merged), not on 0070.
@@ -348,10 +358,17 @@ the CSV wizard, blueprints (setup, not customer data), ⌘K, contact search, Sof
   `e2e/fixtures/fixture-names.test.ts`; rows deleted in `afterAll`, errors checked): Owner adds a property
   with only a landmark and directions, adds an address and sees "Open map"; adds an AC, replaces it, sees
   "Replaced {date}" under Earlier units, Undoes; removes an empty property and Undoes; removes one with
-  equipment and puts it back; shares one with a household and sees it on the co-member's drawer; with their
-  `users.language` set to Spanish (and reset) sees "Cómo llegar". In `assign.spec.ts`'s pattern a Technician
-  sees their customer's property, adds a unit, has no "Belongs to", and another customer's property is
-  absent from the route's JSON and the page.
+  equipment and puts it back; shares one with a household (seeded with BOTH members, via
+  `addContactToGroup`, membership read back before either record is visited) and sees it on the co-member's
+  drawer; with their `users.language` set to Spanish (and reset) sees "Cómo llegar". In `assign.spec.ts`'s
+  pattern a Technician edits and adds a unit to a property shared through their customer's household, has
+  no "Belongs to", and another customer's property is absent from the route's JSON and the page. **What that
+  absence check proves, stated precisely:** it is an APP-PATH check — the read route's own `getContact`
+  (route.ts) 404s on a contact the Technician's request client cannot see at all, before `listContactPlaces`
+  or `places_technician_scope` ever runs, and the page never renders what it never fetched. It is not, by
+  itself, proof that `places_technician_scope` narrows a VISIBLE customer's OWN places correctly — that is
+  `places-rls.test.ts`'s job (§10's RLS block), seeded so a Technician's reach is tested against a
+  property that is genuinely theirs to read, not merely a contact they cannot open at all.
 
 ## 11. Rollout, deploy order and rollback
 
@@ -383,6 +400,17 @@ Effort: about 1.5–2 of S-02's 5–6 engineer-weeks (the siblings estimate 2–
   browser, and the URL form could change. One builder function, one test.
 - `listContactPlaces` makes four small reads per load; fine at today's sizes (production held 53 contacts on
   2026-09-24, 0050:58). The caps (100 places, 500 units) are stated with real counts when reached.
+- **A group-owned property can go unreachable from every record that used to show it.** It happens two ways:
+  the group's last member is removed (0069's own membership removal, nothing here), or a business-name edit
+  moves a contact's membership to a different (or newly created) group mid-session. Either way the `places`
+  row itself is untouched — `client_group_id` still points at a real, non-empty-at-the-time-it-was-written
+  group — so nothing is lost or orphaned at the database level; it simply stops appearing on any CURRENT
+  member's card, because `listContactPlaces` only ever reads a contact's OWN groups. Re-linking it today
+  means an Owner or Staff opening the property from whichever record still shows it (if any still does) and
+  changing "Belongs to". Moving a property to another customer or group outright, and reconciling this case
+  generally, is S-12's merge/move tooling (§3's non-goal already defers "moving a property to another
+  customer, and merge (S-12)"); this bullet just names the household/business-membership path into the same
+  unreachable-not-lost state, so S-12 knows to pick it up rather than treat it as new.
 
 ## 13. Owner rulings (2026-10-11)
 

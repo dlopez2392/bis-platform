@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, setClientAccess, createContact, createGroupWithMember, addPlace, type PlaceFields } from "@bis/db";
+import { serviceDb, setClientAccess, createContact, createGroupWithMember, addContactToGroup, addPlace, type PlaceFields } from "@bis/db";
 import { m } from "../src/lib/messages";
 import { formatDateUTC } from "../src/lib/format";
 
@@ -39,14 +39,19 @@ loadEnv({ path: ".env.local" });
  * (the reasoning assign.spec.ts's and relationships.spec.ts's own headers give).
  *
  * MUTATION PROBE (Task 7 step 5 — static, no Playwright; the orchestrator's run is the real
- * red/green). In test "6.": if migration 0071's RESTRICTIVE policy `places_technician_scope` were
- * dropped, the Technician's own RLS-bound client would stop being narrowed to their assigned
- * customers' places at all, and the ABSENCE checks — `otherRes.status()` would stop being 404, and
- * `html` would then contain `TECH_OTHER_ADDRESS` and the other contact's place id — would fail; those
- * checks run only after the positive control (the shared property IS visible and editable), so they
- * are failing on a real leak, not a card that renders nothing. If `PlacesCardView` ignored
- * `canMovePlace` (rendered "Belongs to" regardless), `expect(card.getByText(m["places.belongsTo"
- * ])).toHaveCount(0)` in that same test would fail, because the line would be there.
+ * red/green; corrected after final review — the first draft mis-attributed the 404 below). In test
+ * "6.": the 404 for `techOtherId`'s route and the absence of `TECH_OTHER_ADDRESS` from the page and
+ * from `techMineId`'s OWN route body are an APP-PATH proof, not a `places_technician_scope` proof —
+ * the places route's `getContact` (route.ts) refuses an unreadable CONTACT before `listContactPlaces`
+ * or any places policy ever runs, so dropping `places_technician_scope` would not touch either
+ * assertion: a Technician's request client already cannot read `techOtherId` at all (0068's contacts
+ * fence), for a reason unrelated to places. What dropping `places_technician_scope` WOULD break is
+ * narrower and not exercised here — a Technician reading a place belonging to a CUSTOMER THEY CAN
+ * SEE but that is not theirs — which is `places-rls.test.ts`'s job (packages/db), seeded so the
+ * Technician's reach is tested against a real, visible customer's place, not a contact they cannot
+ * open in the first place. If `PlacesCardView` ignored `canMovePlace` (rendered "Belongs to"
+ * regardless), `expect(card.getByText(m["places.belongsTo"])).toHaveCount(0)` in test "6." would
+ * fail, because the line would be there — that probe stands as originally written.
  */
 test.describe.configure({ timeout: 60_000 });
 
@@ -238,6 +243,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       const card = page.locator("[data-places-aside] [data-places-card]");
       const row = card.locator("[data-place-row]").filter({ hasText: LANDMARK });
       await expect(row).toBeVisible(); // positive control: test 1's property is still here
+      const placeId = await row.getAttribute("data-place-row");
 
       await row.locator("[data-place-equipment]").getByRole("button", { name: m["equipment.add"] }).click();
       const addDialog = page.getByRole("dialog");
@@ -264,7 +270,9 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       const carrierRow = row.locator("[data-unit-row]").filter({ hasText: "Carrier" });
       await expect(carrierRow).toBeVisible();
       const db = serviceDb();
-      const carrier = await db.from("equipment").select("id, installed_on").eq("account_id", accountId).eq("name", "Carrier").single();
+      // Scoped to THIS place, not just this account: "Carrier" is a plain literal, not a stamped name,
+      // so an unscoped lookup would resolve to whichever "Carrier" row exists anywhere on the account.
+      const carrier = await db.from("equipment").select("id, installed_on").eq("account_id", accountId).eq("place_id", placeId).eq("name", "Carrier").single();
       expect(carrier.error, `reading the new Carrier unit: ${carrier.error?.message}`).toBeNull();
       const replacedOn = carrier.data!.installed_on as string;
       const historyToggle = carrierRow.getByRole("button", { name: m["equipment.history"].replace("{count}", "1") });
@@ -336,6 +344,18 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       expect(group.status, `creating the household: ${group.status}`).toBe("ok");
       householdId = group.status === "ok" ? group.groupId : "";
 
+      // The SECOND member: createGroupWithMember only adds recordId. Without this, secondId is never
+      // in the household at all, and the drawer check below cannot find the shared property because
+      // there is nothing making it SECOND's household to find it through.
+      const added = await addContactToGroup(db, accountId, secondId, householdId, null, ACTOR);
+      expect(added.status, `adding the second member to the household: ${added.status}`).toBe("ok");
+      // Checked before navigating anywhere: a membership row that failed to land would otherwise only
+      // surface later, as a confusing "not visible on the drawer" failure far from its real cause.
+      const membership = await db.from("client_group_members").select("id")
+        .eq("account_id", accountId).eq("client_group_id", householdId).eq("contact_id", secondId).maybeSingle();
+      expect(membership.error, `reading the second member's membership: ${membership.error?.message}`).toBeNull();
+      expect(membership.data, "the second member's membership row").not.toBeNull();
+
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
       const card = page.locator("[data-places-aside] [data-places-card]");
       await card.getByRole("button", { name: m["places.add"] }).click();
@@ -398,7 +418,13 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       const answered = page.waitForResponse((r) => new URL(r.url()).pathname === route);
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${techMineId}`);
       const res = await answered;
-      expect(res.status(), await res.text()).toBe(200);
+      const body = await res.text();
+      expect(res.status(), body).toBe(200);
+      // APP-PATH check: even the Technician's own SUCCESSFUL read, for a customer they really can
+      // see, never carries the other customer's address — this route never queried for it (it reads
+      // only this contact's own places and this contact's own groups' places, §6), so a leak here
+      // would be the route pulling in rows it never meant to select, not an RLS gap.
+      expect(body).not.toContain(TECH_OTHER_ADDRESS);
 
       const card = page.locator("[data-places-aside] [data-places-card]");
       const sharedRow = card.locator("[data-place-row]").filter({ hasText: TECH_SHARED_ADDRESS });
@@ -420,7 +446,10 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       await expect(eqDialog).toBeHidden();
       await expect(sharedRow.locator("[data-unit-row]").filter({ hasText: "Water heater" })).toBeVisible();
 
-      // The other customer's property: not through this contact's own route, not on this page.
+      // APP-PATH checks, both: the OTHER customer's own route 404s — getContact (route.ts) refuses an
+      // unreadable contact before listContactPlaces or any places policy runs, so this is the contacts
+      // fence (0068) acting through the route, not places_technician_scope — and the page this
+      // Technician IS allowed to see never renders what it never fetched.
       const otherRes = await page.request.get(`/api/accounts/${accountId}/contacts/${techOtherId}/places`);
       expect(otherRes.status()).toBe(404);
       const html = await page.content();
