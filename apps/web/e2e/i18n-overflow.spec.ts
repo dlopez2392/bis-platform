@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, recordPage } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
 import { m } from "../src/lib/messages";
 
@@ -148,8 +148,11 @@ test.describe("pseudo-locale overflow (F-014)", () => {
     try {
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}?locale=pseudo`);
       // Positive control: the pseudo-locale is really on (the Call label is padded, not "Call").
-      await expect(page.locator('[data-record-action="call"]')).not.toHaveText(m["record.action.call"]);
-      const measured = page.locator("[data-record-action], [data-record-facts]");
+      // Through the rendered page: the streamed route can hold a hidden second copy, whose 0-wide
+      // elements would be counted and measured here too (support.ts's recordPage).
+      const rec = recordPage(page);
+      await expect(rec.locator('[data-record-action="call"]')).not.toHaveText(m["record.action.call"]);
+      const measured = rec.locator("[data-record-action], [data-record-facts]");
       const count = await measured.count();
       expect(count, "no record header actions or fact line found").toBeGreaterThan(1);
       for (let i = 0; i < count; i++) {

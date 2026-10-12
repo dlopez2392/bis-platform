@@ -110,6 +110,24 @@ export function readClientFixture(): { accountId: string; companyName: string } 
 }
 
 /**
+ * THE rendered contact record page. Every record-page locator goes through it, never through
+ * `page` alone. The route streams (its loading.tsx makes the page a Suspense boundary), and React
+ * 19.2's streaming runtime parks the server's complete copy of the page in a `<div hidden id="S:n">`
+ * at the end of <body> until its deferred, throttled reveal runs (`$RC` queues it on
+ * requestAnimationFrame/setTimeout), which can be after `load`. On some loads React has already
+ * committed its own copy into <main> by then, so for that window the document holds TWO record
+ * headers: one visible, one display:none. A bare `page.locator('[data-record-action="call"]')`
+ * matched both on CI (36d917f3, strict mode). Users never see the parked copy, so the page is right
+ * and the query was too wide: <main> excludes the parked copies, and `:has([data-record-header])`
+ * excludes loading.tsx's skeleton layout, whose header is `data-record-skeleton-header`.
+ * (work-queue.spec.ts scopes to <main> for the same streamed duplicate.)
+ */
+export const RECORD_PAGE = "main [data-record-layout]:has([data-record-header])";
+export function recordPage(page: Page) {
+  return page.locator(RECORD_PAGE);
+}
+
+/**
  * Opens the fixture account's Calendar page directly by id (the agency
  * session sees every account, and the id is authoritative from the fixture
  * file — no card-by-name lookup to race). Skips with a clear reason when the

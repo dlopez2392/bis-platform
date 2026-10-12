@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, recordPage } from "./support";
 import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
@@ -105,7 +105,8 @@ test("an email sent from a contact appears on that contact's timeline", async ({
     // The composer has no <label>s — it is a mode toggle plus placeholders.
     // S-03 part 1: the header's Email opens the composer on its channel (the composer now sits at
     // the top of the Activity card). The tab is still the composer's, pressed by the link.
-    await page.locator('[data-record-action="email"]').click();
+    // Through the rendered page: the streamed route can hold a hidden second copy (support.ts).
+    await recordPage(page).locator('[data-record-action="email"]').click();
     await expect(page.getByRole("button", { name: "Email", exact: true })).toHaveAttribute("aria-pressed", "true");
     await page.getByPlaceholder("Subject").fill("Timeline check");
     await page.getByPlaceholder(/write an email/i).fill(body);

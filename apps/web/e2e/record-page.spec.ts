@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact, addPlace, getOrCreateCalendar } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { recordPage } from "./support";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -33,6 +34,9 @@ const PHONE_ORDER = ["summary", "next-up", "timeline", "groups", "properties", "
 const url = (id: string, q = "") => `/dashboard/accounts/${fixture().accountId}/contacts/${id}${q}`;
 /** A card's phone disclosure: the button in its title (h2), never a control inside its body. */
 const disclosure = (id: string) => `[data-record-card="${id}"] h2 > button[aria-expanded]`;
+
+/** The rendered page, never the whole document: see `recordPage` in support.ts for why. */
+const record = recordPage;
 
 test.beforeAll(async () => {
   const { accountId } = fixture();
@@ -78,87 +82,93 @@ test.afterAll(async () => {
 test("at 1280px the three columns hold their cards, and Call is the one primary", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(url(made.full!));
-  const who = page.locator('[data-record-column="who"]');
-  const happening = page.locator('[data-record-column="happening"]');
-  const have = page.locator('[data-record-column="have"]');
+  const rec = record(page);
+  const who = rec.locator('[data-record-column="who"]');
+  const happening = rec.locator('[data-record-column="happening"]');
+  const have = rec.locator('[data-record-column="have"]');
   await expect(happening.locator('[data-record-card="summary"]')).toBeVisible();
   await expect(have.locator('[data-record-card="deals"]')).toBeVisible();
   await expect(who.locator('[data-record-card="details"]')).toBeVisible();
   const [w, h, v] = await Promise.all([who.boundingBox(), happening.boundingBox(), have.boundingBox()]);
   expect(w!.x).toBeLessThan(h!.x);
   expect(h!.x).toBeLessThan(v!.x);
-  const actions = page.locator("[data-record-actions]");
+  const actions = rec.locator("[data-record-actions]");
   await expect(actions.locator('[data-variant="default"]')).toHaveCount(1);
   await expect(actions.locator('[data-record-action="call"]')).toHaveAttribute("data-variant", "default");
   await expect(actions.locator('[data-record-action="call"]')).toHaveAttribute("href", `tel:${PHONE}`);
   // The desk opens the "have" cards after hydration (phone-first server render, plan Task 4).
-  await expect(page.locator("[data-groups-card]")).toBeVisible();
-  await expect(page.locator('[data-record-card="groups"] h2 > button')).toHaveCount(0);
+  await expect(rec.locator("[data-groups-card]")).toBeVisible();
+  await expect(rec.locator('[data-record-card="groups"] h2 > button')).toHaveCount(0);
 });
 
 test("at 390px the order is header, summary, Next up, timeline, the closed 'have' cards, then who they are", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(url(made.full!));
-  await expect(page.locator("[data-record-header]")).toBeVisible();
-  const ids = await page.locator("[data-record-card]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-card")));
+  const rec = record(page);
+  await expect(rec.locator("[data-record-header]")).toBeVisible();
+  const ids = await rec.locator("[data-record-card]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-card")));
   expect(ids).toEqual(PHONE_ORDER);
-  const headerFirst = await page.evaluate(() => {
-    const header = document.querySelector("[data-record-header]")!;
-    const first = document.querySelector("[data-record-card]")!;
+  const headerFirst = await rec.evaluate((root) => {
+    const header = root.querySelector("[data-record-header]")!;
+    const first = root.querySelector("[data-record-card]")!;
     return Boolean(header.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
   });
   expect(headerFirst).toBe(true);
   for (const id of ["groups", "properties", "deals"]) {
-    await expect(page.locator(disclosure(id))).toHaveAttribute("aria-expanded", "false");
+    await expect(rec.locator(disclosure(id))).toHaveAttribute("aria-expanded", "false");
   }
   // A closed card mounts no body, so the Groups card's own section is not on the page at all.
-  await expect(page.locator("[data-groups-card]")).toHaveCount(0);
-  await expect(page.locator(disclosure("details"))).toHaveCount(0);
-  await page.locator(disclosure("deals")).click();
-  await expect(page.locator(disclosure("deals"))).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator('[data-record-card="deals"]')).toContainText(m["contact.noOpportunities"]);
+  await expect(rec.locator("[data-groups-card]")).toHaveCount(0);
+  await expect(rec.locator(disclosure("details"))).toHaveCount(0);
+  await rec.locator(disclosure("deals")).click();
+  await expect(rec.locator(disclosure("deals"))).toHaveAttribute("aria-expanded", "true");
+  await expect(rec.locator('[data-record-card="deals"]')).toContainText(m["contact.noOpportunities"]);
 });
 
 test("an action with nothing behind it is hidden, not disabled: no email, no address, no phone, and Text while the gate is closed", async ({ page }) => {
   await page.goto(url(made.bare!));
-  await expect(page.locator("[data-record-header]")).toBeVisible();
+  // Positive control first: the bare contact's own page is rendered, so the absences below are its.
+  await expect(record(page).locator("[data-record-header]")).toBeVisible();
+  await expect(record(page).locator("h1")).toHaveText(`Bare ${LAST}`);
   // Not rendered at all: no action, and no empty actions row either.
-  await expect(page.locator("[data-record-action]")).toHaveCount(0);
-  await expect(page.locator("[data-record-actions]")).toHaveCount(0);
+  await expect(record(page).locator("[data-record-action]")).toHaveCount(0);
+  await expect(record(page).locator("[data-record-actions]")).toHaveCount(0);
   await page.goto(url(made.full!));
-  await expect(page.locator('[data-record-action="call"]')).toBeVisible();
-  await expect(page.locator('[data-record-action="email"]')).toBeVisible();
-  await expect(page.locator('[data-record-action="email"]')).toHaveAttribute("href", "#compose-email");
-  await expect(page.locator('[data-record-action="directions"]')).toHaveAttribute("href", /google\.com\/maps/);
+  const rec = record(page);
+  await expect(rec.locator('[data-record-action="call"]')).toBeVisible();
+  await expect(rec.locator('[data-record-action="email"]')).toBeVisible();
+  await expect(rec.locator('[data-record-action="email"]')).toHaveAttribute("href", "#compose-email");
+  await expect(rec.locator('[data-record-action="directions"]')).toHaveAttribute("href", /google\.com\/maps/);
   // The fixture account has no approved A2P registration, so the text gate is closed: no Text.
-  await expect(page.locator('[data-record-action="text"]')).toHaveCount(0);
+  await expect(rec.locator('[data-record-action="text"]')).toHaveCount(0);
   // What is shown is live: nothing in the row is a disabled stand-in.
-  await expect(page.locator("[data-record-action][aria-disabled], [data-record-action][disabled]")).toHaveCount(0);
+  await expect(rec.locator("[data-record-action][aria-disabled], [data-record-action][disabled]")).toHaveCount(0);
 });
 
 test("Email lands on the email composer with its body focused; a #compose-sms deep link opens the Text tab", async ({ page }) => {
   await page.goto(url(made.full!));
-  const emailTab = page.getByRole("button", { name: m["compose.email"], exact: true });
+  const emailTab = record(page).getByRole("button", { name: m["compose.email"], exact: true });
   await expect(emailTab).toHaveAttribute("aria-pressed", "false");
-  await page.locator('[data-record-action="email"]').click();
+  await record(page).locator('[data-record-action="email"]').click();
   await expect(emailTab).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByPlaceholder(m["compose.emailPlaceholder"])).toBeFocused();
+  await expect(record(page).getByPlaceholder(m["compose.emailPlaceholder"])).toBeFocused();
   // A cold load of the deep link (never a same-document hash change from the page above), so this
   // proves the composer reads the hash it was opened with, not only a hashchange.
   await page.goto("about:blank");
   await page.goto(url(made.full!, "#compose-sms"));
-  await expect(page.getByRole("button", { name: m["compose.sms"], exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(record(page).getByRole("button", { name: m["compose.sms"], exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(emailTab).toHaveAttribute("aria-pressed", "false");
 });
 
 test("a seeded upcoming booking shows in Next up", async ({ page }) => {
   await page.goto(url(made.full!));
-  await expect(page.locator('[data-record-card="next-up"] [data-next-up-row="booking"]')).toHaveCount(1);
+  await expect(record(page).locator('[data-record-card="next-up"] [data-next-up-row="booking"]')).toHaveCount(1);
 });
 
 test("in Spanish the converted parts read Spanish and the page says so", async ({ page }) => {
   await page.goto(url(made.full!, "?locale=es"));
-  await expect(page.locator("[data-record-layout]")).toHaveAttribute("lang", "es");
-  await expect(page.locator('[data-record-action="call"]')).toHaveText(m["record.action.call.es"]);
-  await expect(page.getByRole("heading", { name: m["record.card.nextUp.es"] })).toBeVisible();
+  const rec = record(page);
+  await expect(rec).toHaveAttribute("lang", "es");
+  await expect(rec.locator('[data-record-action="call"]')).toHaveText(m["record.action.call.es"]);
+  await expect(rec.getByRole("heading", { name: m["record.card.nextUp.es"] })).toBeVisible();
 });
