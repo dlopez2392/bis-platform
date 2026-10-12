@@ -31,7 +31,7 @@ export function assigneeName(id: string | null, options: AssigneeOption[]): stri
  * on hover it shows itself as the input it is (the ladder's input step and
  * the interactive edge). team-card.tsx's INLINE_TRIGGER, for the same reason.
  */
-const INLINE_TRIGGER = "h-8 max-w-full border-transparent bg-transparent px-1.5 shadow-none hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)] dark:bg-transparent dark:hover:bg-[var(--surface-2)]";
+const INLINE_TRIGGER = "h-8 min-h-11 md:min-h-8 max-w-full border-transparent bg-transparent px-1.5 shadow-none hover:border-[var(--line-strong)] hover:bg-[var(--surface-2)] dark:bg-transparent dark:hover:bg-[var(--surface-2)]";
 
 /**
  * "Assigned to" as an inline edit (spec §9; DESIGN.md Record views, rule 6):

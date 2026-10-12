@@ -42,6 +42,17 @@ describe("MessageComposer's mode tabs (design check 1a, M1)", () => {
       expect(tab).not.toMatch(/\brounded-md\b/);
     }
   });
+
+  // DESIGN DoD (phone tap targets): the Note/Email/Text tabs were a fixed
+  // px-2.5 py-1, well under 44px — the record timeline's own min-h-11 md:min-h-8 idiom.
+  it("are each at least 44px tall on a phone (mutation: drop min-h-11 from the tab -> FAILS)", () => {
+    const tabs = render().match(/<button[^>]*aria-pressed="(?:true|false)"[^>]*>/g) ?? [];
+    expect(tabs).toHaveLength(3);
+    for (const tab of tabs) {
+      expect(tab).toContain("min-h-11");
+      expect(tab).toContain("md:min-h-8");
+    }
+  });
 });
 
 describe("MessageComposer's body field (D-015)", () => {
