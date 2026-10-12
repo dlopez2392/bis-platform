@@ -16,11 +16,15 @@ describe("the bis-crm timeline sources, paged (S-03 1b, spec §7, C3)", () => {
       const ids: string[] = [];
       for (const body of ["one", "two", "three"]) ids.push((await addNote(db, accountId, ana, body, ACTOR)).id);
       const at = "2026-10-09T16:12:00.123456+00:00";
-      await db.from("notes").update({ created_at: at }).in("id", [ids[1], ids[2]]);
-      await db.from("notes").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", ids[0]);
+      const tie = await db.from("notes").update({ created_at: at }).in("id", [ids[1], ids[2]]);
+      if (tie.error) throw new Error(`tie update failed: ${tie.error.message}`);
+      const older = await db.from("notes").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", ids[0]);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
       const first = (await listNotes(db, accountId, ana, { limit: 1 })) as { id: string; created_at: string }[];
       const second = (await listNotes(db, accountId, ana, { limit: 1, before: { v: first[0]!.created_at, id: first[0]!.id } })) as { id: string; created_at: string }[];
       const third = (await listNotes(db, accountId, ana, { limit: 5, before: { v: second[0]!.created_at, id: second[0]!.id } })) as { id: string }[];
+      // The page boundary really is a tie: without it the and(...) half is never exercised.
+      expect(second[0]!.created_at).toBe(first[0]!.created_at);
       const tied = [ids[1]!, ids[2]!].sort().reverse();
       expect([first[0]!.id, second[0]!.id, ...third.map((n) => n.id)]).toEqual([...tied, ids[0]]);
       // No options: today's shape, every note.
