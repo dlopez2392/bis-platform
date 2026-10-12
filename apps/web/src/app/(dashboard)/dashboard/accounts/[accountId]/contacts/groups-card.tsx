@@ -8,7 +8,6 @@ import { toast } from "sonner";
 import type { ContactGroup, GroupKind, GroupSearchHit } from "@bis/db";
 import { InlineField } from "@/components/inline-field";
 import { Button } from "@/components/ui/button";
-import { Notice } from "@/components/ui/notice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -238,10 +237,11 @@ export function GroupsCardView({ accountId, contactId, canManageGroups, headingH
           <div className="space-y-1.5"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-2/3" /></div>
         </div>
       ) : load.status === "error" ? (
-        <Notice tone="crit" className="p-3">
+        // Plain words and a ghost Try again, announced: a tinted Notice was a box in the glass card (design check 1a).
+        <div role="alert" className="space-y-2 text-sm">
           <p className="text-muted-foreground">{m["groups.loadFailed"]}</p>
-          <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>{m["groups.retry"]}</Button>
-        </Notice>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{m["groups.retry"]}</Button>
+        </div>
       ) : load.groups.length === 0 ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">{m["groups.empty"]}</p>

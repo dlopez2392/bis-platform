@@ -81,6 +81,36 @@ describe("PlacesCardView: its own loaded, empty and error states (rule 5 per car
     expect(one(html, /<button[^>]*>[^<]*<\/button>/)).toContain(m["places.retry"]);
   });
 
+  it("the error is announced: role=alert, plain words and a ghost Try again, never a box (design check 1a, #2; mutation: drop role=alert -> FAILS)", () => {
+    const html = render("en", { status: "error" });
+    expect(html).toMatch(/<div role="alert"[^>]*><p[^>]*>[^<]*<\/p><button[^>]*data-variant="ghost"[^>]*>Try again<\/button><\/div>/);
+    expect(html).not.toContain('data-slot="notice"');
+  });
+
+  it("a 60-character unbroken address wraps inside the card: label above value when the card is narrow, two columns only from 18rem, and the value breaks anywhere (design check 1a, #1: 320px scrolled sideways; mutation: drop the wrap class or the stacked base -> FAILS)", () => {
+    const LONG = "1204NolanaAvenueBuildingNineteenUnitTwoHundredFortySevenRear";
+    expect(LONG).toHaveLength(60);
+    const html = render("en", ready({ places: [{ ...HOME, address: LONG }] }));
+    expect(html).toContain(LONG);
+    expect(html).toMatch(/^<section[^>]*class="[^"]*@container[^"]*"/);
+    const grids = html.match(/<dl[^>]*class="[^"]*"/g) ?? [];
+    expect(grids.length).toBeGreaterThanOrEqual(4); // the place's three lists and a unit's
+    for (const g of grids) expect(g).toContain("grid grid-cols-1 gap-x-2 gap-y-0.5 @min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]");
+    const dds = html.match(/<dd[^>]*>/g) ?? [];
+    expect(dds.length).toBeGreaterThan(0);
+    for (const d of dds) expect(d).toContain("[overflow-wrap:anywhere]");
+    // The drawer (wider than 18rem) keeps today's two columns: the template is still there, behind the query.
+    expect(html).toContain("@min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]");
+  });
+
+  it("Add a property shrinks and wraps rather than pushing a 320px page sideways (design check 1a, M8; mutation: keep whitespace-nowrap -> FAILS)", () => {
+    const es = render("es", ready());
+    const trigger = one(es, /<button[^>]*data-slot="dialog-trigger"[^>]*>/);
+    expect(trigger).toContain("max-w-full");
+    expect(trigger).toContain("whitespace-normal");
+    expect(trigger).not.toContain("whitespace-nowrap");
+  });
+
   it("headingHidden hides the heading but keeps it labelling the section (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
       createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load: { status: "loading" }, onRetry: noop, handlers })));

@@ -172,7 +172,7 @@ export function MessageComposer({
             }}
             aria-pressed={mode === value}
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              "rounded-[var(--radius-ctl)] px-2.5 py-1 text-xs font-medium transition-colors",
               mode === value
                 ? "bg-secondary text-secondary-foreground"
                 : "text-muted-foreground hover:text-foreground",

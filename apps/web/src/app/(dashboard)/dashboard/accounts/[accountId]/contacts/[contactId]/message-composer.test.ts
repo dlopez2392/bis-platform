@@ -32,6 +32,17 @@ function render(): string {
   } as never));
 }
 
+describe("MessageComposer's mode tabs (design check 1a, M1)", () => {
+  it("are on the control radius, never rounded-md's off-scale 10px (mutation: put back rounded-md -> FAILS)", () => {
+    const tabs = render().match(/<button[^>]*aria-pressed="(?:true|false)"[^>]*>/g) ?? [];
+    expect(tabs).toHaveLength(3);
+    for (const tab of tabs) {
+      expect(tab).toContain("rounded-[var(--radius-ctl)]");
+      expect(tab).not.toMatch(/\brounded-md\b/);
+    }
+  });
+});
+
 describe("MessageComposer's body field (D-015)", () => {
   it("renders the body as a textarea, not a single-line input (mutation: revert to <Input> → FAILS)", () => {
     const html = render();

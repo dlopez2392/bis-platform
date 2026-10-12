@@ -44,10 +44,10 @@ const header = (all: boolean) => (
 
 // The fixed width sits on the INNER box and the frame around it scrolls: a 1120px box that is
 // itself the scroller would still be 1120px wide and push /styleguide sideways on a phone.
-const layout = (width: string) => (
+const layout = (width: string, idPrefix: string) => (
   <div className="min-w-0 max-w-full overflow-x-auto">
     <div className={`${width} rounded-xl border border-dashed border-[var(--line-strong)]`}>
-      <RecordLayout skipLabel={m["record.skipToDetails"]} header={header(true)} columns={[
+      <RecordLayout skipLabel={m["record.skipToDetails"]} idPrefix={idPrefix} skipLink={false} header={header(true)} columns={[
         { column: "happening", content: <>{stub("record.card.summary")}{stub("record.card.nextUp")}{stub("record.card.activity")}</> },
         { column: "have", content: <>{stub("groups.title")}{stub("places.title")}{stub("record.card.deals")}</> },
         { column: "who", content: <>{stub("contact.details")}{stub("contact.tags")}{stub("relationships.title")}</> },
@@ -59,8 +59,9 @@ const layout = (width: string) => (
 export function RecordDemo() {
   return (
     <div className="flex w-full min-w-0 flex-col gap-6">
-      {layout("w-[1120px]")}
-      {layout("w-[390px]")}
+      {/* Two layouts on one page: their own ids, and no skip link (the page has its own). */}
+      {layout("w-[1120px]", "sg-desk")}
+      {layout("w-[390px]", "sg-phone")}
       {header(true)}
       {header(false)}
       <div className="flex flex-wrap gap-4">

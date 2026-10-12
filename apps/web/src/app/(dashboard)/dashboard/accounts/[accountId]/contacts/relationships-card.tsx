@@ -63,7 +63,7 @@ function Chip({ accountId, view, locale, onToggle, onForm, onRemove }: {
   if (!view.person) {
     return (
       <li data-relationship-chip className="rounded-[var(--radius-ctl)] bg-[var(--surface-2)] px-3 py-2 text-sm">
-        <p className="truncate" title={text}>{text}</p>
+        <p className="[overflow-wrap:anywhere]">{text}</p>
         <div className="mt-1 flex flex-wrap gap-1.5">
           {FLAGS.filter(([f]) => view[f]).map(([f, key]) => <FlagPill key={f} on label={t(m, key, locale)} />)}
         </div>
@@ -75,9 +75,11 @@ function Chip({ accountId, view, locale, onToggle, onForm, onRemove }: {
   const control = chipFormControl(view, locale);
   return (
     <li data-relationship-chip className="rounded-[var(--radius-ctl)] bg-[var(--surface-2)] px-3 py-2 text-sm">
-      <div className="flex items-center gap-2">
-        <Link href={`/dashboard/accounts/${accountId}/contacts/${view.person.id}`} title={text}
-          className={cn("min-w-0 flex-1 truncate rounded-[var(--radius-ctl)] underline-offset-4 hover:underline", focusRing)}>
+      {/* The name wants 8rem: on a narrow card the picker and remove wrap under it and the name
+          keeps the whole first line, wrapping rather than truncating (design check 1a: one letter at 320px). */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Link href={`/dashboard/accounts/${accountId}/contacts/${view.person.id}`}
+          className={cn("min-w-0 basis-32 grow rounded-[var(--radius-ctl)] [overflow-wrap:anywhere] underline-offset-4 hover:underline", focusRing)}>
           {text}
         </Link>
         {control ? (
@@ -125,9 +127,10 @@ export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onFo
           <Skeleton data-relationships-skeleton className="h-14 w-full rounded-[var(--radius-ctl)]" />
         </div>
       ) : load.status === "error" ? (
-        <div className="space-y-2 text-sm">
+        // Announced, plain words and a ghost Try again: RecordCardError's look (design check 1a).
+        <div role="alert" className="space-y-2 text-sm">
           <p className="text-muted-foreground">{t(m, "relationships.loadFailed", locale)}</p>
-          <Button type="button" size="sm" variant="ghost" onClick={onRetry}>{t(m, "relationships.retry", locale)}</Button>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{t(m, "relationships.retry", locale)}</Button>
         </div>
       ) : load.views.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t(m, "relationships.empty", locale)}</p>

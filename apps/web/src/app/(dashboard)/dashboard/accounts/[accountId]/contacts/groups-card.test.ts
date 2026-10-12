@@ -33,6 +33,12 @@ describe("GroupsCardView", () => {
     expect(renderedText(html)).toContain(m["groups.loadFailed"]);
     expect(html).toContain(m["groups.retry"]);
   });
+  it("the error is plain words and a ghost Try again, announced, never a tinted box inside the glass card (design check 1a, M2; mutation: put back the crit Notice -> FAILS)", () => {
+    const html = view({ status: "error" });
+    expect(html).toMatch(/<div role="alert"[^>]*><p[^>]*>[^<]*<\/p><button[^>]*data-variant="ghost"[^>]*>Try again<\/button><\/div>/);
+    expect(html).not.toContain('data-slot="notice"');
+    expect(html).not.toContain("--crit-bg");
+  });
   it("empty sells the feature with its action (rule 5)", () => {
     const html = view({ status: "ready", groups: [] });
     expect(html).toContain(m["groups.empty"]);

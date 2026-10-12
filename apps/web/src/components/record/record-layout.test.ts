@@ -26,6 +26,18 @@ describe("RecordLayout (spec §8, C6): DOM order is the phone order", () => {
     expect(html).toMatch(/id="record-who"[^>]*tabindex="-1"|tabindex="-1"[^>]*id="record-who"/);
   });
 
+  it("a specimen can prefix its ids and drop its skip link, so two layouts on one page share no id; the defaults are unchanged (design check 1a, M4; mutation: ignore idPrefix -> FAILS)", () => {
+    const sg = renderToStaticMarkup(createElement(RecordLayout, {
+      header: null, skipLabel: "Skip to details", idPrefix: "sg-phone", skipLink: false,
+      columns: [{ column: "happening", content: null }, { column: "who", content: null }],
+    }));
+    expect(sg).toContain('id="sg-phone-happening"');
+    expect(sg).toContain('id="sg-phone-who"');
+    expect(sg).not.toContain('id="record-');
+    expect(sg).not.toContain("<a ");
+    expect(html).toContain('href="#record-who"');
+  });
+
   it("is a container-query grid with today's tracks, and carries the page's lang", () => {
     expect(html).toContain("@container");
     expect(html).toContain("@min-[1024px]:grid-cols-[320px_minmax(0,1fr)_280px]");

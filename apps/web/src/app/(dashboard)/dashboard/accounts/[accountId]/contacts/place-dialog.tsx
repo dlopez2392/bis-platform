@@ -70,7 +70,10 @@ export function PlaceDialog({ accountId, contactId, subject, groups, canMovePlac
   return (
     <Dialog open={open} onOpenChange={(next) => { setOpen(next); if (!next) reset(); }}>
       <DialogTrigger asChild>
-        <Button type="button" size="sm" variant="ghost"><Plus className="size-4" aria-hidden />{tt("places.add")}</Button>
+        {/* Shrinks and wraps on a narrow card ("Agregar una propiedad" pushed 320px sideways). */}
+        <Button type="button" size="sm" variant="ghost" className="h-auto min-h-8 max-w-full whitespace-normal text-left">
+          <Plus className="size-4" aria-hidden />{tt("places.add")}
+        </Button>
       </DialogTrigger>
       <DialogContent lang={locale}>
         <DialogHeader><DialogTitle>{tt("places.add")}</DialogTitle></DialogHeader>
