@@ -1,6 +1,21 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { countContactBookingsMade, listContactUpcomingBookings, type UpcomingBooking } from "./booking";
-import { listContactCalls } from "./voice";
+import {
+  countContactBookingsMade, listContactUpcomingBookings, listContactBookings,
+  type UpcomingBooking, type ContactBookingRow,
+} from "./booking";
+import { listContactCalls, type ContactCallRow } from "./voice";
+import { listNotes, listContactTasks } from "./activities";
+import { listContactOpportunities } from "./opportunities";
+import { listContactSubmissions } from "./forms";
+import { listContactMessages } from "./messaging";
+import { instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
+import type { AuthorKind } from "./provenance";
+
+export type { TimelineCursor } from "./timeline-cursor";
+export type { ContactBookingRow } from "./booking";
+export type { ContactCallRow } from "./voice";
+export type { ContactMessageRow } from "./messaging";
+export { TIMELINE_PAGE_SIZE } from "./timeline-cursor";
 
 /**
  * The contact record page's checked facts and "Next up" (S-03 part 1, 1a; spec §7). Bounded reads
@@ -108,4 +123,111 @@ export async function contactNextUp(
   if (undated.error) throw new Error(`contactNextUp undated count failed: ${undated.error.message}`);
   if (undated.count === null) throw new Error("contactNextUp undated count failed: no count returned");
   return { bookings, datedTasks: (dated.data ?? []) as NextUpTask[], undatedCount: undated.count };
+}
+
+/**
+ * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3). Seven sources, each read on the
+ * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into
+ * ONE page ordered (at desc, id desc) with the contact list's cursor. Each source reads limit + 1;
+ * the merge keeps `limit` and knows whether an older page exists. A source that fails is reported
+ * in `failed` (and to `onError` for the log), never thrown: the rest of the page still loads.
+ */
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls";
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+
+export type TimelineNote = { id: string; body: string; author_id: string | null; created_at: string };
+export type TimelineTask = {
+  id: string; title: string; due_at: string | null; completed_at: string | null; created_at: string;
+  consent_event_id: string | null; call_id: string | null; assigned_to: string | null; created_by: string | null;
+};
+export type TimelineDeal = {
+  id: string; name: string; status: string; monetary_value: number | string; created_at: string; created_by: string | null;
+};
+export type TimelineSubmission = {
+  id: string; created_at: string; formName: string;
+  answers: { key: string; label: string; value: string }[]; author_kind: "customer" | "ai";
+};
+export type TimelineMessage = {
+  id: string; channel: "email" | "sms"; direction: "inbound" | "outbound"; status: string;
+  subject: string | null; body: string; error: string | null; created_at: string;
+  /** NULL only for a row the build before 1b wrote, until 0074 re-runs the backfill. */
+  author_kind: AuthorKind | null; author_id: string | null;
+};
+export type TimelineEntry =
+  | { kind: "note"; id: string; at: string; note: TimelineNote }
+  | { kind: "task"; id: string; at: string; task: TimelineTask }
+  | { kind: "deal"; id: string; at: string; deal: TimelineDeal }
+  | { kind: "submission"; id: string; at: string; submission: TimelineSubmission }
+  | { kind: "message"; id: string; at: string; message: TimelineMessage }
+  | { kind: "booking"; id: string; at: string; booking: ContactBookingRow }
+  | { kind: "call"; id: string; at: string; call: ContactCallRow };
+export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
+
+/** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
+ *  which is the lowercase hex string's order). */
+export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): number {
+  const ka = instantKey(a.at);
+  const kb = instantKey(b.at);
+  if (ka !== kb) return ka < kb ? 1 : -1;
+  const ia = a.id.toLowerCase();
+  const ib = b.id.toLowerCase();
+  return ia === ib ? 0 : ia < ib ? 1 : -1;
+}
+
+export async function listContactTimelinePage(
+  db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},
+): Promise<TimelinePage> {
+  const limit = opts.limit ?? TIMELINE_PAGE_SIZE;
+  const page = { before, limit: limit + 1 };
+  const settle = async (source: TimelineSource, read: () => Promise<TimelineEntry[]>) => {
+    try {
+      return { source, entries: await read() };
+    } catch (e) {
+      opts.onError?.(source, e);
+      return { source, entries: null };
+    }
+  };
+  const results = await Promise.all([
+    settle("notes", async () => (((await listNotes(db, accountId, contactId, page)) ?? []) as TimelineNote[])
+      .map((note): TimelineEntry => ({ kind: "note", id: note.id, at: note.created_at, note }))),
+    settle("todos", async () => (await listContactTasks(db, accountId, contactId, page))
+      .map((t): TimelineEntry => ({ kind: "task", id: t.id, at: t.created_at, task: { ...t, created_by: t.created_by ?? null } }))),
+    settle("deals", async () => (((await listContactOpportunities(db, accountId, contactId, page)) ?? []) as TimelineDeal[])
+      .map((deal): TimelineEntry => ({ kind: "deal", id: deal.id, at: deal.created_at, deal }))),
+    settle("forms", async () => (await listContactSubmissions(db, accountId, contactId, page))
+      .map((s): TimelineEntry => ({ kind: "submission", id: s.id, at: s.created_at, submission: {
+        id: s.id, created_at: s.created_at, formName: s.formName, answers: s.answers, author_kind: s.author_kind ?? "customer",
+      } }))),
+    settle("messages", async () => ((await listContactMessages(db, accountId, contactId, { ...page, channels: ["email", "sms"] })) as TimelineMessage[])
+      .map((message): TimelineEntry => ({ kind: "message", id: message.id, at: message.created_at, message }))),
+    settle("bookings", async () => (await listContactBookings(db, accountId, contactId, page))
+      .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, booking }))),
+    settle("calls", async () => (await listContactCalls(db, accountId, contactId, page.limit, { before }))
+      .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, call }))),
+  ]);
+  const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
+  const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);
+  const items = merged.slice(0, limit);
+  const last = items.at(-1);
+  return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed };
+}
+
+/**
+ * Display names for person marks (spec §6, Names): `name ?? email` (the picker's rule), for the
+ * distinct Clerk ids asked, on the caller's client, so RLS decides who may be named (users_member_read
+ * and users_agency_read, 0066). An id with no readable row is absent; the caller reads it as
+ * "Someone on the team". No service-role read names anyone. THROWS on a read error.
+ */
+export async function listPeopleNames(db: SupabaseClient, clerkUserIds: readonly string[]): Promise<Record<string, string>> {
+  const ids = [...new Set(clerkUserIds.filter((x) => x.length > 0))];
+  if (ids.length === 0) return {};
+  const { data, error } = await db.from("users").select("clerk_user_id, name, email").in("clerk_user_id", ids);
+  if (error) throw new Error(`listPeopleNames failed: ${error.message}`);
+  const out: Record<string, string> = {};
+  for (const u of (data ?? []) as { clerk_user_id: string; name: string | null; email: string }[]) {
+    const label = u.name?.trim() || u.email;
+    if (label) out[u.clerk_user_id] = label;
+  }
+  return out;
 }

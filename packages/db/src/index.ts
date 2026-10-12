@@ -260,11 +260,15 @@ export {
   type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
 } from "./places";
 
-// The contact record page's facts and Next up (S-03 part 1). See ./record.ts.
+// The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {
   contactFacts, contactNextUp, OPEN_DEALS_SUM_CAP,
+  listContactTimelinePage, listPeopleNames, compareTimelineEntries, TIMELINE_SOURCES, TIMELINE_PAGE_SIZE,
   type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
   type ContactNextUp, type NextUpTask,
+  type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
+  type TimelineMessage, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
+  type ContactMessageRow,
 } from "./record";
 
 // Who made a timeline row (S-03 part 1, 1b; migration 0073). See ./provenance.ts.
