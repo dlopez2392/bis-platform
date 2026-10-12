@@ -47,6 +47,7 @@ import { ChoiceTilesDemo } from "./choice-tiles-demo";
 import { AssignDemo } from "./assign-demo";
 import { RelationshipsDemo } from "./relationships-demo";
 import { PlacesDemo } from "./places-demo";
+import { RecordDemo } from "./record-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -255,6 +256,12 @@ export default async function StyleguidePage({
             and a Technician's view, which has no Belongs to), empty, loading and error. */}
         <Section title={m["places.title"]} file="accounts/[accountId]/contacts/places-card.tsx">
           <PlacesDemo />
+        </Section>
+
+        {/* S-03 part 1 (spec §15): the record kit: layout at both widths, header with all and no
+            actions, a card loading, ready, empty, in error and closed on a phone. */}
+        <Section title={t(m, "styleguide.recordKit", "en")} file="components/record/*">
+          <RecordDemo />
         </Section>
 
         <Section title={m["assign.filter.label"]} file="components/assign/who-filter.tsx">
