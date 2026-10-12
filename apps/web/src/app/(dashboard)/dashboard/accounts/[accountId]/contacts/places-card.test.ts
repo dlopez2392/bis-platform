@@ -47,7 +47,7 @@ const ready = (over: Partial<Data> = {}): PlacesLoad => ({ status: "ready", data
 const noop = () => {};
 const none = async () => {};
 const handlers = {
-  removePlace: none, putBack: none, removeUnit: none, changed: noop, placeAdded: noop, unitAdded: noop, unitReplaced: noop,
+  removePlace: none, putBack: none, removeUnit: none, changed: noop, placeAdded: noop, unitAdded: noop, unitReplaced: noop, ownerChanged: noop,
 };
 const render = (locale: "en" | "es", load: PlacesLoad, canMovePlace = true) =>
   // Children positionally (react/no-children-prop); the cast only tells createElement they arrive there.
@@ -145,6 +145,8 @@ describe("equipment", () => {
     const history = one(html, /<ul[^>]*data-equipment-history[^>]*>[\s\S]*?<\/ul>/);
     expect(renderedText(history)).toContain("Carrier");
     expect(renderedText(history)).toContain(m["equipment.replacedOn"].replace("{date}", formatDateUTC("2021-06-01", "en")));
+    // Read only, so the old unit's own install date is a line, not a field (spec §8: "Installed {date}").
+    expect(renderedText(history)).toContain(m["equipment.installedOn"].replace("{date}", formatDateUTC("2010-01-01", "en")));
     expect(history).not.toContain("<button");
     // Each current unit has its own Remove; the replaced one has none.
     expect(html.match(/aria-label="Remove AC upstairs"/g)).toHaveLength(1);

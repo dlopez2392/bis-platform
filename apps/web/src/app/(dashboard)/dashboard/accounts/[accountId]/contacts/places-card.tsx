@@ -52,14 +52,26 @@ function Line({ label, children }: { label: ReactNode; children: ReactNode }) {
   );
 }
 
-/** A save through an action that answers a messages.ts key; the card re-reads after it. */
-function saver(ctx: Ctx, run: (value: string) => Promise<{ ok: true } | { ok: false; error: string; params?: Record<string, string | number> }>): Save {
+/**
+ * A save through an action that answers a messages.ts key; the card re-reads after it, unless the
+ * field announces its own save (the owner change, whose handler re-reads), so the card reads once.
+ */
+function saver(
+  ctx: Ctx, run: (value: string) => Promise<{ ok: true } | { ok: false; error: string; params?: Record<string, string | number> }>,
+  reread = true,
+): Save {
   return async (value) => {
     const r = await run(value).catch(() => failed);
     if (!r.ok) return { ok: false, error: ctx.tt(r.error, "params" in r ? r.params : undefined) };
-    ctx.handlers.changed();
+    if (reread) ctx.handlers.changed();
     return { ok: true };
   };
+}
+
+/** Who an owner value names, in the words the owner-change toast uses: the person's name or the group's. */
+function ownerName(ctx: Ctx, value: string): string {
+  const group = value.startsWith("group:") ? ctx.data.groups.find((g) => `group:${g.id}` === value) : undefined;
+  return group ? group.name : ctx.subject.name;
 }
 
 function PlaceField({ ctx, place, field, labelKey, hintKey, multiline }: {
@@ -146,7 +158,11 @@ function UnitRow({ ctx, view }: { ctx: Ctx; view: UnitView }) {
           <ul id={historyId} hidden={!open} data-equipment-history className="space-y-1 text-xs text-muted-foreground">
             {history.map((h) => (
               <li key={h.unit.id} className="break-words">
-                {[h.unit.name, makeModel(h.unit), ctx.tt("equipment.replacedOn", { date: formatDateUTC(h.replacedOn, ctx.locale) })]
+                {[
+                  h.unit.name, makeModel(h.unit),
+                  h.unit.installed_on ? ctx.tt("equipment.installedOn", { date: formatDateUTC(h.unit.installed_on, ctx.locale) }) : "",
+                  ctx.tt("equipment.replacedOn", { date: formatDateUTC(h.replacedOn, ctx.locale) }),
+                ]
                   .filter(Boolean).join(" · ")}
               </li>
             ))}
@@ -207,7 +223,9 @@ function PlaceItem({ ctx, place, units }: { ctx: Ctx; place: PlaceRow; units: Un
           <Line label={ctx.tt("places.belongsTo")}>
             <InlineField key={`owner:${ownerValue(place)}`} options={ownerOptions(ctx.subject, ctx.data.groups, ctx.locale)}
               label={ctx.tt("places.belongsTo")} value={ownerValue(place)} locale={ctx.locale}
-              save={saver(ctx, (v) => setPlaceOwnerAction(ctx.accountId, ctx.contactId, place.id, v))} />
+              save={saver(ctx, (v) => setPlaceOwnerAction(ctx.accountId, ctx.contactId, place.id, v), false)}
+              // Spec §7: "{place} now belongs to {owner}." with its own Undo, not the field's generic "saved".
+              onSaved={(prior, stored) => ctx.handlers.ownerChanged(place.id, title, ownerName(ctx, stored), prior)} />
           </Line>
         ) : null}
       </dl>

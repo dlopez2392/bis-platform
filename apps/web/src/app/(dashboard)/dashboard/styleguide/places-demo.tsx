@@ -53,7 +53,7 @@ const STATES: PlacesLoad[] = [
 const noop = () => {};
 const handlers = {
   removePlace: async () => {}, putBack: async () => {}, removeUnit: async () => {},
-  placeAdded: noop, unitAdded: noop, unitReplaced: noop, changed: noop,
+  placeAdded: noop, unitAdded: noop, unitReplaced: noop, ownerChanged: noop, changed: noop,
 };
 const common = { accountId: "sg", contactId: SUBJECT, onRetry: noop, handlers };
 const box = "min-w-0 rounded-[var(--radius-card)] border border-border p-4";

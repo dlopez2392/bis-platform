@@ -3,7 +3,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import {
-  removePlaceAction, undoRemovePlaceAction, setPlaceArchivedAction, removeEquipmentAction, undoRemoveEquipmentAction,
+  removePlaceAction, undoRemovePlaceAction, setPlaceArchivedAction, setPlaceOwnerAction, removeEquipmentAction, undoRemoveEquipmentAction,
 } from "./places-actions";
 
 /**
@@ -27,6 +27,8 @@ export type PlaceHandlers = {
   unitAdded(id: string, name: string): void;
   /** A dialog replaced a unit with `newId`: the toast, and its Undo (which deletes the new unit). */
   unitReplaced(newId: string): void;
+  /** The owner select saved (Owner and Staff): "{place} now belongs to {owner}.", and its Undo sets `priorOwner` back (spec §7). */
+  ownerChanged(placeId: string, title: string, owner: string, priorOwner: string): void;
   /** Something on the card changed: re-read it. */
   changed(): void;
 };
@@ -49,10 +51,10 @@ export function placeHandlers({ accountId, contactId, locale, reload, inFlight =
     try { return await run(); } finally { inFlight.delete(id); }
   }
 
-  /** A success toast whose Undo runs `undo`, re-reads on success and says why on failure. */
-  function offer(message: string, undo: () => Promise<Answer>) {
+  /** A success toast whose Undo runs `undo` once per row at a time (a double click undoes once), re-reads on success and says why on failure. */
+  function offer(message: string, row: string, undo: () => Promise<Answer>) {
     toast.success(message, { action: { label: undoLabel, onClick: () => {
-      void undo().catch(() => undoFailed).then((u) => (u.ok ? reload() : say(u)));
+      void once(row, () => undo().catch(() => undoFailed)).then((u) => { if (!u) return; if (u.ok) reload(); else say(u); });
     } } });
   }
 
@@ -64,7 +66,7 @@ export function placeHandlers({ accountId, contactId, locale, reload, inFlight =
       reload();
       // The Undo the action answered, as it answered it: a deleted property comes back with the
       // same id; an archived one has its archive cleared (spec C5, §7).
-      offer(tt(r.undo.mode === "deleted" ? "places.removed" : "places.archived", { place: title }),
+      offer(tt(r.undo.mode === "deleted" ? "places.removed" : "places.archived", { place: title }), id,
         () => undoRemovePlaceAction(accountId, contactId, r.undo));
     },
     async putBack(id, title) {
@@ -72,26 +74,30 @@ export function placeHandlers({ accountId, contactId, locale, reload, inFlight =
       if (!r) return;
       if (!r.ok) { say(r); return; }
       reload();
-      offer(tt("places.putBackDone", { place: title }), () => setPlaceArchivedAction(accountId, contactId, id, true));
+      offer(tt("places.putBackDone", { place: title }), id, () => setPlaceArchivedAction(accountId, contactId, id, true));
     },
     async removeUnit(id, name) {
       const r = await once(id, () => removeEquipmentAction(accountId, contactId, id).catch(() => failed));
       if (!r) return;
       if (!r.ok) { say(r); return; }
       reload();
-      offer(tt("equipment.removed", { name }), () => undoRemoveEquipmentAction(accountId, contactId, r.snapshot));
+      offer(tt("equipment.removed", { name }), id, () => undoRemoveEquipmentAction(accountId, contactId, r.snapshot));
     },
     placeAdded(id, title) {
       reload();
-      offer(tt("places.added", { place: title }), () => removePlaceAction(accountId, contactId, id));
+      offer(tt("places.added", { place: title }), id, () => removePlaceAction(accountId, contactId, id));
     },
     unitAdded(id, name) {
       reload();
-      offer(tt("equipment.added", { name }), () => removeEquipmentAction(accountId, contactId, id));
+      offer(tt("equipment.added", { name }), id, () => removeEquipmentAction(accountId, contactId, id));
     },
     unitReplaced(newId) {
       reload();
-      offer(tt("equipment.replaced"), () => removeEquipmentAction(accountId, contactId, newId));
+      offer(tt("equipment.replaced"), newId, () => removeEquipmentAction(accountId, contactId, newId));
+    },
+    ownerChanged(placeId, title, owner, priorOwner) {
+      reload();
+      offer(tt("places.ownerChanged", { place: title, owner }), placeId, () => setPlaceOwnerAction(accountId, contactId, placeId, priorOwner));
     },
     changed: reload,
   };

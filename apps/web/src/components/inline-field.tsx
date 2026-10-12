@@ -117,9 +117,15 @@ export function InlineField(
      *  remount key while the operator types, so a refresh never throws the
      *  typed text away). */
     onEditingChange?: (editing: boolean) => void;
+    /** When given, the field shows no saved toast of its own: the caller
+     *  announces the save in its own words, with its own Undo, given the
+     *  prior value and the one now stored (the Properties card's owner
+     *  change, places spec §7: "{place} now belongs to {owner}."). Errors
+     *  are still the field's to say. Absent: the field's own toast, as ever. */
+    onSaved?: (prior: string, stored: string) => void;
   },
 ) {
-  const { label, field, required, options, rule, value, save, inputType = "text", display: atRest, locale = "en", undoPhone, undoWith, placeholder, onEditingChange } = props;
+  const { label, field, required, options, rule, value, save, inputType = "text", display: atRest, locale = "en", undoPhone, undoWith, placeholder, onEditingChange, onSaved } = props;
   // `field` is guaranteed defined whenever none of `rule`, `required` and
   // `options` is — the four-way union above enforces that at every call
   // site; this is what lets commit() and the undo guard below share ONE
@@ -165,6 +171,7 @@ export function InlineField(
     const view = inlineSavedView(norm.value, label, result, locale);
     committed.current = view.shown;
     setShown(view.shown);
+    if (onSaved) { onSaved(prior, view.shown); return; }
     // Whether Undo is offered, and the ONE write it runs, is decided by
     // planInlineUndo (lib/contacts/inline-save.ts, pinned there by behaviour):
     // phone and an `undoWith` field undo with the payload THIS save handed

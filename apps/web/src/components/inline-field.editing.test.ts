@@ -106,3 +106,27 @@ describe("InlineField's crash line follows locale", () => {
     await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith(m["inline.crashed.es"]));
   });
 });
+
+describe("InlineField's onSaved: the caller announces the save (places spec §7, the owner change)", () => {
+  it("with onSaved the field shows no saved toast of its own and hands the caller the prior and stored values (mutation: toast anyway -> FAILS)", async () => {
+    const { toast } = await import("sonner");
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.info).mockClear();
+    const onSaved = vi.fn();
+    const el = editor({ onSaved });
+    (el.props.onBlur as (e: unknown) => void)({ currentTarget: { value: "Past the second canal" } });
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(onSaved).toHaveBeenCalledWith("Past the canal", "Past the second canal");
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+  it("a refused save never reaches onSaved, and says why", async () => {
+    const { toast } = await import("sonner");
+    vi.mocked(toast.error).mockClear();
+    const onSaved = vi.fn();
+    const el = editor({ onSaved, save: async () => ({ ok: false as const, error: "No." }) });
+    (el.props.onBlur as (e: unknown) => void)({ currentTarget: { value: "Past the second canal" } });
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith("No."));
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+});

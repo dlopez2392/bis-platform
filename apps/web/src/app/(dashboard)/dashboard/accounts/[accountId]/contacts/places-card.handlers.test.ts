@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const actions = {
-  removePlaceAction: vi.fn(), undoRemovePlaceAction: vi.fn(), setPlaceArchivedAction: vi.fn(),
+  removePlaceAction: vi.fn(), undoRemovePlaceAction: vi.fn(), setPlaceArchivedAction: vi.fn(), setPlaceOwnerAction: vi.fn(),
   removeEquipmentAction: vi.fn(), undoRemoveEquipmentAction: vi.fn(),
 };
 vi.mock("./places-actions", () => actions);
@@ -134,5 +134,39 @@ describe("placeHandlers: every change runs at once, with Undo (rule 6)", () => {
     expect(actions.removeEquipmentAction).toHaveBeenCalledTimes(1);
     resolve({ ok: true, snapshot: UNIT_SNAPSHOT });
     await Promise.all([a, b]);
+  });
+});
+
+describe("placeHandlers: the owner change and a double-clicked Undo (fix round 1)", () => {
+  const G1 = "44444444-4444-4444-8444-444444444444";
+  it("a new owner says '{place} now belongs to {owner}.' and its Undo sets the prior owner (spec §7; mutation: InlineField's generic toast -> FAILS)", async () => {
+    const { h, reload } = make();
+    actions.setPlaceOwnerAction.mockResolvedValue({ ok: true });
+    h.ownerChanged(P1, "Casa", "Casa Reyes", `contact:${C1}`);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(toast.success.mock.calls.at(-1)![0]).toBe("Casa now belongs to Casa Reyes.");
+    await pressUndo();
+    expect(actions.setPlaceOwnerAction).toHaveBeenCalledTimes(1);
+    expect(actions.setPlaceOwnerAction).toHaveBeenLastCalledWith("a1", C1, P1, `contact:${C1}`);
+    expect(reload).toHaveBeenCalledTimes(2);
+    // In Spanish too.
+    const es = placeHandlers({ accountId: "a1", contactId: C1, locale: "es", reload });
+    es.ownerChanged(P1, "Casa", "Ana Reyes", `group:${G1}`);
+    expect(toast.success.mock.calls.at(-1)![0]).toBe("Casa ahora es de Ana Reyes.");
+  });
+
+  it("a double-clicked Undo undoes once (mutation: drop the lock around the Undo -> FAILS)", async () => {
+    const { h } = make();
+    actions.removeEquipmentAction.mockResolvedValueOnce({ ok: true, snapshot: UNIT_SNAPSHOT });
+    let resolve!: (v: unknown) => void;
+    actions.undoRemoveEquipmentAction.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    await h.removeUnit(U1, "AC upstairs");
+    const opts = toast.success.mock.calls.at(-1)![1] as { action: { onClick: () => void } };
+    opts.action.onClick();
+    opts.action.onClick();
+    expect(actions.undoRemoveEquipmentAction).toHaveBeenCalledTimes(1);
+    resolve({ ok: true });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });
