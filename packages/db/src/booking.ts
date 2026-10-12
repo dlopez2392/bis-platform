@@ -930,6 +930,44 @@ export async function listBookingCreationsBetween(
   return (data ?? []).map((r: { created_at: string }) => r.created_at);
 }
 
+/**
+ * "Booked {n} times" on a customer's record (S-03 part 1, spec C8/D14): the bookings MADE for one
+ * customer, by the SAME definition as `listBookingCreationsBetween` (D-035, the ONE read behind
+ * every "bookings" count): a reschedule (`rescheduled_from_id` set) is not a new booking, and a
+ * booking cancelled later still counts. An exact head count, never a list. Runs on the caller's
+ * client, so RLS (0068's Technician fence) decides what is counted. THROWS on a read error.
+ */
+export async function countContactBookingsMade(
+  db: SupabaseClient, accountId: string, contactId: string,
+): Promise<number> {
+  const { count, error } = await db.from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("contact_id", contactId)
+    .is("rescheduled_from_id", null);
+  if (error) throw new Error(`countContactBookingsMade failed: ${error.message}`);
+  return count ?? 0;
+}
+
+export type UpcomingBooking = { id: string; starts_at: string };
+
+/**
+ * The record's "Next up" bookings (S-03 part 1, spec §7): still `booked`, starting at or after
+ * `nowIso`, soonest first, at most `limit`. No calendar label: there is one calendar per account
+ * (`calendars_one_per_account`, 0016) and it has no name column. THROWS on a read error.
+ */
+export async function listContactUpcomingBookings(
+  db: SupabaseClient, accountId: string, contactId: string, nowIso: string, limit = 3,
+): Promise<UpcomingBooking[]> {
+  const { data, error } = await db.from("bookings")
+    .select("id, starts_at")
+    .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "booked")
+    .gte("starts_at", nowIso)
+    .order("starts_at", { ascending: true }).order("id", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`listContactUpcomingBookings failed: ${error.message}`);
+  return (data ?? []) as UpcomingBooking[];
+}
+
 /** Rate limiting for the public booking submit: same shape as forms' countRecentSubmissions. */
 export async function countRecentBookings(
   db: SupabaseClient, calendarId: string, ipHash: string, windowStartIso: string,
