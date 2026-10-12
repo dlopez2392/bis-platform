@@ -367,7 +367,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
 
       const sharedRow = card.locator("[data-place-row]").filter({ hasText: SHARED_ADDRESS });
       await expect(sharedRow).toBeVisible();
-      await expect(sharedRow.getByText(m["places.sharedWith"].replace("{group}", HOUSEHOLD))).toBeVisible();
+      await expect(sharedRow.getByRole("paragraph").filter({ hasText: m["places.sharedWith"].replace("{group}", HOUSEHOLD) })).toBeVisible();
 
       // The household's SECOND member sees the same place on their own drawer.
       await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${encodeURIComponent(SECOND_LAST)}`);
@@ -377,7 +377,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       const drawerCard = page.getByRole("dialog").locator("[data-places-card]");
       const sharedInDrawer = drawerCard.locator("[data-place-row]").filter({ hasText: SHARED_ADDRESS });
       await expect(sharedInDrawer).toBeVisible();
-      await expect(sharedInDrawer.getByText(m["places.sharedWith"].replace("{group}", HOUSEHOLD))).toBeVisible();
+      await expect(sharedInDrawer.getByRole("paragraph").filter({ hasText: m["places.sharedWith"].replace("{group}", HOUSEHOLD) })).toBeVisible();
     });
 
     test("5. a Spanish reader sees 'Propiedades', 'Cómo llegar' and 'Equipo'", async ({ page }) => {
