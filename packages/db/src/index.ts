@@ -259,3 +259,10 @@ export {
   type PlaceRow, type EquipmentRow, type PlaceOwner, type PlaceFields, type PlacePatch, type EquipmentFields,
   type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
 } from "./places";
+
+// The contact record page's facts and Next up (S-03 part 1). See ./record.ts.
+export {
+  contactFacts, contactNextUp, OPEN_DEALS_SUM_CAP,
+  type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
+  type ContactNextUp, type NextUpTask,
+} from "./record";
