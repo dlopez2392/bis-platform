@@ -109,6 +109,9 @@ describe("PlacesCardView: its own loaded, empty and error states (rule 5 per car
     expect(trigger).toContain("max-w-full");
     expect(trigger).toContain("whitespace-normal");
     expect(trigger).not.toContain("whitespace-nowrap");
+    // A 44px target on a phone, like its siblings (re-measure of 532f708b; mutation: min-h-8 alone -> FAILS).
+    expect(trigger).toMatch(/[\s"]min-h-11[\s"]/);
+    expect(trigger).toMatch(/[\s"]md:min-h-8[\s"]/);
   });
 
   it("headingHidden hides the heading but keeps it labelling the section (S-03 §8; mutation: ignore the prop -> FAILS)", () => {

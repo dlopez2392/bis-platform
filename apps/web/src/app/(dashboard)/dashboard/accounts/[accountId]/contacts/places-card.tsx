@@ -40,7 +40,8 @@ const failed = { ok: false as const, error: "places.error.failed" };
 /**
  * The label-and-value lists. Label ABOVE value while the card is narrow (a phone's card leaves a
  * 7rem label column only ~60px for the value, and 320px scrolled sideways); the two columns
- * come back from 18rem of card width, so the drawer keeps them (design check 1a).
+ * come back from 18rem of card width, so the drawer keeps them (design check 1a). The desk's
+ * 280px "have" column (about 246px of card) stacks too, on purpose: the same shape as Details.
  */
 const LIST = "grid grid-cols-1 gap-x-2 gap-y-0.5 @min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]";
 
