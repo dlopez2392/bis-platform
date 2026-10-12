@@ -266,3 +266,6 @@ export {
   type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
   type ContactNextUp, type NextUpTask,
 } from "./record";
+
+// Who made a timeline row (S-03 part 1, 1b; migration 0073). See ./provenance.ts.
+export { AUTHOR_KINDS, messageAuthor, bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
