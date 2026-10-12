@@ -83,6 +83,11 @@ async function loadDemo(): Promise<Demo> {
  * website copy of either would drift the first time the numbers changed.
  * "Mon 8:00 AM" is the first tick of the pass's Monday band (08:00-11:00
  * local, lib/reports/weekly-window.ts `inMondayBand`).
+ *
+ * One line each for the sender and the time, the sender cut short with an
+ * ellipsis, as a mail app does: the demo's brand name ("Resaca Air
+ * Conditioning & Heating") wrapped onto two lines in the first phone-size
+ * capture (run 38267925952) and pushed the time onto two lines with it.
  */
 function withMailHeader(html: string, h: { from: string; subject: string; accent: string }): string {
   const esc = (v: string) => v.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -96,9 +101,9 @@ function withMailHeader(html: string, h: { from: string; subject: string; accent
       <div style="width:36px;height:36px;border-radius:999px;background:${avatar};color:#ffffff;
           display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px;">${esc(h.from.slice(0, 1).toUpperCase())}</div>
       <div style="flex:1;min-width:0;">
-        <div style="display:flex;justify-content:space-between;gap:8px;font-size:15px;">
-          <span style="font-weight:600;">${esc(h.from)}</span>
-          <span style="color:#71717a;font-size:13px;">Mon 8:00 AM</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px;">
+          <span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(h.from)}</span>
+          <span style="flex:none;color:#71717a;font-size:13px;white-space:nowrap;">Mon 8:00 AM</span>
         </div>
         <div style="color:#71717a;font-size:13px;">to me</div>
       </div>
