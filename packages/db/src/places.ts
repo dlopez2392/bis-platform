@@ -276,7 +276,8 @@ export async function removePlace(
   const { count, error: cErr } = await db.from("equipment").select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("place_id", placeId);
   if (cErr) throw dbError("removePlace unit count failed", cErr);
-  if ((count ?? 0) === 0) {
+  if (count === null) throw dbError("removePlace unit count failed", { message: "no count returned" });
+  if (count === 0) {
     const { data, error } = await db.from("places").delete()
       .eq("account_id", accountId).eq("id", placeId).select(PLACE_COLUMNS);
     if (error) throw dbError("removePlace delete failed", error);

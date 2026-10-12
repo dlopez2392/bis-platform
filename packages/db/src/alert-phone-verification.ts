@@ -97,7 +97,8 @@ export async function countRecentAlertPhoneVerifications(
     .eq("account_id", accountId).eq("phone", phone)
     .gte("created_at", since);
   if (error) throw new Error(`countRecentAlertPhoneVerifications failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countRecentAlertPhoneVerifications failed: no count returned");
+  return count;
 }
 
 /**

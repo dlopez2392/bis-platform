@@ -938,7 +938,8 @@ export async function countRecentBookings(
     .select("id", { count: "exact", head: true })
     .eq("calendar_id", calendarId).eq("ip_hash", ipHash).gte("created_at", windowStartIso);
   if (error) throw new Error(`countRecentBookings failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countRecentBookings failed: no count returned");
+  return count;
 }
 
 // No `name`: `accounts.name` is the agency's internal label ("Rio Roofing —

@@ -48,7 +48,8 @@ export async function countWebSessionsByIp(
     .select("id", { count: "exact", head: true })
     .eq("ip_hash", ipHash).gte("created_at", sinceIso);
   if (error) throw new Error(`countWebSessionsByIp failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countWebSessionsByIp failed: no count returned");
+  return count;
 }
 
 /** Sessions minted against this account since `sinceIso`. The per-tenant
@@ -60,5 +61,6 @@ export async function countWebSessionsForAccount(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).gte("created_at", sinceIso);
   if (error) throw new Error(`countWebSessionsForAccount failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countWebSessionsForAccount failed: no count returned");
+  return count;
 }

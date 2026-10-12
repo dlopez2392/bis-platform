@@ -228,7 +228,8 @@ export async function countAutomationUsage(
   const count = async (apply: (q: ReturnType<typeof base>) => ReturnType<typeof base>) => {
     const { count: n, error } = await apply(base());
     if (error) throw new Error(`countAutomationUsage failed: ${error.message}`);
-    return n ?? 0;
+    if (n === null) throw new Error("countAutomationUsage failed: no count returned");
+    return n;
   };
   const [textsSent, emailsSent, emailsFailed, conversations, callsHandled, held, skipped] = await Promise.all([
     count((q) => q.eq("status", "sent").eq("channel", "sms")),

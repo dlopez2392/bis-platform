@@ -27,16 +27,19 @@ export default async function DashboardPage() {
     ),
   ]);
 
-  if (contactCount.error) {
-    console.error("dashboard: contacts count query failed", contactCount.error);
+  // A null count with no error is a failed read too (postgrest-js reads a HEAD
+  // request's empty 404 as "204 No Content"), never a real zero.
+  const contactsFailed = contactCount.error !== null || contactCount.count === null;
+  if (contactsFailed) {
+    console.error("dashboard: contacts count query failed", contactCount.error ?? "no count returned");
   }
   if (openOpps.error) {
     console.error("dashboard: opportunities query failed", openOpps.error);
   }
 
-  const contactsValue = contactCount.error
+  const contactsValue = contactsFailed
     ? m["common.unavailable"]
-    : String(contactCount.count ?? 0);
+    : String(contactCount.count);
 
   const openOppsValue = openOpps.error ? m["common.unavailable"] : String(openOpps.result!.count);
   const pipelineValueDisplay = openOpps.error

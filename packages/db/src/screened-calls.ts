@@ -150,7 +150,8 @@ export async function countScreenedCalls(
   if (opts.accountId) q = q.eq("account_id", opts.accountId);
   const { count, error } = await q;
   if (error) throw new Error(`countScreenedCalls failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countScreenedCalls failed: no count returned");
+  return count;
 }
 
 /** The three reasons that mean a line is turning callers away. */
@@ -198,7 +199,8 @@ export async function countMisconfiguredScreenedCalls(
   if (accountId) q = q.eq("account_id", accountId);
   const { count, error } = await q;
   if (error) throw new Error(`countMisconfiguredScreenedCalls failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countMisconfiguredScreenedCalls failed: no count returned");
+  return count;
 }
 
 /**

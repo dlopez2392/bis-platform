@@ -382,7 +382,8 @@ export async function countExpiredUsage(
       .is("reported_at", null)
       .or(usageRangeFilter(group.map((a) => ({ accountId: a.accountId, fromIso: a.billingStartedAt, beforeIso: floorIso }))));
     if (error) throw new Error(`countExpiredUsage failed: ${error.message}`);
-    total += count ?? 0;
+    if (count === null) throw new Error("countExpiredUsage failed: no count returned");
+    total += count;
   }
   return total;
 }
