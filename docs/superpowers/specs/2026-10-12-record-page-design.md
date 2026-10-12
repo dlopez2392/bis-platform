@@ -195,7 +195,7 @@ locale.
 | Deal | person (`created_by`; unnamed when NULL) | **Dan López** · added a deal: Deck build · $2,400 · ● Open |
 | Submission | `author_kind` | **Customer** · sent the Quote request form · … / **Sofía · AI** · took a request in the website chat |
 | Message (email, sms) | `author_kind` | **Customer** · texted · … / **Dan López** · emailed · ● Delivered / **Automation** · texted / **Sofía · AI** · texted (the missed-call text-back) |
-| Booking | `author_kind` | **Customer** · booked Thu, Oct 16, 10:00 AM · Estimates · ● Booked; a reschedule adds "Moved from Tue, Oct 14, 9:00 AM" (`rescheduled_from_id`, 0061) |
+| Booking | `author_kind` | **Customer** · booked an appointment for Thu, Oct 16, 10:00 AM · ● Booked; a reschedule adds "Moved from Tue, Oct 14, 9:00 AM" (`rescheduled_from_id`, 0061). No calendar name: an account has one calendar and it has no name column (`calendars_one_per_account`, 0016), so a row reads "an appointment", as Next up's "Appointment · …" does |
 | Call | AI | **Sofía · AI** · answered a call · ● Booked · 3 min, then the call's reason or summary, and "Open call" to the call page |
 
 **Names.** One read per page: `users (clerk_user_id, name, email)` for the distinct person ids on the page, on the
@@ -247,7 +247,9 @@ one `Promise.all` whose failure fails the page (`[contactId]/page.tsx:57-82`).
 - **Timeline sources** gain an additive options argument `{ before?: RowCursor; limit?: number }`, ordering
   `(at desc, id desc)` and filtering `at <= before.v`; the composer drops rows at `before.v` whose id is not
   below `before.id`. With no options a function behaves exactly as today, so the drawer's `/summary` route
-  (`summary/route.ts:60-74`) is unchanged. New: `listContactBookings` (booking.ts, with the calendar's name) and
+  (`summary/route.ts:60-74`) is unchanged. New: `listContactBookings` (booking.ts; no calendar name, there is one
+  calendar per account and it has no name column, so the row reads "an appointment"; it carries the replaced
+  booking's start for "Moved from") and
   `listContactCalls` widened to the row's columns (`voice.ts:937-946` reads three). `listContactMessages` takes
   `channels: ['email','sms']` (C4). Each source reads `limit + 1` (31); the merge keeps 30 and knows if there is
   an older page.
@@ -444,7 +446,7 @@ contacto) and `contact.tags.es` (Etiquetas).
 | `timeline.deal` | added a deal: {name} | agregó una oportunidad: {name} |
 | `timeline.form` · `.chat` | sent the {form} form · took a request in the website chat | envió el formulario {form} · tomó una solicitud en el chat del sitio web |
 | `timeline.texted` · `.emailed` | texted · emailed | mandó un texto · mandó un correo |
-| `timeline.booked` · `.movedFrom` | booked {when} · Moved from {when} | agendó una cita para {when} · Se movió del {when} |
+| `timeline.booked` · `.movedFrom` | booked an appointment for {when} · Moved from {when} | agendó una cita para {when} · Se movió del {when} |
 | `timeline.answeredCall` · `.openCall` · `.minutes` | answered a call · Open call · {count} min | contestó una llamada · Ver llamada · {count} min |
 | `timeline.empty` | Texts, calls, bookings, notes and To-dos with this customer show up here. | Aquí aparecen los textos, llamadas, citas, notas y pendientes con este cliente. |
 | `timeline.someFailed` | Couldn't load {what}. | No se pudo cargar: {what}. |
