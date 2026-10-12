@@ -271,7 +271,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       await expect(historyToggle).toBeVisible();
       await historyToggle.click();
       await expect(carrierRow.locator("[data-equipment-history] li"))
-        .toHaveText(`${UNIT_NAME} · Trane · ${m["equipment.replacedOn"].replace("{date}", formatDateUTC(replacedOn, "en"))}`);
+        .toHaveText(`${UNIT_NAME} · Trane · ${m["equipment.installedOn"].replace("{date}", formatDateUTC("2019-03-03", "en"))} · ${m["equipment.replacedOn"].replace("{date}", formatDateUTC(replacedOn, "en"))}`);
 
       // Undo the replace: Carrier goes, AC upstairs/Trane is current again with no history.
       const replacedToast = await heldToast(page, m["equipment.replaced"]);
