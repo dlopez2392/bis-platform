@@ -103,7 +103,10 @@ test("an email sent from a contact appears on that contact's timeline", async ({
     // the page heading): getByText ignores case, so it matched both.
     const body = `Hello from the e2e send ${stamp}`;
     // The composer has no <label>s — it is a mode toggle plus placeholders.
-    await page.getByRole("button", { name: "Email", exact: true }).click();
+    // S-03 part 1: the header's Email opens the composer on its channel (the composer now sits at
+    // the top of the Activity card). The tab is still the composer's, pressed by the link.
+    await page.locator('[data-record-action="email"]').click();
+    await expect(page.getByRole("button", { name: "Email", exact: true })).toHaveAttribute("aria-pressed", "true");
     await page.getByPlaceholder("Subject").fill("Timeline check");
     await page.getByPlaceholder(/write an email/i).fill(body);
     await page.getByRole("button", { name: "Send", exact: true }).click();
