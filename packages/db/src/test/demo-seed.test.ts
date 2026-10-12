@@ -126,6 +126,17 @@ describe("demo tenant seeder", () => {
       expect(site!.vercel_project_id).toBe(demoVercelProjectId(THROWAWAY));
       expect(site!.vercel_project_id).not.toBe(demoVercelProjectId(DEMO_ORG_ID));
 
+      // The Website page showed "waiting for the first sync" over sixty
+      // stored days: it reads `last_synced_day` to tell a synced site from a
+      // just-linked one, and the seed never stamped it. Stamped with the
+      // newest day written (mutation: drop the stamp -> FAILS).
+      const { data: synced } = await db.from("sites")
+        .select("last_synced_day").eq("account_id", accountId).single();
+      const { data: newest } = await db.from("site_traffic_daily")
+        .select("day").eq("account_id", accountId).order("day", { ascending: false }).limit(1).single();
+      expect(synced!.last_synced_day).not.toBeNull();
+      expect(synced!.last_synced_day).toBe(newest!.day);
+
       // --- The demo looks like a business that finished setting up. Each of
       //     these was a visible defect in the first capture run, and none was
       //     a rendering bug — the demo was honestly reporting itself as
