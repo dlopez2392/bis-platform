@@ -14,6 +14,7 @@ import { RelationshipsCard } from "../relationships-card";
 import { Card } from "@/components/ui/card";
 import { ActivityTimeline } from "./activity-timeline";
 import { GroupsCard } from "../groups-card";
+import { PlacesCard } from "../places-card";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
@@ -176,6 +177,10 @@ export default async function ContactDetailPage({
               reads its own route, so it loads and fails on its own. */}
           <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
             <GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} />
+          </aside>
+          {/* S-02 B2 §8: between Groups and Deals; its own read, so it loads and fails on its own. */}
+          <aside data-places-aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
+            <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} />
           </aside>
           <aside className="rounded-xl border border-border bg-card glass px-4 pt-3.5 pb-3">
             <p className="mb-2 text-[13.5px] font-semibold text-card-foreground">

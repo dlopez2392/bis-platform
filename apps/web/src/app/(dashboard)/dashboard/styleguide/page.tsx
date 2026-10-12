@@ -46,6 +46,7 @@ import { RailStates } from "./rail-states";
 import { ChoiceTilesDemo } from "./choice-tiles-demo";
 import { AssignDemo } from "./assign-demo";
 import { RelationshipsDemo } from "./relationships-demo";
+import { PlacesDemo } from "./places-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -248,6 +249,12 @@ export default async function StyleguidePage({
             (English and Spanish), empty, loading and error. */}
         <Section title={m["relationships.title"]} file="accounts/[accountId]/contacts/relationships-card.tsx">
           <RelationshipsDemo />
+        </Section>
+
+        {/* S-02 B2 §8: the Properties card on the drawer and the record, loaded (English, Spanish
+            and a Technician's view, which has no Belongs to), empty, loading and error. */}
+        <Section title={m["places.title"]} file="accounts/[accountId]/contacts/places-card.tsx">
+          <PlacesDemo />
         </Section>
 
         <Section title={m["assign.filter.label"]} file="components/assign/who-filter.tsx">

@@ -31,6 +31,7 @@ import { GroupsCard } from "./groups-card";
 import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
 import { RelationshipsCard } from "./relationships-card";
+import { PlacesCard } from "./places-card";
 
 // `nowMs` travels WITH the ready result, read inside the fetch's own
 // `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
@@ -277,6 +278,10 @@ export function ContactDrawer({
                 canManageGroups={canAssign}
                 onChanged={() => setRetryNonce((n) => n + 1)}
               />
+              {/* S-02 B2 §8: after Groups, so "what they have" sits together.
+                  Its own read, skeleton and Try again; only Owner, Staff and
+                  the agency (canAssign) may change who a property belongs to. */}
+              <PlacesCard key={`${row.id}:places`} accountId={accountId} contactId={row.id} canMovePlace={canAssign} />
 
               {load.status === "loading" ? (
                 <div className="space-y-2" data-testid="drawer-skeleton">
