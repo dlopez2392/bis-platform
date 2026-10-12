@@ -77,8 +77,9 @@ const EXPECTED_WRITES: Record<string, string[]> = {
     "related_is_emergency", "updated_at",
   ]),
   "authenticated contact_tags": IUD,
+  // company_name left with 0072 (S-02 G9): a read-only copy only the group sync sets.
   "authenticated contacts": insertDeleteAndUpdate([
-    "assigned_to", "attribution", "company_name", "custom", "dnd", "email", "first_name", "last_name",
+    "assigned_to", "attribution", "custom", "dnd", "email", "first_name", "last_name",
     "marketing_email_opted_out_at", "phone", "phone_country_unconfirmed", "source", "updated_at",
   ]),
   "authenticated custom_fields": IUD,
