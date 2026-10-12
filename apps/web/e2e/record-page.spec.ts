@@ -234,10 +234,10 @@ test("every timeline row says who made it: the booking page's booking is the cus
   const booking = tl.locator('[data-timeline-item="booking"]');
   await expect(booking).toHaveCount(1);
   await expect(booking.locator('[data-author-mark="customer"]')).toHaveText(m["provenance.customer"]);
-  await expect(booking).toContainText("booked an appointment for");
+  await expect(booking).toContainText(m["timeline.booked"].split("{when}")[0]!.trim());
   const call = tl.locator('[data-timeline-item="call"]');
   await expect(call.locator('[data-author-mark="ai"]')).toHaveText(/ · AI$/);
-  await expect(call).toContainText("answered a call");
+  await expect(call).toContainText(m["timeline.answeredCall"]);
   await expect(call.getByRole("link", { name: m["timeline.openCall"] })).toHaveAttribute("href", new RegExp(`/calls/${made.call}$`));
 });
 

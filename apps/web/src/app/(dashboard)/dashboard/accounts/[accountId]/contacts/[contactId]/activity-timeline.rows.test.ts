@@ -23,7 +23,7 @@ const { timelineRows } = await import("@/lib/record/timeline-rows");
 
 const AT = "2026-10-09T16:12:00Z";
 const ENTRIES: TimelineEntry[] = [
-  { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 180, reason: "Se le gotea el techo", summary: "", language: "es" } },
+  { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 180, reason: null, summary: "Caller wants a quote for a roof leak.", language: "es" } },
   { kind: "booking", id: "b1", at: AT, booking: { id: "b1", created_at: AT, starts_at: "2026-10-16T15:00:00Z", status: "booked", note: null,
     author_kind: "customer", author_id: null, rescheduled_from_id: null, moved_from_starts_at: null } },
   { kind: "message", id: "m1", at: AT, message: { id: "m1", channel: "email", direction: "outbound", status: "delivered", subject: "Quote",
@@ -46,12 +46,24 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     expect(html.match(/data-author-mark="/g)).toHaveLength(ENTRIES.length);
     for (const label of ["Sofía · AI", "Customer", "Dan López", "Someone on the team", "You"]) expect(html).toContain(`>${label}<`);
   });
-  it("a call row links to its call page and keeps the caller's language; typed text is lang=\"\" (C11; mutation: drop lang on the call's words -> FAILS)", () => {
+  it("a call row links to its call page; its English summary is lang=\"en\", its reason is lang=\"\" (unknown) — never the caller's own language (C11; mutation: lang={e.call.language} on the call's words -> FAILS)", () => {
     const html = render();
     expect(html).toContain('href="/dashboard/accounts/a1/calls/k1"');
-    expect(html).toMatch(/<p lang="es"[^>]*>Se le gotea el techo<\/p>/);
+    // calls.summary is always English (owner decision A), even on a Spanish-language call.
+    expect(html).toMatch(/<p lang="en"[^>]*>Caller wants a quote for a roof leak\.<\/p>/);
     expect(html).toMatch(/<p lang=""[^>]*>Gate code 4411<\/p>/);
     expect(html).toMatch(/<p lang=""[^>]*>Here it is<\/p>/);
+
+    // calls.reason (a taken-message body, or an English post-call reading) is of unknown
+    // language here — not the caller's own words (calls.caller_words, shown on the call card).
+    const reasonEntries: TimelineEntry[] = [
+      { kind: "call", id: "k2", at: AT, call: { id: "k2", started_at: AT, outcome: "message", duration_secs: 60, reason: "Se le gotea el techo", summary: "", language: "es" } },
+    ];
+    const tr = makeTr("en");
+    const rows = timelineRows(reasonEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
+    const reasonHtml = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    expect(reasonHtml).toMatch(/<p lang=""[^>]*>Se le gotea el techo<\/p>/);
   });
   it("one pager at the foot, Older and Newer as given, labelled; none when there is nowhere to go (mutation: always render the pager -> FAILS)", () => {
     const html = render({ pager: { olderHref: "/x?before=abc#record-timeline", newerHref: "/x#record-timeline" } });

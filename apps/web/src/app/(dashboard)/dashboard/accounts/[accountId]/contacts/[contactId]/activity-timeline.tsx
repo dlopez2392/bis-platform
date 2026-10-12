@@ -209,13 +209,22 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
         </TimelineItem>
       );
     case "call": {
-      const words = e.call.reason?.trim() || e.call.summary.trim();
+      // calls.summary is always English (owner decision A, summary-service.ts)
+      // and calls.reason is staff-facing too, but from either an English
+      // post-call reading or a taken-message body whose language is not
+      // known here — so reason is lang="" (unknown), never the caller's
+      // own language (that is calls.caller_words, shown on the call card,
+      // not here; C11).
+      const reason = e.call.reason?.trim() || null;
+      const summary = e.call.summary.trim();
+      const words = reason || summary;
+      const lang = reason ? "" : "en";
       return (
         <TimelineItem {...head} icon={Phone} action={
           <Link href={`/dashboard/accounts/${accountId}/calls/${e.id}`} data-timeline-open-call
             className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8")}>{tr.text("timeline.openCall")}</Link>
         }>
-          {words ? <p lang={e.call.language} className="line-clamp-2 break-words text-sm text-card-foreground">{words}</p> : null}
+          {words ? <p lang={lang} className="line-clamp-2 break-words text-sm text-card-foreground">{words}</p> : null}
         </TimelineItem>
       );
     }

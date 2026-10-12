@@ -34,7 +34,6 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
 };
 
-/** A known value is a dot and a word (rule 3); an unmapped future one still shows, as itself (D-014). */
 /** A deal's amount, or null when it has none: 0 and null are not an amount anyone entered
  *  (DESIGN.md: omitted, never zeroed), and "$0" would read as a free job. */
 function amountText(value: number | string | null | undefined, tr: Tr): string | null {
@@ -42,6 +41,7 @@ function amountText(value: number | string | null | undefined, tr: Tr): string |
   return Number.isFinite(n) && n !== 0 ? formatCurrency(n, tr.locale) : null;
 }
 
+/** A known value is a dot and a word (rule 3); an unmapped future one still shows, as itself (D-014). */
 function statusOf(map: StatusMap, value: string, tr: Tr): TimelineStatus {
   const hit = Object.hasOwn(map, value) ? map[value] : undefined;
   return hit ? { tone: hit[1], word: tr.text(hit[0]) } : { tone: "muted", word: value };
