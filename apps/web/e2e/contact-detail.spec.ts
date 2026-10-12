@@ -113,11 +113,14 @@ test("an email sent from a contact appears on that contact's timeline", async ({
     await recordPage(page).getByRole("button", { name: "Send", exact: true }).click();
 
     // The timeline, not the composer. Outside production the provider is the
-    // fake one, so this proves the record — not delivery. The unique body is
-    // the real assertion; before this change "Email sent" matched nothing at
-    // all on the timeline.
-    await expect(recordPage(page).getByText("Email sent").first()).toBeVisible();
-    await expect(recordPage(page).getByText(body)).toBeVisible();
+    // fake one, so this proves the record — not delivery. S-03 1b: the row
+    // reads "You · emailed · Sent", so it is addressed as the timeline's
+    // message row carrying the unique body; the composer's own "Email sent."
+    // confirmation would satisfy a page-wide text match without any row.
+    const sent = recordPage(page).locator('[data-record-card="timeline"] [data-timeline-item="message"]').filter({ hasText: body });
+    await expect(sent).toHaveCount(1);
+    await expect(sent).toContainText(m["timeline.emailed"]);
+    await expect(sent.locator('[data-author-mark="person"]')).toHaveText(m["provenance.you"]);
   } finally {
     await deleteContactAndThread(accountId, contactId);
   }
