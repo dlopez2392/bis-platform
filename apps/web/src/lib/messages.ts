@@ -1632,9 +1632,13 @@ export const m = {
   "calendar.cancelDialog.keep": "Keep it",
   "calendar.cancelDialog.keep.es": "Mantenerla",
   "calendar.bookings.status.booked": "Booked",
+  "calendar.bookings.status.booked.es": "Agendada",
   "calendar.bookings.status.cancelled": "Cancelled",
+  "calendar.bookings.status.cancelled.es": "Cancelada",
   "calendar.bookings.status.completed": "Completed",
+  "calendar.bookings.status.completed.es": "Terminada",
   "calendar.bookings.status.no_show": "No-show",
+  "calendar.bookings.status.no_show.es": "No llegó",
 
   "calendar.embed.title": "Embed",
   "calendar.embed.hint": "Paste this where the booking widget should appear.",
