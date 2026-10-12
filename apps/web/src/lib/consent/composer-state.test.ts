@@ -99,4 +99,18 @@ describe("the composer's lines in the page's language (S-03 1b, spec §10.2)", (
     expect(composerEmailNotice({ kind: "stopped", since: "nope", byCustomer: true }, "UTC"))
       .toBe("They unsubscribed from your emails. Write only about something they asked you for.");
   });
+
+  // Minors batch: composerBlockedLine (the server action's after-attempt line, sendRejectedReason's
+  // text) was the one sibling in this file Task 3 left English-only. Threaded the same way, optional
+  // locale defaulting to "en" so every existing caller (actions.ts, which does not pass one) is unchanged.
+  it("composerBlockedLine reads Spanish too (mutation: ignore the locale param -> FAILS)", () => {
+    expect(composerBlockedLine("stopped", "es")).toBe(m["compose.smsStoppedUndated.es"]);
+    expect(composerBlockedLine("held", "es")).toBe(m["compose.smsHeld.es"]);
+    expect(composerBlockedLine("unconfirmed_number", "es")).toBe(m["compose.smsCheckNumber.es"]);
+    expect(composerBlockedLine("window_after_deadline", "es")).toBe(m["compose.smsFailed.es"]);
+    expect(composerBlockedLine("stop_confirmation_stale", "es")).toBe(m["compose.smsFailed.es"]);
+  });
+  it("composerBlockedLine stays English by default (mutation: default to 'es' -> FAILS)", () => {
+    expect(composerBlockedLine("stopped")).toBe(m["compose.smsStoppedUndated"]);
+  });
 });
