@@ -33,6 +33,12 @@ describe("GroupsCardView", () => {
     expect(renderedText(html)).toContain(m["groups.loadFailed"]);
     expect(html).toContain(m["groups.retry"]);
   });
+  it("the error is plain words and a ghost Try again, announced, never a tinted box inside the glass card (design check 1a, M2; mutation: put back the crit Notice -> FAILS)", () => {
+    const html = view({ status: "error" });
+    expect(html).toMatch(/<div role="alert"[^>]*><p[^>]*>[^<]*<\/p><button[^>]*data-variant="ghost"[^>]*>Try again<\/button><\/div>/);
+    expect(html).not.toContain('data-slot="notice"');
+    expect(html).not.toContain("--crit-bg");
+  });
   it("empty sells the feature with its action (rule 5)", () => {
     const html = view({ status: "ready", groups: [] });
     expect(html).toContain(m["groups.empty"]);
@@ -74,6 +80,23 @@ describe("GroupsCardView", () => {
   it("the remove action names its group, so two rows never share one accessible name", () => {
     const html = view({ status: "ready", groups: [group()] });
     expect(html).toContain(`aria-label="${m["groups.remove"]}: Garcia"`);
+  });
+  it("headingHidden keeps the heading for aria-labelledby but hides it, so RecordCard's title is the one seen (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(GroupsCardView, {
+      accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: { status: "loading" } as never, onRetry: () => {}, onChanged: () => {},
+    }));
+    expect(html).toMatch(/<h3 id="([^"]+)" class="sr-only">/);
+    const id = html.match(/<h3 id="([^"]+)"/)![1];
+    expect(html).toContain(`aria-labelledby="${id}"`);
+    expect(view({ status: "loading" })).not.toContain('class="sr-only"');
+  });
+  it("headingHidden: no empty row under RecordCard's title, and the Add control stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
+    const hidden = (load: unknown) => renderToStaticMarkup(createElement(GroupsCardView, {
+      accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: load as never, onRetry: () => {}, onChanged: () => {},
+    }));
+    expect(hidden({ status: "loading" })).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden({ status: "ready", groups: [group()] })).toMatch(/^<section[^>]*><div class="flex items-center justify-end gap-2"><h3 id="[^"]+" class="sr-only">/);
+    expect(view({ status: "loading" })).toMatch(/^<section[^>]*><div class="flex items-center justify-between gap-2"><h3 /);
   });
 });
 

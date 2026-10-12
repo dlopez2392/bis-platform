@@ -97,6 +97,18 @@ describe("InlineField's placeholder", () => {
   });
 });
 
+describe("InlineField's value at rest wraps inside its host (design check 1a: a long First name pushed a 320px record page to 389)", () => {
+  it("a 60-character unbroken value breaks anywhere on the display button, for every host (mutation: drop [overflow-wrap:anywhere] -> FAILS)", () => {
+    const LONG = "MaximilianaGuadalupeHernandezVillarrealDeLaGarzaYMontemayorA";
+    expect(LONG).toHaveLength(60);
+    const out = renderToStaticMarkup(createElement(InlineField, { label: "First name", value: LONG, field: "first_name", save }));
+    const button = out.match(/^<button[^>]*>/)?.[0] ?? "";
+    expect(button).toContain("[overflow-wrap:anywhere]");
+    expect(button).toContain("block w-full");
+    expect(out).toContain(`>${LONG}</button>`);
+  });
+});
+
 /**
  * Final review minor 11: a caller that must not remount the field mid-edit
  * (the Business name) is told when editing starts and stops. Every change of

@@ -8,7 +8,6 @@ import { toast } from "sonner";
 import type { ContactGroup, GroupKind, GroupSearchHit } from "@bis/db";
 import { InlineField } from "@/components/inline-field";
 import { Button } from "@/components/ui/button";
-import { Notice } from "@/components/ui/notice";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -32,7 +31,7 @@ import {
  * hides the two editors they may not use (A6), the server refuses them anyway.
  */
 export type GroupsLoad = { status: "loading" } | { status: "error" } | { status: "ready"; groups: ContactGroup[] };
-type ViewProps = { accountId: string; contactId: string; canManageGroups: boolean };
+type ViewProps = { accountId: string; contactId: string; canManageGroups: boolean; headingHidden?: boolean };
 
 const kindLabel = (k: GroupKind) => m[k === "household" ? "groups.kind.household" : "groups.kind.business"];
 /** `{name}` filled by a replacer FUNCTION, so a name holding "$&" is inserted literally (t.ts, final review N1). */
@@ -216,27 +215,33 @@ export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: ()
   );
 }
 
-export function GroupsCardView({ accountId, contactId, canManageGroups, load, onRetry, onChanged }:
+export function GroupsCardView({ accountId, contactId, canManageGroups, headingHidden, load, onRetry, onChanged }:
   ViewProps & { load: GroupsLoad; onRetry: () => void; onChanged: () => void }) {
   const titleId = useId();
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{m["groups.title"]}</h3>;
+  const add = load.status === "ready" && load.groups.length > 0
+    ? <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} /> : null;
   return (
     <section aria-labelledby={titleId} className="space-y-2" data-groups-card>
-      <div className="flex items-center justify-between gap-2">
-        <h3 id={titleId} className="text-[13.5px] font-semibold text-card-foreground">{m["groups.title"]}</h3>
-        {load.status === "ready" && load.groups.length > 0 ? (
-          <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} />
-        ) : null}
-      </div>
+      {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
+         there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
+      {headingHidden && !add ? heading : (
+        <div className={headingHidden ? "flex items-center justify-end gap-2" : "flex items-center justify-between gap-2"}>
+          {heading}
+          {add}
+        </div>
+      )}
       {load.status === "loading" ? (
         <div className="space-y-3" data-testid="groups-skeleton">
           <div className="space-y-1.5"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-full" /></div>
           <div className="space-y-1.5"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-2/3" /></div>
         </div>
       ) : load.status === "error" ? (
-        <Notice tone="crit" className="p-3">
+        // Plain words and a ghost Try again, announced: a tinted Notice was a box in the glass card (design check 1a).
+        <div role="alert" className="space-y-2 text-sm">
           <p className="text-muted-foreground">{m["groups.loadFailed"]}</p>
-          <Button size="sm" variant="outline" className="mt-2" onClick={onRetry}>{m["groups.retry"]}</Button>
-        </Notice>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{m["groups.retry"]}</Button>
+        </div>
       ) : load.groups.length === 0 ? (
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">{m["groups.empty"]}</p>

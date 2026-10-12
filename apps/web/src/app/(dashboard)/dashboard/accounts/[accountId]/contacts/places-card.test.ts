@@ -10,7 +10,7 @@ vi.mock("./places-actions", () => ({
   undoRemovePlaceAction: vi.fn(), setPlaceArchivedAction: vi.fn(), addEquipmentAction: vi.fn(), replaceEquipmentAction: vi.fn(),
   updateEquipmentFieldAction: vi.fn(), removeEquipmentAction: vi.fn(), undoRemoveEquipmentAction: vi.fn(),
 }));
-const { PlacesCardView } = await import("./places-card");
+const { PlacesCardView, PlacesCard } = await import("./places-card");
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { mapUrl } = await import("@/lib/contacts/place-view");
@@ -79,6 +79,60 @@ describe("PlacesCardView: its own loaded, empty and error states (rule 5 per car
     expect(html).toContain("data-places-card");
     expect(renderedText(html)).toContain(m["places.loadFailed"]);
     expect(one(html, /<button[^>]*>[^<]*<\/button>/)).toContain(m["places.retry"]);
+  });
+
+  it("the error is announced: role=alert, plain words and a ghost Try again, never a box (design check 1a, #2; mutation: drop role=alert -> FAILS)", () => {
+    const html = render("en", { status: "error" });
+    expect(html).toMatch(/<div role="alert"[^>]*><p[^>]*>[^<]*<\/p><button[^>]*data-variant="ghost"[^>]*>Try again<\/button><\/div>/);
+    expect(html).not.toContain('data-slot="notice"');
+  });
+
+  it("a 60-character unbroken address wraps inside the card: label above value when the card is narrow, two columns only from 18rem, and the value breaks anywhere (design check 1a, #1: 320px scrolled sideways; mutation: drop the wrap class or the stacked base -> FAILS)", () => {
+    const LONG = "1204NolanaAvenueBuildingNineteenUnitTwoHundredFortySevenRear";
+    expect(LONG).toHaveLength(60);
+    const html = render("en", ready({ places: [{ ...HOME, address: LONG }] }));
+    expect(html).toContain(LONG);
+    expect(html).toMatch(/^<section[^>]*class="[^"]*@container[^"]*"/);
+    const grids = html.match(/<dl[^>]*class="[^"]*"/g) ?? [];
+    expect(grids.length).toBeGreaterThanOrEqual(4); // the place's three lists and a unit's
+    for (const g of grids) expect(g).toContain("grid grid-cols-1 gap-x-2 gap-y-0.5 @min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]");
+    const dds = html.match(/<dd[^>]*>/g) ?? [];
+    expect(dds.length).toBeGreaterThan(0);
+    for (const d of dds) expect(d).toContain("[overflow-wrap:anywhere]");
+    // The drawer (wider than 18rem) keeps today's two columns: the template is still there, behind the query.
+    expect(html).toContain("@min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]");
+  });
+
+  it("Add a property shrinks and wraps rather than pushing a 320px page sideways (design check 1a, M8; mutation: keep whitespace-nowrap -> FAILS)", () => {
+    const es = render("es", ready());
+    const trigger = one(es, /<button[^>]*data-slot="dialog-trigger"[^>]*>/);
+    expect(trigger).toContain("max-w-full");
+    expect(trigger).toContain("whitespace-normal");
+    expect(trigger).not.toContain("whitespace-nowrap");
+    // A 44px target on a phone, like its siblings (re-measure of 532f708b; mutation: min-h-8 alone -> FAILS).
+    expect(trigger).toMatch(/[\s"]min-h-11[\s"]/);
+    expect(trigger).toMatch(/[\s"]md:min-h-8[\s"]/);
+  });
+
+  it("headingHidden hides the heading but keeps it labelling the section (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load: { status: "loading" }, onRetry: noop, handlers })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+    expect(render("en", { status: "loading" })).not.toMatch(/<h3[^>]*class="sr-only"/);
+  });
+
+  it("PlacesCard hands headingHidden to its view (review round 1, minor 2; mutation: drop the pass-through -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCard, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+  });
+
+  it("headingHidden: no empty row under RecordCard's title, and Add stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
+    const hidden = (load: PlacesLoad) => renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load, onRetry: noop, handlers })));
+    expect(hidden({ status: "loading" })).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden(ready())).toMatch(/^<section[^>]*><div class="flex flex-wrap items-center justify-end gap-2"><h3 id="[^"]+" class="sr-only">/);
+    expect(render("en", { status: "loading" })).toMatch(/^<section[^>]*><div class="flex flex-wrap items-center justify-between gap-2"><h3 /);
   });
 });
 

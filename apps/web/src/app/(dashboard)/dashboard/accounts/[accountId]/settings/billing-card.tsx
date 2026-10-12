@@ -375,12 +375,13 @@ export function BillingCardSkeleton() {
         <CardAction><Skeleton className="h-6 w-20 rounded-full" /></CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <Skeleton className="h-4 w-48" />
+        {/* max-w-full: a 320px screen's card is narrower than w-48 (design check 1a). */}
+        <Skeleton className="h-4 w-48 max-w-full" />
         <div className="flex flex-col gap-2">
-          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-40" />)}
+          {[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-40 max-w-full" />)}
           <Skeleton className="h-3 w-24" />
         </div>
-        <Skeleton className="h-9 w-36" />
+        <Skeleton className="h-9 w-36 max-w-full" />
       </CardContent>
     </Card>
   );
