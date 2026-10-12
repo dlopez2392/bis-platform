@@ -251,6 +251,9 @@ author mark from one closed set: a named person, "Sofía · AI", an
 automation, the customer, or an import. A row with no mark is a defect:
 the same principle as rule 3's dot-and-word, applied to authorship
 instead of status — who did it is never left to be inferred.
+A person the reader cannot name — someone who has left the team, or one
+their role cannot see — reads "Someone on the team" ("Alguien del equipo");
+it is still the person mark, never a sixth kind (decided 2026-10-12).
 
 ## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 

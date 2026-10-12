@@ -2407,6 +2407,15 @@ export const m = {
   // (voice_profiles.persona_name), "Sofía" when the screen has none to hand.
   "provenance.ai": "{name} · AI",
   "provenance.ai.es": "{name} · IA",
+  // The record timeline's author marks (S-03 1b, spec §6, §10.2): one closed set of five.
+  "provenance.customer": "Customer",
+  "provenance.customer.es": "Cliente",
+  "provenance.automation": "Automation",
+  "provenance.automation.es": "Automatización",
+  "provenance.import": "Import",
+  "provenance.import.es": "Importación",
+  "provenance.you": "You",
+  "provenance.you.es": "Usted",
   // The callback To do a call leaves when the caller wants a person to call
   // them back. The English line is written into tasks.title when the To do is
   // made (the `todo.consent.*` precedent); the Spanish waits for an operator

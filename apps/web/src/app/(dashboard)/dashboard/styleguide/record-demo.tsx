@@ -1,5 +1,8 @@
 "use client";
 
+import { CalendarCheck } from "lucide-react";
+import { AuthorMark } from "@/components/record/author-mark";
+import { TimelineItem, TimelineItemSkeleton } from "@/components/record/timeline-item";
 import { RecordCardView } from "@/components/record/record-card";
 import { RecordHeader } from "@/components/record/record-header";
 import { RecordLayout } from "@/components/record/record-layout";
@@ -56,6 +59,16 @@ const layout = (width: string, idPrefix: string) => (
   </div>
 );
 
+// A specimen person's name: a variable, not a JSX literal (the i18n ratchet counts literals).
+const PERSON = "Dan López";
+const MARKS = [
+  { kind: "person", label: PERSON },
+  { kind: "ai", label: m["provenance.ai"].replace("{name}", "Sofía") },
+  { kind: "automation", label: m["provenance.automation"] },
+  { kind: "customer", label: m["provenance.customer"] },
+  { kind: "import", label: m["provenance.import"] },
+] as const;
+
 export function RecordDemo() {
   return (
     <div className="flex w-full min-w-0 flex-col gap-6">
@@ -70,6 +83,16 @@ export function RecordDemo() {
         {card("empty", { state: "empty" }, <p className="text-sm text-muted-foreground">{m["contact.noOpportunities"]}</p>)}
         {card("error", { state: "error" })}
         {card("closed", { disclosure: true, open: false })}
+      </div>
+      <div data-sg-author-marks className="flex flex-wrap gap-2">
+        {MARKS.map((mk) => <AuthorMark key={mk.kind} kind={mk.kind} label={mk.label} />)}
+      </div>
+      <div data-sg-timeline-item className="w-[420px] max-w-full rounded-xl border border-border bg-card glass px-4 py-2">
+        <TimelineItem kind="booking" icon={CalendarCheck} mark={{ kind: "customer", label: m["provenance.customer"] }}
+          verb={m["record.nextUp.booking"].replace("{when}", "Thu, Oct 16 · 10:00 AM")}
+          status={{ tone: "accent", word: m["calendar.bookings.status.booked"] }}
+          time="Oct 9, 2026, 4:12 PM" dateTime="2026-10-09T21:12:00Z" />
+        <TimelineItemSkeleton rows={2} />
       </div>
     </div>
   );
