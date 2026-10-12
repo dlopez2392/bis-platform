@@ -1942,4 +1942,25 @@ describe("per-customer booking reads for the record page (S-03 part 1)", () => {
         expect(await listContactUpcomingBookings(db, otherAccountId, ana, "2027-01-01T00:00:00Z")).toEqual([]);
       });
     }));
+
+  it("countContactBookingsMade fails closed when the server returns no exact count, never 'booked 0 times' (mutation: restore count ?? 0 -> resolves 0 instead of rejecting, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      // Drop the `{ count: "exact", head: true }` option on the bookings read, so
+      // PostgREST answers with count = null, error = null -- the same observable
+      // shape postgrest-js 2.110.8 produces for a HEAD request against a missing
+      // relation (dist/index.cjs:429-431: an empty 404 body is read as "204 No
+      // Content", so `error` stays null and `count` stays null too).
+      const noCount = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "from") return Reflect.get(target, prop, receiver);
+          return (table: string) => {
+            const q = target.from(table);
+            if (table !== "bookings") return q;
+            return { select: (cols: string) => q.select(cols) };
+          };
+        },
+      }) as SupabaseClient;
+      await expect(countContactBookingsMade(noCount, accountId, ana)).rejects.toThrow(/countContactBookingsMade failed/);
+    }));
 });

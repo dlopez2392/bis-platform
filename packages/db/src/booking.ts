@@ -945,7 +945,13 @@ export async function countContactBookingsMade(
     .eq("account_id", accountId).eq("contact_id", contactId)
     .is("rescheduled_from_id", null);
   if (error) throw new Error(`countContactBookingsMade failed: ${error.message}`);
-  return count ?? 0;
+  // A count-less response (`count: null`, `error: null`) is not "zero": it is how
+  // postgrest-js 2.110.8 reads a HEAD request's empty 404 body as "204 No
+  // Content" (dist/index.cjs:429-431), so a failed read must not read back as
+  // "booked 0 times" -- the caller (contactFacts' settle) can only tell a real
+  // zero from a failed read if this throws instead of guessing.
+  if (count === null) throw new Error("countContactBookingsMade failed: no count returned");
+  return count;
 }
 
 export type UpcomingBooking = { id: string; starts_at: string };
