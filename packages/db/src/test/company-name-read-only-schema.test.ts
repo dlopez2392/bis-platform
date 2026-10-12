@@ -33,11 +33,28 @@ const companyOf = async (c: Client, ct: string) =>
 const call = async (c: Client, sql: string, args: unknown[]) => (await c.query<{ r: unknown }>(`select ${sql} as r`, args)).rows[0]!.r;
 
 /**
+ * legacyWrite's `alter table ... disable trigger` takes SHARE ROW EXCLUSIVE on contacts. Taken after this
+ * transaction's own inserts (ROW EXCLUSIVE) it is a lock upgrade, and two test files upgrading at once
+ * deadlock (review round 1, reproduced with two psql sessions). So a test that uses it takes that lock
+ * FIRST, before any write; another file's contact write waits the few ms until this one rolls back.
+ */
+async function withContactsHeld(fn: (c: Client) => Promise<void>) {
+  return withRollback(async (c) => {
+    await c.query("lock table public.contacts in share row exclusive mode");
+    await fn(c);
+  });
+}
+
+/**
  * What a build from before 0072 could leave in the column: a value the sync never set (the over-long
  * names reconcile skipped, 0069 section 8). 0072 makes that unwritable, so the test lifts the trigger
  * for one statement, as the table owner, inside the rolled-back transaction.
  */
 async function legacyWrite(c: Client, ct: string, value: string | null) {
+  const { rows: [held] } = await c.query<{ n: number }>(
+    `select count(*)::int as n from pg_locks where pid = pg_backend_pid() and granted
+        and relation = 'public.contacts'::regclass and mode = 'ShareRowExclusiveLock'`);
+  if (held!.n !== 1) throw new Error("legacyWrite: run this test in withContactsHeld, which locks contacts before any write");
   await c.query("alter table public.contacts disable trigger contacts_company_name_derived");
   await c.query("update contacts set company_name = $2 where id = $1", [ct, value]);
   await c.query("alter table public.contacts enable trigger contacts_company_name_derived");
@@ -173,14 +190,15 @@ describe("0072: the group sync still decides the column", () => {
 });
 
 describe("0072: a value the sync never set is kept until something writes the column", () => {
-  // Owner-visible behaviour, pinned: a stored value reconcile skipped (over 120 characters) survives every
-  // write that does not change company_name, including one that sends the same value back and a household
-  // change; a write that does change it ends at the derived value (NULL here, or the business's name).
+  // Owner-visible behaviour, pinned (owner ruling 2026-10-12): a stored value reconcile skipped (over 120
+  // characters) survives every UPDATE that does not change company_name, including one that sets the same
+  // value again, and a household change. A write that does change it, or ANY upsert that sets it (its INSERT
+  // half resets excluded.company_name first), ends at the derived value (NULL here, or the business's name).
   // A bare `before insert or update` (no OF company_name) cannot fail this test: the function's own
   // unchanged-value check also keeps the value on an unrelated edit. The trigger-definition pin below
   // catches that mutation instead.
   it("an unrelated edit, a same-value write and a household add leave it exactly as stored (mutation: recompute even when the value is unchanged -> FAILS)", () =>
-    withRollback(async (c) => {
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_ro_${RUN}`);
       const ct = await contact(c, a, "Lo");
       const long = "L".repeat(130);
@@ -194,8 +212,8 @@ describe("0072: a value the sync never set is kept until something writes the co
       expect(await companyOf(c, ct)).toBe(long);
     }));
 
-  it("a write that changes it ends at the derived value", () =>
-    withRollback(async (c) => {
+  it("a write that changes it ends at the derived value, and so does an upsert sending the stored value back", () =>
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_ro_${RUN}`);
       const lone = await contact(c, a, "Lo");
       const withBiz = await contact(c, a, "Bea");
@@ -206,6 +224,15 @@ describe("0072: a value the sync never set is kept until something writes the co
       await c.query("update contacts set company_name = 'Other' where id = any($1::uuid[])", [[lone, withBiz]]);
       expect(await companyOf(c, lone)).toBeNull();
       expect(await companyOf(c, withBiz)).toBe("Acme Roofing");
+      // The upsert: its INSERT half resets excluded.company_name to the derived value before the conflict,
+      // so the UPDATE half sees a change even though the caller sent exactly what was stored.
+      const kept = await contact(c, a, "Up");
+      await member(c, a, await group(c, a, "business", "Beta Pools"), kept, true);
+      await legacyWrite(c, kept, "U".repeat(130));
+      await c.query(
+        `insert into contacts (id, account_id, first_name, company_name) values ($1,$2,'Up',$3)
+           on conflict (id) do update set company_name = excluded.company_name`, [kept, a, "U".repeat(130)]);
+      expect(await companyOf(c, kept)).toBe("Beta Pools");
     }));
 });
 

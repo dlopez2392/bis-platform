@@ -29,12 +29,28 @@ const member = async (c: Client, acct: string, g: string, ct: string, primary = 
 const companyOf = async (c: Client, ct: string) =>
   (await c.query<{ company_name: string | null }>("select company_name from contacts where id = $1", [ct])).rows[0]!.company_name;
 /**
+ * legacyWrite's `alter table ... disable trigger` takes SHARE ROW EXCLUSIVE on contacts. Taken after this
+ * transaction's own inserts (ROW EXCLUSIVE) it is a lock upgrade, and two test files upgrading at once
+ * deadlock (review round 1, reproduced with two psql sessions). So a test that uses it takes that lock
+ * FIRST, before any write; another file's contact write waits the few ms until this one rolls back.
+ */
+async function withContactsHeld(fn: (c: Client) => Promise<void>) {
+  return withRollback(async (c) => {
+    await c.query("lock table public.contacts in share row exclusive mode");
+    await fn(c);
+  });
+}
+/**
  * A value the sync never set, as a build from before 0072 could write it straight to the column. 0072's
  * trigger makes that unwritable, so this lifts it for one statement, as the table owner, inside the
  * rolled-back transaction. The sync's selectivity below still matters for such a value: a household or
  * role edit must not erase it.
  */
 async function legacyWrite(c: Client, ct: string, value: string | null) {
+  const { rows: [held] } = await c.query<{ n: number }>(
+    `select count(*)::int as n from pg_locks where pid = pg_backend_pid() and granted
+        and relation = 'public.contacts'::regclass and mode = 'ShareRowExclusiveLock'`);
+  if (held!.n !== 1) throw new Error("legacyWrite: run this test in withContactsHeld, which locks contacts before any write");
   await c.query("alter table public.contacts disable trigger contacts_company_name_derived");
   await c.query("update contacts set company_name = $2 where id = $1", [ct, value]);
   await c.query("alter table public.contacts enable trigger contacts_company_name_derived");
@@ -230,7 +246,7 @@ describe("the company_name sync (spec §5.3, A2)", () => {
   // A build from before 0072 wrote company_name straight to the column (spec §11). Only a change to a
   // BUSINESS membership or group may recompute it; a household change must leave that value where it is.
   it("a household add leaves a directly written column alone (mutation: drop the household skip from sync_company_name's member branch -> FAILS)", () =>
-    withRollback(async (c) => {
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_g_${RUN}`);
       const ct = await contact(c, a, "Ana");
       await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
@@ -248,7 +264,7 @@ describe("the company_name sync (spec §5.3, A2)", () => {
   // the business may fire it (0069 section 6: update of is_primary, client_group_id, contact_id). The
   // reconcile that folded such a write in was dropped by 0072, after its last run.
   it("a role or pays edit on a business membership leaves a directly written column alone (mutation: bare `after insert or update or delete` on client_group_members -> FAILS)", () =>
-    withRollback(async (c) => {
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_g_${RUN}`);
       const ct = await contact(c, a, "Ana");
       const acme = await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
@@ -260,7 +276,7 @@ describe("the company_name sync (spec §5.3, A2)", () => {
       expect(await companyOf(c, ct)).toBe("Old Build Co");
     }));
   it("a main swap between two businesses still recomputes the column (mutation: drop is_primary from the member trigger's column list -> FAILS)", () =>
-    withRollback(async (c) => {
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_g_${RUN}`);
       const ct = await contact(c, a, "Ana");
       await member(c, a, await group(c, a, "business", "Acme Roofing"), ct, true);
@@ -272,7 +288,7 @@ describe("the company_name sync (spec §5.3, A2)", () => {
       expect(await companyOf(c, ct)).toBe("Beta Pools");
     }));
   it("a household rename leaves a directly written column alone, and a kind change still recomputes (mutation: drop the kind condition from client_groups_sync_company_name's WHEN -> FAILS)", () =>
-    withRollback(async (c) => {
+    withContactsHeld(async (c) => {
       const a = await seedAccount(c, `org_g_${RUN}`);
       const ct = await contact(c, a, "Ana");
       const acme = await group(c, a, "business", "Acme Roofing");

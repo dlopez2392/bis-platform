@@ -11,9 +11,12 @@
 -- Who is reset: every role, service_role and the table owner included. The trigger checks no role, so
 -- a server path that still writes the column is undone, not trusted. The sync itself writes exactly
 -- the derived value, so its own UPDATE passes through unchanged.
--- What is kept: a stored value the sync never set (an over-long name reconcile skipped, 0069 section 8)
--- survives every write that does not change company_name, including one that sends the same value
--- back. Only a write that changes the column, or a business membership change, replaces it.
+-- What is kept (owner ruling 2026-10-12): a stored value the sync never set (an over-long name reconcile
+-- skipped, 0069 section 8) survives every UPDATE that does not change company_name, including one that
+-- sets the same value again. It is replaced by a write that changes the column, by a business
+-- membership change, and by ANY upsert that sets company_name, even one sending the stored value back:
+-- the upsert's INSERT half resets excluded.company_name first, so its UPDATE half sees a change. No app
+-- code upserts contacts.
 -- ASCII only, no backslash anywhere (0050's rule; the MCP apply has mangled escapes before).
 --
 -- APPLY ORDER: only after the post-deploy reconcile #2 (0069 header) has run on BOTH projects. Then the
@@ -30,7 +33,9 @@
 --   "create function public.reconcile_business_groups" statement, verbatim) and:
 --   revoke all on function public.reconcile_business_groups(uuid) from public, anon, authenticated, service_role;
 --   grant execute on function public.reconcile_business_groups(uuid) to service_role;
---   Nothing is lost: the column, the groups and the memberships are untouched by this file.
+--   Section 3's last reconcile may have created business groups, linked, relinked or unlinked
+--   memberships and respelled columns. Those repairs persist after a rollback; they are what reconcile
+--   #2 would have done for the same writes. Nothing else in this file changes data.
 
 set local lock_timeout = '5s';
 
@@ -42,8 +47,9 @@ revoke update (company_name) on public.contacts from authenticated;
 --    It reads only the contact's own memberships and writes only NEW. The UPDATE test is
 --    "is not distinct from", and tg_op is never NULL, so no branch can be skipped on a NULL
 --    (memory bis-plpgsql-null-guard). On INSERT a NULL needs no lookup: a new contact has no
---    memberships yet, and an upsert that lands on an existing row is decided by the UPDATE branch,
---    which sees excluded.company_name as a change.
+--    memberships yet. An upsert that lands on an existing row and sets company_name always ends at the
+--    derived value: its INSERT half resets excluded.company_name to it (or leaves a NULL), so the UPDATE
+--    half sees a change from any value the sync never set, even when the upsert sent that value back.
 create function app.company_name_derived() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
