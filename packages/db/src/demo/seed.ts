@@ -15,7 +15,7 @@ import { planDemoCalls, DEMO_CALL_COUNT } from "./call-times";
 import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
-import { upsertSite, writeTrafficDay } from "../sites";
+import { upsertSite, writeTrafficDay, stampSiteSynced } from "../sites";
 import { assignPhoneNumber, upsertVoiceProfile, startCallRow, finishCallRow } from "../voice";
 import { deleteAccountCascade } from "../account-teardown";
 import {
@@ -1007,6 +1007,12 @@ async function seedSite(
       { dimension: "device", value: "tablet", visitors: Math.round(visitors * 0.05), pageviews: Math.round(pageviews * 0.05) },
     ]);
   });
+  // Stamped as the sync pass stamps a site it has pulled, with the newest day
+  // written (yesterday). The Website page reads `last_synced_day`, not the
+  // rows, to tell a site that has synced from one that was just linked, so
+  // without this the demo's sixty days sat behind "waiting for the first
+  // sync" while the weekly report, which reads the rows, counted them.
+  await stampSiteSynced(db, site.id, days[days.length - 1]!.day);
   return DAYS;
 }
 
