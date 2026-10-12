@@ -328,6 +328,16 @@ describe("submitBookingAction — spam gates (each mutation named)", () => {
     expect(createBookingMock).not.toHaveBeenCalled();
   });
 
+  it("a rate-limit count that THROWS (a count-less read, @bis/db's countRecentBookings) refuses: error, no writes (mutation: catch the count as 0 → booked, FAILS)", async () => {
+    countRecentBookingsMock.mockRejectedValue(new Error("countRecentBookings failed: no count returned"));
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData());
+
+    expect(result.ok).toBe(false);
+    expect(createContactMock).not.toHaveBeenCalled();
+    expect(createBookingMock).not.toHaveBeenCalled();
+  });
+
   it("invalid email: field error, no writes (mutation: drop the email check → FAILS)", async () => {
     const result = await submitBookingAction(PUBLIC_ID, validFormData({ email: "not-an-email" }));
 

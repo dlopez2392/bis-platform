@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, recordPage } from "./support";
 import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
@@ -64,16 +64,16 @@ async function sendAndFindInConversations(
   // `exact` matters since P4 Task 8: the fields panel's inline-edit control
   // for the email field is a button named "Edit Email", which a substring
   // match also picks up. The composer tab is exactly "Email".
-  await page.getByRole("button", { name: "Email", exact: true }).click();
-  await page.getByPlaceholder("Subject").fill(subject);
-  await page.getByPlaceholder("Write an email…").fill("Sent by the e2e suite.");
+  await recordPage(page).getByRole("button", { name: "Email", exact: true }).click();
+  await recordPage(page).getByPlaceholder("Subject").fill(subject);
+  await recordPage(page).getByPlaceholder("Write an email…").fill("Sent by the e2e suite.");
 
   // The composer disables its own button for the duration of the send. This is
   // the ONE assertion standing between a slow Resend round-trip and a
   // DUPLICATE EMAIL to a real person — send-button.tsx exists for it, and
   // after the move off the `action` prop its pending state is passed by hand
   // rather than read from useFormStatus, so a wiring mistake would be silent.
-  const send = page.getByRole("button", { name: "Send" });
+  const send = recordPage(page).getByRole("button", { name: "Send" });
   await send.click();
   await expect(send).toBeDisabled();
   // …and released again once the send settles, or the operator could never

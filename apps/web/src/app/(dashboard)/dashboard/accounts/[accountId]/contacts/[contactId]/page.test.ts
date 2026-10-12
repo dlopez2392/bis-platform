@@ -22,10 +22,18 @@ vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {
       if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
+      let cols: string[] = [];
       const chain = {
-        select: () => chain,
+        select: (c: string) => { cols = c.split(",").map((s) => s.trim()); return chain; },
         eq: (...args: unknown[]) => { accountsEq(...args); return chain; },
-        maybeSingle: () => accountRead(),
+        // As PostgREST does: only the columns the page SELECTED come back, so a column dropped
+        // from the select is a column the page never sees.
+        maybeSingle: async () => {
+          const r = await accountRead();
+          const data = r.data && typeof r.data === "object"
+            ? Object.fromEntries(Object.entries(r.data).filter(([k]) => cols.includes(k))) : r.data;
+          return { ...r, data };
+        },
       };
       return chain;
     },
@@ -49,20 +57,37 @@ const listAccountTeamMock = vi.fn<(...args: unknown[]) => Promise<unknown[]>>(as
 const listContactTasksMock = vi.fn(async (..._args: unknown[]) => [] as unknown[]);
 const holdOpenTaskIdsMock = vi.fn(async (..._args: unknown[]) => [] as string[]);
 const getContactMock = vi.fn();
+const READY_FACTS = { bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null }, openDeals: { ok: true, value: { count: 0, amount: null } } };
+const NO_PLACES = { groups: [], places: [], placeCount: 0, equipment: [], equipmentCount: 0 };
+const contactFactsMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => READY_FACTS);
+const contactNextUpMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ bookings: [], datedTasks: [], undatedCount: 0 }));
+const listContactPlacesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => NO_PLACES);
+const listContactOpportunitiesMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const listNotesMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
+const timelineThrows = vi.hoisted(() => ({ on: false }));
+const listContactTagsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 vi.mock("@bis/db", () => ({
   getContact: (...args: unknown[]) => getContactMock(...args),
-  listContactTags: async () => [],
-  listNotes: async () => [],
+  listContactTags: (...args: unknown[]) => listContactTagsMock(...args),
+  listNotes: (...args: unknown[]) => listNotesMock(...args),
   listContactTasks: (...args: unknown[]) => listContactTasksMock(...args),
   holdOpenTaskIds: (...args: unknown[]) => holdOpenTaskIdsMock(...args),
-  listCustomFields: async () => [],
-  listContactOpportunities: async () => [],
+  listCustomFields: (...args: unknown[]) => listCustomFieldsMock(...args),
+  listContactOpportunities: (...args: unknown[]) => listContactOpportunitiesMock(...args),
   listContactSubmissions: async () => [],
   listContactMessages: async () => [],
   readConsentHistory: async () => [],
   readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
   listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
+  contactFacts: (...args: unknown[]) => contactFactsMock(...args),
+  contactNextUp: (...args: unknown[]) => contactNextUpMock(...args),
+  listContactPlaces: (...args: unknown[]) => listContactPlacesMock(...args),
 }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
+// A desk: the three "have" cards render open, so their props and markers can be read.
+vi.mock("@/components/record/use-phone", () => ({ usePhone: () => false, PHONE_QUERY: "(max-width: 767px)" }));
 
 /** Echoes, in `resolveZone`'s own shape: a zone in is the account's own, no
  *  zone in is the UTC fallback, a GUESS. */
@@ -71,7 +96,8 @@ const renderZone = vi.fn(async (z: string | undefined) => (z
   : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
 vi.mock("@/lib/zone", () => ({ renderZone: (z: string | undefined) => renderZone(z) }));
 
-vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => ({ ok: false }) }));
+const resolveSmsSenderMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ ok: false, reason: "a2p_not_approved" }));
+vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => resolveSmsSenderMock(...a) }));
 
 // "use server" modules cannot be imported into a vitest render; the page and
 // the panel only BIND these, nothing is submitted here.
@@ -94,7 +120,11 @@ const placesCardProps: unknown[] = [];
 vi.mock("../places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps.push(p); return null; } }));
 const timelineProps = vi.fn();
 vi.mock("./activity-timeline", () => ({
-  ActivityTimeline: (props: Record<string, unknown>) => { timelineProps(props); return null; },
+  ActivityTimeline: (props: Record<string, unknown>) => {
+    timelineProps(props);
+    if (timelineThrows.on) throw new Error("timeline render boom");
+    return null;
+  },
 }));
 // Consent chain PR-1: the composer's recipient read, stubbed per test.
 const recipientState = vi.fn();
@@ -145,7 +175,7 @@ const { renderedText } = await import("@/lib/rendered-text");
 
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
-  company_name: null, custom: {},
+  company_name: null, custom: {}, created_at: "2026-01-01T05:30:00Z",
 };
 
 async function render() {
@@ -201,12 +231,20 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     }
   });
 
-  it("404s for a contact this account does not have, before any read", async () => {
+  it("404s for a contact this account does not have, before any read (mutation: start the record page's reads before getContact -> FAILS)", async () => {
     getContactMock.mockResolvedValue(null);
+    const reads = {
+      contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
+      listNotes: listNotesMock, listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
+    };
+    for (const r of Object.values(reads)) r.mockClear();
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(renderZone).not.toHaveBeenCalled();
     expect(readEmailView).not.toHaveBeenCalled();
     expect(emailRowProps).not.toHaveBeenCalled();
+    // S-03 part 1: none of the record page's own reads run for a contact the caller cannot see.
+    expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
   });
 });
 
@@ -516,7 +554,7 @@ describe("ContactDetailPage: the Related people card (relationships spec §7)", 
 
   it("renders the card with the page's own accountId and contactId (mutation: drop the card line from the page -> FAILS)", async () => {
     await render();
-    expect(relationshipsCardProps).toContainEqual({ accountId: "acct1", contactId: "ct1" });
+    expect(relationshipsCardProps).toContainEqual({ accountId: "acct1", contactId: "ct1", headingHidden: true });
   });
 });
 
@@ -534,19 +572,240 @@ describe("ContactDetailPage: the Properties card (S-02 part B2)", () => {
   it("renders the Properties card with the page's accountId, contactId and canMovePlace (mutation: drop the card line -> FAILS)", async () => {
     const html = await render();
     // The default access is the agency's, which may move a property.
-    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: true }]);
-    // Between the Groups card and Deals, in an aside of its own.
-    const groups = html.indexOf("data-groups-card");
-    const places = html.indexOf("data-places-aside");
-    expect(groups).toBeGreaterThan(-1);
-    expect(places).toBeGreaterThan(groups);
-    expect(places).toBeLessThan(html.indexOf(m["contact.opportunities"]));
+    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: true, headingHidden: true }]);
+    // Between the Groups card and Deals (S-03 part 1: the registry's order, each a record card).
+    expect(order(html).slice(3, 6)).toEqual(["groups", "properties", "deals"]);
   });
 
   it("a Technician's page hands the card canMovePlace false (mutation: pass true -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "technician", canManage: false });
     readPersonIdMock.mockResolvedValueOnce("p-t");
     await render();
-    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: false }]);
+    expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: false, headingHidden: true }]);
+  });
+});
+
+const order = (html: string) => [...html.matchAll(/data-record-card="([\w-]+)"/g)].map((x) => x[1]);
+const cardHtml = (html: string, id: string) => html.match(new RegExp(`<section[^>]*data-record-card="${id}"[\\s\\S]*?</section>`))?.[0] ?? "";
+
+describe("the record page (S-03 part 1, 1a): every card loads and fails on its own", () => {
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    contactFactsMock.mockReset().mockResolvedValue(READY_FACTS);
+    contactNextUpMock.mockReset().mockResolvedValue({ bookings: [], datedTasks: [], undatedCount: 0 });
+    listContactPlacesMock.mockReset().mockResolvedValue(NO_PLACES);
+    listContactOpportunitiesMock.mockReset().mockResolvedValue([]);
+    listNotesMock.mockReset().mockResolvedValue([]);
+    prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
+    resolveSmsSenderMock.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
+    listContactTagsMock.mockReset().mockResolvedValue([]);
+    listCustomFieldsMock.mockReset().mockResolvedValue([]);
+    timelineProps.mockClear();
+    timelineThrows.on = false;
+  });
+  /** A card's generic failure line ("Couldn't load {title}."), as the HTML escapes it. */
+  const failedCopy = (title: string) => m["record.card.failed"].replace("{title}", title).replaceAll("'", "&#x27;");
+  const actionIds = (html: string) => [...html.matchAll(/data-record-action="(\w+)"/g)].map((x) => x[1]);
+  const quietly = async <T,>(fn: () => Promise<T>): Promise<{ result: T; logged: string }> => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await fn();
+      return { result, logged: errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n") };
+    } finally { errors.mockRestore(); }
+  };
+
+  it("renders the nine cards in the phone order, which is the DOM order on every width (C6; mutation: render the who column first -> FAILS)", async () => {
+    expect(order(await render())).toEqual(["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"]);
+  });
+
+  it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {
+    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "timeline")).toContain(m["record.activity.failed"].replaceAll("'", "&#x27;"));
+      expect(timelineProps).not.toHaveBeenCalled();
+      expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+      expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+    } finally { errors.mockRestore(); }
+  });
+
+  it("the summary failing is the summary's error, the rest stand (mutation: let loadSummary rethrow -> FAILS)", async () => {
+    contactFactsMock.mockRejectedValue(new Error("facts down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "summary")).toContain(m["record.summary.failed"].replaceAll("'", "&#x27;"));
+      expect(timelineProps).toHaveBeenCalled();
+    } finally { errors.mockRestore(); }
+  });
+
+  it("Next up failing is Next up's error, the rest stand (mutation: let loadNextUp rethrow -> FAILS)", async () => {
+    contactNextUpMock.mockRejectedValue(new Error("next up down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.failed"].replaceAll("'", "&#x27;"));
+      expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("Deals failing is Deals' error and the timeline still renders (its own read of the same table succeeds; mutation: let loadDeals rethrow -> FAILS)", async () => {
+    // Promise.all invokes loadTimeline before loadDeals, and each makes its read synchronously at
+    // its start: the first call is the timeline's, the second the Deals card's.
+    listContactOpportunitiesMock.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("deals down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "deals")).toContain("data-record-error");
+      expect(cardHtml(html, "deals")).toContain(failedCopy(m["record.card.deals"]));
+      expect(timelineProps).toHaveBeenCalled();
+    } finally { errors.mockRestore(); }
+  });
+
+  it("Tags failing is the Tags card's error, the rest stand (mutation: let loadTags rethrow -> FAILS)", async () => {
+    listContactTagsMock.mockRejectedValue(new Error("tags down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "tags")).toContain(failedCopy(m["contact.tags"]));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+  });
+
+  it("Details failing (its custom-field definitions) is the Details card's error, the rest stand (mutation: let loadFieldDefs rethrow -> FAILS)", async () => {
+    listCustomFieldsMock.mockRejectedValue(new Error("custom fields down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "details")).toContain(failedCopy(m["contact.details"]));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+  });
+
+  it("an invalid stored zone draws the summary and Next up in the zone renderZone resolved, never the raw one (review ruling; mutation: hand factsView or nextUpView the raw timezone -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "Mars/Olympus", language: null }, error: null });
+    renderZone.mockImplementationOnce(async () => ({ zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
+    contactFactsMock.mockResolvedValue({ ...READY_FACTS, lastTalked: { ok: true, value: { at: "2026-10-10T15:00:00Z", channel: "text" } } });
+    const { result: html } = await quietly(render);
+    expect(renderZone).toHaveBeenLastCalledWith("Mars/Olympus");
+    // 05:30Z on Jan 1 is January in UTC (the resolved zone), where Chicago would say December.
+    expect(cardHtml(html, "summary")).toContain("On your list since Jan 2026");
+    expect(cardHtml(html, "summary")).toContain("Last talked");
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+  });
+
+  it("a summary view that throws costs only the summary (C5: a malformed instant; mutation: build factsView outside its try -> the render rejects, FAILS)", async () => {
+    contactFactsMock.mockResolvedValue({ ...READY_FACTS, lastTalked: { ok: true, value: { at: "not-a-date", channel: "call" } } });
+    const { result: html, logged } = await quietly(render);
+    expect(cardHtml(html, "summary")).toContain(m["record.summary.failed"].replaceAll("'", "&#x27;"));
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+    expect(timelineProps).toHaveBeenCalled();
+    expect(logged).toContain("summary view failed for account acct1");
+    // The customer's id ("ct1") never names the line; `\b` because the account id "acct1" contains it.
+    expect(logged).not.toMatch(/\bct1\b/);
+  });
+
+  it("a Next up view that throws costs only Next up (C5: a malformed due date; mutation: build nextUpView outside its try -> the render rejects, FAILS)", async () => {
+    contactNextUpMock.mockResolvedValue({ bookings: [], datedTasks: [{ id: "t1", title: "Call back", due_at: "not-a-date" }], undatedCount: 0 });
+    const { result: html, logged } = await quietly(render);
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.failed"].replaceAll("'", "&#x27;"));
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+    expect(timelineProps).toHaveBeenCalled();
+    expect(logged).toContain("next up view failed for account acct1");
+  });
+
+  it("Text and Email are hidden while the timeline (and so its composer) failed; Call stays (D3: nothing behind them; mutation: drop the timeline-readiness condition -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    resolveSmsSenderMock.mockResolvedValue({ ok: true, from: "+19565550199", ownedNumbers: ["+19565550199"] });
+    // The control: with the timeline ready, all three are offered.
+    expect(actionIds(await render())).toEqual(["call", "text", "email"]);
+    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    const { result: html } = await quietly(render);
+    expect(actionIds(html)).toEqual(["call"]);
+    expect(html).not.toContain("#compose-sms");
+    expect(html).not.toContain("#compose-email");
+  });
+
+  it("Next up's Add a To-do is offered only while the timeline (which holds the To-do field) rendered (D3; mutation: always pass the label -> FAILS)", async () => {
+    const addTodo = `>${m["record.nextUp.addTodo"]}<`;
+    // The control: the timeline is ready, so the empty Next up offers the action.
+    expect(cardHtml(await render(), "next-up")).toContain(addTodo);
+    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    const { result: html } = await quietly(render);
+    expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
+    expect(cardHtml(html, "next-up")).not.toContain(addTodo);
+  });
+
+  it("on a Spanish page the bodies that stay English carry lang=\"en\": the timeline, Details, Tags and Groups (§9.6; mutation: drop the Groups wrapper -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
+    const wrapped = (id: string) => /<div lang="en">/.test(cardHtml(html, id));
+    expect(["timeline", "details", "tags", "groups"].filter((id) => !wrapped(id))).toEqual([]);
+    // The converted cards inherit the page's Spanish.
+    expect(["summary", "next-up", "deals"].filter(wrapped)).toEqual([]);
+  });
+
+  it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "owner", canManage: true });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
+    expect(html).toContain(`>${m["record.action.call.es"]}<`);
+  });
+
+  it("an agency operator on that Spanish account reads English (requestLocale's role split; mutation: pass isOperator false -> Spanish, FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="en"|lang="en"[^>]*data-record-layout/);
+    expect(html).toContain(`>${m["record.action.call"]}<`);
+    expect(html).not.toContain(m["record.card.nextUp.es"]);
+  });
+
+  it("a render throw inside one card is that card's skeleton on the server, and the page still renders (C5; mutation: drop RecordCardBoundary's Suspense -> the render rejects, FAILS)", async () => {
+    timelineThrows.on = true;
+    const html = await render();
+    expect(cardHtml(html, "timeline")).toContain("data-record-skeleton");
+    expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+  });
+
+  it("the header: Call is the one primary, Email links to its composer, Text is hidden while the gate is closed, Directions takes the first addressed property, and the group is plain text (§9.1, C7)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    listContactPlacesMock.mockResolvedValue({
+      ...NO_PLACES, groups: [{ id: "g1", kind: "household", name: "García", isPrimary: true }],
+      places: [{ id: "p1", account_id: "acct1", contact_id: "ct1", client_group_id: null, label: null, address: "1204 Nolana Ave",
+        landmark: null, directions: null, city: "McAllen", region: "TX", postal_code: "78504", country: "US", archived_at: null,
+        created_by: null, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" }],
+    });
+    const html = await render();
+    expect([...html.matchAll(/data-record-action="(\w+)"/g)].map((x) => x[1])).toEqual(["call", "email", "directions"]);
+    expect(html).toContain('href="tel:+19565550100"');
+    expect(html).toContain('href="#compose-email"');
+    expect(html.match(/data-variant="default"[^>]*data-record-action|data-record-action="call"[^>]*data-variant="default"/g)).toHaveLength(1);
+    expect(html).toContain(encodeURIComponent("1204 Nolana Ave"));
+    expect(html).toMatch(/data-record-subtitle[^>]*>García · Household</);
+  });
+
+  it("a failed places read drops the group line and Directions, never the header (spec §7; mutation: let loadHeaderPlaces rethrow -> FAILS)", async () => {
+    listContactPlacesMock.mockRejectedValue(new Error("places down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(html).toContain("data-record-header");
+      expect(html).not.toContain("data-record-subtitle");
+      expect(html).not.toContain('data-record-action="directions"');
+    } finally { errors.mockRestore(); }
+  });
+
+  it("a person whose language is Spanish gets the converted parts in Spanish, with lang set (§9.6; mutation: drop userLanguage from requestLocale -> English, FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    const html = await render();
+    expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
+    expect(html).toContain(`>${m["record.action.call.es"]}<`);
+    expect(html).toContain(m["record.card.nextUp.es"]);
   });
 });

@@ -11,11 +11,11 @@ import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, setBookingStatus,
          updateCalendarSettings } from "../booking";
 import { setChecklistItem } from "../checklist";
-import { planDemoCalls, DEMO_CALL_COUNT } from "./call-times";
+import { planDemoCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT } from "./call-times";
 import { setFromEmail } from "../sending-identity";
 import { createForm, updateForm, createSubmission, recordRejectedSubmission, linkSubmissionContact } from "../forms";
 import { upsertAutomation } from "../automations";
-import { upsertSite, writeTrafficDay } from "../sites";
+import { upsertSite, writeTrafficDay, stampSiteSynced } from "../sites";
 import { assignPhoneNumber, upsertVoiceProfile, startCallRow, finishCallRow } from "../voice";
 import { deleteAccountCascade } from "../account-teardown";
 import {
@@ -593,7 +593,14 @@ async function seedCalls(
   const spanishBooking = scripts.findIndex((s) => s.lang === "es" && s.outcome === "booked");
   const plan = planDemoCalls(now, DEMO_TIMEZONE, scripts.map((s) => s.outcome),
     spanishBooking >= 0 ? [spanishBooking] : []);
+  // The calls older than the dashboard's 14 days (call-times.ts, k=14..20)
+  // came later and draw from their own stream. Drawn from `r`, their stranger
+  // numbers and discarded timing draws would have shifted every value the
+  // seeders after this one take from it: the bookings, the deals, the form's
+  // sources and the whole traffic chart.
+  const older = rng(0x01de5c0);
   for (let i = 0; i < TOTAL; i++) {
+    const draw = i < DASHBOARD_CALL_COUNT ? r : older;
     const script = DEMO_TRANSCRIPTS[i % DEMO_TRANSCRIPTS.length]!;
     // Spam and abandoned callers are strangers: no contact row, which is
     // exactly how the real product records them.
@@ -602,7 +609,7 @@ async function seedCalls(
     // just walks the matching pool instead of the whole list.
     const pool = byLang[script.lang];
     const contact = known && pool.length > 0 ? pool[(i * 7) % pool.length]! : null;
-    const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(r, 50, 99));
+    const callerE164 = contact ? demoPhone(contact.person.line) : demoPhone(between(draw, 50, 99));
     assertFiction(undefined, callerE164, `caller on call ${i}`);
 
     // More calls in the recent week than the one before (20 against 14), for
@@ -614,7 +621,7 @@ async function seedCalls(
     // The two draws the old random timing made, still made and discarded, so
     // the RNG stream every LATER seeder reads (bookings, deals, contacts'
     // activity) is the same as before and nothing else on the account moves.
-    between(r, 8, 17); between(r, 0, 59);
+    between(draw, 8, 17); between(draw, 0, 59);
 
     const { id: callId } = await startCallRow(db, accountId,
       { phoneNumberId: phone.id, callerE164 });
@@ -1007,6 +1014,12 @@ async function seedSite(
       { dimension: "device", value: "tablet", visitors: Math.round(visitors * 0.05), pageviews: Math.round(pageviews * 0.05) },
     ]);
   });
+  // Stamped as the sync pass stamps a site it has pulled, with the newest day
+  // written (yesterday). The Website page reads `last_synced_day`, not the
+  // rows, to tell a site that has synced from one that was just linked, so
+  // without this the demo's sixty days sat behind "waiting for the first
+  // sync" while the weekly report, which reads the rows, counted them.
+  await stampSiteSynced(db, site.id, days[days.length - 1]!.day);
   return DAYS;
 }
 

@@ -204,6 +204,13 @@ describe("BillingCard", () => {
     expect(renderedText(error)).toContain(m["billing.card.error"]);
   });
 
+  it("the skeleton's fixed-width bars cap at their card's width, so a 320px screen never scrolls sideways (design check 1a, M8: w-48 overran by 10px; mutation: drop max-w-full -> FAILS)", () => {
+    const skeleton = renderToStaticMarkup(createElement(BillingCardSkeleton));
+    const bars = skeleton.match(/<div[^>]*data-slot="skeleton"[^>]*class="[^"]*\bw-(?:48|40|36)\b[^"]*"/g) ?? [];
+    expect(bars.length).toBeGreaterThanOrEqual(5);
+    for (const b of bars) expect(b).toContain("max-w-full");
+  });
+
   it("an address the Send action refuses lands ON the email field (aria-invalid, described by the message), never a toast; any other refusal is a toast and leaves the field clean (mutation: toast the email refusal → FAILS; drop aria-invalid → FAILS)", async () => {
     const refuseEmail = vi.fn(async () => ({ ok: false as const, error: m["billing.error.email"] }));
     const send = byProp(BillingCard(props(base, { send: refuseEmail })), "trigger", m["billing.send"]);

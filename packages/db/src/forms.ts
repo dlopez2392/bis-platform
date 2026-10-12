@@ -324,7 +324,8 @@ export async function countRecentSubmissions(
     .select("id", { count: "exact", head: true })
     .eq("form_id", formId).eq("ip_hash", ipHash).gte("created_at", sinceIso);
   if (error) throw new Error(`countRecentSubmissions failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countRecentSubmissions failed: no count returned");
+  return count;
 }
 
 /**
@@ -417,7 +418,8 @@ export async function countFormsMissingNotify(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("status", "published").eq("notify_emails", "{}");
   if (error) throw new Error(`countFormsMissingNotify failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countFormsMissingNotify failed: no count returned");
+  return count;
 }
 
 /**

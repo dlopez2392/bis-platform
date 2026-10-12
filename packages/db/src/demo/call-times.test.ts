@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planDemoCalls, DEMO_CALL_COUNT, AFTER_HOURS } from "./call-times";
+import { planDemoCalls, DEMO_CALL_COUNT, DASHBOARD_CALL_COUNT, AFTER_HOURS } from "./call-times";
 import { DEMO_OPEN_HOURS, DEMO_TIMEZONE } from "./fiction";
 import { DEMO_TRANSCRIPTS } from "./transcripts";
 
@@ -33,10 +33,18 @@ function dashboardReading(now: number) {
   const prior = new Set(keys14.slice(7));
   const tally = { current: { answered: 0, afterHours: 0 }, prior: { answered: 0, afterHours: 0 } };
   plan.forEach((call, i) => {
-    if (OUTCOMES[i] === "spam" || OUTCOMES[i] === "abandoned") return;
     const l = local(call.startedAt);
     const window = current.has(l.day) ? "current" : prior.has(l.day) ? "prior" : null;
-    expect(window, `call ${i} on ${l.day} is outside the 14 days the dashboard reads`).not.toBeNull();
+    // The first DASHBOARD_CALL_COUNT calls are the dashboard's 14 days; the
+    // rest are older, for the Monday report's week before (and the dashboard
+    // never sees them).
+    if (i < DASHBOARD_CALL_COUNT) {
+      expect(window, `call ${i} on ${l.day} is outside the 14 days the dashboard reads`).not.toBeNull();
+    } else {
+      expect(window, `call ${i} on ${l.day} is older than the dashboard's 14 days`).toBeNull();
+      return;
+    }
+    if (OUTCOMES[i] === "spam" || OUTCOMES[i] === "abandoned") return;
     const hours = DEMO_OPEN_HOURS[l.weekday]?.[0];
     const inside = !!hours && (() => {
       const [a, b] = hours.map((h) => Number(h.slice(0, 2)) * 60 + Number(h.slice(3)));
@@ -114,7 +122,29 @@ describe("planDemoCalls", () => {
     }
   });
 
+  /**
+   * The Monday report compares the last full Monday-Sunday week with the one
+   * before it (apps/web lib/reports/weekly-window.ts `lastWeekMonday`), which
+   * reaches up to 20 local days back. The 2026-10-12 capture, from a Sunday
+   * seed, read "10 more than the week before" because that week had no calls
+   * at all. Every day of both report weeks must have calls, on any weekday
+   * the seed runs (mutation: drop the k=14..20 rows -> FAILS).
+   */
+  it("fills both of the Monday report's weeks, whatever weekday the seed runs", () => {
+    for (const now of RUNS) {
+      const plan = planDemoCalls(now, DEMO_TIMEZONE, OUTCOMES);
+      const days = new Set(plan.map((c) => local(c.startedAt).day));
+      const weekday = local(now).weekday;
+      const sinceMonday = (KEYS.indexOf(weekday) + 6) % 7; // mon=0 .. sun=6
+      const back = dayKeysBack(now, sinceMonday + 15);
+      // k = sinceMonday+1 .. sinceMonday+14: last week, then the week before.
+      for (const day of back.slice(sinceMonday + 1)) {
+        expect(days.has(day), `${new Date(now).toISOString()}: no calls on ${day}`).toBe(true);
+      }
+    }
+  });
+
   it("refuses an outcome list of the wrong length", () => {
-    expect(() => planDemoCalls(RUNS[0]!, DEMO_TIMEZONE, OUTCOMES.slice(1))).toThrow(/expected 34/);
+    expect(() => planDemoCalls(RUNS[0]!, DEMO_TIMEZONE, OUTCOMES.slice(1))).toThrow(new RegExp(`expected ${DEMO_CALL_COUNT}`));
   });
 });

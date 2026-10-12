@@ -6,7 +6,7 @@ import { serviceDb, getBranding, getVoiceProfile, brandDisplayName,
          DEMO_TIMEZONE } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { m } from "@/lib/messages";
-import { weeklyReportEmail } from "@/lib/email/templates/weekly-report";
+import { weeklyReportEmail, weeklyReportSubject } from "@/lib/email/templates/weekly-report";
 import { weeklyMetrics } from "@/lib/reports/weekly-metrics";
 import { lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 
@@ -69,6 +69,50 @@ async function loadDemo(): Promise<Demo> {
     spanishCallId: call.id,
     seededAt: Date.parse(account.created_at),
   };
+}
+
+/**
+ * The message as a phone's mail app opens it: who it is from, the subject,
+ * when it arrived, then the message. Neutral on purpose — no mail app's own
+ * look, because imitating one would be showing somebody else's product.
+ *
+ * Composed here rather than drawn on the website because two of its three
+ * lines are the PRODUCT's: the From name is the one the pass sends under
+ * (`fromName: brand.name`) and the subject is `weeklyReportSubject`, the
+ * function the pass calls, on the same numbers as the message below it. A
+ * website copy of either would drift the first time the numbers changed.
+ * "Mon 8:00 AM" is the first tick of the pass's Monday band (08:00-11:00
+ * local, lib/reports/weekly-window.ts `inMondayBand`).
+ *
+ * One line each for the sender and the time, the sender cut short with an
+ * ellipsis, as a mail app does: the demo's brand name ("Resaca Air
+ * Conditioning & Heating") wrapped onto two lines in the first phone-size
+ * capture (run 38267925952) and pushed the time onto two lines with it.
+ */
+function withMailHeader(html: string, h: { from: string; subject: string; accent: string }): string {
+  const esc = (v: string) => v.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  // Literal colours: this is a stand-in for a mail app's chrome, painted into
+  // a capture, not app UI — DESIGN.md's tokens have nothing to say about it.
+  const avatar = /^#[0-9a-f]{6}$/i.test(h.accent) ? h.accent : "#52525b";
+  const header = `<div style="background:#ffffff;border-bottom:1px solid #e4e4e7;padding:14px 16px 12px;
+      font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#18181b;">
+    <div style="font-size:17px;font-weight:600;line-height:1.3;">${esc(h.subject)}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:12px;">
+      <div style="width:36px;height:36px;border-radius:999px;background:${avatar};color:#ffffff;
+          display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px;">${esc(h.from.slice(0, 1).toUpperCase())}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:15px;">
+          <span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(h.from)}</span>
+          <span style="flex:none;color:#71717a;font-size:13px;white-space:nowrap;">Mon 8:00 AM</span>
+        </div>
+        <div style="color:#71717a;font-size:13px;">to me</div>
+      </div>
+    </div>
+  </div>`;
+  const at = html.search(/<body[^>]*>/);
+  if (at < 0) throw new Error("the weekly report has no <body> to open");
+  const end = html.indexOf(">", at) + 1;
+  return html.slice(0, end) + header + html.slice(end);
 }
 
 /**
@@ -148,9 +192,21 @@ const WIDE = { width: 1280, height: 800 };
  * it silently.
  */
 const DASHBOARD = { width: 1280, height: 880 };
-/** Narrower and taller: the booking page and the email are portrait objects
- *  shown in a half-column, and an email is 600-odd pixels wide by convention. */
-const NARROW = { width: 640, height: 800 };
+/**
+ * The booking page and the email, at the size of the phone they are read on
+ * (2026-10-12). A customer opens the booking link from a text message; the
+ * owner reads the Monday report in bed. Both used to be 640x800, a window no
+ * real device has, which the website then had to shrink into a half-column:
+ * the white half of each image was empty and the words were too small to
+ * read. The website now draws a phone around these two (BIS-Website's
+ * PhoneFrame), so they have to BE phone screens — a desktop layout shrunk
+ * into a phone would be a picture of a page nobody sees.
+ *
+ * 390x797 at 3x -> 1170x2391: an iPhone 13-15's 390x844 screen less the
+ * 47-point status bar the frame draws above it, at its real pixel density.
+ * lib/platform-tour.ts declares the same two numbers on the website side.
+ */
+const PHONE = { width: 390, height: 797 };
 
 test.describe("demo captures", () => {
   test("the six images /platform is waiting for", async ({ browser }) => {
@@ -199,10 +255,12 @@ test.describe("demo captures", () => {
     // set is UTC, so the first capture read "Times shown in UTC" on a page
     // selling a Harlingen HVAC company. A customer looking at this is in the
     // Valley; so is the context now.
-    const narrow = await browser.newContext({
-      viewport: NARROW, deviceScaleFactor: 2, timezoneId: DEMO_TIMEZONE,
+    // `isMobile`: a phone's browser, not a narrow desktop window. It honours
+    // the page's viewport meta and draws no scrollbar gutter.
+    const phone = await browser.newContext({
+      viewport: PHONE, deviceScaleFactor: 3, isMobile: true, hasTouch: true, timezoneId: DEMO_TIMEZONE,
     });
-    const pub = await narrow.newPage();
+    const pub = await phone.newPage();
     await pinClock(pub, demo);
     await useTheme(pub, "light");
     await pub.goto(`/b/${demo.calendarPublicId}`);
@@ -218,6 +276,12 @@ test.describe("demo captures", () => {
       await settled(pub);
     }
     await expect(slots.first(), "no day this week has an open time — re-seed or check the demo calendar").toBeVisible();
+    // The open times are what this image is for. A phone screen is a fixed
+    // height, so a layout change that pushes them below it fails here rather
+    // than shipping a booking page with no times on it.
+    const slot = await slots.first().boundingBox();
+    expect(slot!.y + slot!.height, "the booking page's first open time falls below the phone's screen")
+      .toBeLessThanOrEqual(PHONE.height);
     await shoot(pub, "booking-page.png");
 
     // 6. The Monday email. Not a route — it is a template function, so it is
@@ -243,8 +307,9 @@ test.describe("demo captures", () => {
       weeklyMetrics(db, demo.accountId, priorWindow, true),
     ]);
 
+    const brand = emailBrandNamed(branding, brandDisplayName(branding));
     const { html } = weeklyReportEmail({
-      brand: emailBrandNamed(branding, brandDisplayName(branding)),
+      brand,
       now, prior,
       dashboardUrl: null,
       reassurance: {
@@ -253,19 +318,34 @@ test.describe("demo captures", () => {
       },
     });
 
-    const mail = await pub.context().newPage();
-    await mail.setContent(html, { waitUntil: "networkidle" });
+    // NOT `isMobile`, unlike the booking page. An email carries no viewport
+    // meta, so a phone BROWSER would lay this out 980px wide and shrink it;
+    // a mail app fits the message to the screen instead, which is what a
+    // plain 390-wide window does. Same density as the booking page.
+    const inbox = await browser.newContext({ viewport: PHONE, deviceScaleFactor: 3 });
+    const mail = await inbox.newPage();
+    await mail.setContent(withMailHeader(html, {
+      from: brand.name,
+      subject: weeklyReportSubject(now),
+      accent: brand.accent.accent,
+    }), { waitUntil: "networkidle" });
     await mail.evaluate(() => document.fonts.ready);
-    // Full page: an email is as tall as it is, and cropping one to a viewport
-    // would cut the four numbers this section exists to show.
+    // The viewport, not the full page: this is one phone screen. At 390 wide
+    // the whole message is shorter than the screen; if a copy change ever
+    // makes it longer, the four numbers must still be on it.
     //
     // Through `shoot` rather than its own page.screenshot call. This WAS its
     // own call, and it carried a second `scale: "css"` that the fix in shoot()
     // never touched — so five images came back at 2x and this one stayed at
     // 640x800 against a declared 1280x1600. One call site is the fix; a
     // second one is how the first bug survived being fixed.
-    await shoot(mail, "weekly-report.png", { fullPage: true });
+    const last = await mail.getByText(/website visitors|bookings/).last().boundingBox();
+    expect(last, "the report's numbers are not in the email").not.toBeNull();
+    expect(last!.y + last!.height, "the report's last number falls below the phone's screen")
+      .toBeLessThanOrEqual(PHONE.height);
+    await shoot(mail, "weekly-report.png");
 
-    await narrow.close();
+    await inbox.close();
+    await phone.close();
   });
 });

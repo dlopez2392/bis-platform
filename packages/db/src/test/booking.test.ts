@@ -13,6 +13,7 @@ import {
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
   moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
   moveStamp, sameMicroInstant,
+  countContactBookingsMade, listContactUpcomingBookings,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1891,4 +1892,75 @@ describe("F-048: the move's own stamp", () => {
       expect(sameMicroInstant(back, other)).toBe(false);
     });
   });
+});
+
+describe("per-customer booking reads for the record page (S-03 part 1)", () => {
+  it("counts bookings MADE: a reschedule is not one, a later cancel still is, another customer's never (D-035/D14; mutation: drop .is('rescheduled_from_id', null) -> 3, FAILS; mutation: add .neq('status','cancelled') -> 1, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const { id: luis } = await createContact(db, accountId, { firstName: "Luis" }, "user_test");
+      const at = (iso: string) => ({ startsAt: new Date(iso), endsAt: new Date(new Date(iso).getTime() + 3_600_000) });
+      const first = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana, ...at("2027-03-02T15:00:00Z") }, "user_test");
+      await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: ana, ...at("2027-03-03T15:00:00Z"), rescheduledFromId: first.id }, "user_test");
+      const later = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana, ...at("2027-03-04T15:00:00Z") }, "user_test");
+      await cancelBookingByToken(db, later.cancelToken);
+      await createBooking(db, accountId, { calendarId: cal.id, contactId: luis, ...at("2027-03-05T15:00:00Z") }, "user_test");
+      expect(await countContactBookingsMade(db, accountId, ana)).toBe(2);
+      expect(await countContactBookingsMade(db, accountId, luis)).toBe(1);
+    }));
+
+  it("lists the customer's still-booked bookings from now on, soonest first, capped (mutation: drop .eq('status','booked') -> the cancelled Jan 20 enters, FAILS; mutation: drop .gte('starts_at') -> the past one leads, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const book = async (iso: string) => (await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: ana, startsAt: new Date(iso), endsAt: new Date(new Date(iso).getTime() + 3_600_000) }, "user_test"));
+      await book("2026-12-31T15:00:00Z"); // before "now"
+      const feb = await book("2027-02-01T15:00:00Z");
+      const jan15 = await book("2027-01-15T15:00:00Z");
+      const mar = await book("2027-03-01T15:00:00Z");
+      const cancelled = await book("2027-01-20T15:00:00Z");
+      await cancelBookingByToken(db, cancelled.cancelToken);
+      await book("2027-04-01T15:00:00Z"); // fourth: past the cap of three
+      const rows = await listContactUpcomingBookings(db, accountId, ana, "2027-01-01T00:00:00Z");
+      expect(rows.map((r) => r.id)).toEqual([jan15.id, feb.id, mar.id]);
+      expect(new Date(rows[0]!.starts_at).toISOString()).toBe("2027-01-15T15:00:00.000Z");
+    }));
+
+  it("scopes to the account: another account's id plus this contact's id finds nothing, for both reads (RLS's bookings_tenant lets an agency caller through on its own, so this app-level filter is the only guard for that caller; mutation: drop .eq('account_id', accountId) from either function -> the booking under the first account appears under the second, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_otherDb, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+        await createBooking(db, accountId, {
+          calendarId: cal.id, contactId: ana,
+          startsAt: new Date("2027-05-01T15:00:00Z"), endsAt: new Date("2027-05-01T16:00:00Z"),
+        }, "user_test");
+        expect(await countContactBookingsMade(db, otherAccountId, ana)).toBe(0);
+        expect(await listContactUpcomingBookings(db, otherAccountId, ana, "2027-01-01T00:00:00Z")).toEqual([]);
+      });
+    }));
+
+  it("countContactBookingsMade fails closed when the server returns no exact count, never 'booked 0 times' (mutation: restore count ?? 0 -> resolves 0 instead of rejecting, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      // Drop the `{ count: "exact", head: true }` option on the bookings read, so
+      // PostgREST answers with count = null, error = null -- the same observable
+      // shape postgrest-js 2.110.8 produces for a HEAD request against a missing
+      // relation (dist/index.cjs:429-431: an empty 404 body is read as "204 No
+      // Content", so `error` stays null and `count` stays null too).
+      const noCount = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "from") return Reflect.get(target, prop, receiver);
+          return (table: string) => {
+            const q = target.from(table);
+            if (table !== "bookings") return q;
+            return { select: (cols: string) => q.select(cols) };
+          };
+        },
+      }) as SupabaseClient;
+      await expect(countContactBookingsMade(noCount, accountId, ana)).rejects.toThrow(/countContactBookingsMade failed/);
+    }));
 });

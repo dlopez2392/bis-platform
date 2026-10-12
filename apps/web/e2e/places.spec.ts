@@ -4,6 +4,7 @@ import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact, createGroupWithMember, addContactToGroup, addPlace, type PlaceFields } from "@bis/db";
 import { m } from "../src/lib/messages";
 import { formatDateUTC } from "../src/lib/format";
+import { recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase
 // from the Playwright runner process directly, not through a Next request.
@@ -206,7 +207,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
 
     test("1. adds a property with only a landmark and directions; the address edit reveals Open map", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
-      const card = page.locator("[data-places-aside] [data-places-card]");
+      const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card]');
       // Positive control: the card's own empty state, before anything has been added.
       await expect(card.getByText(m["places.empty"])).toBeVisible();
 
@@ -240,7 +241,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
 
     test("2. adds equipment under warranty; replaces it, with history, and Undo restores it", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
-      const card = page.locator("[data-places-aside] [data-places-card]");
+      const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card]');
       const row = card.locator("[data-place-row]").filter({ hasText: LANDMARK });
       await expect(row).toBeVisible(); // positive control: test 1's property is still here
       const placeId = await row.getAttribute("data-place-row");
@@ -292,7 +293,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
 
     test("3. removes the current unit with Undo; removes an empty property with Undo; archives and puts back the one with equipment", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
-      const card = page.locator("[data-places-aside] [data-places-card]");
+      const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card]');
       const row = card.locator("[data-place-row]").filter({ hasText: LANDMARK });
       const unitRow = row.locator("[data-unit-row]").filter({ hasText: UNIT_NAME });
       await expect(unitRow).toBeVisible(); // positive control: test 2's restored unit is still here
@@ -357,7 +358,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       expect(membership.data, "the second member's membership row").not.toBeNull();
 
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
-      const card = page.locator("[data-places-aside] [data-places-card]");
+      const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card]');
       await card.getByRole("button", { name: m["places.add"] }).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel(m["places.address"]).fill(SHARED_ADDRESS);
@@ -396,7 +397,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
       try {
         await page.goto(`/dashboard/accounts/${accountId}/contacts/${recordId}`);
-        const card = page.locator('[data-places-aside] [data-places-card][lang="es"]');
+        const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card][lang="es"]');
         await expect(card.getByText(m["places.title.es"])).toBeVisible();
         await expect(card.getByText(m["places.directions.es"]).first()).toBeVisible();
         await expect(card.getByText(/Equipo/).first()).toBeVisible();
@@ -426,7 +427,7 @@ test.describe.serial("properties and equipment on the record (S-02 B2)", () => {
       // would be the route pulling in rows it never meant to select, not an RLS gap.
       expect(body).not.toContain(TECH_OTHER_ADDRESS);
 
-      const card = page.locator("[data-places-aside] [data-places-card]");
+      const card = recordPage(page).locator('[data-record-card="properties"] [data-places-card]');
       const sharedRow = card.locator("[data-place-row]").filter({ hasText: TECH_SHARED_ADDRESS });
       // Positive control: the Technician sees their own customer's (shared, household) property.
       await expect(sharedRow).toBeVisible();

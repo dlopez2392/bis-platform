@@ -85,6 +85,7 @@ export { BookingNotStartedError, BookingNotRestorableError, undoOperatorCancel }
 export { claimCancelNotice, rescheduleChain, bookingContactEmail, loadAccountBrandInfo, type AccountBrandInfo } from "./booking";
 export { discardQueuedNotice, noticeMessageStatus } from "./booking";
 export { moveBooking, BookingNotMovableError, bookingWasMoved } from "./booking";
+export { countContactBookingsMade, listContactUpcomingBookings, type UpcomingBooking } from "./booking";
 export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
          REVIEW_REQUEST_MAX_AGE_MS,
@@ -258,3 +259,10 @@ export {
   type PlaceRow, type EquipmentRow, type PlaceOwner, type PlaceFields, type PlacePatch, type EquipmentFields,
   type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
 } from "./places";
+
+// The contact record page's facts and Next up (S-03 part 1). See ./record.ts.
+export {
+  contactFacts, contactNextUp, OPEN_DEALS_SUM_CAP,
+  type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
+  type ContactNextUp, type NextUpTask,
+} from "./record";

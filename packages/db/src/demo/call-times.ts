@@ -29,16 +29,33 @@ import { DEMO_OPEN_HOURS } from "./fiction";
 /** Calls per local day, most recent day first: `[k, count]`, where `k` days
  *  before the seed's local date. Today (k=0) has none: the seed runs at 5 AM,
  *  and a 2 AM call on a marketing screenshot reads as a bug. 4+4+3·4 = 20 in
- *  the dashboard's current window (k=0..6), 2·7 = 14 in the prior (k=7..13). */
+ *  the dashboard's current window (k=0..6), 2·7 = 14 in the prior (k=7..13).
+ *
+ *  And 2·7 = 14 more, k=14..20, that the dashboard never reads (2026-10-12).
+ *  The Monday report compares the last full Monday-Sunday week with the one
+ *  before it, which on a Sunday seed reaches 20 days back; with calls only
+ *  as far as k=13 its "week before" was partly or wholly empty, so the
+ *  report's capture read "10 more than the week before" against a week of
+ *  none. These carry the same steady two a day as the dashboard's prior
+ *  window, so the report's comparison is week against ordinary week. */
 const PER_DAY: readonly (readonly [number, number])[] = [
   [1, 4], [2, 4], [3, 3], [4, 3], [5, 3], [6, 3],
   [7, 2], [8, 2], [9, 2], [10, 2], [11, 2], [12, 2], [13, 2],
+  [14, 2], [15, 2], [16, 2], [17, 2], [18, 2], [19, 2], [20, 2],
 ];
 export const DEMO_CALL_COUNT = PER_DAY.reduce((n, [, c]) => n + c, 0);
 
+/** The calls inside the dashboard's 14 days (k<=13): the first this many of
+ *  the plan. seed.ts draws everything about these from the seed's shared
+ *  random stream as it always has, and the older ones from a stream of their
+ *  own, so adding them moved nothing the rest of the seed draws. */
+export const DASHBOARD_CALL_COUNT = PER_DAY.filter(([k]) => k <= 13).reduce((n, [, c]) => n + c, 0);
+
 /** Answered calls outside opening hours, per window. Current above prior, by
- *  a margin a tile reads as steady growth (▲ 40%), not as a stunt. */
-export const AFTER_HOURS = { current: 7, prior: 5 } as const;
+ *  a margin a tile reads as steady growth (▲ 40%), not as a stunt. `earlier`
+ *  (k=14..20) is never on the dashboard; it is there so the older week has
+ *  evening calls like any other, not none. */
+export const AFTER_HOURS = { current: 7, prior: 5, earlier: 5 } as const;
 
 /** Outcomes the dashboard does not count as answered. */
 const UNANSWERED = new Set(["spam", "abandoned"]);
@@ -96,7 +113,8 @@ export function planDemoCalls(
   }
   const today = zoneParts(now, timezone);
 
-  type Slot = { i: number; k: number; window: "current" | "prior"; open: [number, number] | null; answered: boolean };
+  type Window = keyof typeof AFTER_HOURS;
+  type Slot = { i: number; k: number; window: Window; open: [number, number] | null; answered: boolean };
   const slots: Slot[] = [];
   let i = 0;
   for (const [k, count] of PER_DAY) {
@@ -104,7 +122,7 @@ export function planDemoCalls(
     const hours = DEMO_OPEN_HOURS[WEEKDAY_KEYS[date.getUTCDay()]!]?.[0];
     for (let n = 0; n < count; n++, i++) {
       slots.push({
-        i, k, window: k <= 6 ? "current" : "prior",
+        i, k, window: k <= 6 ? "current" : k <= 13 ? "prior" : "earlier",
         open: hours ? [minutesOf(hours[0]), minutesOf(hours[1])] : null,
         answered: !UNANSWERED.has(outcomes[i]!),
       });
@@ -116,7 +134,7 @@ export function planDemoCalls(
   // the window until its target is met. Unanswered calls are never chosen;
   // they do not count, and spam that rings at 2 AM is not the story.
   const afterHours = new Set<number>();
-  for (const window of ["current", "prior"] as const) {
+  for (const window of ["current", "prior", "earlier"] as const) {
     const answered = slots.filter((s) => s.window === window && s.answered);
     const pinned = (s: Slot) => !s.open || pinAfterHours.includes(s.i);
     for (const s of answered) if (pinned(s)) afterHours.add(s.i);

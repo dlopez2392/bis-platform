@@ -1,22 +1,32 @@
 import { test, expect } from "./fixtures/test";
-import { readClientFixture } from "./support";
+import { config as loadEnv } from "dotenv";
+import { serviceDb, createContact } from "@bis/db";
+import { readClientFixture, recordPage } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
+import { m } from "../src/lib/messages";
+
+// Playwright's config passes env to the webServer, not to this process, so the
+// service-role credentials for the record-page test's own contact are loaded here.
+loadEnv({ path: "apps/web/.env.local" });
+loadEnv({ path: ".env.local" });
 
 /**
  * F-014's +35% pseudo-locale overflow check (DESIGN.md DoD: "survives the
- * pseudo-locale's +35% length") on Spanish-runtime's two proof screens.
+ * pseudo-locale's +35% length") on Spanish-runtime's two proof screens,
+ * and (S-03 part 1) the contact record page's header actions and fact line.
  *
  * QA-only: `?locale=pseudo` only does anything when `BIS_I18N_QA=1` is set
  * (`requestPseudoMode`, lib/i18n/request-locale.ts) — Playwright's own
  * `webServer.env` and CI's `e2e` job set it; a Vercel deployment never does,
  * so this query param is dead weight there, never a live override.
  *
- * READ-ONLY. No test here mutates anything, but the dashboard check still
- * goes through the per-run fixture account (`support.ts`'s
- * `readClientFixture()`) rather than the shared seeded `Test Client One`,
- * per this lane's own fixture discipline — not because this spec writes to
- * it, but so it never depends on `Test Client One`'s real, operator-edited
- * state staying shaped a particular way.
+ * NOT read-only since S-03 part 1: the contact record page test creates one
+ * contact of its own on the per-run fixture account (`support.ts`'s
+ * `readClientFixture()`) and deletes it in a `finally`; it refuses to run,
+ * rather than delete, if `createContact` hands back an existing contact. The
+ * other tests write nothing. Every test here uses the per-run fixture account,
+ * never the shared seeded `Test Client One`, so none of them depends on that
+ * account's real, operator-edited state staying shaped a particular way.
  *
  * What every assertion below measures: `scrollWidth > clientWidth` on the
  * SPECIFIC element that can actually clip — never a container whose own
@@ -118,5 +128,40 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       type: "pseudo-locale nav labels clipped",
       description: clipped.length > 0 ? clipped.join(", ") : "none",
     });
+  });
+
+  test("the contact record page: header actions and the fact line wrap, never clip, under the pseudo-locale", async ({ page }) => {
+    const fixture = readClientFixture();
+    if (!fixture) {
+      test.skip(true, "No client fixture at e2e/.auth/client-fixture.json; run the full suite.");
+      return;
+    }
+    const db = serviceDb();
+    const stamp = Date.now();
+    // A random number, not a fixed one: createContact answers an EXISTING contact on a phone match,
+    // and the finally below deletes whatever id it answered.
+    const phone = `+1956293${String(Math.floor(Math.random() * 9000) + 1000)}`;
+    const { id, existing } = await createContact(db, fixture.accountId, {
+      firstName: "Overflow", lastName: `Check ${stamp}`, phone, email: `overflow-${stamp}@example.com`,
+    }, "e2e-i18n-overflow");
+    if (existing) throw new Error(`i18n-overflow e2e: ${phone} matched an existing contact; refusing to use (or delete) it.`);
+    try {
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}?locale=pseudo`);
+      // Positive control: the pseudo-locale is really on (the Call label is padded, not "Call").
+      // Through the rendered page: the streamed route can hold a hidden second copy, whose 0-wide
+      // elements would be counted and measured here too (support.ts's recordPage).
+      const rec = recordPage(page);
+      await expect(rec.locator('[data-record-action="call"]')).not.toHaveText(m["record.action.call"]);
+      const measured = rec.locator("[data-record-action], [data-record-facts]");
+      const count = await measured.count();
+      expect(count, "no record header actions or fact line found").toBeGreaterThan(1);
+      for (let i = 0; i < count; i++) {
+        const [scrollW, clientW, text] = await measured.nth(i).evaluate((n) => [n.scrollWidth, n.clientWidth, n.textContent]);
+        expect(clipFailure(scrollW, clientW, `record page "${text}"`)).toBeNull();
+      }
+    } finally {
+      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
+    }
   });
 });

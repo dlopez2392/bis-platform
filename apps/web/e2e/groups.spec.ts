@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, setClientAccess, createContact } from "@bis/db";
 import { m } from "../src/lib/messages";
+import { recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase and
 // Clerk from the Playwright runner process rather than through a Next request.
@@ -79,7 +80,7 @@ test.describe.serial("S-02: households and the business name", () => {
 
     test("builds a household, sets role, main and pays, removes and Undoes", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${anaId}`);
-      const card = page.locator("[data-groups-card]");
+      const card = recordPage(page).locator("[data-groups-card]");
       await expect(card.getByText(m["groups.empty"])).toBeVisible();
       await card.getByRole("button", { name: m["groups.add"] }).click();
       await page.getByPlaceholder(m["groups.searchPlaceholder"]).fill(HOUSEHOLD);
@@ -89,7 +90,7 @@ test.describe.serial("S-02: households and the business name", () => {
       await expect(card.locator('[data-mark="primary"]')).toContainText(m["groups.primary"]);
 
       await card.getByRole("button", { name: new RegExp(`^${m["inline.edit"].replace("{label}", m["groups.role"])}`) }).click();
-      await page.getByRole("textbox", { name: m["groups.role"] }).fill("Madre");
+      await recordPage(page).getByRole("textbox", { name: m["groups.role"] }).fill("Madre");
       await page.keyboard.press("Enter");
       await card.getByRole("button", { name: m["groups.billing"] }).click();
       await expect(card.locator('[data-mark="billing"]')).toContainText(m["groups.billing"]);
@@ -120,7 +121,7 @@ test.describe.serial("S-02: households and the business name", () => {
 
     test("adds the second person through search", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${luisId}`);
-      const card = page.locator("[data-groups-card]");
+      const card = recordPage(page).locator("[data-groups-card]");
       await card.getByRole("button", { name: m["groups.add"] }).click();
       await page.getByPlaceholder(m["groups.searchPlaceholder"]).fill(`Familia ${stamp}`.slice(0, 12));
       await page.getByRole("option", { name: new RegExp(HOUSEHOLD) }).first().click();
@@ -140,8 +141,8 @@ test.describe.serial("S-02: households and the business name", () => {
 
     test("the Business name edit reaches the list column", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${luisId}`);
-      await page.getByRole("button", { name: new RegExp(`^${m["inline.edit"].replace("{label}", m["contact.company"])}`) }).click();
-      await page.getByRole("textbox", { name: m["contact.company"] }).fill(BUSINESS);
+      await recordPage(page).getByRole("button", { name: new RegExp(`^${m["inline.edit"].replace("{label}", m["contact.company"])}`) }).click();
+      await recordPage(page).getByRole("textbox", { name: m["contact.company"] }).fill(BUSINESS);
       await page.keyboard.press("Enter");
       await expect(page.getByText(m["inline.saved"].replace("{label}", m["contact.company"]))).toBeVisible();
       await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${encodeURIComponent(`Luis ${stamp}`)}`);
@@ -154,7 +155,7 @@ test.describe.serial("S-02: households and the business name", () => {
 
     test("sees their customer's household but not the other member (G8)", async ({ page }) => {
       await page.goto(`/dashboard/accounts/${accountId}/contacts/${anaId}`);
-      const card = page.locator("[data-groups-card]");
+      const card = recordPage(page).locator("[data-groups-card]");
       await expect(card.getByText(HOUSEHOLD)).toBeVisible();     // positive control first
       await expect(card.getByText(`Luis ${stamp}`)).toHaveCount(0);
       await expect(card.getByText(m["groups.billingAddress"])).toHaveCount(0); // A6

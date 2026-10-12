@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,24 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { segmentsFor } from "@/lib/sms/segments";
 import type { SmsGate } from "@/lib/sms/sender";
 
-type Mode = "note" | "email" | "sms";
+export type ComposeMode = "note" | "email" | "sms";
+type Mode = ComposeMode;
+
+/** The record header's Text/Email links (S-03 part 1, spec §9.1): `#compose-sms`, `#compose-email`. */
+export function composeModeFromHash(hash: string): "email" | "sms" | null {
+  if (hash === "#compose-sms") return "sms";
+  if (hash === "#compose-email") return "email";
+  return null;
+}
+
+/** The line the Text tab shows in place of its form, in today's order; null when the form shows.
+ *  `consent` marks the recipient's own line (the one `data-testid="composer-sms-blocked"` names). */
+export function smsFormBlock(gate: SmsGate | null, contactHasPhone: boolean, blockedLine: string | null): { text: string; consent: boolean } | null {
+  if (gate === null) return { text: m["compose.smsStateUnknown"], consent: false };
+  if (!gate.ok) return { text: gate.reason === "a2p_not_approved" ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"], consent: false };
+  if (!contactHasPhone) return { text: m["compose.noPhoneOnContact"], consent: false };
+  return blockedLine ? { text: blockedLine, consent: true } : null;
+}
 
 export function MessageComposer({
   contactId,
@@ -36,7 +53,8 @@ export function MessageComposer({
   // passed in as a prop — this composer is a client component and must not
   // query the database itself. `resolveSmsSender` is THE gate; nothing here
   // re-derives it.
-  smsGate: SmsGate;
+  // null: the gate read failed (spec §7); the Text tab says so, never an open form.
+  smsGate: SmsGate | null;
   // The recipient's consent line (spec §6), decided on the server from the
   // same two facts the send gate reads: texts stopped, on hold, or a number
   // that could be Mexican or US. The form is not rendered while it is set;
@@ -54,8 +72,45 @@ export function MessageComposer({
   // Controlled, not a plain uncontrolled Input, so the segment counter below
   // can recompute on every keystroke.
   const [body, setBody] = useState("");
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const modeRef = useRef<Mode>(mode);
+  const [focusNonce, setFocusNonce] = useState(0);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
+  // The record header's Text and Email (spec §9.1): open on that channel and focus the body. A
+  // hashchange covers a deep link and a first click; the click listener covers clicking the same
+  // link twice (no hashchange then). Only the note boundary clears the draft, as the tabs do.
+  useEffect(() => {
+    const open = (hash: string) => {
+      const target = composeModeFromHash(hash);
+      if (!target) return;
+      const current = modeRef.current;
+      if (target !== current) {
+        setMode(target);
+        if (current === "note") setBody("");
+      }
+      setFocusNonce((n) => n + 1);
+    };
+    const onHash = () => open(window.location.hash);
+    const onClick = (e: MouseEvent) => {
+      const link = (e.target as Element | null)?.closest?.("a[href^='#compose-']");
+      if (link) open(link.getAttribute("href") ?? "");
+    };
+    // Deferred, not called in the effect body: React's set-state-in-effect rule, and the page's
+    // own hash is read after hydration either way.
+    const first = window.setTimeout(onHash, 0);
+    window.addEventListener("hashchange", onHash);
+    document.addEventListener("click", onClick);
+    return () => {
+      window.clearTimeout(first);
+      window.removeEventListener("hashchange", onHash);
+      document.removeEventListener("click", onClick);
+    };
+  }, []);
+  useEffect(() => { if (focusNonce > 0) bodyRef.current?.focus(); }, [focusNonce]);
   const isEmail = mode === "email";
   const isSms = mode === "sms";
+  const smsBlock = isSms ? smsFormBlock(smsGate, contactHasPhone, smsBlockedLine) : null;
 
   const { pending, onSubmit } = useFormSubmit(async (formData, form) => {
     try {
@@ -92,6 +147,8 @@ export function MessageComposer({
 
   return (
     <div className="w-full space-y-2">
+      <span id="compose-sms" className="block scroll-mt-24" aria-hidden />
+      <span id="compose-email" className="block scroll-mt-24" aria-hidden />
       <div className="flex gap-1">
         {(["note", "email", "sms"] as const).map((value) => (
           <button
@@ -115,7 +172,7 @@ export function MessageComposer({
             }}
             aria-pressed={mode === value}
             className={cn(
-              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+              "rounded-[var(--radius-ctl)] px-2.5 py-1 text-xs font-medium transition-colors",
               mode === value
                 ? "bg-secondary text-secondary-foreground"
                 : "text-muted-foreground hover:text-foreground",
@@ -128,15 +185,8 @@ export function MessageComposer({
 
       {isEmail && !contactHasEmail ? (
         <p className="text-xs text-muted-foreground">{m["compose.noEmailOnContact"]}</p>
-      ) : isSms && !smsGate.ok ? (
-        <p className="text-xs text-muted-foreground">
-          {smsGate.reason === "a2p_not_approved"
-            ? m["compose.smsBlockedA2p"] : m["compose.smsBlockedNoNumber"]}
-        </p>
-      ) : isSms && !contactHasPhone ? (
-        <p className="text-xs text-muted-foreground">{m["compose.noPhoneOnContact"]}</p>
-      ) : isSms && smsBlockedLine ? (
-        <p className="text-xs text-muted-foreground" data-testid="composer-sms-blocked">{smsBlockedLine}</p>
+      ) : smsBlock ? (
+        <p className="text-xs text-muted-foreground" data-testid={smsBlock.consent ? "composer-sms-blocked" : undefined}>{smsBlock.text}</p>
       ) : (
         <form
           key={mode}
@@ -158,6 +208,7 @@ export function MessageComposer({
               newline, as a textarea always does — nothing here intercepts
               it — so the button below is the one way to submit. */}
           <Textarea
+            ref={bodyRef}
             name="body"
             value={body}
             onChange={(e) => setBody(e.target.value)}

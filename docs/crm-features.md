@@ -326,7 +326,7 @@ weakness is breadth: no merge, filters, roles, documents, editable pipeline or c
 | List search | **Partial** (runs on Enter, not as you type; misses full names, business names, accents and differently typed phones) | `packages/db/src/contacts.ts:323-329` |
 | Contact drawer with inline edits and undo | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/contact-drawer.tsx:54-234` |
 | Full record: details, custom fields, tags, timeline, composer, deals | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx:19-101` |
-| Activity timeline | **Partial** (no bookings; calls appear only as voice messages; dates in the server's zone) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx:84-127` |
+| Activity timeline | **Partial** (no bookings; calls appear only as voice messages. Dates have been drawn in the company's zone since D-010, `9bf19e0b`) | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.tsx:84-127` |
 | Notes and tasks on a contact | **Partial** (no edit, delete, assignee or reminder; the note's author is not shown) | `packages/db/src/activities.ts:4-38` |
 | Tags, including bulk add with undo | **Partial** (tags cannot be renamed or deleted, are not shown in the list and cannot be filtered on) | `packages/db/src/contacts.ts:484-510` |
 | CSV import wizard (parsed in the browser; batches of 200; never blanks a field) | **Live** | `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/import-wizard.tsx:43-124` |
@@ -798,11 +798,11 @@ gives its effort: its ½–1 d rows at that rate, plus the slices it names (§4.
 | Undo after a bulk tag removes the tag from every selected contact, including those that already had it | `.../contacts/bulk-action-bar.tsx:34-53`; `packages/db/src/contacts.ts:502-510` | ½–1 d |
 | The CSV export always leaves the tags column blank | `.../contacts/export/route.ts:127-130` | ½–1 d |
 | Search deletes `_ ( ) ,` from the term, so "john_doe" or "(956) 555-0199" never match; submitting a search drops the chosen sort | `packages/db/src/search-term.ts:26`; `.../contacts/page.tsx:181-188` | ½–1 d |
-| Timeline times and the list's "Created" date render in the server's or browser's zone, not the company's | `.../contacts/[contactId]/activity-timeline.tsx:286`; `.../contacts/contacts-table.tsx:242` | F-001 slice |
+| **Fixed 2026-10-09 (D-010, `9bf19e0b`):** timeline times and the list's "Created" date render in the company's zone, not the server's or browser's | `.../contacts/[contactId]/activity-timeline.tsx:213-220`; `.../contacts/contacts-table.tsx:294` | shipped |
 | The board's total counts won and lost deals while the dashboard's "Pipeline value" counts open deals only | `packages/db/src/opportunities.ts:108-126`; `.../pipeline/page.tsx:25` | F-055 slice |
 | Editing a contact's email or phone to one another contact holds creates a silent duplicate | `packages/db/src/contacts.ts:191-202` | ½–1 d |
 | Add contact saves an all-blank contact, checks no email or phone shape, and closes silently on an existing person | `.../contacts/actions.ts:12-20` | ½–1 d |
-| The timeline prints the raw status ("failed", "sent") instead of its label | `.../contacts/[contactId]/activity-timeline.tsx:290` | F-001 slice |
+| **Fixed 2026-10-08 (D-014, `752c070f`):** the timeline prints the status label ("Failed", "Sent"), not the raw value | `.../contacts/[contactId]/activity-timeline.tsx:364-374` | shipped |
 | **Messaging: 7 defects, 0.7–1.4 ew** | | |
 | Email and text bodies are one-line inputs, so no message can contain a paragraph break | `.../conversations/email-composer.tsx:45-50`; `.../contacts/[contactId]/message-composer.tsx:139-150` | ½–1 d |
 | **Fixed 2026-10-08 (D-016):** a hard bounce or a spam complaint now stops later mail to that address. Every gated send carries Resend tags (account id, contact id when known, an operator/customer class); the webhook records a per-address suppression on a hard (`Permanent`) bounce or a complaint, resolving account/contact from the SAME source (the tags, or the message row — never a mix) and retrying past a stale or cross-account contact id rather than 500ing forever; operator-class mail (the business owner's own alerts) is exempt, so an owner marking their own weekly report as spam can't suppress a customer. The gate refuses every customer send to a suppressed address; the contact drawer, the text composer's notice and the thread's failure reason all say so in plain words. Only the customer's own resubscribe lifts it — staff cannot | `packages/db/src/consent.ts` (0062, `recordEmailSuppression`/`readEmailSuppression`); `apps/web/src/lib/consent/email-gate.ts`; `apps/web/src/app/api/webhooks/resend/route.ts` | shipped |
@@ -2619,10 +2619,10 @@ Hoy on a phone, 390 px (proposed)
 
 - **For.** The owner's central ask: one place for each customer, with all their documents and
   information.
-- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions,
-  shows calls only as voice messages, prints raw statuses and draws dates in the server's zone, so
-  an evening call can show tomorrow's date. Deals cannot be opened from the record. There are no
-  documents.
+- **Today.** A contact page and a drawer over the list. The timeline has no bookings or suggestions
+  and shows calls only as voice messages. (Its dates are in the company's zone since D-010,
+  `9bf19e0b`, and its statuses are labels since D-014, `752c070f`.) Deals cannot be opened from the
+  record. There are no documents.
 - **What the owner sees first.** On a desk, the study's three columns: who they are, what is
   happening, what they have. On a phone: the header (language chip, status as dot and word, Llamar ·
   Mensaje · Cómo llegar), the summary (checked fact line first, prose marked "Generado por IA"), the

@@ -625,7 +625,8 @@ export async function countCallsSince(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).gte("started_at", sinceIso);
   if (error) throw new Error(`countCallsSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countCallsSince failed: no count returned");
+  return count;
 }
 
 /**
@@ -644,7 +645,8 @@ export async function countAnsweredCallsSince(
     .eq("account_id", accountId).gte("started_at", sinceIso)
     .in("outcome", [...ANSWERED_CALL_OUTCOMES]);
   if (error) throw new Error(`countAnsweredCallsSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countAnsweredCallsSince failed: no count returned");
+  return count;
 }
 
 /**
@@ -665,7 +667,8 @@ export async function hasActiveCallSince(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).is("ended_at", null).gt("started_at", sinceIso);
   if (error) throw new Error(`hasActiveCallSince failed: ${error.message}`);
-  return (count ?? 0) > 0;
+  if (count === null) throw new Error("hasActiveCallSince failed: no count returned");
+  return count > 0;
 }
 
 export async function countCallsByCallerSince(
@@ -675,7 +678,8 @@ export async function countCallsByCallerSince(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("caller_e164", callerE164).gte("started_at", sinceIso);
   if (error) throw new Error(`countCallsByCallerSince failed: ${error.message}`);
-  return count ?? 0;
+  if (count === null) throw new Error("countCallsByCallerSince failed: no count returned");
+  return count;
 }
 
 /**
@@ -732,7 +736,10 @@ export async function countCallerHistorySince(
   if (spam.error) throw new Error(`countCallerHistorySince failed: ${spam.error.message}`);
   if (other.error) throw new Error(`countCallerHistorySince failed: ${other.error.message}`);
   if (answered.error) throw new Error(`countCallerHistorySince failed: ${answered.error.message}`);
-  return { spamCalls: spam.count ?? 0, otherCalls: other.count ?? 0, answeredCalls: answered.count ?? 0 };
+  if (spam.count === null || other.count === null || answered.count === null) {
+    throw new Error("countCallerHistorySince failed: no count returned");
+  }
+  return { spamCalls: spam.count, otherCalls: other.count, answeredCalls: answered.count };
 }
 
 /**
@@ -933,14 +940,18 @@ export async function getCall(
   return (data as unknown as CallDetailRow | null) ?? null;
 }
 
-/** The contact drawer's recent-calls source — newest few for ONE contact. */
+/** The contact drawer's recent-calls source: newest few for ONE contact. `excludeSpam` is the
+ *  record page's "Last talked" read (S-03 part 1, spec §7): a call the receptionist marked spam
+ *  is not talking with the customer. */
 export async function listContactCalls(
   db: SupabaseClient, accountId: string, contactId: string, limit = 3,
+  opts: { excludeSpam?: boolean } = {},
 ): Promise<{ id: string; started_at: string; outcome: string }[]> {
-  const { data, error } = await db.from("calls")
+  let query = db.from("calls")
     .select("id, started_at, outcome")
-    .eq("account_id", accountId).eq("contact_id", contactId)
-    .order("started_at", { ascending: false }).limit(limit);
+    .eq("account_id", accountId).eq("contact_id", contactId);
+  if (opts.excludeSpam) query = query.neq("outcome", "spam");
+  const { data, error } = await query.order("started_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listContactCalls failed: ${error.message}`);
   return (data ?? []) as { id: string; started_at: string; outcome: string }[];
 }
@@ -996,11 +1007,13 @@ export async function callerInTouchSince(
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("caller_e164", callerE164).gt("started_at", sinceIso);
   if (error) throw new Error(`callerInTouchSince calls read failed: ${error.message}`);
-  if ((calls ?? 0) > 0) return true;
+  if (calls === null) throw new Error("callerInTouchSince calls read failed: no count returned");
+  if (calls > 0) return true;
   const { count: texts, error: mErr } = await db.from("messages")
     .select("id", { count: "exact", head: true })
     .eq("account_id", accountId).eq("conversation_id", conversationId)
     .eq("channel", "sms").eq("direction", "inbound").gt("created_at", sinceIso);
   if (mErr) throw new Error(`callerInTouchSince messages read failed: ${mErr.message}`);
-  return (texts ?? 0) > 0;
+  if (texts === null) throw new Error("callerInTouchSince messages read failed: no count returned");
+  return texts > 0;
 }

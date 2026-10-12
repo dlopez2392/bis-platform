@@ -37,6 +37,13 @@ const focusRing = "outline-none focus-visible:ring-[3px] focus-visible:ring-ring
 const rowClass = "border-t border-[var(--row-line)] first:border-t-0";
 const disclosureClass = cn("rounded-[var(--radius-ctl)] text-left text-xs text-muted-foreground underline-offset-4 hover:underline", focusRing);
 const failed = { ok: false as const, error: "places.error.failed" };
+/**
+ * The label-and-value lists. Label ABOVE value while the card is narrow (a phone's card leaves a
+ * 7rem label column only ~60px for the value, and 320px scrolled sideways); the two columns
+ * come back from 18rem of card width, so the drawer keeps them (design check 1a). The desk's
+ * 280px "have" column (about 246px of card) stacks too, on purpose: the same shape as Details.
+ */
+const LIST = "grid grid-cols-1 gap-x-2 gap-y-0.5 @min-[18rem]:grid-cols-[minmax(0,7rem)_minmax(0,1fr)]";
 
 /** The route sends rows without their author (C8); the view helpers take whole rows. */
 const asPlace = (p: Data["places"][number]): PlaceRow => ({ ...p, created_by: null });
@@ -47,7 +54,7 @@ function Line({ label, children }: { label: ReactNode; children: ReactNode }) {
   return (
     <div className="contents">
       <dt className="break-words pt-1 text-xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
+      <dd className="min-w-0 [overflow-wrap:anywhere]">{children}</dd>
     </div>
   );
 }
@@ -141,7 +148,7 @@ function UnitRow({ ctx, view }: { ctx: Ctx; view: UnitView }) {
         </Button>
       </div>
       <Warranty ctx={ctx} unit={unit} />
-      <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+      <dl className={LIST}>
         <UnitField ctx={ctx} unit={unit} field="make" labelKey="equipment.make" />
         <UnitField ctx={ctx} unit={unit} field="model" labelKey="equipment.model" />
         <UnitField ctx={ctx} unit={unit} field="serial" labelKey="equipment.serial" />
@@ -195,7 +202,7 @@ function PlaceItem({ ctx, place, units }: { ctx: Ctx; place: PlaceRow; units: Un
         </Button>
       </div>
       {group ? <p className="text-xs text-muted-foreground">{ctx.tt("places.sharedWith", { group: group.name })}</p> : null}
-      <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+      <dl className={LIST}>
         <PlaceField ctx={ctx} place={place} field="label" labelKey="places.label" hintKey="places.labelHint" />
         <PlaceField ctx={ctx} place={place} field="address" labelKey="places.address" />
         <Line label={
@@ -206,7 +213,7 @@ function PlaceItem({ ctx, place, units }: { ctx: Ctx; place: PlaceRow; units: Un
           {city ? <p className="px-2 py-1 text-sm">{city}</p> : null}
         </Line>
       </dl>
-      <dl id={moreId} hidden={!more} className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+      <dl id={moreId} hidden={!more} className={LIST}>
         <PlaceField ctx={ctx} place={place} field="city" labelKey="places.city" />
         <PlaceField ctx={ctx} place={place} field="region" labelKey="places.region" />
         <PlaceField ctx={ctx} place={place} field="postal_code" labelKey="places.postalCode" />
@@ -215,7 +222,7 @@ function PlaceItem({ ctx, place, units }: { ctx: Ctx; place: PlaceRow; units: Un
             locale={ctx.locale} save={saver(ctx, (v) => updatePlaceFieldAction(ctx.accountId, ctx.contactId, place.id, "country", v))} />
         </Line>
       </dl>
-      <dl className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+      <dl className={LIST}>
         <PlaceField ctx={ctx} place={place} field="landmark" labelKey="places.landmark" hintKey="places.landmarkHint" />
         <PlaceField ctx={ctx} place={place} field="directions" labelKey="places.directions" hintKey="places.directionsHint" multiline />
         {/* Owner and Staff only (spec §4, §5.3): a Technician never sees the control. */}
@@ -279,8 +286,10 @@ function RemovedList({ ctx, places }: { ctx: Ctx; places: PlaceRow[] }) {
 }
 
 /** Pure: everything the card shows, for every state. Tests and the styleguide render this. */
-export function PlacesCardView({ accountId, contactId, canMovePlace, load, onRetry, handlers }: {
+export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidden, load, onRetry, handlers }: {
   accountId: string; contactId: string; canMovePlace: boolean; load: PlacesLoad; onRetry: () => void; handlers: PlaceHandlers;
+  /** S-03 §8: inside a RecordCard, whose title is the one seen; the h3 still labels the section. */
+  headingHidden?: boolean;
 }) {
   const locale = useLocale();
   const titleId = useId(); // the styleguide shows several cards on one page
@@ -289,15 +298,21 @@ export function PlacesCardView({ accountId, contactId, canMovePlace, load, onRet
   const subject = ready
     ? { id: ready.subject.id, name: [ready.subject.firstName, ready.subject.lastName].filter(Boolean).join(" ") || tt("places.thisCustomer") }
     : null;
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{tt("places.title")}</h3>;
+  const add = ready && subject ? (
+    <PlaceDialog accountId={accountId} contactId={contactId} subject={subject} groups={ready.groups}
+      canMovePlace={canMovePlace} onAdded={(id, title) => handlers.placeAdded(id, title)} />
+  ) : null;
   return (
-    <section data-places-card lang={locale} aria-labelledby={titleId} className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id={titleId} className="text-[13.5px] font-semibold text-card-foreground">{tt("places.title")}</h3>
-        {ready && subject ? (
-          <PlaceDialog accountId={accountId} contactId={contactId} subject={subject} groups={ready.groups}
-            canMovePlace={canMovePlace} onAdded={(id, title) => handlers.placeAdded(id, title)} />
-        ) : null}
-      </div>
+    <section data-places-card lang={locale} aria-labelledby={titleId} className="@container space-y-2">
+      {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
+         there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
+      {headingHidden && !add ? heading : (
+        <div className={headingHidden ? "flex flex-wrap items-center justify-end gap-2" : "flex flex-wrap items-center justify-between gap-2"}>
+          {heading}
+          {add}
+        </div>
+      )}
       {load.status === "loading" ? (
         <div>
           {[0, 1].map((i) => (
@@ -310,9 +325,10 @@ export function PlacesCardView({ accountId, contactId, canMovePlace, load, onRet
           ))}
         </div>
       ) : load.status === "error" || !ready || !subject ? (
-        <div className="space-y-2 text-sm">
+        // Announced, plain words and a ghost Try again: RecordCardError's look (design check 1a).
+        <div role="alert" className="space-y-2 text-sm">
           <p className="text-muted-foreground">{tt("places.loadFailed")}</p>
-          <Button type="button" size="sm" variant="ghost" onClick={onRetry}>{tt("places.retry")}</Button>
+          <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{tt("places.retry")}</Button>
         </div>
       ) : (
         <ReadyBody ctx={{ accountId, contactId, canMovePlace, locale, data: ready, subject, handlers, tt }} />
@@ -337,7 +353,7 @@ function ReadyBody({ ctx }: { ctx: Ctx }) {
 }
 
 /** The card on the drawer and the contact page (spec §8): reads its own route, saves at once, Undo on every change (rule 6). */
-export function PlacesCard({ accountId, contactId, canMovePlace }: { accountId: string; contactId: string; canMovePlace: boolean }) {
+export function PlacesCard({ accountId, contactId, canMovePlace, headingHidden }: { accountId: string; contactId: string; canMovePlace: boolean; headingHidden?: boolean }) {
   const locale = useLocale();
   // Paired with the id it was read for (the drawer's own pattern): a newly peeked contact reads
   // "loading" by mismatch, and only the fetch's own callbacks write state.
@@ -367,6 +383,7 @@ export function PlacesCard({ accountId, contactId, canMovePlace }: { accountId: 
       accountId={accountId}
       contactId={contactId}
       canMovePlace={canMovePlace}
+      headingHidden={headingHidden}
       load={load}
       onRetry={() => { setState({ contactId: "", load: { status: "loading" } }); setNonce((n) => n + 1); }}
       handlers={handlers}

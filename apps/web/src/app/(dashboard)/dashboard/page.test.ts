@@ -21,11 +21,12 @@ const dbMocks = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   sumOpenOpportunities: vi.fn(),
 }));
+const contactsAnswer = vi.hoisted(() => ({ current: { count: 3 as number | null, error: null as { message: string } | null } }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: (table: string) => {
       if (table === "contacts") {
-        return { select: async () => ({ count: 3, error: null }) };
+        return { select: async () => contactsAnswer.current };
       }
       throw new Error(`unexpected table in agency dashboard page.test.ts mock: ${table}`);
     },
@@ -38,6 +39,7 @@ const { default: DashboardPage } = await import("./page");
 
 function resetFixtures() {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
+  contactsAnswer.current = { count: 3, error: null };
   dbMocks.listAccounts.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
 }
@@ -67,5 +69,27 @@ describe("Agency home DashboardPage — open opportunities and pipeline value (F
     // as a real zero.
     expect(html.match(new RegExp(m["common.unavailable"], "g"))).toHaveLength(2);
     expect(html).not.toContain("$0<");
+  });
+});
+
+describe("Agency home DashboardPage — total contacts", () => {
+  beforeEach(resetFixtures);
+
+  it("renders the exact count the contacts read returned", async () => {
+    contactsAnswer.current = { count: 41, error: null };
+    const html = renderToStaticMarkup(await DashboardPage());
+    expect(html).toContain(">41<");
+    expect(html).not.toContain(m["common.unavailable"]);
+  });
+
+  it("a count-less answer with NO error (postgrest-js reads a HEAD request's empty 404 as 204) shows 'unavailable', never 0 (mutation: restore `count ?? 0` -> renders 0, FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    contactsAnswer.current = { count: null, error: null };
+    // No other tile may read 0, so a 0 on the page can only be the contacts tile.
+    dbMocks.listAccounts.mockResolvedValue([{}, {}]);
+    dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 7, value: 100 });
+    const html = renderToStaticMarkup(await DashboardPage());
+    expect(html.match(new RegExp(m["common.unavailable"], "g"))).toHaveLength(1);
+    expect(html).not.toContain(">0<");
   });
 });

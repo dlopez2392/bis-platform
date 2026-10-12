@@ -210,7 +210,10 @@ export function InlineField(
         type="button"
         onClick={() => { cancelled.current = false; setEditing(true); }}
         className={cn(
-          "block w-full rounded-[var(--radius-ctl)] px-2 py-1 text-left text-sm transition-colors",
+          // A long unbroken value (a 60-letter name) breaks anywhere rather than pushing its host,
+          // and the page, sideways: every host wraps for free (design check 1a). Display only:
+          // the editing input/select/textarea below are untouched.
+          "block w-full rounded-[var(--radius-ctl)] px-2 py-1 text-left text-sm transition-colors [overflow-wrap:anywhere]",
           "hover:bg-muted focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none",
           shown ? "text-foreground" : "text-muted-foreground italic",
           // A multi-line value keeps the line breaks it was typed with.

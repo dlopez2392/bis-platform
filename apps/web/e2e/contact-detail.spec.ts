@@ -1,7 +1,7 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
-import { readClientFixture } from "./support";
+import { readClientFixture, recordPage } from "./support";
 import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
@@ -50,7 +50,7 @@ test("opening a contact from the table renders the detail screen", async ({ page
   // The bug this guards against returned 404, which renders not-found.tsx —
   // a page that still "loads". So assert on content only the real detail
   // screen has, and that the not-found copy is absent.
-  await expect(page.getByRole("heading", { name })).toBeVisible();
+  await expect(recordPage(page).getByRole("heading", { name })).toBeVisible();
   // The Email value is an InlineField in DISPLAY mode here — a <button>
   // whose accessible name is "Edit Email: <value>", not a labelled input
   // (it only gets a plain "Email" label once clicked into edit mode). So
@@ -62,7 +62,7 @@ test("opening a contact from the table renders the detail screen", async ({ page
   const emailEditName = new RegExp(
     "^" + escapeRegExp(m["inline.edit"].replace("{label}", m["contacts.email"])) + ":",
   );
-  await expect(page.getByRole("button", { name: emailEditName })).toBeVisible();
+  await expect(recordPage(page).getByRole("button", { name: emailEditName })).toBeVisible();
   await expect(page.getByText("Page not found")).toHaveCount(0);
 });
 
@@ -103,17 +103,21 @@ test("an email sent from a contact appears on that contact's timeline", async ({
     // the page heading): getByText ignores case, so it matched both.
     const body = `Hello from the e2e send ${stamp}`;
     // The composer has no <label>s — it is a mode toggle plus placeholders.
-    await page.getByRole("button", { name: "Email", exact: true }).click();
-    await page.getByPlaceholder("Subject").fill("Timeline check");
-    await page.getByPlaceholder(/write an email/i).fill(body);
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    // S-03 part 1: the header's Email opens the composer on its channel (the composer now sits at
+    // the top of the Activity card). The tab is still the composer's, pressed by the link.
+    // Through the rendered page: the streamed route can hold a hidden second copy (support.ts).
+    await recordPage(page).locator('[data-record-action="email"]').click();
+    await expect(recordPage(page).getByRole("button", { name: "Email", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await recordPage(page).getByPlaceholder("Subject").fill("Timeline check");
+    await recordPage(page).getByPlaceholder(/write an email/i).fill(body);
+    await recordPage(page).getByRole("button", { name: "Send", exact: true }).click();
 
     // The timeline, not the composer. Outside production the provider is the
     // fake one, so this proves the record — not delivery. The unique body is
     // the real assertion; before this change "Email sent" matched nothing at
     // all on the timeline.
-    await expect(page.getByText("Email sent").first()).toBeVisible();
-    await expect(page.getByText(body)).toBeVisible();
+    await expect(recordPage(page).getByText("Email sent").first()).toBeVisible();
+    await expect(recordPage(page).getByText(body)).toBeVisible();
   } finally {
     await deleteContactAndThread(accountId, contactId);
   }
