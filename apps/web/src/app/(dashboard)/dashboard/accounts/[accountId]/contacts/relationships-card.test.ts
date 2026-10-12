@@ -8,7 +8,7 @@ vi.mock("./relationship-actions", () => ({
   setRelationshipAction: vi.fn(), undoSetRelationshipAction: vi.fn(), removeRelationshipAction: vi.fn(),
   undoRemoveRelationshipAction: vi.fn(), addRelationshipAction: vi.fn(), searchRelatableContactsAction: vi.fn(),
 }));
-const { RelationshipsCardView } = await import("./relationships-card");
+const { RelationshipsCardView, RelationshipsCard } = await import("./relationships-card");
 const { m } = await import("@/lib/messages");
 // Copy is asserted on what a reader receives: React escapes an apostrophe in markup, so a raw
 // toContain on "Couldn't load" matches nothing (lib/rendered-text.ts).
@@ -47,6 +47,22 @@ describe("RelationshipsCardView: its own loaded, empty and error states (rule 5 
       createElement(RelationshipsCardView, { accountId: "a1", load: { status: "loading" }, onRetry: noop, onToggle: noop, onForm: noop, onRemove: noop, addSlot: null, headingHidden: true })));
     expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
     expect(render("en", { status: "loading" })).not.toMatch(/<h3[^>]*class="sr-only"/);
+  });
+  it("RelationshipsCard hands headingHidden to its view (review round 1, minor 2; mutation: drop the pass-through -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(RelationshipsCard, { accountId: "a1", contactId: ANA, headingHidden: true })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+  });
+  it("headingHidden: no empty row under RecordCard's title, and Add stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
+    const hidden = (load: Parameters<typeof RelationshipsCardView>[0]["load"], addSlot: ReturnType<typeof createElement> | null) =>
+      renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+        createElement(RelationshipsCardView, { accountId: "a1", load, onRetry: noop, onToggle: noop, onForm: noop, onRemove: noop, addSlot, headingHidden: true })));
+    const add = createElement("button", { type: "button" }, "Add");
+    const ready = { status: "ready" as const, subject: { firstName: "Sofía", lastName: null }, views: [] };
+    expect(hidden({ status: "loading" }, add)).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden(ready, null)).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden(ready, add)).toMatch(/^<section[^>]*><div class="flex items-center justify-end gap-2"><h3 id="[^"]+" class="sr-only">[^<]*<\/h3><button/);
+    expect(render("en", { status: "loading" })).toMatch(/^<section[^>]*><div class="flex items-center justify-between gap-2"><h3 /);
   });
 });
 

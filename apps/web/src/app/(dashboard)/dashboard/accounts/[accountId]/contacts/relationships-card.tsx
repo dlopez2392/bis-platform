@@ -107,12 +107,18 @@ function Chip({ accountId, view, locale, onToggle, onForm, onRemove }: {
 export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onForm, onRemove, addSlot, headingHidden }: CardViewProps) {
   const locale = useLocale();
   const titleId = useId(); // the styleguide shows several cards on one page
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-sm font-medium"}>{t(m, "relationships.title", locale)}</h3>;
+  const add = load.status === "ready" ? addSlot : null;
   return (
     <section data-relationships-card lang={locale} aria-labelledby={titleId} className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <h3 id={titleId} className={headingHidden ? "sr-only" : "text-sm font-medium"}>{t(m, "relationships.title", locale)}</h3>
-        {load.status === "ready" ? addSlot : null}
-      </div>
+      {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
+         there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
+      {headingHidden && !add ? heading : (
+        <div className={headingHidden ? "flex items-center justify-end gap-2" : "flex items-center justify-between gap-2"}>
+          {heading}
+          {add}
+        </div>
+      )}
       {load.status === "loading" ? (
         <div className="space-y-2">
           <Skeleton data-relationships-skeleton className="h-14 w-full rounded-[var(--radius-ctl)]" />

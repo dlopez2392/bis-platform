@@ -219,15 +219,19 @@ export function GroupsCard({ onChanged, ...props }: ViewProps & { onChanged?: ()
 export function GroupsCardView({ accountId, contactId, canManageGroups, headingHidden, load, onRetry, onChanged }:
   ViewProps & { load: GroupsLoad; onRetry: () => void; onChanged: () => void }) {
   const titleId = useId();
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{m["groups.title"]}</h3>;
+  const add = load.status === "ready" && load.groups.length > 0
+    ? <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} /> : null;
   return (
     <section aria-labelledby={titleId} className="space-y-2" data-groups-card>
-      <div className="flex items-center justify-between gap-2">
-        {/* S-03 §8: on the record page RecordCard shows the title; this one still labels the section. */}
-        <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{m["groups.title"]}</h3>
-        {load.status === "ready" && load.groups.length > 0 ? (
-          <AddToGroup accountId={accountId} contactId={contactId} onChanged={onChanged} />
-        ) : null}
-      </div>
+      {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
+         there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
+      {headingHidden && !add ? heading : (
+        <div className={headingHidden ? "flex items-center justify-end gap-2" : "flex items-center justify-between gap-2"}>
+          {heading}
+          {add}
+        </div>
+      )}
       {load.status === "loading" ? (
         <div className="space-y-3" data-testid="groups-skeleton">
           <div className="space-y-1.5"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-full" /></div>

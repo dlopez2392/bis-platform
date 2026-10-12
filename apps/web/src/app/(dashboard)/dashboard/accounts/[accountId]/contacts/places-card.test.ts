@@ -10,7 +10,7 @@ vi.mock("./places-actions", () => ({
   undoRemovePlaceAction: vi.fn(), setPlaceArchivedAction: vi.fn(), addEquipmentAction: vi.fn(), replaceEquipmentAction: vi.fn(),
   updateEquipmentFieldAction: vi.fn(), removeEquipmentAction: vi.fn(), undoRemoveEquipmentAction: vi.fn(),
 }));
-const { PlacesCardView } = await import("./places-card");
+const { PlacesCardView, PlacesCard } = await import("./places-card");
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { mapUrl } = await import("@/lib/contacts/place-view");
@@ -86,6 +86,20 @@ describe("PlacesCardView: its own loaded, empty and error states (rule 5 per car
       createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load: { status: "loading" }, onRetry: noop, handlers })));
     expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
     expect(render("en", { status: "loading" })).not.toMatch(/<h3[^>]*class="sr-only"/);
+  });
+
+  it("PlacesCard hands headingHidden to its view (review round 1, minor 2; mutation: drop the pass-through -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCard, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+  });
+
+  it("headingHidden: no empty row under RecordCard's title, and Add stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
+    const hidden = (load: PlacesLoad) => renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load, onRetry: noop, handlers })));
+    expect(hidden({ status: "loading" })).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden(ready())).toMatch(/^<section[^>]*><div class="flex flex-wrap items-center justify-end gap-2"><h3 id="[^"]+" class="sr-only">/);
+    expect(render("en", { status: "loading" })).toMatch(/^<section[^>]*><div class="flex flex-wrap items-center justify-between gap-2"><h3 /);
   });
 });
 

@@ -44,7 +44,7 @@ function render() {
 
 beforeEach(() => refresh.mockClear());
 
-describe("ContactFieldsPanel: Assigned to (F-085)", () => {
+describe("ContactDetailsBody: Assigned to (F-085)", () => {
   it("hands the field this contact, its holder, the team, canAssign as !readOnly and the viewer", () => {
     render();
     expect(fieldProps).toHaveLength(1);

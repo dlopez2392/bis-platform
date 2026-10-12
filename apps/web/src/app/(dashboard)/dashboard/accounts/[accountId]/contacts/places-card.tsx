@@ -291,15 +291,21 @@ export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidd
   const subject = ready
     ? { id: ready.subject.id, name: [ready.subject.firstName, ready.subject.lastName].filter(Boolean).join(" ") || tt("places.thisCustomer") }
     : null;
+  const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{tt("places.title")}</h3>;
+  const add = ready && subject ? (
+    <PlaceDialog accountId={accountId} contactId={contactId} subject={subject} groups={ready.groups}
+      canMovePlace={canMovePlace} onAdded={(id, title) => handlers.placeAdded(id, title)} />
+  ) : null;
   return (
     <section data-places-card lang={locale} aria-labelledby={titleId} className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{tt("places.title")}</h3>
-        {ready && subject ? (
-          <PlaceDialog accountId={accountId} contactId={contactId} subject={subject} groups={ready.groups}
-            canMovePlace={canMovePlace} onAdded={(id, title) => handlers.placeAdded(id, title)} />
-        ) : null}
-      </div>
+      {/* S-03 §8: inside a RecordCard its title is the one seen, so the h3 is sr-only (still the section's label),
+         there is no empty row under that title, and Add keeps to the right. The drawer sets nothing: unchanged. */}
+      {headingHidden && !add ? heading : (
+        <div className={headingHidden ? "flex flex-wrap items-center justify-end gap-2" : "flex flex-wrap items-center justify-between gap-2"}>
+          {heading}
+          {add}
+        </div>
+      )}
       {load.status === "loading" ? (
         <div>
           {[0, 1].map((i) => (

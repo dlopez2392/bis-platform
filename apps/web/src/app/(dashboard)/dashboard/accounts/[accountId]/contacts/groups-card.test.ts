@@ -84,6 +84,14 @@ describe("GroupsCardView", () => {
     expect(html).toContain(`aria-labelledby="${id}"`);
     expect(view({ status: "loading" })).not.toContain('class="sr-only"');
   });
+  it("headingHidden: no empty row under RecordCard's title, and the Add control stays right; the drawer's row is unchanged (review round 1, minor 3; mutation: keep the justify-between row -> FAILS)", () => {
+    const hidden = (load: unknown) => renderToStaticMarkup(createElement(GroupsCardView, {
+      accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: load as never, onRetry: () => {}, onChanged: () => {},
+    }));
+    expect(hidden({ status: "loading" })).toMatch(/^<section[^>]*><h3 id="[^"]+" class="sr-only">/);
+    expect(hidden({ status: "ready", groups: [group()] })).toMatch(/^<section[^>]*><div class="flex items-center justify-end gap-2"><h3 id="[^"]+" class="sr-only">/);
+    expect(view({ status: "loading" })).toMatch(/^<section[^>]*><div class="flex items-center justify-between gap-2"><h3 /);
+  });
 });
 
 const ok = <T,>(v: T) => ({ ok: true as const, ...v });
