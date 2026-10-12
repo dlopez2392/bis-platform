@@ -37,7 +37,8 @@ export function RecordCardRetry({ label, onRetry }: { label: string; onRetry?: (
 
 export function RecordCardError({ text, retryLabel, onRetry }: { text: string; retryLabel: string; onRetry?: () => void }) {
   return (
-    <div role="status" className="space-y-2 text-sm" data-record-error>
+    // role="alert": this repo's error role; "status" is for success and info (public-form.tsx).
+    <div role="alert" className="space-y-2 text-sm" data-record-error>
       <p className="text-muted-foreground">{text}</p>
       <RecordCardRetry label={retryLabel} onRetry={onRetry} />
     </div>
@@ -66,7 +67,9 @@ export function RecordCardView(p: RecordCardViewProps) {
       <div className="flex items-center justify-between gap-2">
         <h2 id={titleId} className="min-w-0 flex-1 text-[13.5px] font-semibold text-card-foreground">
           {p.disclosure ? (
-            <button type="button" aria-expanded={p.open} aria-controls={bodyId}
+            // aria-controls only while the body is mounted: a closed card renders no body, and a
+            // link to nothing is worse than none (setup-rail.tsx's SETUP_PANE_ID note).
+            <button type="button" aria-expanded={p.open} aria-controls={closed ? undefined : bodyId}
               aria-label={closed ? p.showLabel : undefined} onClick={p.onToggle}
               className="flex min-h-11 w-full items-center justify-between gap-2 rounded-[var(--radius-ctl)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
               <span className="truncate" title={p.title}>{p.title}</span>

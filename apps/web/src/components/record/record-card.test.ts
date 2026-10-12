@@ -29,6 +29,15 @@ describe("RecordCard (spec §8): one chrome, its own states, a phone disclosure"
     expect(html).toContain("deal rows");
   });
 
+  it("a closed disclosure names no aria-controls, and an open one points at the body it mounts, so the link never dangles (mutation: unconditional aria-controls -> FAILS)", () => {
+    const closed = view({ disclosure: true, open: false }, createElement("p", null, "deal rows"));
+    expect(closed).not.toContain("aria-controls");
+    const open = view({ disclosure: true, open: true }, createElement("p", null, "deal rows"));
+    const target = open.match(/aria-controls="([^"]+)"/)?.[1];
+    expect(target).toBeTruthy();
+    expect(open).toContain(`id="${target}"`);
+  });
+
   it("not a disclosure: a plain title and the body (desk, or a card that never collapses)", () => {
     const html = view({}, createElement("p", null, "deal rows"));
     expect(html).not.toContain("aria-expanded");
@@ -48,6 +57,12 @@ describe("RecordCard (spec §8): one chrome, its own states, a phone disclosure"
     expect(html).toContain("Couldn&#x27;t load Deals.");
     expect(html).toContain(">Try again<");
     expect(html).not.toContain("deal rows");
+  });
+
+  it("a card's failure is announced as an alert, the repo's error role, never a status (mutation: role=\"status\" on RecordCardError -> FAILS)", () => {
+    const html = view({ state: "error" });
+    expect(html).toMatch(/role="alert"[^>]*data-record-error|data-record-error[^>]*role="alert"/);
+    expect(html).not.toContain('role="status"');
   });
 
   it("RecordCard on the server: a collapsible card renders closed (phone-first), a fixed one open (mutation: server snapshot false -> the collapsible body renders, FAILS)", () => {
