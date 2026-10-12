@@ -150,6 +150,7 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
         const { data, error } = await db.from("bookings").insert({
           account_id: accountId, calendar_id: calendar!.id, contact_id: contactId,
           starts_at: past(hoursAgo + 1), ends_at: past(hoursAgo), cancel_token: `tok_af_${RUN}_${hoursAgo}`,
+          author_kind: "person",
         }).select("id").single();
         if (error) throw error;
         return data!.id as string;

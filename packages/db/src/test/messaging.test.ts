@@ -754,7 +754,7 @@ describe("messaging", () => {
       // would return 1000 of THESE and exactly zero of quiet's.
       const rows = Array.from({ length: 1004 }, (_, i) => ({
         account_id: accountId, conversation_id: loud.id, channel: "email",
-        direction: "outbound", body: `loud message ${i}`,
+        direction: "outbound", body: `loud message ${i}`, author_kind: "person",
       }));
       const { error: bulkErr } = await db.from("messages").insert(rows);
       expect(bulkErr, `bulk insert failed: ${bulkErr?.message}`).toBeNull();

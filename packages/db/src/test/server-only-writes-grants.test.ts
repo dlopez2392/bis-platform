@@ -36,7 +36,7 @@ async function seed(c: Client, label: string): Promise<Seed> {
   const contactId = await one("insert into contacts (account_id, first_name) values ($1,'Ana') returning id", [accountId]);
   const conversationId = await one("insert into conversations (account_id, contact_id) values ($1,$2) returning id", [accountId, contactId]);
   const messageId = await one(
-    "insert into messages (account_id, conversation_id, channel, direction, body) values ($1,$2,'sms','outbound','hi') returning id",
+    "insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1,$2,'sms','outbound','hi','person') returning id",
     [accountId, conversationId]);
   const formId = await one("insert into forms (account_id, public_id, name) values ($1,$2,'Quote') returning id",
     [accountId, `pub_SOW_${label}_${RUN}`]);
@@ -45,8 +45,8 @@ async function seed(c: Client, label: string): Promise<Seed> {
   const calendarId = await one("insert into calendars (account_id, public_id) values ($1,$2) returning id",
     [accountId, `cal_SOW_${label}_${RUN}`]);
   const bookingId = await one(
-    `insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token)
-       values ($1,$2,$3, now() + interval '1 day', now() + interval '1 day 1 hour', $4) returning id`,
+    `insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind)
+       values ($1,$2,$3, now() + interval '1 day', now() + interval '1 day 1 hour', $4, 'person') returning id`,
     [accountId, calendarId, contactId, `tok_SOW_${label}_${RUN}`]);
   const phoneId = await one("insert into phone_numbers (account_id, e164) values ($1,$2) returning id", [accountId, testPhoneNumber()]);
   const callId = await one("insert into calls (account_id, phone_number_id) values ($1,$2) returning id", [accountId, phoneId]);

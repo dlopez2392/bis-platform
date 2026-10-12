@@ -66,7 +66,7 @@ async function fixture(c: Client) {
   const cal = (await c.query<{ id: string }>(
     "insert into calendars (account_id, public_id) values ($1, $2) returning id", [a, `fold-${RUN}`])).rows[0]!.id;
   await c.query(
-    "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token) values ($1, $2, $3, now() + interval '7 days', now() + interval '7 days 1 hour', $4)",
+    "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind) values ($1, $2, $3, now() + interval '7 days', now() + interval '7 days 1 hour', $4, 'person')",
     [a, cal, ids.gee, `fold-cancel-${RUN}`]);
   return { a, ids };
 }

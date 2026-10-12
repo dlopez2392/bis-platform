@@ -70,11 +70,11 @@ async function seed(c: Client) {
       tasks: await one("insert into tasks (account_id, contact_id, title, assigned_to) values ($1,$2,'t',$3) returning id", [acct, cid, assignee]),
       opportunities: cid ? await one("insert into opportunities (account_id, contact_id, pipeline_id, stage_id, name) values ($1,$2,$3,$4,'Roof') returning id", [acct, cid, pipeline, stage]) : "",
       conversations: conv,
-      messages: cid ? await one("insert into messages (account_id, conversation_id, channel, direction, body) values ($1,$2,'sms','inbound','hola') returning id", [acct, conv]) : "",
+      messages: cid ? await one("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1,$2,'sms','inbound','hola','customer') returning id", [acct, conv]) : "",
       calls: call,
       call_proposals: await one("insert into call_proposals (account_id, call_id, contact_id, kind, payload, evidence) values ($1,$2,$3,'task','{}','they asked') returning id", [acct, call, cid]),
       bookings: cid ? await one(
-        "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token) values ($1,$2,$3,$4,$5,$6) returning id",
+        "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind) values ($1,$2,$3,$4,$5,$6,'person') returning id",
         [acct, calendar, cid, starts.toISOString(), new Date(starts.getTime() + 1_800_000).toISOString(), `tok_${RUN}_${hour}`]) : "",
       form_submissions: await one("insert into form_submissions (account_id, form_id, contact_id) values ($1,$2,$3) returning id", [acct, form, cid]),
       automation_log: await one(
