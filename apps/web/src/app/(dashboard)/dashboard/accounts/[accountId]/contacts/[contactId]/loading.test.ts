@@ -33,4 +33,11 @@ describe("contact record page loading.tsx", () => {
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     expect(html).toContain(m["record.card.nextUp.es"]);
   });
+
+  it("the timeline loads as rows (mark chip, line, time), not generic lines (spec §9.4; mutation: drop the timeline skeleton -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(Loading));
+    const timeline = html.match(/<section[^>]*data-record-card="timeline"[\s\S]*?<\/section>/)![0];
+    expect(timeline).toContain("data-timeline-skeleton");
+    expect(timeline.match(/data-timeline-skeleton-row/g)).toHaveLength(5);
+  });
 });

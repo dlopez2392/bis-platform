@@ -1,10 +1,12 @@
 import {
-  contactFacts, contactNextUp, listNotes, listContactTasks, holdOpenTaskIds, listContactOpportunities,
-  listContactSubmissions, listContactMessages, listContactPlaces, listContactTags, listCustomFields,
+  contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
+  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, TIMELINE_SOURCES,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
+  type TimelinePage, type TimelineCursor,
 } from "@bis/db";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { loggableError } from "@/lib/loggable-error";
+import { personIdsOf } from "./author-mark";
 
 /**
  * One loader per record card (S-03 part 1, spec C5): each returns a load and NEVER throws, so one
@@ -36,43 +38,50 @@ export async function loadNextUp(db: SupabaseClient, accountId: string, contactI
   }
 }
 
-type Notes = NonNullable<Awaited<ReturnType<typeof listNotes>>>;
-type Tasks = Awaited<ReturnType<typeof listContactTasks>>;
-type Opps = NonNullable<Awaited<ReturnType<typeof listContactOpportunities>>>;
-type Subs = Awaited<ReturnType<typeof listContactSubmissions>>;
-type Msgs = Awaited<ReturnType<typeof listContactMessages>>;
 export type TimelineLoad =
-  | { status: "ready"; notes: Notes; tasks: Tasks; opportunities: Opps; submissions: Subs; messages: Msgs; holdOpen: string[] }
+  | { status: "ready"; page: TimelinePage; holdOpen: string[]; names: Record<string, string>; personaName: string | null }
   | { status: "error" };
 
-/** Today's five reads plus the hold check, unchanged and still uncapped (1b pages them), now inside the card. */
-export async function loadTimeline(db: SupabaseClient, ledger: SupabaseClient, accountId: string, contactId: string): Promise<TimelineLoad> {
-  let notes: Notes, tasks: Tasks, opportunities: Opps, submissions: Subs, messages: Msgs;
+/**
+ * The timeline card's load (S-03 1b, spec §7, C3, C5): one merged server page; a source that failed
+ * is named in `page.failed` and the rest still render; only when ALL seven failed is it the card's
+ * error. Then three soft reads, none of which can cost the card: the hold check (fails CLOSED), the
+ * names on person marks (fails to "Someone on the team"), the receptionist's persona (fails to "Sofía").
+ */
+export async function loadTimeline(
+  db: SupabaseClient, ledger: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
+): Promise<TimelineLoad> {
+  let page: TimelinePage;
   try {
-    [notes, tasks, opportunities, submissions, messages] = await Promise.all([
-      listNotes(db, accountId, contactId).then((r) => r ?? []),
-      listContactTasks(db, accountId, contactId),
-      listContactOpportunities(db, accountId, contactId).then((r) => r ?? []),
-      listContactSubmissions(db, accountId, contactId),
-      listContactMessages(db, accountId, contactId),
-    ]);
+    page = await listContactTimelinePage(db, accountId, contactId, before, {
+      onError: (source, e) => log(`activity (${source})`, accountId, e),
+    });
   } catch (e) {
     log("activity", accountId, e);
     return { status: "error" };
   }
-  // Review R3-N1 (G21): a To-do whose number is still on hold is closed by deciding the hold, never by
-  // "Done". A failed read fails CLOSED: every open linked To-do gets the hint (moved from page.tsx).
-  // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
-  let holdOpen: string[];
-  try {
-    holdOpen = await holdOpenTaskIds(db, accountId, tasks, ledger);
-  } catch (e) {
-    console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
-    holdOpen = tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
-  }
-  return { status: "ready", notes, tasks, opportunities, submissions, messages, holdOpen };
+  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  const tasks = page.items.flatMap((i) => (i.kind === "task" ? [i.task] : []));
+  const [holdOpen, names, personaName] = await Promise.all([
+    // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
+    // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
+    holdOpenTaskIds(db, accountId, tasks, ledger).catch((e: unknown) => {
+      console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
+      return tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
+    }),
+    listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
+      log("activity names", accountId, e);
+      return {} as Record<string, string>;
+    }),
+    getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+      log("activity persona", accountId, e);
+      return null;
+    }),
+  ]);
+  return { status: "ready", page, holdOpen, names, personaName };
 }
 
+type Opps = NonNullable<Awaited<ReturnType<typeof listContactOpportunities>>>;
 // The read's own row type (DealsBody's `DealRow` is structurally the same); lib never imports from app/.
 export type DealsLoad = { status: "ready"; deals: Opps } | { status: "error" };
 export async function loadDeals(db: SupabaseClient, accountId: string, contactId: string): Promise<DealsLoad> {

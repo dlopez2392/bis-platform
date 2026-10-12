@@ -8,19 +8,20 @@ vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), co
 vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
 
 const { ActivityTimeline } = await import("./activity-timeline");
+const { legacyTimeline } = await import("./activity-timeline.fixture");
 
 const message = (status: string) => ({
   id: "msg1", created_at: "2026-10-05T10:00:00Z", direction: "outbound",
   subject: null, body: "Hi there", status, channel: "sms",
 });
 
-const html = (status: string) => renderToStaticMarkup(createElement(ActivityTimeline, {
+const html = (status: string) => renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
   accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
   smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
   notes: [], tasks: [], holdOpenTaskIds: [], opportunities: [], submissions: [],
   messages: [message(status)],
   emailAction: async () => {}, smsAction: async () => {},
-} as never));
+}) as never));
 
 // D-014: the timeline printed the RAW `status` column ("failed", "sent")
 // instead of its label — exactly the dot-and-word-style defect DESIGN.md

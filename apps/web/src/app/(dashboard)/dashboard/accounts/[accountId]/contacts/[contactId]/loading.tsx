@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLocale } from "@/components/locale-provider";
 import { RecordLayout } from "@/components/record/record-layout";
 import { RecordCard } from "@/components/record/record-card";
+import { TimelineItemSkeleton } from "@/components/record/timeline-item";
 import { columnRuns } from "@/lib/record/record-cards";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
@@ -28,7 +29,9 @@ export default function Loading() {
     column,
     content: cards.map((def) => (
       <RecordCard key={def.id} id={def.id} title={t(m, def.titleKey, locale)} collapsibleOnPhone={def.collapsibleOnPhone}
-        skeletonRows={def.skeletonRows} state="loading" />
+        skeletonRows={def.skeletonRows} state="loading"
+        // Rule 7: the timeline loads as its own rows (mark chip, line, time), not generic lines.
+        skeleton={def.id === "timeline" ? <TimelineItemSkeleton rows={def.skeletonRows} /> : undefined} />
     )),
   }));
   return (

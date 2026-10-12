@@ -68,7 +68,15 @@ const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, the
 const timelineThrows = vi.hoisted(() => ({ on: false }));
 const listContactTagsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const EMPTY_PAGE = { items: [], older: null, failed: [] };
+const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
+const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
+const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
 vi.mock("@bis/db", () => ({
+  listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
+  listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
+  getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
   getContact: (...args: unknown[]) => getContactMock(...args),
   listContactTags: (...args: unknown[]) => listContactTagsMock(...args),
   listNotes: (...args: unknown[]) => listNotesMock(...args),
@@ -178,8 +186,8 @@ const CONTACT = {
   company_name: null, custom: {}, created_at: "2026-01-01T05:30:00Z",
 };
 
-async function render() {
-  const el = await ContactDetailPage({ params: Promise.resolve({ accountId: "acct1", contactId: "ct1" }) });
+async function render(search: Record<string, string> = {}) {
+  const el = await ContactDetailPage({ params: Promise.resolve({ accountId: "acct1", contactId: "ct1" }), searchParams: Promise.resolve(search) });
   return renderToStaticMarkup(el);
 }
 
@@ -235,7 +243,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     getContactMock.mockResolvedValue(null);
     const reads = {
       contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
-      listNotes: listNotesMock, listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      listContactTimelinePage: listContactTimelinePageMock, listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
     };
     for (const r of Object.values(reads)) r.mockClear();
@@ -315,10 +323,9 @@ describe("ContactDetailPage: the recipient's texts state", () => {
   });
 
   it("the timeline is told exactly what holdOpenTaskIds answered for the page's own tasks, and an unreadable ledger hints every open linked one — never a Done that would be refused (review R3-N1, I4; mutation: pass [] on failure → FAILS; mutation: pass the fallback always → the first case FAILS)", async () => {
-    listContactTasksMock.mockResolvedValue([
-      { id: "t_hold", title: "Ana may have asked …", completed_at: null, consent_event_id: "h1" },
-      { id: "t_plain", title: "Call back", completed_at: null, consent_event_id: null },
-    ]);
+    const taskEntry = (id: string, consent_event_id: string | null) => ({ kind: "task", id, at: "2026-10-01T00:00:00Z", task: {
+      id, title: "x", due_at: null, completed_at: null, created_at: "2026-10-01T00:00:00Z", consent_event_id, call_id: null, assigned_to: null, created_by: null } });
+    listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", "h1"), taskEntry("t_plain", null)], older: null, failed: [] });
     // The hold was decided since: the read answers none, and the page passes none (not its own fallback).
     holdOpenTaskIdsMock.mockResolvedValue([]);
     await render();
@@ -335,6 +342,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
       expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("hold To-dos unreadable");
     } finally {
       errors.mockRestore();
+      listContactTimelinePageMock.mockResolvedValue(EMPTY_PAGE);
     }
   });
 });
@@ -600,6 +608,7 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     listContactPlacesMock.mockReset().mockResolvedValue(NO_PLACES);
     listContactOpportunitiesMock.mockReset().mockResolvedValue([]);
     listNotesMock.mockReset().mockResolvedValue([]);
+    listContactTimelinePageMock.mockReset().mockResolvedValue(EMPTY_PAGE); listPeopleNamesMock.mockReset().mockResolvedValue({});
     prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
     resolveSmsSenderMock.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
     listContactTagsMock.mockReset().mockResolvedValue([]);
@@ -623,7 +632,7 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
   });
 
   it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {
-    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    listContactTimelinePageMock.mockRejectedValue(new Error("timeline read down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();
@@ -655,9 +664,8 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
   });
 
   it("Deals failing is Deals' error and the timeline still renders (its own read of the same table succeeds; mutation: let loadDeals rethrow -> FAILS)", async () => {
-    // Promise.all invokes loadTimeline before loadDeals, and each makes its read synchronously at
-    // its start: the first call is the timeline's, the second the Deals card's.
-    listContactOpportunitiesMock.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("deals down"));
+    // The timeline no longer reads through it (1b), so one rejection is the Deals card's alone.
+    listContactOpportunitiesMock.mockRejectedValue(new Error("deals down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();
@@ -720,7 +728,7 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     resolveSmsSenderMock.mockResolvedValue({ ok: true, from: "+19565550199", ownedNumbers: ["+19565550199"] });
     // The control: with the timeline ready, all three are offered.
     expect(actionIds(await render())).toEqual(["call", "text", "email"]);
-    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    listContactTimelinePageMock.mockRejectedValue(new Error("timeline read down"));
     const { result: html } = await quietly(render);
     expect(actionIds(html)).toEqual(["call"]);
     expect(html).not.toContain("#compose-sms");
@@ -731,20 +739,20 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     const addTodo = `>${m["record.nextUp.addTodo"]}<`;
     // The control: the timeline is ready, so the empty Next up offers the action.
     expect(cardHtml(await render(), "next-up")).toContain(addTodo);
-    listNotesMock.mockRejectedValue(new Error("notes read down"));
+    listContactTimelinePageMock.mockRejectedValue(new Error("timeline read down"));
     const { result: html } = await quietly(render);
     expect(cardHtml(html, "next-up")).toContain(m["record.nextUp.empty"]);
     expect(cardHtml(html, "next-up")).not.toContain(addTodo);
   });
 
-  it("on a Spanish page the bodies that stay English carry lang=\"en\": the timeline, Details, Tags and Groups (§9.6; mutation: drop the Groups wrapper -> FAILS)", async () => {
+  it("on a Spanish page the bodies that stay English carry lang=\"en\": Details, Tags and Groups; the timeline is bilingual since 1b (§9.6; mutation: wrap the timeline in lang=\"en\" -> FAILS)", async () => {
     prefsMock.mockResolvedValue({ language: "es", theme: null });
     const html = await render();
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     const wrapped = (id: string) => /<div lang="en">/.test(cardHtml(html, id));
-    expect(["timeline", "details", "tags", "groups"].filter((id) => !wrapped(id))).toEqual([]);
+    expect(["details", "tags", "groups"].filter((id) => !wrapped(id))).toEqual([]);
     // The converted cards inherit the page's Spanish.
-    expect(["summary", "next-up", "deals"].filter(wrapped)).toEqual([]);
+    expect(["summary", "next-up", "deals", "timeline"].filter(wrapped)).toEqual([]);
   });
 
   it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {
@@ -807,5 +815,124 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     expect(html).toContain(`>${m["record.action.call.es"]}<`);
     expect(html).toContain(m["record.card.nextUp.es"]);
+  });
+});
+
+describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
+  const ID = "0f8a7b2c-1d2e-4f3a-8b4c-5d6e7f8a9b0c";
+  const noteBy = (author_id: string | null, id = "n1") => ({ kind: "note", id, at: "2026-10-09T16:12:00Z",
+    note: { id, body: "x", author_id, created_at: "2026-10-09T16:12:00Z" } });
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    listContactTimelinePageMock.mockReset().mockResolvedValue(EMPTY_PAGE);
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+    prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
+    timelineProps.mockClear();
+    timelineThrows.on = false;
+  });
+  type Props = { rows: { verb: string; mark: { label: string } }[]; failedText: string | null; emptyText: string | null;
+    pager: { olderHref: string | null; newerHref: string | null } };
+  const props = () => timelineProps.mock.calls.at(-1)![0] as Props;
+
+  it("a ?before= that parses reaches the page read; one that does not is a cold start (spec §11; mutation: pass the raw param -> FAILS)", async () => {
+    const good = Buffer.from(JSON.stringify(["2026-10-09T16:12:00.123456+00:00", ID]), "utf8").toString("base64url");
+    await render({ before: good });
+    expect(listContactTimelinePageMock.mock.calls.at(-1)![3]).toEqual({ v: "2026-10-09T16:12:00.123456+00:00", id: ID });
+    await render({ before: "garbage" });
+    expect(listContactTimelinePageMock.mock.calls.at(-1)![3]).toBeUndefined();
+  });
+
+  it("names: the request client reads the page's person ids; the viewer reads You and an unreadable id Someone on the team (D10, D11; mutation: You for every person -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "user_me", isAgency: false, role: "staff", canManage: false });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy("user_me", "n1"), noteBy("user_dan", "n2"), noteBy("user_gone", "n3")], older: null, failed: [] });
+    listPeopleNamesMock.mockResolvedValue({ user_dan: "Dan López" });
+    await render();
+    expect(listPeopleNamesMock.mock.calls.at(-1)![1]).toEqual(["user_me", "user_dan", "user_gone"]);
+    expect(props().rows.map((r) => r.mark.label)).toEqual(["You", "Dan López", "Someone on the team"]);
+  });
+
+  it("some sources failed: the timeline gets its rows and says what could not load (mutation: drop failedText -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: ["calls", "bookings"] });
+    await render();
+    expect(props().failedText).toBe("Couldn't load calls and bookings.");
+    expect(props().rows).toHaveLength(1);
+    expect(props().emptyText).toBeNull();
+  });
+
+  it("a page where a source failed offers no Older (its cursor would skip that source's rows), keeps Newer, and never claims empty (Task 9's rule; mutation: hand timelinePagerHrefs failed: [] -> FAILS)", async () => {
+    const cursor = Buffer.from(JSON.stringify(["2026-10-09T16:12:00Z", ID]), "utf8").toString("base64url");
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: { v: "2026-10-08T16:12:00Z", id: ID }, failed: ["calls"] });
+    await render({ before: cursor });
+    expect(listContactTimelinePageMock.mock.calls.at(-1)![3]).toEqual({ v: "2026-10-09T16:12:00Z", id: ID });
+    expect(props().pager).toEqual({ olderHref: null, newerHref: "/dashboard/accounts/acct1/contacts/ct1#record-timeline" });
+    expect(props().failedText).toBe("Couldn't load calls.");
+    await render();
+    expect(props().emptyText).toBeNull();
+  });
+
+  it("all seven sources failed: the card's error, and Text and Email hide with the composer (D3)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "timeline")).toContain(m["record.activity.failed"].replaceAll("'", "&#x27;"));
+      expect(timelineProps).not.toHaveBeenCalled();
+      expect(html).not.toContain("#compose-email");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("the pager: Older from the head carries the merge's cursor; a paged view offers Newer; the first empty page sells the timeline (mutation: offer Newer on the head -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: { v: "2026-10-09T16:12:00Z", id: ID }, failed: [] });
+    await render();
+    expect(props().pager.olderHref).toMatch(/^\/dashboard\/accounts\/acct1\/contacts\/ct1\?before=[\w-]+#record-timeline$/);
+    expect(props().pager.newerHref).toBeNull();
+    const cursor = Buffer.from(JSON.stringify(["2026-10-09T16:12:00Z", ID]), "utf8").toString("base64url");
+    listContactTimelinePageMock.mockResolvedValue(EMPTY_PAGE);
+    await render({ before: cursor });
+    expect(props().pager.newerHref).toBe("/dashboard/accounts/acct1/contacts/ct1#record-timeline");
+    expect(props().emptyText).toBeNull();
+    await render();
+    expect(props().emptyText).toBe(m["timeline.empty"]);
+  });
+
+  it("a Spanish page's rows read Spanish (§9.6; mutation: build the rows with an English Tr -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: [] });
+    await render();
+    expect(props().rows[0]!.verb).toBe("agregó una nota");
+    expect(props().rows[0]!.mark.label).toBe("Alguien del equipo");
+  });
+
+  it("a row that cannot be drawn costs the timeline card, never the page, and its composer actions hide (C5, D3; mutation: build the rows outside viewOf -> the render rejects, FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
+    listContactTimelinePageMock.mockResolvedValue({ items: [{ ...noteBy(null), at: "not-a-date" }], older: null, failed: [] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(cardHtml(html, "timeline")).toContain(m["record.activity.failed"].replaceAll("'", "&#x27;"));
+      expect(timelineProps).not.toHaveBeenCalled();
+      expect(html).not.toContain("#compose-email");
+      expect(cardHtml(html, "summary")).toContain("On your list since Dec 2025");
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("timeline view failed for account acct1");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("a Spanish page's composer lines read Spanish, an English page's English (Task 3's locale; mutation: drop locale from composerStateLine or composerEmailNotice -> FAILS)", async () => {
+    recipientState.mockResolvedValue({ kind: "unknown" });
+    emailRecipientStateMock.mockResolvedValue({ kind: "unknown" });
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({
+      smsBlockedLine: m["compose.smsStateUnknown.es"], emailNoticeLine: m["compose.emailStateUnknown.es"],
+    });
+    prefsMock.mockResolvedValue({ language: null, theme: null });
+    await render();
+    expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({
+      smsBlockedLine: m["compose.smsStateUnknown"], emailNoticeLine: m["compose.emailStateUnknown"],
+    });
   });
 });

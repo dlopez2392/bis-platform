@@ -20,19 +20,20 @@ vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), co
 vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
 
 const { ActivityTimeline } = await import("./activity-timeline");
+const { legacyTimeline } = await import("./activity-timeline.fixture");
 
 const note = (createdAt: string) => ({
   id: "n1", body: "Called back", pinned: false, author_id: "user_test", created_at: createdAt,
 });
 
 function html(createdAt: string, timezone: string): string {
-  return renderToStaticMarkup(createElement(ActivityTimeline, {
+  return renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
     accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
     smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
     notes: [note(createdAt)], tasks: [], holdOpenTaskIds: [], opportunities: [], submissions: [], messages: [],
     emailAction: async () => {}, smsAction: async () => {},
     timezone,
-  } as never));
+  }) as never));
 }
 
 describe("the timeline's own row timestamps render in the ACCOUNT's zone, not the runtime's (D-010)", () => {

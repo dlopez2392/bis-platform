@@ -6,15 +6,16 @@ vi.mock("./actions", () => ({ addNoteAction: vi.fn(), addTaskAction: vi.fn(), co
 vi.mock("./message-composer", () => ({ MessageComposer: () => null }));
 
 const { ActivityTimeline } = await import("./activity-timeline");
+const { legacyTimeline } = await import("./activity-timeline.fixture");
 
-const html = (body: string) => renderToStaticMarkup(createElement(ActivityTimeline, {
+const html = (body: string) => renderToStaticMarkup(createElement(ActivityTimeline, legacyTimeline({
   accountId: "a1", contactId: "c1", contactHasEmail: false, contactHasPhone: false,
   smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null, emailNoticeLine: null,
   notes: [{ id: "n1", created_at: "2026-10-05T10:00:00Z", body }],
   tasks: [], holdOpenTaskIds: [], opportunities: [], submissions: [],
   messages: [],
   emailAction: async () => {}, smsAction: async () => {},
-} as never));
+}) as never));
 
 /**
  * (Review fix, review-9f383e51.) A note typed with paragraph breaks lost
