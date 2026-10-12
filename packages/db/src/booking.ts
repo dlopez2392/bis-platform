@@ -965,7 +965,7 @@ export async function listContactUpcomingBookings(
     .order("starts_at", { ascending: true }).order("id", { ascending: true })
     .limit(limit);
   if (error) throw new Error(`listContactUpcomingBookings failed: ${error.message}`);
-  return (data ?? []) as UpcomingBooking[];
+  return (data ?? []).map((r: UpcomingBooking) => ({ id: r.id, starts_at: r.starts_at }));
 }
 
 /** Rate limiting for the public booking submit: same shape as forms' countRecentSubmissions. */

@@ -1928,4 +1928,18 @@ describe("per-customer booking reads for the record page (S-03 part 1)", () => {
       expect(rows.map((r) => r.id)).toEqual([jan15.id, feb.id, mar.id]);
       expect(new Date(rows[0]!.starts_at).toISOString()).toBe("2027-01-15T15:00:00.000Z");
     }));
+
+  it("scopes to the account: another account's id plus this contact's id finds nothing, for both reads (RLS's bookings_tenant lets an agency caller through on its own, so this app-level filter is the only guard for that caller; mutation: drop .eq('account_id', accountId) from either function -> the booking under the first account appears under the second, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (_otherDb, otherAccountId) => {
+        const cal = await getOrCreateCalendar(db, accountId, "user_test");
+        const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+        await createBooking(db, accountId, {
+          calendarId: cal.id, contactId: ana,
+          startsAt: new Date("2027-05-01T15:00:00Z"), endsAt: new Date("2027-05-01T16:00:00Z"),
+        }, "user_test");
+        expect(await countContactBookingsMade(db, otherAccountId, ana)).toBe(0);
+        expect(await listContactUpcomingBookings(db, otherAccountId, ana, "2027-01-01T00:00:00Z")).toEqual([]);
+      });
+    }));
 });
