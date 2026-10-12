@@ -279,8 +279,10 @@ function RemovedList({ ctx, places }: { ctx: Ctx; places: PlaceRow[] }) {
 }
 
 /** Pure: everything the card shows, for every state. Tests and the styleguide render this. */
-export function PlacesCardView({ accountId, contactId, canMovePlace, load, onRetry, handlers }: {
+export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidden, load, onRetry, handlers }: {
   accountId: string; contactId: string; canMovePlace: boolean; load: PlacesLoad; onRetry: () => void; handlers: PlaceHandlers;
+  /** S-03 §8: inside a RecordCard, whose title is the one seen; the h3 still labels the section. */
+  headingHidden?: boolean;
 }) {
   const locale = useLocale();
   const titleId = useId(); // the styleguide shows several cards on one page
@@ -292,7 +294,7 @@ export function PlacesCardView({ accountId, contactId, canMovePlace, load, onRet
   return (
     <section data-places-card lang={locale} aria-labelledby={titleId} className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id={titleId} className="text-[13.5px] font-semibold text-card-foreground">{tt("places.title")}</h3>
+        <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{tt("places.title")}</h3>
         {ready && subject ? (
           <PlaceDialog accountId={accountId} contactId={contactId} subject={subject} groups={ready.groups}
             canMovePlace={canMovePlace} onAdded={(id, title) => handlers.placeAdded(id, title)} />
@@ -337,7 +339,7 @@ function ReadyBody({ ctx }: { ctx: Ctx }) {
 }
 
 /** The card on the drawer and the contact page (spec §8): reads its own route, saves at once, Undo on every change (rule 6). */
-export function PlacesCard({ accountId, contactId, canMovePlace }: { accountId: string; contactId: string; canMovePlace: boolean }) {
+export function PlacesCard({ accountId, contactId, canMovePlace, headingHidden }: { accountId: string; contactId: string; canMovePlace: boolean; headingHidden?: boolean }) {
   const locale = useLocale();
   // Paired with the id it was read for (the drawer's own pattern): a newly peeked contact reads
   // "loading" by mismatch, and only the fetch's own callbacks write state.
@@ -367,6 +369,7 @@ export function PlacesCard({ accountId, contactId, canMovePlace }: { accountId: 
       accountId={accountId}
       contactId={contactId}
       canMovePlace={canMovePlace}
+      headingHidden={headingHidden}
       load={load}
       onRetry={() => { setState({ contactId: "", load: { status: "loading" } }); setNonce((n) => n + 1); }}
       handlers={handlers}

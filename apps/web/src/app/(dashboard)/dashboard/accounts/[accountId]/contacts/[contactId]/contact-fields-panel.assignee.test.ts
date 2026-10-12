@@ -26,7 +26,7 @@ vi.mock("../actions", () => ({ updateContactFieldAction: async () => ({ ok: true
 vi.mock("../texts-row", () => ({ TextsRow: () => null }));
 vi.mock("../email-row", () => ({ EmailRow: () => null }));
 
-const { ContactFieldsPanel } = await import("./contact-fields-panel");
+const { ContactDetailsBody } = await import("./contact-fields-panel");
 
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: null, phone: null, company_name: null,
@@ -35,8 +35,8 @@ const CONTACT = {
 
 function render() {
   fieldProps.length = 0;
-  return renderToStaticMarkup(createElement(ContactFieldsPanel, {
-    accountId: "acct1", contactId: "ct1", contact: CONTACT, tags: [], fieldDefs: [],
+  return renderToStaticMarkup(createElement(ContactDetailsBody, {
+    accountId: "acct1", contactId: "ct1", contact: CONTACT, fieldDefs: [],
     email: { status: "error" }, texts: { status: "error" },
     canAssign: true, members: [{ userId: "p-me", label: "Ana Me", role: "staff" }], viewerId: "p-me",
   } as never));

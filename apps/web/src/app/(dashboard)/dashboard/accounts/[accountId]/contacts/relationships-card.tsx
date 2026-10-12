@@ -28,6 +28,8 @@ export type CardViewProps = {
   onForm: (view: RelationshipView, who: "named" | "subject", form: WordForm | null) => void;
   onRemove: (view: RelationshipView) => void;
   addSlot: ReactNode;
+  /** S-03 §8: inside a RecordCard, whose title is the one seen; the h3 still labels the section. */
+  headingHidden?: boolean;
 };
 
 const FLAGS = [["canPickUp", "relationships.flag.canPickUp"], ["isEmergency", "relationships.flag.isEmergency"]] as const;
@@ -102,13 +104,13 @@ function Chip({ accountId, view, locale, onToggle, onForm, onRemove }: {
 }
 
 /** Pure: everything the card shows, for every state. Tests render this. */
-export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onForm, onRemove, addSlot }: CardViewProps) {
+export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onForm, onRemove, addSlot, headingHidden }: CardViewProps) {
   const locale = useLocale();
   const titleId = useId(); // the styleguide shows several cards on one page
   return (
     <section data-relationships-card lang={locale} aria-labelledby={titleId} className="space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <h3 id={titleId} className="text-sm font-medium">{t(m, "relationships.title", locale)}</h3>
+        <h3 id={titleId} className={headingHidden ? "sr-only" : "text-sm font-medium"}>{t(m, "relationships.title", locale)}</h3>
         {load.status === "ready" ? addSlot : null}
       </div>
       {load.status === "loading" ? (
@@ -135,7 +137,7 @@ export function RelationshipsCardView({ accountId, load, onRetry, onToggle, onFo
 }
 
 /** The card on the drawer and the detail page (spec §7, R2): reads its own route, saves at once, Undo on every change (rule 6). */
-export function RelationshipsCard({ accountId, contactId }: { accountId: string; contactId: string }) {
+export function RelationshipsCard({ accountId, contactId, headingHidden }: { accountId: string; contactId: string; headingHidden?: boolean }) {
   const locale = useLocale();
   // Paired with the id it was read for (the drawer's own pattern): a newly peeked contact reads
   // "loading" by mismatch, and only the fetch's own callbacks write state.
@@ -157,6 +159,7 @@ export function RelationshipsCard({ accountId, contactId }: { accountId: string;
   return (
     <RelationshipsCardView
       accountId={accountId}
+      headingHidden={headingHidden}
       load={load}
       // Back to the skeleton at once, then refire the read (the drawer's own Retry does the same).
       onRetry={() => { setState({ contactId: "", rel: { status: "loading" } }); setNonce((n) => n + 1); }}

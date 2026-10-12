@@ -2,7 +2,6 @@
 
 import { Plus, X } from "lucide-react";
 import type { getContact, listContactTags, CustomFieldDef } from "@bis/db";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -38,22 +37,10 @@ import type { AssignMember } from "@/lib/assign/view";
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];
 
-export function ContactFieldsPanel({
-  accountId,
-  contactId,
-  contact,
-  tags,
-  fieldDefs,
-  email,
-  texts,
-  canAssign = false,
-  members = [],
-  viewerId = null,
-}: {
+type DetailsProps = {
   accountId: string;
   contactId: string;
   contact: Contact;
-  tags: Tag[];
   fieldDefs: CustomFieldDef[];
   /** The Email row (consent PR-3), read on the server by page.tsx. */
   email: EmailLoad;
@@ -67,7 +54,10 @@ export function ContactFieldsPanel({
   members?: AssignMember[];
   /** The viewer's own person here: "You" on a read-only line only for their own customer. */
   viewerId?: string | null;
-}) {
+};
+
+/** The record page's "Contact Details" card body (S-03 §8): moved in unchanged, minus its Card. */
+export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null }: DetailsProps) {
   const router = useRouter();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   // F-157: computed from the SAME `contact` prop the FIELDS below read —
@@ -78,175 +68,166 @@ export function ContactFieldsPanel({
   });
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
-  const boundAddTag = addTagAction.bind(null, accountId);
-  const boundRemoveTag = removeTagAction.bind(null, accountId);
-
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">{m["contact.details"]}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <dl className="space-y-1">
-            {FIELDS.map(({ field, labelKey, type }) => (
-              <div key={field} className="space-y-0.5">
-                <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
-                <dd>
-                  <InlineField
-                    label={m[labelKey]}
-                    field={field}
-                    inputType={type}
-                    value={(contact[field] as string | null) ?? null}
-                    save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
-                    {...(field === "phone" ? {
-                      undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
-                    } : {})}
-                  />
-                </dd>
-              </div>
-            ))}
-            <div className="space-y-0.5">
-              <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
-              <dd><BusinessInlineField accountId={accountId} contactId={contactId} value={contact.company_name ?? null} /></dd>
-            </div>
-            <SourceField
+    <div className="space-y-3">
+      <dl className="space-y-1">
+        {FIELDS.map(({ field, labelKey, type }) => (
+          <div key={field} className="space-y-0.5">
+            <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
+            <dd>
+              <InlineField
+                label={m[labelKey]}
+                field={field}
+                inputType={type}
+                value={(contact[field] as string | null) ?? null}
+                save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
+                {...(field === "phone" ? {
+                  undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
+                } : {})}
+              />
+            </dd>
+          </div>
+        ))}
+        <div className="space-y-0.5">
+          <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
+          <dd><BusinessInlineField accountId={accountId} contactId={contactId} value={contact.company_name ?? null} /></dd>
+        </div>
+        <SourceField
+          accountId={accountId}
+          contactId={contactId}
+          source={contact.source ?? null}
+          sourceHint={sourceHint}
+          onSaved={() => router.refresh()}
+        />
+        {/* F-085 part 1 (spec §9): who holds the customer, in the Source
+            line's shape. A change refreshes the page: the customer's
+            open tasks move with them (A4). */}
+        <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
+          <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
+          <dd className="min-w-0">
+            <ContactAssigneeField
+              key={contact.assigned_to ?? ""}
               accountId={accountId}
               contactId={contactId}
-              source={contact.source ?? null}
-              sourceHint={sourceHint}
+              value={contact.assigned_to ?? null}
+              options={members}
+              readOnly={!canAssign}
+              viewerId={viewerId}
               onSaved={() => router.refresh()}
             />
-            {/* F-085 part 1 (spec §9): who holds the customer, in the Source
-                line's shape. A change refreshes the page: the customer's
-                open tasks move with them (A4). */}
-            <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
-              <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
-              <dd className="min-w-0">
-                <ContactAssigneeField
-                  key={contact.assigned_to ?? ""}
-                  accountId={accountId}
-                  contactId={contactId}
-                  value={contact.assigned_to ?? null}
-                  options={members}
-                  readOnly={!canAssign}
-                  viewerId={viewerId}
-                  onSaved={() => router.refresh()}
-                />
-              </dd>
-            </div>
-          </dl>
+          </dd>
+        </div>
+      </dl>
 
-          <TextsRow
-            accountId={accountId}
-            contactId={contactId}
-            load={texts}
-            // The composer on this page reads the same ledger: refresh it too.
-            onChanged={() => router.refresh()}
-            onRetry={() => router.refresh()}
-          />
+      <TextsRow
+        accountId={accountId}
+        contactId={contactId}
+        load={texts}
+        // The composer on this page reads the same ledger: refresh it too.
+        onChanged={() => router.refresh()}
+        onRetry={() => router.refresh()}
+      />
 
-          <EmailRow
-            accountId={accountId}
-            contactId={contactId}
-            load={email}
-            showTitle={texts.status === "ready" && texts.view.kind === "no_number"}
-            // The composer on this page reads the same ledger: refresh it too.
-            onChanged={() => router.refresh()}
-            onRetry={() => router.refresh()}
-          />
+      <EmailRow
+        accountId={accountId}
+        contactId={contactId}
+        load={email}
+        showTitle={texts.status === "ready" && texts.view.kind === "no_number"}
+        // The composer on this page reads the same ledger: refresh it too.
+        onChanged={() => router.refresh()}
+        onRetry={() => router.refresh()}
+      />
 
-          {fieldDefs.length > 0 ? (
-            <>
-              <Separator />
-              <form action={boundUpdateContact} className="space-y-3">
-                {hidden}
-                {fieldDefs.map((d) => {
-                  const fieldName = `cf_${d.field_key}`;
-                  const current = custom[d.field_key];
-                  return (
-                    <div key={d.id} className="space-y-1.5">
-                      {d.data_type === "checkbox" ? (
-                        <div className="flex items-center gap-2 pt-1">
-                          <Checkbox id={fieldName} name={fieldName} defaultChecked={current === true} />
-                          <Label htmlFor={fieldName} className="font-normal">
-                            {d.name}
-                          </Label>
-                        </div>
-                      ) : d.data_type === "single_select" ? (
-                        <>
-                          <Label htmlFor={fieldName}>{d.name}</Label>
-                          <Select name={fieldName} defaultValue={String(current ?? "")}>
-                            <SelectTrigger id={fieldName} className="w-full">
-                              <SelectValue placeholder={m["common.none"]} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={CLEAR_FIELD_SENTINEL}>{m["contact.clearField"]}</SelectItem>
-                              {d.options.map((o) => (
-                                <SelectItem key={o} value={o}>
-                                  {o}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </>
-                      ) : (
-                        <>
-                          <Label htmlFor={fieldName}>{d.name}</Label>
-                          <Input
-                            id={fieldName}
-                            name={fieldName}
-                            type={
-                              d.data_type === "number" ? "number" : d.data_type === "date" ? "date" : "text"
-                            }
-                            defaultValue={String(current ?? "")}
-                          />
-                        </>
-                      )}
+      {fieldDefs.length > 0 ? (
+        <>
+          <Separator />
+          <form action={boundUpdateContact} className="space-y-3">
+            {hidden}
+            {fieldDefs.map((d) => {
+              const fieldName = `cf_${d.field_key}`;
+              const current = custom[d.field_key];
+              return (
+                <div key={d.id} className="space-y-1.5">
+                  {d.data_type === "checkbox" ? (
+                    <div className="flex items-center gap-2 pt-1">
+                      <Checkbox id={fieldName} name={fieldName} defaultChecked={current === true} />
+                      <Label htmlFor={fieldName} className="font-normal">
+                        {d.name}
+                      </Label>
                     </div>
-                  );
-                })}
+                  ) : d.data_type === "single_select" ? (
+                    <>
+                      <Label htmlFor={fieldName}>{d.name}</Label>
+                      <Select name={fieldName} defaultValue={String(current ?? "")}>
+                        <SelectTrigger id={fieldName} className="w-full">
+                          <SelectValue placeholder={m["common.none"]} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={CLEAR_FIELD_SENTINEL}>{m["contact.clearField"]}</SelectItem>
+                          {d.options.map((o) => (
+                            <SelectItem key={o} value={o}>
+                              {o}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </>
+                  ) : (
+                    <>
+                      <Label htmlFor={fieldName}>{d.name}</Label>
+                      <Input
+                        id={fieldName}
+                        name={fieldName}
+                        type={
+                          d.data_type === "number" ? "number" : d.data_type === "date" ? "date" : "text"
+                        }
+                        defaultValue={String(current ?? "")}
+                      />
+                    </>
+                  )}
+                </div>
+              );
+            })}
 
-                <SubmitButton>{m["common.save"]}</SubmitButton>
-              </form>
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
+            <SubmitButton>{m["common.save"]}</SubmitButton>
+          </form>
+        </>
+      ) : null}
+    </div>
+  );
+}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">{m["contact.tags"]}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap items-center gap-2">
-            {tags.map((t) => (
-              <form key={t.id} action={boundRemoveTag} className="inline-flex">
-                {hidden}
-                <input type="hidden" name="tagId" value={t.id} />
-                <button
-                  type="submit"
-                  className="group"
-                  title={t.name}
-                  aria-label={m["contact.removeTag"].replace("{name}", t.name)}
-                >
-                  <Badge variant="secondary" className="gap-1 pr-1.5">
-                    {t.name}
-                    <X className="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden />
-                  </Badge>
-                </button>
-              </form>
-            ))}
-            <form action={boundAddTag} className="inline-flex items-center gap-1">
-              {hidden}
-              <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
-              <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>
-                <Plus className="size-3" aria-hidden />
-              </Button>
-            </form>
-          </div>
-        </CardContent>
-      </Card>
+/** The record page's "Tags" card body (S-03 §8): moved in unchanged, minus its Card. */
+export function ContactTagsBody({ accountId, contactId, tags }: { accountId: string; contactId: string; tags: Tag[] }) {
+  const hidden = <input type="hidden" name="contactId" value={contactId} />;
+  const boundAddTag = addTagAction.bind(null, accountId);
+  const boundRemoveTag = removeTagAction.bind(null, accountId);
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {tags.map((t) => (
+        <form key={t.id} action={boundRemoveTag} className="inline-flex">
+          {hidden}
+          <input type="hidden" name="tagId" value={t.id} />
+          <button
+            type="submit"
+            className="group"
+            title={t.name}
+            aria-label={m["contact.removeTag"].replace("{name}", t.name)}
+          >
+            <Badge variant="secondary" className="gap-1 pr-1.5">
+              {t.name}
+              <X className="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden />
+            </Badge>
+          </button>
+        </form>
+      ))}
+      <form action={boundAddTag} className="inline-flex items-center gap-1">
+        {hidden}
+        <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
+        <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>
+          <Plus className="size-3" aria-hidden />
+        </Button>
+      </form>
     </div>
   );
 }

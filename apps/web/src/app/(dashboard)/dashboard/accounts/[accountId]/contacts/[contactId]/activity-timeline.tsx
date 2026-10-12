@@ -4,7 +4,6 @@ import type { ComponentType } from "react";
 import type { listNotes, listContactTasks, listContactOpportunities, listContactSubmissions,
               listContactMessages, NewMessage } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -29,6 +28,7 @@ const MESSAGE_CHANNEL_ICON: Record<NewMessage["channel"], ComponentType<{ classN
 };
 import { addNoteAction, addTaskAction, completeTaskAction } from "./actions";
 import { MessageComposer } from "./message-composer";
+import { ADD_TODO_FIELD_ID } from "./constants";
 
 type Note = Awaited<ReturnType<typeof listNotes>>[number];
 type Task = Awaited<ReturnType<typeof listContactTasks>>[number];
@@ -77,8 +77,8 @@ export function ActivityTimeline({
   contactHasPhone: boolean;
   // Resolved server-side (resolveSmsSender, THE gate) and threaded through as
   // a plain prop — MessageComposer is a client component and must not query
-  // the database itself.
-  smsGate: SmsGate;
+  // the database itself. null: the gate could not be read, and the composer says so.
+  smsGate: SmsGate | null;
   /** Consent chain spec §6: the one line the Text tab shows in place of the
    *  form when the recipient's texts are stopped, held or the number is
    *  unconfirmed (lib/consent/composer-state.ts); null when it may text. */
@@ -172,80 +172,10 @@ export function ActivityTimeline({
 
 
   return (
-    <Card className="flex flex-col">
-      <CardHeader>
-        <CardTitle className="text-sm">{m["contact.activity"]}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <form
-          action={boundAddTask}
-          aria-label={m["contact.tasks"]}
-          className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2"
-        >
-          {hidden}
-          <Input
-            name="title"
-            placeholder={m["contact.addTask"]}
-            className="h-8 min-w-[140px] flex-1 text-sm"
-          />
-          <Input name="dueAt" type="date" className="h-8 w-36 text-sm" />
-          <Button type="submit" variant="outline" size="sm">
-            {m["common.add"]}
-          </Button>
-        </form>
-
-        {items.length === 0 ? (
-          <EmptyState
-            icon={History}
-            title={m["contact.noActivity"]}
-            body={m["contact.noActivityBody"]}
-          />
-        ) : (
-          /* These were five stacked, bordered, card-filled boxes INSIDE a
-             glass `<Card>` — five card shadows piling up on one, and a
-             nested-card shape the ladder forbids. They are timeline ROWS:
-             the panel is the card, the rows are `--row-line` rules (the
-             mockup's `.row`, northern-lights.html:122). */
-          <ol className="flex flex-col">
-            {items.map((item, i) => {
-              // D-010: the account's own zone, not the runtime's (server or
-              // browser) — the same bug `taskDueDateText` below already
-              // fixed for a task's due date, now applied to every row's own
-              // "when this happened" timestamp and the day it groups under.
-              const day = formatDateInZone(item.at, timezone);
-              // Derive the separator from the previous item rather than a
-              // carried variable — mutating during render is not safe.
-              const showSeparator = i === 0 || day !== formatDateInZone(items[i - 1]!.at, timezone);
-              return (
-                <li
-                  key={`${item.kind}-${item.id}`}
-                  // A day separator is already a divider; a row rule directly
-                  // above one would read as two lines.
-                  className={cn(
-                    "border-t border-[var(--row-line)] first:border-t-0",
-                    showSeparator && "border-t-0",
-                  )}
-                >
-                  {showSeparator ? (
-                    <div
-                      className={cn(
-                        "mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground",
-                        i > 0 && "mt-3",
-                      )}
-                    >
-                      <Separator className="flex-1" />
-                      {day}
-                      <Separator className="flex-1" />
-                    </div>
-                  ) : null}
-                  <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} timezone={timezone} assign={assign} />
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </CardContent>
-      <CardFooter className="border-t border-border pt-4">
+    // S-03 part 1 (spec §9.4): inside its RecordCard ("Activity"), so no card chrome or title here.
+    // The composer comes first, where the header's Text and Email land; the rows are unchanged.
+    <div className="space-y-4">
+      <div className="border-b border-[var(--row-line)] pb-4" data-timeline-composer>
         <MessageComposer
           contactId={contactId}
           contactHasEmail={contactHasEmail}
@@ -257,8 +187,66 @@ export function ActivityTimeline({
           emailAction={emailAction}
           smsAction={smsAction}
         />
-      </CardFooter>
-    </Card>
+      </div>
+      <form action={boundAddTask} aria-label={m["contact.tasks"]}
+        className="flex flex-wrap items-center gap-2 rounded-[var(--radius-ctl)] border border-dashed border-[var(--line-strong)] p-2">
+        {hidden}
+        <Input id={ADD_TODO_FIELD_ID} name="title" placeholder={m["contact.addTask"]} className="h-8 min-w-[140px] flex-1 text-sm" />
+        <Input name="dueAt" type="date" className="h-8 w-36 text-sm" />
+        <Button type="submit" variant="outline" size="sm">{m["common.add"]}</Button>
+      </form>
+
+      {items.length === 0 ? (
+        <EmptyState
+          icon={History}
+          title={m["contact.noActivity"]}
+          body={m["contact.noActivityBody"]}
+        />
+      ) : (
+        /* These were five stacked, bordered, card-filled boxes INSIDE a
+           glass `<Card>` — five card shadows piling up on one, and a
+           nested-card shape the ladder forbids. They are timeline ROWS:
+           the panel is the card, the rows are `--row-line` rules (the
+           mockup's `.row`, northern-lights.html:122). */
+        <ol className="flex flex-col">
+          {items.map((item, i) => {
+            // D-010: the account's own zone, not the runtime's (server or
+            // browser) — the same bug `taskDueDateText` below already
+            // fixed for a task's due date, now applied to every row's own
+            // "when this happened" timestamp and the day it groups under.
+            const day = formatDateInZone(item.at, timezone);
+            // Derive the separator from the previous item rather than a
+            // carried variable — mutating during render is not safe.
+            const showSeparator = i === 0 || day !== formatDateInZone(items[i - 1]!.at, timezone);
+            return (
+              <li
+                key={`${item.kind}-${item.id}`}
+                // A day separator is already a divider; a row rule directly
+                // above one would read as two lines.
+                className={cn(
+                  "border-t border-[var(--row-line)] first:border-t-0",
+                  showSeparator && "border-t-0",
+                )}
+              >
+                {showSeparator ? (
+                  <div
+                    className={cn(
+                      "mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground",
+                      i > 0 && "mt-3",
+                    )}
+                  >
+                    <Separator className="flex-1" />
+                    {day}
+                    <Separator className="flex-1" />
+                  </div>
+                ) : null}
+                <TimelineRow item={item} hidden={hidden} completeAction={boundCompleteTask} timezone={timezone} assign={assign} />
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }
 

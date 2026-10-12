@@ -75,6 +75,15 @@ describe("GroupsCardView", () => {
     const html = view({ status: "ready", groups: [group()] });
     expect(html).toContain(`aria-label="${m["groups.remove"]}: Garcia"`);
   });
+  it("headingHidden keeps the heading for aria-labelledby but hides it, so RecordCard's title is the one seen (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(GroupsCardView, {
+      accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: { status: "loading" } as never, onRetry: () => {}, onChanged: () => {},
+    }));
+    expect(html).toMatch(/<h3 id="([^"]+)" class="sr-only">/);
+    const id = html.match(/<h3 id="([^"]+)"/)![1];
+    expect(html).toContain(`aria-labelledby="${id}"`);
+    expect(view({ status: "loading" })).not.toContain('class="sr-only"');
+  });
 });
 
 const ok = <T,>(v: T) => ({ ok: true as const, ...v });

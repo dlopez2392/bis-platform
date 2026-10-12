@@ -42,6 +42,12 @@ describe("RelationshipsCardView: its own loaded, empty and error states (rule 5 
     expect(renderedText(html)).toContain(m["relationships.loadFailed"]);
     expect(renderedText(html)).toContain(m["relationships.retry"]);
   });
+  it("headingHidden hides the heading but keeps it labelling the section (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(RelationshipsCardView, { accountId: "a1", load: { status: "loading" }, onRetry: noop, onToggle: noop, onForm: noop, onRemove: noop, addSlot: null, headingHidden: true })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+    expect(render("en", { status: "loading" })).not.toMatch(/<h3[^>]*class="sr-only"/);
+  });
 });
 
 describe("chips", () => {

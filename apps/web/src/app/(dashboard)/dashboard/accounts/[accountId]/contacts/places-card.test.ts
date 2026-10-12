@@ -80,6 +80,13 @@ describe("PlacesCardView: its own loaded, empty and error states (rule 5 per car
     expect(renderedText(html)).toContain(m["places.loadFailed"]);
     expect(one(html, /<button[^>]*>[^<]*<\/button>/)).toContain(m["places.retry"]);
   });
+
+  it("headingHidden hides the heading but keeps it labelling the section (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(LocaleProvider, { locale: "en" } as ComponentProps<typeof LocaleProvider>,
+      createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace: true, headingHidden: true, load: { status: "loading" }, onRetry: noop, handlers })));
+    expect(html).toMatch(/<h3 id="[^"]+" class="sr-only">/);
+    expect(render("en", { status: "loading" })).not.toMatch(/<h3[^>]*class="sr-only"/);
+  });
 });
 
 describe("a property", () => {
