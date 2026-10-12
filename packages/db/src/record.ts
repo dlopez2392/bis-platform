@@ -3,9 +3,12 @@ import { countContactBookingsMade, listContactUpcomingBookings, type UpcomingBoo
 import { listContactCalls } from "./voice";
 
 /**
- * The contact record page's checked facts and "Next up" (S-03 part 1, 1a; spec §7). Exact head
- * counts and one-row reads, never a list. Every read runs on the caller's client, so RLS
- * (0068's Technician fences included) decides what is counted; there is no role branch here.
+ * The contact record page's checked facts and "Next up" (S-03 part 1, 1a; spec §7). Bounded reads
+ * only: exact head counts, one-row reads, open deals up to the cap and Next up up to its limit;
+ * never an unbounded list. Every read runs on the caller's client, so RLS (0068's Technician
+ * fences included) decides what is counted; there is no role branch here. A count the server did
+ * not return is a failed read, never a zero: postgrest-js turns a HEAD request's empty 404 into
+ * `{ error: null, count: null }` (status 204), so `count ?? 0` would report a failure as "none".
  */
 export type Fact<T> = { ok: true; value: T } | { ok: false };
 export type LastTalkedChannel = "text" | "email" | "call";
@@ -57,10 +60,13 @@ async function openDeals(db: SupabaseClient, accountId: string, contactId: strin
     .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "open")
     .order("id", { ascending: true }).limit(cap);
   if (error) throw new Error(`openDeals failed: ${error.message}`);
+  // Fail closed: without the exact count, the rows (at most `cap`) could understate it.
+  if (count === null) throw new Error("openDeals failed: no exact count returned");
   const rows = (data ?? []) as { monetary_value: number | string }[];
-  const total = count ?? rows.length;
-  if (total > rows.length) return { count: total, amount: null };
-  return { count: total, amount: rows.reduce((sum, r) => sum + Number(r.monetary_value), 0) };
+  if (count > rows.length) return { count, amount: null };
+  // monetary_value is numeric(12,2): summing whole cents keeps 0.10 + 0.20 at 0.3.
+  const cents = rows.reduce((sum, r) => sum + Math.round(Number(r.monetary_value) * 100), 0);
+  return { count, amount: cents / 100 };
 }
 
 /** Never throws: a failed read is that fact's `{ ok: false }`, named to `onError` for the log. */
@@ -100,5 +106,6 @@ export async function contactNextUp(
   ]);
   if (dated.error) throw new Error(`contactNextUp To-dos failed: ${dated.error.message}`);
   if (undated.error) throw new Error(`contactNextUp undated count failed: ${undated.error.message}`);
-  return { bookings, datedTasks: (dated.data ?? []) as NextUpTask[], undatedCount: undated.count ?? 0 };
+  if (undated.count === null) throw new Error("contactNextUp undated count failed: no count returned");
+  return { bookings, datedTasks: (dated.data ?? []) as NextUpTask[], undatedCount: undated.count };
 }
