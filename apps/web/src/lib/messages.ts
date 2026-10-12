@@ -650,7 +650,9 @@ export const m = {
   "pipeline.status.lost.es": "Perdida",
 
   "contact.details": "Contact Details",
+  "contact.details.es": "Datos de contacto",
   "contact.tags": "Tags",
+  "contact.tags.es": "Etiquetas",
   "contact.addTag": "add tag",
   "contact.clearField": "—",
   "contact.removeTag": "Remove {name}",
@@ -3758,6 +3760,11 @@ export const m = {
   "record.nextUp.undated.es": "{count} pendientes más no tienen fecha.",
   "record.nextUp.undatedOne": "1 more To-do has no date.",
   "record.nextUp.undatedOne.es": "1 pendiente más no tiene fecha.",
+  // The same count with nothing listed above it, so it cannot say "more" (review round 1).
+  "record.nextUp.undatedOnly": "{count} To-dos have no date.",
+  "record.nextUp.undatedOnly.es": "{count} pendientes no tienen fecha.",
+  "record.nextUp.undatedOnlyOne": "1 To-do has no date.",
+  "record.nextUp.undatedOnlyOne.es": "1 pendiente no tiene fecha.",
   "record.nextUp.empty": "Nothing coming up. Bookings ahead and To-dos with a due date show here.",
   "record.nextUp.empty.es": "No hay nada próximo. Aquí aparecen las citas que vienen y los pendientes con fecha.",
   "record.nextUp.addTodo": "Add a To-do",

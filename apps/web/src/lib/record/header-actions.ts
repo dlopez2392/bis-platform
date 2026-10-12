@@ -15,9 +15,12 @@ export function telHref(phone: string | null): string | null {
   return digits ? `tel:${digits}` : null;
 }
 
-/** Exactly when the composer's text form would open (spec §9.1): a usable number, an open gate, no consent line. */
+/**
+ * Exactly when the composer's text form would open (spec §9.1): a usable number, an open gate, no
+ * consent line. An empty line is no line, as `smsFormBlock` reads it; the parity test pins the two.
+ */
 export function canTextFrom(input: { phone: string | null; smsGate: SmsGate | null; smsBlockedLine: string | null }): boolean {
-  return Boolean(e164Of(input.phone)) && input.smsGate !== null && input.smsGate.ok && input.smsBlockedLine === null;
+  return Boolean(e164Of(input.phone)) && input.smsGate !== null && input.smsGate.ok && !input.smsBlockedLine;
 }
 
 /** D13: the first property in the Properties card's order that has an address. */

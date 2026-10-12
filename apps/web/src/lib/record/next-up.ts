@@ -32,8 +32,8 @@ export function nextUpView(data: ContactNextUp, ctx: { zone: string; now: Date; 
       return { kind: "booking", id: b.id, label: tr.text("record.nextUp.booking", { when: `${day} · ${time}` }) };
     } })),
   ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || a.rank - b.rank);
-  return {
-    rows: dated.slice(0, limit).map((d) => d.row()),
-    undated: data.undatedCount > 0 ? tr.count("record.nextUp.undated", data.undatedCount) : null,
-  };
+  const rows = dated.slice(0, limit).map((d) => d.row());
+  // "N more" only reads right under rows; alone, the line says how many have no date.
+  const undatedKey = rows.length > 0 ? "record.nextUp.undated" : "record.nextUp.undatedOnly";
+  return { rows, undated: data.undatedCount > 0 ? tr.count(undatedKey, data.undatedCount) : null };
 }

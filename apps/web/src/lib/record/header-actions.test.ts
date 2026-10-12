@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { PlaceRow } from "@bis/db";
+import type { SmsGate } from "@/lib/sms/sender";
+import { e164Of } from "@/lib/voice/phone-number";
+
+// The composer imports sonner at module scope; nothing here calls it.
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+import { smsFormBlock } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer";
 import { headerActions, canTextFrom, firstMapUrl, telHref } from "./header-actions";
 
 const base = { phone: "+19565550100", email: "ana@example.com", canText: true, directionsUrl: "https://maps.example/x" };
@@ -16,6 +23,7 @@ describe("the header's actions (spec §9.1)", () => {
   it.each([
     ["no phone hides Call", { phone: null }, "call"],
     ["no email hides Email", { email: null }, "email"],
+    ["an empty email hides Email", { email: "" }, "email"],
     ["a closed text gate hides Text", { canText: false }, "text"],
     ["no addressed property hides Directions", { directionsUrl: null }, "directions"],
   ])("%s, never disabled", (_n, over, gone) => {
@@ -39,6 +47,23 @@ describe("canTextFrom: exactly when the composer's text form would open", () => 
     expect(canTextFrom({ phone: "+19565550100", smsGate: { ok: false, reason: "a2p_not_approved" }, smsBlockedLine: null })).toBe(false);
     expect(canTextFrom({ phone: "+19565550100", smsGate: null, smsBlockedLine: null })).toBe(false);
     expect(canTextFrom({ phone: "+19565550100", smsGate: gate, smsBlockedLine: "Stopped texts on Oct 3" })).toBe(false);
+  });
+  it("a phone that is there but not a usable number hides Text (mutation: Boolean(input.phone) instead of e164Of -> FAILS)", () => {
+    expect(canTextFrom({ phone: "123", smsGate: gate, smsBlockedLine: null })).toBe(false);
+    expect(canTextFrom({ phone: "call me", smsGate: gate, smsBlockedLine: null })).toBe(false);
+  });
+  it("parity: Text shows exactly when the composer's own smsFormBlock lets the form open, over every combination (mutation: Boolean(input.phone) -> FAILS on '123'; ignore the gate -> FAILS)", () => {
+    const phones = [null, "", "123", "call me", "(956) 555-0100", "+19565550100"];
+    const gates: (SmsGate | null)[] = [null, { ok: false, reason: "a2p_not_approved" }, { ok: false, reason: "no_live_number" }, gate];
+    const lines = [null, "", "Stopped texts on Oct 3"];
+    const disagreements: string[] = [];
+    for (const phone of phones) for (const smsGate of gates) for (const smsBlockedLine of lines) {
+      const composerOpens = smsFormBlock(smsGate, Boolean(e164Of(phone)), smsBlockedLine) === null;
+      if (canTextFrom({ phone, smsGate, smsBlockedLine }) !== composerOpens) {
+        disagreements.push(JSON.stringify({ phone, gate: smsGate && smsGate.ok, smsBlockedLine, composerOpens }));
+      }
+    }
+    expect(disagreements).toEqual([]);
   });
 });
 

@@ -31,4 +31,10 @@ describe("the record card registry (S-03 part 1, spec §8)", () => {
     expect(RECORD_CARDS.find((c) => c.id === "timeline")!.skeletonRows).toBe(5);
     expect(RECORD_CARDS.find((c) => c.id === "summary")!.skeletonRows).toBe(1);
   });
+  it("every card's title has a Spanish twin, so a Spanish record page has no English title (spec §9.6; mutation: delete contact.tags.es -> FAILS naming tags)", () => {
+    const catalogue: Record<string, string | undefined> = m;
+    for (const c of RECORD_CARDS) {
+      expect(catalogue[`${c.titleKey}.es`], `${c.id}: ${c.titleKey}.es`).toBeTruthy();
+    }
+  });
 });

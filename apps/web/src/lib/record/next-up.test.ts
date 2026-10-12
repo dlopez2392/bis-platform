@@ -41,8 +41,18 @@ describe("Next up (spec §9.3, C9)", () => {
   });
 
   it("undated To-dos are counted, never listed (C9; mutation: list them -> FAILS)", () => {
-    expect(view(data({ undatedCount: 2 }))).toEqual({ rows: [], undated: "2 more To-dos have no date." });
-    expect(view(data({ undatedCount: 1 })).undated).toBe("1 more To-do has no date.");
+    expect(view(data({ undatedCount: 2 }))).toEqual({ rows: [], undated: "2 To-dos have no date." });
     expect(view(data()).undated).toBeNull();
+  });
+
+  it("the undated line says 'more' only when rows sit above it (mutation: always the 'more' key -> FAILS; never it -> FAILS)", () => {
+    const dated = { datedTasks: [{ id: "t", title: "Quote", due_at: "2026-10-20T05:00:00Z" }] };
+    const booked = { bookings: [{ id: "b", starts_at: "2026-10-20T15:00:00Z" }] };
+    expect(view(data({ ...dated, undatedCount: 2 })).undated).toBe("2 more To-dos have no date.");
+    expect(view(data({ ...booked, undatedCount: 1 })).undated).toBe("1 more To-do has no date.");
+    expect(view(data({ undatedCount: 1 })).undated).toBe("1 To-do has no date.");
+    expect(view(data({ undatedCount: 3 }), undefined, "es").undated).toBe("3 pendientes no tienen fecha.");
+    expect(view(data({ undatedCount: 1 }), undefined, "es").undated).toBe("1 pendiente no tiene fecha.");
+    expect(view(data({ ...dated, undatedCount: 1 }), undefined, "es").undated).toBe("1 pendiente más no tiene fecha.");
   });
 });
