@@ -111,6 +111,12 @@ beforeEach(() => {
 });
 
 describe("fileLead", () => {
+  it("files the submission as the AI's: the website chat took it, not the customer typing a form (S-03 1b, spec §5.2; mutation: drop authorKind -> FAILS)", async () => {
+    const { db } = fakeDb();
+    await fileLead({ db, ...CTX });
+    expect(dbFns.createSubmission.mock.calls[0]![3]).toMatchObject({ authorKind: "ai" });
+  });
+
   it("files against the form id it was GIVEN, never any other value in scope", async () => {
     const { db } = fakeDb();
     await fileLead({ db, ...CTX });

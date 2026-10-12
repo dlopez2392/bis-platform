@@ -151,6 +151,8 @@ export async function fileLead(ctx: {
     const submission = await createSubmission(db, form.account_id, form.id, {
       answers, attribution: ctx.attribution, consent,
       locale: ctx.locale, ipHash: ctx.ipHash,
+      // 0073: the record timeline marks this lead "Sofía · AI · took a request in the website chat".
+      authorKind: "ai",
     });
 
     const claimedSlot = await setConciergeSubmission(db, ctx.conversationId, submission.id);
