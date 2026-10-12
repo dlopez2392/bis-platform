@@ -584,6 +584,24 @@ describe("listContactCalls", () => {
       expect(limited.map((r) => r.id)).toEqual([r2.id]);
     });
   });
+
+  it("excludeSpam skips a call the receptionist marked spam; without it the call is still listed (S-03 part 1; mutation: ignore opts.excludeSpam -> the spam call comes back first, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const ana = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const seed = async (startedAt: string, outcome: string) => {
+        const { data, error } = await db.from("calls").insert({
+          account_id: accountId, phone_number_id: num.id, contact_id: ana.id, started_at: startedAt, outcome,
+        }).select("id").single();
+        if (error || !data) throw new Error(`seed call failed: ${error?.message}`);
+        return (data as { id: string }).id;
+      };
+      const real = await seed("2026-10-01T15:00:00Z", "booked");
+      const spam = await seed("2026-10-02T15:00:00Z", "spam");
+      expect((await listContactCalls(db, accountId, ana.id, 1)).map((r) => r.id)).toEqual([spam]);
+      expect((await listContactCalls(db, accountId, ana.id, 1, { excludeSpam: true })).map((r) => r.id)).toEqual([real]);
+    });
+  });
 });
 
 /**

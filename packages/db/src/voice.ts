@@ -933,14 +933,18 @@ export async function getCall(
   return (data as unknown as CallDetailRow | null) ?? null;
 }
 
-/** The contact drawer's recent-calls source — newest few for ONE contact. */
+/** The contact drawer's recent-calls source: newest few for ONE contact. `excludeSpam` is the
+ *  record page's "Last talked" read (S-03 part 1, spec §7): a call the receptionist marked spam
+ *  is not talking with the customer. */
 export async function listContactCalls(
   db: SupabaseClient, accountId: string, contactId: string, limit = 3,
+  opts: { excludeSpam?: boolean } = {},
 ): Promise<{ id: string; started_at: string; outcome: string }[]> {
-  const { data, error } = await db.from("calls")
+  let query = db.from("calls")
     .select("id, started_at, outcome")
-    .eq("account_id", accountId).eq("contact_id", contactId)
-    .order("started_at", { ascending: false }).limit(limit);
+    .eq("account_id", accountId).eq("contact_id", contactId);
+  if (opts.excludeSpam) query = query.neq("outcome", "spam");
+  const { data, error } = await query.order("started_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listContactCalls failed: ${error.message}`);
   return (data ?? []) as { id: string; started_at: string; outcome: string }[];
 }
