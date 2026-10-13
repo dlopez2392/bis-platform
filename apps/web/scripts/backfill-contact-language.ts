@@ -40,4 +40,9 @@ if (chunkRaw !== null) {
   writeFileSync(outPath, backfillSql(signals), "utf8");
 }
 
-console.log(JSON.stringify({ evidence: evidence.length, dropped, files: chunkFiles, ...backfillCounts(signals) }));
+// Review M-4: every evidence row is a signal or one drop reason (a form in the account's own language
+// is `dropped.sameAsAccount`), so `reconciles` is true; false means a row fell through uncounted.
+const droppedTotal = Object.values(dropped).reduce((n, k) => n + k, 0);
+console.log(JSON.stringify({
+  evidence: evidence.length, dropped, reconciles: evidence.length === signals.length + droppedTotal, files: chunkFiles, ...backfillCounts(signals),
+}));

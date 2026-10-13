@@ -29,14 +29,18 @@ export type CallEvidence = {
 };
 export type Evidence = FormEvidence | CallEvidence;
 export type PlannedSignal = { accountId: string; contactId: string; language: "en" | "es"; source: "form" | "call"; at: string };
-export type DropCounts = { badId: number; badKind: number; badTime: number; unknownLocale: number; unclearCall: number; nonMeaningfulCall: number };
+/** Every evidence row is a signal or exactly one of these, so evidence = signals + the sum (review M-4).
+ *  `sameAsAccount`: a form in the language the customer would get anyway (C6), a legitimate no-signal. */
+export type DropCounts = {
+  badId: number; badKind: number; badTime: number; unknownLocale: number; sameAsAccount: number; unclearCall: number; nonMeaningfulCall: number;
+};
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const MEANINGFUL_CALL_OUTCOMES = new Set(["booked", "lead", "message"]);
 
 function emptyDropCounts(): DropCounts {
-  return { badId: 0, badKind: 0, badTime: 0, unknownLocale: 0, unclearCall: 0, nonMeaningfulCall: 0 };
+  return { badId: 0, badKind: 0, badTime: 0, unknownLocale: 0, sameAsAccount: 0, unclearCall: 0, nonMeaningfulCall: 0 };
 }
 
 /**
@@ -62,8 +66,11 @@ function planWithReport(evidence: readonly Evidence[]): { signals: PlannedSignal
     if (e.kind === "form") {
       if (e.locale !== "en" && e.locale !== "es") { dropped.unknownLocale++; continue; }
       const language = pageLanguageSignal(e.locale, e.accountLanguage);
+      // locale equals what the customer would get anyway: a legitimate no-signal, counted so the
+      // script's counts line reconciles (evidence = signals + the sum of dropped).
       if (language) out.push({ accountId: e.accountId, contactId: e.contactId, language, source: "form", at });
-      continue; // locale equals the account's own default: a legitimate no-signal, not a drop
+      else dropped.sameAsAccount++;
+      continue;
     }
 
     if (e.outcome != null && !MEANINGFUL_CALL_OUTCOMES.has(e.outcome)) { dropped.nonMeaningfulCall++; continue; }

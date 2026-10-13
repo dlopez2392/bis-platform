@@ -70,7 +70,7 @@ describe("the UUID check runs on every row — a malformed or upper-case id is c
       form(C2, "2026-09-01T10:00:00Z", "es"), // the one real signal
     ]);
     expect(signals).toEqual([{ accountId: A, contactId: C2, language: "es", source: "form", at: "2026-09-01T10:00:00.000Z" }]);
-    expect(dropped).toEqual({ badId: 1, badKind: 1, badTime: 2, unknownLocale: 2, unclearCall: 2, nonMeaningfulCall: 0 });
+    expect(dropped).toEqual({ badId: 1, badKind: 1, badTime: 2, unknownLocale: 2, sameAsAccount: 0, unclearCall: 2, nonMeaningfulCall: 0 });
   });
 
   it("a call whose outcome is not meaningful (spam/abandoned/transferred) is dropped and counted, when the outcome is known", () => {
@@ -81,6 +81,27 @@ describe("the UUID check runs on every row — a malformed or upper-case id is c
     ]);
     expect(signals).toEqual([{ accountId: A, contactId: C2, language: "es", source: "call", at: "2026-09-01T10:00:00.000Z" }]);
     expect(dropped.nonMeaningfulCall).toBe(2);
+  });
+});
+
+describe("review M-4: every evidence row is either a signal or counted under one drop reason", () => {
+  it("a form in the account's own language is counted as sameAsAccount, and evidence = signals + the sum of dropped (mutation: `continue` without counting it -> FAILS)", () => {
+    const farFuture = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
+    const evidence: Evidence[] = [
+      form(C1, "2026-09-01T10:00:00Z", "es", "es"), // sameAsAccount
+      form(C2, "2026-09-01T10:00:00Z", "en"), // sameAsAccount: English with no account language
+      form(C3, "2026-09-01T10:00:00Z", "es"), // a signal
+      call(C3, "2026-09-02T10:00:00Z", "hola, necesito una cita", "booked"), // a signal
+      call(C3, "2026-09-03T10:00:00Z", "hi"), // unclearCall
+      call(C3, "2026-09-03T10:00:00Z", "hola, necesito una cita", "spam"), // nonMeaningfulCall
+      form(C1, farFuture, "es"), // badTime
+      form(C1, "2026-09-01T10:00:00Z", "fr"), // unknownLocale
+      form("nope", "2026-09-01T10:00:00Z", "es"), // badId
+      { kind: "nonsense", accountId: A, contactId: C1, at: "2026-09-01T10:00:00Z" } as unknown as Evidence, // badKind
+    ];
+    const { signals, dropped } = planLanguageBackfillReport(evidence);
+    expect(dropped.sameAsAccount).toBe(2);
+    expect(signals.length + Object.values(dropped).reduce((a, b) => a + b, 0)).toBe(evidence.length);
   });
 });
 
