@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   instantKey, isTimelineInstant, timelineBeforeFilter, withTimelinePage, TIMELINE_PAGE_SIZE,
+  forContacts,
 } from "../timeline-cursor";
 
 const ID = "0f8a7b2c-1d2e-4f3a-8b4c-5d6e7f8a9b0c";
@@ -47,6 +48,31 @@ describe("timelineBeforeFilter: strictly past (at, id), the contact list's row-v
   it("throws on a cursor that is not a timestamp and a uuid: it never reaches a filter string (mutation: drop the check -> FAILS)", () => {
     expect(() => timelineBeforeFilter("created_at", { v: "x),or(id.gt.0", id: ID })).toThrow(TypeError);
     expect(() => timelineBeforeFilter("created_at", { v: "2026-10-09T16:12:00Z", id: "not-a-uuid" })).toThrow(TypeError);
+  });
+});
+
+describe("forContacts: one source reads one person (.eq) or a household's set (.in) (S-03 part 2b, C6)", () => {
+  const recorder = () => {
+    const calls: unknown[][] = [];
+    const chain: Record<string, (...a: unknown[]) => unknown> = {};
+    for (const k of ["eq", "in"]) chain[k] = (...a: unknown[]) => { calls.push([k, ...a]); return chain; };
+    return { chain, calls };
+  };
+  it("a single id calls .eq, not .in (mutation: route every call through .in -> the string case FAILS)", () => {
+    const { chain, calls } = recorder();
+    forContacts(chain, "contact_id", "c1");
+    expect(calls).toEqual([["eq", "contact_id", "c1"]]);
+  });
+  it("a set calls .in with every id, copied out of the readonly array", () => {
+    const { chain, calls } = recorder();
+    const ids: readonly string[] = ["c1", "c2"];
+    forContacts(chain, "contact_id", ids);
+    expect(calls).toEqual([["in", "contact_id", ["c1", "c2"]]]);
+  });
+  it("refuses an empty set: PostgREST's in.() is not a query anyone means (mutation: drop the length guard -> FAILS)", () => {
+    const { chain } = recorder();
+    expect(() => forContacts(chain, "contact_id", [])).toThrow(TypeError);
+    expect(() => forContacts(chain, "contact_id", [])).toThrow("forContacts: an empty set");
   });
 });
 

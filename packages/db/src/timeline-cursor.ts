@@ -58,6 +58,19 @@ type Chain = {
   limit: (n: number) => Chain;
 };
 
+type Filterable = { eq: (column: string, value: string) => Filterable; in: (column: string, values: string[]) => Filterable };
+
+/**
+ * S-03 part 2 (C6): one source function serves one person (the contact page, `.eq`, unchanged) or a
+ * household's members (`.in`). An empty set is refused: PostgREST's `in.()` is not a query anyone
+ * means, and the merged page short-circuits before it (record.ts).
+ */
+export function forContacts<T>(q: T, column: string, ids: string | readonly string[]): T {
+  if (typeof ids === "string") return (q as unknown as Filterable).eq(column, ids) as unknown as T;
+  if (ids.length === 0) throw new TypeError("forContacts: an empty set");
+  return (q as unknown as Filterable).in(column, [...ids]) as unknown as T;
+}
+
 /** Applies the page to a PostgREST query: (column desc, id desc), past the cursor, at most `limit`. */
 export function withTimelinePage<T>(q: T, column: string, page: TimelinePageOpts): T {
   let c = (q as unknown as Chain).order(column, { ascending: false }).order("id", { ascending: false });
