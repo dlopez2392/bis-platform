@@ -62,6 +62,7 @@ import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
 import "@/app/c/[publicId]/concierge.css";
 import { m, type MessageKey } from "@/lib/messages";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 
 export const dynamic = "force-dynamic";
 
@@ -485,6 +486,37 @@ export default async function StyleguidePage({
                 defaultSmsReminderBody(),
               ))}
               testId="styleguide-sms-preview"
+            />
+          </div>
+        </Section>
+
+        {/* S-09 PR 2 Task 14: the Spanish box every editable automatic message shares, beside its
+            English box on the card (Task 15 pins the pairing). Three of its four stored shapes:
+            nothing stored (our Spanish, pre-filled), stale (the stored row no longer matches a
+            changed English), and emptied (the stored row is the empty string, so Spanish customers
+            get the English message). All through m[…] already — no new literal here. */}
+        <Section title={m["automations.bodyEs.label"]} file="components/spanish-body-field.tsx">
+          <div className="grid w-full gap-4 md:grid-cols-2">
+            <SpanishBodyField
+              idPrefix="sg-sbf-our"
+              stored={{ bodyEs: null, stale: false }}
+              defaultEs="Gracias por su visita."
+              composeEs={(x) => x}
+              sms
+            />
+            <SpanishBodyField
+              idPrefix="sg-sbf-stale"
+              stored={{ bodyEs: "Mensaje viejo.", stale: true }}
+              defaultEs="Gracias por su visita."
+              composeEs={(x) => x}
+              sms
+            />
+            <SpanishBodyField
+              idPrefix="sg-sbf-emptied"
+              stored={{ bodyEs: "", stale: false }}
+              defaultEs="Gracias por su visita."
+              composeEs={(x) => x}
+              sms
             />
           </div>
         </Section>
