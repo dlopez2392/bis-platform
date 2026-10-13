@@ -761,6 +761,8 @@ export const m = {
   "contact.language.keptToast.es": "Le volveremos a preguntar si otra llamada, cita o formulario dice otra cosa.",
   "contact.language.saveFailed": "Couldn't change the language. Try again.",
   "contact.language.saveFailed.es": "No se pudo cambiar el idioma. Intente de nuevo.",
+  "contact.language.changed": "This customer's language changed since. Nothing was undone.",
+  "contact.language.changed.es": "El idioma de este cliente cambió desde entonces. No se deshizo nada.",
   "language.name.en": "English",
   "language.name.en.es": "inglés",
   "language.name.es": "Spanish",

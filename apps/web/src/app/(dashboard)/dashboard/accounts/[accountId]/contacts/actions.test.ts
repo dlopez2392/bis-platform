@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { LanguageTriple } from "@bis/db";
 
 type Access = { userId: string; isAgency: boolean; role?: "owner" | "staff" | "technician" | null };
 const requireAccountAccess = vi.fn<(accountId: string) => Promise<Access>>(async () => ({ userId: "user_1", isAgency: true }));
@@ -17,6 +18,15 @@ vi.mock("@/lib/db", () => ({ dbForRequest: () => dbForRequest() }));
 const revalidatePath = vi.fn();
 vi.mock("next/cache", () => ({ revalidatePath }));
 
+// Fix round I4/Task-11-review: the language actions resolve the READER's locale the same way the
+// record page does (requestLocale + getPersonPrefs, #251's pattern) — real requestLocale/t, only the
+// person's own preference is mocked, exactly as conversations/actions.test.ts already does for the
+// same resolver.
+const getPersonPrefsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: (...a: unknown[]) => getPersonPrefsMock(...a),
+}));
+
 const dbMocks = {
   updateContact: vi.fn(), deleteContacts: vi.fn(),
   addTagToContacts: vi.fn(), removeTagFromContacts: vi.fn(),
@@ -34,11 +44,22 @@ const dbMocks = {
   setContactsBusiness: vi.fn(), undoSetBusiness: vi.fn(), GROUP_NAME_MAX: 120,
   // S-09 §7.5: the staff language writers.
   setContactLanguage: vi.fn(), restoreContactLanguage: vi.fn(), keepContactLanguageHint: vi.fn(),
-  isLanguageTriple: vi.fn((_v: unknown) => true),
+  isLanguageTriple: vi.fn<(v: unknown) => boolean>(() => true),
 };
 /** The service client and the request client, told apart by identity. */
 const SERVICE = { tag: "service-db" };
-const REQUEST = { tag: "request-db" };
+// Fix round (Task 11 review): the language actions' error locale reads `accounts.language` on the
+// REQUEST client (RLS), the same column requestLocale's other call sites read — `REQUEST_ACCOUNT`
+// is the mutable value a test sets; no other action in this file ever calls `.from`, so adding it
+// here is additive and does not disturb any identity check elsewhere in this suite.
+const REQUEST_ACCOUNT = { language: null as string | null };
+const REQUEST = {
+  tag: "request-db",
+  from: (table: string) => {
+    if (table !== "accounts") throw new Error(`REQUEST fake: unexpected table ${table}`);
+    return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { language: REQUEST_ACCOUNT.language } }) }) }) };
+  },
+};
 vi.mock("@bis/db", () => dbMocks);
 
 const {
@@ -864,29 +885,69 @@ describe("setContactBusinessAction", () => {
   });
 });
 
-describe("the language actions (S-09 §7.5, C2, C9)", () => {
+describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () => {
   const BOOKED = { id: "c1", language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" };
+  const WRITTEN_T = "2026-10-13T12:00:00+00:00";
 
-  it("set: proves the contact on the CALLER's client, writes on the service client, and returns the prior triple (mutation: write before the proof -> FAILS)", async () => {
+  beforeEach(() => {
+    // Default: no personal preference, no account language — an agency caller (isAgency: true,
+    // the outer beforeEach's default) resolves English; a test overrides for the Spanish cases.
+    getPersonPrefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
+    REQUEST_ACCOUNT.language = null;
+  });
+
+  it("set: proves the contact on the CALLER's client, writes on the service client, and returns the PRIOR and WRITTEN triples (mutation: write before the proof -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
-    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.getContact
+      .mockResolvedValueOnce(BOOKED)
+      .mockResolvedValueOnce({ id: "c1", language: "en", language_source: "staff", language_set_at: WRITTEN_T });
     dbMocks.setContactLanguage.mockResolvedValue(true);
     expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({
-      ok: true, undo: { language: "es", source: "booking", setAt: "2026-10-03T15:00:00+00:00" },
+      ok: true,
+      prior: { language: "es", source: "booking", setAt: "2026-10-03T15:00:00+00:00" },
+      written: { language: "en", source: "staff", setAt: WRITTEN_T },
     });
     expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
     expect(dbMocks.setContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", "en", "user_1");
     expect(dbMocks.getContact.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.setContactLanguage.mock.invocationCallOrder[0]!);
   });
 
-  it("a contact the caller cannot see (a Technician's other customer) writes nothing (mutation: skip the proof -> FAILS)", async () => {
+  // I1 (Task 10 fix round): set/restore/keep's proof runs on the CALLER's own client — explicit here,
+  // not merely "some object", matching the identity checks this file's other actions already pin.
+  it("I1: restore and keep prove the contact through dbForRequest()'s own REQUEST client, by identity, not the service client (mutation: getContact(serviceDb()) in restore/keep -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.getContact.mockResolvedValue({ ...BOOKED, language: "en", language_source: "staff", language_set_at: WRITTEN_T });
+    dbMocks.restoreContactLanguage.mockResolvedValue("updated");
+    dbMocks.keepContactLanguageHint.mockResolvedValue(true);
+    const written = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
+    const prior = { language: "es" as const, source: "booking" as const, setAt: "2026-10-03T15:00:00+00:00" };
+    await restoreContactLanguageAction("a1", "c1", prior, written);
+    expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
+    dbMocks.getContact.mockClear();
+    await keepContactLanguageHintAction("a1", "c1");
+    expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
+  });
+
+  // I2 (Task 10 fix round): a contact the caller cannot see is a QUIET refusal — an authorization
+  // boundary, never a logged error. Report (per the coordinator's question): the earlier probe for
+  // this same mutation accidentally used `before?.language` (optional chaining) while removing the
+  // guard, which let execution continue (and `setContactLanguage` get called) instead of throwing —
+  // so that run's redness came from "the write happened", never from a thrown-and-logged error; it
+  // never actually exercised the console.error path this assertion now pins. The action still reads
+  // `before.language` directly (no `?.`), so deleting the guard throws on the null read, is caught,
+  // and IS logged — which this assertion now catches by name.
+  it("a contact the caller cannot see (a Technician's other customer) writes nothing, and is a quiet refusal — never a logged error (mutation: skip the proof -> FAILS)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.getContact.mockResolvedValue(null);
+    const nullTriple = { language: null, source: null, setAt: null } as const;
     expect(await setContactLanguageAction("a1", "c9", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
-    expect(await restoreContactLanguageAction("a1", "c9", { language: null, source: null, setAt: null })).toMatchObject({ ok: false });
+    expect(await restoreContactLanguageAction("a1", "c9", nullTriple, nullTriple)).toMatchObject({ ok: false });
     expect(await keepContactLanguageHintAction("a1", "c9")).toMatchObject({ ok: false });
     expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
     expect(dbMocks.restoreContactLanguage).not.toHaveBeenCalled();
     expect(dbMocks.keepContactLanguageHint).not.toHaveBeenCalled();
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("set refuses a language outside the set before reading anything", async () => {
@@ -894,19 +955,40 @@ describe("the language actions (S-09 §7.5, C2, C9)", () => {
     expect(dbMocks.getContact).not.toHaveBeenCalled();
   });
 
-  it("restore sends the prior triple back through the RESTORE writer, never as a staff choice (mutation: route Undo through setContactLanguage -> FAILS)", async () => {
+  it("restore sends the prior triple back through the RESTORE writer, with `written`, never as a staff choice (mutation: route Undo through setContactLanguage -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({ ...BOOKED, language: "en", language_source: "staff" });
-    dbMocks.restoreContactLanguage.mockResolvedValue(true);
+    dbMocks.restoreContactLanguage.mockResolvedValue("updated");
     const prior = { language: "es" as const, source: "booking" as const, setAt: "2026-10-03T15:00:00+00:00" };
-    expect(await restoreContactLanguageAction("a1", "c1", prior)).toEqual({ ok: true });
-    expect(dbMocks.restoreContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", prior, "user_1");
+    const written = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
+    expect(await restoreContactLanguageAction("a1", "c1", prior, written)).toEqual({ ok: true });
+    expect(dbMocks.restoreContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", prior, written, "user_1");
     expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
   });
 
-  it("restore refuses a forged, incoherent prior before the proof (mutation: drop the isLanguageTriple check -> FAILS)", async () => {
+  it("restore refuses a forged, incoherent prior OR written before the proof (mutation: drop the isLanguageTriple check -> FAILS)", async () => {
     dbMocks.isLanguageTriple.mockImplementation(() => false);
-    expect(await restoreContactLanguageAction("a1", "c1", { language: "es", source: null, setAt: null } as never)).toMatchObject({ ok: false });
+    const valid = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
+    expect(await restoreContactLanguageAction("a1", "c1", { language: "es", source: null, setAt: null } as never, valid)).toMatchObject({ ok: false });
     expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+
+  // Isolates the SECOND argument of the shape check: a mutation that validates only `prior` would
+  // let a malformed `written` straight through to the proof read, which this pins against by name.
+  it("restore checks BOTH prior AND written's shape, not just prior's (mutation: validate only prior -> FAILS)", async () => {
+    dbMocks.isLanguageTriple.mockImplementation((v: unknown) => (v as { language?: unknown })?.language !== "forged");
+    const prior = { language: "es" as const, source: "booking" as const, setAt: "2026-10-03T15:00:00+00:00" };
+    const forgedWritten = { language: "forged", source: "staff", setAt: WRITTEN_T } as unknown as LanguageTriple;
+    expect(await restoreContactLanguageAction("a1", "c1", prior, forgedWritten)).toMatchObject({ ok: false });
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+
+  // I3: the server itself refuses a stale/forged Undo via the writer's "changed" outcome — localized.
+  it("restore answers a localized 'changed' when the writer reports the row no longer holds `written` (mutation: ignore the writer's 'changed' outcome -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.restoreContactLanguage.mockResolvedValue("changed");
+    const prior = { language: null, source: null, setAt: null } as const;
+    const written = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
+    expect(await restoreContactLanguageAction("a1", "c1", prior, written)).toEqual({ ok: false, error: m["contact.language.changed"] });
   });
 
   it("keep stamps only the hint (mutation: call setContactLanguage -> FAILS)", async () => {
@@ -917,9 +999,96 @@ describe("the language actions (S-09 §7.5, C2, C9)", () => {
     expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
   });
 
-  it("a thrown write is the plain failure, never a thrown action", async () => {
-    dbMocks.getContact.mockResolvedValue(BOOKED);
+  it("a thrown write with no sign the row actually changed is the plain failure, never a thrown action", async () => {
+    dbMocks.getContact.mockResolvedValue(BOOKED); // every read is still "es"/"booking" — never "en"/"staff"
     dbMocks.setContactLanguage.mockRejectedValue(new Error("db down"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
+    errSpy.mockRestore();
+  });
+
+  // M1 (this file's own rule): the row may already have committed before the writer's OWN emit()
+  // threw. A read-back judges which, so a write that landed is reported as a save, never a failure.
+  it("M1 (set): a write that committed before the writer's emit() threw is still a successful save, logged not thrown (mutation: drop the read-back recovery -> FAILS)", async () => {
+    dbMocks.getContact
+      .mockResolvedValueOnce(BOOKED)
+      .mockResolvedValueOnce({ id: "c1", language: "en", language_source: "staff", language_set_at: WRITTEN_T });
+    dbMocks.setContactLanguage.mockRejectedValue(new Error("event emit failed"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({
+      ok: true,
+      prior: { language: "es", source: "booking", setAt: "2026-10-03T15:00:00+00:00" },
+      written: { language: "en", source: "staff", setAt: WRITTEN_T },
+    });
+    expect(errSpy.mock.calls.flat().join(" ")).toContain("event emit failed");
+    errSpy.mockRestore();
+  });
+
+  it("M1 (keep): a write that committed before the writer's emit() threw is still a successful Keep (mutation: drop the read-back recovery -> FAILS)", async () => {
+    const before = { ...BOOKED, language_hint_kept_at: null as string | null };
+    dbMocks.getContact
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce({ ...before, language_hint_kept_at: WRITTEN_T });
+    dbMocks.keepContactLanguageHint.mockRejectedValue(new Error("event emit failed"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await keepContactLanguageHintAction("a1", "c1")).toEqual({ ok: true });
+    expect(errSpy.mock.calls.flat().join(" ")).toContain("event emit failed");
+    errSpy.mockRestore();
+  });
+
+  it("M1: a write that genuinely failed (the row never changed) still answers the plain failure, read-back or not (mutation: always treat a thrown write as recovered -> FAILS)", async () => {
+    const before = { ...BOOKED, language_hint_kept_at: null as string | null };
+    dbMocks.getContact.mockResolvedValue(before); // read-back shows nothing moved
+    dbMocks.keepContactLanguageHint.mockRejectedValue(new Error("connection reset"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await keepContactLanguageHintAction("a1", "c1")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
+    errSpy.mockRestore();
+  });
+
+  // I4: every error (saveFailed, changed) is already in the reader's own language, resolved through
+  // getPersonPrefs()/requestLocale exactly as the record page resolves it (#251's pattern).
+  it("I4: a Spanish-preferring reader gets the Spanish text for both saveFailed and changed", async () => {
+    getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    expect(await setContactLanguageAction("a1", "c9", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed.es"] });
+
+    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.restoreContactLanguage.mockResolvedValueOnce("changed");
+    const prior = { language: null, source: null, setAt: null } as const;
+    const written = { language: "en" as const, source: "staff" as const, setAt: WRITTEN_T };
+    expect(await restoreContactLanguageAction("a1", "c1", prior, written)).toEqual({ ok: false, error: m["contact.language.changed.es"] });
+  });
+
+  // Task 11 review: a CLIENT-role reader (isAgency: false) with no personal `users.language` of their
+  // own still reads Spanish when the ACCOUNT itself is Spanish — requestLocale's isOperator:false
+  // branch, the account read on the REQUEST client (RLS), same column the record page itself reads.
+  it("a client-role reader with no personal language on a Spanish account gets the Spanish text (mutation: account null -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+    dbForRequest.mockResolvedValue(REQUEST);
+    REQUEST_ACCOUNT.language = "es";
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    expect(await setContactLanguageAction("a1", "c9", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed.es"] });
+  });
+
+  // An agency OPERATOR's own session stays English from the account alone (owner decision 1,
+  // request-locale.ts): isOperator:true ignores the account's language entirely.
+  it("an agency operator reading a Spanish account still gets English absent a personal preference (isOperator ignores the account)", async () => {
+    requireAccountAccess.mockResolvedValue({ userId: "user_1", isAgency: true });
+    dbForRequest.mockResolvedValue(REQUEST);
+    REQUEST_ACCOUNT.language = "es";
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    expect(await setContactLanguageAction("a1", "c9", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
+  });
+
+  // A failed account-language read for the error locale itself must never become a THROWN action —
+  // it still resolves a locale (falls back the same as an account with no language at all).
+  it("a failed account-language read never turns the error itself into a thrown action (mutation: let that read's throw propagate -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue({ userId: "user_1", isAgency: false, role: "owner" });
+    dbForRequest.mockResolvedValueOnce(REQUEST).mockResolvedValueOnce({
+      tag: "request-db-broken",
+      from: () => { throw new Error("accounts read failed"); },
+    });
+    dbMocks.getContact.mockResolvedValueOnce(null);
+    await expect(setContactLanguageAction("a1", "c9", "en")).resolves.toEqual({ ok: false, error: m["contact.language.saveFailed"] });
   });
 });
