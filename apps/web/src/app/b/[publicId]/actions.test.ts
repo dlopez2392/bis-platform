@@ -14,6 +14,7 @@ const incrementUnreadCountMock = vi.fn();
 const setAttributionMock = vi.fn();
 const getMeetingProviderMock = vi.fn();
 const createMeetingRoomMock = vi.fn();
+const recordLanguageSignalMock = vi.fn();
 
 const sendMock = vi.fn();
 // `emailProviderThrowsRef` lets one test simulate `getEmailProvider()`
@@ -136,6 +137,7 @@ vi.mock("@bis/db", () => ({
   // booking.confirmation too (customer_initiated — the consent ledger read
   // above skips it, but not this one). Allowed by default.
   readEmailSuppression: async () => null,
+  recordLanguageSignal: (...a: unknown[]) => recordLanguageSignalMock(...a),
 }));
 
 // The SAME `setAttribution` helper the sibling public-form action owns (I3)
@@ -292,6 +294,7 @@ beforeEach(() => {
   accountRow.language = null;
   sendAlertSmsMock.mockReset().mockResolvedValue(undefined);
   formatWhenThrowsRef.current = false;
+  recordLanguageSignalMock.mockReset().mockResolvedValue(true);
 });
 
 describe("submitBookingAction — spam gates (each mutation named)", () => {
@@ -1207,5 +1210,40 @@ describe("submitBookingAction — F-048: the change-the-time link", () => {
   it("with no host to build on, no line at all", async () => {
     await submitBookingAction(PUBLIC_ID, validFormData());
     expect(confirmation().body).not.toContain("Change the time");
+  });
+});
+
+describe("submitBookingAction — the booker's language becomes the contact's (S-09 §7.1, C6)", () => {
+  it("a Spanish booking on an English account signals booking/es with the public/system pair, after the booking exists (mutation: signal before createBooking -> FAILS)", async () => {
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(result.ok).toBe(true);
+    expect(recordLanguageSignalMock).toHaveBeenCalledTimes(1);
+    const [, accountId, contactId, signal, actorId, actorType] = recordLanguageSignalMock.mock.calls[0]!;
+    expect([accountId, contactId, signal.language, signal.source, actorId, actorType]).toEqual([ACCOUNT_ID, "contact_1", "es", "booking", "public", "system"]);
+    expect(signal.at).toBeInstanceOf(Date);
+    expect(recordLanguageSignalMock.mock.invocationCallOrder[0]!).toBeGreaterThan(createBookingMock.mock.invocationCallOrder[0]!);
+  });
+
+  it("an English booking on an English account says nothing: it is what they would get anyway (mutation: always signal -> FAILS)", async () => {
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "en" }));
+    expect(recordLanguageSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("an English booking on a Spanish account IS a sign (mutation: compare with 'en' instead of the account's language -> FAILS)", async () => {
+    accountRow.language = "es";
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "en" }));
+    expect(recordLanguageSignalMock.mock.calls[0]![3]).toMatchObject({ language: "en", source: "booking" });
+  });
+
+  it("a taken slot signals nothing", async () => {
+    createBookingMock.mockRejectedValue(new SlotTakenError());
+    await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(recordLanguageSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed signal never costs the booking (mutation: drop the try -> FAILS)", async () => {
+    recordLanguageSignalMock.mockRejectedValue(new Error("db down"));
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+    expect(result.ok).toBe(true);
   });
 });
