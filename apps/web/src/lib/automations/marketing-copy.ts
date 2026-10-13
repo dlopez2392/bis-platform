@@ -1,4 +1,7 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+
+type Lang = "en" | "es";
 
 /**
  * The footer's first line in both MARKETING emails — the check-in
@@ -16,7 +19,8 @@ import { m } from "@/lib/messages";
  * would otherwise read "a customer of ." Function replacement, not a plain
  * string, for names containing `$&`.
  */
-export function marketingFooterReason(brandName: string): string {
-  if (!brandName.trim()) return m["automations.reactivation.footerReasonNoName"];
-  return m["automations.reactivation.footerReason"].replace("{name}", () => brandName);
+export function marketingFooterReason(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.reactivation.footerReason", language, { name: brandName })
+    : t(m, "automations.reactivation.footerReasonNoName", language);
 }

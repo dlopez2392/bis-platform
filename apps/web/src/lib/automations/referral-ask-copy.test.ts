@@ -4,6 +4,20 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultReferralAskBody, referralAskSubject } from "./referral-ask-copy";
 
+describe("the referral ask's copy in Spanish (spec §11.2, §13)", () => {
+  it("the no-name subject is Spanish (mutation: ignore language -> FAILS)", () => {
+    expect(referralAskSubject("", "es")).toBe("Un favor");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(referralAskSubject("")).toBe("One favor");
+  });
+  it("the default body is Spanish too (mutation: defaultReferralAskBody ignores language -> FAILS)", () => {
+    expect(defaultReferralAskBody("Rio Roofing", "es")).toBe(
+      "Gracias otra vez de parte de Rio Roofing. ¿Conoce a alguien que necesite el mismo trabajo? "
+      + "Denos su nombre y su cel y nosotros nos encargamos.");
+  });
+});
+
 describe("the referral ask's copy", () => {
   it("names the brand and asks for a NAME", () => {
     const body = defaultReferralAskBody("Rio Roofing");

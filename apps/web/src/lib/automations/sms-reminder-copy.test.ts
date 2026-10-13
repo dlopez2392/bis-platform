@@ -5,6 +5,21 @@ import {
   smsReminderLead, defaultSmsReminderBody, composeSmsReminder, SMS_REMINDER_PREVIEW_INSTANT,
 } from "./sms-reminder-copy";
 
+describe("the text reminder in Spanish (spec §11.2, §13)", () => {
+  const sat = formatWhen(new Date("2026-10-17T14:30:00Z"), "America/Chicago", "es");
+  it("the lead and the default are Spanish, and the Saturday is folded to GSM-7 (mutation: no gsmFoldVowels -> FAILS)", () => {
+    expect(smsReminderLead("Rio Roofing", sat, "es")).toBe("Recordatorio: su cita con Rio Roofing es el sab, 17 de oct, 9:30 a.m. CDT.");
+    expect(defaultSmsReminderBody("es")).toBe("Si necesita hacer un cambio, responda a este mensaje.");
+    expect(segmentsFor(composeSmsReminder("Rio Roofing", sat, defaultSmsReminderBody("es"), "es")).encoding).toBe("gsm7");
+  });
+  it("English is unchanged and never folded (mutation: fold for every language -> an English 'é' brand would change; here the English lead is byte-for-byte)", () => {
+    expect(smsReminderLead("Rio Roofing", "Sat, Oct 17, 9:30 AM CDT")).toBe("Reminder: your appointment with Rio Roofing is Sat, Oct 17, 9:30 AM CDT.");
+  });
+  it("a blank brand drops the clause in Spanish too (mutation: always the named lead -> FAILS)", () => {
+    expect(smsReminderLead("  ", sat, "es")).toBe("Recordatorio: su cita es el sab, 17 de oct, 9:30 a.m. CDT.");
+  });
+});
+
 const WHEN = "Wed, Sep 30, 12:30 PM CDT";
 
 describe("smsReminderLead — the time is never the operator's to place", () => {

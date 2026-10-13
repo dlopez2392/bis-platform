@@ -20,6 +20,17 @@ describe("withTrailingLink — the ONE place a link is appended to an SMS", () =
   });
 });
 
+describe("defaultNoShowNudgeBody in Spanish (spec §11.2, §13)", () => {
+  it("the no-name variant is Spanish (mutation: ignore language -> FAILS)", () => {
+    expect(defaultNoShowNudgeBody("", "es"))
+      .toBe("Le estuvimos esperando en su cita. Escoja otro horario en este enlace:");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(defaultNoShowNudgeBody(""))
+      .toBe("We missed you at your appointment. Pick a new time here:");
+  });
+});
+
 describe("defaultNoShowNudgeBody", () => {
   it("names the company, so a text from an unknown number does not read as spam", () => {
     expect(defaultNoShowNudgeBody("Rio Roofing"))

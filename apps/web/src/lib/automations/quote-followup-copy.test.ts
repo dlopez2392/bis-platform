@@ -7,6 +7,15 @@ import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultQuoteFollowupBody, quoteFollowupSubject } from "./quote-followup-copy";
 
+describe("the quote follow-up's copy in Spanish (spec §11.2, §13)", () => {
+  it("the subject is Spanish (mutation: ignore language -> FAILS)", () => {
+    expect(quoteFollowupSubject("Rio Roofing", "es")).toBe("Sobre su estimado de Rio Roofing");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(quoteFollowupSubject("Rio Roofing")).toBe("About your quote from Rio Roofing");
+  });
+});
+
 describe("the quote follow-up's copy", () => {
   it("names the brand and asks about the quote", () => {
     const body = defaultQuoteFollowupBody("Rio Roofing");

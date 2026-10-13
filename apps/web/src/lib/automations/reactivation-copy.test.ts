@@ -12,6 +12,15 @@ import { defaultReactivationBody, reactivationSubject } from "./reactivation-cop
  * pinning an encoding or a segment count here would assert a property of a
  * string nothing measures.
  */
+describe("the reactivation check-in's copy in Spanish (spec §11.2, §13)", () => {
+  it("the subject is Spanish (mutation: ignore language -> FAILS)", () => {
+    expect(reactivationSubject("Rio Roofing", "es")).toBe("Un saludo de Rio Roofing");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(reactivationSubject("Rio Roofing")).toBe("A note from Rio Roofing");
+  });
+});
+
 describe("the reactivation check-in's copy", () => {
   it("names the brand and reads like a door left open, not a campaign", () => {
     const body = defaultReactivationBody("Rio Roofing");

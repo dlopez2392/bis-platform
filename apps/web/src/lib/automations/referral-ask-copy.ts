@@ -1,4 +1,7 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+
+type Lang = "en" | "es";
 
 /**
  * What a customer receives when the operator has not written their own
@@ -15,9 +18,10 @@ import { m } from "@/lib/messages";
  * `brandName` is the CUSTOMER-FACING name (the due-row carries only that).
  * Function replacement, not a plain string, for names containing `$&`.
  */
-export function defaultReferralAskBody(brandName: string): string {
-  if (!brandName.trim()) return m["automations.referral.defaultBodyNoName"];
-  return m["automations.referral.defaultBody"].replace("{name}", () => brandName);
+export function defaultReferralAskBody(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.referral.defaultBody", language, { name: brandName })
+    : t(m, "automations.referral.defaultBodyNoName", language);
 }
 
 /**
@@ -28,7 +32,8 @@ export function defaultReferralAskBody(brandName: string): string {
  * with nothing after the comma. Task 8's `reactivationSubject` and Task 10's
  * `quoteFollowupSubject` are the same function for the same reason.
  */
-export function referralAskSubject(brandName: string): string {
-  if (!brandName.trim()) return m["automations.referral.emailSubjectNoName"];
-  return m["automations.referral.emailSubject"].replace("{name}", () => brandName);
+export function referralAskSubject(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.referral.emailSubject", language, { name: brandName })
+    : t(m, "automations.referral.emailSubjectNoName", language);
 }

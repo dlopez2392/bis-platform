@@ -1,4 +1,8 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { gsmFoldVowels } from "@/lib/sms/segments";
+
+type Lang = "en" | "es";
 
 /**
  * The confirmation ask's LEAD: the brand, the appointment time (formatWhen,
@@ -20,11 +24,11 @@ import { m } from "@/lib/messages";
  * blank one drops the clause rather than inventing a noun. Function
  * replacement, not a plain string, for names containing `$&`.
  */
-export function appointmentConfirmLead(brandName: string, whenText: string): string {
-  const template = brandName.trim()
-    ? m["automations.appointmentConfirm.lead"].replace("{name}", () => brandName)
-    : m["automations.appointmentConfirm.leadNoName"];
-  return template.replace("{when}", () => whenText);
+export function appointmentConfirmLead(brandName: string, whenText: string, language: Lang = "en"): string {
+  const when = language === "es" ? gsmFoldVowels(whenText) : whenText;
+  return brandName.trim()
+    ? t(m, "automations.appointmentConfirm.lead", language, { name: brandName, when })
+    : t(m, "automations.appointmentConfirm.leadNoName", language, { when });
 }
 
 /**
@@ -33,6 +37,6 @@ export function appointmentConfirmLead(brandName: string, whenText: string): str
  * the same inputs, so the count the operator approves is the count that is
  * billed — the preview-vs-send drift fixed twice on 2026-09-06 cannot recur.
  */
-export function composeAppointmentConfirm(brandName: string, whenText: string, body: string): string {
-  return [appointmentConfirmLead(brandName, whenText), body.trim()].filter(Boolean).join(" ");
+export function composeAppointmentConfirm(brandName: string, whenText: string, body: string, language: Lang = "en"): string {
+  return [appointmentConfirmLead(brandName, whenText, language), body.trim()].filter(Boolean).join(" ");
 }
