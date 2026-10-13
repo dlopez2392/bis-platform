@@ -877,3 +877,29 @@ describe("production secrets are reachable only from jobs that declare the produ
     expect(secretMentions(ciLines).names.filter((n) => PRODUCTION_SECRETS.has(n))).toEqual([]);
   });
 });
+
+/**
+ * The production demo rebuilds itself every Monday (owner's decision,
+ * 2026-10-13): left alone, every date in it is frozen at its seed and the
+ * Website chart and "this week" tiles go stale. A schedule has no inputs, so
+ * the "type seed" check must skip it, and only it; a dispatch still needs the
+ * word. And still no push trigger, ever.
+ */
+describe("seed-demo.yml rebuilds the production demo on Mondays, and only by schedule or a typed dispatch", () => {
+  const seedLines = codeLines(read("../../../.github/workflows/seed-demo.yml"));
+  const text = seedLines.join("\n");
+
+  it("runs every Monday morning (mutation: drop the schedule -> FAILS)", () => {
+    expect(text).toMatch(/schedule:\s*\n\s*- cron: '17 10 \* \* 1'/);
+  });
+
+  it("never runs on a push or pull request (mutation: add `push:` -> FAILS)", () => {
+    const on = text.slice(text.indexOf("\non:"), text.indexOf("\nconcurrency:"));
+    expect(on).not.toMatch(/^\s*(push|pull_request\w*):/m);
+  });
+
+  it("skips the typed confirmation for the schedule only (mutation: drop the `if:` -> FAILS)", () => {
+    expect(text).toMatch(/- name: Check the confirmation\s*\n\s*if: github\.event_name == 'workflow_dispatch'/);
+    expect(text).toMatch(/inputs\.confirm \}\}" != "seed"/);
+  });
+});
