@@ -3958,6 +3958,11 @@ export const m = {
   "groupPage.nextUp.empty.es": "No hay nada próximo para estas personas. Aquí aparecen las citas que vienen y los pendientes con fecha.",
   "groupPage.timeline.empty": "Texts, calls, bookings, notes and To-dos with these people show up here. Open a person to start one.",
   "groupPage.timeline.empty.es": "Aquí aparecen los textos, llamadas, citas, notas y pendientes con estas personas. Abra a una persona para empezar uno.",
+  // S-03 part 2b (review of Task 16): the cap line when the exact count could not be read.
+  "groupPage.cap.unknownTotal": "Showing activity for {shown} people. Open a person to see theirs.",
+  "groupPage.cap.unknownTotal.es": "Se muestra la actividad de {shown} personas. Abra a una persona para ver la suya.",
+  "groupPage.cap.unknownTotalVisible": "Showing activity for {shown} people you can see. Open a person to see theirs.",
+  "groupPage.cap.unknownTotalVisible.es": "Se muestra la actividad de {shown} personas que usted puede ver. Abra a una persona para ver la suya.",
 } as const;
 
 export type MessageKey = keyof typeof m;

@@ -483,3 +483,45 @@ describe("groupNextUp (S-03 part 2b, C9)", () => {
       expect(n.undatedCount).toBe(2);
     }));
 });
+
+describe("groupActivityMembers, the review's fixes (S-03 part 2b)", () => {
+  it("the call-first member is inside the scan however early they joined, and `more` says the scan held past the cap (mutation: drop the is_primary_contact order on the scan -> the two newest-joined fill it and the call-first member is gone, FAILS; mutation: more from the cut list -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const h = await household(db, accountId, 4);
+      const joined = ["2026-08-01T00:00:00+00:00", "2026-08-02T00:00:00+00:00", "2026-08-03T00:00:00+00:00", "2026-08-04T00:00:00+00:00"];
+      for (const [i, memberId] of h.memberIds.entries()) {
+        const { error } = await db.from("client_group_members").update({ created_at: joined[i] }).eq("id", memberId);
+        if (error) throw new Error(error.message);
+      }
+      // The earliest joined is the call-first member: a newest-first scan of 2 would never reach them.
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
+      const a = await groupActivityMembers(db, accountId, h.groupId, 1, { scan: 2 });
+      expect(a.people.map((p) => p.contactId)).toEqual([h.ids[0]]);
+      expect(a.more).toBe(true);
+      expect((await groupActivityMembers(db, accountId, h.groupId, 10)).more).toBe(false);
+    }));
+
+  it("a failed head count is the total's { ok: false }, named to onError, and the people still load (mutation: drop the onError pass -> nothing named, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const h = await household(db, accountId, 2);
+      const noCount = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "from") return Reflect.get(target, prop, receiver);
+          return (table: string) => {
+            const q = target.from(table);
+            if (table !== "client_group_members") return q;
+            return {
+              select: (cols: string, o?: { count?: "exact"; head?: boolean }) =>
+                (o?.head ? target.from("no_such_table_s03") : q).select(cols, o),
+            };
+          };
+        },
+      }) as SupabaseClient;
+      const onError = vi.fn();
+      const a = await groupActivityMembers(noCount, accountId, h.groupId, 50, { onError });
+      expect(a.total).toEqual({ ok: false });
+      expect(a.people.map((p) => p.contactId).sort()).toEqual([...h.ids].sort());
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith("people", expect.anything());
+    }));
+});

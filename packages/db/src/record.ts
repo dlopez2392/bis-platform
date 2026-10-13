@@ -205,17 +205,22 @@ export async function groupNextUp(
 
 /** How many visible memberships the activity ranking reads, newest-joined first (spec §6, C5). */
 export const GROUP_ACTIVITY_SCAN = 500;
-export type GroupActivity = { people: GroupPerson[]; total: Fact<number> };
+/** `more`: the scan held more visible members than `cap`, so the cap line can still be said when the
+ *  exact count failed (review of Task 16). */
+export type GroupActivity = { people: GroupPerson[]; total: Fact<number>; more: boolean };
 
 /**
  * C5's set: the call-first member (when visible), then by the customer's one conversation's
  * last_message_at desc nulls last, then the membership's created_at desc, then contact_id desc; cut at
  * `cap`. PostgREST cannot order a parent by a to-many embed (groups spec ruling 13.1), so the sort is
- * here, over at most GROUP_ACTIVITY_SCAN memberships. `total` is the exact visible count, its own read
- * (plan deviation 9): a failure costs the people fact and the cap line, not the page. THROWS on the scan.
+ * here, over at most GROUP_ACTIVITY_SCAN memberships, read call-first FIRST so the call-first member is
+ * inside the scan however early they joined. `total` is the exact visible count, its own read (plan
+ * deviation 9): a failure costs the people fact (named to `onError` as "people"), never the page.
+ * `opts.scan` exists so a test can show the call-first order with a handful of rows. THROWS on the scan.
  */
 export async function groupActivityMembers(
   db: SupabaseClient, accountId: string, groupId: string, cap = GROUP_ACTIVITY_CAP,
+  opts: { onError?: (name: FactName, e: unknown) => void; scan?: number } = {},
 ): Promise<GroupActivity> {
   type Row = { contact_id: string; is_primary_contact: boolean; created_at: string;
     contacts: { first_name: string | null; last_name: string | null; conversations: { last_message_at: string | null }[] | null } | null };
@@ -223,8 +228,9 @@ export async function groupActivityMembers(
     db.from("client_group_members")
       .select("contact_id, is_primary_contact, created_at, contacts(first_name, last_name, conversations(last_message_at))")
       .eq("account_id", accountId).eq("client_group_id", groupId)
-      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(GROUP_ACTIVITY_SCAN),
-    settle("people", () => countGroupMembers(db, accountId, groupId)),
+      .order("is_primary_contact", { ascending: false })
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(opts.scan ?? GROUP_ACTIVITY_SCAN),
+    settle("people", () => countGroupMembers(db, accountId, groupId), opts.onError),
   ]);
   if (scan.error) throw new Error(`groupActivityMembers failed: ${scan.error.message}`);
   const rows = ((scan.data ?? []) as unknown as Row[]).filter((r) => r.contacts !== null);
@@ -244,6 +250,7 @@ export async function groupActivityMembers(
   return {
     people: rows.slice(0, cap).map((r) => ({ contactId: r.contact_id, firstName: r.contacts!.first_name, lastName: r.contacts!.last_name })),
     total,
+    more: rows.length > cap,
   };
 }
 

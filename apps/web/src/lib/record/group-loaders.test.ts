@@ -175,11 +175,23 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     const activity = { people: [{ contactId: "c-ana", firstName: "Ana", lastName: "García" }], total: { ok: true, value: 1 } };
     groupActivityMembersMock.mockResolvedValueOnce(activity);
     expect(await loadGroupActivity(db, "acct1", G)).toEqual({ status: "ready", activity });
-    expect(groupActivityMembersMock).toHaveBeenCalledWith(db, "acct1", G);
+    expect(groupActivityMembersMock).toHaveBeenCalledWith(db, "acct1", G, undefined, { onError: expect.any(Function) });
     groupActivityMembersMock.mockRejectedValueOnce(new Error("scan down"));
     expect(await loadGroupActivity(db, "acct1", G)).toEqual({ status: "error" });
     expect(logged()).toEqual([expect.stringMatching(/^record page: activity set read failed for account acct1: /)]);
     expect(logged().join("\n")).not.toContain(G);
+  });
+
+  it("a failed head count leaves the set ready and is logged once, by card and account only (review of Task 16; mutation: drop the onError pass -> nothing logged, FAILS)", async () => {
+    const activity = { people: [{ contactId: "c-ana", firstName: "Ana", lastName: "García" }], total: { ok: false }, more: false };
+    groupActivityMembersMock.mockImplementationOnce(async (_db, _a, _g, _cap, opts: { onError: (n: string, e: unknown) => void }) => {
+      opts.onError("people", new Error("countGroupMembers failed: no count returned"));
+      return activity;
+    });
+    expect(await loadGroupActivity(db, "acct1", G)).toEqual({ status: "ready", activity });
+    expect(logged()).toEqual([expect.stringMatching(/^record page: activity set \(people\) read failed for account acct1: /)]);
+    expect(logged().join("\n")).not.toContain(G);
+    expect(logged().join("\n")).not.toContain("c-ana");
   });
 
   it("the summary reads exactly the set, logs a failed fact by name, and a throw is the card's error (mutation: rethrow -> FAILS; mutation: drop the onError log -> FAILS)", async () => {

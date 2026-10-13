@@ -89,11 +89,13 @@ export type GroupActivityLoad = { status: "ready"; activity: GroupActivity } | {
 /**
  * The middle column's set (S-03 part 2b, C5): at most 50 members, the call-first first. A failed
  * scan is the summary's, Next up's and the timeline's error (they have no set to read); a failed
- * head count is only the people fact's and the cap line's (`activity.total`, plan deviation 9).
+ * head count is only the people fact's (`activity.total`, plan deviation 9), logged here as
+ * "activity set (people)" so it is never swallowed.
  */
 export async function loadGroupActivity(db: SupabaseClient, accountId: string, groupId: string): Promise<GroupActivityLoad> {
   try {
-    return { status: "ready", activity: await groupActivityMembers(db, accountId, groupId) };
+    const onError = (name: string, e: unknown) => log(`activity set (${name})`, accountId, e);
+    return { status: "ready", activity: await groupActivityMembers(db, accountId, groupId, undefined, { onError }) };
   } catch (e) {
     log("activity set", accountId, e);
     return { status: "error" };
