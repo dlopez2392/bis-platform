@@ -43,6 +43,7 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
     accountTimezone: "America/New_York",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     body: "", config: { channel: "email", reviewUrl: URL },
+    language: "en", bodyEs: null,
     ...overrides,
   };
 }

@@ -24,7 +24,7 @@ const BOOKING_URL = "https://app.bis-rgv.com/b/k7m2p9q4x3wz";
 
 const ROW: AutomationRow = {
   id: "au2", account_id: "a1", recipe_key: "no_show_nudge", enabled: true,
-  body: "", config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof NoShowNudgeCard>[0]> = {}): string {

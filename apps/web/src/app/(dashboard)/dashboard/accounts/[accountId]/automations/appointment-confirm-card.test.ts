@@ -26,7 +26,7 @@ import { AppointmentConfirmCard } from "./appointment-confirm-card";
  */
 const ROW: AutomationRow = {
   id: "au5", account_id: "a1", recipe_key: "appointment_confirm", enabled: true,
-  body: "", config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof AppointmentConfirmCard>[0]> = {}): string {

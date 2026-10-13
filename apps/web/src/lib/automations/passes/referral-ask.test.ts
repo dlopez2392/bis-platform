@@ -52,6 +52,7 @@ function row(over: Partial<DueReferralAsk> = {}): DueReferralAsk {
     // skipped (B21), and every existing email case is about something else.
     mailingAddress: "PO Box 12\nMcAllen, TX 78501",
     body: "", config: { channel: "sms" },
+    language: "en", bodyEs: null,
     ...over,
   };
 }

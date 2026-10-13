@@ -21,7 +21,7 @@ import { ReferralAskCard } from "./referral-ask-card";
  */
 const ROW: AutomationRow = {
   id: "au6", account_id: "a1", recipe_key: "referral_ask", enabled: true,
-  body: "", config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof ReferralAskCard>[0]> = {}): string {

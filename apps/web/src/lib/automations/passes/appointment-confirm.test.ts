@@ -56,6 +56,7 @@ function row(over: Partial<DueAppointmentConfirm> = {}): DueAppointmentConfirm {
     startsAt: STARTS,
     bookerTimezone: "America/Los_Angeles", contactId: "ct_1", contactPhone: "(956) 555-0107",
     brandName: "Rio Roofing", accountTimezone: "America/Chicago", body: "",
+    language: "en", bodyEs: null,
     ...over,
   };
 }

@@ -22,7 +22,7 @@ import { SmsReminderCard } from "./sms-reminder-card";
  */
 const ROW: AutomationRow = {
   id: "au3", account_id: "a1", recipe_key: "sms_reminder", enabled: true,
-  body: "", config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(body: string): string {

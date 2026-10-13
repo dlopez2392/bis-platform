@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { getOrCreateCalendar, createBooking, setBookingStatus, getDueReminderById, getDueFollowupById, stampReminderSent } from "../booking";
+import { setAccountLanguage } from "../accounts";
 import { upsertAutomation, getDueSmsReminderById, getDueReviewRequestById, getDueNoShowNudgeById,
   getDueAppointmentConfirmById, stampAppointmentConfirmAsked,
   getDueReferralAskById, stampReferralAsked,
@@ -287,6 +288,94 @@ describe("the recipe lookups: `off` until the recipe is on, `gone` in the wrong 
       // Mutation: drop `.eq("status", "open")` from the by-id lookup → the won
       // deal comes back due and this reds. It is the one the RELEASE path
       // depends on: a held row whose deal was won must not send.
+    });
+  });
+});
+
+describe("S-09 PR 2: every by-id read carries the customer's language — the release path reads it too", () => {
+  it("sms reminder", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "sms_reminder", { enabled: true, body: "", config: {} }, "user_test");
+      expect((await getDueSmsReminderById(db, bookingId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueSmsReminderById(db, bookingId)).due?.language).toBe("es");
+    });
+  });
+
+  it("review request", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "", config: { channel: "email", reviewUrl: "https://g.page/r/x/review" } }, "user_test");
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      expect((await getDueReviewRequestById(db, bookingId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueReviewRequestById(db, bookingId)).due?.language).toBe("es");
+    });
+  });
+
+  it("no-show nudge", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "no_show_nudge", { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      await setBookingStatus(db, accountId, bookingId, "no_show", "user_test");
+      expect((await getDueNoShowNudgeById(db, bookingId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueNoShowNudgeById(db, bookingId)).due?.language).toBe("es");
+    });
+  });
+
+  it("appointment confirm", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "appointment_confirm", { enabled: true, body: "", config: {} }, "user_test");
+      expect((await getDueAppointmentConfirmById(db, bookingId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueAppointmentConfirmById(db, bookingId)).due?.language).toBe("es");
+    });
+  });
+
+  it("referral ask", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { bookingId } = await seed(db, accountId);
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      await upsertAutomation(db, accountId, "referral_ask",
+        { enabled: true, body: "", config: { channel: "email" } }, "user_test");
+      expect((await getDueReferralAskById(db, bookingId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueReferralAskById(db, bookingId)).due?.language).toBe("es");
+    });
+  });
+
+  it("reactivation", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { contactId, bookingId } = await seed(db, accountId);
+      await upsertAutomation(db, accountId, "reactivation", { enabled: true, body: "", config: { months: 12 } }, "user_test");
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId,
+        { conversationId: convo.id, channel: "sms", direction: "inbound", body: "hi" }, "user_test");
+      expect((await getDueReactivationById(db, contactId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueReactivationById(db, contactId)).due?.language).toBe("es");
+    });
+  });
+
+  it("quote follow-up", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { contactId } = await seed(db, accountId);
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const stages = (await listPipelinesWithStages(db, accountId)).find((p) => p.id === pipelineId)!.stages;
+      const stageId = stages[1]!.id;
+      const { id: oppId } = await createOpportunity(db, accountId, { contactId, pipelineId, name: "Reroof" }, "user_test");
+      await db.from("opportunities").update({ stage_id: stageId }).eq("id", oppId)
+        .then(({ error }) => { if (error) throw new Error(`park ${oppId} failed: ${error.message}`); });
+      await upsertAutomation(db, accountId, "quote_followup",
+        { enabled: true, body: "", config: { stageId, quietDays: 3, channel: "email" } }, "user_test");
+      expect((await getDueQuoteFollowupById(db, oppId)).due?.language).toBe("en");
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect((await getDueQuoteFollowupById(db, oppId)).due?.language).toBe("es");
     });
   });
 });

@@ -50,6 +50,7 @@ function row(over: Partial<DueQuoteFollowup> = {}): DueQuoteFollowup {
     accountTimezone: "America/Chicago",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     body: "", config: { stageId: STAGE, quietDays: 3, channel: "sms" },
+    language: "en", bodyEs: null,
     ...over,
   };
 }

@@ -88,6 +88,7 @@ const CONFIRM_ROW: DueAppointmentConfirm = {
   bookingId: "bk_ac", accountId: "acct_1", startsAt: "2026-09-11T13:00:00.000Z", bookerTimezone: null,
   contactId: "ct_6", contactPhone: "9565550104", brandName: BRAND,
   accountTimezone: "America/New_York", body: "",
+  language: "en", bodyEs: null,
 };
 
 /** Part B's referral ask — the ladder's third rung, one strictly-later local
@@ -102,6 +103,7 @@ const REFERRAL_ROW: DueReferralAsk = {
   brandName: BRAND, branding, accountTimezone: "America/New_York",
   fromEmail: null, replyToEmail: null, mailingAddress: "PO Box 12\nMcAllen, TX 78501",
   body: "", config: { channel: "sms" },
+  language: "en", bodyEs: null,
 };
 
 /** Part B’s reactivation check-in — EMAIL ONLY, so the row carries no phone
@@ -119,6 +121,7 @@ const REACTIVATION_ROW: DueReactivation = {
   // the scan also covers the footer, which names the company ("a customer
   // of …") and must name the BRAND, never the label.
   fromEmail: null, replyToEmail: "office@rioroofing.example", mailingAddress: "PO Box 12\nMcAllen, TX 78501", body: "",
+  language: "en", bodyEs: null,
 };
 
 /** Part B's quote follow-up — the only PIPELINE-driven recipe. Five days
@@ -134,6 +137,7 @@ const QUOTE_FOLLOWUP_ROW: DueQuoteFollowup = {
   brandName: BRAND, branding, accountTimezone: "America/New_York",
   fromEmail: null, replyToEmail: null, body: "",
   config: { stageId: "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f", quietDays: 3, channel: "sms" },
+  language: "en", bodyEs: null,
 };
 
 beforeEach(() => {

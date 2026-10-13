@@ -112,7 +112,7 @@ vi.mock("./quiet-hours-card", () => ({
 
 const { default: AutomationsPage } = await import("./page");
 
-const base = { account_id: "a1", created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z" };
+const base = { account_id: "a1", body_es: null, body_es_basis: null, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z" };
 const STAGE_ID = "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f";
 const ROWS: Record<string, AutomationRow> = {
   review_request: { ...base, id: "au1", recipe_key: "review_request", enabled: true, body: "Hi",

@@ -42,6 +42,7 @@ function row(overrides: Partial<DueNoShowNudge> = {}): DueNoShowNudge {
     accountTimezone: "America/New_York",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     body: "", config: { channel: "email" },
+    language: "en", bodyEs: null,
     ...overrides,
   };
 }

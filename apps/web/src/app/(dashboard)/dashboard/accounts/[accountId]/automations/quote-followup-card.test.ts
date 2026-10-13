@@ -35,7 +35,7 @@ const STAGES = [{ id: STAGE_ID, label: "Quoted" }, { id: "stg_b", label: "Won" }
 
 const ROW: AutomationRow = {
   id: "au8", account_id: "a1", recipe_key: "quote_followup", enabled: true,
-  body: "", config: { stageId: STAGE_ID, quietDays: 4, channel: "sms" },
+  body: "", body_es: null, body_es_basis: null, config: { stageId: STAGE_ID, quietDays: 4, channel: "sms" },
   created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 

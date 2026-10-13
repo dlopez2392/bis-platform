@@ -55,6 +55,7 @@ function row(over: Partial<DueReactivation> = {}): DueReactivation {
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     mailingAddress: "123 Main St\nMcAllen, TX 78501",
     body: "",
+    language: "en", bodyEs: null,
     ...over,
   };
 }

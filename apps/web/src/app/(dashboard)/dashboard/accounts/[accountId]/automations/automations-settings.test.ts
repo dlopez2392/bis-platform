@@ -27,7 +27,7 @@ const LONG_LINK = "https://search.google.com/local/writereview?placeid=ChIJN1t_t
 
 const ROW: AutomationRow = {
   id: "au1", account_id: "a1", recipe_key: "review_request", enabled: true,
-  body: "", config: { channel: "sms", reviewUrl: SHORT_LINK },
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms", reviewUrl: SHORT_LINK },
   created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 

@@ -28,7 +28,7 @@ import { ReactivationCard } from "./reactivation-card";
  */
 const ROW: AutomationRow = {
   id: "au7", account_id: "a1", recipe_key: "reactivation", enabled: true,
-  body: "", config: { months: 14 }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { months: 14 }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof ReactivationCard>[0]> = {}): string {
