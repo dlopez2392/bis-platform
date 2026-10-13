@@ -19,6 +19,9 @@ import { renderedText } from "@/lib/rendered-text";
  */
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
 // F-085 part 1: the page reads the caller (for ?who=). The agency, so no filter applies here.
+// The send actions read the signed-in person's language (person-prefs pulls in @/lib/auth
+// and the tenant theme); this page test only renders, so their prefs are empty.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "u1", isAgency: true, role: null, canManage: true }),
 }));
