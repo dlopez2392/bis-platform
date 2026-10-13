@@ -775,3 +775,11 @@ revert the app; 0076 stays (additive) unless §6.6's SQL is wanted.
 | Q8 | The instant reply already has its own Spanish (both required, no default). Fold it into the new boxes? | **No, not now** (C15); its contract is stricter and shipped. Revisit if owners find two patterns confusing |
 | Q9 | The text reminder's closing line is not in L2's list but is editable | **Give it a Spanish box** (C15), or a Spanish reminder ends in English |
 | Q10 | On PR 2's deploy, every customer with no language on a Spanish account starts getting Spanish scheduled messages (L3) | **Name those accounts (§18.2) and tell each client before the merge**; no flag, since L3 is the decision |
+
+**Decided 2026-10-13 (owner):** Q1 keep their English (0076 marks an account's customised bodies' Spanish
+as emptied; the card offers "Use our Spanish"). Q2, Q3, Q4 as recommended (backfill only after read-only
+production counts). Q5 usted everywhere, converting today's tú copy in a follow-up pass, the opt-out line
+last after its carrier wording is checked. Q10 measure the switched accounts and customers before PR 2
+merges; the owner tells those clients first. Orchestrator rulings: Q6 one migration (0076 carries PR 2's
+columns); Q7 thresholds tuned on a sample of stored transcripts before PR 1 merges; Q8 the instant reply
+stays as shipped; Q9 the SMS reminder's closing line gets a Spanish box.
