@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Notice } from "@/components/ui/notice";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
@@ -104,6 +105,18 @@ export function ReactivationCard({
   );
   const [body, setBody] = useState(stored.body);
 
+  // C14/spec §12.3's staleness rule, mirrored like the sibling cards. Reads
+  // the STORED row (plan deviation 5), not live state.
+  const storedBody = automation?.body ?? "";
+  const storedBodyEs = automation?.body_es ?? null;
+  const storedBasis = automation?.body_es_basis ?? null;
+  const spanishStale = (() => {
+    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
+    if (storedBody.trim() === "" && storedBodyEs === null) return false;
+    const basis = storedBasis === null ? null : storedBasis.trim();
+    return basis !== storedBody.trim();
+  })();
+
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
       success: m["automations.reactivation.saved"],
@@ -166,14 +179,24 @@ export function ReactivationCard({
             <p className="text-xs text-muted-foreground">{m["automations.reactivation.monthsHint"]}</p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="reactivation-body">{m["automations.reactivation.message"]}</Label>
-            <Textarea
-              id="reactivation-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={defaultReactivationBody(brandName)}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="reactivation-body">{m["automations.bodyEn.label"]}</Label>
+              <Textarea
+                id="reactivation-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={defaultReactivationBody(brandName)}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.reactivation.messageHint"]}</p>
+            </div>
+            <SpanishBodyField
+              idPrefix="reactivation"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs={defaultReactivationBody(brandName, "es")}
+              composeEs={(text) => text}
+              sms={false}
             />
-            <p className="text-xs text-muted-foreground">{m["automations.reactivation.messageHint"]}</p>
           </div>
 
           {/* ALWAYS RENDERED: a cap is context, and DESIGN.md rule 1 says a

@@ -15,6 +15,7 @@ import { Notice } from "@/components/ui/notice";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
@@ -88,6 +89,18 @@ export function QuoteFollowupCard({
   // sentence themselves is not counted twice.
   const previewBody = body.trim() || defaultQuoteFollowupBody(brandName);
   const preview = segmentsFor(withOptOut(previewBody));
+
+  // C14/spec §12.3's staleness rule, mirrored like the sibling cards. Reads
+  // the STORED row (plan deviation 5), not live state.
+  const storedBody = automation?.body ?? "";
+  const storedBodyEs = automation?.body_es ?? null;
+  const storedBasis = automation?.body_es_basis ?? null;
+  const spanishStale = (() => {
+    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
+    if (storedBody.trim() === "" && storedBodyEs === null) return false;
+    const basis = storedBasis === null ? null : storedBasis.trim();
+    return basis !== storedBody.trim();
+  })();
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
@@ -182,31 +195,41 @@ export function QuoteFollowupCard({
             ) : null}
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="quote-followup-body">{m["automations.quoteFollowup.message"]}</Label>
-            <Textarea
-              id="quote-followup-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={defaultQuoteFollowupBody(brandName)}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="quote-followup-body">{m["automations.bodyEn.label"]}</Label>
+              <Textarea
+                id="quote-followup-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={defaultQuoteFollowupBody(brandName)}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.quoteFollowup.messageHint"]}</p>
+              {channel === "sms" ? (
+                <>
+                  <p className="text-xs text-muted-foreground" data-testid="quote-followup-sms-count">
+                    {m["compose.smsSegments"]
+                      .replace("{chars}", String(preview.chars))
+                      .replace("{segments}", String(preview.segments))}
+                  </p>
+                  {/* The count above is of the DISCLOSED body, and those 23
+                      characters appear nowhere else on this page — the message
+                      box shows the undisclosed default (design review I3). Its
+                      own paragraph rather than more text inside the counter's,
+                      so the counter's testid still reads as one clean string.
+                      Inside the `sms` branch on purpose: an emailed quote
+                      follow-up has no opt-out sentence and no count. */}
+                  <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+                </>
+              ) : null}
+            </div>
+            <SpanishBodyField
+              idPrefix="quote-followup"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs={defaultQuoteFollowupBody(brandName, "es")}
+              composeEs={(text) => (channel === "sms" ? withOptOut(text, "es") : text)}
+              sms={channel === "sms"}
             />
-            <p className="text-xs text-muted-foreground">{m["automations.quoteFollowup.messageHint"]}</p>
-            {channel === "sms" ? (
-              <>
-                <p className="text-xs text-muted-foreground" data-testid="quote-followup-sms-count">
-                  {m["compose.smsSegments"]
-                    .replace("{chars}", String(preview.chars))
-                    .replace("{segments}", String(preview.segments))}
-                </p>
-                {/* The count above is of the DISCLOSED body, and those 23
-                    characters appear nowhere else on this page — the message
-                    box shows the undisclosed default (design review I3). Its
-                    own paragraph rather than more text inside the counter's,
-                    so the counter's testid still reads as one clean string.
-                    Inside the `sms` branch on purpose: an emailed quote
-                    follow-up has no opt-out sentence and no count. */}
-                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
-              </>
-            ) : null}
           </div>
 
           <SubmitButton pending={pending} disabled={!hasStages}>

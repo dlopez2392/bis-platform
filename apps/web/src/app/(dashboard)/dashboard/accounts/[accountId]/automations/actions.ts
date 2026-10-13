@@ -23,6 +23,9 @@ import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
 import { defaultReviewRequestBody } from "@/lib/automations/review-request-copy";
 import { defaultNoShowNudgeBody } from "@/lib/automations/no-show-nudge-copy";
 import { defaultSmsReminderBody } from "@/lib/automations/sms-reminder-copy";
+import { defaultReferralAskBody } from "@/lib/automations/referral-ask-copy";
+import { defaultReactivationBody } from "@/lib/automations/reactivation-copy";
+import { defaultQuoteFollowupBody } from "@/lib/automations/quote-followup-copy";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -153,6 +156,16 @@ export async function saveReferralAskAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  let brandName: string;
+  try {
+    brandName = brandDisplayName(await getBranding(serviceDb(), accountId));
+  } catch (e) {
+    console.error(`saveReferralAskAction: branding read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.referral.saveFailed"] };
+  }
+  const es = await spanishBoxPatch(accountId, "referral_ask", formData, body, defaultReferralAskBody(brandName, "es"));
+  if (!es.ok) return es;
+
   // NOT ON BY EMAIL WITHOUT AN ADDRESS AND A REPLY-TO (B21, danlo,
   // 2026-09-23) — the check-in's rule, for the same reason: the referral
   // email is marketing, prints the postal address, and its opt-out is a
@@ -177,7 +190,8 @@ export async function saveReferralAskAction(
   }
 
   try {
-    await upsertAutomation(serviceDb(), accountId, "referral_ask", { enabled, body, config }, userId);
+    await upsertAutomation(serviceDb(), accountId, "referral_ask",
+      { enabled, body, config, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveReferralAskAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.referral.saveFailed"] };
@@ -206,6 +220,16 @@ export async function saveReactivationAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  let brandName: string;
+  try {
+    brandName = brandDisplayName(await getBranding(serviceDb(), accountId));
+  } catch (e) {
+    console.error(`saveReactivationAction: branding read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.reactivation.saveFailed"] };
+  }
+  const es = await spanishBoxPatch(accountId, "reactivation", formData, body, defaultReactivationBody(brandName, "es"));
+  if (!es.ok) return es;
+
   // NOT ON WITHOUT AN ADDRESS AND A REPLY-TO (decision A, danlo, 2026-09-22).
   // The check-in is commercial email, which under CAN-SPAM (the
   // orchestrator's reading, not a lawyer's) carries the sender's postal
@@ -232,7 +256,8 @@ export async function saveReactivationAction(
   }
 
   try {
-    await upsertAutomation(serviceDb(), accountId, "reactivation", { enabled, body, config }, userId);
+    await upsertAutomation(serviceDb(), accountId, "reactivation",
+      { enabled, body, config, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveReactivationAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.reactivation.saveFailed"] };
@@ -275,10 +300,21 @@ export async function saveQuoteFollowupAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  let brandName: string;
+  try {
+    brandName = brandDisplayName(await getBranding(serviceDb(), accountId));
+  } catch (e) {
+    console.error(`saveQuoteFollowupAction: branding read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
+  }
+  const es = await spanishBoxPatch(accountId, "quote_followup", formData, body, defaultQuoteFollowupBody(brandName, "es"));
+  if (!es.ok) return es;
+
   try {
     // The PARSED config, never the raw form values: the stored jsonb is then
     // exactly what the pass will read back.
-    await upsertAutomation(serviceDb(), accountId, "quote_followup", { enabled, body, config }, userId);
+    await upsertAutomation(serviceDb(), accountId, "quote_followup",
+      { enabled, body, config, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveQuoteFollowupAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
