@@ -725,14 +725,19 @@ export const m = {
   "contact.source.machine.form": "Saved to your “{name}” form",
   "contact.source.machine.form.es": "Guardado en su formulario “{name}”",
   // S-09 (a language on every customer): the record's and the drawer's Language line. Spec §15.2's
-  // words, plus `.choose` (plan deviation 10). Not set names English only: nothing sends in Spanish
-  // in PR 1, so `.notSetAccount` ("…, the account's language.") arrives in PR 2 with the switch that
-  // makes it true (review I-2). "their", never "her": BIS stores no gender.
+  // words, plus `.choose` (plan deviation 10). `.notSetAccount` ("…, the account's language.") and
+  // `.notSetUnknown` ("Not set.") are live from PR 2, which is what makes that clause true: messages
+  // now go out in the account's language to a customer whose own is not yet known. "their", never
+  // "her": BIS stores no gender.
   // {value} is the endonym; {language} the in-sentence name (language.name.*).
   "contact.language.label": "Language",
   "contact.language.label.es": "Idioma",
   "contact.language.notSet": "Not set. Messages go out in {language}.",
   "contact.language.notSet.es": "Sin definir. Los mensajes salen en {language}.",
+  "contact.language.notSetAccount": "Not set. Messages go out in {language}, the account's language.",
+  "contact.language.notSetAccount.es": "Sin definir. Los mensajes salen en {language}, el idioma de la cuenta.",
+  "contact.language.notSetUnknown": "Not set.",
+  "contact.language.notSetUnknown.es": "Sin definir.",
   "contact.language.choose": "Choose",
   "contact.language.choose.es": "Elegir",
   "contact.language.from.booking": "from their booking ({date})",
@@ -964,8 +969,8 @@ export const m = {
   // The Language card's one line (M4 review): what the setting changes and
   // who it leaves alone. Agency staff stay English (owner decision 1); the
   // alert texts follow it too (owner decision B).
-  "settings.language.description": "Changes the language your client sees when they sign in, and their alert texts. Agency staff stay in English.",
-  "settings.language.description.es": "Cambia el idioma que ve su cliente al iniciar sesión, y sus mensajes de aviso. El personal de la agencia sigue en inglés.",
+  "settings.language.description": "Changes the language your client sees when they sign in and their alert texts, and the language automatic messages go out in to customers whose language we don't know yet. Agency staff stay in English.",
+  "settings.language.description.es": "Cambia el idioma que ve su cliente al iniciar sesión y sus mensajes de aviso, y el idioma de los mensajes automáticos a los clientes de quienes todavía no sabemos el idioma. El personal de la agencia sigue en inglés.",
   "settings.language.invalid": "Choose English or Español.",
   "settings.language.invalid.es": "Elija inglés o español.",
   "settings.customFields": "Custom fields",
@@ -2087,7 +2092,9 @@ export const m = {
   // The trailing colon is where the review link is appended
   // (composeReviewRequestSms); the email template renders it as a button.
   "automations.review.defaultBody": "Thanks for choosing {name}! If you have a minute, we'd love a quick review:",
+  "automations.review.defaultBody.es": "¡Gracias por elegir a {name}! Si tiene un minuto, nos ayuda mucho que nos deje una reseña:",
   "automations.review.defaultBodyNoName": "Thanks for choosing us! If you have a minute, we'd love a quick review:",
+  "automations.review.defaultBodyNoName.es": "¡Gracias por elegirnos! Si tiene un minuto, nos ayuda mucho que nos deje una reseña:",
   // The no-show nudge's default body. Same rules as the review request's:
   // `{name}` filled at send time with the customer-facing brand name; the
   // NoName variant drops the clause; GSM-7 throughout (straight apostrophe).
@@ -2098,13 +2105,18 @@ export const m = {
   // characters (measured in no-show-nudge-copy.test.ts). The longer first
   // draft crossed into a second billed message at 13.
   "automations.noShow.defaultBody": "We missed you at your appointment with {name}. Pick a new time here:",
+  "automations.noShow.defaultBody.es": "Le estuvimos esperando en su cita con {name}. Escoja otro horario en este enlace:",
   "automations.noShow.defaultBodyNoName": "We missed you at your appointment. Pick a new time here:",
+  "automations.noShow.defaultBodyNoName.es": "Le estuvimos esperando en su cita. Escoja otro horario en este enlace:",
   // The text reminder. The LEAD carries the appointment time and is never
   // the operator's to place — `{when}` is formatWhen's output in the
   // booker's zone; the operator's prose (or this default) follows it.
   "automations.smsReminder.lead": "Reminder: your appointment with {name} is {when}.",
+  "automations.smsReminder.lead.es": "Recordatorio: su cita con {name} es el {when}.",
   "automations.smsReminder.leadNoName": "Reminder: your appointment is {when}.",
+  "automations.smsReminder.leadNoName.es": "Recordatorio: su cita es el {when}.",
   "automations.smsReminder.defaultBody": "Reply to this text if you need to make a change.",
+  "automations.smsReminder.defaultBody.es": "Si necesita hacer un cambio, responda a este mensaje.",
   // The instant reply to a new web-form lead (Milestone C) — sent the moment
   // a submission with a phone number lands, in the language the form was
   // filled in (the submission's locale), so it matches the receipt email the
@@ -2192,7 +2204,9 @@ export const m = {
   // confirmation this recipe ever sends. appointment-confirm-copy.test.ts
   // pins the encoding.
   "automations.appointmentConfirm.lead": "Hi, it's {name}. You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.lead.es": "Hola, le escribe {name}. Tiene cita el {when}. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.",
   "automations.appointmentConfirm.leadNoName": "You're booked for {when}. Reply YES to confirm or NO if you need a different time. Either way we'll see it.",
+  "automations.appointmentConfirm.leadNoName.es": "Tiene cita el {when}. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.",
   "automations.appointmentConfirm.title": "Appointment confirmations",
   "automations.appointmentConfirm.body": "Two days before an appointment, text the customer to confirm. They reply YES or NO and you see the answer on the booking. Nothing is cancelled automatically. Text only. Off until you turn it on.",
   "automations.appointmentConfirm.enabled": "Ask customers to confirm",
@@ -2251,9 +2265,13 @@ export const m = {
   // instead of around the copy.
   "automations.optOutCounted": "Every text ends with Reply STOP to opt out. That sentence is included in the count above.",
   "automations.referral.defaultBody": "Thanks again from {name}. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.defaultBody.es": "Gracias otra vez de parte de {name}. ¿Conoce a alguien que necesite el mismo trabajo? Denos su nombre y su cel y nosotros nos encargamos.",
   "automations.referral.defaultBodyNoName": "Thanks again. Know anyone who needs the same done? Send their name and number and we'll look after them.",
+  "automations.referral.defaultBodyNoName.es": "Gracias otra vez. ¿Conoce a alguien que necesite el mismo trabajo? Denos su nombre y su cel y nosotros nos encargamos.",
   "automations.referral.emailSubject": "One favor, from {name}",
+  "automations.referral.emailSubject.es": "Un favor, de parte de {name}",
   "automations.referral.emailSubjectNoName": "One favor",
+  "automations.referral.emailSubjectNoName.es": "Un favor",
   "automations.referral.title": "Referral asks",
   "automations.referral.body": "Ask the customer whether they know someone else who needs the same work. It goes the morning after the last message this job sent, and never on the same morning as one. If review requests are on, that one goes first. Off until you turn it on.",
   "automations.referral.enabled": "Ask for referrals",
@@ -2280,9 +2298,13 @@ export const m = {
   // interpolated from a constant, so `reactivation-copy.test.ts` pins each of
   // them against the constant it has to agree with.
   "automations.reactivation.defaultBody": "Hi, it's {name}. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.defaultBody.es": "Hola, le saluda {name}. Ya hace tiempo que no pasamos por su casa. Si algo necesita revisión antes de la temporada, responda este correo y le damos una cita.",
   "automations.reactivation.defaultBodyNoName": "Hi. It's been a while since we were out at your place. If anything needs looking at before the season, just reply and we'll get you on the schedule.",
+  "automations.reactivation.defaultBodyNoName.es": "Hola. Ya hace tiempo que no pasamos por su casa. Si algo necesita revisión antes de la temporada, responda este correo y le damos una cita.",
   "automations.reactivation.subject": "A note from {name}",
+  "automations.reactivation.subject.es": "Un saludo de {name}",
   "automations.reactivation.subjectNoName": "Checking in",
+  "automations.reactivation.subjectNoName.es": "Pasamos a saludar",
   "automations.reactivation.title": "Checking in with past customers",
   "automations.reactivation.body": "Email a past customer who hasn't been in touch for a while. Only people whose job you completed, at most five a day, and only once each — ever. Email only. Off until you turn it on.",
   "automations.reactivation.enabled": "Check in with past customers",
@@ -2301,7 +2323,9 @@ export const m = {
   // a REPLY, not a link: the email carries no link of any kind, and one
   // check-in per person, ever, leaves no later message to suppress.
   "automations.reactivation.footerReason": "You're getting this because you've been a customer of {name}. If you'd rather not hear from us, reply and let us know.",
+  "automations.reactivation.footerReason.es": "Le llega este correo porque ha sido cliente de {name}. Si prefiere no recibir más mensajes, responda y avísenos.",
   "automations.reactivation.footerReasonNoName": "You're getting this because you've been a customer of ours. If you'd rather not hear from us, reply and let us know.",
+  "automations.reactivation.footerReasonNoName.es": "Le llega este correo porque ha sido nuestro cliente. Si prefiere no recibir más mensajes, responda y avísenos.",
   // What the card and the save say when the email has nothing to stand on.
   // `{settingsLink}` is split out by the card and rendered as a link to the
   // Settings page, where the agency edits branding (this card is agency-only).
@@ -2324,9 +2348,54 @@ export const m = {
   // quote-followup-copy.test.ts is what keeps them honest against
   // QUOTE_FOLLOWUP_MIN_QUIET_DAYS / QUOTE_FOLLOWUP_MAX_QUIET_DAYS.
   "automations.quoteFollowup.defaultBody": "Hi, it's {name}. Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBody.es": "Hola, le escribe {name}. ¿Ya pudo ver el estimado que le mandamos? Con gusto le contestamos cualquier pregunta o lo ajustamos.",
   "automations.quoteFollowup.defaultBodyNoName": "Just checking you got the quote we sent. Happy to answer anything or adjust it. Any questions?",
+  "automations.quoteFollowup.defaultBodyNoName.es": "¿Ya pudo ver el estimado que le mandamos? Con gusto le contestamos cualquier pregunta o lo ajustamos.",
   "automations.quoteFollowup.emailSubject": "About your quote from {name}",
+  "automations.quoteFollowup.emailSubject.es": "Sobre su estimado de {name}",
   "automations.quoteFollowup.emailSubjectNoName": "About your quote",
+  "automations.quoteFollowup.emailSubjectNoName.es": "Sobre su estimado",
+
+  // S-09 PR 2: what scheduled customer emails say in each language (spec §15.1). Customer-facing.
+  "email.reminder.subject": "Reminder: your upcoming booking",
+  "email.reminder.subject.es": "Recordatorio: su próxima cita",
+  "email.reminder.intro": "This is a reminder for your upcoming booking.",
+  "email.reminder.intro.es": "Le recordamos su próxima cita.",
+  "email.reminder.join": "Join your video meeting",
+  "email.reminder.join.es": "Entrar a la videollamada",
+  "email.reminder.cancel": "Cancel this booking",
+  "email.reminder.cancel.es": "Cancelar esta cita",
+  "email.followup.defaultBody": "Thanks for coming in! If you have any questions or want to book again, just reply to this email.",
+  "email.followup.defaultBody.es": "¡Gracias por su visita! Si tiene alguna pregunta o quiere hacer otra cita, solo responda a este correo.",
+  "email.followup.subject": "Thanks from {name}",
+  "email.followup.subject.es": "Gracias de parte de {name}",
+  "email.review.subject": "Would you leave {name} a review?",
+  "email.review.subject.es": "¿Le gustaría dejarle una reseña a {name}?",
+  "email.review.button": "Leave a review",
+  "email.review.button.es": "Dejar una reseña",
+  "email.noShow.subject": "Want to pick a new time with {name}?",
+  "email.noShow.subject.es": "¿Quiere escoger otro horario con {name}?",
+  "email.noShow.button": "Pick a new time",
+  "email.noShow.button.es": "Escoger otro horario",
+  // S-09 PR 2: the Spanish box on every editable message (spec §15.3). Agency chrome renders English; twinned for the ratchet.
+  "automations.bodyEn.label": "English message",
+  "automations.bodyEn.label.es": "Mensaje en inglés",
+  "automations.bodyEs.label": "Spanish message",
+  "automations.bodyEs.label.es": "Mensaje en español",
+  "automations.bodyEs.hint": "Sent to customers whose language is Spanish. It starts as our Spanish; change it to say what your English says.",
+  "automations.bodyEs.hint.es": "Se manda a los clientes que hablan español. Empieza con nuestro mensaje en español; cámbielo para que diga lo mismo que su mensaje en inglés.",
+  "automations.bodyEs.stale": "The Spanish still says the old message. Update it to match your English.",
+  "automations.bodyEs.stale.es": "El mensaje en español todavía dice lo de antes. Actualícelo para que diga lo mismo que el de inglés.",
+  "automations.bodyEs.stillMatches": "The Spanish still matches",
+  "automations.bodyEs.stillMatches.es": "El español todavía coincide",
+  "automations.bodyEs.emptied": "Customers whose language is Spanish will get the English message.",
+  "automations.bodyEs.emptied.es": "Los clientes que hablan español recibirán el mensaje en inglés.",
+  "automations.bodyEs.useOurs": "Use our Spanish",
+  "automations.bodyEs.useOurs.es": "Usar nuestro español",
+  "automations.bodyEs.accentCost": "Accents on á, í, ó or ú make this text cost {n} parts instead of {m}.",
+  "automations.bodyEs.accentCost.es": "Los acentos en á, í, ó o ú hacen que este texto cueste {n} partes en vez de {m}.",
+  "automations.previewEs": "Spanish preview",
+  "automations.previewEs.es": "Vista previa en español",
   "automations.quoteFollowup.title": "Quote follow-ups",
   "automations.quoteFollowup.body": "This watches your pipeline. Deals only get there when you or your team put them there, so nothing happens on its own. Move a deal into the stage you pick, and after a few quiet days with no reply it checks in about the quote. Off until you turn it on.",
   "automations.quoteFollowup.enabled": "Follow up on quiet quotes",
