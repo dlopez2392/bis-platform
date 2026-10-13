@@ -77,6 +77,10 @@ const accountRow: {
   brand_logo_path: string | null; brand_color: string | null;
   brand_neutral: string | null; brand_corners: string | null;
   brand_type: string | null; brand_mode: string | null;
+  // minors-1b item 1 review fix: the account's own language — the fallback a
+  // CLIENT-role sender's own locale reads when they have no personal
+  // preference (requestLocale's isOperator: false branch).
+  language: string | null;
 } = {
   // `name` is the AGENCY's internal label for this company; brand_name is what
   // its customers are allowed to see. They differ here on purpose, so the From
@@ -85,6 +89,7 @@ const accountRow: {
   brand_name: "Rio Roofing",
   brand_logo_path: null, brand_color: null, brand_neutral: null,
   brand_corners: null, brand_type: null, brand_mode: null,
+  language: null,
 };
 // Hoisted and held so a test can assert IDENTITY: that a call reached this
 // exact client, not merely a same-shaped one. `dbForRequest` returns this
@@ -201,6 +206,7 @@ beforeEach(() => {
   accountRow.reply_to_email = null;
   accountRow.from_email = null;
   accountRow.brand_name = "Rio Roofing";
+  accountRow.language = null;
   contactRow.email = "customer@example.com";
   contactRow.phone = "9565551234";
   svc.throws = false;
@@ -788,5 +794,37 @@ describe("sendEmailAction/sendSmsAction — rejections speak the signed-in perso
     })).catch((err: unknown) => err);
 
     expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed"]);
+  });
+
+  /**
+   * Review fix: no test covered requestLocale's OTHER branch — a client-role
+   * sender (isOperator: false, requireAccountAccess's own isAgency) with no
+   * personal `users.language` falls back to the ACCOUNT's own language, not
+   * straight to English. Dropping "language" from the `accounts` select
+   * passed the suite 50/50 (English by coincidence, since `resolveLocale`'s
+   * final fallback is also English) — these pin the actual fallback value.
+   */
+  it("a client-role sender with no personal language falls back to the account's own language — sendEmailAction (mutation: drop \"language\" from the accounts select → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false });
+    getPersonPrefsMock.mockResolvedValue({ language: null, theme: null });
+    accountRow.language = "es";
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed.es"]);
+  });
+
+  it("a client-role sender with no personal language falls back to the account's own language — sendSmsAction (mutation: drop \"language\" from the accounts select → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: false });
+    getPersonPrefsMock.mockResolvedValue({ language: null, theme: null });
+    accountRow.language = "es";
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed.es"]);
   });
 });
