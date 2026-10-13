@@ -25,12 +25,11 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(new Set(ids).size).toBe(ids.length);
     expect(html).not.toContain(`>${m["record.skipToDetails"]}<`);
   });
-  it("RecordHeader with every action and with none (mutation: drop the no-action header -> 4 headers, FAILS)", () => {
-    // Each of the two layouts carries its own header with every action, so the page has five
-    // headers: two in the layouts, one with every action, one with none, and one whose subtitle
-    // links to the group (S-03 part 2b). Exactly one of the five has no action row.
-    expect(html.match(/data-record-header/g)).toHaveLength(5);
-    expect(html.match(/data-record-actions/g)).toHaveLength(4);
+  it("RecordHeader with every action, with none, and in the drawer's form (mutation: drop the no-action header -> 5 headers, FAILS)", () => {
+    // Six headers: two in the layouts, one with every action, one with none, one whose subtitle
+    // links to the group (S-03 part 2b), and the drawer's (S-03 part 3). Exactly one has no action row.
+    expect(html.match(/data-record-header/g)).toHaveLength(6);
+    expect(html.match(/data-record-actions/g)).toHaveLength(5);
   });
   it("a record header's subtitle can link to the group's own page (S-03 part 2b; mutation: drop subtitleHref -> FAILS)", () => {
     const start = html.indexOf("data-sg-header-linked");
@@ -51,5 +50,18 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
   });
   it("a timeline row can name the member it is about (S-03 part 2b; mutation: drop the subject -> FAILS)", () => {
     expect(html).toMatch(/<a[^>]*data-timeline-subject[^>]*>Dan López<\/a>/);
+  });
+
+  it("the drawer's header and its flat sections in a Sheet's surface (S-03 part 3; mutation: drop the specimen -> FAILS)", () => {
+    const start = html.indexOf("data-sg-drawer");
+    expect(start).toBeGreaterThan(-1);
+    const section = html.slice(start, html.indexOf("data-sg-drawer-end"));
+    expect(section).toMatch(/class="[^"]*glass-overlay/);
+    expect(section).toContain("<h2");
+    expect(section).not.toContain("<h1");
+    expect(section).not.toContain(`>${m["record.back"]}<`);
+    expect(section).toContain(`aria-label="${m["drawer.openFull"]}"`);
+    expect([...section.matchAll(/data-record-section="[^"]+" data-state="(\w+)"/g)].map((x) => x[1]))
+      .toEqual(["ready", "loading", "empty", "error"]);
   });
 });

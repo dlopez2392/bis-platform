@@ -28,16 +28,18 @@ export class RecordCardBoundaryCore extends Component<CoreProps, { failed: boole
  * One per card (spec C5, DESIGN.md "Record page": one card's fault never blanks the page).
  * React's server renderer does not run class error boundaries, so the Suspense is what keeps a
  * server-render throw inside this card: it renders `skeleton` there and the client retries, where
- * the core catches it. Verified on React 19.2.4 (plan, Global Constraints).
+ * the core catches it. Verified on React 19.2.4 (plan, Global Constraints). `onReset`: what Try again
+ * re-reads after a render throw; absent, the page (a section inside the list's drawer passes its own,
+ * S-03 part 3, so it never refreshes the list behind the drawer).
  */
-export function RecordCardBoundary({ fallback, skeleton, children }: {
+export function RecordCardBoundary({ fallback, skeleton, children, onReset }: {
   // Optional only so createElement(RecordCardBoundary, props, child) type-checks (TS2769 on a
   // required children prop); ReactNode already admits undefined, so callers see no difference.
-  fallback: (reset: () => void) => ReactNode; skeleton: ReactNode; children?: ReactNode;
+  fallback: (reset: () => void) => ReactNode; skeleton: ReactNode; children?: ReactNode; onReset?: () => void;
 }) {
   const router = useRouter();
   return (
-    <RecordCardBoundaryCore fallback={fallback} onReset={() => router.refresh()}>
+    <RecordCardBoundaryCore fallback={fallback} onReset={onReset ?? (() => router.refresh())}>
       <Suspense fallback={skeleton}>{children}</Suspense>
     </RecordCardBoundaryCore>
   );

@@ -63,3 +63,41 @@ describe("RecordHeader (spec §9.1)", () => {
     expect(cls.split(/\s+/)).toEqual(expect.arrayContaining(["block", "w-fit"]));
   });
 });
+
+describe("RecordHeader's drawer form (S-03 part 3 §8.1)", () => {
+  const drawer = (over: Partial<Parameters<typeof RecordHeader>[0]> = {}) =>
+    renderToStaticMarkup(createElement(RecordHeader, {
+      name: "Ana García", subtitle: null, actions: ALL, headingLevel: 2,
+      trailing: createElement("a", { href: "/dashboard/accounts/a1/contacts/c1", "aria-label": "Open full record" }, "↗"),
+      ...over,
+    }));
+
+  it("no back link when none is given (mutation: render the Link unconditionally -> FAILS)", () => {
+    const html = drawer();
+    expect(html).not.toContain('href="/dashboard/accounts/a1/contacts"');
+    expect(html.match(/<a /g)).toHaveLength(5); // the trailing link and the four actions, nothing else
+  });
+
+  it("the name is an h2, never a second h1 over a page that has one (mutation: hard-code h1 -> FAILS)", () => {
+    const html = drawer();
+    expect(html).not.toContain("<h1");
+    expect(html).toMatch(/<h2[^>]*title="Ana García"[^>]*>Ana García<\/h2>/);
+  });
+
+  it("wrapHeading wraps exactly the heading, so the Sheet's title can be it (mutation: ignore wrapHeading -> FAILS)", () => {
+    const html = drawer({ wrapHeading: (h) => createElement("div", { "data-wrapped": "" }, h) });
+    expect(html).toMatch(/<div data-wrapped=""><h2/);
+  });
+
+  it("the trailing node sits on the name line after the name and never shrinks (mutation: drop trailing -> FAILS)", () => {
+    const html = drawer();
+    expect(html).toMatch(/<\/h2><span class="shrink-0"><a href="\/dashboard\/accounts\/a1\/contacts\/c1" aria-label="Open full record">/);
+  });
+
+  it("the page's form is unchanged: back link and h1 (mutation: default headingLevel 2 -> FAILS)", () => {
+    const html = render(ALL);
+    expect(html.match(/<h1/g)).toHaveLength(1);
+    expect(html).toContain('href="/dashboard/accounts/a1/contacts"');
+    expect(html).not.toContain("shrink-0\"><a");
+  });
+});

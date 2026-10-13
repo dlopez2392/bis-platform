@@ -1,11 +1,12 @@
 "use client";
 
-import { CalendarCheck } from "lucide-react";
+import { CalendarCheck, ExternalLink } from "lucide-react";
 import { AuthorMark } from "@/components/record/author-mark";
 import { TimelineItem, TimelineItemSkeleton } from "@/components/record/timeline-item";
 import { RecordCardView } from "@/components/record/record-card";
 import { RecordHeader } from "@/components/record/record-header";
 import { RecordLayout } from "@/components/record/record-layout";
+import { RecordSection } from "@/components/record/record-section";
 import { m, type MessageKey } from "@/lib/messages";
 
 /**
@@ -80,6 +81,32 @@ export function RecordDemo() {
       {header(false)}
       {/* S-03 part 2b: a record header whose subtitle links to the group's own page. */}
       <div data-sg-header-linked>{header(true, "#")}</div>
+      {/* S-03 part 3: the list's drawer. The header with no back link, an h2 and the ↗ beside the
+          name; then the flat sections in each state. A Sheet-styled frame, not an open Sheet: Radix's
+          title needs a Dialog around it, and an open one would cover this page. */}
+      <div data-sg-drawer className="w-[448px] max-w-full space-y-4 rounded-xl border border-[var(--line-strong)] glass-overlay p-4">
+        <RecordHeader name="Ana García" headingLevel={2}
+          subtitle={m["record.group.household"].replace("{group}", "García")}
+          trailing={
+            <a href="#" aria-label={m["drawer.openFull"]}
+              className="inline-flex min-h-11 items-center rounded-[var(--radius-ctl)] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">
+              <ExternalLink className="size-4" aria-hidden />
+            </a>
+          }
+          actions={[
+            { id: "call", label: m["record.action.call"], href: "tel:+19565550100", ariaLabel: m["record.action.callAria"].replace("{name}", "Ana García"), primary: true },
+            { id: "email", label: m["record.action.email"], href: "#compose-email" },
+          ]} />
+        <RecordSection id="sg-facts" label={null} state="ready" errorText={m["record.summary.failed"]} retryLabel={m["record.card.retry"]} onRetry={() => {}}>
+          <p className="text-sm text-card-foreground">{m["record.facts.openDealsOne"]}</p>
+        </RecordSection>
+        <RecordSection id="sg-next" label={m["record.card.nextUp"]} state="loading" errorText={failedText(m["record.card.nextUp"])} retryLabel={m["record.card.retry"]} onRetry={() => {}} />
+        <RecordSection id="sg-recent" label={m["drawer.recent"]} state="empty" errorText={failedText(m["drawer.recent"])} retryLabel={m["record.card.retry"]} onRetry={() => {}}>
+          <p className="text-sm text-muted-foreground">{m["timeline.empty"]}</p>
+        </RecordSection>
+        <RecordSection id="sg-tags" label={m["contact.tags"]} state="error" errorText={failedText(m["contact.tags"])} retryLabel={m["record.card.retry"]} onRetry={() => {}} />
+      </div>
+      <span data-sg-drawer-end hidden />
       <div className="flex flex-wrap gap-4">
         {card("loading", { state: "loading" })}
         {card("ready")}
