@@ -4,9 +4,10 @@ import { config as loadEnv } from "dotenv";
 import {
   serviceDb, setClientAccess, createContact, ensureDefaultPipeline, createOpportunity,
   assignPhoneNumber, startCallRow, finishCallRow, addTagToContact, addNote,
+  addPlace, getOrCreateCalendar, createBooking,
 } from "@bis/db";
 import { m } from "../src/lib/messages";
-import { watchRouterTraffic } from "./support";
+import { watchRouterTraffic, recordPage } from "./support";
 
 // Same two paths, same reason, as every other spec that talks to Supabase from
 // the Playwright runner process rather than through a Next.js request.
@@ -523,7 +524,9 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     const dialogB = page.getByRole("dialog");
     await expect(dialogB.getByText("Retry B", { exact: true })).toBeVisible();
     await expect(dialogB.getByTestId("drawer-skeleton")).toHaveCount(0);
-    await expect(dialogB.getByText("Recent", { exact: true })).toBeVisible();
+    // The label "Recent" now renders while loading (the wrapper's own label), so the section's
+    // data-state is the real sign the route answered, not the text.
+    await expect(dialogB.locator('[data-drawer-section="recent"][data-state="ready"]')).toBeVisible();
 
     // Wait past A's delayed response window. Without the `stale` guard, A's
     // late .then() would setFetched keyed to A's own (closed-over)
@@ -623,7 +626,9 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await row.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    const fullHref = await dialog.getByRole("link", { name: m["drawer.openFull"] }).getAttribute("href");
+    // The drawer carries TWO links named "Open full record" (the header's ↗ and the bottom link);
+    // only the bottom one carries this attribute, so the locator stays unambiguous under strict mode.
+    const fullHref = await dialog.locator("[data-drawer-open-full]").getAttribute("href");
     const tagTargetId = fullHref!.split("/").pop()!;
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
@@ -648,8 +653,8 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     // /api/accounts/<id>/contacts/<id>/summary (see the route file).
     await expect.poll(async () => {
       const res = await page.request.get(`/api/accounts/${accountId}/contacts/${tagTargetId}/summary`);
-      const body = (await res.json()) as { tags: { name: string }[] };
-      return body.tags.some((t) => t.name === seededTagName);
+      const body = (await res.json()) as { who: { tags: { status: string; tags?: { name: string }[] } } };
+      return body.who.tags.status === "ready" && (body.who.tags.tags ?? []).some((t) => t.name === seededTagName);
     }, { message: "undo should remove the seeded tag from the contact's own record" }).toBe(false);
 
     // Free-text create, then close and reopen the dropdown.
@@ -775,7 +780,7 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     await row.click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByText("Recent", { exact: true })).toBeVisible();
+    await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
 
     const scroller = dialog.getByTestId("drawer-scroll");
     const before = await scroller.evaluate((el) => (
@@ -795,26 +800,17 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
     expect(scrollTopAfter, "the container must actually be scrollable, not just overflowing")
       .toBeGreaterThan(0);
 
-    // The scrollTop assertions above are the real proof; this is a geometric
-    // sanity check that the LAST recent-activity row actually lands inside
-    // the scroller's own clipped bounds once scrolled. Playwright's
-    // `toBeVisible()` alone would not catch a regression here: it checks for
-    // a non-empty, non-`visibility:hidden` bounding box, not whether that
-    // box is clipped outside a scrollable ancestor. Located by testid and
-    // `.last()`, not by a note's own body text: the summary route renders
-    // every note as the same generic `m["drawer.recent.note"]` label
-    // ("Note added") regardless of body, so the five seeded notes are
-    // indistinguishable in the UI — only their position in the list differs.
-    const lastNote = dialog.getByTestId("drawer-recent-item").last();
-    await expect(lastNote).toBeVisible();
+    // Recent now sits above who they are (S-03 part 3 §9), so after scrolling to the bottom the last
+    // thing in the scroller is the way to the full record, and THAT must land inside the clipped bounds.
+    const bottom = dialog.locator("[data-drawer-open-full]");
+    await expect(bottom).toBeVisible();
     const scrollerBox = await scroller.boundingBox();
-    const noteBox = await lastNote.boundingBox();
+    const bottomBox = await bottom.boundingBox();
     expect(scrollerBox, "scroller must have a real bounding box").not.toBeNull();
-    expect(noteBox, "the last recent-activity row must have a real bounding box").not.toBeNull();
-    if (scrollerBox && noteBox) {
-      expect(noteBox.y, "the last row's top must be within the scroller's clipped bounds")
-        .toBeGreaterThanOrEqual(scrollerBox.y - 1);
-      expect(noteBox.y + noteBox.height, "the last row's bottom must be within the scroller's clipped bounds")
+    expect(bottomBox, "the bottom link must have a real bounding box").not.toBeNull();
+    if (scrollerBox && bottomBox) {
+      expect(bottomBox.y, "the bottom link's top must be within the scroller's clipped bounds").toBeGreaterThanOrEqual(scrollerBox.y - 1);
+      expect(bottomBox.y + bottomBox.height, "the bottom link's bottom must be within the scroller's clipped bounds")
         .toBeLessThanOrEqual(scrollerBox.y + scrollerBox.height + 1);
     }
   });
@@ -833,6 +829,145 @@ test.describe("P4 client session (RLS proof)", () => {
     // Grants proof: the summary fetch resolved into content, not the error
     // state — serviceDb unit fixtures cannot see grants, only this can.
     await expect(drawer.getByText(m["drawer.loadFailed"])).toHaveCount(0);
-    await expect(drawer.getByText("Recent", { exact: true })).toBeVisible();
+    // The client session's grants proof: Recent's seven timeline sources read under RLS. The label
+    // "Recent" renders while loading now, so the section's data-state is the real sign it answered.
+    await expect(drawer.locator('[data-drawer-section="recent"][data-state="ready"]')).toBeVisible();
+  });
+});
+
+/**
+ * S-03 part 3 (spec §12.2): the drawer is the record's quick look. ON THE PER-RUN FIXTURE ACCOUNT
+ * (`accountId`, set by this file's beforeAll). Two contacts of this block's own: "Quick" with a phone,
+ * an email, an addressed property and a booking made by the booking page's writer (the customer's);
+ * "Plain" with a phone only. The booking goes before its contact (bookings.contact_id is on delete
+ * restrict); the property cascades with it.
+ */
+test.describe("S-03 part 3: the drawer on the record kit", () => {
+  const STAMP = Date.now();
+  const LAST = `Quicklook ${STAMP}`;
+  const PHONE = `+1956295${String(Math.floor(Math.random() * 9000) + 1000)}`;
+  const PLAIN_PHONE = `+1956297${String(Math.floor(Math.random() * 9000) + 1000)}`;
+  const made: { quick?: string; plain?: string } = {};
+  let cancelToken = "";
+
+  test.beforeAll(async () => {
+    const db = serviceDb();
+    const quick = await createContact(db, accountId, { firstName: "Quick", lastName: LAST, phone: PHONE, email: `quicklook-${STAMP}@example.com` }, ACTOR);
+    if (quick.existing) throw new Error(`contacts-drawer e2e: ${PHONE} matched an existing contact; refusing to use (or delete) it.`);
+    made.quick = quick.id;
+    const plain = await createContact(db, accountId, { firstName: "Plain", lastName: LAST, phone: PLAIN_PHONE }, ACTOR);
+    if (plain.existing) throw new Error(`contacts-drawer e2e: ${PLAIN_PHONE} matched an existing contact; refusing to use (or delete) it.`);
+    made.plain = plain.id;
+    await addPlace(db, accountId, { contactId: made.quick, groupId: null }, {
+      label: null, address: "1204 Nolana Ave", landmark: null, directions: null, city: "McAllen", region: "TX", postal_code: "78504", country: "US",
+    }, { subjectId: made.quick, actorId: ACTOR });
+    // Sixty-one days out: past the calendar's 30-day horizon, so booking.spec never offers this slot.
+    const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+    const start = new Date(Date.now() + 61 * 86_400_000);
+    start.setUTCHours(16, STAMP % 60, 0, 0);
+    const booked = await createBooking(db, accountId, {
+      calendarId: cal.id, contactId: made.quick, startsAt: start, endsAt: new Date(start.getTime() + 3_600_000), ipHash: `e2e-quicklook-${STAMP}`,
+    }, "public", "system");
+    cancelToken = booked.cancelToken;
+  });
+
+  test.afterAll(async () => {
+    const db = serviceDb();
+    if (cancelToken) {
+      const { error } = await db.from("bookings").delete().eq("account_id", accountId).eq("cancel_token", cancelToken);
+      if (error) console.error(`contacts-drawer e2e: booking cleanup failed (the fixture sweep takes it): ${error.message}`);
+    }
+    const ids = [made.quick, made.plain].filter((x): x is string => Boolean(x));
+    const { error } = await db.from("contacts").delete().eq("account_id", accountId).in("id", ids);
+    if (error) console.error(`contacts-drawer e2e: contact cleanup failed (the fixture sweep takes it): ${error.message}`);
+    const { data: left } = await db.from("contacts").select("id").in("id", ids);
+    expect(left ?? []).toEqual([]);
+  });
+
+  const open = async (page: Page, first: string) => {
+    await page.goto(`${base()}/contacts?q=${encodeURIComponent(LAST)}`);
+    await page.getByRole("row").filter({ hasText: `${first} ${LAST}` }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.locator('[data-drawer-section="recent"][data-state="ready"]')).toBeVisible();
+    return dialog;
+  };
+
+  test("the header: Call the one primary, Email and Directions, no Text on an account without A2P; a bare contact shows only Call", async ({ page }, testInfo) => {
+    const summary = page.waitForResponse((r) => r.url().includes(`/contacts/${made.quick}/summary`));
+    const dialog = await open(page, "Quick");
+    // Wall time of the drawer's one read beside the record page's document (plan deviation 10; reported, not asserted).
+    const drawerMs = (await summary).request().timing().responseEnd;
+    await expect(dialog.locator("h2")).toHaveText(`Quick ${LAST}`);
+    await expect(dialog.locator("[data-record-action]")).toHaveCount(3);
+    expect(await dialog.locator("[data-record-action]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-action")))).toEqual(["call", "email", "directions"]);
+    await expect(dialog.locator('[data-record-action="call"]')).toHaveAttribute("href", /^tel:\+1956295/);
+    await expect(dialog.locator('[data-record-header] [data-variant="default"]')).toHaveCount(1);
+    await expect(dialog.locator('[data-record-action="text"]')).toHaveCount(0);
+    await expect(dialog.locator("[data-record-action][aria-disabled], [data-record-action][disabled]")).toHaveCount(0);
+    const record = await page.goto(`${base()}/contacts/${made.quick}`);
+    testInfo.annotations.push({ type: "drawer summary vs record page (ms to response end)",
+      description: `${Math.round(drawerMs)} vs ${Math.round(record!.request().timing().responseEnd)}` });
+    const plain = await open(page, "Plain");
+    expect(await plain.locator("[data-record-action]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-action")))).toEqual(["call"]);
+  });
+
+  test("Email lands on the record with the email composer open and its body focused (D8; Text is hidden here, its target is unit-pinned)", async ({ page }) => {
+    const dialog = await open(page, "Quick");
+    await dialog.locator('[data-record-action="email"]').click();
+    await expect(page).toHaveURL(new RegExp(`/contacts/${made.quick}#compose-email$`));
+    await expect(recordPage(page).getByRole("button", { name: m["compose.email"], exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(recordPage(page).getByPlaceholder(m["compose.emailPlaceholder"])).toBeFocused();
+  });
+
+  test("Recent shows the booking page's booking as the customer's, and See all activity opens the record's timeline", async ({ page }) => {
+    const dialog = await open(page, "Quick");
+    const booking = dialog.getByTestId("drawer-recent-item").filter({ has: page.locator('[data-author-mark="customer"]') });
+    await expect(booking).toHaveCount(1);
+    await expect(booking.locator('[data-author-mark="customer"]')).toHaveText(m["provenance.customer"]);
+    await expect(booking).toContainText(m["timeline.booked"].split("{when}")[0]!.trim());
+    // Every row says who did it (DESIGN.md, Provenance): record-page.spec.ts:233's check, in the drawer.
+    await expect(dialog.locator('[data-testid="drawer-recent-item"] [data-timeline-item]:not(:has([data-author-mark]))')).toHaveCount(0);
+    await dialog.locator("[data-drawer-see-all]").click();
+    await expect(page).toHaveURL(new RegExp(`/contacts/${made.quick}#record-timeline$`));
+  });
+
+  test("Esc closes the drawer", async ({ page }) => {
+    await open(page, "Quick");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
+  test.describe("in Spanish (the client session's Owner, restored in finally)", () => {
+    test.use({ storageState: "e2e/.auth/client-state.json" });
+
+    test("the drawer reads Spanish: lang, Llamar, Lo que sigue, Cliente, Nombre and Apellido, and Cerrar", async ({ page }) => {
+      const db = serviceDb();
+      // Exactly one Owner membership on a per-run fixture account (places.spec.ts:385-400's reasoning).
+      const owner = await db.from("memberships").select("user_id")
+        .eq("scope", "account").eq("account_id", accountId).eq("role", "owner").limit(1).single();
+      expect(owner.error, `reading the fixture Owner's membership: ${owner.error?.message}`).toBeNull();
+      const ownerId = owner.data!.user_id as string;
+      const prior = await db.from("users").select("language").eq("id", ownerId).single();
+      expect(prior.error, `reading the Owner's language before the switch: ${prior.error?.message}`).toBeNull();
+      const priorLanguage = prior.data!.language as string | null;
+      const set = await db.from("users").update({ language: "es" }).eq("id", ownerId).select("id");
+      expect(set.error, `switching the Owner to Spanish: ${set.error?.message}`).toBeNull();
+      expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
+      try {
+        const dialog = await open(page, "Quick");
+        await expect(dialog.locator('[lang="es"]').first()).toBeVisible();
+        await expect(dialog.locator('[data-record-action="call"]')).toHaveText(m["record.action.call.es"]);
+        await expect(dialog.getByText(m["record.card.nextUp.es"], { exact: true })).toBeVisible();
+        await expect(dialog.locator('[data-author-mark="customer"]').first()).toHaveText(m["provenance.customer.es"]);
+        await expect(dialog.getByText(m["contacts.firstName.es"], { exact: true }).first()).toBeVisible();
+        await expect(dialog.getByText(m["contacts.lastName.es"], { exact: true }).first()).toBeVisible();
+        await expect(dialog.getByRole("button", { name: m["drawer.close.es"] })).toBeVisible();
+      } finally {
+        // Every later spec in this run uses this same per-run Owner (workers: 1) and reads English.
+        const reset = await db.from("users").update({ language: priorLanguage }).eq("id", ownerId).select("id");
+        expect(reset.error, `resetting the Owner's language: ${reset.error?.message}`).toBeNull();
+        expect(reset.data, "resetting the Owner's language: one users row").toHaveLength(1);
+      }
+    });
   });
 });

@@ -119,6 +119,11 @@ test.describe.serial("F-085 part 1: an Owner assigns a customer; the Technician 
       await page.getByRole("row").filter({ hasText: MINE_NAME }).first().click();
       const drawer = page.getByRole("dialog");
       await expect(drawer).toBeVisible();
+      // The Assigned to field sits in the drawer's who section (S-03 part 3), rendered only after
+      // the route's `who` part has loaded — wait for that rather than relying on the combobox
+      // locator's own auto-wait outlasting the drawer's other in-flight reads (texts/email rows)
+      // that share this same section's re-renders via retryNonce.
+      await expect(drawer.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
 
       const combobox = drawer.getByRole("combobox", { name: m["assign.field.label"] });
       await combobox.click();

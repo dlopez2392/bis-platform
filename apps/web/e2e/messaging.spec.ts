@@ -2,7 +2,6 @@ import { test, expect, type Page } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
 import { serviceDb, createContact } from "@bis/db";
 import { readClientFixture, recordPage } from "./support";
-import { m } from "../src/lib/messages";
 
 // Playwright's config passes env to the webServer, not to this process, so the
 // service-role credentials have to be loaded explicitly for setup and cleanup.
@@ -54,7 +53,9 @@ async function sendAndFindInConversations(
   await page.getByRole("row").filter({ hasText: contactName }).click();
   const drawer = page.getByRole("dialog");
   await expect(drawer).toBeVisible();
-  await drawer.getByRole("link", { name: m["drawer.openFull"] }).click();
+  // The drawer carries TWO links named "Open full record" (the header's ↗ and the bottom link);
+  // only the bottom one carries this attribute, so the locator stays unambiguous under strict mode.
+  await drawer.locator("[data-drawer-open-full]").click();
   await expect(page).toHaveURL(new RegExp(`/contacts/${contactId}$`));
 
   // The timestamped subject stops assertions from matching a row a crashed

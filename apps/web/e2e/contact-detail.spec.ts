@@ -44,7 +44,9 @@ test("opening a contact from the table renders the detail screen", async ({ page
   await firstRow.click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("link", { name: m["drawer.openFull"] }).click();
+  // The drawer carries TWO links named "Open full record" (the header's ↗ and the bottom link);
+  // only the bottom one carries this attribute, so the locator stays unambiguous under strict mode.
+  await dialog.locator("[data-drawer-open-full]").click();
   await expect(page).toHaveURL(/\/contacts\/[0-9a-f-]{36}$/);
 
   // The bug this guards against returned 404, which renders not-found.tsx —

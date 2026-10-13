@@ -106,11 +106,9 @@ test("a reload after a pick shows no Check number row: the server's answer, not 
   await expect(page).toHaveURL(/[?&]peek=/);
   await page.reload();
   await expect(page.getByRole("dialog")).toBeVisible();
-  // exact: true — the drawer's sr-only description ("Contact details, tags,
-  // and recent activity.") also contains "recent", and the substring match
-  // resolves both; the exact heading only exists once the summary has
-  // loaded, so the row assertion below reads loaded data, not a race.
-  await expect(page.getByRole("dialog").getByText(m["drawer.recent"], { exact: true })).toBeVisible();
+  // The section's data-state is the sign the route answered; the label "Recent" renders while
+  // loading now, so the text is no longer a safe signal that the summary has loaded.
+  await expect(page.getByRole("dialog").locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
   // The Texts row is its own read (consent chain PR-2): wait for it to have
   // LOADED — a data-state — or the count below passes against its skeleton.
   await expect(page.getByRole("dialog").getByTestId("texts-row")).toHaveAttribute("data-state", /.+/);
@@ -122,10 +120,9 @@ test("a phone edited in the drawer into one that reads both ways raises the Chec
   await page.goto(`/dashboard/accounts/${accountId}/contacts?q=${STAMP}`);
   await page.getByRole("row").filter({ hasText: `Number ${STAMP}` }).first().click();
   const drawer = page.getByRole("dialog");
-  // exact: true — the drawer's sr-only description also contains "recent",
-  // and the exact heading only exists once the summary has loaded, so the
-  // row assertion below reads loaded data, not a race.
-  await expect(drawer.getByText(m["drawer.recent"], { exact: true })).toBeVisible();
+  // The section's data-state is the sign the route answered; the label "Recent" renders while
+  // loading now, so the text is no longer a safe signal that the summary has loaded.
+  await expect(drawer.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
   // The test above settled it as US: no row — once the Texts row has loaded
   // (its own read since consent chain PR-2; the skeleton has no data-state).
   await expect(drawer.getByTestId("texts-row")).toHaveAttribute("data-state", /.+/);
