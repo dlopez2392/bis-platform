@@ -893,27 +893,24 @@ export const m = {
   "todo.consent.timelineHint.es": "Ciérrelo desde la página de Pendientes.",
   "todo.consent.failed": "Couldn't save that — please try again.",
 
-  // The contact drawer's recent-activity feed (Task 2's summary route,
-  // Task 6's drawer). "{outcome}"/"{name}"/"{value}" are the house
-  // {placeholder} convention (see setup.progress above) — the route
-  // .replace()s them before the string ever reaches the client.
-  "drawer.recent.call": "Call — {outcome}",
-  "drawer.recent.note": "Note added",
-  "drawer.recent.submission": "Form submitted",
-  "drawer.recent.message": "Message",
-  "drawer.recent.opportunity": "Opportunity: {name} ({value})",
-
-  // The drawer's own chrome (Task 6): skeleton/error states and the
-  // recent-activity section heading/empty copy.
+  // The contact list's drawer (S-03 part 3): the record's quick look.
   "drawer.recent": "Recent",
-  "drawer.recentEmpty": "Nothing here yet — calls, notes, and form submissions for this contact will show up here.",
-  "drawer.loadFailed": "Couldn't load this contact's activity.",
-  "drawer.openFull": "Open full page",
-  // Screen-reader-only (Radix logs a missing-Description warning without
-  // one) — sr-only rather than visible copy, since the header row already
-  // carries the avatar, name, and open-full-page link and DESIGN.md's
-  // surfaces don't have room for a redundant subtitle.
-  "drawer.description": "Contact details, tags, and recent activity.",
+  "drawer.recent.es": "Lo más reciente",
+  "drawer.seeAll": "See all activity",
+  "drawer.seeAll.es": "Ver toda la actividad",
+  "drawer.moreOnRecord": "Groups, properties and related people are on the full record.",
+  "drawer.moreOnRecord.es": "Los grupos, las propiedades y las personas relacionadas están en la ficha completa.",
+  // The whole drawer's error only; a section's failure says its own words.
+  "drawer.loadFailed": "Couldn't load this customer. Try again, or open the full record.",
+  "drawer.loadFailed.es": "No se pudo cargar este cliente. Intente de nuevo o abra la ficha completa.",
+  "drawer.openFull": "Open full record",
+  "drawer.openFull.es": "Abrir la ficha completa",
+  // The Sheet's close button, read by a screen reader (plan deviation 3).
+  "drawer.close": "Close",
+  "drawer.close.es": "Cerrar",
+  // Screen-reader-only (Radix logs a missing-Description warning without one).
+  "drawer.description": "A quick look at this customer: how to reach them, what's next and what happened lately.",
+  "drawer.description.es": "Un vistazo a este cliente: cómo comunicarse, lo que sigue y lo más reciente.",
 
   "settings.title": "Settings",
   // Spanish-runtime Task 5 (owner decision 4, 2026-10-10): the one inline

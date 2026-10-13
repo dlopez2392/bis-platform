@@ -2,84 +2,85 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Plus, X } from "lucide-react";
+import {
+  CalendarCheck, CheckSquare, DollarSign, ExternalLink, FileText, MessageSquare, Phone, Plus, Square, StickyNote, X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { InlineField } from "@/components/inline-field";
-import { contactDisplayName, initials } from "@/lib/format";
-import { relativeTime } from "@/lib/dashboard/relative-time";
 import { Notice } from "@/components/ui/notice";
-import { m } from "@/lib/messages";
+import { InlineField } from "@/components/inline-field";
+import { LocaleProvider, useLocale } from "@/components/locale-provider";
+import { RecordHeader } from "@/components/record/record-header";
+import { RecordSection } from "@/components/record/record-section";
+import { RecordCardRetry, RecordCardSkeleton } from "@/components/record/record-card";
+import { TimelineItem, TimelineItemSkeleton } from "@/components/record/timeline-item";
+import { ContactAssigneeField } from "@/components/assign/assignee-field";
+import { contactDisplayName } from "@/lib/format";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { cn } from "@/lib/utils";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
-import { EmailRow } from "./email-row";
+import type { AssignMember } from "@/lib/assign/view";
 import { emailLoadFrom, type EmailLoad } from "@/lib/consent/email-row";
-import { TextsRow } from "./texts-row";
 import { textsLoadFrom, type TextsLoad } from "@/lib/consent/texts-row";
-import { addTagAction, removeTagAction } from "./[contactId]/actions";
-import type { ContactRow } from "./contacts-table";
-import { summaryLoadFrom, type ParsedContactSummary, type SummaryLoad } from "@/lib/contacts/summary";
 import type { EditableField } from "@/lib/contacts/field-input";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
+import { drawerFieldsRow, drawerLoadFrom, drawerSummaryUrl, type DrawerLoad, type ParsedDrawerSummary } from "@/lib/contacts/drawer-summary";
+import type { RecentRowView } from "@/lib/record/recent-rows";
+import { updateContactFieldAction, undoInlinePhoneEditAction } from "./actions";
+import { addTagAction, removeTagAction } from "./[contactId]/actions";
+import { SummaryBody } from "./[contactId]/summary-card";
+import { NextUpBody } from "./[contactId]/next-up-card";
+import { EmailRow } from "./email-row";
+import { TextsRow } from "./texts-row";
 import { SourceField } from "./source-field";
 import { BusinessInlineField } from "./business-field";
-import { GroupsCard } from "./groups-card";
-import { ContactAssigneeField } from "@/components/assign/assignee-field";
-import type { AssignMember } from "@/lib/assign/view";
-import { RelationshipsCard } from "./relationships-card";
-import { PlacesCard } from "./places-card";
+import type { ContactRow } from "./contacts-table";
 
-// `nowMs` travels WITH the ready result, read inside the fetch's own
-// `.then()` (an allowed impure read — react-hooks/purity flags Date.now()
-// reachable from the render body itself, same as f/[publicId]/page.tsx's
-// own comment on signRenderToken's Date.now()) and handed to
-// `summaryLoadFrom`, rather than a bare `Date.now()` call in the component
-// body. The summary is the PARSED one (lib/contacts/summary.ts): the body is
-// checked, not cast, so a server older or newer than this tab's bundle gets
-// the "couldn't load" state below instead of a throw during render, which
-// the dashboard's one error boundary would answer by replacing the page.
-type LoadResult = SummaryLoad;
+// The body is PARSED (lib/contacts/drawer-summary.ts): checked, not cast, so a server older or newer
+// than this tab's bundle gets an error state, not a throw during render, which the dashboard's one
+// error boundary would answer by replacing the page. Paired with the id it was fetched for, the
+// shape shell-data.tsx uses: "loading" for a newly-peeked contact falls out of the mismatch check in
+// `load` below instead of a synchronous setState in the effect (react-hooks/set-state-in-effect).
+type Fetched = { contactId: string; result: DrawerLoad } | null;
 
-// Paired with the id it was fetched for, the same shape shell-data.tsx uses
-// for its own fetch effect: "loading" for a newly-peeked contact falls out
-// of the mismatch check in `load` below instead of a synchronous setState
-// reset at the top of the effect (react-hooks/set-state-in-effect) — only
-// the fetch's own `.then()`/`.catch()` callbacks below write state.
-type Fetched = { contactId: string; result: LoadResult } | null;
-
-// Exported so contact-fields-panel.tsx (the full contact page) shares this
-// vocabulary instead of duplicating it — one list of standard fields, two
-// InlineField call sites (drawer + full page).
-//
-// `field` is narrowed to exclude "source" (F-157 widened EditableField to
-// add it) on purpose: this list indexes `row`/`contact` directly
-// (`row[field]`), and the drawer's list-row type (`ContactRow`,
-// contacts-table.tsx) deliberately carries none of the extra columns the
-// Source line needs — that line has its own component (`SourceField`),
-// fed by the summary route / the full page's own `contact` prop, not this
-// array.
-// The Business name is not in this array either (S-02 §6 row 3): it writes
-// the contact's business GROUP through its own action and Undo, so it has
-// its own component (`BusinessInlineField`), rendered after these rows.
-export const FIELDS: { field: Exclude<EditableField, "source" | "company_name">; labelKey: keyof typeof m; type: "text" | "email" | "tel" }[] = [
+// Exported so contact-fields-panel.tsx (the full contact page) shares this vocabulary instead of
+// duplicating it — one list of standard fields, two InlineField call sites (drawer + full page).
+// `field` excludes "source" (its own SourceField, fed by the route) and the Business name (its own
+// BusinessInlineField: it writes the contact's business GROUP, S-02 §6 row 3).
+export const FIELDS: { field: Exclude<EditableField, "source" | "company_name">; labelKey: MessageKey; type: "text" | "email" | "tel" }[] = [
   { field: "first_name", labelKey: "contacts.firstName", type: "text" },
   { field: "last_name", labelKey: "contacts.lastName", type: "text" },
   { field: "email", labelKey: "contacts.email", type: "email" },
   { field: "phone", labelKey: "contacts.phone", type: "tel" },
 ];
 
+const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
+  note: StickyNote, task: Square, deal: DollarSign, submission: FileText, message: MessageSquare, booking: CalendarCheck, call: Phone,
+};
+const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
+const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";
+type SectionState = "loading" | "ready" | "error";
+
+/**
+ * The contact list's drawer (S-03 part 3): the record's quick look on the record kit. Top to bottom:
+ * the record's header (Call the one primary; Text and Email open the record page's composer), the
+ * checked facts, Next up, the five newest timeline rows, who they are, and the way to the full
+ * record. Each section loads and fails on its own (C2); a section's Try again re-reads the route
+ * without blanking the others (C3). Every read-only word comes from the route in ONE locale (C1).
+ */
 export function ContactDrawer({
   accountId, row, onClose, canAssign = false, members = [], viewerId = null,
 }: {
   accountId: string;
   row: ContactRow | null;
   onClose: () => void;
-  /** F-085 part 1: may this caller hand the customer to someone (Owner,
-   *  Staff, the agency); read-only otherwise (a Technician, M4). */
+  /** F-085 part 1: may this caller hand the customer to someone (Owner, Staff, the agency); read-only otherwise (a Technician, M4). */
   canAssign?: boolean;
   /** The people the "Assigned to" picker offers (lib/assign/view.ts). */
   members?: AssignMember[];
@@ -88,36 +89,31 @@ export function ContactDrawer({
 }) {
   const [fetched, setFetched] = useState<Fetched>(null);
   const [retryNonce, setRetryNonce] = useState(0);
+  const pageLocale = useLocale();
   const contactId = row?.id ?? null;
 
   useEffect(() => {
     if (!contactId) return;
     let stale = false;
-    fetch(`/api/accounts/${accountId}/contacts/${contactId}/summary`)
+    // C9: the list URL's QA ?locale= rides along only when present; otherwise today's exact path.
+    fetch(drawerSummaryUrl(accountId, contactId, typeof window === "undefined" ? "" : window.location.search))
       .then(async (res) => {
         if (stale) return;
-        const result = await summaryLoadFrom(res, Date.now());
-        // Checked again AFTER the body is read: the cleanup can land while
-        // `res.json()` is pending, and without this a switched-away
-        // contact's result (or an older retry's) would overwrite the
-        // current one.
+        const result = await drawerLoadFrom(res);
+        // Checked again AFTER the body is read: the cleanup can land while `res.json()` is pending,
+        // and without this a switched-away contact's result (or an older retry's) would overwrite.
         if (!stale) setFetched({ contactId, result });
       })
       .catch(() => { if (!stale) setFetched({ contactId, result: { status: "error" } }); });
     return () => { stale = true; };
   }, [accountId, contactId, retryNonce]);
 
-  const load: LoadResult | { status: "loading" } =
+  const load: DrawerLoad | { status: "loading" } =
     contactId && fetched?.contactId === contactId ? fetched.result : { status: "loading" };
 
-  // The Texts row's own read (consent chain PR-2, spec §6: the Messages block
-  // has its own skeleton and error). Re-read whenever the summary is — a
-  // phone save, a pick, a row action, an Undo all bump retryNonce — with the
-  // same stale-closure guard as the summary's fetch above.
-  // Never initialised to `null`: the drawer's OTHER paired-fetch state
-  // (`fetched` above) is found in the wiring test's harness by starting
-  // value ("found by starting value, not hook order" — its own comment), and
-  // a second state starting at `null` would collide with that filter.
+  // The Texts row's own read (consent chain PR-2): re-read whenever the summary is (a phone save, a
+  // pick, a row action, an Undo all bump retryNonce), with the same stale-closure guard. Never
+  // initialised to `null`: the wiring test finds `fetched` above by that starting value.
   const [texts, setTexts] = useState<{ contactId: string; load: TextsLoad }>({ contactId: "", load: { status: "loading" } });
   useEffect(() => {
     if (!contactId) return;
@@ -133,10 +129,8 @@ export function ContactDrawer({
   }, [accountId, contactId, retryNonce]);
   const textsLoad: TextsLoad = contactId && texts.contactId === contactId ? texts.load : { status: "loading" };
 
-  // The Email row's own read (consent PR-3), the Texts row's pattern: the
-  // same retryNonce, the same stale-closure guard. Its starting value's SHAPE
-  // differs from the texts state's (an `email` key, not `load`), so the
-  // wiring test's find-by-starting-value harness can tell the two apart.
+  // The Email row's own read (consent PR-3), the Texts row's pattern; its starting value's SHAPE
+  // differs (an `email` key), so the wiring test can tell the two apart.
   const [emailRead, setEmailRead] = useState<{ contactId: string; email: EmailLoad }>({ contactId: "", email: { status: "loading" } });
   useEffect(() => {
     if (!contactId) return;
@@ -152,312 +146,320 @@ export function ContactDrawer({
   }, [accountId, contactId, retryNonce]);
   const emailLoad: EmailLoad = contactId && emailRead.contactId === contactId ? emailRead.email : { status: "loading" };
 
-  const fullHref = contactId
-    ? `/dashboard/accounts/${accountId}/contacts/${contactId}` : "#";
+  const body: ParsedDrawerSummary | null = load.status === "ready" ? load.body : null;
+  const locale: Locale = body?.locale ?? pageLocale;
+  const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const fullHref = contactId ? `/dashboard/accounts/${accountId}/contacts/${contactId}` : "#";
+  // C3: a section's Try again keeps the body on screen and re-reads the route.
+  const retrySection = () => setRetryNonce((n) => n + 1);
+  const stateOf = (s: { status: string } | undefined): SectionState =>
+    load.status === "loading" ? "loading" : s && s.status === "ready" ? "ready" : "error";
+  const who = body && body.who.status === "ready" ? body.who : null;
+  const fieldsRow = row ? drawerFieldsRow(row, load) : null;
+  // The who section's one error. A `?peek=` stub whose fields never arrived (the whole drawer's
+  // error, or a `who` the parser refused) shows it in place of the fields, and it is not said twice.
+  const whoError = (
+    <div role="alert" data-drawer-who-error className="flex flex-wrap items-center gap-2 text-sm">
+      <p className="text-muted-foreground">
+        {body?.who.status === "error" ? body.who.text : tx("record.card.failed", { title: tx("contact.details") })}
+      </p>
+      <RecordCardRetry label={tx("record.card.retry")} onRetry={retrySection} />
+    </div>
+  );
 
   return (
     <Sheet open={row !== null} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent
         side="right"
         className="w-full sm:max-w-md"
-        // Radix's own Escape listener sits on `document` with
-        // `{capture: true}` and runs BEFORE any bubble-phase `onKeyDown` on
-        // a field inside this sheet — including InlineField's own Escape
-        // handler, which only means to cancel the field being edited.
-        // Without this, Escape while editing (or mid-tag-draft in TagsRow
-        // below) closed the whole drawer instead of just abandoning the
-        // edit. preventDefault here stops Radix's dismiss for THIS keypress
-        // only; the focused field's own onKeyDown still runs right after
-        // (same event, same phase, just later), so the edit itself still
-        // cancels normally. Esc with no field focused — document.activeElement
-        // isn't an input — is untouched and still closes the drawer.
+        closeLabel={tx("drawer.close")}
+        // Radix's own Escape listener sits on `document` with `{capture: true}` and runs BEFORE any
+        // bubble-phase `onKeyDown` on a field inside this sheet — including InlineField's own Escape
+        // handler, which only means to cancel the field being edited. preventDefault here stops
+        // Radix's dismiss for THIS keypress only; the focused field's own onKeyDown still runs right
+        // after, so the edit cancels normally. Esc with no input focused still closes the drawer.
         onEscapeKeyDown={(e) => {
           const el = document.activeElement;
-          if (
-            el instanceof HTMLInputElement &&
-            e.currentTarget instanceof Node &&
-            e.currentTarget.contains(el)
-          ) {
+          if (el instanceof HTMLInputElement && e.currentTarget instanceof Node && e.currentTarget.contains(el)) {
             e.preventDefault();
           }
         }}
       >
         {row === null ? null : (
-          <>
-            <SheetHeader>
-              <SheetTitle className="flex items-center gap-2">
-                <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-xs text-primary">
-                  {initials(contactDisplayName(row))}
-                </span>
-                <span className="truncate">{contactDisplayName(row)}</span>
-                <Link
-                  href={fullHref}
-                  // mr-8 clears SheetContent's own close button, which is
-                  // absolutely positioned at top-4 right-4 — without it the
-                  // two icons render on top of each other.
-                  className="text-muted-foreground hover:text-foreground mr-8 ml-auto"
-                  aria-label={m["drawer.openFull"]}
-                >
-                  <ExternalLink className="size-4" aria-hidden />
-                </Link>
-              </SheetTitle>
-              <SheetDescription className="sr-only">{m["drawer.description"]}</SheetDescription>
-            </SheetHeader>
+          <LocaleProvider locale={locale}>
+            <div lang={locale} className="flex min-h-0 flex-1 flex-col">
+              <SheetHeader>
+                <RecordHeader
+                  name={body?.header.name ?? contactDisplayName(row)}
+                  subtitle={body?.header.subtitle ?? null}
+                  subtitleHref={body?.header.subtitleHref ?? undefined}
+                  actions={body?.header.actions ?? []}
+                  headingLevel={2}
+                  // The dialog is named by the customer's name (Radix needs a Dialog.Title).
+                  wrapHeading={(h) => <SheetTitle asChild>{h}</SheetTitle>}
+                  trailing={
+                    <Link href={fullHref} aria-label={tx("drawer.openFull")}
+                      // mr-8 clears the Sheet's absolutely placed close button (sheet.tsx:84).
+                      className="mr-8 inline-flex min-h-11 items-center rounded-[var(--radius-ctl)] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">
+                      <ExternalLink className="size-4" aria-hidden />
+                    </Link>
+                  }
+                />
+                {load.status === "loading" ? <Skeleton data-testid="drawer-skeleton" className="h-11 w-2/3 rounded-[var(--radius-ctl)]" /> : null}
+                <SheetDescription className="sr-only">{tx("drawer.description")}</SheetDescription>
+              </SheetHeader>
 
-            <div
-              data-testid="drawer-scroll"
-              className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-6"
-            >
-              <dl className="space-y-1">
-                {FIELDS.map(({ field, labelKey, type }) => (
-                  // Keyed by contact id + field, not field alone: the peek
-                  // overlay blocks row clicks while it's open so `row` can't
-                  // change out from under it today, but a bare `field` key
-                  // would reconcile instead of remount if it ever could,
-                  // showing/writing contact A's values under contact B.
-                  <div key={`${row.id}:${field}`} className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2">
-                    <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
-                    <dd>
-                      <InlineField
-                        label={m[labelKey]}
-                        field={field}
-                        inputType={type}
-                        value={(row[field] as string | null) ?? null}
-                        save={async (v) => {
-                          const saved = await updateContactFieldAction(accountId, row.id, field, v);
-                          // A phone edit can make the number ambiguous, or
-                          // settle it: re-read the summary so the Check number
-                          // row follows (review R3-I2).
-                          if (field === "phone") setRetryNonce((n) => n + 1);
-                          return saved;
-                        }}
-                        {...(field === "phone" ? {
-                          undoPhone: async (undo: PhoneInlineUndo) => {
-                            const r = await undoInlinePhoneEditAction(accountId, row.id, undo);
-                            // Same reason as the save above: the undo can
-                            // move the flag too, so the row must re-read.
-                            if (r.ok) setRetryNonce((n) => n + 1);
-                            return r;
-                          },
-                        } : {})}
-                      />
-                    </dd>
-                  </div>
-                ))}
-                <div key={`${row.id}:company_name`} className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2">
-                  <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
-                  <dd><BusinessInlineField accountId={accountId} contactId={row.id} value={row.company_name ?? null} /></dd>
+              <div data-testid="drawer-scroll" className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 pb-6">
+                {load.status === "error" ? (
+                  <Notice tone="crit" className="p-3">
+                    <p className="text-muted-foreground">{tx("drawer.loadFailed")}</p>
+                    <div className="mt-2 flex gap-3">
+                      <Button size="sm" variant="ghost" onClick={() => {
+                        // The whole drawer's error only: drop the paired fetch so `load` falls back to
+                        // "loading", then refire the guarded effect (same `stale` guard as a normal load).
+                        setFetched(null);
+                        setRetryNonce((n) => n + 1);
+                      }}>
+                        {tx("common.retry")}
+                      </Button>
+                      <Link href={fullHref} className="text-sm underline">{tx("drawer.openFull")}</Link>
+                    </div>
+                  </Notice>
+                ) : null}
+
+                {/* The read-only sections exist only once the route answered or while it loads; the
+                    whole drawer's error above stands in for all three (C2), the fields below stay. */}
+                {load.status === "error" ? null : (<>
+                <div data-drawer-section="facts" data-state={stateOf(body?.facts)}>
+                  <RecordSection id="facts" label={null} state={stateOf(body?.facts)}
+                    errorText={body?.facts.status === "error" ? body.facts.text : tx("record.summary.failed")}
+                    retryLabel={tx("record.card.retry")} onRetry={retrySection}
+                    skeleton={<div data-testid="drawer-skeleton"><RecordCardSkeleton rows={1} /></div>}>
+                    {body?.facts.status === "ready"
+                      ? <SummaryBody view={body.facts.view} retryLabel={tx("record.card.retry")} onRetry={retrySection} />
+                      : null}
+                  </RecordSection>
                 </div>
-              </dl>
 
-              <TextsRow
-                accountId={accountId}
-                contactId={row.id}
-                load={textsLoad}
-                onChanged={() => setRetryNonce((n) => n + 1)}
-                onRetry={() => setRetryNonce((n) => n + 1)}
-              />
-              <EmailRow
-                accountId={accountId}
-                contactId={row.id}
-                load={emailLoad}
-                showTitle={textsLoad.status === "ready" && textsLoad.view.kind === "no_number"}
-                onChanged={() => setRetryNonce((n) => n + 1)}
-                onRetry={() => setRetryNonce((n) => n + 1)}
-              />
-              {/* S-02 §8: its own read, skeleton and Retry, so it loads and
-                  fails on its own. `canAssign` is Owner, Staff or the agency:
-                  the same people A6 lets rename a group. A change re-reads
-                  the drawer like the Texts and Email rows' do; the card also
-                  refreshes the list, which brings this drawer a fresh row and
-                  so the new Business name (fix round 1, I1). */}
-              <GroupsCard
-                key={`${row.id}:groups`}
-                accountId={accountId}
-                contactId={row.id}
-                canManageGroups={canAssign}
-                onChanged={() => setRetryNonce((n) => n + 1)}
-              />
-              {/* S-02 B2 §8: after Groups, so "what they have" sits together.
-                  Its own read, skeleton and Try again; only Owner, Staff and
-                  the agency (canAssign) may change who a property belongs to. */}
-              <PlacesCard key={`${row.id}:places`} accountId={accountId} contactId={row.id} canMovePlace={canAssign} />
-
-              {load.status === "loading" ? (
-                <div className="space-y-2" data-testid="drawer-skeleton">
-                  <Skeleton className="h-5 w-24" />
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-2/3" />
+                <div data-drawer-section="next-up" data-state={stateOf(body?.nextUp)}>
+                  <RecordSection id="next-up" label={tx("record.card.nextUp")} state={stateOf(body?.nextUp)}
+                    errorText={body?.nextUp.status === "error" ? body.nextUp.text : tx("record.nextUp.failed")}
+                    retryLabel={tx("record.card.retry")} onRetry={retrySection}
+                    skeleton={<div data-testid="drawer-skeleton"><RecordCardSkeleton rows={3} /></div>}>
+                    {/* D4: no "Add a To-do": the composer that holds it is on the record, one link away (Q2). */}
+                    {body?.nextUp.status === "ready"
+                      ? <NextUpBody view={body.nextUp.view} emptyText={body.nextUp.emptyText} addTodoLabel={null} />
+                      : null}
+                  </RecordSection>
                 </div>
-              ) : load.status === "error" ? (
-                <Notice tone="crit" className="p-3">
-                  <p className="text-muted-foreground">{m["drawer.loadFailed"]}</p>
-                  <div className="mt-2 flex gap-3">
-                    <Button size="sm" variant="outline" onClick={() => {
-                      // Drop the paired fetch so `load` falls back to
-                      // "loading" (the mismatch check above), then bump the
-                      // nonce so the guarded effect above refires the fetch
-                      // itself — retry rides the same `stale` closure guard
-                      // as the normal load, so a switched-away contact can
-                      // never have its state overwritten by this retry.
-                      setFetched(null);
-                      setRetryNonce((n) => n + 1);
-                    }}>
-                      {m["common.retry"]}
-                    </Button>
-                    <Link href={fullHref} className="text-sm underline">{m["drawer.openFull"]}</Link>
-                  </div>
-                </Notice>
-              ) : (
-                <>
-                  <dl>
-                    {/* Review round 1, m6: keyed by contact id, the same
-                        reason FIELDS' own rows are (see that array's own
-                        comment above) — a bare position would let React
-                        reuse InlineField's internal `shown`/`editing` state
-                        across a contact switch instead of remounting it. */}
-                    <SourceField
-                      key={row.id}
-                      accountId={accountId}
-                      contactId={row.id}
-                      source={load.summary.source}
-                      sourceHint={load.summary.sourceHint}
-                      onSaved={() => setRetryNonce((n) => n + 1)}
-                    />
-                    {/* F-085 part 1 (spec §9): who holds the customer, an
-                        inline pick with an Undo toast. Left out when the
-                        server did not say (one from before the field), never
-                        shown as Unassigned on a guess. Keyed by contact AND
-                        holder, so a re-read that brings a different holder
-                        remounts the field instead of keeping a stale pick. */}
-                    {load.summary.assignedTo !== undefined ? (
-                      <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
-                        <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
-                        <dd className="min-w-0">
-                          <ContactAssigneeField
-                            key={`${row.id}:${load.summary.assignedTo ?? ""}`}
-                            accountId={accountId}
-                            contactId={row.id}
-                            value={load.summary.assignedTo}
-                            options={members}
-                            readOnly={!canAssign}
-                            viewerId={viewerId}
-                          />
-                        </dd>
+
+                <div data-drawer-section="recent" data-state={stateOf(body?.recent)}>
+                  <RecordSection id="recent" label={tx("drawer.recent")} state={stateOf(body?.recent)}
+                    errorText={body?.recent.status === "error" ? body.recent.text : tx("record.activity.failed")}
+                    retryLabel={tx("record.card.retry")} onRetry={retrySection}
+                    skeleton={<div data-testid="drawer-skeleton"><TimelineItemSkeleton rows={5} /></div>}>
+                    {body?.recent.status === "ready" ? (
+                      <div className="space-y-2">
+                        {body.recent.failedText ? (
+                          // Some sources failed: the rows that loaded stay, and this says what could not.
+                          <div role="alert" data-timeline-failed className="flex flex-wrap items-center gap-2 text-sm">
+                            <p className="text-muted-foreground">{body.recent.failedText}</p>
+                            <RecordCardRetry label={tx("record.card.retry")} onRetry={retrySection} />
+                          </div>
+                        ) : null}
+                        {body.recent.emptyText ? <p className="text-sm text-muted-foreground">{body.recent.emptyText}</p> : null}
+                        {body.recent.rows.length > 0 ? (
+                          <ol className="flex flex-col">
+                            {body.recent.rows.map((r) => (
+                              <li key={r.key} data-testid="drawer-recent-item" className="border-t border-[var(--row-line)] first:border-t-0">
+                                <TimelineItem kind={r.kind} icon={r.kind === "task" && r.excerpt?.done ? CheckSquare : ROW_ICON[r.kind]}
+                                  mark={r.mark} verb={r.verb} status={r.status} detail={r.detail} time={r.time} dateTime={r.dateTime}>
+                                  {r.excerpt ? (
+                                    <p lang={r.excerpt.lang} className={cn("line-clamp-2 break-words text-sm",
+                                      r.excerpt.done ? "text-muted-foreground line-through" : "text-card-foreground")}>{r.excerpt.text}</p>
+                                  ) : null}
+                                </TimelineItem>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : null}
+                        <Link href={body.recent.seeAllHref} data-drawer-see-all className={GHOST_LINK}>{tx("drawer.seeAll")}</Link>
                       </div>
                     ) : null}
-                  </dl>
-                  <TagsRow
-                    accountId={accountId}
-                    contactId={row.id}
-                    tags={load.summary.tags}
-                    onChanged={() => setRetryNonce((n) => n + 1)}
-                  />
-                  {/* Relationships spec §7: its own read, its own skeleton and error. */}
-                  <RelationshipsCard accountId={accountId} contactId={row.id} />
-                  <div>
-                    <p className="text-muted-foreground mb-2 font-mono text-[10px] tracking-[0.14em] uppercase">
-                      {m["drawer.recent"]}
-                    </p>
-                    {load.summary.recent.length === 0 ? (
-                      <p className="text-muted-foreground text-sm">{m["drawer.recentEmpty"]}</p>
-                    ) : (
-                      <ul className="space-y-1.5 text-sm">
-                        {load.summary.recent.map((r, i) => (
-                          <li key={i} data-testid="drawer-recent-item" className="flex items-baseline justify-between gap-2">
-                            <span className="truncate">{r.label}</span>
-                            <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-                              {relativeTime(r.at, load.nowMs)}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </>
-              )}
+                  </RecordSection>
+                </div>
+                </>)}
+
+                <div data-drawer-section="who" data-state={body ? (who ? "ready" : "error") : load.status === "error" ? "error" : "loading"}>
+                  {/* The fields never wait on the route (D6), except a ?peek= stub's, which come from it (Q1). */}
+                  <RecordSection id="who" label={tx("contact.details")} state="ready"
+                    errorText={tx("record.card.failed", { title: tx("contact.details") })}
+                    retryLabel={tx("record.card.retry")} onRetry={retrySection}>
+                    <div className="space-y-4">
+                      {fieldsRow ? (
+                        <dl className="space-y-1">
+                          {FIELDS.map(({ field, labelKey, type }) => (
+                            // Keyed by contact id + field (+ where the values came from): a bare `field`
+                            // key would reconcile instead of remount, showing contact A's values under B.
+                            <div key={`${row.id}:${field}:${fieldsRow === row ? "row" : "route"}`} className={LABEL_ROW}>
+                              <dt className="text-muted-foreground text-xs">{tx(labelKey)}</dt>
+                              <dd>
+                                <InlineField
+                                  label={tx(labelKey)}
+                                  field={field}
+                                  inputType={type}
+                                  locale={locale}
+                                  value={(fieldsRow[field] as string | null) ?? null}
+                                  save={async (v) => {
+                                    const saved = await updateContactFieldAction(accountId, row.id, field, v);
+                                    // A phone edit can make the number ambiguous, or settle it: re-read the summary so the Check number row follows (review R3-I2).
+                                    if (field === "phone") setRetryNonce((n) => n + 1);
+                                    return saved;
+                                  }}
+                                  {...(field === "phone" ? {
+                                    undoPhone: async (undo: PhoneInlineUndo) => {
+                                      const r = await undoInlinePhoneEditAction(accountId, row.id, undo);
+                                      // Same reason as the save above: the undo can move the flag too, so the row must re-read.
+                                      if (r.ok) setRetryNonce((n) => n + 1);
+                                      return r;
+                                    },
+                                  } : {})}
+                                />
+                              </dd>
+                            </div>
+                          ))}
+                          <div key={`${row.id}:company_name`} className={LABEL_ROW}>
+                            <dt className="text-muted-foreground text-xs">{tx("contact.company")}</dt>
+                            <dd><BusinessInlineField accountId={accountId} contactId={row.id} value={fieldsRow.company_name ?? null} /></dd>
+                          </div>
+                        </dl>
+                      ) : load.status === "loading" ? (
+                        // M6: skeleton lines only while the route is still answering, never forever.
+                        <div data-drawer-fields-skeleton data-testid="drawer-skeleton"><RecordCardSkeleton rows={5} /></div>
+                      ) : whoError}
+
+                      <TextsRow accountId={accountId} contactId={row.id} load={textsLoad}
+                        onChanged={() => setRetryNonce((n) => n + 1)} onRetry={() => setRetryNonce((n) => n + 1)} />
+                      <EmailRow accountId={accountId} contactId={row.id} load={emailLoad}
+                        showTitle={textsLoad.status === "ready" && textsLoad.view.kind === "no_number"}
+                        onChanged={() => setRetryNonce((n) => n + 1)} onRetry={() => setRetryNonce((n) => n + 1)} />
+
+                      {who ? (
+                        <>
+                          <dl>
+                            {/* Keyed by contact id, like FIELDS' rows (review round 1, m6). */}
+                            <SourceField
+                              key={row.id}
+                              accountId={accountId}
+                              contactId={row.id}
+                              source={who.source}
+                              sourceHint={who.sourceHint}
+                              onSaved={() => setRetryNonce((n) => n + 1)}
+                            />
+                            {/* F-085 part 1: left out when the server did not say, never shown as Unassigned on a guess.
+                                Keyed by contact AND holder, so a re-read with a different holder remounts the field. */}
+                            {who.assignedTo !== undefined ? (
+                              <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
+                                <dt className="text-muted-foreground text-xs">{t(m, "assign.field.label", locale)}</dt>
+                                <dd className="min-w-0">
+                                  <ContactAssigneeField
+                                    key={`${row.id}:${who.assignedTo ?? ""}`}
+                                    accountId={accountId}
+                                    contactId={row.id}
+                                    value={who.assignedTo}
+                                    options={members}
+                                    readOnly={!canAssign}
+                                    viewerId={viewerId}
+                                  />
+                                </dd>
+                              </div>
+                            ) : null}
+                          </dl>
+                          {who.tags.status === "ready" ? (
+                            <TagsRow accountId={accountId} contactId={row.id} tags={who.tags.tags} locale={locale}
+                              onChanged={() => setRetryNonce((n) => n + 1)} />
+                          ) : (
+                            <div role="alert" className="flex flex-wrap items-center gap-2 text-sm">
+                              <p className="text-muted-foreground">{tx("record.card.failed", { title: tx("contact.tags") })}</p>
+                              <RecordCardRetry label={tx("record.card.retry")} onRetry={retrySection} />
+                            </div>
+                          )}
+                        </>
+                      ) : load.status === "loading" ? (
+                        <div data-testid="drawer-skeleton"><RecordCardSkeleton rows={3} /></div>
+                      ) : body && fieldsRow ? whoError : null}
+                    </div>
+                  </RecordSection>
+                </div>
+
+                {/* D7: Groups, properties and related people are on the full record, one link away. */}
+                <div data-drawer-bottom className="space-y-2 border-t border-[var(--line)] pt-3">
+                  <p className="text-sm text-muted-foreground">{tx("drawer.moreOnRecord")}</p>
+                  <Link href={fullHref} data-drawer-open-full className={GHOST_LINK}>{tx("drawer.openFull")}</Link>
+                </div>
+              </div>
             </div>
-          </>
+          </LocaleProvider>
         )}
       </SheetContent>
     </Sheet>
   );
 }
 
-// Reuses the EXISTING FormData tag actions with the same hidden-input idiom
-// as contact-fields-panel.tsx (do not invent a new action shape). `onChanged`
-// fires only after a successful submission and bumps ContactDrawer's own
-// `retryNonce`, which the guarded fetch effect above already depends on — so
-// a tag add/remove refetches the one-shot summary GET the badges below come
-// from. Before this, the server actions' own `revalidatePath` targeted the
-// contact DETAIL path (not this drawer), so the badges stayed stale with no
-// toast either way and an operator watching a tag not disappear had no way
-// to tell a slow success from a silent failure.
-async function submitTagAction(run: () => Promise<void>, onChanged: () => void): Promise<boolean> {
+// Reuses the EXISTING FormData tag actions with the same hidden-input idiom as
+// contact-fields-panel.tsx. `onChanged` fires only after a successful submission and bumps the
+// drawer's `retryNonce`, so a tag add/remove re-reads the route the badges come from.
+async function submitTagAction(run: () => Promise<void>, onChanged: () => void, locale: Locale): Promise<boolean> {
   try {
     await run();
     onChanged();
     return true;
   } catch {
-    // Same crash-safety reasoning as notifyActionResult (action-feedback.ts):
-    // a stale tab posting a content-hashed server-action id from before a
-    // redeploy REJECTS rather than resolving, and that must reach the
-    // operator as a toast, not vanish silently.
-    toast.error(m["inline.crashed"]);
-    // Reported rather than swallowed, so the caller can keep the operator's
-    // typed tag on screen instead of clearing a field whose write failed.
+    // A stale tab posting a content-hashed server-action id from before a redeploy REJECTS rather
+    // than resolving, and that must reach the operator as a toast, not vanish silently.
+    toast.error(t(m, "inline.crashed", locale));
+    // Reported rather than swallowed, so the caller keeps the typed tag on screen.
     return false;
   }
 }
 
-function TagsRow({ accountId, contactId, tags, onChanged }: {
-  accountId: string; contactId: string; tags: ParsedContactSummary["tags"]; onChanged: () => void;
+function TagsRow({ accountId, contactId, tags, locale, onChanged }: {
+  accountId: string; contactId: string; tags: { id: string; name: string }[]; locale: Locale; onChanged: () => void;
 }) {
   const boundAdd = addTagAction.bind(null, accountId);
   const boundRemove = removeTagAction.bind(null, accountId);
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const addTag = useFormSubmit(async (formData, form) => {
-    const ok = await submitTagAction(() => boundAdd(formData), onChanged);
-    // Cleared for the next tag ONLY on success. On failure the typed tag has
-    // to stay — that is the whole point of the conversion.
+    const ok = await submitTagAction(() => boundAdd(formData), onChanged, locale);
+    // Cleared for the next tag ONLY on success; on failure the typed tag stays.
     if (ok && form.isConnected) form.reset();
   });
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {tags.map((t) => (
+      {tags.map((tag) => (
         <form
-          key={t.id}
-          // Keeps the `action` prop: this form carries no operator-typed
-          // input (just hidden ids), so React's post-action reset has nothing
-          // to discard. `void` because submitTagAction now reports success for
-          // the add form's benefit, and an action prop must return void.
-          action={(formData) => void submitTagAction(() => boundRemove(formData), onChanged)}
+          key={tag.id}
+          // Keeps the `action` prop: this form carries no typed input, so React's post-action reset
+          // has nothing to discard. `void` because an action prop must return void.
+          action={(formData) => void submitTagAction(() => boundRemove(formData), onChanged, locale)}
           className="inline-flex"
         >
           {hidden}
-          <input type="hidden" name="tagId" value={t.id} />
-          <button type="submit" className="group" title={t.name}
-            aria-label={m["contact.removeTag"].replace("{name}", t.name)}>
+          <input type="hidden" name="tagId" value={tag.id} />
+          <button type="submit" className="group rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50" title={tag.name}
+            aria-label={t(m, "contact.removeTag", locale, { name: tag.name })}>
             <Badge variant="secondary" className="gap-1 pr-1.5">
-              {t.name}
+              <span lang="">{tag.name}</span>
               <X className="text-muted-foreground group-hover:text-foreground size-3" aria-hidden />
             </Badge>
           </button>
         </form>
       ))}
-      {/* onSubmit, NOT the `action` prop: submitTagAction catches and toasts,
-          so a failed add used to resolve, trigger React's post-action reset,
-          and wipe the tag the operator had just typed. One short word to
-          retype, but the same defect as the rest — see
-          lib/forms/use-form-submit.ts. The REMOVE forms above carry no typed
-          input, so they keep the `action` prop. */}
-      <form
-        onSubmit={addTag.onSubmit}
-        className="inline-flex items-center gap-1"
-      >
+      {/* onSubmit, NOT the `action` prop: a failed add must keep the tag the operator typed (lib/forms/use-form-submit.ts). */}
+      <form onSubmit={addTag.onSubmit} className="inline-flex items-center gap-1">
         {hidden}
-        <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
-        <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>
+        <Input name="tag" placeholder={t(m, "contact.addTag", locale)} className="h-7 w-28 text-xs" />
+        <Button type="submit" size="icon-xs" variant="ghost" aria-label={t(m, "contact.addTag", locale)}>
           <Plus className="size-3" aria-hidden />
         </Button>
       </form>
