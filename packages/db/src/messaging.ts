@@ -866,3 +866,63 @@ export async function searchConversations(
     }];
   });
 }
+
+// ---------------------------------------------------------------------------
+// S-09 PR 2: the language a scheduled customer message goes out in, and which
+// body it sends. Pure; every scheduled due-list's mapper calls
+// `recipientLanguage` once (spec C12) and every sender calls `chooseBody`.
+// ---------------------------------------------------------------------------
+
+export type RecipientLanguage = "en" | "es";
+const asLanguage = (v: string | null | undefined): RecipientLanguage | null => (v === "en" || v === "es" ? v : null);
+
+/** L3: the contact's language, else the account's (0065, its second reader since 0076), else English. */
+export function recipientLanguage(
+  contactLanguage: string | null | undefined, accountLanguage: string | null | undefined,
+): RecipientLanguage {
+  return asLanguage(contactLanguage) ?? asLanguage(accountLanguage) ?? "en";
+}
+
+export type BodyDefaults = { en: string; es: string };
+
+/**
+ * C11 + C13. English: theirs, else ours. Spanish: NULL is our written Spanish; an EMPTIED box
+ * ('' after trim) sends the English AND switches the whole message to English, because the
+ * returned `language` is the one the subject, date, button and footer follow.
+ */
+export function chooseBody(input: {
+  language: RecipientLanguage; body: string; bodyEs: string | null; defaults: BodyDefaults;
+}): { language: RecipientLanguage; text: string } {
+  const english = { language: "en" as const, text: input.body.trim() || input.defaults.en };
+  if (input.language === "en") return english;
+  if (input.bodyEs === null) return { language: "es", text: input.defaults.es };
+  const theirs = input.bodyEs.trim();
+  return theirs ? { language: "es", text: theirs } : english;
+}
+
+/** C14, spec §12.3: a comparison with the English the Spanish was written beside. No clock. */
+export function spanishIsStale(input: { body: string; bodyEs: string | null; bodyEsBasis: string | null }): boolean {
+  if (input.bodyEs === "") return false;
+  if (input.body.trim() === "" && input.bodyEs === null) return false;
+  return input.bodyEsBasis !== input.body;
+}
+
+/**
+ * The save side (plan deviation 3). Order matters (finding F1): an unchanged box keeps what is
+ * stored; "Use our Spanish" stores NULL; a box equal to our default stores NULL (the 0024
+ * discipline); anything else is theirs, '' meaning emptied. The basis moves to the new English
+ * only when the Spanish changed in this save or "The Spanish still matches" was ticked.
+ */
+export function nextSpanishBox(input: {
+  submitted: string; useOurs: boolean; stillMatches: boolean; defaultEs: string; body: string;
+  stored: { bodyEs: string | null; basis: string | null };
+}): { bodyEs: string | null; basis: string | null } {
+  const text = input.submitted.trim();
+  let bodyEs: string | null;
+  if (input.useOurs) bodyEs = null;
+  else if (input.stored.bodyEs !== null && text === input.stored.bodyEs.trim()) bodyEs = input.stored.bodyEs;
+  else if (text === input.defaultEs.trim()) bodyEs = null;
+  else bodyEs = text;
+  const changed = bodyEs !== input.stored.bodyEs;
+  return { bodyEs, basis: changed || input.stillMatches ? input.body : input.stored.basis };
+}

@@ -53,6 +53,7 @@ export { ensureConversation, createMessage, updateMessageStatus,
          type MessageStatus, type NewMessage, type ConversationSummary,
          type ConversationCursor, type FailedOutboundSms, type TextbackWindow,
          sumUnreadCount, searchConversations } from "./messaging";
+export { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox, type RecipientLanguage, type BodyDefaults } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
          getFormByPublicId, isFormLive,
