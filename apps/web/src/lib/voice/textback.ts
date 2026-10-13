@@ -26,7 +26,7 @@ import type { serviceDb, AutomationLogRow } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage,
   updateMessageStatus, hasRecentOutboundSms, recordAutomationLog, getVoiceProfile, getBranding,
-  callerInTouchSince,
+  callerInTouchSince, chooseBody,
 } from "@bis/db";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { decideSms, deliverSms, type ClearedSms } from "@/lib/consent/gate";
@@ -79,6 +79,10 @@ export interface TextbackRequest {
   brandName: string;
   /** `voice_profiles.textback_body`. Empty means use the live default. */
   textbackBody: string;
+  /** `voice_profiles.textback_body_es`. NULL means use our written Spanish
+   *  default; '' (emptied) means send the whole message, opt-out included,
+   *  in English — C11, via `chooseBody`. Only read for a Spanish caller. */
+  textbackBodyEs: string | null;
   /** Identifies the call in log lines. */
   label: string;
   /** The call's row id: the automation-log subject (`call:<id>`) and what a
@@ -204,10 +208,21 @@ export async function prepareTextback(
   const sender = await resolveSmsSender(db, accountId);
   if (!sender.ok) return { contactId: null, conversationId: null, pending: null, notSent: "sender_refused" };
 
-  // The operator's own body is never translated: they chose those words for
-  // their own customers. Only the DEFAULT follows the caller's language. The
-  // STOP line is the gate's to add (the registry's footer for voice.textback).
-  const body = r.textbackBody.trim() || defaultTextbackBody(r.brandName, r.language, r.held === true);
+  // The caller's spoken language stays the rule (live, spec §10.1). New in
+  // S-09 PR 2: the Spanish box. NULL = our Spanish default; '' = emptied, so
+  // the whole text, opt-out included, goes in English (C11). The operator's
+  // own English is still never translated; their Spanish box (or ours) is
+  // what a Spanish caller gets. The STOP line is the gate's to add (the
+  // registry's footer for voice.textback), in whichever language `chosen`
+  // returns, so a release replays the same language.
+  const chosen = chooseBody({
+    language: r.language, body: r.textbackBody, bodyEs: r.textbackBodyEs,
+    defaults: {
+      en: defaultTextbackBody(r.brandName, "en", r.held === true),
+      es: defaultTextbackBody(r.brandName, "es", r.held === true),
+    },
+  });
+  const body = chosen.text;
 
   const contactId = r.contactId
     ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber));
@@ -233,10 +248,10 @@ export async function prepareTextback(
 
   const subject: LogSubject | null = r.callId === null ? null : {
     accountId, source: "textback", channel: "sms", subjectKey: `call:${r.callId}`, contactId,
-    payload: { callerNumber: r.callerNumber, contactId, conversationId, language: r.language, missedAt: (r.missedAt ?? r.now).toISOString() } satisfies TextbackPayload,
+    payload: { callerNumber: r.callerNumber, contactId, conversationId, language: chosen.language, missedAt: (r.missedAt ?? r.now).toISOString() } satisfies TextbackPayload,
   };
   const decision = await decideSms(db, {
-    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: r.language, now: r.now,
+    accountId, kind: "voice.textback", to: r.callerNumber, body, contactId, language: chosen.language, now: r.now,
     // The caller ID, from the carrier: not held on the contact's stored
     // phone_country_unconfirmed, which is about a number a person typed.
     numberFromCarrier: true,
@@ -434,6 +449,7 @@ export const releaseTextback: Releaser = async (ctx, row: AutomationLogRow) => {
   const outcome = await prepareTextback(db, row.account_id, {
     callerNumber: payload.callerNumber, contactId: payload.contactId, language: payload.language,
     brandName: brandDisplayName(branding), textbackBody: profile.textback_body ?? "",
+    textbackBodyEs: profile.textback_body_es ?? null,
     label, callId: match[1]!, now: ctx.now, held: true, missedAt: new Date(missedAt),
   });
   if (outcome.pending) return deliverTextback(db, row.account_id, outcome.pending, label);

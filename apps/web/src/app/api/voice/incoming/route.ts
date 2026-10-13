@@ -1155,6 +1155,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // pinned to the profile that answered THIS call rather than re-read
       // minutes later at hangup, when an operator may have toggled it.
       textbackEnabled: profile.textback_enabled, textbackBody: profile.textback_body,
+      textbackBodyEs: profile.textback_body_es ?? null,
     };
 
     // --- Step 13: accept the call, then IMMEDIATELY schedule the lifecycle

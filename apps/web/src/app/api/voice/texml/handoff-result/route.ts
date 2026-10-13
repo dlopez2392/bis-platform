@@ -339,6 +339,7 @@ async function decide(token: string, status: string): Promise<string> {
     const callerNumber = call.caller_e164;
     const contactId = call.contact_id;
     const textbackBody = profile.textback_body ?? "";
+    const textbackBodyEs = profile.textback_body_es ?? null;
     const callId = call.id;
     after(async () => {
       try {
@@ -357,6 +358,7 @@ async function decide(token: string, status: string): Promise<string> {
           language: spoken,
           brandName: brandDisplayName(branding),
           textbackBody,
+          textbackBodyEs,
           label: `handoff-result ${callId}`,
           callId,
           now: new Date(),
