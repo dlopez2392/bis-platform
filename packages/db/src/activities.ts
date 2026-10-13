@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { readConsentEvent, readConsentHistory, newestDecidingRow } from "./consent";
-import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 
 export async function addNote(
   db: SupabaseClient, accountId: string, contactId: string, body: string, actorId: string,
@@ -15,12 +15,18 @@ export async function addNote(
   return { id: data.id };
 }
 
-/** A customer's notes, newest first. `page` (the record timeline, S-03 1b) reads one page by
- *  (created_at desc, id desc) past its cursor; without it, every note, as the drawer reads them. */
-export async function listNotes(db: SupabaseClient, accountId: string, contactId: string, page?: TimelinePageOpts) {
-  const q = db.from("notes")
-    .select("id, body, pinned, author_id, created_at")
-    .eq("account_id", accountId).eq("contact_id", contactId);
+/** A customer's notes, newest first. `page` (the record timeline, S-03 1b, 2b) reads one page by
+ *  (created_at desc, id desc) past its cursor, for one contact (`.eq`) or a household's set (`.in`,
+ *  forContacts); without `page`, every note for one contact, as the drawer reads them — a set with no
+ *  page is refused, since the drawer never has one to give. */
+export async function listNotes(
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
+) {
+  if (!page && typeof contactId !== "string") throw new TypeError("listNotes: a set needs a page");
+  const q = forContacts(
+    db.from("notes").select("id, contact_id, body, pinned, author_id, created_at").eq("account_id", accountId),
+    "contact_id", contactId,
+  );
   const { data, error } = await (page ? withTimelinePage(q, "created_at", page) : q.order("created_at", { ascending: false }));
   if (error) throw new Error(error.message);
   return data;
@@ -41,21 +47,23 @@ export async function addTask(
   return { id: data.id };
 }
 
-const TASK_COLS = "id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to";
+const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to";
 
 export async function listContactTasks(
-  db: SupabaseClient, accountId: string, contactId: string, page?: TimelinePageOpts,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
 ) {
+  if (!page && typeof contactId !== "string") throw new TypeError("listContactTasks: a set needs a page");
   // created_by (0073) only in page mode: the record timeline names who made a To-do. postgrest-js's
   // select parser cannot read a union of two column lists (it types the rows as a ParserError), so
   // the argument is typed as the narrower list and the cast below adds created_by as optional.
-  const q = db.from("tasks")
-    .select((page ? `${TASK_COLS}, created_by` : TASK_COLS) as typeof TASK_COLS)
-    .eq("account_id", accountId).eq("contact_id", contactId);
+  const q = forContacts(
+    db.from("tasks").select((page ? `${TASK_COLS}, created_by` : TASK_COLS) as typeof TASK_COLS).eq("account_id", accountId),
+    "contact_id", contactId,
+  );
   const { data, error } = await (page ? withTimelinePage(q, "created_at", page) : q.order("created_at", { ascending: false }));
   if (error) throw new Error(error.message);
   return (data ?? []) as {
-    id: string; title: string; due_at: string | null; completed_at: string | null;
+    id: string; contact_id: string; title: string; due_at: string | null; completed_at: string | null;
     created_at: string; consent_event_id: string | null; call_id: string | null;
     /** F-085 part 1: who holds the task (the record page's task picker). */
     assigned_to: string | null;
