@@ -85,14 +85,68 @@ exit 0
 `;
 
 // Logs argv; answers a read of Kong's admin API (port 8001) with FAKE_KONG_ADMIN,
-// and `docker inspect` (a container's environment) with FAKE_REST_ENV.
+// a container's pid (`docker inspect -f '{{.State.Pid}}'`) with FAKE_KONG_PID
+// for Kong and 5151 for any other, and any other `docker inspect` (a
+// container's environment) with FAKE_REST_ENV.
 const FAKE_DOCKER = `#!/usr/bin/env bash
 printf 'docker %s\\n' "$*" >> "$FAKE_DIR/log"
 case "$*" in
   *8001*) printf '%s' "$FAKE_KONG_ADMIN" ;;
+  *State.Pid*supabase_kong_*) [ "\${FAKE_KONG_PID:-4242}" = none ] || printf '%s\\n' "\${FAKE_KONG_PID:-4242}" ;;
+  *State.Pid*) printf '5151\\n' ;;
   inspect*) printf '%s' "$FAKE_REST_ENV" ;;
 esac
 exit "\${FAKE_DOCKER_EXIT:-0}"
+`;
+
+// sudo runs what it is given. nsenter insists it was asked for a NETWORK
+// namespace by pid (-t PID -n) and runs the command with FAKE_NETNS set to
+// that pid, so the fake sysctl keeps one set of values per namespace: a value
+// written on the runner's own namespace, or another container's, is not one
+// Kong's namespace reads back.
+const FAKE_SUDO = `#!/usr/bin/env bash
+printf 'sudo %s\\n' "$*" >> "$FAKE_DIR/log"
+exec "$@"
+`;
+const FAKE_NSENTER = `#!/usr/bin/env bash
+printf 'nsenter %s\\n' "$*" >> "$FAKE_DIR/log"
+if [ "$1" != "-t" ] || [ "$3" != "-n" ]; then echo "fake nsenter: want -t PID -n CMD" >&2; exit 97; fi
+pid="$2"; shift 3
+FAKE_NETNS="$pid" exec "$@"
+`;
+// An Ubuntu runner's defaults until written: tcp_tw_reuse 2 (loopback only)
+// and the 32768-60999 range, which the kernel prints tab-separated.
+// FAKE_SYSCTL_IGNORE names a key whose write "succeeds" but does not take;
+// FAKE_SYSCTL_W_EXIT makes every write fail, as one the kernel refuses would.
+const FAKE_SYSCTL = `#!/usr/bin/env bash
+ns="\${FAKE_NETNS:-host}"
+printf 'sysctl %s [netns=%s]\\n' "$*" "$ns" >> "$FAKE_DIR/log"
+state() { printf '%s/sysctl.%s.%s' "$FAKE_DIR" "$ns" "$1"; }
+default() {
+  case "$1" in
+    net.ipv4.tcp_tw_reuse) printf '2' ;;
+    net.ipv4.ip_local_port_range) printf '32768\\t60999' ;;
+    *) echo "sysctl: cannot stat /proc/sys/$1" >&2; exit 255 ;;
+  esac
+}
+case "$1" in
+  -w)
+    shift
+    if [ "\${FAKE_SYSCTL_W_EXIT:-0}" != 0 ]; then echo "sysctl: permission denied on key \${1%%=*}" >&2; exit "$FAKE_SYSCTL_W_EXIT"; fi
+    for kv in "$@"; do
+      k="\${kv%%=*}"; v="\${kv#*=}"
+      [ "$k" = "\${FAKE_SYSCTL_IGNORE:-}" ] || printf '%s' "$v" | tr ' ' '\\t' > "$(state "$k")"
+      printf '%s = %s\\n' "$k" "$v"
+    done ;;
+  -n)
+    shift
+    for k in "$@"; do
+      f="$(state "$k")"
+      if [ -f "$f" ]; then cat "$f"; else default "$k"; fi
+      printf '\\n'
+    done ;;
+  *) exit 2 ;;
+esac
 `;
 const KONG_ADMIN = (pool: number) =>
   `{"version":"2.8.1","configuration":{"upstream_keepalive_idle_timeout":60,"upstream_keepalive_pool_size":${pool},"upstream_keepalive_max_requests":100}}`;
@@ -129,6 +183,7 @@ beforeAll(() => {
   fs.mkdirSync(path.join(fakeDir, "bin"));
   for (const [name, body] of [
     ["supabase", FAKE_SUPABASE], ["psql", FAKE_PSQL], ["curl", FAKE_CURL], ["docker", FAKE_DOCKER],
+    ["sudo", FAKE_SUDO], ["nsenter", FAKE_NSENTER], ["sysctl", FAKE_SYSCTL],
   ] as const) {
     fs.writeFileSync(path.join(fakeDir, "bin", name), body, { mode: 0o755 });
   }
@@ -186,6 +241,7 @@ function run(script: string, extraEnv: Record<string, string> = {}, args: string
   // the first run's calls as the second's.
   fs.rmSync(path.join(fakeDir, "log"), { force: true });
   fs.rmSync(path.join(fakeDir, "started-config.toml"), { force: true });
+  for (const f of fs.readdirSync(fakeDir)) if (f.startsWith("sysctl.")) fs.rmSync(path.join(fakeDir, f));
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of [
     "NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DB_URL",
@@ -305,6 +361,60 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     expect(r.githubEnv).toBe("");
   });
 
+  // 2026-10-13: the 502s came back WITH pool size 0, in bursts (one verify
+  // run lost three suites within seconds). The hypothesis: with no upstream
+  // keep-alive, every proxied request opens a new loopback connection from
+  // Kong to PostgREST and Kong closes it, leaving its end in TIME_WAIT for
+  // 60s in KONG's network namespace, so a busy db suite can run Kong out of
+  // the default 28,232 ephemeral ports. So, in that namespace and not the
+  // runner's: tcp_tw_reuse=1 and a 1024-65000 range, each read back from the
+  // namespace itself, as the pool size is read back from the running Kong.
+  const sysctlLine = (args: string) =>
+    new RegExp(`^sysctl ${args.replace(/\./g, "\\.")} \\[netns=4242\\]$`);
+  it("sets tcp_tw_reuse=1 and ip_local_port_range 1024-65000 in Kong's network namespace (the pid docker reports for Kong, through sudo nsenter), after the pool-size read-back, reads both back there, and only then applies anything (mutation: drop the read-back → FAILS)", () => {
+    const r = run(STACK_SCRIPT);
+    expect(r.status, r.output).toBe(0);
+    const confirm = indexOf(r.log, /^docker exec supabase_kong_db .*127\.0\.0\.1:8001/);
+    const pid = indexOf(r.log, /^docker inspect .*State\.Pid.* supabase_kong_db$/);
+    const writeReuse = indexOf(r.log, sysctlLine("-w net.ipv4.tcp_tw_reuse=1"));
+    const writeRange = indexOf(r.log, sysctlLine("-w net.ipv4.ip_local_port_range=1024 65000"));
+    const readReuse = indexOf(r.log, sysctlLine("-n net.ipv4.tcp_tw_reuse"));
+    const readRange = indexOf(r.log, sysctlLine("-n net.ipv4.ip_local_port_range"));
+    expect(pid, "Kong's pid looked up after the pool-size read-back").toBeGreaterThan(confirm);
+    expect(writeReuse, "tcp_tw_reuse written in Kong's namespace").toBeGreaterThan(pid);
+    expect(writeRange, "ip_local_port_range written in Kong's namespace").toBeGreaterThan(pid);
+    expect(readReuse, "tcp_tw_reuse read back in Kong's namespace").toBeGreaterThan(writeReuse);
+    expect(readRange, "ip_local_port_range read back in Kong's namespace").toBeGreaterThan(writeRange);
+    expect(indexOf(r.log, BOOTSTRAP)).toBeGreaterThan(Math.max(readReuse, readRange));
+    // As root: the runner's user cannot write a namespace's sysctl.
+    expect(r.log).toContain("sudo nsenter -t 4242 -n sysctl -w net.ipv4.tcp_tw_reuse=1");
+    expect(r.log).toContain("sudo nsenter -t 4242 -n sysctl -w net.ipv4.ip_local_port_range=1024 65000");
+    // Nothing written on the runner's own namespace instead.
+    expect(r.log.filter((l) => /^sysctl -w .*\[netns=host\]$/.test(l))).toEqual([]);
+    expect(r.output).toMatch(/::notice::.*tcp_tw_reuse=1.*ip_local_port_range=1024-65000/);
+  });
+
+  it.each([
+    ["tcp_tw_reuse does not take", { FAKE_SYSCTL_IGNORE: "net.ipv4.tcp_tw_reuse" }, /::error::.*net\.ipv4\.tcp_tw_reuse=2\b/],
+    ["ip_local_port_range does not take", { FAKE_SYSCTL_IGNORE: "net.ipv4.ip_local_port_range" }, /::error::.*net\.ipv4\.ip_local_port_range=32768-60999\b/],
+    ["the kernel refuses the write", { FAKE_SYSCTL_W_EXIT: "1" }, /::error::.*net\.ipv4\.tcp_tw_reuse=2\b/],
+  ] as const)("refuses to go on when, in Kong's network namespace, %s: names the setting and what it reads back, applying nothing (mutation: drop the read-back → FAILS)", (_label, env, error) => {
+    const r = run(STACK_SCRIPT, { ...env });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(error);
+    expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
+    expect(r.githubEnv).toBe("");
+  });
+
+  it.each([["no pid", "none"], ["pid 0 (not running)", "0"]])("refuses to go on when docker reports %s for Kong, before any sysctl, applying nothing", (_label, pid) => {
+    const r = run(STACK_SCRIPT, { FAKE_KONG_PID: pid });
+    expect(r.status).not.toBe(0);
+    expect(r.output).toMatch(/::error::.*supabase_kong_db.*pid/);
+    expect(indexOf(r.log, /^sysctl /)).toBe(-1);
+    expect(indexOf(r.log, BOOTSTRAP)).toBe(-1);
+    expect(r.githubEnv).toBe("");
+  });
+
   it("writes exactly the four values the code reads to GITHUB_ENV, mapped from the stack's own status", () => {
     const r = run(STACK_SCRIPT);
     expect(r.status, r.output).toBe(0);
@@ -392,7 +502,9 @@ describe("ci-local-supabase.sh --trust-clerk-dev-instance: the e2e stack trusts 
     expect(r.status, r.output).toBe(0);
     expect(r.startedConfig).toBe(fs.readFileSync(path.join(REPO, "packages/db/supabase/config.toml"), "utf8"));
     expect(clerkSection(r.startedConfig)).toEqual(["enabled = false"]);
-    expect(indexOf(r.log, /^docker inspect /)).toBe(-1);
+    // Kong's pid is inspected in both modes (for its network namespace);
+    // PostgREST's environment only with the flag.
+    expect(indexOf(r.log, /^docker inspect .*supabase_rest_/)).toBe(-1);
   });
 
   it("reads PostgREST's RUNNING JWKS after the stack starts and before anything is applied, and refuses a stack holding only its own secret (mutation: trust the config edit without reading PostgREST's environment → FAILS)", () => {

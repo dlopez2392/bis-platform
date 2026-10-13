@@ -50,8 +50,10 @@
 #
 # Needs: `supabase` on PATH (.github/scripts/ci-supabase-cli.sh puts the pinned
 # one there), `psql` (on GitHub's ubuntu runners), Docker (`docker` on PATH,
-# also used to turn off Kong's upstream keep-alive, see KONG below),
-# RUNNER_TEMP, GITHUB_ENV, and the repository root as the working directory.
+# also used to turn off Kong's upstream keep-alive, see KONG below), `sudo`
+# and `nsenter` (passwordless root and util-linux on GitHub's ubuntu runners,
+# for Kong's network namespace, see KONG'S PORTS below), RUNNER_TEMP,
+# GITHUB_ENV, and the repository root as the working directory.
 #
 # Writes to GITHUB_ENV, only after every step above succeeded:
 #   NEXT_PUBLIC_SUPABASE_URL       <- API_URL
@@ -62,7 +64,8 @@
 # default secret; they open nothing but this runner's stack. They are still
 # never printed. ci-target-guard.sh --local-stack checks all four next.
 #
-# Tested by apps/web/ci/ci-local-supabase.test.ts (fake supabase and psql).
+# Tested by apps/web/ci/ci-local-supabase.test.ts (fake supabase, psql,
+# docker, sudo, nsenter and sysctl).
 
 { set +x; } 2>/dev/null
 set -euo pipefail
@@ -92,7 +95,7 @@ BOOTSTRAP="$DB_DIR/bootstrap/ci-project.sql"
 # costs no extra pull: `supabase start` pulls it anyway for the auth schema.
 EXCLUDE="realtime,imgproxy,mailpit,postgres-meta,studio,edge-runtime,logflare,vector,supavisor"
 
-for tool in supabase psql docker; do
+for tool in supabase psql docker sudo nsenter; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "::error::$tool is not on PATH. verify installs the Supabase CLI in the step before this one (.github/scripts/ci-supabase-cli.sh); psql ships with GitHub's ubuntu runners."
     exit 1
@@ -192,6 +195,49 @@ if [ "$pool" != "0" ]; then
   exit 1
 fi
 
+# KONG'S PORTS (2026-10-13). The 502 came back WITH pool size 0, and in
+# bursts: one verify run lost three db suites inside a few seconds, another
+# ten tests of one file. Hypothesis, unproven until a run's diagnostics say
+# so (ci.yml prints the TIME_WAIT count after `pnpm check` and on failure):
+# pool size 0 trades the stale-connection bug for a new connection per
+# proxied request, Kong closes each one, and its end sits in TIME_WAIT for
+# 60s in KONG'S network namespace. A db suite making hundreds of requests a
+# second can then run Kong out of the default 28,232 ephemeral ports
+# (32768-60999), and nginx reports a connect() it cannot make as the same
+# "invalid response from the upstream server". So, in that namespace only
+# (the runner's own is never touched): tcp_tw_reuse=1, which lets a new
+# outgoing connection take a TIME_WAIT port when TCP timestamps make it safe,
+# and 1024-65000, more than twice the ports. A container cannot write its own
+# netns sysctls, so they are written as root from the runner through nsenter
+# into Kong's network namespace, by the pid docker reports, and READ BACK
+# there: a write is not trusted any more than the pool-size edit is.
+#
+# Both this and pool size 0 are workarounds. The lasting fix is the CLI bump
+# to >= 2.110.0 (PostgREST v14.15, which fixes the HEAD close upstream): with
+# it, pool size 0 can go, keep-alive comes back, and with it far fewer
+# connections and TIME_WAIT sockets. That bump is its own change (see KONG).
+kong_pid="$(docker inspect -f '{{.State.Pid}}' "$kong" 2>/dev/null | tr -d '[:space:]' || true)"
+if ! [[ "$kong_pid" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::Kong ($kong) has no running pid (docker reports '${kong_pid:-<none>}'), so its network namespace cannot be found to widen its ephemeral ports. Nothing was applied. See this script's KONG'S PORTS note."
+  exit 1
+fi
+kong_ns() { sudo nsenter -t "$kong_pid" -n "$@"; }
+# Writes may fail; the read-back below is what decides, and names the value.
+kong_ns sysctl -w net.ipv4.tcp_tw_reuse=1 >/dev/null 2>&1 || true
+kong_ns sysctl -w "net.ipv4.ip_local_port_range=1024 65000" >/dev/null 2>&1 || true
+tw_reuse="$(kong_ns sysctl -n net.ipv4.tcp_tw_reuse 2>/dev/null | tr -d '[:space:]' || true)"
+# The kernel prints the range tab-separated; compared as "low-high".
+port_range="$(kong_ns sysctl -n net.ipv4.ip_local_port_range 2>/dev/null | tr -s '[:space:]' ' ' | sed -E 's/^ //; s/ $//; s/ /-/' || true)"
+if [ "$tw_reuse" != "1" ]; then
+  echo "::error::Kong's network namespace ($kong, pid $kong_pid) reads back net.ipv4.tcp_tw_reuse=${tw_reuse:-<unreadable>}, not 1, after it was written. Nothing was applied. See this script's KONG'S PORTS note."
+  exit 1
+fi
+if [ "$port_range" != "1024-65000" ]; then
+  echo "::error::Kong's network namespace ($kong, pid $kong_pid) reads back net.ipv4.ip_local_port_range=${port_range:-<unreadable>}, not 1024-65000, after it was written. Nothing was applied. See this script's KONG'S PORTS note."
+  exit 1
+fi
+kong_ports_note=" Kong's network namespace: tcp_tw_reuse=$tw_reuse, ip_local_port_range=$port_range."
+
 # CLERK: what the RUNNING PostgREST verifies tokens with, not what the config
 # file says. Its JWKS must hold an RSA key whose kid is Clerk's shape, the
 # instance id (`ins_` + letters and digits), in the SAME key object: "some
@@ -266,4 +312,4 @@ schema_seconds=$((SECONDS - schema_at))
   echo "SUPABASE_DB_URL=$db_url"
 } >> "$GITHUB_ENV"
 
-echo "::notice::Local Supabase stack (Postgres $got_major): supabase start ${start_seconds}s, bootstrap and migrations ${schema_seconds}s.${trust_note}"
+echo "::notice::Local Supabase stack (Postgres $got_major): supabase start ${start_seconds}s, bootstrap and migrations ${schema_seconds}s.${kong_ports_note}${trust_note}"

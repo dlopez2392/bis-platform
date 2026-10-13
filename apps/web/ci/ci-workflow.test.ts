@@ -37,8 +37,19 @@ const SUPABASE_NAMES = [
 ];
 /** The docs-only decision (its behaviour is tested in ci-docs-only.test.ts). */
 const SCOPE = "bash .github/scripts/ci-docs-only.sh";
-/** The ONE condition a command step in verify or e2e may carry. */
+/** The ONE condition a command step in verify or e2e may carry, the diagnostics below aside. */
 const DOCS_ONLY_IF = "steps.scope.outputs.docs_only != 'true'";
+/**
+ * The stack diagnostics (ci-stack-diagnostics.test.ts, 2026-10-13): read-only,
+ * never exit non-zero, and the only steps here that run on another condition.
+ * verify's baseline runs after `pnpm check` whether it passed or not (a green
+ * run's numbers are the comparison); the failure dump is each job's last step.
+ */
+const DIAGNOSE_BASELINE = "bash .github/scripts/ci-stack-diagnostics.sh --baseline";
+const DIAGNOSE_FAILURE = "bash .github/scripts/ci-stack-diagnostics.sh --failure";
+const BASELINE_IF = "${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}";
+const FAILURE_IF = "failure()";
+const isDiagnostic = (s: { run?: string }) => s.run === DIAGNOSE_BASELINE || s.run === DIAGNOSE_FAILURE;
 
 function read(relative: string): string {
   return fs.readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8").replace(/\r\n/g, "\n");
@@ -375,18 +386,48 @@ describe("ci.yml's jobs", () => {
     const all = steps(job(id));
     expect(all.length).toBeGreaterThan(3);
     expect(all.filter((s) => s.keys.includes("continue-on-error"))).toEqual([]);
-    expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF)).toEqual([]);
+    // The diagnostics' own conditions are pinned exactly, below.
+    expect(all.filter((s) => s.run && s.keys.includes("if") && s.if !== DOCS_ONLY_IF && !isDiagnostic(s))).toEqual([]);
   });
 
-  it("verify runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, pnpm check and the build, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
+  // 2026-10-13: Kong 502s in bursts with keep-alive already off. The dump
+  // that tells port exhaustion from a test defect runs only when the job has
+  // already failed, as its LAST step, so it reads the stack as the failure
+  // left it and can change no gate's outcome. verify also prints the same
+  // port numbers right after `pnpm check`, pass or fail, so a green run is
+  // the baseline. Neither carries continue-on-error (the script exits 0 by
+  // itself, which ci-stack-diagnostics.test.ts pins), and each is bounded.
+  it.each([
+    ["verify", [DIAGNOSE_BASELINE, DIAGNOSE_FAILURE]],
+    ["e2e", [DIAGNOSE_FAILURE]],
+  ] as const)("%s's stack diagnostics: the failure dump last, on failure() only; verify's baseline straight after pnpm check, unless cancelled or docs-only; each bounded, nothing else on the step (mutation: drop the failure step, or give it `if: always()` → FAILS)", (id, expected) => {
+    const all = steps(job(id));
+    expect(all.filter(isDiagnostic).map((s) => s.run)).toEqual(expected);
+    const last = all[all.length - 1];
+    expect(last?.run).toBe(DIAGNOSE_FAILURE);
+    expect(last?.if).toBe(FAILURE_IF);
+    for (const s of all.filter(isDiagnostic)) {
+      expect([...s.keys].sort(), s.run).toEqual(["if", "name", "run", "timeout-minutes"]);
+    }
+    if (id === "verify") {
+      const runs = all.map((s) => s.run);
+      const baseline = all[runs.indexOf(DIAGNOSE_BASELINE)];
+      expect(runs.indexOf(DIAGNOSE_BASELINE)).toBe(runs.indexOf("pnpm check") + 1);
+      expect(baseline?.if).toBe(BASELINE_IF);
+    }
+  });
+
+  it("verify runs exactly the guard, the docs-only decision, the install, its own Supabase stack, the guard again on that stack, pnpm check, the stack baseline, the build and the failure dump, in that order (mutation: drop the --local-stack guard step → FAILS)", () => {
     // pnpm check and the build are still exactly CLAUDE.md's gates; what is
     // new is where their database comes from, and that the guard checks it
-    // after it exists and before anything uses it.
+    // after it exists and before anything uses it. The two diagnostics are
+    // not gates: read-only, exit 0 always (pinned above and in
+    // ci-stack-diagnostics.test.ts).
     const runs = steps(job("verify")).flatMap((s) => (s.run ? [s.run] : []));
     expect(runs).toEqual([
       GUARD_BEFORE_LOCAL, SCOPE, "pnpm install --frozen-lockfile",
       INSTALL_CLI, START_STACK, GUARD_LOCAL,
-      "pnpm check", "pnpm --filter web build",
+      "pnpm check", DIAGNOSE_BASELINE, "pnpm --filter web build", DIAGNOSE_FAILURE,
     ]);
   });
 
@@ -398,12 +439,12 @@ describe("ci.yml's jobs", () => {
   // build time, so the stack must be up, and its values in GITHUB_ENV, before
   // that step. The migration check reads bis-ci, read-only, before anything
   // else costs time. "|" is the Chromium install, a multi-line `run:`.
-  it("e2e runs exactly the guard, the docs-only decision, the migration check on bis-ci, the install, its own Clerk-trusting stack, the guard again on that stack, the seed of THAT stack, Chromium and Playwright, in that order (mutation: start the stack after Playwright, or without --trust-clerk-dev-instance → FAILS)", () => {
+  it("e2e runs exactly the guard, the docs-only decision, the migration check on bis-ci, the install, its own Clerk-trusting stack, the guard again on that stack, the seed of THAT stack, Chromium, Playwright and the failure dump, in that order (mutation: start the stack after Playwright, or without --trust-clerk-dev-instance → FAILS)", () => {
     const runs = steps(job("e2e")).flatMap((s) => (s.run ? [s.run] : []));
     expect(runs).toEqual([
       GUARD_BEFORE_LOCAL, SCOPE, MIGRATIONS_APPLIED, "pnpm install --frozen-lockfile",
       INSTALL_CLI, `${START_STACK} --trust-clerk-dev-instance`, GUARD_LOCAL,
-      SEED_LOCAL, "|", "pnpm --filter web test:e2e",
+      SEED_LOCAL, "|", "pnpm --filter web test:e2e", DIAGNOSE_FAILURE,
     ]);
   });
 
@@ -434,7 +475,8 @@ describe("ci.yml's jobs", () => {
     // Checkout, the target guard and the decision itself always run: the
     // guard refuses a production target whether or not anything follows it.
     expect(all.slice(0, decision + 1).filter((s) => s.keys.includes("if"))).toEqual([]);
-    const after = all.slice(decision + 1);
+    // The stack diagnostics carry their own conditions, pinned in their own case.
+    const after = all.slice(decision + 1).filter((s) => !isDiagnostic(s));
     expect(after.length).toBeGreaterThan(3);
     // `!= 'true'`, never `== 'false'`: when the decision writes nothing (a
     // crash, a renamed output), the condition still holds and the suites RUN.
