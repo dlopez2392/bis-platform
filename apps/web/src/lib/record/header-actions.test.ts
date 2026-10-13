@@ -2,12 +2,15 @@ import { describe, it, expect, vi } from "vitest";
 import type { PlaceRow } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { makeTr } from "./copy";
 
 // The composer imports sonner at module scope; nothing here calls it.
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { smsFormBlock } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/message-composer";
-import { headerActions, canTextFrom, firstMapUrl, telHref } from "./header-actions";
+import { headerActions, headerActionLabels, canTextFrom, firstMapUrl, telHref } from "./header-actions";
 
 const base = { phone: "+19565550100", email: "ana@example.com", canText: true, directionsUrl: "https://maps.example/x" };
 
@@ -72,6 +75,26 @@ describe("canTextFrom: exactly when the composer's text form would open", () => 
       }
     }
     expect(disagreements).toEqual([]);
+  });
+});
+
+describe("headerActionLabels (S-03 part 3 C8): the header's words have one home", () => {
+  it("Spanish words for every action, and only Call names the person (mutation: a drawer-only map that says 'Phone' -> FAILS)", () => {
+    const labelled = headerActionLabels(headerActions(base), makeTr("es"), "Ana García");
+    expect(labelled.map((a) => a.label)).toEqual(["Llamar", "Mandar texto", "Mandar correo", "Cómo llegar"]);
+    expect(labelled.map((a) => a.ariaLabel)).toEqual(["Llamar a Ana García", undefined, undefined, undefined]);
+  });
+  it("keeps every href, primary and external flag (mutation: rebuild the action without primary -> FAILS)", () => {
+    const raw = headerActions({ ...base, composeHref: "/dashboard/accounts/a1/contacts/c1" });
+    const labelled = headerActionLabels(raw, makeTr("en"), "Ana");
+    expect(labelled.map(({ id, href, primary, external }) => ({ id, href, primary, external })))
+      .toEqual(raw.map(({ id, href, primary, external }) => ({ id, href, primary, external })));
+  });
+  it("the record page labels its header through it and keeps no map of its own (mutation: restore the page's ACTION_KEY -> FAILS)", () => {
+    const page = readFileSync(fileURLToPath(new URL(
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx", import.meta.url)), "utf8");
+    expect(page).not.toMatch(/ACTION_KEY/);
+    expect(page).toMatch(/headerActionLabels\(headerActions\(\{/);
   });
 });
 

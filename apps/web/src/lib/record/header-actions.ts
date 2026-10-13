@@ -2,6 +2,9 @@ import type { PlaceRow, ContactPlaceGroup } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
 import { e164Of } from "@/lib/voice/phone-number";
 import { mapUrl, placesInOrder } from "@/lib/contacts/place-view";
+import type { MessageKey } from "@/lib/messages";
+import type { RecordHeaderAction } from "@/components/record/record-header";
+import type { Tr } from "./copy";
 
 export type HeaderActionId = "call" | "text" | "email" | "directions";
 export type HeaderAction = { id: HeaderActionId; href: string; primary: boolean; external: boolean };
@@ -48,4 +51,20 @@ export function headerActions(
   if (input.email) out.push({ id: "email", href: `${prefix}#compose-email`, primary: false, external: false });
   if (input.directionsUrl) out.push({ id: "directions", href: input.directionsUrl, primary: false, external: true });
   return out;
+}
+
+const ACTION_KEY = {
+  call: "record.action.call", text: "record.action.text", email: "record.action.email", directions: "record.action.directions",
+} as const satisfies Record<HeaderActionId, MessageKey>;
+
+/**
+ * The header's words (S-03 part 3 C8), moved here from the record page so the page and the list's
+ * drawer can never say "Call" two ways. Call's aria-label names the person ("Call Ana García").
+ */
+export function headerActionLabels(actions: readonly HeaderAction[], tr: Tr, name: string): RecordHeaderAction[] {
+  return actions.map((a) => ({
+    ...a,
+    label: tr.text(ACTION_KEY[a.id]),
+    ariaLabel: a.id === "call" ? tr.text("record.action.callAria", { name }) : undefined,
+  }));
 }

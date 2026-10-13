@@ -32,7 +32,7 @@ vi.mock("@bis/db", () => ({
 }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => { throw new Error("gate down"); } }));
 
-const { loadSummary, loadTimeline, loadHeaderPlaces, softSmsGate } = await import("./loaders");
+const { loadSummary, loadTimeline, loadRecent, DRAWER_RECENT, loadHeaderPlaces, softSmsGate } = await import("./loaders");
 const db = {} as SupabaseClient;
 const ledger = { tag: "ledger" } as unknown as SupabaseClient;
 
@@ -126,6 +126,39 @@ describe("record loaders", () => {
     try {
       expect(await loadHeaderPlaces(db, "acct1", "ct1")).toBeNull();
       expect(await softSmsGate(db, "acct1")).toBeNull();
+    } finally { errors.mockRestore(); }
+  });
+
+  it("the drawer's Recent reads the head of the merged timeline, five rows, no cursor (mutation: drop limit -> 30 rows, FAILS)", async () => {
+    expect(DRAWER_RECENT).toBe(5);
+    await loadRecent(db, "acct1", "ct1");
+    expect(listContactTimelinePageMock).toHaveBeenCalledWith(db, "acct1", "ct1", undefined, expect.objectContaining({ limit: 5 }));
+  });
+
+  it("Recent reads no hold and no ledger: the drawer has no Done (mutation: build it on loadTimeline -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [{ kind: "task", id: "t1", at: "2026-10-01T00:00:00Z", contactId: "ct1",
+      task: { id: "t1", completed_at: null, consent_event_id: "ev1", call_id: null, created_by: null } }], older: null, failed: [] });
+    expect((await loadRecent(db, "acct1", "ct1")).status).toBe("ready");
+    expect(holdOpenTaskIdsMock).not.toHaveBeenCalled();
+  });
+
+  it("Recent is an error only when all seven sources failed; six failed is ready, naming them (mutation: error on any failure -> FAILS)", async () => {
+    const all = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all });
+    expect(await loadRecent(db, "acct1", "ct1")).toEqual({ status: "error" });
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all.slice(1) });
+    expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: all.slice(1) } });
+  });
+
+  it("Recent never throws: a rejected read is the error; names and persona are soft (mutation: let the read throw -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listContactTimelinePageMock.mockRejectedValueOnce(new Error("down"));
+      expect(await loadRecent(db, "acct1", "ct1")).toEqual({ status: "error" });
+      listPeopleNamesMock.mockRejectedValueOnce(new Error("names down"));
+      getVoiceProfileMock.mockRejectedValueOnce(new Error("persona down"));
+      expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", names: {}, personaName: null });
+      expect(errors.mock.calls.map((c) => String(c[0])).join("\n")).toContain("for account acct1");
     } finally { errors.mockRestore(); }
   });
 });

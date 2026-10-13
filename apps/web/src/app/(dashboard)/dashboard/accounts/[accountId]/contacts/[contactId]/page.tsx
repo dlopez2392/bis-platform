@@ -14,7 +14,7 @@ import { RECORD_CARDS, columnRuns, type RecordCardId } from "@/lib/record/record
 import { makeTr } from "@/lib/record/copy";
 import { factsView } from "@/lib/record/record-facts";
 import { nextUpView } from "@/lib/record/next-up";
-import { headerActions, canTextFrom, firstMapUrl, type HeaderActionId } from "@/lib/record/header-actions";
+import { headerActions, headerActionLabels, canTextFrom, firstMapUrl } from "@/lib/record/header-actions";
 import {
   loadSummary, loadNextUp, loadTimeline, loadDeals, loadTags, loadFieldDefs, loadHeaderPlaces, softSmsGate,
 } from "@/lib/record/loaders";
@@ -50,10 +50,6 @@ export const dynamic = "force-dynamic";
 const READ_ONLY_ASSIGN: AssignView = {
   who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [],
 };
-
-const ACTION_KEY = {
-  call: "record.action.call", text: "record.action.text", email: "record.action.email", directions: "record.action.directions",
-} as const satisfies Record<HeaderActionId, MessageKey>;
 
 type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
 
@@ -172,16 +168,12 @@ export default async function ContactDetailPage({
   // Text and Email link to the composer inside the timeline card; when that card failed there is no
   // composer behind them, so they hide (D3: an action with nothing behind it is hidden). Call stays.
   const composerShown = timelineView !== null;
-  const actions: RecordHeaderAction[] = headerActions({
+  const actions: RecordHeaderAction[] = headerActionLabels(headerActions({
     phone: contact.phone ?? null,
     email: composerShown ? contact.email ?? null : null,
     canText: composerShown && canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
     directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
-  }).map((a) => ({
-    ...a,
-    label: tr.text(ACTION_KEY[a.id]),
-    ariaLabel: a.id === "call" ? tr.text("record.action.callAria", { name }) : undefined,
-  }));
+  }), tr, name);
 
   const facts = summary.status === "ready"
     ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
