@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import type { Client } from "pg";
+import { Client } from "pg";
 import { withRollback, actAs } from "./db";
+import { TEST_ORG_ID_PREFIX } from "../org-id";
 
 /**
  * Who we call first in a household or business (S-03 part 2, migration 0075; spec §5). As the table
@@ -197,9 +198,10 @@ describe("0075: grants (spec §5; client-groups-schema.test.ts:157-208's shapes)
         [s.acct, s.home, s.ana])))
         .toMatchObject({ code: "42501", message: "permission denied for table client_group_members" });
     }));
-  it("the new and the two replaced functions are executable by service_role only (mutation: drop 0075's revoke loop -> the 0043 default privilege grants anon and authenticated, FAILS)", () =>
+  it("the new and the three replaced functions are executable by service_role only (mutation: drop 0075's revoke loop -> the 0043 default privilege grants anon and authenticated, FAILS)", () =>
     withRollback(async (c) => {
-      for (const f of ["public.set_group_primary_contact(uuid,uuid,uuid)", "app.restore_member(uuid,jsonb)", "public.undo_set_business(uuid,uuid,uuid,jsonb)"]) {
+      for (const f of ["public.set_group_primary_contact(uuid,uuid,uuid)", "app.restore_member(uuid,jsonb)", "public.undo_set_business(uuid,uuid,uuid,jsonb)",
+                       "public.remove_group_membership(uuid,uuid)"]) {
         const { rows: [r] } = await c.query(
           `select has_function_privilege('service_role', $1, 'execute') as svc,
                   has_function_privilege('authenticated', $1, 'execute') as auth,
@@ -207,4 +209,138 @@ describe("0075: grants (spec §5; client-groups-schema.test.ts:157-208's shapes)
         expect(r, f).toEqual({ svc: true, auth: false, anon: false });
       }
     }));
+});
+
+/**
+ * Two sessions at once (Task 1 review, minors 1 and 2). client-groups-functions.test.ts:141-206's
+ * harness, copied so this file's seeds stay local: the rows are COMMITTED (a second session cannot see
+ * another's uncommitted seed), under the sweep's org prefix, and removed in finally.
+ */
+const connect = async () => {
+  const c = new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
+  await c.connect();
+  return c;
+};
+let committedN = 0;
+async function withCommittedHousehold(fn: (c: Client, s: Awaited<ReturnType<typeof household>> & { biz: string; mAnaBiz: string }) => Promise<void>) {
+  const c = await connect();
+  let acct = "";
+  try {
+    const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
+    acct = await one(c, "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'Call First Race Co',true) returning id",
+      [agency!.id, `${TEST_ORG_ID_PREFIX}cfrace_${RUN}_${committedN++}`]);
+    const home = await group(c, acct, "household", "Garcia");
+    const [ana, luis, maria] = [await contact(c, acct, "Ana"), await contact(c, acct, "Luis"), await contact(c, acct, "Maria")];
+    const s = {
+      acct, home, ana, luis, maria,
+      mAna: await member(c, acct, home, ana, { primary: true }),
+      mLuis: await member(c, acct, home, luis, { primary: true }),
+      mMaria: await member(c, acct, home, maria, { primary: true }),
+    };
+    const biz = await group(c, acct, "business", "Acme Roofing");
+    const mAnaBiz = await member(c, acct, biz, ana);
+    await fn(c, { ...s, biz, mAnaBiz });
+  } finally {
+    if (acct) {
+      await c.query("delete from contacts where account_id = $1", [acct]); // memberships cascade
+      await c.query("delete from accounts where id = $1", [acct]); // groups cascade
+    }
+    await c.end();
+  }
+}
+const pidOf = async (c: Client) => (await c.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0]!.pid;
+/** Polls pg_stat_activity from its own autocommit connection until `pid` waits on a lock. */
+async function waitUntilBlocked(pid: number, timeoutMs = 15_000) {
+  const watcher = await connect();
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const { rows } = await watcher.query<{ blocked: boolean }>(
+        "select coalesce((select wait_event_type = 'Lock' from pg_stat_activity where pid = $1), false) as blocked", [pid]);
+      if (rows[0]!.blocked) return;
+      if (Date.now() > deadline) throw new Error(`session ${pid} never blocked on a lock`);
+      await new Promise((res) => setTimeout(res, 25));
+    }
+  } finally { await watcher.end(); }
+}
+type Settled = { ok: true; v: unknown } | { ok: false; e: { code?: string; message?: string } };
+const settle = (p: Promise<unknown>): Promise<Settled> =>
+  p.then((v) => ({ ok: true as const, v }), (e: { code?: string; message?: string }) => ({ ok: false as const, e: { code: e.code, message: e.message } }));
+/** `first` runs and holds its locks in an open transaction; `second` starts and must block on them; then `first` commits. */
+async function race(first: (c: Client) => Promise<unknown>, second: (c: Client) => Promise<unknown>) {
+  const c1 = await connect(); const c2 = await connect();
+  try {
+    await c1.query("begin"); await c2.query("begin");
+    const r1 = await first(c1);
+    const c2pid = await pidOf(c2);
+    const p2 = settle(second(c2));
+    await waitUntilBlocked(c2pid);
+    await c1.query("commit");
+    const r2 = await p2;
+    await c2.query(r2.ok ? "commit" : "rollback");
+    return { r1, r2 };
+  } finally { await c1.end(); await c2.end(); }
+}
+const val = async (c: Client, sql: string, args: unknown[]) => (await c.query<{ r: unknown }>(`select ${sql} as r`, args)).rows[0]!.r;
+
+describe("0075: two sessions at once (Task 1 review)", () => {
+  it("choosing a member another session is removing answers not_found and the previous holder keeps the flag (mutation: drop `for no key update` from set_group_primary_contact's member check -> ok with nobody holding it, FAILS)", () =>
+    withCommittedHousehold(async (c, s) => {
+      await setPrimary(c, s.acct, s.home, s.mAna);
+      const { r1, r2 } = await race(
+        (c1) => val(c1, "public.remove_group_membership($1,$2)", [s.acct, s.mLuis]),
+        (c2) => val(c2, "public.set_group_primary_contact($1,$2,$3)", [s.acct, s.home, s.mLuis]));
+      expect(r1).toMatchObject({ status: "ok" });
+      expect(r2).toEqual({ ok: true, v: { status: "not_found" } });
+      expect(await holders(c, s.home)).toEqual([s.mAna]);
+    }));
+  it("removing a member while another session makes them call-first snapshots the flag, so Undo restores it (mutation: take remove_group_membership's snapshot from the read before the delete, as 0069 did -> FAILS)", () =>
+    withCommittedHousehold(async (c, s) => {
+      const { r2 } = await race(
+        (c1) => val(c1, "public.set_group_primary_contact($1,$2,$3)", [s.acct, s.home, s.mLuis]),
+        (c2) => val(c2, "public.remove_group_membership($1,$2)", [s.acct, s.mLuis]));
+      expect(r2.ok).toBe(true);
+      const removed = (r2 as { v: { status: string; removed: Record<string, unknown> } }).v;
+      expect(removed.status).toBe("ok");
+      expect(removed.removed.is_primary_contact).toBe(true);
+      expect(await val(c, "public.restore_group_membership($1,$2::jsonb)", [s.acct, JSON.stringify(removed.removed)])).toBe("ok");
+      expect(await holders(c, s.home)).toEqual([s.mLuis]);
+    }));
+  it("an Undo putting the flag back while another session chooses someone else waits on the group, then restores the membership WITHOUT the flag (mutation: drop the group lock from restore_member's flag branch -> 23505, FAILS)", () =>
+    withCommittedHousehold(async (c, s) => {
+      await setPrimary(c, s.acct, s.home, s.mAna);
+      const removed = (await val(c, "public.remove_group_membership($1,$2)", [s.acct, s.mAna]) as { removed: Record<string, unknown> }).removed;
+      expect(removed.is_primary_contact).toBe(true);
+      const { r1, r2 } = await race(
+        (c1) => val(c1, "public.set_group_primary_contact($1,$2,$3)", [s.acct, s.home, s.mLuis]),
+        (c2) => val(c2, "public.restore_group_membership($1,$2::jsonb)", [s.acct, JSON.stringify(removed)]));
+      expect(r1).toEqual({ status: "ok", previous: null });
+      expect(r2).toEqual({ ok: true, v: "ok" });
+      expect(await holders(c, s.home)).toEqual([s.mLuis]);
+      expect((await c.query("select 1 from client_group_members where id = $1", [s.mAna])).rowCount).toBe(1);
+    }));
+  for (const flagged of [false, true]) {
+    it(`an Undo of a membership that is already back (snapshot ${flagged ? "with" : "without"} the flag), while a Business rename waits on that contact, answers ok with no deadlock (the reviewer's interleaving; mutation: ${flagged ? "lock the group before the already-a-member check when the snapshot carries the flag" : "lock the group at the top of restore_member, as f5424381 did"} -> 40P01, FAILS)`, () =>
+      withCommittedHousehold(async (c, s) => {
+        const { rows: [row] } = await c.query<{ s: Record<string, unknown> }>("select to_jsonb(m) as s from client_group_members m where m.id = $1", [s.mAnaBiz]);
+        const snap = { ...row!.s, is_primary_contact: flagged };
+        const c1 = await connect(); const c2 = await connect();
+        try {
+          await c1.query("begin"); await c2.query("begin");
+          // restore_group_membership's first act is this same lock (app.lock_contact); taking it first
+          // opens the window between that lock and anything restore_member locks after it.
+          await c1.query("select 1 from contacts where id = $1 for no key update", [s.ana]);
+          const c2pid = await pidOf(c2);
+          // The rename locks the group row, then its sync trigger waits on Ana's contact row.
+          const rename = settle(c2.query("update client_groups set name = 'Acme Roofing Two' where id = $1", [s.biz]));
+          await waitUntilBlocked(c2pid);
+          const undo = await settle(val(c1, "public.restore_group_membership($1,$2::jsonb)", [s.acct, JSON.stringify(snap)]));
+          await c1.query(undo.ok ? "commit" : "rollback");
+          const renamed = await rename;
+          await c2.query(renamed.ok ? "commit" : "rollback");
+          expect({ undo, renamed: renamed.ok }).toEqual({ undo: { ok: true, v: "ok" }, renamed: true });
+        } finally { await c1.end(); await c2.end(); }
+        expect(await holders(c, s.biz)).toEqual([]); // already back: the Undo changed nothing
+      }));
+  }
 });

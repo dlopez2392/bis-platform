@@ -12,10 +12,25 @@
 -- app.restore_member (0069 section 5) is replaced so the Undo of a removal puts the flag back when no
 -- other member holds it now. public.undo_set_business (0069 section 7) is replaced so the Business
 -- name Undo, whose snapshot comes back from ANY reader's browser, never sets it.
--- Both lock the group row FOR NO KEY UPDATE: it serialises two choosers and two restores (the partial
--- index's race) without queueing member inserts, which take FOR KEY SHARE through the group FK.
+-- public.remove_group_membership (0069 section 7) is replaced so its Undo snapshot is the row as
+-- DELETED: the flag is written under the group lock, not the contact's, so a choice made while the
+-- removal waited is carried into the Undo.
+--
+-- Locks. set_group_primary_contact locks the group row, then the chosen member row, FOR NO KEY UPDATE:
+-- two choosers queue (the partial index's race), member inserts (FOR KEY SHARE through the group FK)
+-- do not, and a removal in flight is waited for and then seen, so the old holder is never cleared for
+-- a member that is gone. restore_member takes the group lock ONLY to put the flag back, after its
+-- "already a member" return: its callers hold the contact lock, and a Business rename holds the group
+-- and then waits on every current member's contact, so taking the group lock first would deadlock
+-- against a rename. With the flag, the contact is not a current member, so no rename waits on it.
 -- The sync trigger fires on update of is_primary, client_group_id, contact_id only (0069 section 6),
 -- so choosing who we call first never touches anyone's Business name.
+--
+-- Under the build that is live when this is applied (before PR 2a deploys), the replaced functions
+-- already change behaviour: a removal's Undo carries is_primary_contact, and restore_member honours a
+-- snapshot that says true. Until 2a's server action strips the flag for a narrow reader, a Technician
+-- could resend a removal snapshot with is_primary_contact true. Exposure at apply time: none while no
+-- account has a technician membership (count them in the pre-flight).
 -- ASCII only, no backslash anywhere (0050's rule; the MCP apply has mangled escapes before).
 --
 -- APPLY ORDER: CI project (ci-project-setup.yml push-dry-run, then push), then production (MCP
@@ -23,8 +38,9 @@
 --
 -- ROLLBACK (revert the app first; the old build never reads the column):
 --   drop function public.set_group_primary_contact(uuid, uuid, uuid);
---   re-run 0069's "create function app.restore_member" and "create function public.undo_set_business"
---   statements verbatim, each as "create or replace function";
+--   re-run 0069's "create function app.restore_member", "create function public.undo_set_business" and
+--   "create function public.remove_group_membership" statements verbatim, each as
+--   "create or replace function";
 --   drop index public.client_group_members_one_primary_contact;
 --   alter table public.client_group_members drop column is_primary_contact;
 --   Lost: the call-first choices made since.
@@ -44,8 +60,9 @@ begin
   perform 1 from public.client_groups where id = p_group_id and account_id = p_account_id for no key update;
   if not found then return jsonb_build_object('status', 'not_found'); end if;
   if p_member_id is not null then
+    -- Locked: a removal in flight is waited for, then seen as gone, before anything is cleared.
     perform 1 from public.client_group_members
-     where id = p_member_id and client_group_id = p_group_id and account_id = p_account_id;
+     where id = p_member_id and client_group_id = p_group_id and account_id = p_account_id for no key update;
     if not found then return jsonb_build_object('status', 'not_found'); end if;
   end if;
   select id into v_previous from public.client_group_members where client_group_id = p_group_id and is_primary_contact;
@@ -59,6 +76,7 @@ begin
 end $$;
 
 -- 3. The restore. 0069's body, plus the flag: back only when no other member of the group holds it.
+--    The group lock is taken only for the flag, and only after the "already a member" return (see Locks).
 create or replace function app.restore_member(p_account_id uuid, p_snapshot jsonb) returns text
 language plpgsql set search_path = '' as $$
 declare
@@ -67,7 +85,7 @@ declare
   v_primary boolean := coalesce((p_snapshot ->> 'is_primary')::boolean, false);
   v_call_first boolean := coalesce((p_snapshot ->> 'is_primary_contact')::boolean, false);
 begin
-  perform 1 from public.client_groups where id = v_group and account_id = p_account_id for no key update;
+  perform 1 from public.client_groups where id = v_group and account_id = p_account_id;
   if not found then return 'not_found'; end if;
   perform 1 from public.contacts where id = v_contact and account_id = p_account_id;
   if not found then return 'not_found'; end if;
@@ -77,8 +95,11 @@ begin
   if v_primary then
     update public.client_group_members set is_primary = false where contact_id = v_contact and is_primary;
   end if;
-  if v_call_first and exists (select 1 from public.client_group_members where client_group_id = v_group and is_primary_contact) then
-    v_call_first := false;
+  if v_call_first then
+    perform 1 from public.client_groups where id = v_group for no key update;
+    if exists (select 1 from public.client_group_members where client_group_id = v_group and is_primary_contact) then
+      v_call_first := false;
+    end if;
   end if;
   insert into public.client_group_members
     (id, account_id, client_group_id, contact_id, role, is_primary, is_billing, is_primary_contact, created_at)
@@ -114,14 +135,28 @@ begin
   return 'ok';
 end $$;
 
--- 5. Grants. Default privileges hand EXECUTE to anon, authenticated and service_role BY NAME (0043);
+-- 5. The removal. 0069's body, except the snapshot comes from the DELETE itself (see the header).
+create or replace function public.remove_group_membership(p_account_id uuid, p_member_id uuid)
+returns jsonb language plpgsql set search_path = '' as $$
+declare v_contact uuid; v_row public.client_group_members;
+begin
+  select contact_id into v_contact from public.client_group_members where id = p_member_id and account_id = p_account_id;
+  if v_contact is null then return jsonb_build_object('status', 'not_found'); end if;
+  if not app.lock_contact(p_account_id, v_contact) then return jsonb_build_object('status', 'not_found'); end if;
+  delete from public.client_group_members where id = p_member_id and account_id = p_account_id returning * into v_row;
+  if v_row.id is null then return jsonb_build_object('status', 'not_found'); end if;
+  perform app.promote_primary(v_row.contact_id);
+  return jsonb_build_object('status', 'ok', 'removed', to_jsonb(v_row));
+end $$;
+
+-- 6. Grants. Default privileges hand EXECUTE to anon, authenticated and service_role BY NAME (0043);
 --    create or replace keeps the old ACL, re-stated here so this file alone is the record.
 do $$
 declare f text;
 begin
   foreach f in array array[
     'public.set_group_primary_contact(uuid,uuid,uuid)', 'app.restore_member(uuid,jsonb)',
-    'public.undo_set_business(uuid,uuid,uuid,jsonb)'] loop
+    'public.undo_set_business(uuid,uuid,uuid,jsonb)', 'public.remove_group_membership(uuid,uuid)'] loop
     execute format('revoke all on function %s from public, anon, authenticated, service_role', f);
     execute format('grant execute on function %s to service_role', f);
   end loop;
