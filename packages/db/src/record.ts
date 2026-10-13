@@ -143,8 +143,9 @@ export type TimelineSubmission = {
 export type TimelineMessage = {
   id: string; channel: "email" | "sms"; direction: "inbound" | "outbound"; status: string;
   subject: string | null; body: string; error: string | null; created_at: string;
-  /** NULL only for a row the build before 1b wrote, until 0074 re-runs the backfill. */
-  author_kind: AuthorKind | null; author_id: string | null;
+  /** NOT NULL since 0074 (the migration backfilled every row the build before 1b had written, then
+   *  closed the column). */
+  author_kind: AuthorKind; author_id: string | null;
 };
 export type TimelineEntry =
   | { kind: "note"; id: string; at: string; note: TimelineNote }
@@ -200,6 +201,13 @@ export async function listContactTimelinePage(
       .map((deal): TimelineEntry => ({ kind: "deal", id: deal.id, at: deal.created_at, deal }))),
     settle("forms", async () => (await listContactSubmissions(db, accountId, contactId, page))
       .map((s): TimelineEntry => ({ kind: "submission", id: s.id, at: s.created_at, submission: {
+        // Review note: `?? "customer"` is unreachable AT THIS CALL SITE — `page` above is always a
+        // real object, so listContactSubmissions always selects author_kind here, and the column has
+        // been NOT NULL DEFAULT 'customer' since 0073. Kept rather than removed: the field's type
+        // (SubmissionRow's `author_kind?`) is still genuinely optional for forms.ts's OTHER caller
+        // (the record-summary route, which never passes a page and never selects the column), and
+        // dropping the default would need an unsafe cast here to satisfy that shared type, not a real
+        // simplification.
         id: s.id, created_at: s.created_at, formName: s.formName, answers: s.answers, author_kind: s.author_kind ?? "customer",
       } }))),
     settle("messages", async () => ((await listContactMessages(db, accountId, contactId, { ...page, channels: ["email", "sms"] })) as TimelineMessage[])
@@ -225,7 +233,11 @@ export async function listContactTimelinePage(
 export async function listPeopleNames(db: SupabaseClient, clerkUserIds: readonly string[]): Promise<Record<string, string>> {
   const ids = [...new Set(clerkUserIds.filter((x) => x.length > 0))];
   if (ids.length === 0) return {};
-  const { data, error } = await db.from("users").select("clerk_user_id, name, email").in("clerk_user_id", ids);
+  // Capped at the number of distinct ids asked: a one-to-one match against
+  // `.in()`, never a growing result set if a future caller ever asks for
+  // more than today's one bounded caller (the record timeline's one page,
+  // TIMELINE_PAGE_SIZE = 30 distinct person ids at most).
+  const { data, error } = await db.from("users").select("clerk_user_id, name, email").in("clerk_user_id", ids).limit(ids.length);
   if (error) throw new Error(`listPeopleNames failed: ${error.message}`);
   const out: Record<string, string> = {};
   for (const u of (data ?? []) as { clerk_user_id: string; name: string | null; email: string }[]) {

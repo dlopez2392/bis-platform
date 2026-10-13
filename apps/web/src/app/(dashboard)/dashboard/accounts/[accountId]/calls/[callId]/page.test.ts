@@ -287,6 +287,24 @@ describe("CallDetailPage", () => {
     expect(html).toContain(prose);
   });
 
+  it("a lone block with no fact-line marker (no RECORDED line at all — 34 of 271 production calls) renders as PROSE, never facts by position (review fix; mutation: classify the lone block as facts by position -> FAILS)", async () => {
+    // Hand-written on purpose: this is the one shape composeSummary never
+    // actually produces (it always leads with the fact line) but a real
+    // stored row can still carry, and the splitter must not assume the
+    // composer's shape to classify it correctly.
+    const prose = "Wants a replacement quote — 18-year-old system, says it's making noise.";
+    const html = await render({ ...CALL, summary: prose });
+
+    // React escapes the apostrophe to &#x27; in static markup. The exact
+    // "prose" treatment (plain reading text), not "facts" (font-mono,
+    // boxed on --surface-2) — asserted on the summary paragraph's OWN
+    // class, not just page-wide absence, since the page's own section
+    // labels are mono too.
+    expect(html).toMatch(
+      /<p class="text-sm leading-7 break-words whitespace-pre-wrap text-foreground">Wants a replacement quote — 18-year-old system, says it&#x27;s making noise\.<\/p>/,
+    );
+  });
+
   it("renders no Summary section at all when the summary is empty", async () => {
     // Not an empty heading: "Summary" over nothing reads as a summary that
     // said nothing, which is a claim this page has no basis for.

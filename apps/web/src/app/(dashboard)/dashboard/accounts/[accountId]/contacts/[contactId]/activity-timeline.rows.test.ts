@@ -23,7 +23,11 @@ const { timelineRows } = await import("@/lib/record/timeline-rows");
 
 const AT = "2026-10-09T16:12:00Z";
 const ENTRIES: TimelineEntry[] = [
-  { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 180, reason: null, summary: "Caller wants a quote for a roof leak.", language: "es" } },
+  // Production-shaped (summarize.ts's composeSummary): the system's own fact line first, a blank
+  // line, then the model's prose — never just prose on its own (minors-1b item 5).
+  { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 180, reason: null,
+    summary: "RECORDED — Booked: Dan Lopez at 2026-08-31T14:00:00.000Z · Intake: nothing captured.\n\nCaller wants a quote for a roof leak.",
+    language: "es" } },
   { kind: "booking", id: "b1", at: AT, booking: { id: "b1", created_at: AT, starts_at: "2026-10-16T15:00:00Z", status: "booked", note: null,
     author_kind: "customer", author_id: null, rescheduled_from_id: null, moved_from_starts_at: null } },
   { kind: "message", id: "m1", at: AT, message: { id: "m1", channel: "email", direction: "outbound", status: "delivered", subject: "Quote",
@@ -49,8 +53,12 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
   it("a call row links to its call page; its English summary is lang=\"en\", its reason is lang=\"\" (unknown) — never the caller's own language (C11; mutation: lang={e.call.language} on the call's words -> FAILS)", () => {
     const html = render();
     expect(html).toContain('href="/dashboard/accounts/a1/calls/k1"');
-    // calls.summary is always English (owner decision A), even on a Spanish-language call.
+    // calls.summary is always English (owner decision A), even on a Spanish-language call. Only the
+    // model's PROSE renders here — never the system's own fact line or its ISO timestamp (minors-1b
+    // item 5; mutation: render e.call.summary raw -> "RECORDED" and the ISO stamp leak in, FAILS).
     expect(html).toMatch(/<p lang="en"[^>]*>Caller wants a quote for a roof leak\.<\/p>/);
+    expect(html).not.toContain("RECORDED");
+    expect(html).not.toContain("2026-08-31T14:00:00.000Z");
     expect(html).toMatch(/<p lang=""[^>]*>Gate code 4411<\/p>/);
     expect(html).toMatch(/<p lang=""[^>]*>Here it is<\/p>/);
 
@@ -64,6 +72,60 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
     const reasonHtml = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
     expect(reasonHtml).toMatch(/<p lang=""[^>]*>Se le gotea el techo<\/p>/);
+  });
+  it("a summary with a ⚠ MISMATCH block shows no summary text at all — the prose is contradicted by the recorded state, and the row still has its verb, status and Open-call link (minors-1b item 5; mutation: render the prose anyway -> FAILS)", () => {
+    const mismatchEntries: TimelineEntry[] = [
+      { kind: "call", id: "k3", at: AT, call: {
+        id: "k3", started_at: AT, outcome: "booked", duration_secs: 60, reason: null,
+        summary: "RECORDED — Booked: no appointment was recorded · Intake: nothing captured.\n\n"
+          + "⚠ MISMATCH — the notes below mention an appointment, which the system did not record. "
+          + "The caller may have been told otherwise on the call. Check before following up.\n\n"
+          + "I booked an appointment for Thursday.",
+        language: "en",
+      } },
+    ];
+    const tr = makeTr("en");
+    const rows = timelineRows(mismatchEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    expect(html).not.toContain("RECORDED");
+    expect(html).not.toContain("MISMATCH");
+    expect(html).not.toContain("I booked an appointment for Thursday.");
+    // The row itself still renders — Open call link, no summary paragraph.
+    expect(html).toContain('href="/dashboard/accounts/a1/calls/k3"');
+    expect(html).not.toContain("line-clamp-2");
+  });
+  it("a PROSE-ONLY summary (no fact line at all — 34 of 271 production calls, the Resaca demo account among them) renders on the row (review fix; mutation: classify the lone block as facts by position -> FAILS)", () => {
+    const proseOnlyEntries: TimelineEntry[] = [
+      { kind: "call", id: "k4", at: AT, call: {
+        id: "k4", started_at: AT, outcome: "message", duration_secs: 45, reason: null,
+        summary: "Wants a replacement quote — 18-year-old system, says it's making noise.",
+        language: "en",
+      } },
+    ];
+    const tr = makeTr("en");
+    const rows = timelineRows(proseOnlyEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    // React escapes the apostrophe to &#x27; in static markup.
+    expect(html).toMatch(/<p lang="en"[^>]*>Wants a replacement quote — 18-year-old system, says it&#x27;s making noise\.<\/p>/);
+  });
+  it("a FACT-LINE-ONLY summary (nothing to show the customer) renders no summary text, but the row keeps its verb, status and Open-call link (mutation: fall back to the raw summary -> FAILS)", () => {
+    const factsOnlyEntries: TimelineEntry[] = [
+      { kind: "call", id: "k5", at: AT, call: {
+        id: "k5", started_at: AT, outcome: "booked", duration_secs: 30, reason: null,
+        summary: "RECORDED — Booked: no appointment was recorded · Intake: nothing captured.",
+        language: "en",
+      } },
+    ];
+    const tr = makeTr("en");
+    const rows = timelineRows(factsOnlyEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "en", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    expect(html).not.toContain("RECORDED");
+    expect(html).not.toContain("line-clamp-2");
+    expect(html).toContain('href="/dashboard/accounts/a1/calls/k5"');
+    expect(html).toContain(">Booked<");
   });
   it("one pager at the foot, Older and Newer as given, labelled; none when there is nowhere to go (mutation: always render the pager -> FAILS)", () => {
     const html = render({ pager: { olderHref: "/x?before=abc#record-timeline", newerHref: "/x#record-timeline" } });

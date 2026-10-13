@@ -1,3 +1,5 @@
+import { FACT_LINE_MARKER } from "./summarize";
+
 /** The three things a stored summary can be made of, in the order
  *  `composeSummary` writes them. */
 export type SummaryBlockKind = "facts" | "mismatch" | "prose";
@@ -27,10 +29,15 @@ const MISMATCH_MARKER = "⚠ MISMATCH";
  * rewritten, because the prose is the closest thing on file to what the caller
  * was actually told.
  *
- * The mismatch test runs BEFORE the "first block is the facts" rule, not after.
- * If a summary ever reaches this page without its fact line, the warning must
- * still render as a warning — labelling it `facts` would dress the one block
- * that says "do not trust what follows" as the authoritative record.
+ * Review fix: "facts" used to mean "whichever block sits first", which read
+ * 34 of 271 production calls' summaries — every one with no fact line at all,
+ * prose only — as the system's own record, and (on the timeline row, which
+ * only ever shows PROSE) rendered nothing for a call that DID have something
+ * to say. A block earns "facts" the SAME way one earns "mismatch": by
+ * starting with its own marker (`FACT_LINE_MARKER`, shared with
+ * summarize.ts), never by where it happens to sit. The mismatch check still
+ * runs first — a summary with no fact line at all must still show its
+ * warning as a warning, not dress it up as "facts" for being first.
  */
 export function splitSummaryBlocks(summary: string): SummaryBlock[] {
   return summary
@@ -41,8 +48,8 @@ export function splitSummaryBlocks(summary: string): SummaryBlock[] {
     .split(/\n\s*\n/)
     .map((block) => block.trim())
     .filter(Boolean)
-    .map((text, i): SummaryBlock => ({
-      kind: text.startsWith(MISMATCH_MARKER) ? "mismatch" : i === 0 ? "facts" : "prose",
+    .map((text): SummaryBlock => ({
+      kind: text.startsWith(MISMATCH_MARKER) ? "mismatch" : text.startsWith(FACT_LINE_MARKER) ? "facts" : "prose",
       text,
     }));
 }

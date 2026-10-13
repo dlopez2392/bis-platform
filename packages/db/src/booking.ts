@@ -981,7 +981,9 @@ export async function listContactUpcomingBookings(
 
 export type ContactBookingRow = {
   id: string; created_at: string; starts_at: string; status: BookingStatus; note: string | null;
-  author_kind: AuthorKind | null; author_id: string | null; rescheduled_from_id: string | null;
+  // NOT NULL since 0074 (the migration backfilled every row the build before 1b had written, then
+  // closed the column).
+  author_kind: AuthorKind; author_id: string | null; rescheduled_from_id: string | null;
   /** The replaced booking's start ("Moved from …"), when this row is a reschedule and that row is readable. */
   moved_from_starts_at: string | null;
 };

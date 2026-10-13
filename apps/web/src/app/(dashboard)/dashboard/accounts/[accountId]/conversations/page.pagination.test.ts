@@ -32,6 +32,9 @@ vi.mock("@/lib/zone", () => ({
 type Access = { userId: string; isAgency: boolean; role: "owner" | "staff" | "technician" | null; canManage: boolean };
 const AGENCY: Access = { userId: "u1", isAgency: true, role: null, canManage: true };
 const accessMock = vi.fn(async (): Promise<Access> => AGENCY);
+// The send actions read the signed-in person's language (person-prefs pulls in @/lib/auth
+// and the tenant theme); this page test only renders, so their prefs are empty.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 vi.mock("@/lib/auth", () => ({ requireAccountAccess: () => accessMock() }));
 
 const listConversationsMock = vi.fn();
