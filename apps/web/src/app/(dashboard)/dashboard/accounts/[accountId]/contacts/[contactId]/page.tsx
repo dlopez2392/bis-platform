@@ -10,7 +10,7 @@ import { LocaleProvider } from "@/components/locale-provider";
 import { RecordLayout } from "@/components/record/record-layout";
 import { RecordHeader, type RecordHeaderAction } from "@/components/record/record-header";
 import { RecordCard, type RecordCardState } from "@/components/record/record-card";
-import { columnRuns, type RecordCardId } from "@/lib/record/record-cards";
+import { RECORD_CARDS, columnRuns, type RecordCardId } from "@/lib/record/record-cards";
 import { makeTr } from "@/lib/record/copy";
 import { factsView } from "@/lib/record/record-facts";
 import { nextUpView } from "@/lib/record/next-up";
@@ -252,7 +252,7 @@ export default async function ContactDetailPage({
     "related-people": { node: <RelationshipsCard accountId={accountId} contactId={contactId} headingHidden /> },
   } satisfies Record<RecordCardId, Slot>;
 
-  const columns = columnRuns().map(({ column, cards }) => ({
+  const columns = columnRuns(RECORD_CARDS).map(({ column, cards }) => ({
     column,
     content: cards.map((def) => {
       const slot: Slot = slots[def.id];
