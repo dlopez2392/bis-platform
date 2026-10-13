@@ -846,7 +846,7 @@ describe("setContactBusinessAction", () => {
   it("undo surfaces the database's refusal of a forged snapshot as a failed Undo, revalidating nothing (mutation: ignore undoSetBusiness's answer -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({ id: "c1" });
     dbMocks.undoSetBusiness.mockResolvedValue("not_found");
-    const forged = { id: ADDED, account_id: "a1", client_group_id: "g-household", contact_id: "c1", role: null, is_primary: false, is_billing: false, created_at: "2026-01-01" };
+    const forged = { id: ADDED, account_id: "a1", client_group_id: "g-household", contact_id: "c1", role: null, is_primary: false, is_billing: false, is_primary_contact: false, created_at: "2026-01-01" };
     expect(await undoContactBusinessAction("a1", "c1", { added: null, removed: forged })).toEqual({ ok: false, error: "Undo failed — please try again." });
     expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", null, forged);
     expect(revalidatePath).not.toHaveBeenCalled();
