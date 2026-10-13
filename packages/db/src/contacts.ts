@@ -1157,16 +1157,46 @@ export async function setContactLanguage(
   return wrote;
 }
 
-/** Undo (C9): the prior triple back EXACTLY, its source and time included, "not set" included. */
+/** What the Undo must still find in the row before it is honoured, or stale (`"changed"`). */
+export type LanguageRestoreOutcome = "updated" | "changed";
+
+/**
+ * Undo (C9, fix round I3): the prior triple back EXACTLY, only while the row still holds `written` —
+ * the SAME compare-and-set every other Undo in this file runs (`setContactPhoneCountry`'s
+ * `expectedPhone`): the UPDATE's own WHERE clause matches `written`'s language, source and
+ * timestamp, so a row changed since the Undo was issued updates zero rows and answers "changed"
+ * atomically, with no separate read-then-write race. A forged `written` (the caller's own claim of
+ * what was there, sent back from the browser) that names the wrong language, source or timestamp
+ * can therefore never match a real row either, for the same reason a stale one cannot.
+ *
+ * M1 (this file's own rule, R3-M11 above: a failure AFTER the write it is about has succeeded is
+ * logged, never thrown — a throw here would report a failed Undo for a write that landed): the row
+ * has already committed by the time `emit` runs below.
+ */
 export async function restoreContactLanguage(
-  db: SupabaseClient, accountId: string, contactId: string, prior: LanguageTriple, actorId: string,
-): Promise<boolean> {
-  if (!isLanguageTriple(prior)) throw new Error("restoreContactLanguage: not a language triple");
-  const wrote = await writeLanguage(db, accountId, contactId,
-    { language: prior.language, language_source: prior.source, language_set_at: prior.setAt });
-  if (wrote) await emit(db, accountId, "contact.language_set", actorId,
-    { contactId, language: prior.language, source: prior.source, undo: true }, "user");
-  return wrote;
+  db: SupabaseClient, accountId: string, contactId: string,
+  prior: LanguageTriple, written: LanguageTriple, actorId: string,
+): Promise<LanguageRestoreOutcome> {
+  if (!isLanguageTriple(prior) || !isLanguageTriple(written)) {
+    throw new Error("restoreContactLanguage: not a language triple");
+  }
+  let q = db.from("contacts").update({
+    language: prior.language, language_source: prior.source, language_set_at: prior.setAt,
+    updated_at: new Date().toISOString(),
+  }).eq("account_id", accountId).eq("id", contactId);
+  q = written.language === null ? q.is("language", null) : q.eq("language", written.language);
+  q = written.source === null ? q.is("language_source", null) : q.eq("language_source", written.source);
+  q = written.setAt === null ? q.is("language_set_at", null) : q.eq("language_set_at", written.setAt);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`contact language write failed: ${error.message}`);
+  if (!data?.length) return "changed";
+  try {
+    await emit(db, accountId, "contact.language_set", actorId,
+      { contactId, language: prior.language, source: prior.source, undo: true }, "user");
+  } catch (e) {
+    console.error(`restoreContactLanguage: account ${accountId} contact ${contactId}: event emit failed after the write committed: ${(e as Error).message}`);
+  }
+  return "updated";
 }
 
 /** Keep (§7.4): the hint stays away until a newer sign. Nothing about the customer changes. */
