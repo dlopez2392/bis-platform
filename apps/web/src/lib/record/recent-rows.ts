@@ -27,9 +27,9 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "deal": return null;
     case "submission": return null;
     case "message": {
-      // S-09 plan deviation 5: an inbound `voice` message is the AI's own English summary, not text
-      // the customer wrote, so it keeps lang="" (only email, sms and form inbound messages take it).
-      const typedLang = e.message.direction === "inbound" && (e.message.channel as string) !== "voice" ? customerLang : "";
+      // S-09 §9: an inbound message is what the customer typed. The timeline loads only email and sms
+      // (record.ts's listContactMessages `channels`), so the AI's `voice` summary never reaches here.
+      const typedLang = e.message.direction === "inbound" ? customerLang : "";
       return typed(e.message.subject?.trim() ? e.message.subject : e.message.body, typedLang);
     }
     case "booking": return typed(e.booking.note, e.booking.author_kind === "customer" ? customerLang : "");

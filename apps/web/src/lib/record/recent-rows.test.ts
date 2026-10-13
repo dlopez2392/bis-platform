@@ -71,4 +71,11 @@ describe("recentRowsView's customer language (S-09 §9)", () => {
     expect(recentRowsView(rows, "es").map((r) => r.excerpt?.lang)).toEqual(["es", ""]);
     expect(recentRowsView(rows).map((r) => r.excerpt?.lang)).toEqual(["", ""]);
   });
+
+  it("a customer's booking note takes the contact's language; a staff one (author_kind person) stays typed-unknown (mutation: drop the booking author_kind check -> FAILS)", () => {
+    const staff: TimelineEntry = { ...booking, id: "b2", booking: { ...booking.booking, id: "b2", note: "Bring the long ladder", author_kind: "person", author_id: "u1" } };
+    const tr = makeTr("en");
+    const rows = timelineRows([booking, staff], { zone: "UTC", tr, author: { viewerId: null, names: { u1: "Ana" }, personaName: null, tr } });
+    expect(recentRowsView(rows, "es").map((r) => [r.excerpt?.text, r.excerpt?.lang])).toEqual([["Gate code 4411", "es"], ["Bring the long ladder", ""]]);
+  });
 });

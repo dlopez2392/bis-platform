@@ -142,9 +142,9 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
     }
     case "message": {
       const reason = e.message.direction === "outbound" ? messageFailureReason(e.message, tr.locale) : null;
-      // S-09 plan deviation 5: an inbound `voice` message is the AI's own English summary, not text
-      // the customer wrote, so it keeps lang="" (only email, sms and form inbound messages take it).
-      const typedLang = e.message.direction === "inbound" && (e.message.channel as string) !== "voice" ? customerLang : "";
+      // S-09 §9: an inbound message is what the customer typed. The timeline loads only email and sms
+      // (record.ts's listContactMessages `channels`), so the AI's `voice` summary never reaches here.
+      const typedLang = e.message.direction === "inbound" ? customerLang : "";
       return (
         <TimelineItem {...head} icon={e.message.channel === "sms" ? MessageSquare : Mail}>
           {e.message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{e.message.subject}</p> : null}
