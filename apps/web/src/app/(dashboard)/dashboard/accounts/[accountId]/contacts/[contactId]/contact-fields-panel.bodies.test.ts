@@ -23,4 +23,15 @@ describe("the fields panel's two bodies, moved into record cards unchanged (spec
     expect(details).toContain("data-assignee-row");
     expect(tags).toContain("VIP");
   });
+
+  // minors-1b item 2: a 28px control fails the 44px touch-target minimum on
+  // a phone; the rest of the record page's own controls already carry this
+  // same pair (groups-card.tsx, send-button.tsx, assignee-field.tsx, …) —
+  // full height on a phone, the old 32px back on desktop.
+  it("the tag-add Input is a real tap target on a phone (min-h-11 md:min-h-8), not the fixed 28px h-7 (mutation: revert to h-7 -> FAILS)", () => {
+    const tags = renderToStaticMarkup(createElement(ContactTagsBody, { accountId: "a1", contactId: "ct1", tags: [] }));
+    const input = tags.match(/<input[^>]*name="tag"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain("min-h-11");
+    expect(input).toContain("md:min-h-8");
+  });
 });

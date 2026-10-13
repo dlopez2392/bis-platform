@@ -223,7 +223,7 @@ export function ContactTagsBody({ accountId, contactId, tags }: { accountId: str
       ))}
       <form action={boundAddTag} className="inline-flex items-center gap-1">
         {hidden}
-        <Input name="tag" placeholder={m["contact.addTag"]} className="h-7 w-28 text-xs" />
+        <Input name="tag" placeholder={m["contact.addTag"]} className="min-h-11 md:min-h-8 w-28 text-xs" />
         <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>
           <Plus className="size-3" aria-hidden />
         </Button>
