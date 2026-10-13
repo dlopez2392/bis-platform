@@ -258,6 +258,25 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     // S-03 part 1: none of the record page's own reads run for a contact the caller cannot see.
     expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
   });
+
+  it("review I4: the Details card's Language line is the page's own real wiring, in the account's zone (S-09 §8.1; mutation: drop the language prop in page.tsx -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" });
+    const html = await render();
+    expect(html).toMatch(/data-language-row="" data-language="es"/);
+    expect(html).toContain("from their booking (Oct 3)");
+  });
+
+  it("review M1: a bad stored language_set_at costs the Language line alone, never the page (mutation: call languageView outside viewOf -> the render rejects, FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(html).toMatch(/data-language-row="" data-language=""/);
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
 });
 
 /**

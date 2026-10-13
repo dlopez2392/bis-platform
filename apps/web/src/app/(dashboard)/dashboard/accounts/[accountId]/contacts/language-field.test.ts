@@ -38,8 +38,23 @@ describe("LanguageField (S-09 §8.2)", () => {
     expect(hint).toMatch(/>Keep<\/button>/);
   });
 
-  it("every control is a real tap target with a visible focus ring (DESIGN.md DoD)", () => {
+  it("every control is a real tap target with a visible focus ring (DESIGN.md DoD; mutation: drop focus-visible:ring -> FAILS)", () => {
     const html = render({ ...SET, hint: { language: "en", text: "x" } });
-    for (const el of html.match(/<button[^>]*>/g) ?? []) expect(el).toContain("min-h-11");
+    for (const el of html.match(/<button[^>]*>/g) ?? []) {
+      expect(el).toContain("min-h-11");
+      expect(el).toContain("focus-visible:ring");
+    }
+    const trigger = html.match(/<button[^>]*role="combobox"[^>]*>/)?.[0] ?? "";
+    expect(trigger).toContain("focus-visible:ring");
+  });
+
+  // review I1: swapping <SelectValue> for a plain <span> breaks Radix's own positioning (it needs
+  // the real valueNode to measure against, select.tsx:56's default / @radix-ui/react-select's
+  // SelectContentImpl) and its focus wiring — SelectValue must stay mounted in BOTH states.
+  it("SelectValue stays mounted set or not (mutation: swap it for a bare span -> FAILS)", () => {
+    for (const view of [SET, { value: null, valueLabel: null, phrase: "Not set.", hint: null }]) {
+      const html = render(view);
+      expect(html).toContain('data-slot="select-value"');
+    }
   });
 });
