@@ -586,3 +586,126 @@ describe("ContactDrawer on the record kit (S-03 part 3)", () => {
     expect(loadFailed).toContain("data-drawer-who-error");
   });
 });
+
+/** Task 6 review: each section's own branches, the pairing guard, the rules between sections, Esc. */
+describe("ContactDrawer: every section's own state, and the chrome around them (Task 6 review)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; nextUpProps.length = 0; });
+  const ready = (body: unknown) => ({ contactId: "c1", result: { status: "ready", body } });
+  const WHO_ERR = { ...PARSED, who: { status: "error", text: "Couldn't load Contact Details." } };
+  const TAGS_ERR = { ...PARSED, who: { ...PARSED.who, tags: { status: "error" } } };
+  const FACTS_MISSING = { ...PARSED, facts: { status: "ready", view: { line: ["On your list since Sep 2026"], missing: "Couldn't count bookings.", allFailed: false } } };
+  const RECENT_PARTIAL = { ...PARSED, recent: { ...PARSED.recent, failedText: "Couldn't load the calls." } };
+  const RECENT_EMPTY = { ...PARSED, recent: { ...PARSED.recent, rows: [], emptyText: "Nothing here yet." } };
+
+  it("I1: a --line rule sits between sections, never above the first (mutation: drop the wrapper's rule -> FAILS)", () => {
+    const html = renderOpen(READY);
+    const wrappers = [...html.matchAll(/<div data-drawer-section="([\w-]+)"[^>]*class="([^"]*)"/g)].map((x) => ({ id: x[1], cls: x[2]!.split(/\s+/) }));
+    expect(wrappers.map((w) => w.id)).toEqual(["facts", "next-up", "recent", "who"]);
+    for (const w of wrappers) expect(w.cls).toEqual(expect.arrayContaining(["border-t", "border-[var(--line)]", "pt-3", "first:border-t-0", "first:pt-0"]));
+    // The first wrapper is the scroller's first child, so `first:` drops its rule; the rest are not, so they keep it.
+    expect(html).toMatch(/data-testid="drawer-scroll"[^>]*><div data-drawer-section="facts"/);
+  });
+
+  it("I2: a body fetched for another contact is never shown: skeletons and the row's own name (mutation: drop the contactId pairing -> FAILS)", () => {
+    const other = { ...PARSED, header: { ...PARSED.header, name: "Somebody Else" }, who: { ...PARSED.who, tags: { status: "ready", tags: [{ id: "t0", name: "c0-only-tag" }] } } };
+    const html = renderOpen({ contactId: "c0", result: { status: "ready", body: other } });
+    expect(html).not.toContain("Somebody Else");
+    expect(html).not.toContain("c0-only-tag");
+    expect(html).toMatch(/<h2[^>]*>Maria Garcia<\/h2>/);
+    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(5);
+  });
+
+  it("I3: who failed on an ordinary list row says so with Try again, under fields that stay editable (mutation: drop the lower who error -> FAILS)", () => {
+    const html = renderOpen(ready(WHO_ERR));
+    expect(html).toMatch(/data-drawer-who-error[^>]*>[\s\S]*?Couldn&#x27;t load Contact Details\.[\s\S]*?Try again/);
+    expect(html).toMatch(/First name: Maria/);
+  });
+
+  it("I3: tags failed says so with Try again (mutation: render nothing for a tags error -> FAILS)", () => {
+    const html = renderOpen(ready(TAGS_ERR));
+    expect(html).toMatch(/data-drawer-tags-error[^>]*>[\s\S]*?Couldn&#x27;t load Tags\.[\s\S]*?Try again/);
+  });
+
+  it("I3: Recent with a partial failure keeps its rows and says what failed (mutation: drop the failedText line -> FAILS)", () => {
+    const html = renderOpen(ready(RECENT_PARTIAL));
+    expect(html).toMatch(/data-timeline-failed[^>]*>[\s\S]*?Couldn&#x27;t load the calls\.[\s\S]*?Try again/);
+    expect(html.match(/data-testid="drawer-recent-item"/g)).toHaveLength(2);
+  });
+
+  it("I3: an empty Recent says its empty words (mutation: drop the emptyText line -> FAILS)", () => {
+    const html = renderOpen(ready(RECENT_EMPTY));
+    expect(html).toContain("Nothing here yet.");
+    expect(html).not.toContain('data-testid="drawer-recent-item"');
+  });
+
+  it("I3: every Try again in the drawer is the drawer's own section retry, never undefined, which would refresh the list (mutation: drop onRetry from SummaryBody, the Recent partial Retry, the tags or the who error -> FAILS)", async () => {
+    const { RecordCardRetry } = await import("@/components/record/record-card");
+    const { RecordSection } = await import("@/components/record/record-section");
+    const { SummaryBody } = await import("./[contactId]/summary-card");
+    const seen = new Set<unknown>();
+    let sites = 0;
+    for (const body of [{ ...FACTS_MISSING, recent: RECENT_PARTIAL.recent, who: TAGS_ERR.who }, { ...FACTS_MISSING, who: WHO_ERR.who }]) {
+      const tree = treeOf(ready(body));
+      const retry = tree.find((e) => e.type === RecordSection && e.props.id === "facts")!.props.onRetry;
+      expect(typeof retry).toBe("function");
+      for (const u of tree.filter((e) => e.type === RecordCardRetry || e.type === SummaryBody || e.type === RecordSection)) {
+        expect(u.props.onRetry).toBe(retry);
+        seen.add(u.type === RecordSection ? `section:${String(u.props.id)}` : u.type);
+        if (u.type === RecordCardRetry) sites += 1;
+      }
+    }
+    // Every kind was reached: the facts' SummaryBody, the four sections, and the three RecordCardRetry
+    // sites (Recent's partial failure, tags, who).
+    expect(seen).toContain(SummaryBody);
+    expect([...seen].filter((s) => typeof s === "string").sort()).toEqual(["section:facts", "section:next-up", "section:recent", "section:who"]);
+    expect(sites).toBe(3);
+  });
+
+  it("m1: Escape with an input focused inside the sheet cancels the field, not the drawer; otherwise the drawer closes (mutation: drop preventDefault -> FAILS)", () => {
+    class FakeNode { constructor(private inside: unknown) {} contains(el: unknown) { return el === this.inside; } }
+    class FakeInput {}
+    vi.stubGlobal("Node", FakeNode);
+    vi.stubGlobal("HTMLInputElement", FakeInput);
+    const onEsc = treeOf(READY).find((e) => typeof e.props.onEscapeKeyDown === "function")!.props.onEscapeKeyDown as (e: unknown) => void;
+    const press = (active: unknown, inside: unknown) => {
+      vi.stubGlobal("document", { activeElement: active });
+      const preventDefault = vi.fn();
+      onEsc({ currentTarget: new FakeNode(inside), preventDefault });
+      return preventDefault.mock.calls.length;
+    };
+    const input = new FakeInput();
+    expect(press(input, input)).toBe(1);
+    expect(press(null, input)).toBe(0);
+    expect(press(input, null)).toBe(0);
+  });
+
+  it("m2/m3: the whole drawer's Try again (the sections' word) drops the failed load and re-reads (mutation: delete both setters -> FAILS)", async () => {
+    const { Button } = await import("@/components/ui/button");
+    const tree = treeOf({ contactId: "c1", result: { status: "error" } });
+    const retry = tree.find((e) => e.type === Button && typeof e.props.onClick === "function")!;
+    expect(retry.props.children).toBe("Try again");
+    (retry.props.onClick as () => void)();
+    const fetched = states.find((s) => s.initial === null)!;
+    const nonce = states.find((s) => s.initial === 0)!;
+    expect(fetched.set).toHaveBeenCalledWith(null);
+    expect(nonce.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("m10: exactly two links named Open full record in every state, the bottom one carrying the e2e's hook (mutation: keep the error Notice's own link -> FAILS)", () => {
+    for (const fetched of [undefined, READY, { contactId: "c1", result: { status: "error" } }]) {
+      const html = renderOpen(fetched);
+      expect(html.match(/aria-label="Open full record"|>Open full record<\/a>/g)).toHaveLength(2);
+      expect(html).toMatch(/<a [^>]*data-drawer-open-full[^>]*>Open full record<\/a>/);
+    }
+  });
+
+  it("m8: a tag shows as typed (lang=''), and See all and the bottom link are ghost, never a second primary (mutation: make either link default -> FAILS)", () => {
+    expect(renderOpen(READY)).toContain('<span lang="">vip</span>');
+    const tree = treeOf(READY);
+    for (const hook of ["data-drawer-see-all", "data-drawer-open-full"]) {
+      const cls = String(tree.find((e) => hook in e.props)?.props.className ?? "");
+      expect(cls).toContain("hover:bg-[var(--surface-3)]");
+      expect(cls).not.toContain("btn-primary");
+    }
+  });
+});

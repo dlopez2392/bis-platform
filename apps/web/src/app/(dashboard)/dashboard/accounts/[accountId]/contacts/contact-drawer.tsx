@@ -65,6 +65,10 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";
+// The --line rule between sections sits on the drawer's wrappers, which are siblings: each
+// RecordSection is its wrapper's only child, so the section's own first:border-t-0 always matched
+// and no rule ever drew (Task 6 review I1). Its own rule is neutralised here so none is doubled.
+const SECTION_WRAP = "border-t border-[var(--line)] pt-3 first:border-t-0 first:pt-0 [&>section]:border-t-0 [&>section]:pt-0";
 type SectionState = "loading" | "ready" | "error";
 
 /**
@@ -213,16 +217,15 @@ export function ContactDrawer({
                 {load.status === "error" ? (
                   <Notice tone="crit" className="p-3">
                     <p className="text-muted-foreground">{tx("drawer.loadFailed")}</p>
-                    <div className="mt-2 flex gap-3">
+                    <div className="mt-2">
                       <Button size="sm" variant="ghost" onClick={() => {
                         // The whole drawer's error only: drop the paired fetch so `load` falls back to
                         // "loading", then refire the guarded effect (same `stale` guard as a normal load).
                         setFetched(null);
                         setRetryNonce((n) => n + 1);
                       }}>
-                        {tx("common.retry")}
+                        {tx("record.card.retry")}
                       </Button>
-                      <Link href={fullHref} className="text-sm underline">{tx("drawer.openFull")}</Link>
                     </div>
                   </Notice>
                 ) : null}
@@ -230,7 +233,7 @@ export function ContactDrawer({
                 {/* The read-only sections exist only once the route answered or while it loads; the
                     whole drawer's error above stands in for all three (C2), the fields below stay. */}
                 {load.status === "error" ? null : (<>
-                <div data-drawer-section="facts" data-state={stateOf(body?.facts)}>
+                <div data-drawer-section="facts" data-state={stateOf(body?.facts)} className={SECTION_WRAP}>
                   <RecordSection id="facts" label={null} state={stateOf(body?.facts)}
                     errorText={body?.facts.status === "error" ? body.facts.text : tx("record.summary.failed")}
                     retryLabel={tx("record.card.retry")} onRetry={retrySection}
@@ -241,7 +244,7 @@ export function ContactDrawer({
                   </RecordSection>
                 </div>
 
-                <div data-drawer-section="next-up" data-state={stateOf(body?.nextUp)}>
+                <div data-drawer-section="next-up" data-state={stateOf(body?.nextUp)} className={SECTION_WRAP}>
                   <RecordSection id="next-up" label={tx("record.card.nextUp")} state={stateOf(body?.nextUp)}
                     errorText={body?.nextUp.status === "error" ? body.nextUp.text : tx("record.nextUp.failed")}
                     retryLabel={tx("record.card.retry")} onRetry={retrySection}
@@ -253,7 +256,7 @@ export function ContactDrawer({
                   </RecordSection>
                 </div>
 
-                <div data-drawer-section="recent" data-state={stateOf(body?.recent)}>
+                <div data-drawer-section="recent" data-state={stateOf(body?.recent)} className={SECTION_WRAP}>
                   <RecordSection id="recent" label={tx("drawer.recent")} state={stateOf(body?.recent)}
                     errorText={body?.recent.status === "error" ? body.recent.text : tx("record.activity.failed")}
                     retryLabel={tx("record.card.retry")} onRetry={retrySection}
@@ -290,7 +293,7 @@ export function ContactDrawer({
                 </div>
                 </>)}
 
-                <div data-drawer-section="who" data-state={body ? (who ? "ready" : "error") : load.status === "error" ? "error" : "loading"}>
+                <div data-drawer-section="who" data-state={body ? (who ? "ready" : "error") : load.status === "error" ? "error" : "loading"} className={SECTION_WRAP}>
                   {/* The fields never wait on the route (D6), except a ?peek= stub's, which come from it (Q1). */}
                   <RecordSection id="who" label={tx("contact.details")} state="ready"
                     errorText={tx("record.card.failed", { title: tx("contact.details") })}
@@ -379,7 +382,7 @@ export function ContactDrawer({
                             <TagsRow accountId={accountId} contactId={row.id} tags={who.tags.tags} locale={locale}
                               onChanged={() => setRetryNonce((n) => n + 1)} />
                           ) : (
-                            <div role="alert" className="flex flex-wrap items-center gap-2 text-sm">
+                            <div role="alert" data-drawer-tags-error className="flex flex-wrap items-center gap-2 text-sm">
                               <p className="text-muted-foreground">{tx("record.card.failed", { title: tx("contact.tags") })}</p>
                               <RecordCardRetry label={tx("record.card.retry")} onRetry={retrySection} />
                             </div>
