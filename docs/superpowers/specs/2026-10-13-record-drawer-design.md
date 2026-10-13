@@ -577,3 +577,8 @@ error states, and every section loads as a skeleton.
 | Q3 | No "Open call" on a call row in the drawer | Keep it out (no per-row links, C6); "See all activity" is one click to it |
 | Q4 | The D12 e2e asked for Text landing on the composer; the fixture account cannot show Text | Accept the substitution (§12.2): Email clicked end to end, Text's URL unit-pinned, its cold load already pinned |
 | Q5 | The consent copy's Spanish (§10.3) speaks for the business on a legal-adjacent subject | bis-comms reviews it before merge; the owner reads the six status and toast lines |
+
+**Decided 2026-10-13 (owner):** Q1–Q5 all as recommended above. Orchestrator rulings: `lib/consent/texts-row.ts`
+and `email-row.ts` locale changes are bis-crm's; bis-frontend adds the Sheet's `closeLabel`; the two §17 DESIGN.md
+sentences land in this PR; server-action error strings stay English (follow-up, §16); the read count (~7 → ~20)
+is measured in the plan, not assumed.
