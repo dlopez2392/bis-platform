@@ -44,8 +44,17 @@ describe("client-groups.ts over PostgREST", () => {
     expect(first!.status).toBe("ok");
     expect((await getContact(db, accountId, ana))!.company_name).toBe("Acme Roofing");
     const [second] = await setContactsBusiness(db, accountId, [{ contactId: ana, name: "Beta Pools" }], A);
-    expect(await undoSetBusiness(db, accountId, ana, second!.added, second!.removed)).toBe("ok");
+    expect(await undoSetBusiness(db, accountId, ana, second!.added, second!.removed, A)).toBe("ok");
     expect((await getContact(db, accountId, ana))!.company_name).toBe("Acme Roofing");
+    // S-03 part 2 review fix: both deletes are recorded as removals (the rename's Acme membership, then
+    // the Undo's Beta one), so the newest-removal rule in groups-actions.ts sees them.
+    const { data, error } = await serviceDb().from("events").select("actor_id, payload")
+      .eq("account_id", accountId).eq("type", "client_group.member_removed").order("id", { ascending: true });
+    if (error) throw new Error(error.message);
+    expect(data).toEqual([
+      { actor_id: A, payload: { memberId: first!.added, contactId: ana, groupId: second!.removed!.client_group_id, wasPrimaryContact: false } },
+      { actor_id: A, payload: { memberId: second!.added, contactId: ana, groupId: expect.any(String), wasPrimaryContact: false } },
+    ]);
   }));
 
   it("remove then restore gives back the same membership; role and pays update; a rename onto another business is name_taken", () =>

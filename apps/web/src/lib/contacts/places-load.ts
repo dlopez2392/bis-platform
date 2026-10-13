@@ -32,6 +32,9 @@ function isUnit(v: unknown): boolean {
 }
 
 const isGroup = (v: unknown) => isObj(v) && str(v.id) && str(v.kind) && str(v.name) && typeof v.isPrimary === "boolean";
+/** S-03 part 2: the group's own route names the group it read; the contact's route never sends one. */
+const isSubjectGroup = (v: unknown) =>
+  v === undefined || (isObj(v) && str(v.id) && (v.kind === "household" || v.kind === "business") && str(v.name));
 
 export async function placesLoadFrom(res: Response): Promise<PlacesLoad> {
   if (!res.ok) return { status: "error" };
@@ -43,6 +46,7 @@ export async function placesLoadFrom(res: Response): Promise<PlacesLoad> {
     && str(body.today) && DAY.test(body.today as string)
     && Array.isArray(body.groups) && body.groups.every(isGroup)
     && Array.isArray(body.places) && body.places.every(isPlace) && count(body.placeCount)
-    && Array.isArray(body.equipment) && body.equipment.every(isUnit) && count(body.equipmentCount);
+    && Array.isArray(body.equipment) && body.equipment.every(isUnit) && count(body.equipmentCount)
+    && isSubjectGroup(body.group);
   return ok ? { status: "ready", data: body as PlacesResponse } : { status: "error" };
 }

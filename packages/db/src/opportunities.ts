@@ -167,6 +167,28 @@ export async function listContactOpportunities(
   return data as (typeof data[number] & { created_by?: string | null })[];
 }
 
+/** The group page's Deals card shows at most this many rows (spec §8.5). */
+export const GROUP_DEALS_SHOWN = 30;
+export type OpenDealRow = { id: string; name: string; status: string; monetary_value: number | string; created_at: string; contact_id: string };
+
+/**
+ * Open deals of a set of people (S-03 part 2, C13), newest first, at most `limit`, with an exact
+ * count for "Showing 30 of 41 open deals.". On the caller's client: RLS (0068) decides. THROWS on a
+ * read error or a count-less answer (#245).
+ */
+export async function listOpenDealsFor(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], limit = GROUP_DEALS_SHOWN,
+): Promise<{ deals: OpenDealRow[]; count: number }> {
+  if (contactIds.length === 0) return { deals: [], count: 0 };
+  const { data, count, error } = await db.from("opportunities")
+    .select("id, name, status, monetary_value, created_at, contact_id", { count: "exact" })
+    .eq("account_id", accountId).eq("status", "open").in("contact_id", [...contactIds])
+    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
+  if (error) throw new Error(`listOpenDealsFor failed: ${error.message}`);
+  if (count === null) throw new Error("listOpenDealsFor failed: no count returned");
+  return { deals: (data ?? []) as OpenDealRow[], count };
+}
+
 /**
  * Raw (createdAt, value) pairs for opportunities created in
  * `[fromIso, toIso)` — the dashboard's 14-day pipeline-value chart.

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getContact, listContactPlaces, type ContactPlaceGroup, type PlaceRow, type EquipmentRow } from "@bis/db";
+import { getContact, listContactPlaces, type ContactPlaceGroup, type PlaceRow, type EquipmentRow, type GroupKind } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -22,6 +22,8 @@ export type PlacesResponse = {
   placeCount: number;
   equipment: Omit<EquipmentRow, "created_by">[];
   equipmentCount: number;
+  /** S-03 part 2: present when the record is a group (its own route, `…/groups/[groupId]/places`). */
+  group?: { id: string; kind: GroupKind; name: string };
 };
 
 function withoutAuthor<R extends { created_by: string | null }>(row: R): Omit<R, "created_by"> {

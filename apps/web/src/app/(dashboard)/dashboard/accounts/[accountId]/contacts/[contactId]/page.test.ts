@@ -798,6 +798,15 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(html).toMatch(/data-record-subtitle[^>]*>García · Household</);
   });
 
+  it("the group line uses S-02's kind words: a business reads 'Business customer', and Spanish 'Familia' / 'Cliente comercial' (R3; mutation: leave 'Negocio' -> FAILS)", async () => {
+    listContactPlacesMock.mockResolvedValue({ ...NO_PLACES, groups: [{ id: "g2", kind: "business", name: "Acme", isPrimary: true }] });
+    expect(await render()).toMatch(/data-record-subtitle[^>]*>Acme · Business customer</);
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    expect(await render()).toMatch(/data-record-subtitle[^>]*>Acme · Cliente comercial</);
+    listContactPlacesMock.mockResolvedValue({ ...NO_PLACES, groups: [{ id: "g1", kind: "household", name: "García", isPrimary: true }] });
+    expect(await render()).toMatch(/data-record-subtitle[^>]*>García · Familia</);
+  });
+
   it("a failed places read drops the group line and Directions, never the header (spec §7; mutation: let loadHeaderPlaces rethrow -> FAILS)", async () => {
     listContactPlacesMock.mockRejectedValue(new Error("places down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

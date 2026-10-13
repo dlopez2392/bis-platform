@@ -3,6 +3,7 @@ import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LocaleProvider } from "@/components/locale-provider";
 import type { PlacesLoad } from "@/lib/contacts/places-load";
+import type { PlaceSubjectArg } from "./places-actions";
 
 // "use server" actions cannot load in vitest; the view never calls them while rendering.
 vi.mock("./places-actions", () => ({
@@ -44,15 +45,26 @@ const data = (over: Partial<Data> = {}): Data => ({
 });
 const ready = (over: Partial<Data> = {}): PlacesLoad => ({ status: "ready", data: data(over) });
 
+// S-03 part 2 (C12): a household's or business's own page passes a group subject, never a contact's.
+const GID = "55555555-5555-4555-8555-555555555555";
+const GROUP_SUBJECT: PlaceSubjectArg = { kind: "group", id: GID };
+const groupReady = (over: Partial<Data> = {}): PlacesLoad => ({
+  status: "ready",
+  data: data({
+    subject: { id: GID, firstName: null, lastName: null }, group: { id: GID, kind: "household", name: "García" },
+    groups: [], places: [], placeCount: 0, equipment: [], equipmentCount: 0, ...over,
+  }),
+});
+
 const noop = () => {};
 const none = async () => {};
 const handlers = {
   removePlace: none, putBack: none, removeUnit: none, changed: noop, placeAdded: noop, unitAdded: noop, unitReplaced: noop, ownerChanged: noop,
 };
-const render = (locale: "en" | "es", load: PlacesLoad, canMovePlace = true) =>
+const render = (locale: "en" | "es", load: PlacesLoad, canMovePlace = true, contactId: PlaceSubjectArg = C1, emptyText?: string) =>
   // Children positionally (react/no-children-prop); the cast only tells createElement they arrive there.
   renderToStaticMarkup(createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>,
-    createElement(PlacesCardView, { accountId: "a1", contactId: C1, canMovePlace, load, onRetry: noop, handlers })));
+    createElement(PlacesCardView, { accountId: "a1", contactId, canMovePlace, load, onRetry: noop, handlers, emptyText })));
 const one = (html: string, re: RegExp) => html.match(re)?.[0] ?? "";
 
 describe("PlacesCardView: its own loaded, empty and error states (rule 5 per card)", () => {
@@ -177,6 +189,45 @@ describe("a property", () => {
   it("a Technician has no Belongs to control; an Owner has it (mutation: ignore canMovePlace -> FAILS)", () => {
     expect(renderedText(render("en", ready(), true))).toContain(m["places.belongsTo"]);
     expect(renderedText(render("en", ready(), false))).not.toContain(m["places.belongsTo"]);
+    // S-03 part 2: the group page always passes canMovePlace=false, even for its own place (unchanged rule).
+    const groupWithPlace = groupReady({ places: [{ ...HOME, id: "gp1", contact_id: null, client_group_id: GID }] });
+    expect(renderedText(render("en", groupWithPlace, false, GROUP_SUBJECT))).not.toContain(m["places.belongsTo"]);
+  });
+});
+
+describe("S-03 part 2: a group subject (the Properties card on a household's or business's own page)", () => {
+  it("the empty line is the caller's own sentence, never the contact's places.empty (mutation: ignore emptyText -> FAILS)", () => {
+    const text = renderedText(render("en", groupReady(), false, GROUP_SUBJECT, "Homes this household shares…"));
+    expect(text).toContain("Homes this household shares…");
+    expect(text).not.toContain(m["places.empty"]);
+  });
+
+  it("with no emptyText given, a group subject still falls back to places.empty (mutation: drop the fallback -> FAILS)", () => {
+    const text = renderedText(render("en", groupReady(), false, GROUP_SUBJECT));
+    expect(text).toContain(m["places.empty"]);
+  });
+
+  it("the add dialog's subject is the group's own name, never built from first/last name (mutation: build the subject from first/last name only -> FAILS)", async () => {
+    vi.resetModules();
+    const captured: Record<string, unknown>[] = [];
+    vi.doMock("./place-dialog", () => ({ PlaceDialog: (p: Record<string, unknown>) => { captured.push(p); return null; } }));
+    try {
+      const { PlacesCardView: FreshView } = await import("./places-card");
+      renderToStaticMarkup(createElement(FreshView, {
+        accountId: "a1", contactId: GROUP_SUBJECT, canMovePlace: false, load: groupReady(), onRetry: noop, handlers,
+      }));
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.subject).toEqual({ id: GID, name: "García" });
+    } finally {
+      vi.doUnmock("./place-dialog");
+      vi.resetModules();
+    }
+  });
+
+  it("placesRouteFor: a group's own route, never the contact's (mutation: always the contact URL -> FAILS)", async () => {
+    const { placesRouteFor } = await import("./places-card");
+    expect(placesRouteFor("a1", undefined, { id: GID })).toBe(`/api/accounts/a1/groups/${GID}/places`);
+    expect(placesRouteFor("a1", C1, undefined)).toBe(`/api/accounts/a1/contacts/${C1}/places`);
   });
 });
 

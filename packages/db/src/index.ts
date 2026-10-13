@@ -41,7 +41,8 @@ export { listCustomFields, createCustomField, listCustomValues, upsertCustomValu
 export { createOpportunity, moveOpportunityStage, moveOpportunityToStage,
          updateOpportunity, setOpportunityStatus,
          listBoard, listContactOpportunities,
-         listOpportunityValuesCreatedBetween, sumOpenOpportunities } from "./opportunities";
+         listOpportunityValuesCreatedBetween, sumOpenOpportunities,
+         listOpenDealsFor, GROUP_DEALS_SHOWN, type OpenDealRow } from "./opportunities";
 export { ensureConversation, createMessage, updateMessageStatus,
          updateMessageStatusByProviderId, findMessageByProviderId, hasRecentOutboundSms,
          listFailedOutboundSms,
@@ -240,6 +241,8 @@ export {
   setPrimaryMembership, removeMembership, restoreMembership, updateMembership, updateGroup,
   type GroupKind, type GroupMemberSnapshot, type ContactGroup, type ContactGroupMember,
   type GroupSearchHit, type BusinessResult,
+  listGroupMembers, countGroupMembers, listGroupPeople, setGroupPrimaryContact, GROUP_MEMBERS_PAGE_SIZE, GROUP_ACTIVITY_CAP,
+  type GroupMember, type GroupMembersPage, type GroupPerson,
 } from "./client-groups";
 
 // Relationships between customers (0070). See ./relationships.ts and ./relationship-keys.ts.
@@ -258,6 +261,7 @@ export {
   PlaceDbError, MAX_PLACES_READ, MAX_EQUIPMENT_READ,
   type PlaceRow, type EquipmentRow, type PlaceOwner, type PlaceFields, type PlacePatch, type EquipmentFields,
   type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
+  listGroupPlaces,
 } from "./places";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.

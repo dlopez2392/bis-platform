@@ -32,13 +32,20 @@ export function firstMapUrl(places: readonly PlaceRow[], subjectId: string, grou
   return null;
 }
 
-/** Call, Text, Email, Directions in that order on every width; an action with nothing behind it is hidden (D3). */
-export function headerActions(input: { phone: string | null; email: string | null; canText: boolean; directionsUrl: string | null }): HeaderAction[] {
+/**
+ * Call, Text, Email, Directions in that order on every width; an action with nothing behind it is
+ * hidden (D3). `composeHref`: the record whose composer Text and Email open; absent, this page's own
+ * (the group page sends them to the call-first member's, S-03 part 2 §8.1).
+ */
+export function headerActions(
+  input: { phone: string | null; email: string | null; canText: boolean; directionsUrl: string | null; composeHref?: string },
+): HeaderAction[] {
   const out: HeaderAction[] = [];
   const tel = telHref(input.phone);
+  const prefix = input.composeHref ?? "";
   if (tel) out.push({ id: "call", href: tel, primary: true, external: false });
-  if (input.canText) out.push({ id: "text", href: "#compose-sms", primary: false, external: false });
-  if (input.email) out.push({ id: "email", href: "#compose-email", primary: false, external: false });
+  if (input.canText) out.push({ id: "text", href: `${prefix}#compose-sms`, primary: false, external: false });
+  if (input.email) out.push({ id: "email", href: `${prefix}#compose-email`, primary: false, external: false });
   if (input.directionsUrl) out.push({ id: "directions", href: input.directionsUrl, primary: false, external: true });
   return out;
 }

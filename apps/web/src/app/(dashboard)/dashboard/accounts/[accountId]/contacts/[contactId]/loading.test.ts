@@ -12,7 +12,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }))
 
 const { default: Loading } = await import("./loading");
 const { LocaleProvider } = await import("@/components/locale-provider");
-const { cardsInPhoneOrder } = await import("@/lib/record/record-cards");
+const { RECORD_CARDS, cardsInPhoneOrder } = await import("@/lib/record/record-cards");
 const { m } = await import("@/lib/messages");
 
 const cards = (html: string) => [...html.matchAll(/<section[^>]*data-record-card="([\w-]+)"[^>]*data-state="(\w+)"[\s\S]*?<\/section>/g)]
@@ -22,7 +22,7 @@ describe("contact record page loading.tsx", () => {
   it("renders one loading card per registry entry, in the phone order that is the DOM order, each a skeleton (rule 7; mutation: drop a card -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(Loading));
     expect(html).toContain("data-record-layout");
-    expect(cards(html)).toEqual(cardsInPhoneOrder().map((d) => ({ id: d.id, state: "loading", skeleton: true })));
+    expect(cards(html)).toEqual(cardsInPhoneOrder(RECORD_CARDS).map((d) => ({ id: d.id, state: "loading", skeleton: true })));
     // A skeleton header, never a spinner.
     expect(html).toMatch(/<header[^>]*data-record-skeleton-header/);
     expect(html).not.toMatch(/animate-spin|spinner/i);

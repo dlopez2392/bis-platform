@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RECORD_CARDS, cardsInPhoneOrder, columnRuns } from "./record-cards";
+import { RECORD_CARDS, GROUP_RECORD_CARDS, cardsInPhoneOrder, columnRuns } from "./record-cards";
 import { m } from "@/lib/messages";
 
 describe("the record card registry (S-03 part 1, spec §8)", () => {
@@ -8,14 +8,14 @@ describe("the record card registry (S-03 part 1, spec §8)", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
   it("phone order is exactly D6's: summary, Next up, the timeline, what they have, who they are (mutation: swap timeline's and summary's phoneOrder -> FAILS)", () => {
-    expect(cardsInPhoneOrder().map((c) => c.id)).toEqual(
+    expect(cardsInPhoneOrder(RECORD_CARDS).map((c) => c.id)).toEqual(
       ["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"]);
   });
   it("each column is ONE unbroken run in phone order, so the DOM can be the phone order on a desk too (C6; mutation: give tags phoneOrder 3.5 -> FAILS)", () => {
-    expect(columnRuns().map((r) => r.column)).toEqual(["happening", "have", "who"]);
+    expect(columnRuns(RECORD_CARDS).map((r) => r.column)).toEqual(["happening", "have", "who"]);
   });
   it("within a column, desk order agrees with phone order", () => {
-    for (const run of columnRuns()) {
+    for (const run of columnRuns(RECORD_CARDS)) {
       expect(run.cards.map((c) => c.deskOrder)).toEqual([...run.cards.map((c) => c.deskOrder)].sort((a, b) => a - b));
     }
   });
@@ -36,5 +36,33 @@ describe("the record card registry (S-03 part 1, spec §8)", () => {
     for (const c of RECORD_CARDS) {
       expect(catalogue[`${c.titleKey}.es`], `${c.id}: ${c.titleKey}.es`).toBeTruthy();
     }
+  });
+});
+
+describe("the group record page's cards (S-03 part 2, spec §7)", () => {
+  it("ids are unique", () => {
+    const ids = GROUP_RECORD_CARDS.map((c) => c.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+  it("2a's phone order: what they have, then who they are (mutation: swap people's and properties' phoneOrder -> FAILS)", () => {
+    expect(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((c) => c.id)).toEqual(["properties", "deals", "people", "details"]);
+    expect(columnRuns(GROUP_RECORD_CARDS).map((r) => r.column)).toEqual(["have", "who"]);
+  });
+  it("only Properties and Deals collapse on a phone", () => {
+    expect(GROUP_RECORD_CARDS.filter((c) => c.collapsibleOnPhone).map((c) => c.id).sort()).toEqual(["deals", "properties"]);
+  });
+  it("every title has a key and a Spanish twin (mutation: delete groupPage.card.people.es -> FAILS naming people)", () => {
+    const catalogue: Record<string, string | undefined> = m;
+    for (const c of GROUP_RECORD_CARDS) {
+      expect(m[c.titleKey], c.id).toBeTruthy();
+      expect(catalogue[`${c.titleKey}.es`], `${c.id}: ${c.titleKey}.es`).toBeTruthy();
+    }
+  });
+  it("the contact list's runs are unchanged by the generic (mutation: make columnRuns ignore its argument and read GROUP_RECORD_CARDS -> FAILS)", () => {
+    expect(columnRuns(RECORD_CARDS).map((r) => [r.column, r.cards.map((c) => c.id)])).toEqual([
+      ["happening", ["summary", "next-up", "timeline"]],
+      ["have", ["groups", "properties", "deals"]],
+      ["who", ["details", "tags", "related-people"]],
+    ]);
   });
 });

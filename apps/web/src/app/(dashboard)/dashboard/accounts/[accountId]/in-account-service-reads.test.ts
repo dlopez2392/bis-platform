@@ -118,6 +118,9 @@ const ALLOWED: Record<string, Reason> = {
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
   "lib/ops/stamp.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",
+  // loadPrimaryText (the group page's Text): ledgerDb only after getContact on the request client
+  // proved the call-first member (S-03 part 2, C14).
+  "lib/record/group-loaders.ts": "proven-target",
   "lib/setup/setup-inputs.ts": "agency-only",
   "lib/team/ensure-role.ts": "before-trust",
   "lib/voice/presence.ts": "technician-filtered",

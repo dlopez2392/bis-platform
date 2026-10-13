@@ -835,20 +835,20 @@ describe("setContactBusinessAction", () => {
     expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
   });
   const ADDED = "00000000-0000-4000-8000-000000000002";
-  it("undo hands the server exactly its own payload (the control for the refusal below)", async () => {
+  it("undo hands the server exactly its own payload and the caller as the actor of the removal it records (the control for the refusal below; mutation: drop the actor -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({ id: "c1" });
     dbMocks.undoSetBusiness.mockResolvedValue("ok");
     expect(await undoContactBusinessAction("a1", "c1", { added: ADDED, removed: null })).toEqual({ ok: true });
-    expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", ADDED, null);
+    expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", ADDED, null, "user_1");
   });
   // Final review I-B: undo_set_business now answers not_found for a snapshot naming a household or
   // another account's group (a forged Undo). The action must say the Undo failed, and refresh nothing.
   it("undo surfaces the database's refusal of a forged snapshot as a failed Undo, revalidating nothing (mutation: ignore undoSetBusiness's answer -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValue({ id: "c1" });
     dbMocks.undoSetBusiness.mockResolvedValue("not_found");
-    const forged = { id: ADDED, account_id: "a1", client_group_id: "g-household", contact_id: "c1", role: null, is_primary: false, is_billing: false, created_at: "2026-01-01" };
+    const forged = { id: ADDED, account_id: "a1", client_group_id: "g-household", contact_id: "c1", role: null, is_primary: false, is_billing: false, is_primary_contact: false, created_at: "2026-01-01" };
     expect(await undoContactBusinessAction("a1", "c1", { added: null, removed: forged })).toEqual({ ok: false, error: "Undo failed — please try again." });
-    expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", null, forged);
+    expect(dbMocks.undoSetBusiness).toHaveBeenCalledWith(SERVICE, "a1", "c1", null, forged, "user_1");
     expect(revalidatePath).not.toHaveBeenCalled();
   });
   it("undo refuses a contact the request client cannot see, before any service write (I1; mutation: drop the undo's getContact proof -> FAILS)", async () => {

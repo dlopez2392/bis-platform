@@ -37,6 +37,14 @@ describe("the header's actions (spec §9.1)", () => {
     expect(telHref("call me")).toBeNull();
     expect(telHref(null)).toBeNull();
   });
+  it("a composeHref prefixes Text and Email's anchors (S-03 part 2 §8.1); without one, today's bare anchor (mutation: always prefix -> the contact page's case FAILS)", () => {
+    const withHref = headerActions({ ...base, composeHref: "/dashboard/accounts/a1/contacts/c9" });
+    expect(withHref.find((x) => x.id === "text")!.href).toBe("/dashboard/accounts/a1/contacts/c9#compose-sms");
+    expect(withHref.find((x) => x.id === "email")!.href).toBe("/dashboard/accounts/a1/contacts/c9#compose-email");
+    const bare = headerActions(base);
+    expect(bare.find((x) => x.id === "text")!.href).toBe("#compose-sms");
+    expect(bare.find((x) => x.id === "email")!.href).toBe("#compose-email");
+  });
 });
 
 describe("canTextFrom: exactly when the composer's text form would open", () => {

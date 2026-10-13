@@ -1,0 +1,146 @@
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
+import type { SupabaseClient, GroupMember } from "@bis/db";
+
+/**
+ * The group page's loaders (S-03 part 2, plan Task 7; part 1 C5): each returns a load and NEVER
+ * throws, logs the card and the account only, and the Text gate builds the ledger (service) client
+ * only after getContact on the REQUEST client proved the call-first member (C14).
+ */
+const listGroupMembersMock = vi.fn();
+const listOpenDealsForMock = vi.fn();
+const listGroupPlacesMock = vi.fn();
+const getContactMock = vi.fn();
+vi.mock("@bis/db", () => ({
+  listGroupMembers: (...a: unknown[]) => listGroupMembersMock(...a),
+  listOpenDealsFor: (...a: unknown[]) => listOpenDealsForMock(...a),
+  listGroupPlaces: (...a: unknown[]) => listGroupPlacesMock(...a),
+  getContact: (...a: unknown[]) => getContactMock(...a),
+}));
+const LEDGER = vi.hoisted(() => ({ tag: "ledger-db" }));
+const ledgerDbMock = vi.hoisted(() => vi.fn(() => LEDGER));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbMock() }));
+const smsRecipientStateMock = vi.fn();
+vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: (...a: unknown[]) => smsRecipientStateMock(...a) }));
+
+const { loadGroupPeople, loadGroupDeals, loadGroupHeaderPlaces, loadPrimaryText } = await import("./group-loaders");
+
+const db = { tag: "request-db" } as unknown as SupabaseClient;
+const G = "11111111-1111-4111-8111-111111111111";
+const ANA: GroupMember = {
+  memberId: "m-ana", contactId: "c-ana", firstName: "Ana", lastName: "García", phone: "+19565550100",
+  email: "ana@example.com", role: null, isBilling: false, isPrimaryContact: true, joinedAt: "2026-01-01T00:00:00Z",
+};
+const OPEN_GATE = { ok: true as const, from: "+19565550199", ownedNumbers: ["+19565550199"] };
+const CONTACT = { id: "c-ana", phone: "+19565550100", email: "ana@example.com", phone_country_unconfirmed: false };
+
+let errors: MockInstance<typeof console.error>;
+const logged = () => errors.mock.calls.map((c) => String(c[0]));
+
+describe("group record loaders", () => {
+  beforeEach(() => {
+    for (const f of [listGroupMembersMock, listOpenDealsForMock, listGroupPlacesMock, getContactMock, smsRecipientStateMock]) f.mockReset();
+    ledgerDbMock.mockClear();
+    errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => errors.mockRestore());
+
+  it("People: a page is ready with its cursor passed through, and a failed read is the card's error, logged by card and account only (mutation: rethrow -> FAILS; mutation: log the group id -> FAILS)", async () => {
+    const page = { primary: ANA, members: [], next: null };
+    listGroupMembersMock.mockResolvedValueOnce(page);
+    const after = { v: "2026-01-01T00:00:00.000Z", id: "22222222-2222-4222-8222-222222222222" };
+    expect(await loadGroupPeople(db, "acct1", G, after)).toEqual({ status: "ready", page });
+    expect(listGroupMembersMock).toHaveBeenCalledWith(db, "acct1", G, { after });
+
+    listGroupMembersMock.mockRejectedValueOnce(new Error("members down"));
+    expect(await loadGroupPeople(db, "acct1", G)).toEqual({ status: "error" });
+    expect(logged()).toEqual([expect.stringMatching(/^record page: people read failed for account acct1: /)]);
+    expect(logged().join("\n")).not.toContain(G);
+  });
+
+  it("Deals: reads exactly the set it is handed and returns it for the names (C13; mutation: read the deals of no one -> FAILS)", async () => {
+    const set = [{ contactId: "c1", firstName: "Ana", lastName: null }, { contactId: "c2", firstName: "Luis", lastName: null }];
+    const deals = [{ id: "d1", name: "Deck", status: "open", monetary_value: 10, created_at: "2026-01-01T00:00:00Z", contact_id: "c2" }];
+    listOpenDealsForMock.mockResolvedValueOnce({ deals, count: 41 });
+    expect(await loadGroupDeals(db, "acct1", async () => set)).toEqual({ status: "ready", deals, count: 41, people: set });
+    expect(listOpenDealsForMock).toHaveBeenCalledWith(db, "acct1", ["c1", "c2"]);
+  });
+
+  it("Deals: a failed people read or a failed deals read is the card's error, never a throw (mutation: let the people read escape the try -> FAILS)", async () => {
+    expect(await loadGroupDeals(db, "acct1", async () => { throw new Error("people down"); })).toEqual({ status: "error" });
+    expect(listOpenDealsForMock).not.toHaveBeenCalled();
+    listOpenDealsForMock.mockRejectedValueOnce(new Error("deals down"));
+    expect(await loadGroupDeals(db, "acct1", async () => [{ contactId: "c1", firstName: null, lastName: null }])).toEqual({ status: "error" });
+    expect(logged()).toEqual([
+      expect.stringMatching(/^record page: deals read failed for account acct1: /),
+      expect.stringMatching(/^record page: deals read failed for account acct1: /),
+    ]);
+  });
+
+  it("the header's places are soft: null on a failed read, logged (mutation: rethrow -> FAILS)", async () => {
+    const places = { groups: [], places: [], placeCount: 0, equipment: [], equipmentCount: 0 };
+    listGroupPlacesMock.mockResolvedValueOnce(places);
+    expect(await loadGroupHeaderPlaces(db, "acct1", G)).toBe(places);
+    expect(listGroupPlacesMock).toHaveBeenCalledWith(db, "acct1", G);
+    listGroupPlacesMock.mockRejectedValueOnce(new Error("places down"));
+    expect(await loadGroupHeaderPlaces(db, "acct1", G)).toBeNull();
+    expect(logged()).toEqual([expect.stringMatching(/^record page: header places read failed for account acct1: /)]);
+  });
+
+  it("Text: no call-first member, or no gate, is false with no contact read, no ledger client and nothing logged, because neither is a failure (mutation: drop the primary guard -> FAILS)", async () => {
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: null, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: null, zone: "UTC", locale: "en" })).toBe(false);
+    expect(getContactMock).not.toHaveBeenCalled();
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+    expect(logged()).toEqual([]);
+  });
+
+  it("Text: a closed gate (no approved number yet, most accounts today) is false with no contact read and no ledger client (mutation: drop the gate.ok skip -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(CONTACT);
+    smsRecipientStateMock.mockResolvedValue({ kind: "ok" });
+    for (const reason of ["a2p_not_approved", "no_live_number"] as const) {
+      expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: { ok: false, reason }, zone: "UTC", locale: "en" })).toBe(false);
+    }
+    expect(getContactMock).not.toHaveBeenCalled();
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+    expect(logged()).toEqual([]);
+  });
+
+  it("Text: a call-first member getContact cannot see is false, and the ledger client is never built (mutation: build the ledger before the contact check -> FAILS)", async () => {
+    getContactMock.mockResolvedValueOnce(null);
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
+    expect(getContactMock).toHaveBeenCalledWith(db, "acct1", "c-ana");
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+  });
+
+  it("Text: the ledger client is built only AFTER getContact on the request client resolved the member (C14; mutation: build it first -> FAILS)", async () => {
+    getContactMock.mockResolvedValueOnce(CONTACT);
+    smsRecipientStateMock.mockResolvedValueOnce({ kind: "ok" });
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(true);
+    expect(getContactMock.mock.invocationCallOrder[0]).toBeLessThan(ledgerDbMock.mock.invocationCallOrder[0]!);
+    expect(smsRecipientStateMock).toHaveBeenCalledWith(LEDGER, "acct1", CONTACT);
+  });
+
+  it("Text answers canTextFrom's verdict: a stop, a closed gate or no usable number is false (mutation: return true once the contact is found -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(CONTACT);
+    smsRecipientStateMock.mockResolvedValueOnce({ kind: "stopped", since: "2026-01-01T00:00:00Z" });
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "es" })).toBe(false);
+    smsRecipientStateMock.mockResolvedValueOnce({ kind: "ok" });
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: { ok: false, reason: "a2p_not_approved" }, zone: "UTC", locale: "en" })).toBe(false);
+    getContactMock.mockResolvedValueOnce({ ...CONTACT, phone: "12" });
+    smsRecipientStateMock.mockResolvedValueOnce({ kind: "ok" });
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
+  });
+
+  it("Text fails closed: a throw anywhere is false, logged as the primary text read by account, apart from the gate read (mutation: rethrow -> FAILS; mutation: the label loaders.ts uses -> FAILS)", async () => {
+    getContactMock.mockRejectedValueOnce(new Error("contact down"));
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
+    getContactMock.mockResolvedValueOnce(CONTACT);
+    smsRecipientStateMock.mockRejectedValueOnce(new Error("ledger down"));
+    expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
+    expect(logged()).toEqual([
+      expect.stringMatching(/^record page: primary text read failed for account acct1: /),
+      expect.stringMatching(/^record page: primary text read failed for account acct1: /),
+    ]);
+    expect(logged().join("\n")).not.toContain("c-ana");
+  });
+});

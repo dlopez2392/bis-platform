@@ -113,7 +113,7 @@ beforeEach(() => { vi.clearAllMocks(); });
 
 describe("the card's writes: feedback and Undo (rule 6)", () => {
   it("remove says so by name and offers Undo, which restores the SAME snapshot and refreshes (mutation: restore without the returned snapshot -> FAILS)", async () => {
-    const snapshot = { id: "m1", account_id: "a1", client_group_id: "g1", contact_id: "c1", role: "Madre", is_primary: true, is_billing: true, created_at: "2026-10-01T00:00:00Z" };
+    const snapshot = { id: "m1", account_id: "a1", client_group_id: "g1", contact_id: "c1", role: "Madre", is_primary: true, is_billing: true, is_primary_contact: false, created_at: "2026-10-01T00:00:00Z" };
     vi.mocked(actions.removeMembershipAction).mockResolvedValue(ok({ removed: snapshot }));
     vi.mocked(actions.restoreMembershipAction).mockResolvedValue({ ok: true });
     const onChanged = vi.fn();

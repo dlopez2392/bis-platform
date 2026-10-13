@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 import type { ContactPlaceGroup } from "@bis/db";
 import { parsePlaceFields, PLACE_LIMITS } from "@/lib/contacts/place-input";
 import { ownerOptions, placeTitle } from "@/lib/contacts/place-view";
-import { addPlaceAction } from "./places-actions";
+import { addPlaceAction, type PlaceSubjectArg } from "./places-actions";
 
 const hintClass = "text-xs text-muted-foreground";
 const focusRing = "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -30,7 +30,8 @@ type Draft = typeof EMPTY;
  * read out in a POLITE live region inside the dialog, never role="alert".
  */
 export function PlaceDialog({ accountId, contactId, subject, groups, canMovePlace, onAdded }: {
-  accountId: string; contactId: string; subject: { id: string; name: string };
+  /** A contact id, or `{ kind: "group", id }` on a group's own page (S-03 part 2, C12). */
+  accountId: string; contactId: PlaceSubjectArg; subject: { id: string; name: string };
   groups: readonly ContactPlaceGroup[]; canMovePlace: boolean;
   onAdded: (id: string, title: string) => void;
 }) {

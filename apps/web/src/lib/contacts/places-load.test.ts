@@ -43,4 +43,22 @@ describe("placesLoadFrom: the card's read, parsed", () => {
     ];
     for (const [what, r] of cases) expect(await placesLoadFrom(r), what).toEqual({ status: "error" });
   });
+
+  // S-03 part 2: the group's own route answers `group`; the contact's never does.
+  const GROUP_BODY = {
+    ...BODY, subject: { id: BODY.groups[0]!.id, firstName: null, lastName: null }, groups: [],
+    group: { id: BODY.groups[0]!.id, kind: "business", name: "Reyes Roofing" },
+  };
+  it("a group's body with a well-formed group is ready", async () => {
+    expect(await placesLoadFrom(res(GROUP_BODY))).toEqual({ status: "ready", data: GROUP_BODY });
+  });
+
+  it("a malformed group is the card's error state (mutation: drop the group clause -> FAILS)", async () => {
+    const cases: [string, unknown][] = [
+      ["null", null], ["a string", "Reyes Roofing"], ["no id", { kind: "household", name: "Reyes" }],
+      ["an unknown kind", { id: GROUP_BODY.group.id, kind: "family", name: "Reyes" }],
+      ["a numeric name", { id: GROUP_BODY.group.id, kind: "household", name: 3 }],
+    ];
+    for (const [what, group] of cases) expect(await placesLoadFrom(res({ ...GROUP_BODY, group })), what).toEqual({ status: "error" });
+  });
 });
