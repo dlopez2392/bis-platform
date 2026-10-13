@@ -30,14 +30,18 @@ test.describe("S-09 PR 2: the review card's Spanish box (fixture account only)",
 
     try {
       // Seed a known starting row: English body set, Spanish box untouched
-      // (NULL body_es / NULL basis) so the card opens pre-filled with ours.
+      // (NULL body_es, so the card opens pre-filled with ours) and its basis
+      // EQUAL to the English, so the row opens NOT stale. A NULL basis beside
+      // a non-empty English reads stale (spanishIsStale), which would make
+      // the stale assertion below pass before any edit.
+      const seededBody = "Thanks for having us out!";
       await upsertAutomation(
         db, accountId, "review_request",
         {
           enabled: false,
-          body: "Thanks for having us out!",
+          body: seededBody,
           config: { channel: "email", reviewUrl: "https://example.com/r" },
-          bodyEs: null, bodyEsBasis: null,
+          bodyEs: null, bodyEsBasis: seededBody,
         },
         clerkUserId,
       );
@@ -46,8 +50,9 @@ test.describe("S-09 PR 2: the review card's Spanish box (fixture account only)",
       const card = page.getByTestId("review-request-card");
       const es = card.locator('textarea[name="body_es"]');
 
-      // Pre-filled with our Spanish default (NULL body_es).
+      // Pre-filled with our Spanish default (NULL body_es), and not stale.
       await expect(es).toHaveValue(ours);
+      await expect(card.getByText(m["automations.bodyEs.stale"])).not.toBeVisible();
 
       // An English-only edit, saved, leaves the Spanish row's basis stale
       // against the new English.
@@ -77,8 +82,8 @@ test.describe("S-09 PR 2: the review card's Spanish box (fixture account only)",
           )
         : db.from("automations").delete().eq("account_id", accountId).eq("recipe_key", "review_request")
             .then(({ error }) => { if (error) throw error; });
-      await Promise.resolve(restore).catch((e: unknown) =>
-        console.error(`automations-spanish e2e: restore failed: ${String(e)}`));
+      // A failed restore fails the test: the fixture row must not be left mutated silently.
+      await restore;
     }
   });
 });
