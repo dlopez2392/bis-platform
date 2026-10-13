@@ -11,6 +11,7 @@ export function MessageThread({
   contactName,
   composer,
   timezone,
+  contactLanguage,
 }: {
   messages: Message[];
   contactName: string;
@@ -20,6 +21,8 @@ export function MessageThread({
    *  every bubble's timestamp rendered in the RUNTIME's zone, never the
    *  account's. */
   timezone: string;
+  /** S-09 §9: the customer's language for their own words; null when not set. */
+  contactLanguage: "en" | "es" | null;
 }) {
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
@@ -50,10 +53,17 @@ export function MessageThread({
                 : "bg-[var(--surface-2)]",
             )}
           >
-            {message.subject ? (
-              <p className="text-sm font-medium text-card-foreground">{message.subject}</p>
-            ) : null}
-            <p className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
+            {/* S-09 §9: what the CUSTOMER wrote (inbound, never the voice channel's AI summary) carries
+                their language; with none it is typed text of unknown language. Outbound is unchanged. */}
+            {(() => {
+              const typedLang = message.direction === "inbound" && message.channel !== "voice" ? (contactLanguage ?? "") : undefined;
+              return (
+                <>
+                  {message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{message.subject}</p> : null}
+                  <p lang={typedLang} className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
+                </>
+              );
+            })()}
             <p className="mt-1 text-xs text-muted-foreground">
               {formatDateTimeInZone(message.created_at, timezone)}
               {message.channel !== "email" ? (

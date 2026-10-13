@@ -156,6 +156,7 @@ export default async function ConversationsPage({
             <MessageThread
               messages={messages}
               timezone={zone.zone}
+              contactLanguage={active.contactLanguage}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,
