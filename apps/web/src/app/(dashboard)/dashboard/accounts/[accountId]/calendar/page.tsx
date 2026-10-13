@@ -57,11 +57,11 @@ export default async function CalendarPage({
   // a row the list carries as started always offers its outcome buttons.
   const nowIso = new Date().toISOString();
   const [account, bookings, h] = await Promise.all([
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`calendar: account lookup failed: ${error.message}`);
         if (!data) throw new Error("calendar: account not found");
-        return data as { timezone: string };
+        return data as { timezone: string; language: string | null };
       }),
     listCalendarBookings(db, accountId, nowIso),
     headers(),
@@ -93,6 +93,7 @@ export default async function CalendarPage({
             timezone={account.timezone}
             bookings={bookings}
             nowIso={nowIso}
+            accountLanguage={account.language === "en" || account.language === "es" ? account.language : null}
             statusAction={boundSetStatus}
             noticeOptionAction={boundNoticeOption}
             cancelAction={boundCancel}

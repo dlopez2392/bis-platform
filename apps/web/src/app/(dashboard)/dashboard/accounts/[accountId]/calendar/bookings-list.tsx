@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import type { BookingRow, BookingStatus } from "@bis/db";
+import { recipientLanguage, type BookingRow, type BookingStatus } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,11 @@ import { CancelDialog } from "./cancel-dialog";
 import { runCancelButton, NO_NOTICE } from "./cancel-flow";
 import type { ActionResult, CancelBookingResult, CancelNoticeChoice, CancelNoticeOptionResult } from "./actions";
 
-type Booking = BookingRow & { contact_name: string; contact_email: string | null };
+type Booking = BookingRow & {
+  contact_name: string; contact_email: string | null;
+  /** Task 17, C18: resolves the Cancel dialog's starting language. */
+  contact_language: string | null;
+};
 
 const STATUS_LABEL: Record<BookingStatus, string> = {
   booked: m["calendar.bookings.status.booked"],
@@ -66,13 +70,16 @@ function timeRange(startsAt: string, endsAt: string, timeZone: string): string {
 }
 
 function StatusActions({
-  booking, started, when, statusAction, noticeOptionAction, cancelAction, undoCancelAction,
+  booking, started, when, accountLanguage, statusAction, noticeOptionAction, cancelAction, undoCancelAction,
 }: {
   booking: Booking;
   /** D-030: the appointment's start is at or before the page's `nowIso`. */
   started: boolean;
   /** The row's own time, in the account's zone, for the Cancel dialog. */
   when: string;
+  /** Task 17, C18: the account's own language, the Cancel dialog's fallback
+   *  when the contact carries none (`recipientLanguage`). */
+  accountLanguage: "en" | "es" | null;
   statusAction: (bookingId: string, status: BookingStatus) => Promise<ActionResult>;
   noticeOptionAction: (bookingId: string) => Promise<CancelNoticeOptionResult>;
   cancelAction: (bookingId: string, notice: CancelNoticeChoice) => Promise<CancelBookingResult>;
@@ -145,6 +152,7 @@ function StatusActions({
         <CancelDialog
           contactName={booking.contact_name}
           when={when}
+          defaultLocale={recipientLanguage(booking.contact_language, accountLanguage)}
           onOpenChange={setDialogOpen}
           onConfirm={confirmFromDialog}
         />
@@ -154,13 +162,17 @@ function StatusActions({
 }
 
 export function BookingsList({
-  accountId, timezone, bookings, nowIso, statusAction, noticeOptionAction, cancelAction, undoCancelAction,
+  accountId, timezone, bookings, nowIso, accountLanguage,
+  statusAction, noticeOptionAction, cancelAction, undoCancelAction,
 }: {
   accountId: string;
   /** The ACCOUNT zone (spec: grouped by day in the account zone, not the
    *  browser's or the booker's own). */
   timezone: string;
   bookings: Booking[];
+  /** Task 17, C18: `accounts.language`, the Cancel dialog's fallback when
+   *  the booking's own contact carries none. */
+  accountLanguage?: "en" | "es" | null;
   /** The server's clock at render, the same instant the page listed from.
    *  Decides which rows have STARTED (D-030). A prop, never `Date.now()` in
    *  here: the server render and the hydrated client must agree. */
@@ -261,6 +273,7 @@ export function BookingsList({
                         booking={b}
                         started={new Date(b.starts_at).getTime() <= new Date(nowIso).getTime()}
                         when={timeRange(b.starts_at, b.ends_at, timezone)}
+                        accountLanguage={accountLanguage ?? null}
                         statusAction={statusAction}
                         noticeOptionAction={noticeOptionAction}
                         cancelAction={cancelAction}

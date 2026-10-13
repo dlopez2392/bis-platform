@@ -10,10 +10,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SubmitButton } from "../../submit-button";
 import { Notice } from "@/components/ui/notice";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { m } from "@/lib/messages";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
-import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
 import {
   DEFAULT_CLOSE_TIME, DEFAULT_OPEN_TIME, openHoursToRows, seedTimeOnPickerOpen,
   type WeekdayKey,
@@ -67,6 +68,20 @@ export function CalendarSettings({
   // never drift from what `bookingFollowupEmail` actually falls back to.
   const [followupBodyText, setFollowupBodyText] = useState(calendar.followup_body);
   const rows = useMemo(() => openHoursToRows(calendar.open_hours), [calendar.open_hours]);
+
+  // Task 17: C14/spec §12.3's staleness rule, mirrored here rather than
+  // importing `spanishIsStale` (packages/db/src/messaging.ts) into this
+  // client component — the same "the barrel carries the database client
+  // into the browser bundle" reason voice-settings.tsx's own mirror exists
+  // for. Reads the STORED row (plan deviation 5), not the live
+  // `followupBodyText` state: a warning that flickered while typing would
+  // describe an edit not yet saved.
+  const followupEsStale = (() => {
+    if (calendar.followup_body_es !== null && calendar.followup_body_es.trim() === "") return false;
+    if (calendar.followup_body.trim() === "" && calendar.followup_body_es === null) return false;
+    const basis = calendar.followup_body_es_basis === null ? null : calendar.followup_body_es_basis.trim();
+    return basis !== calendar.followup_body.trim();
+  })();
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
@@ -230,14 +245,28 @@ export function CalendarSettings({
               />
               <Label htmlFor="followup-enabled">{m["calendar.settings.followupEnabled"]}</Label>
             </div>
-            <Label htmlFor="followupBody" className="sr-only">{m["calendar.settings.followupBody"]}</Label>
-            <textarea
-              id="followupBody" name="followupBody" rows={3}
-              value={followupBodyText}
-              onChange={(e) => setFollowupBodyText(e.target.value)}
-              placeholder={DEFAULT_FOLLOWUP_BODY}
-              className={nativeFieldClass}
-            />
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor="followupBody" className="sr-only">{m["calendar.settings.followupBody"]}</Label>
+                <textarea
+                  id="followupBody" name="followupBody" rows={3}
+                  value={followupBodyText}
+                  onChange={(e) => setFollowupBodyText(e.target.value)}
+                  placeholder={DEFAULT_FOLLOWUP_BODY}
+                  className={nativeFieldClass}
+                />
+              </div>
+              {/* Task 17: the Spanish box, inside this card's ONE form
+                  (rule 8) — nothing here saves on its own; Save commits
+                  both boxes together. */}
+              <SpanishBodyField
+                idPrefix="followup"
+                stored={{ bodyEs: calendar.followup_body_es, stale: followupEsStale }}
+                defaultEs={defaultFollowupBody("es")}
+                composeEs={(x) => x}
+                sms={false}
+              />
+            </div>
           </div>
 
           <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>

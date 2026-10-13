@@ -13,9 +13,11 @@ export type NoticeDraft = { send: boolean; locale: PublicLocale; message: string
 
 const defaultFor = (locale: PublicLocale) => bookingStrings(locale).cancelNoticeDefault;
 
-/** The dialog opens only when a notice can go (`cancelStep`), so it starts on. */
-export function initialDraft(): NoticeDraft {
-  return { send: true, locale: "en", message: defaultFor("en") };
+/** The dialog opens only when a notice can go (`cancelStep`), so it starts
+ *  on. Task 17, C18: pre-selected to the customer's own language, when the
+ *  caller (the booking list) has resolved one; English otherwise. */
+export function initialDraft(locale: PublicLocale = "en"): NoticeDraft {
+  return { send: true, locale, message: defaultFor(locale) };
 }
 
 /** Switching language swaps a message the owner has not touched (or has
