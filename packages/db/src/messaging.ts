@@ -924,10 +924,12 @@ export function spanishIsStale(input: { body: string; bodyEs: string | null; bod
  * value.
  *
  * The basis moves to the new English only when the Spanish changed IN THIS SAVE to a WRITTEN
- * value (text or '') or "The Spanish still matches" was ticked (orchestrator fix 1). Choosing our
- * Spanish (the new value is `null`) never moves the basis: there is no written Spanish left to
- * compare an English edit against, so moving it would let a later "emptied" or custom Spanish
- * silently inherit a basis nobody actually wrote beside.
+ * value (text or '') or "The Spanish still matches" was ticked (orchestrator fix 1). An unchanged
+ * box keeps the stored basis. Choosing our Spanish (the new value is `null`) CLEARS the basis
+ * instead (orchestrator fix, case B) — unless the box is ticked, our Spanish has not been checked
+ * against this English, so there is nothing a later staleness check could honestly compare it to;
+ * leaving the old basis in place would read a written Spanish that was just REPLACED by our
+ * default as still matching an English it was never checked against.
  */
 export function nextSpanishBox(input: {
   submitted: string; useOurs: boolean; stillMatches: boolean; defaultEs: string; body: string;
@@ -940,5 +942,6 @@ export function nextSpanishBox(input: {
   else if (text === input.defaultEs.trim()) bodyEs = null;
   else bodyEs = text;
   const changed = bodyEs !== input.stored.bodyEs;
-  return { bodyEs, basis: (changed && bodyEs !== null) || input.stillMatches ? input.body : input.stored.basis };
+  const basis = input.stillMatches ? input.body : !changed ? input.stored.basis : bodyEs === null ? null : input.body;
+  return { bodyEs, basis };
 }

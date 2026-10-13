@@ -94,4 +94,9 @@ describe("nextSpanishBox (C13 on save, §12.3's basis rule, plan deviation 3)", 
     expect(next).toEqual({ bodyEs: null, basis: null });
     expect(spanishIsStale({ body: "Custom English.", bodyEs: next.bodyEs, bodyEsBasis: next.basis })).toBe(true);
   });
+  it("Case B: a written Spanish replaced by ours, next to a custom English, warns (mutation: keep the old basis instead of clearing it -> FAILS)", () => {
+    const next = nextSpanishBox({ ...base, useOurs: true, submitted: "", body: "Custom.", stored: { bodyEs: "Suyo.", basis: "Custom." } });
+    expect(next).toEqual({ bodyEs: null, basis: null });
+    expect(spanishIsStale({ body: "Custom.", bodyEs: next.bodyEs, bodyEsBasis: next.basis })).toBe(true);
+  });
 });
