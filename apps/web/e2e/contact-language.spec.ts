@@ -88,14 +88,17 @@ test.describe("a language on every contact (S-09): in Spanish", () => {
     const prior = await db.from("users").select("language").eq("id", ownerId).single();
     expect(prior.error, `reading the Owner's language before the switch: ${prior.error?.message}`).toBeNull();
     const priorLanguage = prior.data!.language as string | null;
-    const set = await db.from("users").update({ language: "es" }).eq("id", ownerId).select("id");
-    expect(set.error, `switching the Owner to Spanish: ${set.error?.message}`).toBeNull();
-    expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
 
+    // The contact is created BEFORE the Owner's language flips, and the flip runs inside the `try`,
+    // so whatever throws after the flip (its own assertions included), the `finally` restores the
+    // Owner's language. Flipping first left the Owner in Spanish whenever `createContact` threw.
     const stamp = Date.now();
     const { id, existing } = await createContact(db, fixture.accountId, { firstName: "Idioma", lastName: `Prueba ${stamp}` }, "e2e-language");
     if (existing) throw new Error("contact-language e2e: matched an existing contact; refusing to use it.");
     try {
+      const set = await db.from("users").update({ language: "es" }).eq("id", ownerId).select("id");
+      expect(set.error, `switching the Owner to Spanish: ${set.error?.message}`).toBeNull();
+      expect(set.data, "switching the Owner to Spanish: one users row").toHaveLength(1);
       await recordLanguageSignal(db, fixture.accountId, id, { language: "es", source: "booking", at: new Date() }, "public", "system");
       await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts/${id}`);
       const row = recordPage(page).locator("[data-language-row]");
