@@ -49,7 +49,14 @@ export function detectCallerLanguage(
   return detectSpokenLanguage(turns, profileLanguages) === "es" ? "es" : "en";
 }
 
-/** S-09 C5's thresholds. Tuned on stored transcripts before PR 1 merged (Q7; plan Task 4). */
+/**
+ * S-09 C5's thresholds (Q7; plan Task 4). Measured 2026-10-13 on 176 production calls with caller
+ * text: 126 robocalls, 36 rows of six repeated demo scripts, 6 with nothing said, 8 one-off test
+ * calls, so only 7 independent English calls and 0 real Spanish callers. Every set swept
+ * (esMin 2-3, enMin 2-5, enRatio 1.5-3) gave falseEn 0 and falseEs 0; these values tied for best
+ * coverage and were kept. UNVALIDATED on real customer traffic: re-tune once real Spanish calls
+ * exist (spec §19 risk).
+ */
 export type ClearThresholds = { esMin: number; enMin: number; enRatio: number };
 export const CLEAR_THRESHOLDS: ClearThresholds = { esMin: 2, enMin: 3, enRatio: 2 };
 
