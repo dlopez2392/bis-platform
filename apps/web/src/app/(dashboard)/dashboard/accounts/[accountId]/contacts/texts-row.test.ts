@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
@@ -13,6 +13,7 @@ vi.mock("./texts-actions", () => ({
 }));
 
 const { TextsRow } = await import("./texts-row");
+const { LocaleProvider } = await import("@/components/locale-provider");
 
 const ready = (view: Extract<TextsLoad, { status: "ready" }>["view"]): TextsLoad =>
   ({ status: "ready", view, zone: "America/Chicago", phone: "+15512345678" });
@@ -130,5 +131,25 @@ describe("TextsRow — every state of spec §6", () => {
 
   it("the status is a focus target, so an action keeps the keyboard in the row (review R3-M9; mutation: drop tabIndex → FAILS)", () => {
     expect(html(ready({ kind: "allowed", newestId: null }))).toMatch(/data-testid="texts-row-status"[^>]*tabindex="-1"|tabindex="-1"[^>]*data-testid="texts-row-status"/);
+  });
+});
+
+describe("TextsRow in Spanish (S-03 part 3 §10)", () => {
+  const es = (load: TextsLoad, onRetry?: () => void) =>
+    renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(TextsRow, { accountId: "a1", contactId: "c1", load, onRetry })));
+  it("Allowed reads Permitido under Mensajes, with a ghost Detener textos (mutation: keep m[\"contact.texts.allowed\"] -> FAILS)", () => {
+    const out = renderedText(es(ready({ kind: "allowed", newestId: null })));
+    expect(out).toMatch(/Mensajes[\s\S]*Textos\s+Permitido/);
+    expect(out).toContain("Detener textos");
+  });
+  it("stopped by the customer: the Spanish since line and the START line (mutation: textsLine without the locale -> FAILS)", () => {
+    const out = renderedText(es(ready({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "keyword", word: "STOP" }, canResume: false })));
+    expect(out).toMatch(/Desde el .+ · mandó STOP por texto/);
+    expect(out).toContain("Puede mandar START por texto para volver a recibir textos.");
+  });
+  it("the error line and its Retry (mutation: keep m[\"common.retry\"] -> FAILS)", () => {
+    const out = es({ status: "error" }, () => {});
+    expect(out).toContain("No se pudo cargar la configuración de mensajes. Intente de nuevo.");
+    expect(out).toContain(">Intentar de nuevo<");
   });
 });

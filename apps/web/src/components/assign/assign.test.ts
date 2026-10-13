@@ -93,7 +93,7 @@ describe("AssigneeField: editable", () => {
   });
 
   it("the Select lists exactly those choices and maps Unassigned back to null (mutation: list the members only -> FAILS)", () => {
-    expect(FIELD_SRC).toContain("{assigneeChoices(options).map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}");
+    expect(FIELD_SRC).toContain("{assigneeChoices(options, locale).map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}");
     expect(FIELD_SRC).toMatch(/onValueChange=\{\(v\) => pick\(v === NONE \? null : v\)\}/);
   });
 

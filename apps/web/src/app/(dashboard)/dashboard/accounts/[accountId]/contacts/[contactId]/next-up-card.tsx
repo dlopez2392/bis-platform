@@ -32,7 +32,7 @@ export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView
               <p className="tabular-nums text-card-foreground">{r.label}<Who row={r} /></p>
             ) : (
               <>
-                <p className="truncate font-medium text-card-foreground" title={r.title}>{r.title}</p>
+                <p className="truncate font-medium text-card-foreground" title={r.title}><span lang="">{r.title}</span></p>
                 <p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
                   {r.overdue ? <span aria-hidden="true" className="size-[7px] shrink-0 rounded-full bg-[var(--warn)]" /> : null}
                   <span className={r.overdue ? "text-[var(--warn)]" : undefined}>{r.detail}</span>

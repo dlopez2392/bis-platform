@@ -81,6 +81,44 @@ export async function loadTimeline(
   return { status: "ready", page, holdOpen, names, personaName };
 }
 
+/** The list drawer's Recent: the newest five rows (S-03 part 3 D5). */
+export const DRAWER_RECENT = 5;
+
+export type RecentLoad =
+  | { status: "ready"; page: TimelinePage; names: Record<string, string>; personaName: string | null }
+  | { status: "error" };
+
+/**
+ * The list drawer's Recent (S-03 part 3 §6): the head of the record page's merged timeline, five
+ * rows. No hold read and no ledger: those stand in for Done (`loadTimeline`, above), and the drawer
+ * has no Done. A failed source is named in `page.failed`; all seven failed is the section's error.
+ * The names on person marks and the persona are soft, exactly as on the page. Never throws.
+ */
+export async function loadRecent(db: SupabaseClient, accountId: string, contactId: string): Promise<RecentLoad> {
+  let page: TimelinePage;
+  try {
+    page = await listContactTimelinePage(db, accountId, contactId, undefined, {
+      limit: DRAWER_RECENT,
+      onError: (source, e) => log(`recent (${source})`, accountId, e),
+    });
+  } catch (e) {
+    log("recent", accountId, e);
+    return { status: "error" };
+  }
+  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  const [names, personaName] = await Promise.all([
+    listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
+      log("recent names", accountId, e);
+      return {} as Record<string, string>;
+    }),
+    getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+      log("recent persona", accountId, e);
+      return null;
+    }),
+  ]);
+  return { status: "ready", page, names, personaName };
+}
+
 type Opps = NonNullable<Awaited<ReturnType<typeof listContactOpportunities>>>;
 // The read's own row type (DealsBody's `DealRow` is structurally the same); lib never imports from app/.
 export type DealsLoad = { status: "ready"; deals: Opps } | { status: "error" };

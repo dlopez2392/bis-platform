@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createElement } from "react";
+import { createElement, isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ContactRow } from "./contacts-table";
 import { readFileSync } from "node:fs";
@@ -7,24 +7,23 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Pins the drawer's USE of the summary parser: what its fetch effect stores
- * for a body the parser refuses. `summaryLoadFrom`'s own tests
- * (lib/contacts/summary.test.ts) cannot see the drawer going back to
- * `(await res.json()) as ContactSummary` — this can.
+ * Pins the drawer's USE of the summary parser (`lib/contacts/drawer-summary.ts`, S-03 part 3):
+ * what its fetch effect stores for a body the parser refuses, and how the drawer draws each
+ * section's load. `drawerLoadFrom`'s own tests cannot see the drawer going back to
+ * `(await res.json()) as DrawerSummary`; this can.
  *
  * No DOM renderer in apps/web, so the effect is captured rather than run by
  * React (the server renderer never runs effects), and `useState` records its
  * setters (the retired 0049 switch's own wiring test used this idiom). The Sheet is
- * stubbed out: the fetch effect lives in ContactDrawer itself, and nothing
- * under the Sheet is what this pins.
+ * stubbed: closed by default (the fetch effect lives in ContactDrawer itself), opened by
+ * the harness for the blocks that read what the drawer draws.
  */
 const effects: Array<() => void | (() => void)> = [];
 const states: { initial: unknown; set: ReturnType<typeof vi.fn> }[] = [];
 /**
- * Opt-in for the one block that must reach the drawer's READY branch (the Related people card):
- * when set, the `fetched` state (the one starting at null) answers this value instead of null,
- * and the Sheet renders its children. Every other block leaves both off, so they behave exactly
- * as before.
+ * Opt-in for the blocks that must reach a given load: when set, the `fetched` state (the drawer's
+ * first state starting at null) answers this value instead of null, and the Sheet renders its
+ * children. Every other block leaves both off.
  */
 const harness: { readyFetched: unknown; openSheet: boolean } = { readyFetched: undefined, openSheet: false };
 vi.mock("react", async (importOriginal) => {
@@ -35,26 +34,29 @@ vi.mock("react", async (importOriginal) => {
     useState: (init: unknown) => {
       const initial = typeof init === "function" ? (init as () => unknown)() : init;
       const set = vi.fn();
+      const firstNull = initial === null && !states.some((s) => s.initial === null);
       states.push({ initial, set });
-      return [initial === null && harness.readyFetched !== undefined ? harness.readyFetched : initial, set];
+      return [firstNull && harness.readyFetched !== undefined ? harness.readyFetched : initial, set];
     },
   };
 });
 vi.mock("@/components/ui/sheet", () => {
   const pass = ({ children }: { children?: unknown }) => (harness.openSheet ? children : null);
   const none = () => null;
-  return { Sheet: pass, SheetContent: pass, SheetDescription: none, SheetHeader: none, SheetTitle: none };
+  // SheetTitle passes its child through: the header's h2 is wrapped by it (wrapHeading), and must render.
+  return { Sheet: pass, SheetContent: pass, SheetDescription: none, SheetHeader: pass, SheetTitle: pass };
 });
-const relationshipsCardProps: unknown[] = [];
-vi.mock("./relationships-card", () => ({ RelationshipsCard: (p: unknown) => { relationshipsCardProps.push(p); return null; } }));
-// The Groups card (S-02 part 1) has its own tests and calls useRouter, which has no app router to
-// read once the Related people block opens the Sheet. Stubbed by identity: the Groups block below
-// imports "./groups-card" too, so the element it finds in the drawer's tree is this same function.
-vi.mock("./groups-card", () => ({ GroupsCard: () => null }));
-// The Properties card (S-02 part B2) has its own tests and imports server actions; recorded, not run.
-const placesCardProps: unknown[] = [];
-vi.mock("./places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps.push(p); return null; } }));
-vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
+// RecordSection's boundary and the facts' Try again read the router; there is no app router here.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+// Recorded, not run: the body's locale is what the drawer hands its provider (C1).
+const localeProps: unknown[] = [];
+vi.mock("@/components/locale-provider", () => ({
+  useLocale: () => "en",
+  LocaleProvider: (p: { locale: unknown; children?: unknown }) => { localeProps.push(p.locale); return p.children; },
+}));
+const nextUpProps: unknown[] = [];
+vi.mock("./[contactId]/next-up-card", () => ({ NextUpBody: (p: unknown) => { nextUpProps.push(p); return null; } }));
+vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn(), undoInlinePhoneEditAction: vi.fn(), setContactBusinessAction: vi.fn(), undoContactBusinessAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
 
@@ -66,17 +68,26 @@ const ROW: ContactRow = {
 };
 
 const GOOD = {
-  tags: [{ id: "t1", name: "vip" }],
-  recent: [{ kind: "note", label: "Note", at: "2026-09-01T10:00:00+00:00" }],
-  phone_country_unconfirmed: false,
-  phone: "+15512345678",
-  zone: { zone: "UTC", guessed: false, label: "UTC" },
-  source: null,
-  sourceHint: null,
+  locale: "en",
+  header: { name: "Maria Garcia", subtitle: null, subtitleHref: null, actions: [
+    { id: "call", label: "Call", href: "tel:+15512345678", ariaLabel: "Call Maria Garcia", primary: true, external: false },
+  ] },
+  facts: { status: "error", text: "Couldn't load the summary." },
+  nextUp: { status: "ready", view: { rows: [], undated: null }, emptyText: "Nothing coming up." },
+  recent: { status: "ready", rows: [
+    { key: "note-n1", kind: "note", mark: { kind: "person", label: "You" }, verb: "added a note", status: null, detail: null,
+      time: "Sep 1, 2026, 5:00 AM", dateTime: "2026-09-01T10:00:00+00:00", excerpt: { text: "Prefers mornings", lang: "", done: false } },
+    { key: "booking-b1", kind: "booking", mark: { kind: "customer", label: "Customer" }, verb: "booked an appointment for Fri, Oct 16, 10:00 AM",
+      status: { tone: "accent", word: "Booked" }, detail: null, time: "Aug 30, 2026, 5:00 AM", dateTime: "2026-08-30T10:00:00+00:00", excerpt: null },
+  ], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline" },
+  who: { source: null, sourceHint: null, assignedTo: null,
+    fields: { first_name: "Maria", last_name: "Garcia", email: null, phone: null, company_name: null },
+    tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] } },
 };
+const PARSED = { ...GOOD, who: { status: "ready", ...GOOD.who } };
 
 function omit(key: keyof typeof GOOD): Record<string, unknown> {
-  const body: Record<string, unknown> = { ...GOOD };
+  const body: Record<string, unknown> = JSON.parse(JSON.stringify(GOOD));
   delete body[key];
   return body;
 }
@@ -108,34 +119,45 @@ async function load(body: unknown, ok = true): Promise<unknown> {
 beforeEach(() => { vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000); });
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("ContactDrawer: the summary body is parsed, not cast", () => {
-  it("a body without tags stores the error state, not a summary that would throw in render", async () => {
-    expect(await load(omit("tags"))).toEqual({ contactId: "c1", result: { status: "error" } });
+describe("ContactDrawer: the summary body is parsed, one section at a time (S-03 part 3 §7.4)", () => {
+  it("a body without a header stores the whole drawer's error (mutation: cast the body -> FAILS)", async () => {
+    expect(await load(omit("header"))).toEqual({ contactId: "c1", result: { status: "error" } });
   });
-
-  it("a good body stores the PARSED summary, extra keys dropped, with the clock read in the callback", async () => {
-    expect(await load({ ...GOOD, timezone: "UTC" })).toEqual({
-      contactId: "c1", result: { status: "ready", summary: GOOD, nowMs: 1_700_000_000_000 },
-    });
+  it("a good body stores the PARSED body, extra keys dropped", async () => {
+    expect(await load({ ...JSON.parse(JSON.stringify(GOOD)), zone: "UTC" })).toEqual({ contactId: "c1", result: { status: "ready", body: PARSED } });
   });
-
-  it("a body from before #124 (no zone) is still ready, with zone undefined", async () => {
-    const stored = await load(omit("zone")) as { result: { status: string; summary: { zone?: unknown } } };
-    expect(stored.result.status).toBe("ready");
-    expect(stored.result.summary.zone).toBeUndefined();
-  });
-
   it("a non-OK response stores the error state, even with a body that would parse", async () => {
     expect(await load(GOOD, false)).toEqual({ contactId: "c1", result: { status: "error" } });
   });
-
-  it("a recent item of a kind this bundle does not know is dropped, and the rest still loads", async () => {
-    const body = { ...GOOD, recent: [{ kind: "booking", label: "Booked", at: "2026-09-02T10:00:00+00:00" }, ...GOOD.recent] };
-    expect(await load(body)).toEqual({
-      contactId: "c1", result: { status: "ready", summary: GOOD, nowMs: 1_700_000_000_000 },
-    });
+  it("a malformed Recent is Recent's error only; the rest still load (mutation: refuse the body -> FAILS)", async () => {
+    const body = { ...JSON.parse(JSON.stringify(GOOD)), recent: { status: "ready", rows: 3 } };
+    const stored = await load(body) as { result: { status: string; body: { recent: { status: string }; nextUp: { status: string } } } };
+    expect(stored.result.status).toBe("ready");
+    expect([stored.result.body.recent.status, stored.result.body.nextUp.status]).toEqual(["error", "ready"]);
   });
 });
+
+describe("ContactDrawer: the fetch URL (C9)", () => {
+  async function fetchedUrl(search: string | null): Promise<string> {
+    effects.length = 0;
+    states.length = 0;
+    if (search !== null) vi.stubGlobal("window", { location: { search } });
+    const f = vi.fn(async () => ({ ok: true, json: async () => GOOD }));
+    vi.stubGlobal("fetch", f);
+    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
+    effects[0]!();
+    // `vi.fn` with no parameters types its calls as `[]`; the URL is the call's first argument.
+    return (f.mock.calls[0] as unknown[])[0] as string;
+  }
+  it("today's exact path with no ?locale= on the list (mutation: always append -> e2e's route glob stops matching, FAILS)", async () => {
+    expect(await fetchedUrl(null)).toBe("/api/accounts/a1/contacts/c1/summary");
+    expect(await fetchedUrl("?q=Retry&peek=c1")).toBe("/api/accounts/a1/contacts/c1/summary");
+  });
+  it("the list's QA locale rides along (mutation: drop it -> the pseudo overflow check measures English, FAILS)", async () => {
+    expect(await fetchedUrl("?peek=c1&locale=pseudo")).toBe("/api/accounts/a1/contacts/c1/summary?locale=pseudo");
+  });
+});
+
 
 /**
  * The effect's cleanup (the contact changed, or a retry refired the fetch)
@@ -280,6 +302,12 @@ describe("the Texts row follows the contact (consent chain PR-2)", () => {
     expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
   });
 
+  it("a name or email save re-reads the route so the header follows (mutation: drop the bump → FAILS)", () => {
+    expect(drawer).toMatch(
+      /if \(saved\.ok && \(field === "first_name" \|\| field === "last_name" \|\| field === "email"\)\) setRetryNonce\(\(n\) => n \+ 1\);/,
+    );
+  });
+
   it("a row action or a pick makes the drawer re-read, and the row hands onChanged to the pick (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
     expect(drawer).toMatch(/<TextsRow[\s\S]{0,400}?onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
     expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
@@ -401,8 +429,8 @@ describe("the Source line's props come from the real read, not a stub (review ro
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const panel = strip(readFileSync(path.join(here, "[contactId]", "contact-fields-panel.tsx"), "utf8"));
 
-  it("the drawer passes the summary's own source/sourceHint, never a literal null (mutation: source={null} sourceHint={null} → FAILS)", () => {
-    expect(drawer).toMatch(/<SourceField[\s\S]{0,250}?source=\{load\.summary\.source\}[\s\S]{0,150}?sourceHint=\{load\.summary\.sourceHint\}/);
+  it("the drawer passes the route's own source/sourceHint, never a literal null (mutation: source={null} sourceHint={null} → FAILS)", () => {
+    expect(drawer).toMatch(/<SourceField[\s\S]{0,250}?source=\{who\.source\}[\s\S]{0,150}?sourceHint=\{who\.sourceHint\}/);
   });
 
   it("the full page passes the real contact's source and the computed hint, never a literal null (mutation: source={null} sourceHint={null} → FAILS)", () => {
@@ -429,12 +457,12 @@ describe("the drawer's Assigned to line (F-085)", () => {
   const drawer = strip(readFileSync(path.join(here, "contact-drawer.tsx"), "utf8"));
   const table = strip(readFileSync(path.join(here, "contacts-table.tsx"), "utf8"));
 
-  it("renders ContactAssigneeField for THIS contact with the summary's holder, the team as options, and readOnly = !canAssign (mutation: readOnly={false} -> FAILS)", () => {
-    expect(drawer).toMatch(/<ContactAssigneeField[\s\S]{0,300}?contactId=\{row\.id\}[\s\S]{0,200}?value=\{load\.summary\.assignedTo\}[\s\S]{0,200}?options=\{members\}[\s\S]{0,200}?readOnly=\{!canAssign\}/);
+  it("renders ContactAssigneeField for THIS contact with the route's holder, the team as options, and readOnly = !canAssign (mutation: readOnly={false} -> FAILS)", () => {
+    expect(drawer).toMatch(/<ContactAssigneeField[\s\S]{0,300}?contactId=\{row\.id\}[\s\S]{0,200}?value=\{who\.assignedTo\}[\s\S]{0,200}?options=\{members\}[\s\S]{0,200}?readOnly=\{!canAssign\}/);
   });
 
-  it("sits in the Source line's 92px label column, labelled 'Assigned to', and only when the server said who holds the customer (mutation: render it for an undefined holder -> FAILS)", () => {
-    expect(drawer).toMatch(/load\.summary\.assignedTo !== undefined \? \(\s*<div className="grid grid-cols-\[92px_minmax\(0,1fr\)\][^"]*"[^>]*>\s*<dt[^>]*>\{m\["assign\.field\.label"\]\}<\/dt>/);
+  it("sits in the 92px label column, labelled 'Assigned to', and only when the server said who holds the customer (mutation: render it for an undefined holder -> FAILS)", () => {
+    expect(drawer).toMatch(/who\.assignedTo !== undefined \? \(\s*<div className="grid grid-cols-\[92px_minmax\(0,1fr\)\][^"]*"[^>]*>\s*<dt[^>]*>\{t\(m, "assign\.field\.label", locale\)\}<\/dt>/);
   });
 
   it("the table hands the drawer and the bulk bar canAssign and the team (mutation: drop either prop -> FAILS)", () => {
@@ -453,114 +481,245 @@ describe("the drawer's Assigned to line (F-085)", () => {
   });
 });
 
-/**
- * Relationships spec §7: the Related people card sits in the drawer's READY branch, for the
- * drawer's own contact. Rendered for real (the harness's opt-in above opens the Sheet and seeds
- * the summary as loaded), with the card itself recorded rather than run: it has its own tests.
- */
-describe("the drawer's Related people card (relationships spec §7)", () => {
-  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; relationshipsCardProps.length = 0; });
-  function renderDrawer(fetched: unknown) {
-    effects.length = 0;
-    states.length = 0;
-    harness.openSheet = true;
-    harness.readyFetched = fetched;
-    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
-  }
+/** Renders the drawer with the Sheet open and `fetched` as its load (undefined: still loading). */
+function renderOpen(fetched: unknown, row: ContactRow = ROW): string {
+  effects.length = 0;
+  states.length = 0;
+  harness.readyFetched = fetched;
+  harness.openSheet = true;
+  return renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row, onClose: () => {} }));
+}
+/** The element tree the drawer returns when CALLED (not rendered), so its props can be read. */
+function treeOf(fetched: unknown) {
+  effects.length = 0;
+  states.length = 0;
+  harness.readyFetched = fetched;
+  harness.openSheet = true;
+  const found: { type: unknown; props: Record<string, unknown> }[] = [];
+  const walk = (n: unknown): void => {
+    if (Array.isArray(n)) { n.forEach(walk); return; }
+    if (!isValidElement(n)) return;
+    const el = n as unknown as { type: unknown; props: Record<string, unknown> };
+    found.push(el);
+    walk(el.props.children);
+  };
+  walk(ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {} }));
+  return found;
+}
+const READY = { contactId: "c1", result: { status: "ready", body: PARSED } };
+const drawerSrc = () => readFileSync(fileURLToPath(new URL("./contact-drawer.tsx", import.meta.url)), "utf8");
 
-  it("renders the card for THIS contact once the summary has loaded (mutation: delete the card line from the drawer -> FAILS)", () => {
-    renderDrawer({ contactId: "c1", result: { status: "ready", summary: GOOD, nowMs: 1_700_000_000_000 } });
-    expect(relationshipsCardProps).toContainEqual({ accountId: "a1", contactId: "c1" });
+describe("ContactDrawer on the record kit (S-03 part 3)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; nextUpProps.length = 0; });
+
+  it("Groups, Properties and Related people have left the drawer (D7; mutation: keep one -> FAILS)", () => {
+    expect(drawerSrc()).not.toMatch(/GroupsCard|PlacesCard|RelationshipsCard/);
   });
 
-  it("never over the drawer's own loading or error state (mutation: mount the card outside the ready branch -> FAILS)", () => {
-    renderDrawer(undefined);
-    expect(relationshipsCardProps).toHaveLength(0);
-    renderDrawer({ contactId: "c1", result: { status: "error" } });
-    expect(relationshipsCardProps).toHaveLength(0);
+  it("the sections in the spec's order: facts, Next up, Recent, who they are, then the way to the full record (§9; mutation: move Recent below who -> FAILS)", () => {
+    const src = drawerSrc();
+    const order = ["facts", "next-up", "recent", "who"].map((id) => src.indexOf(`data-drawer-section="${id}"`));
+    expect(order.every((i) => i > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(src.indexOf('"drawer.moreOnRecord"')).toBeGreaterThan(order[3]!);
   });
 
-  it("sits after Tags and before Recent (spec §7: after Assigned to, before Recent)", () => {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(path.join(here, "contact-drawer.tsx"), "utf8");
-    const card = src.indexOf("<RelationshipsCard");
-    expect(card).toBeGreaterThan(src.indexOf("<TagsRow"));
-    expect(card).toBeLessThan(src.indexOf('m["drawer.recent"]'));
+  it("Next up has no Add a To-do: there is no composer in the drawer (D4; mutation: pass the label -> FAILS)", () => {
+    renderOpen(READY);
+    expect(nextUpProps).toHaveLength(1);
+    expect((nextUpProps[0] as { addTodoLabel: unknown }).addTodoLabel).toBeNull();
   });
-});
 
-/**
- * Task 6 fix round 1, I1: a Groups card write can change the Business name
- * (0069's trigger) and the drawer's other rows, so the card's onChanged bumps
- * the drawer's retryNonce, as TextsRow's and EmailRow's do. (The card itself
- * refreshes the server-rendered list, which brings the drawer a fresh row:
- * groups-card.wiring.test.ts.) The drawer is CALLED, not rendered, so the
- * element tree under the stubbed Sheet can be read.
- */
-describe("ContactDrawer: the Groups card's changes re-read the drawer (fix round 1, I1)", () => {
-  it("hands the card an onChanged that bumps retryNonce (mutation: drop the onChanged prop -> FAILS)", async () => {
-    const { isValidElement } = await import("react");
-    const { GroupsCard } = await import("./groups-card");
-    effects.length = 0;
-    states.length = 0;
-    const tree = ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: true });
-    const found: { type: unknown; props: Record<string, unknown> }[] = [];
-    const walk = (n: unknown): void => {
-      if (Array.isArray(n)) { n.forEach(walk); return; }
-      if (!isValidElement(n)) return;
-      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
-      found.push(el);
-      walk(el.props.children);
-    };
-    walk(tree);
-    const card = found.find((e) => e.type === GroupsCard);
-    expect(card?.props).toMatchObject({ accountId: "a1", contactId: "c1", canManageGroups: true });
-    // `retryNonce` is the one state that starts at 0 (found by starting value, not hook order).
+  it("a section's Try again re-reads without blanking the drawer (C3; mutation: setFetched(null) first -> FAILS)", async () => {
+    const { RecordSection } = await import("@/components/record/record-section");
+    const facts = treeOf(READY).find((e) => e.type === RecordSection && e.props.id === "facts");
+    expect(facts?.props.state).toBe("error");
     const nonce = states.filter((s) => s.initial === 0);
-    expect(nonce).toHaveLength(1);
-    (card!.props.onChanged as () => void)();
+    const fetched = states.filter((s) => s.initial === null);
+    expect([nonce.length, fetched.length]).toEqual([1, 1]);
+    (facts!.props.onRetry as () => void)();
     expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
+    expect(fetched[0]!.set).not.toHaveBeenCalled();
+  });
+
+  it("the body is wrapped in a provider of the BODY's locale, not the page's (C1; mutation: wrap with useLocale() -> FAILS)", async () => {
+    const { LocaleProvider } = await import("@/components/locale-provider");
+    const tree = treeOf({ contactId: "c1", result: { status: "ready", body: { ...PARSED, locale: "es" } } });
+    expect(tree.find((e) => e.type === LocaleProvider)?.props.locale).toBe("es");
+    expect(tree.find((e) => e.props.lang === "es")).toBeDefined();
+  });
+
+  it("each recent row is a marked TimelineItem with the e2e's hook, and See all opens the record's timeline (C10, D5; mutation: drop the testid -> FAILS)", () => {
+    const html = renderOpen(READY);
+    expect(html.match(/data-testid="drawer-recent-item"/g)).toHaveLength(2);
+    expect(html).toMatch(/data-testid="drawer-recent-item"[\s\S]*?data-author-mark="customer"/);
+    expect(html).toContain('href="/dashboard/accounts/a1/contacts/c1#record-timeline"');
+    expect(html).toMatch(/<p lang=""[^>]*>Prefers mornings<\/p>/);
+  });
+
+  it("the header is the route's: Call the only primary, the name an h2 (D2; mutation: render the list row's name -> FAILS)", () => {
+    const html = renderOpen({ contactId: "c1", result: { status: "ready", body: { ...PARSED, header: { ...PARSED.header, name: "Maria G. Garcia" } } } });
+    expect(html).toMatch(/<h2[^>]*>Maria G\. Garcia<\/h2>/);
+    const header = html.slice(html.indexOf("data-record-header"), html.indexOf("data-drawer-section"));
+    expect(header.match(/data-variant="default"/g)).toHaveLength(1);
+    expect(header).toMatch(/data-variant="default"[^>]*data-record-action="call"|data-record-action="call"[^>]*data-variant="default"/);
+  });
+
+  it("while loading, every section is a skeleton carrying the e2e's hook (rule 7, C10; mutation: drop the hook from a section -> FAILS)", () => {
+    const html = renderOpen(undefined);
+    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(5);
+    expect(html).toMatch(/data-drawer-section="recent" data-state="loading"/);
+  });
+
+  it("a ?peek= stub row shows skeleton fields until the route's arrive (Q1; mutation: render the stub's blanks -> FAILS)", () => {
+    const stub = { ...ROW, first_name: null, last_name: null, created_at: "" };
+    expect(renderOpen(undefined, stub)).toContain("data-drawer-fields-skeleton");
+    const ready = renderOpen(READY, stub);
+    expect(ready).not.toContain("data-drawer-fields-skeleton");
+    expect(ready).toMatch(/First name: Maria/);
+  });
+
+  it("a ?peek= stub row whose route answered without its fields shows the who section's error and Try again, never skeletons forever (M6; mutation: draw skeletons whenever the fields row is null -> FAILS)", () => {
+    const stub = { ...ROW, first_name: null, last_name: null, created_at: "" };
+    const whoFailed = renderOpen({ contactId: "c1", result: { status: "ready", body: { ...PARSED, who: { status: "error", text: "Couldn't load Contact Details." } } } }, stub);
+    expect(whoFailed).not.toContain("data-drawer-fields-skeleton");
+    expect(whoFailed).toMatch(/data-drawer-who-error[^>]*>[\s\S]*?Couldn&#x27;t load Contact Details\.[\s\S]*?Try again/);
+    // Said once: the error in place of the fields is the who section's one error, not a second below it.
+    expect(whoFailed.match(/data-drawer-who-error/g)).toHaveLength(1);
+    // The whole drawer's error: the stub's fields never arrive either, so they say so too.
+    const loadFailed = renderOpen({ contactId: "c1", result: { status: "error" } }, stub);
+    expect(loadFailed).not.toContain("data-drawer-fields-skeleton");
+    expect(loadFailed).toContain("data-drawer-who-error");
   });
 });
 
-/**
- * S-02 B2 §8: the Properties card sits after the Groups card ("what they have" together), outside
- * the summary's ready branch as the Groups card is, so it loads and fails on its own. The drawer is
- * CALLED, not rendered, so its element tree can be walked in order (the Groups block's idiom).
- */
-describe("ContactDrawer: the Properties card (S-02 part B2)", () => {
-  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; placesCardProps.length = 0; });
+/** Task 6 review: each section's own branches, the pairing guard, the rules between sections, Esc. */
+describe("ContactDrawer: every section's own state, and the chrome around them (Task 6 review)", () => {
+  afterEach(() => { harness.readyFetched = undefined; harness.openSheet = false; nextUpProps.length = 0; });
+  const ready = (body: unknown) => ({ contactId: "c1", result: { status: "ready", body } });
+  const WHO_ERR = { ...PARSED, who: { status: "error", text: "Couldn't load Contact Details." } };
+  const TAGS_ERR = { ...PARSED, who: { ...PARSED.who, tags: { status: "error" } } };
+  const FACTS_MISSING = { ...PARSED, facts: { status: "ready", view: { line: ["On your list since Sep 2026"], missing: "Couldn't count bookings.", allFailed: false } } };
+  const RECENT_PARTIAL = { ...PARSED, recent: { ...PARSED.recent, failedText: "Couldn't load the calls." } };
+  const RECENT_EMPTY = { ...PARSED, recent: { ...PARSED.recent, rows: [], emptyText: "Nothing here yet." } };
 
-  it("the drawer mounts the Properties card after the Groups card, with canMovePlace from canAssign (mutation: drop the card line -> FAILS)", async () => {
-    const { isValidElement } = await import("react");
-    const { GroupsCard } = await import("./groups-card");
-    const { PlacesCard } = await import("./places-card");
-    const found: { type: unknown; props: Record<string, unknown> }[] = [];
-    const walk = (n: unknown): void => {
-      if (Array.isArray(n)) { n.forEach(walk); return; }
-      if (!isValidElement(n)) return;
-      const el = n as unknown as { type: unknown; props: Record<string, unknown> };
-      found.push(el);
-      walk(el.props.children);
-    };
-    effects.length = 0;
-    states.length = 0;
-    walk(ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: true }));
-    const at = found.findIndex((e) => e.type === PlacesCard);
-    expect(at).toBeGreaterThanOrEqual(0);
-    expect(found[at]!.props).toMatchObject({ accountId: "a1", contactId: "c1", canMovePlace: true });
-    expect(at).toBeGreaterThan(found.findIndex((e) => e.type === GroupsCard));
-    // A Technician's drawer (canAssign false) hands the card false.
-    found.length = 0;
-    walk(ContactDrawer({ accountId: "a1", row: ROW, onClose: () => {}, canAssign: false }));
-    expect(found.find((e) => e.type === PlacesCard)?.props).toMatchObject({ canMovePlace: false });
+  it("I1: a --line rule sits between sections, never above the first (mutation: drop the wrapper's rule -> FAILS)", () => {
+    const html = renderOpen(READY);
+    const wrappers = [...html.matchAll(/<div data-drawer-section="([\w-]+)"[^>]*class="([^"]*)"/g)].map((x) => ({ id: x[1], cls: x[2]!.split(/\s+/) }));
+    expect(wrappers.map((w) => w.id)).toEqual(["facts", "next-up", "recent", "who"]);
+    for (const w of wrappers) expect(w.cls).toEqual(expect.arrayContaining(["border-t", "border-[var(--line)]", "pt-3", "first:border-t-0", "first:pt-0"]));
+    // The first wrapper is the scroller's first child, so `first:` drops its rule; the rest are not, so they keep it.
+    expect(html).toMatch(/data-testid="drawer-scroll"[^>]*><div data-drawer-section="facts"/);
   });
 
-  it("mounts while the drawer's own summary is still loading, so it never waits on it (mutation: move it into the ready branch -> FAILS)", () => {
-    effects.length = 0;
-    states.length = 0;
-    harness.openSheet = true;
-    renderToStaticMarkup(createElement(ContactDrawer, { accountId: "a1", row: ROW, onClose: () => {} }));
-    expect(placesCardProps).toEqual([{ accountId: "a1", contactId: "c1", canMovePlace: false }]);
+  it("I2: a body fetched for another contact is never shown: skeletons and the row's own name (mutation: drop the contactId pairing -> FAILS)", () => {
+    const other = { ...PARSED, header: { ...PARSED.header, name: "Somebody Else" }, who: { ...PARSED.who, tags: { status: "ready", tags: [{ id: "t0", name: "c0-only-tag" }] } } };
+    const html = renderOpen({ contactId: "c0", result: { status: "ready", body: other } });
+    expect(html).not.toContain("Somebody Else");
+    expect(html).not.toContain("c0-only-tag");
+    expect(html).toMatch(/<h2[^>]*>Maria Garcia<\/h2>/);
+    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(5);
+  });
+
+  it("I3: who failed on an ordinary list row says so with Try again, under fields that stay editable (mutation: drop the lower who error -> FAILS)", () => {
+    const html = renderOpen(ready(WHO_ERR));
+    expect(html).toMatch(/data-drawer-who-error[^>]*>[\s\S]*?Couldn&#x27;t load Contact Details\.[\s\S]*?Try again/);
+    expect(html).toMatch(/First name: Maria/);
+  });
+
+  it("I3: tags failed says so with Try again (mutation: render nothing for a tags error -> FAILS)", () => {
+    const html = renderOpen(ready(TAGS_ERR));
+    expect(html).toMatch(/data-drawer-tags-error[^>]*>[\s\S]*?Couldn&#x27;t load Tags\.[\s\S]*?Try again/);
+  });
+
+  it("I3: Recent with a partial failure keeps its rows and says what failed (mutation: drop the failedText line -> FAILS)", () => {
+    const html = renderOpen(ready(RECENT_PARTIAL));
+    expect(html).toMatch(/data-timeline-failed[^>]*>[\s\S]*?Couldn&#x27;t load the calls\.[\s\S]*?Try again/);
+    expect(html.match(/data-testid="drawer-recent-item"/g)).toHaveLength(2);
+  });
+
+  it("I3: an empty Recent says its empty words (mutation: drop the emptyText line -> FAILS)", () => {
+    const html = renderOpen(ready(RECENT_EMPTY));
+    expect(html).toContain("Nothing here yet.");
+    expect(html).not.toContain('data-testid="drawer-recent-item"');
+  });
+
+  it("I3: every Try again in the drawer is the drawer's own section retry, never undefined, which would refresh the list (mutation: drop onRetry from SummaryBody, the Recent partial Retry, the tags or the who error -> FAILS)", async () => {
+    const { RecordCardRetry } = await import("@/components/record/record-card");
+    const { RecordSection } = await import("@/components/record/record-section");
+    const { SummaryBody } = await import("./[contactId]/summary-card");
+    const seen = new Set<unknown>();
+    let sites = 0;
+    for (const body of [{ ...FACTS_MISSING, recent: RECENT_PARTIAL.recent, who: TAGS_ERR.who }, { ...FACTS_MISSING, who: WHO_ERR.who }]) {
+      const tree = treeOf(ready(body));
+      const retry = tree.find((e) => e.type === RecordSection && e.props.id === "facts")!.props.onRetry;
+      expect(typeof retry).toBe("function");
+      for (const u of tree.filter((e) => e.type === RecordCardRetry || e.type === SummaryBody || e.type === RecordSection)) {
+        expect(u.props.onRetry).toBe(retry);
+        seen.add(u.type === RecordSection ? `section:${String(u.props.id)}` : u.type);
+        if (u.type === RecordCardRetry) sites += 1;
+      }
+    }
+    // Every kind was reached: the facts' SummaryBody, the four sections, and the three RecordCardRetry
+    // sites (Recent's partial failure, tags, who).
+    expect(seen).toContain(SummaryBody);
+    expect([...seen].filter((s) => typeof s === "string").sort()).toEqual(["section:facts", "section:next-up", "section:recent", "section:who"]);
+    expect(sites).toBe(3);
+  });
+
+  it("m1: Escape with an input focused inside the sheet cancels the field, not the drawer; otherwise the drawer closes (mutation: drop preventDefault -> FAILS)", () => {
+    class FakeNode { constructor(private inside: unknown) {} contains(el: unknown) { return el === this.inside; } }
+    class FakeInput {}
+    vi.stubGlobal("Node", FakeNode);
+    vi.stubGlobal("HTMLInputElement", FakeInput);
+    const onEsc = treeOf(READY).find((e) => typeof e.props.onEscapeKeyDown === "function")!.props.onEscapeKeyDown as (e: unknown) => void;
+    const press = (active: unknown, inside: unknown) => {
+      vi.stubGlobal("document", { activeElement: active });
+      const preventDefault = vi.fn();
+      onEsc({ currentTarget: new FakeNode(inside), preventDefault });
+      return preventDefault.mock.calls.length;
+    };
+    const input = new FakeInput();
+    expect(press(input, input)).toBe(1);
+    expect(press(null, input)).toBe(0);
+    expect(press(input, null)).toBe(0);
+  });
+
+  it("m2/m3: the whole drawer's Try again (the sections' word) drops the failed load and re-reads (mutation: delete both setters -> FAILS)", async () => {
+    const { Button } = await import("@/components/ui/button");
+    const tree = treeOf({ contactId: "c1", result: { status: "error" } });
+    const retry = tree.find((e) => e.type === Button && typeof e.props.onClick === "function")!;
+    expect(retry.props.children).toBe("Try again");
+    (retry.props.onClick as () => void)();
+    const fetched = states.find((s) => s.initial === null)!;
+    const nonce = states.find((s) => s.initial === 0)!;
+    expect(fetched.set).toHaveBeenCalledWith(null);
+    expect(nonce.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("m10: exactly two links named Open full record in every state, the bottom one carrying the e2e's hook (mutation: keep the error Notice's own link -> FAILS)", () => {
+    for (const fetched of [undefined, READY, { contactId: "c1", result: { status: "error" } }]) {
+      const html = renderOpen(fetched);
+      expect(html.match(/aria-label="Open full record"|>Open full record<\/a>/g)).toHaveLength(2);
+      expect(html).toMatch(/<a [^>]*data-drawer-open-full[^>]*>Open full record<\/a>/);
+    }
+  });
+
+  it("m8: a tag shows as typed (lang=''), and See all and the bottom link are ghost, never a second primary (mutation: make either link default -> FAILS)", () => {
+    expect(renderOpen(READY)).toContain('<span lang="">vip</span>');
+    const tree = treeOf(READY);
+    for (const hook of ["data-drawer-see-all", "data-drawer-open-full"]) {
+      const cls = String(tree.find((e) => hook in e.props)?.props.className ?? "");
+      expect(cls).toContain("hover:bg-[var(--surface-3)]");
+      expect(cls).not.toContain("btn-primary");
+    }
+  });
+
+  it("the tag-add Input is a real tap target on a phone (min-h-11 md:min-h-8), matching its twin on the full record page (mutation: revert to h-7 -> FAILS)", () => {
+    const html = renderOpen(READY);
+    const input = html.match(/<input[^>]*name="tag"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain("min-h-11");
+    expect(input).toContain("md:min-h-8");
+    expect(input).not.toMatch(/(?<!file:)\bh-7\b/);
   });
 });

@@ -169,6 +169,56 @@ test.describe("pseudo-locale overflow (F-014)", () => {
     }
   });
 
+  test("the contact list's drawer: header actions and the fact line wrap, never clip, under the pseudo-locale (S-03 part 3)", async ({ page }, testInfo) => {
+    const fixture = readClientFixture();
+    if (!fixture) {
+      test.skip(true, "No client fixture at e2e/.auth/client-fixture.json; run the full suite.");
+      return;
+    }
+    const db = serviceDb();
+    const stamp = Date.now();
+    const phone = `+1956298${String(Math.floor(Math.random() * 9000) + 1000)}`;
+    const { id, existing } = await createContact(db, fixture.accountId, {
+      firstName: "Overflow", lastName: `Drawer ${stamp}`, phone, email: `overflow-drawer-${stamp}@example.com`,
+    }, "e2e-i18n-overflow");
+    if (existing) throw new Error(`i18n-overflow e2e: ${phone} matched an existing contact; refusing to use (or delete) it.`);
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      // C9: the list's ?locale= rides along to the drawer's route.
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts?locale=pseudo&peek=${id}`);
+      const dialog = page.getByRole("dialog");
+      await expect(dialog.locator('[data-drawer-section="facts"][data-state="ready"]')).toBeVisible();
+      await expect(dialog.locator('[data-record-action="call"]')).not.toHaveText(m["record.action.call"]);
+      const measured = dialog.locator("[data-record-action], [data-record-facts]");
+      const count = await measured.count();
+      expect(count, "no drawer header actions or fact line found").toBeGreaterThan(1);
+      for (let i = 0; i < count; i++) {
+        const [scrollW, clientW, text] = await measured.nth(i).evaluate((n) => [n.scrollWidth, n.clientWidth, n.textContent]);
+        expect(clipFailure(scrollW, clientW, `drawer "${text}"`)).toBeNull();
+      }
+
+      // Spec §9.7's open Assumption: the who-they-are label column (contact-drawer.tsx's
+      // LABEL_ROW, 92px) is REPORTED under the real Spanish locale, never asserted on — same
+      // discipline as the sidebar's own pseudo-locale case above.
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/contacts?locale=es&peek=${id}`);
+      await expect(dialog.locator('[data-drawer-section="who"][data-state="ready"]')).toBeVisible();
+      const labelCells = dialog.locator('[data-drawer-section="who"] dt');
+      const labelCount = await labelCells.count();
+      const clippedLabels: string[] = [];
+      for (let i = 0; i < labelCount; i++) {
+        const [scrollW, clientW, text] = await labelCells.nth(i).evaluate((n) => [n.scrollWidth, n.clientWidth, n.textContent]);
+        if ((scrollW as number) > (clientW as number)) clippedLabels.push(String(text ?? ""));
+      }
+      testInfo.annotations.push({
+        type: "drawer who-they-are label column (es) clipped",
+        description: clippedLabels.length > 0 ? clippedLabels.join(", ") : "none",
+      });
+    } finally {
+      const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
+      if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
+    }
+  });
+
   /**
    * S-03 part 2, 2a/2b: the household/business record page's header actions (Call, built from the
    * call-first member's name), the summary's fact line (2b: `[data-record-facts]`, the people count

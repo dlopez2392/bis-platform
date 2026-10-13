@@ -8,10 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { runGuarded } from "@/lib/ui/guarded-run";
-import { EMAIL_TREATMENT, emailLine, noResumeLine, runEmailAction, type EmailLoad } from "@/lib/consent/email-row";
+import { EMAIL_TREATMENT, emailLine, noResumeLine, runEmailAction, emailStatusWord, type EmailLoad } from "@/lib/consent/email-row";
 import type { EmailView } from "@/lib/consent/email-view";
 import type { EmailActionResult, EmailUndo } from "@/lib/consent/email-staff-actions";
+import type { Locale } from "@/lib/i18n/locale";
 import { stopEmailsAction, undoStopEmailsAction, resumeEmailsAction } from "./email-actions";
 
 /**
@@ -25,11 +28,11 @@ import { stopEmailsAction, undoStopEmailsAction, resumeEmailsAction } from "./em
  */
 type Ready = Extract<EmailLoad, { status: "ready" }>;
 
-function Block({ children, state, showTitle }: { children: React.ReactNode; state?: string; showTitle: boolean }) {
+function Block({ children, state, showTitle, locale }: { children: React.ReactNode; state?: string; showTitle: boolean; locale: Locale }) {
   return (
     <div className="space-y-1.5" data-testid="email-row" data-state={state}>
       {showTitle ? (
-        <p className="text-muted-foreground font-mono text-[10px] font-medium tracking-[0.14em] uppercase">{m["contact.messages.title"]}</p>
+        <p className="text-muted-foreground font-mono text-[10px] font-medium tracking-[0.14em] uppercase">{t(m, "contact.messages.title", locale)}</p>
       ) : null}
       {children}
     </div>
@@ -45,9 +48,10 @@ export function EmailRow({ accountId, contactId, load, showTitle, onChanged = ()
   onChanged?: () => void;
   onRetry?: () => void;
 }) {
+  const locale = useLocale();
   if (load.status === "loading") {
     return (
-      <Block showTitle={showTitle}>
+      <Block showTitle={showTitle} locale={locale}>
         <div className="space-y-2" data-testid="email-row-skeleton">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-5 w-32" />
@@ -57,9 +61,9 @@ export function EmailRow({ accountId, contactId, load, showTitle, onChanged = ()
   }
   if (load.status === "error") {
     return (
-      <Block showTitle={showTitle}>
-        <p className="text-muted-foreground text-sm">{m["contact.email.loadFailed"]}</p>
-        {onRetry ? <Button size="sm" variant="ghost" onClick={onRetry}>{m["common.retry"]}</Button> : null}
+      <Block showTitle={showTitle} locale={locale}>
+        <p className="text-muted-foreground text-sm">{t(m, "contact.email.loadFailed", locale)}</p>
+        {onRetry ? <Button size="sm" variant="ghost" onClick={onRetry}>{t(m, "common.retry", locale)}</Button> : null}
       </Block>
     );
   }
@@ -70,6 +74,7 @@ export function EmailRow({ accountId, contactId, load, showTitle, onChanged = ()
 function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
   accountId: string; contactId: string; load: Ready; showTitle: boolean; onChanged: () => void;
 }) {
+  const locale = useLocale();
   const [adopted, setAdopted] = useState(load);
   const [view, setView] = useState<EmailView>(load.view);
   const [resuming, setResuming] = useState(false);
@@ -95,52 +100,52 @@ function ReadyRow({ accountId, contactId, load, showTitle, onChanged }: {
   const act = (call: () => Promise<EmailActionResult>, success: string, withUndo = true) => {
     if (pending || busy.current) return;
     run(async () => {
-      await runEmailAction(call, show, toast, { success, undo: withUndo ? undo : undefined, run, onChanged });
+      await runEmailAction(call, show, toast, { success, undo: withUndo ? undo : undefined, run, onChanged, locale });
     });
   };
 
   if (view.kind === "no_email") return null;
-  const line = emailLine(view, load.zone);
+  const line = emailLine(view, load.zone, locale);
   const pill = view.kind === "allowed" ? EMAIL_TREATMENT.allowed : EMAIL_TREATMENT.stopped;
 
   return (
-    <Block state={view.kind} showTitle={showTitle}>
+    <Block state={view.kind} showTitle={showTitle} locale={locale}>
       <div ref={status} tabIndex={-1} data-testid="email-row-status"
         className="flex items-center gap-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <span>{m["contact.messages.email"]}</span>
-        <DotPill {...pill} dense data-status={view.kind} />
+        <span>{t(m, "contact.messages.email", locale)}</span>
+        <DotPill {...pill} label={emailStatusWord(view.kind, locale)} dense data-status={view.kind} />
       </div>
       {line ? <p className="text-muted-foreground text-xs">{line}</p> : null}
 
       {view.kind === "allowed" ? (
         <Button size="sm" variant="ghost" disabled={pending}
-          onClick={() => act(() => stopEmailsAction(accountId, contactId, view.newestId), m["contact.email.stoppedToast"])}>
-          {m["contact.email.stopEmails"]}
+          onClick={() => act(() => stopEmailsAction(accountId, contactId, view.newestId), t(m, "contact.email.stoppedToast", locale))}>
+          {t(m, "contact.email.stopEmails", locale)}
         </Button>
       ) : null}
 
       {view.kind === "stopped" && !view.canResume ? (
-        <p className="text-muted-foreground text-xs">{noResumeLine(view.how)}</p>
+        <p className="text-muted-foreground text-xs">{noResumeLine(view.how, locale)}</p>
       ) : null}
       {view.kind === "stopped" && view.canResume && !resuming ? (
         <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setNote(""); setResuming(true); }}>
-          {m["contact.email.resume"]}
+          {t(m, "contact.email.resume", locale)}
         </Button>
       ) : null}
       {view.kind === "stopped" && view.canResume && resuming ? (
         <form className="space-y-2" data-testid="email-resume-form" onSubmit={(e) => {
           e.preventDefault();
-          act(() => resumeEmailsAction(accountId, contactId, view.eventId, note), m["contact.email.resumedToast"], false);
+          act(() => resumeEmailsAction(accountId, contactId, view.eventId, note), t(m, "contact.email.resumedToast", locale), false);
         }}>
-          <Label htmlFor={`email-resume-${contactId}`}>{m["contact.email.resumeNoteLabel"]}</Label>
+          <Label htmlFor={`email-resume-${contactId}`}>{t(m, "contact.email.resumeNoteLabel", locale)}</Label>
           <Input id={`email-resume-${contactId}`} name="note" value={note} required aria-required="true" autoFocus
             onChange={(e) => setNote(e.target.value)} />
           <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={pending || !note.trim()}>{m["contact.email.resumeSubmit"]}</Button>
+            <Button type="submit" size="sm" disabled={pending || !note.trim()}>{t(m, "contact.email.resumeSubmit", locale)}</Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => {
               setResuming(false);
               queueMicrotask(() => status.current?.focus());
-            }}>{m["contact.email.resumeCancel"]}</Button>
+            }}>{t(m, "contact.email.resumeCancel", locale)}</Button>
           </div>
         </form>
       ) : null}

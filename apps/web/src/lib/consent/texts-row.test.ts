@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { m } from "@/lib/messages";
-import { howLine, textsLine, parseTextsResponse, textsLoadFrom, runTextsAction, TEXTS_TREATMENT } from "./texts-row";
+import { howLine, textsLine, parseTextsResponse, textsLoadFrom, runTextsAction, textsStatusWord, TEXTS_TREATMENT } from "./texts-row";
 import type { TextsView } from "./texts-view";
 
 const STOPPED: TextsView = { kind: "stopped", eventId: "ev1", since: "2026-10-04T02:30:00Z", how: { kind: "keyword", word: "STOP" }, canResume: false };
@@ -98,5 +98,29 @@ describe("runTextsAction — at once, the answer shown, Undo on the toast (rule 
     second.click();
     expect(second.t.error).toHaveBeenCalledWith(m["contact.texts.undoBusy"]);
     void click;
+  });
+});
+
+describe("the Texts row's words in Spanish (S-03 part 3 §10.1)", () => {
+  it("how it stopped, and since when, in the reader's language (mutation: ignore the locale -> FAILS)", () => {
+    expect(howLine({ kind: "staff" }, "es")).toBe("usted lo registró");
+    expect(howLine({ kind: "keyword", word: "STOP" }, "es")).toBe("mandó STOP por texto");
+    expect(howLine({ kind: "free_text", excerpt: "ya no", by: "Ana" }, "es")).toBe("escribió “ya no”, confirmado por Ana");
+    expect(textsLine({ kind: "held", eventId: "h", since: "2026-10-03T15:00:00Z", excerpt: "remove me" }, "UTC", "es"))
+      .toBe("Escribió “remove me”. Los textos están en pausa.");
+    expect(textsLine({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "carrier" }, canResume: false }, "UTC", "es"))
+      .toMatch(/^Desde el .*2026 · la compañía telefónica lo bloqueó$/);
+  });
+  it("the status words (mutation: textsStatusWord ignores the locale -> FAILS)", () => {
+    expect([textsStatusWord("allowed", "es"), textsStatusWord("stopped", "es"), textsStatusWord("held", "es")]).toEqual(["Permitido", "Detenido", "En pausa"]);
+    expect(textsStatusWord("held", "en")).toBe("On hold");
+  });
+  it("the action's Undo and its crash line (mutation: keep m[\"common.undo\"] -> FAILS)", async () => {
+    const toast = { success: vi.fn(), error: vi.fn() };
+    await runTextsAction(async () => ({ ok: true, view: { kind: "allowed", newestId: null }, undo: { kind: "stop", eventId: "e1" } }), () => {}, toast,
+      { success: "x", undo: async () => ({ ok: true, view: { kind: "allowed", newestId: null } }), locale: "es" });
+    expect(toast.success.mock.calls[0]![1].action.label).toBe("Deshacer");
+    await runTextsAction(async () => { throw new Error("stale action id"); }, () => {}, toast, { success: "x", locale: "es" });
+    expect(toast.error).toHaveBeenLastCalledWith(m["inline.crashed.es"]);
   });
 });

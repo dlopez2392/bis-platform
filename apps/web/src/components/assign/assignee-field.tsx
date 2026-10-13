@@ -3,6 +3,9 @@
 import { useState, useTransition } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { m } from "@/lib/messages";
+import { useLocale } from "@/components/locale-provider";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { applyAssignee, contactAssigneeSave, taskAssigneeSave, type AssignSave } from "./assign-handlers";
 
 /** A person who can hold a customer or a task, as the picker names them. `AssignMember` (lib/assign/view.ts) fits. */
@@ -12,8 +15,8 @@ export type AssigneeOption = { userId: string; label: string };
 export const NONE = "__unassigned__";
 
 /** The picker's choices: Unassigned first, then each person by name. */
-export function assigneeChoices(options: AssigneeOption[]): { value: string; label: string }[] {
-  return [{ value: NONE, label: m["assign.unassigned"] }, ...options.map((o) => ({ value: o.userId, label: o.label }))];
+export function assigneeChoices(options: AssigneeOption[], locale: Locale = "en"): { value: string; label: string }[] {
+  return [{ value: NONE, label: t(m, "assign.unassigned", locale) }, ...options.map((o) => ({ value: o.userId, label: o.label }))];
 }
 
 /**
@@ -21,9 +24,9 @@ export function assigneeChoices(options: AssigneeOption[]): { value: string; lab
  * team since this page loaded) is "Someone on the team", never Unassigned:
  * that would state a fact the page does not have.
  */
-export function assigneeName(id: string | null, options: AssigneeOption[]): string {
-  if (id === null) return m["assign.unassigned"];
-  return options.find((o) => o.userId === id)?.label ?? m["assign.someone"];
+export function assigneeName(id: string | null, options: AssigneeOption[], locale: Locale = "en"): string {
+  if (id === null) return t(m, "assign.unassigned", locale);
+  return options.find((o) => o.userId === id)?.label ?? t(m, "assign.someone", locale);
 }
 
 /**
@@ -48,9 +51,10 @@ export function AssigneeField({ label, value, options, readOnly, save }: {
   readOnly: boolean;
   save: AssignSave;
 }) {
+  const locale = useLocale();
   const [current, setCurrent] = useState<string | null>(value);
   const [pending, startTransition] = useTransition();
-  const nameOf = (id: string | null) => assigneeName(id, options);
+  const nameOf = (id: string | null) => assigneeName(id, options, locale);
   if (readOnly) return <span className="block px-1.5 py-1 text-sm">{nameOf(current)}</span>;
   const pick = (next: string | null) => {
     if (next === current) return;
@@ -65,7 +69,7 @@ export function AssigneeField({ label, value, options, readOnly, save }: {
         </SelectValue>
       </SelectTrigger>
       <SelectContent>
-        {assigneeChoices(options).map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+        {assigneeChoices(options, locale).map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
       </SelectContent>
     </Select>
   );
@@ -93,12 +97,13 @@ export function ContactAssigneeField({ accountId, contactId, value, options, rea
   /** After a save that changed something, e.g. the record page's refresh (its task rows move with the customer, A4). */
   onSaved?: () => void;
 }) {
+  const locale = useLocale();
   const shown = readOnly && value !== null && value === viewerId && !options.some((o) => o.userId === value)
-    ? [...options, { userId: value, label: m["assign.you"] }]
+    ? [...options, { userId: value, label: t(m, "assign.you", locale) }]
     : options;
   return (
     <AssigneeField
-      label={m["assign.field.label"]} value={value} options={shown} readOnly={readOnly}
+      label={t(m, "assign.field.label", locale)} value={value} options={shown} readOnly={readOnly}
       save={contactAssigneeSave(accountId, contactId, onSaved)}
     />
   );
@@ -116,9 +121,10 @@ export function TaskAssigneeField({ accountId, taskId, value, options }: {
   value: string | null;
   options: AssigneeOption[];
 }) {
+  const locale = useLocale();
   return (
     <AssigneeField
-      label={m["assign.field.label"]} value={value} options={options} readOnly={false}
+      label={t(m, "assign.field.label", locale)} value={value} options={options} readOnly={false}
       save={taskAssigneeSave(accountId, taskId)}
     />
   );

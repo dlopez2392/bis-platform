@@ -104,6 +104,8 @@ const ALLOWED: Record<string, Reason> = {
   // The drawer's Texts and Email rows: ledgerDb after getContact on the request client.
   "app/api/accounts/[accountId]/contacts/[contactId]/email/route.ts": "proven-target",
   "app/api/accounts/[accountId]/contacts/[contactId]/texts/route.ts": "proven-target",
+  // The list drawer's summary (S-03 part 3): ledgerDb for the Text gate, only after getContact on the request client.
+  "app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts": "proven-target",
   "lib/auth.ts": "before-trust",
   "lib/booking/availability.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",

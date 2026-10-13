@@ -220,3 +220,19 @@ describe("contactSourceHint", () => {
   });
 });
 
+describe("contactSourceHint in the reader's language (S-03 part 3 §10.1)", () => {
+  it("every caption reads Spanish for a Spanish reader (mutation: ignore the locale -> FAILS)", () => {
+    expect(contactSourceHint({ source: null, custom: { referred_by: "Ana" }, attribution: null }, "es")).toBe("Recomendado por Ana");
+    expect(contactSourceHint({ source: null, custom: null, attribution: { first: { ref: "https://chat.openai.com/" } } }, "es")).toBe("Llegó a través de ChatGPT");
+    expect(contactSourceHint({ source: "voice", custom: null, attribution: null }, "es")).toBe("Llamaron por teléfono");
+    expect(contactSourceHint({ source: "form: Contact us", custom: null, attribution: null }, "es")).toBe("Guardado en su formulario “Contact us”");
+    expect(contactSourceHint({ source: null, custom: null, attribution: null }, "es")).toBe("Origen desconocido");
+  });
+  it("English without a locale, as every caller before this read (mutation: default to es -> FAILS)", () => {
+    expect(contactSourceHint({ source: null, custom: null, attribution: null })).toBe("Source unknown");
+  });
+  it("a typed name is inserted verbatim, $& included (mutation: a string replacement -> FAILS)", () => {
+    expect(contactSourceHint({ source: null, custom: { referred_by: "Ana $& Co." }, attribution: null }, "es")).toBe("Recomendado por Ana $& Co.");
+  });
+});
+

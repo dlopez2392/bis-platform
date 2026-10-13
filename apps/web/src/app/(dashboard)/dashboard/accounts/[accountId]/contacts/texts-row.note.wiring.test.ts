@@ -40,6 +40,12 @@ vi.mock("react", async (importOriginal) => {
     useTransition: () => [false, (cb: () => unknown) => { void cb(); }],
     useRef: (init: unknown) => ({ current: init }),
     useEffect: () => {},
+    // S-03 part 3: TextsRow/ReadyRow now read useLocale() (useContext under
+    // it), which needs React's real dispatcher — absent here, since this
+    // file calls the function components directly rather than rendering a
+    // tree. "en" is the same default LocaleProvider's context carries
+    // outside a Provider, so this mirrors an unlocalized render exactly.
+    useContext: () => "en",
   };
 });
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -79,8 +85,9 @@ function find(node: unknown, pred: (el: El) => boolean): El | null {
 const STOPPED_STAFF = { kind: "stopped", eventId: "e1", since: "2026-10-04T02:30:00Z", how: { kind: "staff" as const }, canResume: true };
 const LOAD = { status: "ready" as const, view: STOPPED_STAFF, zone: "America/Chicago", phone: "+15512345678" };
 
-/** `TextsRow` itself calls no hook; the tree this returns for a "ready" load
- *  is exactly `<ReadyRow .../>`, called directly to reach ITS tree. */
+/** `TextsRow` itself calls only `useLocale()` (mocked to "en" above); the
+ *  tree this returns for a "ready" load is exactly `<ReadyRow .../>`,
+ *  called directly to reach ITS tree. */
 function render(): El {
   callIndex = 0;
   states = [];

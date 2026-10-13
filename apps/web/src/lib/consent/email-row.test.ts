@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { emailLine, emailHowLine, noResumeLine, parseEmailResponse, runEmailAction, EMAIL_TREATMENT } from "./email-row";
+import { emailLine, emailHowLine, noResumeLine, parseEmailResponse, runEmailAction, emailStatusWord, EMAIL_TREATMENT } from "./email-row";
 import { m } from "@/lib/messages";
 
 describe("emailLine — 'Since {date} · {how}' (G14)", () => {
@@ -67,5 +67,23 @@ describe("runEmailAction — at once, the answer shown, Undo on the toast (rule 
       expect(t.label.length).toBeGreaterThan(0);
       expect(`${t.dot} ${t.chip}`).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(/i);
     }
+  });
+});
+
+describe("the Email row's words in Spanish (S-03 part 3 §10.1)", () => {
+  it("how, since, and what to say instead of Resume (mutation: ignore the locale -> FAILS)", () => {
+    expect(emailHowLine({ kind: "bounced" }, "es")).toBe("rebotó");
+    expect(noResumeLine({ kind: "complained" }, "es")).toBe("Marcó un correo como spam: no le volveremos a escribir a menos que se vuelva a suscribir.");
+    expect(emailLine({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "staff" }, canResume: true }, "UTC", "es"))
+      .toMatch(/^Desde el .*2026 · usted lo registró$/);
+  });
+  it("the status words (mutation: emailStatusWord ignores the locale -> FAILS)", () => {
+    expect([emailStatusWord("allowed", "es"), emailStatusWord("stopped", "es")]).toEqual(["Permitido", "Detenido"]);
+  });
+  it("Undo on the toast reads Deshacer (mutation: keep m[\"common.undo\"] -> FAILS)", async () => {
+    const toast = { success: vi.fn(), error: vi.fn() };
+    await runEmailAction(async () => ({ ok: true, view: { kind: "allowed", newestId: "n" }, undo: { kind: "stop", eventId: "e1" } }), () => {}, toast,
+      { success: "x", undo: async () => ({ ok: true, view: { kind: "allowed", newestId: null } }), locale: "es" });
+    expect(toast.success.mock.calls[0]![1].action.label).toBe("Deshacer");
   });
 });

@@ -17,6 +17,8 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { SubmitButton } from "../../../submit-button";
 import { updateContactAction, addTagAction, removeTagAction } from "./actions";
 import { updateContactFieldAction, undoInlinePhoneEditAction } from "../actions";
@@ -59,13 +61,14 @@ type DetailsProps = {
 /** The record page's "Contact Details" card body (S-03 §8): moved in unchanged, minus its Card. */
 export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null }: DetailsProps) {
   const router = useRouter();
+  const locale = useLocale();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
   // F-157: computed from the SAME `contact` prop the FIELDS below read —
   // this page already has the full row server-side, so no second fetch like
   // the drawer's own summary route.
   const sourceHint = contactSourceHint({
     source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution,
-  });
+  }, locale);
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundUpdateContact = updateContactAction.bind(null, accountId);
   return (
@@ -73,13 +76,14 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
       <dl className="space-y-1">
         {FIELDS.map(({ field, labelKey, type }) => (
           <div key={field} className="space-y-0.5">
-            <dt className="text-muted-foreground text-xs">{m[labelKey]}</dt>
+            <dt className="text-muted-foreground text-xs">{t(m, labelKey, locale)}</dt>
             <dd>
               <InlineField
-                label={m[labelKey]}
+                label={t(m, labelKey, locale)}
                 field={field}
                 inputType={type}
                 value={(contact[field] as string | null) ?? null}
+                locale={locale}
                 save={(v) => updateContactFieldAction(accountId, contactId, field, v)}
                 {...(field === "phone" ? {
                   undoPhone: (undo: PhoneInlineUndo) => undoInlinePhoneEditAction(accountId, contactId, undo),
@@ -89,7 +93,7 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
           </div>
         ))}
         <div className="space-y-0.5">
-          <dt className="text-muted-foreground text-xs">{m["contact.company"]}</dt>
+          <dt className="text-muted-foreground text-xs">{t(m, "contact.company", locale)}</dt>
           <dd><BusinessInlineField accountId={accountId} contactId={contactId} value={contact.company_name ?? null} /></dd>
         </div>
         <SourceField
@@ -103,7 +107,7 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
             line's shape. A change refreshes the page: the customer's
             open tasks move with them (A4). */}
         <div className="grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2" data-assignee-row>
-          <dt className="text-muted-foreground text-xs">{m["assign.field.label"]}</dt>
+          <dt className="text-muted-foreground text-xs">{t(m, "assign.field.label", locale)}</dt>
           <dd className="min-w-0">
             <ContactAssigneeField
               key={contact.assigned_to ?? ""}
@@ -160,10 +164,10 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
                       <Label htmlFor={fieldName}>{d.name}</Label>
                       <Select name={fieldName} defaultValue={String(current ?? "")}>
                         <SelectTrigger id={fieldName} className="w-full">
-                          <SelectValue placeholder={m["common.none"]} />
+                          <SelectValue placeholder={t(m, "common.none", locale)} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value={CLEAR_FIELD_SENTINEL}>{m["contact.clearField"]}</SelectItem>
+                          <SelectItem value={CLEAR_FIELD_SENTINEL}>{t(m, "contact.clearField", locale)}</SelectItem>
                           {d.options.map((o) => (
                             <SelectItem key={o} value={o}>
                               {o}
@@ -189,7 +193,7 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
               );
             })}
 
-            <SubmitButton>{m["common.save"]}</SubmitButton>
+            <SubmitButton>{t(m, "common.save", locale)}</SubmitButton>
           </form>
         </>
       ) : null}
@@ -199,23 +203,24 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
 
 /** The record page's "Tags" card body (S-03 §8): moved in unchanged, minus its Card. */
 export function ContactTagsBody({ accountId, contactId, tags }: { accountId: string; contactId: string; tags: Tag[] }) {
+  const locale = useLocale();
   const hidden = <input type="hidden" name="contactId" value={contactId} />;
   const boundAddTag = addTagAction.bind(null, accountId);
   const boundRemoveTag = removeTagAction.bind(null, accountId);
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {tags.map((t) => (
-        <form key={t.id} action={boundRemoveTag} className="inline-flex">
+      {tags.map((tag) => (
+        <form key={tag.id} action={boundRemoveTag} className="inline-flex">
           {hidden}
-          <input type="hidden" name="tagId" value={t.id} />
+          <input type="hidden" name="tagId" value={tag.id} />
           <button
             type="submit"
             className="group"
-            title={t.name}
-            aria-label={m["contact.removeTag"].replace("{name}", t.name)}
+            title={tag.name}
+            aria-label={t(m, "contact.removeTag", locale, { name: tag.name })}
           >
             <Badge variant="secondary" className="gap-1 pr-1.5">
-              {t.name}
+              <span lang="">{tag.name}</span>
               <X className="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden />
             </Badge>
           </button>
@@ -223,8 +228,8 @@ export function ContactTagsBody({ accountId, contactId, tags }: { accountId: str
       ))}
       <form action={boundAddTag} className="inline-flex items-center gap-1">
         {hidden}
-        <Input name="tag" placeholder={m["contact.addTag"]} className="min-h-11 md:min-h-8 w-28 text-xs" />
-        <Button type="submit" size="icon-xs" variant="outline" aria-label={m["contact.addTag"]}>
+        <Input name="tag" placeholder={t(m, "contact.addTag", locale)} className="min-h-11 md:min-h-8 w-28 text-xs" />
+        <Button type="submit" size="icon-xs" variant="outline" aria-label={t(m, "contact.addTag", locale)}>
           <Plus className="size-3" aria-hidden />
         </Button>
       </form>

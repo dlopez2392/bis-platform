@@ -1,5 +1,7 @@
 import { channelOf, aiAssistantNameOf } from "@/lib/website/channel";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 
 /**
  * F-157 (docs/crm-features.md §4.3 rider 6): the drawer's one Source line.
@@ -115,11 +117,11 @@ function channelFrom(attribution: unknown): string | null {
  * free text, a manual correction) matches none of these and gets no
  * caption: there is nothing machine-made to translate.
  */
-function machineSourceCaption(source: string): string | null {
-  if (source === "voice") return m["contact.source.machine.voice"];
-  if (source === "booking") return m["contact.source.machine.booking"];
+function machineSourceCaption(source: string, locale: Locale): string | null {
+  if (source === "voice") return t(m, "contact.source.machine.voice", locale);
+  if (source === "booking") return t(m, "contact.source.machine.booking", locale);
   const formMatch = /^form: (.+)$/.exec(source);
-  if (formMatch) return m["contact.source.machine.form"].replace("{name}", () => formMatch[1]!);
+  if (formMatch) return t(m, "contact.source.machine.form", locale, { name: formMatch[1]! });
   return null;
 }
 
@@ -131,18 +133,15 @@ export function contactSourceHint(input: {
    *  `{ first?: Record<string,string>; last?: Record<string,string> }`
    *  when it was `setAttribution` that wrote it. */
   attribution: unknown;
-}): string | null {
-  // Function replacements, not string ones (review round 1, m1):
-  // `String.prototype.replace` treats a STRING replacement's `$&`/`$1`/`$$`
-  // specially — a referral answer or a channel name containing a literal
-  // "$&" would otherwise have it swapped for the matched placeholder text
-  // itself. A function's return value is inserted verbatim.
+}, locale: Locale = "en"): string | null {
+  // `t()` interpolates with a replacer FUNCTION (lib/i18n/t.ts:23-27), so a referral answer or a
+  // channel name containing "$&" is inserted verbatim (review round 1, m1).
   const referredBy = referredByFrom(input.custom);
-  if (referredBy) return m["contact.source.referredBy"].replace("{name}", () => referredBy);
+  if (referredBy) return t(m, "contact.source.referredBy", locale, { name: referredBy });
 
   const channel = channelFrom(input.attribution);
-  if (channel) return m["contact.source.foundThrough"].replace("{channel}", () => channel);
+  if (channel) return t(m, "contact.source.foundThrough", locale, { channel });
 
-  if (input.source) return machineSourceCaption(input.source);
-  return m["contact.source.unknown"];
+  if (input.source) return machineSourceCaption(input.source, locale);
+  return t(m, "contact.source.unknown", locale);
 }

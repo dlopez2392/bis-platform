@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
@@ -9,6 +9,7 @@ import type { EmailLoad } from "@/lib/consent/email-row";
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 
 const { EmailRow } = await import("./email-row");
+const { LocaleProvider } = await import("@/components/locale-provider");
 
 const ready = (view: Extract<EmailLoad, { status: "ready" }>["view"]): EmailLoad => ({ status: "ready", view, zone: "America/Chicago" });
 const html = (load: EmailLoad, showTitle = false) => renderToStaticMarkup(createElement(EmailRow, { accountId: "a1", contactId: "c1", load, showTitle }));
@@ -61,5 +62,19 @@ describe("EmailRow — spec §6's Email row", () => {
   it("shows the Messages label only when told to (the Texts row shows none for a contact with no number; mutation: always show it → two labels, FAILS)", () => {
     expect(renderedText(html(ready({ kind: "allowed", newestId: null }), true))).toContain(m["contact.messages.title"]);
     expect(renderedText(html(ready({ kind: "allowed", newestId: null }), false))).not.toContain(m["contact.messages.title"]);
+  });
+});
+
+describe("EmailRow in Spanish (S-03 part 3 §10)", () => {
+  const es = (load: EmailLoad) =>
+    renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>, createElement(EmailRow, { accountId: "a1", contactId: "c1", load, showTitle: true })));
+  it("Allowed reads Correo · Permitido with Detener correos (mutation: keep m[\"contact.email.allowed\"] -> FAILS)", () => {
+    const out = renderedText(es(ready({ kind: "allowed", newestId: null })));
+    expect(out).toMatch(/Mensajes[\s\S]*Correo\s+Permitido/);
+    expect(buttons(es(ready({ kind: "allowed", newestId: null })))).toEqual(["Detener correos"]);
+  });
+  it("a bounced address explains itself in Spanish (mutation: noResumeLine without the locale -> FAILS)", () => {
+    const out = renderedText(es(ready({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "bounced" }, canResume: false })));
+    expect(out).toContain("Esta dirección rebotó: los correos no se envían. Corrija la dirección para empezar de nuevo.");
   });
 });

@@ -126,7 +126,9 @@ they re-resolve against the accent each element inherits.
    primary.
    A record page's header is its own view (decided 2026-10-12): its one
    primary, Call, writes nothing, so it cannot write what a card's primary
-   writes, and the cards below keep their own.
+   writes, and the cards below keep their own. The drawer's header is the
+   same view: Call is its one primary, and an inline form inside the
+   drawer keeps its own.
 9. Client-customer surfaces (booking page, forms, emails) always carry the
    client's logo + brand color from the theming engine. **Login is the one
    exception and carries the platform's mark and accent instead** — nobody is
@@ -242,6 +244,11 @@ until tapped), then who they are.
 A household or a business has its own record page on the same kit
 (decided 2026-10-13): it is a record, reached from its members' pages, not
 a new top-level surface.
+The list's drawer is the record's quick look on the same kit (decided
+2026-10-13): the record's header with Call as its one primary, the checked
+facts, what is next, the five newest timeline rows and who they are, in
+flat sections (a mono label and row rules, never a glass card inside the
+glass sheet); everything else is on the full record, one link away.
 
 **Documents.** Each file states its source ("the client uploaded it"),
 version, expiry in words ("expires in 12 days") and who can see it.
