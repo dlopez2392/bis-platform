@@ -286,13 +286,14 @@ describe("the drawer's summary route: who they are (D6, Q1)", () => {
     expect(b.who.language).toEqual({ value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null });
   });
 
-  it("review M1: a bad stored language_set_at costs the language line alone, never the response (mutation: call languageView outside viewOf -> the route 500s, FAILS)", async () => {
+  it("review M1/M-2: a bad stored language_set_at leaves who.language OUT (the drawer then shows no line), never a false \"Not set.\" and never a 500 (mutation: call languageView outside viewOf -> 500; or fall back to a not-set view -> the key is present; each FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });
     const res = await GET(req(), ctx());
     expect(res.status).toBe(200);
     const b = await res.json();
-    expect(b.who.language).toEqual({ value: null, valueLabel: null, phrase: "Not set.", hint: null });
+    expect(b.who).not.toHaveProperty("language");
+    expect(b.who.fields).toBeDefined();
     expect(b.facts.status).toBe("ready");
     expect(errors).toHaveBeenCalled();
   });

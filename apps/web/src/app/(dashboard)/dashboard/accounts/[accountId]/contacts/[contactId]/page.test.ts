@@ -266,12 +266,15 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     expect(html).toContain("from their booking (Oct 3)");
   });
 
-  it("review M1: a bad stored language_set_at costs the Language line alone, never the page (mutation: call languageView outside viewOf -> the render rejects, FAILS)", async () => {
+  it("review M1/M-2: a bad stored language_set_at leaves the Language line OUT, never a false \"Not set.\" and never the page (mutation: call languageView outside viewOf -> the render rejects; or fall back to a not-set view -> the row renders; each FAILS)", async () => {
     getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();
-      expect(html).toMatch(/data-language-row="" data-language=""/);
+      expect(html).toContain("data-record-header");
+      expect(html).toMatch(/data-record-card="details" data-state="ready"/);
+      expect(html).not.toContain("data-language-row");
+      expect(html).not.toContain("Not set.");
       expect(errors).toHaveBeenCalled();
     } finally {
       errors.mockRestore();

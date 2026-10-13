@@ -52,7 +52,7 @@ describe("LanguageField (S-09 §8.2)", () => {
   // the real valueNode to measure against, select.tsx:56's default / @radix-ui/react-select's
   // SelectContentImpl) and its focus wiring — SelectValue must stay mounted in BOTH states.
   it("SelectValue stays mounted set or not (mutation: swap it for a bare span -> FAILS)", () => {
-    for (const view of [SET, { value: null, valueLabel: null, phrase: "Not set.", hint: null }]) {
+    for (const view of [SET, { value: null, valueLabel: null, phrase: "Not set. Messages go out in English.", hint: null }]) {
       const html = render(view);
       expect(html).toContain('data-slot="select-value"');
     }

@@ -116,11 +116,10 @@ export async function GET(
       zone: zone.zone, tr, author: { viewerId: access.userId, names: recent.names, personaName: recent.personaName, tr },
     }), (contact.language as "en" | "es" | null) ?? ""))
     : null;
-  // review M1: a bad stored date (etc.) must cost this one line, never the whole response — the
-  // same "unknown" phrase `languageView` itself uses when the account row can't be read.
-  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, {
-    accountLanguage: account.error ? undefined : accountRow?.language ?? null, zone: zone.zone, tr,
-  })) ?? { value: null, valueLabel: null, phrase: tr.text("contact.language.notSetUnknown"), hint: null };
+  // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole response, and the
+  // line is LEFT OUT (no who.language; the drawer reads absent as no line, plan deviation 11) rather
+  // than a "Not set." that would be false for a set contact.
+  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, { zone: zone.zone, tr }));
 
   const body: DrawerSummary = {
     locale,
@@ -147,7 +146,7 @@ export async function GET(
         phone: contact.phone ?? null, company_name: contact.company_name ?? null,
       },
       tags: tags.status === "ready" ? { status: "ready", tags: tags.tags.map((t) => ({ id: t.id, name: t.name })) } : { status: "error" },
-      language,
+      ...(language ? { language } : {}),
     },
   };
   return NextResponse.json(body);

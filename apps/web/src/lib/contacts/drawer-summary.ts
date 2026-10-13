@@ -27,7 +27,8 @@ export type DrawerSummary = {
   who: {
     source: string | null; sourceHint: string | null; assignedTo: string | null; fields: DrawerFields;
     tags: { status: "ready"; tags: { id: string; name: string }[] } | { status: "error" };
-    language: LanguageView;
+    /** Absent when the line could not be built (review M-2): the drawer leaves it out, never "Not set.". */
+    language?: LanguageView;
   };
 };
 

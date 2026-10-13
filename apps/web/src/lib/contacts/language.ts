@@ -59,18 +59,14 @@ function shortDay(at: string, zone: string, locale: Tr["locale"]): string {
 }
 
 /**
- * The Details line (§8.2). `accountLanguage`: the account's language, null when it has none, undefined
- * when its row could not be read (then the line claims nothing about what goes out; plan deviation 10).
+ * The Details line (§8.2). Not set names English whatever the account's language: in PR 1 nothing
+ * sends in Spanish, so English is the only true fallback today. The account's-language wording
+ * arrives in PR 2 with the switch that makes it true (spec §8.2, §15.2).
  */
-export function languageView(
-  c: ContactLanguageFacts, opts: { accountLanguage: ContactLanguage | null | undefined; zone: string; tr: Tr },
-): LanguageView {
+export function languageView(c: ContactLanguageFacts, opts: { zone: string; tr: Tr }): LanguageView {
   const { tr } = opts;
   if (c.language === null || c.language_source === null || c.language_set_at === null) {
-    const phrase = opts.accountLanguage === undefined ? tr.text("contact.language.notSetUnknown")
-      : opts.accountLanguage === null ? tr.text("contact.language.notSet", { language: tr.text(NAME_KEY.en) })
-        : tr.text("contact.language.notSetAccount", { language: tr.text(NAME_KEY[opts.accountLanguage]) });
-    return { value: null, valueLabel: null, phrase, hint: null };
+    return { value: null, valueLabel: null, phrase: tr.text("contact.language.notSet", { language: tr.text(NAME_KEY.en) }), hint: null };
   }
   const hint = languageHint(c);
   return {

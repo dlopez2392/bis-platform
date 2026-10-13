@@ -725,16 +725,14 @@ export const m = {
   "contact.source.machine.form": "Saved to your “{name}” form",
   "contact.source.machine.form.es": "Guardado en su formulario “{name}”",
   // S-09 (a language on every customer): the record's and the drawer's Language line. Spec §15.2's
-  // words verbatim, plus `.choose` and `.notSetUnknown` (plan deviation 10). "their", never "her":
-  // BIS stores no gender. {value} is the endonym; {language} the in-sentence name (language.name.*).
+  // words, plus `.choose` (plan deviation 10). Not set names English only: nothing sends in Spanish
+  // in PR 1, so `.notSetAccount` ("…, the account's language.") arrives in PR 2 with the switch that
+  // makes it true (review I-2). "their", never "her": BIS stores no gender.
+  // {value} is the endonym; {language} the in-sentence name (language.name.*).
   "contact.language.label": "Language",
   "contact.language.label.es": "Idioma",
   "contact.language.notSet": "Not set. Messages go out in {language}.",
   "contact.language.notSet.es": "Sin definir. Los mensajes salen en {language}.",
-  "contact.language.notSetAccount": "Not set. Messages go out in {language}, the account's language.",
-  "contact.language.notSetAccount.es": "Sin definir. Los mensajes salen en {language}, el idioma de la cuenta.",
-  "contact.language.notSetUnknown": "Not set.",
-  "contact.language.notSetUnknown.es": "Sin definir.",
   "contact.language.choose": "Choose",
   "contact.language.choose.es": "Elegir",
   "contact.language.from.booking": "from their booking ({date})",
