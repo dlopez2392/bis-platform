@@ -56,6 +56,6 @@ describe("the To do reads name tasks.call_id directly, with no pre-0064 fallback
   it("listContactTasks: same, one select and the error surfaces (mutation: restore the 42703 retry → resolves, FAILS)", async () => {
     const { db, selects } = fakeDb();
     await expect(listContactTasks(db, "a1", "c1")).rejects.toThrow("call_id");
-    expect(selects).toEqual(["id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to"]);
+    expect(selects).toEqual(["id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to"]);
   });
 });

@@ -19,7 +19,7 @@ import {
   loadGroupActivity, loadGroupSummary, loadGroupNextUp, loadGroupTimeline,
 } from "@/lib/record/group-loaders";
 import { groupFactsView, groupCapLine } from "@/lib/record/group-facts";
-import { nextUpView } from "@/lib/record/next-up";
+import { nextUpView, type NextUpWho } from "@/lib/record/next-up";
 import { timelineRows, timelineFailedText } from "@/lib/record/timeline-rows";
 import { timelinePagerHrefs } from "@/lib/record/timeline-pager";
 import { parseTimelineCursor } from "@/lib/cursor";
@@ -40,6 +40,9 @@ export const dynamic = "force-dynamic";
 
 type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
 const KIND_KEY = { household: "groups.kind.household", business: "groups.kind.business" } as const satisfies Record<GroupKind, MessageKey>;
+const PEOPLE_EMPTY_KEY = {
+  household: "groupPage.people.emptyHousehold", business: "groupPage.people.emptyBusiness",
+} as const satisfies Record<GroupKind, MessageKey>;
 const PLACES_EMPTY_KEY = {
   household: "groupPage.places.emptyHousehold", business: "groupPage.places.emptyBusiness",
 } as const satisfies Record<GroupKind, MessageKey>;
@@ -92,11 +95,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
     softSmsGate(db, accountId),
     loadGroupPeople(db, accountId, group.id, after),
     loadGroupHeaderPlaces(db, accountId, group.id),
-    // C13: the open deals of the same ≤50 people the middle column reads (plan deviation 5).
-    loadGroupDeals(db, accountId, async () => {
-      if (!set) throw new Error("no activity set");
-      return set.people;
-    }),
+    // C13: the open deals of the same ≤50 people the middle column reads (plan deviation 5). With
+    // no set, the scan's own failure (logged once by loadGroupActivity, under its real cause) is
+    // Deals' error too, as it is the three middle cards' (final review minor d).
+    set ? loadGroupDeals(db, accountId, async () => set.people) : noSet,
     ids ? loadGroupSummary(db, accountId, ids) : noSet,
     ids ? loadGroupNextUp(db, accountId, ids, now) : noSet,
     ids ? loadGroupTimeline(db, accountId, ids, before) : noSet,
@@ -141,6 +143,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const setPeople = set?.people ?? [];
   const names = new Map(setPeople.map((p) => [p.contactId, memberName(p, tr)]));
   const firstNames: Record<string, string> = Object.fromEntries(setPeople.map((p) => [p.contactId, memberFirstName(p, tr)]));
+  // Next up marks a typed name lang="" and leaves the page's own "(no name)" in the page's language (minor b).
+  const nextUpNames: Record<string, NextUpWho> = Object.fromEntries(setPeople.map((p) => [p.contactId, {
+    name: memberFirstName(p, tr), typed: Boolean(p.firstName?.trim() || p.lastName?.trim()),
+  }]));
   const subjects = Object.fromEntries(setPeople.map((p) => [p.contactId, {
     label: memberName(p, tr), href: `/dashboard/accounts/${accountId}/contacts/${p.contactId}`,
   }]));
@@ -159,10 +165,15 @@ export default async function GroupRecordPage({ params, searchParams }: {
     }
   };
   const facts = set && summary.status === "ready"
-    ? viewOf("summary", () => groupFactsView({ total: set.total, narrow, facts: summary.facts, names: firstNames }, { zone: zone.zone, now, tr }))
+    ? viewOf("summary", () => {
+      const view = groupFactsView({ total: set.total, narrow, facts: summary.facts, names: firstNames }, { zone: zone.zone, now, tr });
+      // A group with no one in it (an exact zero, never a failed count): the People card's own
+      // sentence, by kind, rather than an empty line (final review minor a).
+      return set.total.ok && set.total.value === 0 ? { ...view, line: [tr.text(PEOPLE_EMPTY_KEY[group.kind])] } : view;
+    })
     : null;
   const upNext = nextUp.status === "ready"
-    ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr, names: firstNames }))
+    ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr, names: nextUpNames }))
     : null;
   const timelineView = timeline.status === "ready"
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
@@ -192,7 +203,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("groupPage.timeline.empty") : null}
             // A page where a source failed offers no Older (its cursor would skip that source's rows).
             pager={timelinePagerHrefs({
-              basePath: `/dashboard/accounts/${accountId}/groups/${group.id}`,
+              basePath,
               older: timeline.page.older, paged: Boolean(before), failed: timeline.page.failed, locale: localeParam,
             })} />
         ),

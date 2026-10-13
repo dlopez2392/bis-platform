@@ -7,9 +7,9 @@ import { FocusFieldButton } from "./focus-field-button";
  * `addTodoLabel` is null when the timeline (which holds the To-do field) did not render: an action
  * with nothing behind it is hidden (D3).
  */
-/** Whose row it is, on the group page (S-03 part 2b, C9): the member's first name as typed. */
+/** Whose row it is, on the group page (S-03 part 2b, C9): the member's first name; lang="" only when typed. */
 function Who({ row }: { row: NextUpRow }) {
-  return row.who ? <span data-next-up-who="" className="text-muted-foreground"> · <span lang="">{row.who}</span></span> : null;
+  return row.who ? <span data-next-up-who="" className="text-muted-foreground"> · {row.who.typed ? <span lang="">{row.who.name}</span> : <span>{row.who.name}</span>}</span> : null;
 }
 
 export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView; emptyText: string; addTodoLabel: string | null }) {

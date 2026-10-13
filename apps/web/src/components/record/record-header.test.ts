@@ -56,4 +56,10 @@ describe("RecordHeader (spec §9.1)", () => {
     expect(html).toMatch(/<a[^>]*data-record-subtitle[^>]*href="\/dashboard\/accounts\/a1\/groups\/g1"[^>]*>García family · Household<\/a>/);
     expect(html).toMatch(/focus-visible:ring-\[3px\]/);
   });
+
+  it("the subtitle link is a block, so the header's space-y spacing still applies above it (final review M1; mutation: drop block -> FAILS)", () => {
+    const html = render(ALL, "García family · Household", "/dashboard/accounts/a1/groups/g1");
+    const cls = html.match(/<a[^>]*data-record-subtitle[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(cls.split(/\s+/)).toEqual(expect.arrayContaining(["block", "w-fit"]));
+  });
 });

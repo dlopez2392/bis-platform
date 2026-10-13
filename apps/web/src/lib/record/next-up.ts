@@ -3,10 +3,12 @@ import { formatDateInZone } from "@/lib/format";
 import { dayKeyIn } from "./record-facts";
 import type { Tr } from "./copy";
 
-/** `who`: the member the row is for, on the group page (S-03 part 2b, C9); null on the contact page. */
+/** `who`: the member the row is for, on the group page (S-03 part 2b, C9); null on the contact page.
+ *  `typed`: the name is as the customer typed it (lang=""), not the page's own "(no name)" (final review minor b). */
+export type NextUpWho = { name: string; typed: boolean };
 export type NextUpRow =
-  | { kind: "booking"; id: string; label: string; who: string | null }
-  | { kind: "task"; id: string; title: string; detail: string; overdue: boolean; who: string | null };
+  | { kind: "booking"; id: string; label: string; who: NextUpWho | null }
+  | { kind: "task"; id: string; title: string; detail: string; overdue: boolean; who: NextUpWho | null };
 export type NextUpView = { rows: NextUpRow[]; undated: string | null };
 
 /**
@@ -14,11 +16,11 @@ export type NextUpView = { rows: NextUpRow[]; undated: string | null };
  * sorts first on its own. Days are the ACCOUNT's (a due date is midnight there, D-006).
  */
 export function nextUpView(
-  data: ContactNextUp | GroupNextUp, ctx: { zone: string; now: Date; tr: Tr; names?: Readonly<Record<string, string>> }, limit = 3,
+  data: ContactNextUp | GroupNextUp, ctx: { zone: string; now: Date; tr: Tr; names?: Readonly<Record<string, NextUpWho>> }, limit = 3,
 ): NextUpView {
   const { zone, now, tr } = ctx;
   // A To-do carries its member only in the group form; a booking always does (booking.ts).
-  const who = (row: object): string | null => {
+  const who = (row: object): NextUpWho | null => {
     const id = "contact_id" in row && typeof row.contact_id === "string" ? row.contact_id : null;
     return ctx.names && id !== null && Object.hasOwn(ctx.names, id) ? ctx.names[id]! : null;
   };

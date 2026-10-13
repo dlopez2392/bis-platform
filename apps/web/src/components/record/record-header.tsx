@@ -25,7 +25,7 @@ export function RecordHeader({ name, subtitle, subtitleHref, back, actions }: {
       {subtitle ? (
         subtitleHref ? (
           <Link href={subtitleHref} data-record-subtitle
-            className="rounded-[var(--radius-ctl)] text-sm text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            className="block w-fit rounded-[var(--radius-ctl)] text-sm text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
             {subtitle}
           </Link>
         ) : <p data-record-subtitle className="text-sm text-muted-foreground">{subtitle}</p>

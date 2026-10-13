@@ -63,8 +63,8 @@ describe("Next up across a household (S-03 part 2b, C9)", () => {
       bookings: [{ id: "b1", contact_id: "c2", starts_at: "2026-10-13T15:00:00Z" }],
       datedTasks: [{ id: "t1", title: "Call back", due_at: "2026-10-01T05:00:00Z", contact_id: "c1" } as ContactNextUp["datedTasks"][number]],
     });
-    const named = nextUpView(d, { zone: ZONE, now: new Date("2026-10-12T17:00:00Z"), tr: makeTr("en"), names: { c1: "Ana", c2: "Luis" } });
-    expect(named.rows.map((r) => [r.id, r.who])).toEqual([["t1", "Ana"], ["b1", "Luis"]]);
+    const named = nextUpView(d, { zone: ZONE, now: new Date("2026-10-12T17:00:00Z"), tr: makeTr("en"), names: { c1: { name: "Ana", typed: true }, c2: { name: "Luis", typed: true } } });
+    expect(named.rows.map((r) => [r.id, r.who])).toEqual([["t1", { name: "Ana", typed: true }], ["b1", { name: "Luis", typed: true }]]);
     expect(view(d).rows.map((r) => r.who)).toEqual([null, null]);
   });
 });

@@ -367,12 +367,17 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     expect(listGroupPeopleMock).not.toHaveBeenCalled();
   });
 
-  it("with no activity set (its scan failed), Deals is its card's error, not a guess from another list (C13; mutation: fall back to listGroupPeople -> FAILS)", async () => {
+  it("with no activity set (its scan failed), Deals is its card's error, not a guess from another list, logged once under the scan's cause (C13, final review minor d; mutation: fall back to listGroupPeople -> FAILS; mutation: throw inside Deals' loader -> FAILS)", async () => {
     groupActivityMembersMock.mockRejectedValue(new Error("scan down"));
     const html = await render();
     expect(cardHtml(html, "deals")).toMatch(/data-state="error"/);
     expect(listOpenDealsForMock).not.toHaveBeenCalled();
     expect(cardHtml(html, "people")).toMatch(/data-state="ready"/);
+    // Logged ONCE, under its real cause, never again as a made-up Deals failure (final review minor d;
+    // mutation: throw "no activity set" inside Deals' loader -> a second, deals line, FAILS).
+    const lines = errors.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => l.includes("activity set read failed") && l.includes("scan down"))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes("deals read failed"))).toEqual([]);
   });
 
   it("each deal names its person from that set, and past 30 the more line says how many (C13, §8.5; mutation: drop who -> FAILS; mutation: never the more line -> FAILS)", async () => {
@@ -549,6 +554,18 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
     expect(html).not.toContain(m["record.nextUp.addTodo"]);
   });
 
+  it("Next up: a nameless member reads the page's '(no name)' with no lang=\"\", a named one keeps it (final review minor b; mutation: typed: true for everyone -> FAILS)", async () => {
+    prefsMock.mockResolvedValue({ language: "es", theme: null });
+    groupActivityMembersMock.mockResolvedValue({ people: [LUIS_P, person({ contactId: "c-n", firstName: null, lastName: "  " })], total: { ok: true, value: 2 }, more: false });
+    groupNextUpMock.mockResolvedValue({ bookings: [
+      { id: "b1", starts_at: "2099-01-05T15:00:00Z", contact_id: LUIS.contactId },
+      { id: "b2", starts_at: "2099-01-06T15:00:00Z", contact_id: "c-n" },
+    ], datedTasks: [], undatedCount: 0 });
+    const html = cardHtml(await render(), "next-up");
+    expect(html).toMatch(/data-next-up-who=""[^>]*> · <span lang="">Luis<\/span>/);
+    expect(html).toMatch(new RegExp(`data-next-up-who=""[^>]*> · <span>${m["contact.noName.es"].replace(/[()]/g, "\\$&")}</span>`));
+  });
+
   it("Next up empty: the group's sentence, no Add a To-do (spec §8.7; mutation: the contact page's empty text -> FAILS)", async () => {
     const html = cardHtml(await render(), "next-up");
     expect(html).toContain(esc(m["groupPage.nextUp.empty"]));
@@ -594,6 +611,13 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
     expect(cardHtml(html, "summary")).toContain(">2 personas<");
     expect(cardHtml(html, "next-up")).toContain(esc(m["groupPage.nextUp.empty.es"]));
     expect(cardHtml(html, "timeline")).toContain(esc(m["groupPage.timeline.empty.es"]));
+  });
+
+  it("a group with no one in it: the summary says so with the People card's own sentence, by kind, never an empty line (final review minor a; mutation: drop the zero-member branch -> FAILS)", async () => {
+    groupActivityMembersMock.mockResolvedValue({ people: [], total: { ok: true, value: 0 }, more: false });
+    expect(cardHtml(await render(), "summary")).toMatch(new RegExp(`<p data-record-facts[^>]*>${esc(m["groupPage.people.emptyHousehold"]).replaceAll(".", "\\.")}</p>`));
+    readGroupMock.mockResolvedValue({ ...GROUP, kind: "business", name: "Rio Roofing" });
+    expect(cardHtml(await render(), "summary")).toContain(esc(m["groupPage.people.emptyBusiness"]));
   });
 
   it("still names no hero with the middle column drawn (rule 11)", async () => {

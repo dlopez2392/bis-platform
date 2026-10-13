@@ -31,6 +31,14 @@ const fixture = (): { accountId: string; clerkUserId: string } => {
   if (!existsSync(FIXTURE_FILE)) throw new Error(`client fixture missing at ${FIXTURE_FILE}: run the full suite (the "setup" project).`);
   return JSON.parse(readFileSync(FIXTURE_FILE, "utf-8"));
 };
+// The spec runs as the AGENCY user (playwright.config's storageState is AUTH_FILE, agency_admin),
+// so a note meant to read "You" carries that user's Clerk id, not the client fixture's (which reads
+// "E2E Client"). Read as preferences.spec.ts does (final review I1).
+const AGENCY_FIXTURE_FILE = "e2e/.auth/agency-fixture.json";
+const agencyClerkUserId = (): string => {
+  if (!existsSync(AGENCY_FIXTURE_FILE)) throw new Error(`agency fixture missing at ${AGENCY_FIXTURE_FILE}: run the full suite (the "setup" project).`);
+  return (JSON.parse(readFileSync(AGENCY_FIXTURE_FILE, "utf-8")) as { clerkUserId: string }).clerkUserId;
+};
 const stamp = Date.now();
 const ACTOR = "e2e-group-page";
 const LAST = `García ${stamp}`;
@@ -41,7 +49,7 @@ const url = (q = "") => `/dashboard/accounts/${fixture().accountId}/groups/${mad
 const contactUrl = (contactId: string, q = "") => `/dashboard/accounts/${fixture().accountId}/contacts/${contactId}${q}`;
 
 test.beforeAll(async () => {
-  const { accountId, clerkUserId } = fixture();
+  const { accountId } = fixture();
   const db = serviceDb();
   for (const first of ["Ana", "Luis", "Maria"] as const) {
     const c = await createContact(db, accountId, { firstName: first, lastName: LAST, phone: phone() }, ACTOR);
@@ -58,8 +66,8 @@ test.beforeAll(async () => {
   // One timeline row per member, each through the app's own writer so it carries the author that
   // writer stamps (0073): a receptionist call for Ana (kind "ai"), a booking-page booking for Luis
   // (kind "customer", `createBooking`'s "public"/"system" actor), and a note for Maria stamped with
-  // the signed-in e2e user's own Clerk id (kind "person", resolving to "You" — the same id every
-  // session on this fixture signs in as, support.ts's auth.setup.ts).
+  // the signed-in AGENCY user's Clerk id (kind "person", resolving to "You" for the session this spec
+  // runs as; agency-fixture.json, written by auth.setup.ts).
   const number = await assignPhoneNumber(db, accountId, { e164: `+1557${String(stamp).slice(-7)}`, status: "testing" }, ACTOR);
   made.phoneNumber = number.id;
   made.call = (await startCallRow(db, accountId, { phoneNumberId: number.id, callerE164: phone() })).id;
@@ -75,7 +83,7 @@ test.beforeAll(async () => {
     calendarId: cal.id, contactId: made.luis!, startsAt: start, endsAt: new Date(start.getTime() + 3_600_000), ipHash: `e2e-group-${stamp}`,
   }, "public", "system");
   cancelToken = booked.cancelToken;
-  await addNote(db, accountId, made.maria!, `Household note ${stamp}`, clerkUserId);
+  await addNote(db, accountId, made.maria!, `Household note ${stamp}`, agencyClerkUserId());
 });
 
 test.afterAll(async () => {
@@ -190,12 +198,13 @@ test("in Spanish a row reads Cliente and the fact reads personas", async ({ page
   await expect(rec.locator("[data-record-facts]")).toContainText(m["groupPage.facts.people.es"].replace("{count}", "3"));
 });
 
-test("at 390px Properties and Deals are closed, above People (spec §7's phone order; plan deviation 13)", async ({ page }) => {
+test("at 390px the middle column comes first, then Properties and Deals closed, above People (spec §7's phone order; plan deviation 13)", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(url());
   const rec = recordPage(page);
   const order = await rec.locator("[data-record-card]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-card")));
-  expect(order).toEqual(["properties", "deals", "people", "details"]);
+  // 2b: the summary, Next up and the timeline lead (GROUP_RECORD_CARDS); 2a's four follow.
+  expect(order).toEqual(["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
   for (const id of ["properties", "deals"]) {
     await expect(rec.locator(`[data-record-card="${id}"] h2 > button[aria-expanded]`)).toHaveAttribute("aria-expanded", "false");
   }

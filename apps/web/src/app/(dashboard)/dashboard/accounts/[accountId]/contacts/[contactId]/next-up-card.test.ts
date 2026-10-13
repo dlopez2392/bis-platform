@@ -47,13 +47,21 @@ describe("NextUpBody (spec §9.3)", () => {
 describe("NextUpBody across a household (S-03 part 2b, C9)", () => {
   it("a row with `who` reads '… · Ana', on a booking and on a To-do; a row without one names no one (mutation: drop the who span -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { undated: null, rows: [
-      { kind: "task", id: "t", title: "Call back", detail: "Due Oct 20", overdue: false, who: "Ana" },
-      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: "Luis" },
+      { kind: "task", id: "t", title: "Call back", detail: "Due Oct 20", overdue: false, who: { name: "Ana", typed: true } },
+      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: { name: "Luis", typed: true } },
       { kind: "booking", id: "b2", label: "Appointment · Sat, Oct 17 · 9:00 AM", who: null },
     ] } }));
     expect(html.match(/data-next-up-who/g)).toHaveLength(2);
     // The name is typed text: lang="" so a Spanish page does not read "Ana" as a Spanish word (or the reverse).
     expect(html).toMatch(/Due Oct 20<\/span><span data-next-up-who="" class="[^"]*">\s*·\s*<span lang="">Ana<\/span><\/span>/);
     expect(html).toMatch(/Appointment · Fri, Oct 16 · 10:00 AM<span data-next-up-who="" class="[^"]*">\s*·\s*<span lang="">Luis<\/span><\/span>/);
+  });
+
+  it("a member with no name reads the page's own '(no name)' in the PAGE's language: no lang=\"\" on it (final review minor b; mutation: lang=\"\" on every who -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { undated: null, rows: [
+      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: { name: "(sin nombre)", typed: false } },
+    ] } }));
+    expect(html).toMatch(/<span data-next-up-who="" class="[^"]*">\s*·\s*<span>\(sin nombre\)<\/span><\/span>/);
+    expect(html).not.toContain('lang=""');
   });
 });
