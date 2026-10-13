@@ -115,7 +115,9 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
     try {
       await page.goto(`/dashboard/accounts/${accountId}/automations`);
       const card = page.getByTestId("appointment-confirm-card");
-      await card.getByRole("checkbox").check();
+      // Named: the card also carries the Spanish box's "still matches" checkbox when the stored
+      // Spanish is stale, and a bare role query would match both.
+      await card.getByRole("checkbox", { name: m["automations.appointmentConfirm.enabled"], exact: true }).check();
       await card.getByLabel("Closing line").fill(line);
       // The preview is computed through the SAME composer the pass uses, so
       // this is also the proof the operator's count is the billed count.
@@ -136,7 +138,7 @@ test.describe("part B's recipes on the Automations page (agency)", () => {
       await page.reload();
       const after = page.getByTestId("appointment-confirm-card");
       await expect(after.getByLabel("Closing line")).toHaveValue(line);
-      await expect(after.getByRole("checkbox")).toBeChecked();
+      await expect(after.getByRole("checkbox", { name: m["automations.appointmentConfirm.enabled"], exact: true })).toBeChecked();
     } finally {
       await forgetRecipe(accountId, "appointment_confirm");
     }
