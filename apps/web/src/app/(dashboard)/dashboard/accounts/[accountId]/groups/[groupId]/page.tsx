@@ -198,6 +198,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
       ? {
         node: (
           <GroupTimeline accountId={accountId} timezone={zone.zone} rows={timelineView} tr={tr}
+            customerLangs={Object.fromEntries((set?.people ?? []).flatMap((p) => (p.language ? [[p.contactId, p.language]] : [])))}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("groupPage.timeline.empty") : null}

@@ -48,7 +48,7 @@ function render(over: Record<string, unknown> = {}, locale: "en" | "es" = "en") 
   });
   return renderToStaticMarkup(createElement(GroupTimeline, {
     accountId: "a1", timezone: "America/Chicago", rows, failedText: null, emptyText: null,
-    pager: { olderHref: null, newerHref: null }, tr, ...over,
+    pager: { olderHref: null, newerHref: null }, tr, customerLangs: {}, ...over,
   } as never));
 }
 const rowHtml = (html: string, kind: string) =>
@@ -103,7 +103,7 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     const tr = makeTr("en");
     const html = renderToStaticMarkup(createElement(GroupTimeline, {
       accountId: "a1", timezone: "UTC", rows: [], failedText: null, emptyText: tr.text("groupPage.timeline.empty"),
-      pager: { olderHref: null, newerHref: null }, tr,
+      pager: { olderHref: null, newerHref: null }, tr, customerLangs: {},
     }));
     expect(html).toMatch(/<p data-timeline-empty[^>]*>Texts, calls, bookings, notes and To-dos with these people show up here\. Open a person to start one\.<\/p>/);
     expect(html).not.toContain("<ol");

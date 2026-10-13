@@ -106,8 +106,8 @@ function parseRecentRow(r: unknown): RecentRowView | "unknown" | null {
   const status = st === null ? null : isRecord(st) && oneOf(TONES, st.tone) && isStr(st.word) ? { tone: st.tone, word: st.word } : undefined;
   const ex = r.excerpt;
   const excerpt = ex === null ? null
-    : isRecord(ex) && isStr(ex.text) && (ex.lang === "" || ex.lang === "en") && isBool(ex.done)
-      ? { text: ex.text, lang: ex.lang as "" | "en", done: ex.done } : undefined;
+    : isRecord(ex) && isStr(ex.text) && (ex.lang === "" || ex.lang === "en" || ex.lang === "es") && isBool(ex.done)
+      ? { text: ex.text, lang: ex.lang as "" | "en" | "es", done: ex.done } : undefined;
   if (status === undefined || excerpt === undefined) return null;
   return { key: r.key, kind: r.kind, mark: { kind: mark.kind, label: mark.label }, verb: r.verb, status, detail: r.detail, time: r.time, dateTime: r.dateTime, excerpt };
 }

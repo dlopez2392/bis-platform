@@ -43,6 +43,6 @@ export function legacyTimeline(p: Record<string, unknown>): ActivityTimelineProp
     timezone, canAssign: Boolean(p.canAssign), members: (p.members ?? []) as AssignMember[],
     rows, holdOpenTaskIds: (p.holdOpenTaskIds ?? []) as string[],
     failedText: null, emptyText: rows.length === 0 ? tr.text("timeline.empty") : null,
-    pager: { olderHref: null, newerHref: null }, tr,
+    pager: { olderHref: null, newerHref: null }, tr, customerLang: "",
   };
 }

@@ -11,22 +11,28 @@ import type { TimelineRow, TimelineStatus } from "./timeline-rows";
 export type RecentRowView = {
   key: string; kind: TimelineEntry["kind"]; mark: AuthorMarkView; verb: string; status: TimelineStatus | null;
   detail: string | null; time: string; dateTime: string;
-  /** At most two lines under the head. `lang`: "" for typed text, "en" for a call summary's prose. */
-  excerpt: { text: string; lang: "" | "en"; done: boolean } | null;
+  /** At most two lines under the head. `lang`: "" for typed-unknown text, "en" for a call summary's
+   *  prose, or the contact's own language ("" | "en" | "es") for what the CUSTOMER typed (S-09 §9). */
+  excerpt: { text: string; lang: "" | "en" | "es"; done: boolean } | null;
 };
 
-const typed = (text: string | null | undefined, done = false): RecentRowView["excerpt"] =>
-  text && text.trim() ? { text, lang: "", done } : null;
+const typed = (text: string | null | undefined, lang: "" | "en" | "es" = "", done = false): RecentRowView["excerpt"] =>
+  text && text.trim() ? { text, lang, done } : null;
 
 /** The group timeline's per-kind body rules (`groups/[groupId]/group-timeline.tsx:92-172`), as text. */
-function excerptOf(e: TimelineEntry): RecentRowView["excerpt"] {
+function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowView["excerpt"] {
   switch (e.kind) {
     case "note": return typed(e.note.body);
-    case "task": return typed(e.task.title, Boolean(e.task.completed_at));
+    case "task": return typed(e.task.title, "", Boolean(e.task.completed_at));
     case "deal": return null;
     case "submission": return null;
-    case "message": return typed(e.message.subject?.trim() ? e.message.subject : e.message.body);
-    case "booking": return typed(e.booking.note);
+    case "message": {
+      // S-09 plan deviation 5: an inbound `voice` message is the AI's own English summary, not text
+      // the customer wrote, so it keeps lang="" (only email, sms and form inbound messages take it).
+      const typedLang = e.message.direction === "inbound" && (e.message.channel as string) !== "voice" ? customerLang : "";
+      return typed(e.message.subject?.trim() ? e.message.subject : e.message.body, typedLang);
+    }
+    case "booking": return typed(e.booking.note, e.booking.author_kind === "customer" ? customerLang : "");
     case "call": {
       // The reason as typed; else only the summary's English prose; nothing when it carries a MISMATCH.
       const reason = e.call.reason?.trim() || null;
@@ -39,9 +45,9 @@ function excerptOf(e: TimelineEntry): RecentRowView["excerpt"] {
   }
 }
 
-export function recentRowsView(rows: readonly TimelineRow[]): RecentRowView[] {
+export function recentRowsView(rows: readonly TimelineRow[], customerLang: "" | "en" | "es" = ""): RecentRowView[] {
   return rows.map((r) => ({
     key: r.key, kind: r.entry.kind, mark: r.mark, verb: r.verb, status: r.status, detail: r.detail,
-    time: r.time, dateTime: r.entry.at, excerpt: excerptOf(r.entry),
+    time: r.time, dateTime: r.entry.at, excerpt: excerptOf(r.entry, customerLang),
   }));
 }

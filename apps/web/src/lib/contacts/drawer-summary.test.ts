@@ -83,6 +83,15 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     expect(parseDrawerSummary(body)!.recent).toEqual(GOOD.recent);
   });
 
+  it("a recent row whose excerpt carries the contact's language ('es') parses (mutation: keep lang === \"\" || lang === \"en\" -> the row is malformed -> FAILS)", () => {
+    const body = clone();
+    (body.recent as { rows: unknown[] }).rows = [{ ...ROW, excerpt: { text: "Hola", lang: "es", done: false } }];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [{ ...ROW, excerpt: { text: "Hola", lang: "es", done: false } }],
+      failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("who: a missing holder leaves Assigned to out (undefined), never Unassigned; a bad tags list costs Tags alone", () => {
     const body = clone();
     delete (body.who as Record<string, unknown>).assignedTo;

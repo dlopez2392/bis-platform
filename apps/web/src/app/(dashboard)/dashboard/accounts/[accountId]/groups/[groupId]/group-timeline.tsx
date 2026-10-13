@@ -25,6 +25,8 @@ export type GroupTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** S-09 §9: each member's language, by contact id; a member without one is absent. */
+  customerLangs: Record<string, "en" | "es">;
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -73,7 +75,7 @@ export function GroupTimeline(p: GroupTimelineProps) {
                   <Separator className="flex-1" />
                 </div>
               ) : null}
-              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} />
+              <Row row={row} timezone={p.timezone} accountId={p.accountId} tr={tr} customerLangs={p.customerLangs} />
             </li>
           ))}
         </ol>
@@ -89,8 +91,11 @@ export function GroupTimeline(p: GroupTimelineProps) {
   );
 }
 
-function Row({ row, timezone, accountId, tr }: { row: TimelineRow; timezone: string; accountId: string; tr: Tr }) {
+function Row({ row, timezone, accountId, tr, customerLangs }: {
+  row: TimelineRow; timezone: string; accountId: string; tr: Tr; customerLangs: Record<string, "en" | "es">;
+}) {
   const e = row.entry;
+  const customerLang = customerLangs[e.contactId] ?? "";
   const head = {
     kind: e.kind, mark: row.mark, subject: row.subject ?? undefined, verb: row.verb, status: row.status,
     detail: row.detail, time: row.time, dateTime: e.at,
@@ -127,7 +132,7 @@ function Row({ row, timezone, accountId, tr }: { row: TimelineRow; timezone: str
               {answers.map((a) => (
                 <div key={a.key} className="flex gap-2 text-sm">
                   <dt className="shrink-0 text-muted-foreground">{a.label}:</dt>
-                  <dd lang="" className="min-w-0 break-words text-card-foreground">{a.value}</dd>
+                  <dd lang={e.submission.author_kind === "customer" ? customerLang : ""} className="min-w-0 break-words text-card-foreground">{a.value}</dd>
                 </div>
               ))}
             </dl>
@@ -137,10 +142,13 @@ function Row({ row, timezone, accountId, tr }: { row: TimelineRow; timezone: str
     }
     case "message": {
       const reason = e.message.direction === "outbound" ? messageFailureReason(e.message, tr.locale) : null;
+      // S-09 plan deviation 5: an inbound `voice` message is the AI's own English summary, not text
+      // the customer wrote, so it keeps lang="" (only email, sms and form inbound messages take it).
+      const typedLang = e.message.direction === "inbound" && (e.message.channel as string) !== "voice" ? customerLang : "";
       return (
         <TimelineItem {...head} icon={e.message.channel === "sms" ? MessageSquare : Mail}>
-          {e.message.subject ? <p lang="" className="text-sm font-medium text-card-foreground">{e.message.subject}</p> : null}
-          <p lang="" className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.message.body}</p>
+          {e.message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{e.message.subject}</p> : null}
+          <p lang={typedLang} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.message.body}</p>
           {reason ? <p className="mt-1 text-xs text-[var(--crit)]">{reason}</p> : null}
         </TimelineItem>
       );
@@ -148,7 +156,7 @@ function Row({ row, timezone, accountId, tr }: { row: TimelineRow; timezone: str
     case "booking":
       return (
         <TimelineItem {...head} icon={CalendarCheck}>
-          {e.booking.note ? <p lang="" className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.booking.note}</p> : null}
+          {e.booking.note ? <p lang={e.booking.author_kind === "customer" ? customerLang : ""} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.booking.note}</p> : null}
         </TimelineItem>
       );
     case "call": {

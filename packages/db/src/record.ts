@@ -207,7 +207,8 @@ export async function groupNextUp(
 export const GROUP_ACTIVITY_SCAN = 500;
 /** `more`: the scan held more visible members than `cap`, so the cap line can still be said when the
  *  exact count failed (review of Task 16). */
-export type GroupActivity = { people: GroupPerson[]; total: Fact<number>; more: boolean };
+/** S-09 §9: each member's own language rides along (0076), for the group timeline's per-row rule. */
+export type GroupActivity = { people: (GroupPerson & { language: "en" | "es" | null })[]; total: Fact<number>; more: boolean };
 
 /**
  * C5's set: the call-first member (when visible), then by the customer's one conversation's
@@ -223,10 +224,11 @@ export async function groupActivityMembers(
   opts: { onError?: (name: FactName, e: unknown) => void; scan?: number } = {},
 ): Promise<GroupActivity> {
   type Row = { contact_id: string; is_primary_contact: boolean; created_at: string;
-    contacts: { first_name: string | null; last_name: string | null; conversations: { last_message_at: string | null }[] | null } | null };
+    contacts: { first_name: string | null; last_name: string | null; language: "en" | "es" | null;
+      conversations: { last_message_at: string | null }[] | null } | null };
   const [scan, total] = await Promise.all([
     db.from("client_group_members")
-      .select("contact_id, is_primary_contact, created_at, contacts(first_name, last_name, conversations(last_message_at))")
+      .select("contact_id, is_primary_contact, created_at, contacts(first_name, last_name, language, conversations(last_message_at))")
       .eq("account_id", accountId).eq("client_group_id", groupId)
       .order("is_primary_contact", { ascending: false })
       .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(opts.scan ?? GROUP_ACTIVITY_SCAN),
@@ -248,7 +250,10 @@ export async function groupActivityMembers(
       || desc(a.contact_id, b.contact_id);
   });
   return {
-    people: rows.slice(0, cap).map((r) => ({ contactId: r.contact_id, firstName: r.contacts!.first_name, lastName: r.contacts!.last_name })),
+    people: rows.slice(0, cap).map((r) => ({
+      contactId: r.contact_id, firstName: r.contacts!.first_name, lastName: r.contacts!.last_name,
+      language: r.contacts!.language ?? null,
+    })),
     total,
     more: rows.length > cap,
   };
