@@ -16,6 +16,10 @@ import { sendSms } from "@/lib/consent/gate";
 import { composerBlockedLine } from "@/lib/consent/composer-state";
 import { recordUsageSafely } from "@/lib/billing/usage";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import type { Locale } from "@/lib/i18n/locale";
 // A prefix on `.message` rather than an Error subclass: thrown Errors are
 // serialized across the server-action boundary and do not keep a custom
 // prototype chain on the way back to the client. Lives in its own module
@@ -42,7 +46,7 @@ function normalizeLineBreaks(raw: string): string {
 }
 
 export async function sendEmailAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId, isAgency } = await requireAccountAccess(accountId);
   const contactId = String(formData.get("contactId") ?? "");
   const subject = String(formData.get("subject") ?? "").trim();
   const body = normalizeLineBreaks(String(formData.get("body") ?? "")).trim();
@@ -52,6 +56,31 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
   const contact = await getContact(db, accountId, contactId);
   if (!contact) rejectSend("contact not in account");
   if (!contact.email) rejectSend("contact has no email address");
+
+  // One row, three jobs: the display name, the reply-to, and everything the
+  // template needs to wear the company's brand, PLUS (minors-1b item 1) the
+  // account's own language — the one fallback a client-role sender's own
+  // locale reads when they have not set a language of their own.
+  // getBranding() here would be a second round trip to a row this query
+  // already returns. `name` is NOT selected: that column is the agency's
+  // internal label and `emailBrand` has no parameter left to receive it.
+  // Read before anything downstream can reject, so even the suppression
+  // refusal just below can speak the resolved language.
+  const { data: account } = await db.from("accounts")
+    .select("reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode, language")
+    .eq("id", accountId).maybeSingle();
+
+  // minors-1b item 1: the SAME resolver the record page and dashboard use for
+  // the signed-in person's language (request-locale.ts) — never a locale the
+  // client form supplies. An agency operator's own `users.language` wins
+  // outright; a client-role sender (isOperator: false) falls back to the
+  // account's own language before English.
+  const prefs = await getPersonPrefs();
+  // A named variable, not an inline literal: request-locale-callers.test.ts
+  // scans each call's braces, and a nested literal there truncates the scan
+  // at the inner brace.
+  const accountLanguage = { language: (account?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
 
   // 0053: conversations and messages are written by server code only. The
   // read above ran as the signed-in user under RLS, so `contact` is known to
@@ -73,7 +102,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     console.error(`sendEmailAction: suppression flag unreadable for account ${accountId}: ${String(e)}`);
     suppressed = true;
   }
-  if (suppressed) rejectSend(m["automations.reason.accountSuppressed"]);
+  if (suppressed) rejectSend(t(m, "automations.reason.accountSuppressed", locale));
 
   const convo = await ensureConversation(writer, accountId, contactId, userId);
 
@@ -83,15 +112,6 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
     conversationId: convo.id, channel: "email", direction: "outbound",
     subject: subject || undefined, body,
   }, userId);
-
-  // One row, three jobs: the display name, the reply-to, and everything the
-  // template needs to wear the company's brand. getBranding() here would be a
-  // second round trip to a row this query already returns. `name` is NOT
-  // selected: that column is the agency's internal label and `emailBrand` has
-  // no parameter left to receive it.
-  const { data: account } = await db.from("accounts")
-    .select("reply_to_email, from_email, brand_name, brand_logo_path, brand_color, brand_neutral, brand_corners, brand_type, brand_mode")
-    .eq("id", accountId).maybeSingle();
 
   const brand = emailBrand({
     brandName: account?.brand_name ?? null,
@@ -159,7 +179,7 @@ export async function sendEmailAction(accountId: string, formData: FormData): Pr
 }
 
 export async function sendSmsAction(accountId: string, formData: FormData): Promise<void> {
-  const { userId } = await requireAccountAccess(accountId);
+  const { userId, isAgency } = await requireAccountAccess(accountId);
   const contactId = String(formData.get("contactId") ?? "");
   const body = normalizeLineBreaks(String(formData.get("body") ?? "")).trim();
   if (!contactId || !body) rejectSend("contactId and body required");
@@ -170,6 +190,17 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
   const db = await dbForRequest();
   const contact = await getContact(db, accountId, contactId);
   if (!contact) rejectSend("contact not in account");
+
+  // minors-1b item 1: the SAME resolver the record page/dashboard use for the
+  // signed-in person's language — never a locale the client form supplies.
+  // This action otherwise never touches `accounts`; one extra column, read on
+  // the request client already in scope.
+  const { data: langRow } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+  const prefs = await getPersonPrefs();
+  // A named variable, not an inline literal — see the same comment in
+  // sendEmailAction above.
+  const accountLanguage = { language: (langRow?.language as Locale | null | undefined) ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
 
   // Since 0053, conversations and messages are written by server code only,
   // in the service-after-requireAccountAccess shape. Built here, before any
@@ -202,18 +233,18 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
 
   if (result.kind === "blocked") {
     switch (result.reason) {
-      case "a2p_not_approved": rejectSend(m["compose.smsBlockedA2p"]);
-      case "no_live_number": rejectSend(m["compose.smsBlockedNoNumber"]);
-      case "no_number": rejectSend(m["compose.noPhoneOnContact"]);
+      case "a2p_not_approved": rejectSend(t(m, "compose.smsBlockedA2p", locale));
+      case "no_live_number": rejectSend(t(m, "compose.smsBlockedNoNumber", locale));
+      case "no_number": rejectSend(t(m, "compose.noPhoneOnContact", locale));
       // The render's own words for an unreadable state (review R3-M2): never
       // worded as the customer's choice, and never an open form.
-      case "ledger_unavailable": rejectSend(m["compose.smsStateUnknown"]);
+      case "ledger_unavailable": rejectSend(t(m, "compose.smsStateUnknown", locale));
       // D-061: a suppressed account (a demo, or otherwise not real) refuses
       // every send — the composer says so plainly rather than silently
       // dropping the attempt, and nothing was written: `prepare` runs only
       // after the gate clears.
-      case "suppressed_account": rejectSend(m["automations.reason.accountSuppressed"]);
-      default: rejectSend(composerBlockedLine(result.reason));
+      case "suppressed_account": rejectSend(t(m, "automations.reason.accountSuppressed", locale));
+      default: rejectSend(composerBlockedLine(result.reason, locale));
     }
   }
   if (result.kind === "deferred") throw new Error("a staff text was deferred, which its kind never is");
@@ -229,7 +260,7 @@ export async function sendSmsAction(accountId: string, formData: FormData): Prom
     // so the FIRST attempt to a stopped number lands here, not as blocked:
     // say the stopped line now, not on the retry (review R3-I3). The gate
     // has already recorded the stop.
-    if (result.carrierBlocked) rejectSend(composerBlockedLine("stopped"));
+    if (result.carrierBlocked) rejectSend(composerBlockedLine("stopped", locale));
     throw new Error(result.error);
   }
   const messageId = row.messageId;

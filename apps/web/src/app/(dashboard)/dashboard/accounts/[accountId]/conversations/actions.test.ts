@@ -13,6 +13,15 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: (...a: unknown[]) => requireAccountAccessMock(...a),
 }));
 
+// minors-1b item 1: the signed-in person's own language, resolved the SAME
+// way the record page/dashboard do (requestLocale + getPersonPrefs) rather
+// than always English. Defaulted to "no preference" in beforeEach; a test
+// overrides it to assert the Spanish line reaches a Spanish-reading operator.
+const getPersonPrefsMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: (...a: unknown[]) => getPersonPrefsMock(...a),
+}));
+
 // F-085 (spec §7.3): mark-read proves the conversation through the CALLER's
 // own client before its service-key write. Visible by default; a test flips it.
 const callerCanSeeMock = vi.hoisted(() => vi.fn());
@@ -177,6 +186,7 @@ function fd(entries: Record<string, string>) {
 
 beforeEach(() => {
   requireAccountAccessMock.mockReset().mockResolvedValue({ userId: "user_1", isAgency: false });
+  getPersonPrefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
   callerCanSeeMock.mockReset().mockResolvedValue(true);
   sendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
   smsSendMock.mockReset().mockResolvedValue({ providerMessageId: "pm_1" });
@@ -710,5 +720,73 @@ describe("sendSmsAction — the consent gate's refusals", () => {
     expect(sendRejectedReason(await send())).toBe(m["automations.reason.accountSuppressed"]);
     expect(createMessageMock).not.toHaveBeenCalled();
     expect(smsSendMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * minors-1b item 1: the rejection toasts these actions throw are resolved
+ * through `requestLocale` (the SAME resolver the record page/dashboard use
+ * for the signed-in person's language) rather than hardcoded English. The
+ * locale never comes from the client form — only the person's own stored
+ * `users.language` (via `getPersonPrefs`) and their operator/client-role
+ * split (`requireAccountAccess`'s own `isAgency`).
+ */
+describe("sendEmailAction/sendSmsAction — rejections speak the signed-in person's own language", () => {
+  it("a Spanish-reading operator gets the Spanish 'account suppressed' line from sendEmailAction (mutation: hardcode locale to \"en\" in actions.ts → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: true });
+    getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed.es"]);
+  });
+
+  it("a Spanish-reading operator gets the Spanish 'account suppressed' line from sendSmsAction (mutation: hardcode locale to \"en\" in actions.ts → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: true });
+    getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed.es"]);
+  });
+
+  it("a Spanish-reading operator gets the Spanish 'texts stopped' line from sendSmsAction (mutation: hardcode locale to \"en\" in actions.ts → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: true });
+    getPersonPrefsMock.mockResolvedValue({ language: "es", theme: null });
+    vi.mocked(readConsentState).mockResolvedValueOnce({
+      state: "stopped", since: "2026-10-03T15:00:00Z", method: "keyword", eventId: "e1",
+    });
+
+    const e = await sendSmsAction("acct_1", fd({ contactId: "contact_1", body: "On our way" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["compose.smsStoppedUndated.es"]);
+  });
+
+  it("an English-reading operator is unchanged: still gets the English 'account suppressed' line (mutation: always resolve \"es\" → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: true });
+    getPersonPrefsMock.mockResolvedValue({ language: "en", theme: null });
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendEmailAction("acct_1", fd({ contactId: "contact_1", subject: "Hi", body: "Hello" }))
+      .catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed"]);
+  });
+
+  it("never trusts a locale from the client form — only the person's own stored language (mutation: read formData.get(\"locale\") → FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "user_1", isAgency: true });
+    getPersonPrefsMock.mockResolvedValue({ language: null, theme: null });
+    vi.mocked(isAccountOutboundSuppressed).mockResolvedValueOnce(true);
+
+    const e = await sendEmailAction("acct_1", fd({
+      contactId: "contact_1", subject: "Hi", body: "Hello", locale: "es",
+    })).catch((err: unknown) => err);
+
+    expect(sendRejectedReason(e)).toBe(m["automations.reason.accountSuppressed"]);
   });
 });
