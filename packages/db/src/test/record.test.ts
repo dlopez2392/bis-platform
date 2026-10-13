@@ -417,7 +417,7 @@ describe("groupActivityMembers (S-03 part 2b, C5, D7)", () => {
       expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
       const all = await groupActivityMembers(db, accountId, h.groupId, 10);
       expect(all.people.map((p) => p.contactId)).toEqual([c0, c2, c3, c1]);
-      expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia" });
+      expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia", language: null });
       const cut = await groupActivityMembers(db, accountId, h.groupId, 2);
       expect(cut.people.map((p) => p.contactId)).toEqual([c0, c2]);
       expect(cut.total).toEqual({ ok: true, value: 4 });

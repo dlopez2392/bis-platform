@@ -14,6 +14,10 @@ export type VoiceProfileRow = {
   languages: "en" | "es" | "both"; booking_enabled: boolean;
   after_hours: "hours_then_message" | "message_only"; enabled: boolean;
   textback_enabled: boolean; textback_body: string;
+  /** S-09 PR 2's Spanish text-back box (0076). NULL = our written Spanish default;
+   *  '' = emptied (Spanish customers get the English). `textback_body_es_basis` is
+   *  the English the Spanish was written beside, for staleness detection. */
+  textback_body_es: string | null; textback_body_es_basis: string | null;
   public_id: string | null; concierge_enabled: boolean;
   concierge_form_id: string | null;
   /** 0058. Send this account's callers straight to `accounts.transfer_phone`
@@ -62,6 +66,7 @@ const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
 export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
+  "textback_body_es, textback_body_es_basis, " +
   "public_id, concierge_enabled, concierge_form_id, forward_calls";
 
 export async function getPhoneNumberByE164(
