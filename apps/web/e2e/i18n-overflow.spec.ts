@@ -1,6 +1,6 @@
 import { test, expect } from "./fixtures/test";
 import { config as loadEnv } from "dotenv";
-import { serviceDb, createContact } from "@bis/db";
+import { serviceDb, createContact, createGroupWithMember, setGroupPrimaryContact } from "@bis/db";
 import { readClientFixture, recordPage } from "./support";
 import { clipFailure, pseudoTitleFallbackFailure } from "./overflow-check";
 import { m } from "../src/lib/messages";
@@ -13,7 +13,9 @@ loadEnv({ path: ".env.local" });
 /**
  * F-014's +35% pseudo-locale overflow check (DESIGN.md DoD: "survives the
  * pseudo-locale's +35% length") on Spanish-runtime's two proof screens,
- * and (S-03 part 1) the contact record page's header actions and fact line.
+ * (S-03 part 1) the contact record page's header actions and fact line, and
+ * (S-03 part 2, 2a) the household/business record page's header actions and
+ * People's own row controls.
  *
  * QA-only: `?locale=pseudo` only does anything when `BIS_I18N_QA=1` is set
  * (`requestPseudoMode`, lib/i18n/request-locale.ts) — Playwright's own
@@ -24,9 +26,11 @@ loadEnv({ path: ".env.local" });
  * contact of its own on the per-run fixture account (`support.ts`'s
  * `readClientFixture()`) and deletes it in a `finally`; it refuses to run,
  * rather than delete, if `createContact` hands back an existing contact. The
- * other tests write nothing. Every test here uses the per-run fixture account,
- * never the shared seeded `Test Client One`, so none of them depends on that
- * account's real, operator-edited state staying shaped a particular way.
+ * group record page case (S-03 part 2) does the same, plus a household of
+ * its own, made the call-first member so the header's Call actually renders.
+ * Every test here uses the per-run fixture account, never the shared seeded
+ * `Test Client One`, so none of them depends on that account's real,
+ * operator-edited state staying shaped a particular way.
  *
  * What every assertion below measures: `scrollWidth > clientWidth` on the
  * SPECIFIC element that can actually clip — never a container whose own
@@ -162,6 +166,62 @@ test.describe("pseudo-locale overflow (F-014)", () => {
     } finally {
       const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", id);
       if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
+    }
+  });
+
+  /**
+   * S-03 part 2, 2a: the household/business record page's header actions (Call, built from the
+   * call-first member's name) and People's own controls (toggle billing, remove) — never clipped
+   * under the pseudo-locale's +35% padding. ON THE PER-RUN FIXTURE ACCOUNT ONLY, same idiom as the
+   * contact record page case above: one contact and one household of this file's own, made the
+   * call-first member so the header actually renders Call (D4: with nobody chosen, the header shows
+   * none of Call/Text/Email, which would leave this test with nothing of its own to measure there),
+   * deleted in a `finally` (the group before the contact — `client_group_members` cascades on
+   * `contacts.id`, but deleting the group explicitly rather than relying on that cascade keeps this
+   * test's cleanup self-contained, matching record-page.spec.ts's own discipline).
+   */
+  test("the group record page: header actions and People's controls wrap, never clip, under the pseudo-locale", async ({ page }) => {
+    const fixture = readClientFixture();
+    if (!fixture) {
+      test.skip(true, "No client fixture at e2e/.auth/client-fixture.json; run the full suite.");
+      return;
+    }
+    const db = serviceDb();
+    const stamp = Date.now();
+    const phone = `+1956294${String(Math.floor(Math.random() * 9000) + 1000)}`;
+    let contactId = "";
+    let groupId = "";
+    try {
+      const contact = await createContact(db, fixture.accountId, {
+        firstName: "Overflow", lastName: `Group ${stamp}`, phone,
+      }, "e2e-i18n-overflow");
+      if (contact.existing) throw new Error(`i18n-overflow e2e: ${phone} matched an existing contact; refusing to use (or delete) it.`);
+      contactId = contact.id;
+      const group = await createGroupWithMember(db, fixture.accountId, contactId, "household", `Overflow Group ${stamp}`, null, "e2e-i18n-overflow");
+      if (group.status !== "ok") throw new Error(`i18n-overflow e2e: createGroupWithMember ${group.status}`);
+      groupId = group.groupId;
+      const primary = await setGroupPrimaryContact(db, fixture.accountId, groupId, group.memberId, "e2e-i18n-overflow");
+      if (primary.status !== "ok") throw new Error(`i18n-overflow e2e: setGroupPrimaryContact ${primary.status}`);
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/groups/${groupId}?locale=pseudo`);
+      const rec = recordPage(page);
+      // Positive control: the pseudo-locale is really on (the Call label isn't the plain English one).
+      await expect(rec.locator('[data-record-action="call"]')).not.toHaveText(m["groupPage.action.call"].replace("{name}", "Overflow"));
+      const measured = rec.locator("[data-record-action], [data-people-row] button");
+      const count = await measured.count();
+      expect(count, "no group header actions or People row controls found").toBeGreaterThan(1);
+      for (let i = 0; i < count; i++) {
+        const [scrollW, clientW, text] = await measured.nth(i).evaluate((n) => [n.scrollWidth, n.clientWidth, n.textContent]);
+        expect(clipFailure(scrollW, clientW, `group page "${text}"`)).toBeNull();
+      }
+    } finally {
+      if (groupId) {
+        const { error: groupErr } = await db.from("client_groups").delete().eq("account_id", fixture.accountId).eq("id", groupId);
+        if (groupErr) console.error(`i18n-overflow e2e: group cleanup failed: ${groupErr.message}`);
+      }
+      if (contactId) {
+        const { error } = await db.from("contacts").delete().eq("account_id", fixture.accountId).eq("id", contactId);
+        if (error) console.error(`i18n-overflow e2e: cleanup failed: ${error.message}`);
+      }
     }
   });
 });
