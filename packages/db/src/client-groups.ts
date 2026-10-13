@@ -258,9 +258,13 @@ export async function setGroupPrimaryContact(
   const r = await rpc<{ status: string; previous?: string | null }>(
     db, "set_group_primary_contact", { p_account_id: accountId, p_group_id: groupId, p_member_id: memberId });
   if (r.status !== "ok") return { status: "not_found" };
-  await emit(db, accountId, "client_group.member_updated", actorId,
-    { groupId, memberId, previous: r.previous ?? null, fields: ["is_primary_contact"] });
-  return { status: "ok", previous: r.previous ?? null };
+  const previous = r.previous ?? null;
+  // Choosing who already holds it (or clearing when nobody does) changed nothing: no event.
+  if (previous !== memberId) {
+    await emit(db, accountId, "client_group.member_updated", actorId,
+      { groupId, memberId, previous, fields: ["is_primary_contact"] });
+  }
+  return { status: "ok", previous };
 }
 
 /**

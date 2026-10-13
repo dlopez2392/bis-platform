@@ -134,6 +134,8 @@ export async function listContactPlaces(db: SupabaseClient, accountId: string, c
     .order("created_at", { ascending: true }).order("id", { ascending: true })
     .limit(MAX_PLACES_READ);
   if (pErr) throw dbError("listContactPlaces places read failed", pErr);
+  // #245: a HEAD-less count can still come back null on a failure; never read that as a real number.
+  if (placeCount === null) throw new PlaceDbError("listContactPlaces failed: no count returned", undefined);
   const places = (pData ?? []) as unknown as PlaceRow[];
 
   let equipment: EquipmentRow[] = [];
@@ -144,8 +146,9 @@ export async function listContactPlaces(db: SupabaseClient, accountId: string, c
       .order("created_at", { ascending: true }).order("id", { ascending: true })
       .limit(MAX_EQUIPMENT_READ);
     if (error) throw dbError("listContactPlaces equipment read failed", error);
+    if (count === null) throw new PlaceDbError("listContactPlaces failed: no equipment count returned", undefined);
     equipment = (data ?? []) as unknown as EquipmentRow[];
-    equipmentCount = count ?? equipment.length;
+    equipmentCount = count;
   }
 
   let groups: ContactPlaceGroup[] = [];
@@ -159,7 +162,7 @@ export async function listContactPlaces(db: SupabaseClient, accountId: string, c
       .map((g) => ({ ...g, isPrimary: memberships.some((m) => m.client_group_id === g.id && m.is_primary) }))
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
-  return { groups, places, placeCount: placeCount ?? places.length, equipment, equipmentCount };
+  return { groups, places, placeCount, equipment, equipmentCount };
 }
 
 /**

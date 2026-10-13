@@ -4,7 +4,7 @@ import {
   listGroupMembers, countGroupMembers, listGroupPeople, setGroupPrimaryContact, removeMembership,
   GROUP_MEMBERS_PAGE_SIZE, GROUP_ACTIVITY_CAP,
 } from "../client-groups";
-import { addPlace, listGroupPlaces } from "../places";
+import { addPlace, listGroupPlaces, listContactPlaces } from "../places";
 import { listOpenDealsFor, GROUP_DEALS_SHOWN } from "../opportunities";
 
 /**
@@ -102,6 +102,11 @@ describe("listGroupMembers (spec §6, C10)", () => {
     const { db } = recordingDb((q) => has(q, "maybeSingle") ? { data: null } : { error: { message: "down" } });
     await expect(listGroupMembers(db, "acct", G)).rejects.toThrow(/listGroupMembers failed: down/);
   });
+
+  it("a failed call-first read throws, never reads as 'nobody is called first' (mutation: ignore held.error -> FAILS)", async () => {
+    const { db } = recordingDb((q) => has(q, "maybeSingle") ? { error: { message: "down" } } : { data: [row(1)] });
+    await expect(listGroupMembers(db, "acct", G)).rejects.toThrow(/listGroupMembers primary failed: down/);
+  });
 });
 
 describe("countGroupMembers and listGroupPeople", () => {
@@ -110,14 +115,15 @@ describe("countGroupMembers and listGroupPeople", () => {
     await expect(countGroupMembers(db, "acct", G)).rejects.toThrow("countGroupMembers failed: no count returned");
   });
 
-  it("countGroupMembers is an exact HEAD count of this group in this account", async () => {
+  it("countGroupMembers is an exact HEAD count of this group in this account (mutation: drop .eq('account_id') -> FAILS)", async () => {
     const { db, queries } = recordingDb(() => ({ count: 7 }));
     expect(await countGroupMembers(db, "acct", G)).toBe(7);
     expect(has(queries[0]!, "select", "id", { count: "exact", head: true })).toBe(true);
     expect(has(queries[0]!, "eq", "client_group_id", G)).toBe(true);
+    expect(has(queries[0]!, "eq", "account_id", "acct")).toBe(true);
   });
 
-  it("listGroupPeople defaults to GROUP_ACTIVITY_CAP in joined order and drops a row whose contact the caller cannot see (mutation: drop the contacts !== null filter -> FAILS)", async () => {
+  it("listGroupPeople defaults to GROUP_ACTIVITY_CAP in joined order, in this account, and drops a row whose contact the caller cannot see (mutation: drop the contacts !== null filter, or .eq('account_id') -> FAILS)", async () => {
     const { db, queries } = recordingDb(() => ({ data: [
       { contact_id: "c1", contacts: { first_name: "Ana", last_name: null } },
       { contact_id: "c2", contacts: null },
@@ -125,6 +131,7 @@ describe("countGroupMembers and listGroupPeople", () => {
     expect(await listGroupPeople(db, "acct", G)).toEqual([{ contactId: "c1", firstName: "Ana", lastName: null }]);
     expect(has(queries[0]!, "limit", GROUP_ACTIVITY_CAP)).toBe(true);
     expect(has(queries[0]!, "order", "created_at", { ascending: true })).toBe(true);
+    expect(has(queries[0]!, "eq", "account_id", "acct")).toBe(true);
   });
 });
 
@@ -141,6 +148,14 @@ describe("setGroupPrimaryContact and removeMembership's event", () => {
     const { db, queries } = recordingDb(() => ({}), { status: "not_found" });
     expect(await setGroupPrimaryContact(db, "acct", G, M, "user_1")).toEqual({ status: "not_found" });
     expect(queries.filter((q) => q.table === "events")).toEqual([]);
+  });
+
+  it("choosing who already holds it (or clearing when nobody does) records no event (mutation: emit whenever status is ok -> FAILS)", async () => {
+    for (const [memberId, previous] of [[M, M], [null, null]] as const) {
+      const { db, queries } = recordingDb(() => ({}), { status: "ok", previous });
+      expect(await setGroupPrimaryContact(db, "acct", G, memberId, "user_1")).toEqual({ status: "ok", previous });
+      expect(queries.filter((q) => q.table === "events")).toEqual([]);
+    }
   });
 
   it("removeMembership's event says whether the removed member was who we call first (mutation: drop wasPrimaryContact -> FAILS)", async () => {
@@ -170,11 +185,15 @@ describe("places: a group subject and the group's own places (C12)", () => {
     }
   });
 
-  it("listGroupPlaces filters on client_group_id alone, never a member's own (mutation: an .or() with contact_id -> FAILS), and groups is []", async () => {
+  it("listGroupPlaces filters on client_group_id alone, never a member's own (mutation: an .or() with contact_id, or drop either read's .eq('account_id') -> FAILS), and groups is []", async () => {
     const { db, queries } = recordingDb((q) => q.table === "places" ? { data: [{ id: "p1" }], count: 1 } : { data: [], count: 0 });
     expect(await listGroupPlaces(db, "acct", G)).toEqual({ groups: [], places: [{ id: "p1" }], placeCount: 1, equipment: [], equipmentCount: 0 });
     const places = queries.find((q) => q.table === "places")!;
+    const equipment = queries.find((q) => q.table === "equipment")!;
     expect(has(places, "eq", "client_group_id", G)).toBe(true);
+    expect(has(places, "eq", "account_id", "acct")).toBe(true);
+    expect(has(equipment, "eq", "account_id", "acct")).toBe(true);
+    expect(has(equipment, "in", "place_id", ["p1"])).toBe(true);
     expect(places.calls.some(([k]) => k === "or")).toBe(false);
     expect(queries.some((q) => q.table === "client_group_members" || q.table === "client_groups")).toBe(false);
   });
@@ -189,14 +208,27 @@ describe("places: a group subject and the group's own places (C12)", () => {
     const { db } = recordingDb((q) => q.table === "places" ? { data: [{ id: "p1" }], count: 1 } : { data: [], count: null });
     await expect(listGroupPlaces(db, "acct", G)).rejects.toThrow("listGroupPlaces failed: no equipment count returned");
   });
+
+  // #245, the same rule on listContactPlaces' two counts (review fix).
+  const C = "33333333-3333-4333-8333-333333333333";
+  it("listContactPlaces throws on a count-less places answer (mutation: placeCount ?? places.length -> FAILS)", async () => {
+    const { db } = recordingDb((q) => q.table === "places" ? { data: [], count: null } : { data: [] });
+    await expect(listContactPlaces(db, "acct", C)).rejects.toThrow("listContactPlaces failed: no count returned");
+  });
+
+  it("listContactPlaces throws on a count-less equipment answer (mutation: count ?? equipment.length -> FAILS)", async () => {
+    const { db } = recordingDb((q) => q.table === "places" ? { data: [{ id: "p1" }], count: 1 } : q.table === "equipment" ? { data: [], count: null } : { data: [] });
+    await expect(listContactPlaces(db, "acct", C)).rejects.toThrow("listContactPlaces failed: no equipment count returned");
+  });
 });
 
 describe("listOpenDealsFor (C13)", () => {
-  it("open deals of the set only, newest first, capped, with an exact count (mutation: drop .eq('status','open') -> FAILS)", async () => {
+  it("open deals of the set only, in this account, newest first, capped, with an exact count (mutation: drop .eq('status','open') or .eq('account_id') -> FAILS)", async () => {
     const { db, queries } = recordingDb(() => ({ data: [{ id: "o1", contact_id: "c2" }], count: 41 }));
     expect(await listOpenDealsFor(db, "acct", ["c1", "c2"])).toEqual({ deals: [{ id: "o1", contact_id: "c2" }], count: 41 });
     const q = queries[0]!;
     expect(has(q, "eq", "status", "open")).toBe(true);
+    expect(has(q, "eq", "account_id", "acct")).toBe(true);
     expect(has(q, "in", "contact_id", ["c1", "c2"])).toBe(true);
     expect(has(q, "order", "created_at", { ascending: false })).toBe(true);
     expect(has(q, "limit", GROUP_DEALS_SHOWN)).toBe(true);

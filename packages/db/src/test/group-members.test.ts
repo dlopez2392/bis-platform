@@ -83,7 +83,7 @@ describe("group members (S-03 part 2, spec §6)", () => {
       ]);
     }));
 
-  it("setGroupPrimaryContact refuses a member of another group and names the previous holder on a swap", () =>
+  it("setGroupPrimaryContact refuses a member of another group and names the previous holder on a swap (mutation: drop the wrapper's status check -> returns ok instead of not_found, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const h = await household(db, accountId, 2);
       const other = await household(db, accountId, 1);
