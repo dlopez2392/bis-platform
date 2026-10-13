@@ -91,7 +91,7 @@ Columns: `id`, `document_id → documents on delete cascade`, `account_id`, `sto
 
 ### 3.5 Quota
 A function `public.reserve_document_version(p_account_id, p_document_id, p_bytes, …)` is `SECURITY DEFINER` and executable by `service_role` only. It:
-1. locks the account row (`for update`)
+1. locks the account row (`for no key update`: two reservations queue behind each other; amended 2026-10-13 after plan review)
 2. adds up `bytes` of every version with status `ready` or `uploading` on that account, trashed documents included
 3. refuses if the new total would pass **5,368,709,120** bytes (5 GiB)
 4. otherwise inserts the `uploading` version row and returns its id and path
@@ -162,7 +162,7 @@ Every action returns `{ ok: true, … } | { ok: false, message }`, with bilingua
   5. returns `createSignedUploadUrl` for the version's path
 - **`finishDocumentUpload`**
   1. checks the object exists
-  2. reads its real size and its first bytes (§5.2) and computes its sha256
+  2. reads its real size and its first bytes (§5.2) and computes its sha256; the real size must equal the size reserved in step 4 of the start action, and the stored content type must equal the declared one, or a client that understated its size would slip past the quota (amended 2026-10-13 after plan review)
   3. if any check fails, deletes the object, deletes the version row, and deletes a document that never had a ready version, then returns the reason
   4. otherwise marks the version `ready`, moves `current_version_id`, and emits `document.added` (only for a document's first version)
 - **Edit, trash, restore and purge actions** follow §3.4's rules. Purge removes every version's object, then the rows, then emits.
@@ -187,10 +187,11 @@ Anything else, or a mismatch with the declared type, is refused and deleted: an 
 - This is a browser-side step for staff uploads, and its limits are stated, not hidden: a modified client could skip it. Part 2's server-side scanning pipeline is where enforcement for customer uploads belongs.
 
 ### 5.4 The daily clean-up job
-One new pass in the cron registry (`lib/automations/registry.ts`), named `documents-sweep`, running once a day:
+One new pass in the cron registry (`lib/automations/registry.ts`), named `documents-sweep`, running on every cron tick (amended 2026-10-13 after plan review: with nothing due it is two indexed reads; only an every-tick pass can fail twice in a row, which is what the operational floor alerts on):
 - purges documents trashed more than 30 days ago, emitting `document.purged` as `system`
 - deletes versions still `uploading` more than an hour after creation, with their objects if present, and any document left with no ready version
-- deletes the object first and the row second. A failed object delete leaves the row for the next run, which logs it in `automation_log`.
+- deletes the object first and the row second. A failed object delete leaves the row for the next run. A run that counted any failure logs its counters and fails, so its heartbeat fails; two failing ticks in a row raise the operational floor's alert to the agency (amended 2026-10-13: not `automation_log`, which is the client's history of what was sent).
+- an upload counts as abandoned three hours after its reservation (its signed upload URL lives two).
 
 It also follows the existing cron-coupling test rules.
 
@@ -224,8 +225,8 @@ It also follows the existing cron-coupling test rules.
 ## 7. Rollout and PRs
 
 - **One migration (0077) and two PRs:**
-  - **1a:** 0077, upload (including camera), list, viewer, inline edits, Owners only, trash with Undo and Restore, and the daily job
-  - **1b:** new versions and the Versions list, Delete forever with the typed name, teardown, and the space-used line
+  - **1a:** 0077, upload (including camera), list, viewer, inline edits, Owners only, trash with Undo and Restore, the clean-up job, deleting a customer's files with the customer (owner ruling 2026-10-13), and the teardown's storage leg (moved from 1b on 2026-10-13: the demo tenant is rebuilt through it every week in production)
+  - **1b:** new versions and the Versions list, Delete forever with the typed name, and the space-used line
 - **The migration:** bis-ci first (`ci-project-setup.yml`), then production through MCP `apply_migration` once, then a parity check (runbook `ci-supabase-project.md`). Never re-apply.
 - **CSP:** if the app's content-security policy restricts `img-src`, `frame-src` or `connect-src`, the plan adds the Supabase storage origin for the viewer and the upload PUT. The plan reads `next.config.ts` and the middleware first.
 - **The tracker:** item 6 becomes `in_progress` on the first merge. It is `done` only after parts 2 and 3.
