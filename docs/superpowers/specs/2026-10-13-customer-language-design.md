@@ -461,15 +461,26 @@ form, one server action, one toast. The save action validates the Spanish exactl
 `spanishIsStale({ body, bodyEs, bodyEsBasis })`, pure:
 
 ```
-bodyEs === ""                         → false   (they chose English for everyone)
-body.trim() === "" && bodyEs === null → false   (our English default beside our Spanish default)
-otherwise                             → bodyEsBasis !== body
+bodyEs !== null && bodyEs.trim() === "" → false   (emptied — trim-empty, not literally ''; a
+                                                    whitespace-only box reads as emptied too)
+body.trim() === "" && bodyEs === null   → false   (our English default beside our Spanish default)
+otherwise                               → bodyEsBasis?.trim() !== body.trim()
 ```
 
-On save the basis becomes the new English when the Spanish box changed in this save or "The Spanish still
-matches" was ticked; otherwise it keeps its value. So: a custom English with our Spanish default is stale until
-someone writes Spanish or ticks the box; editing only the English makes a written Spanish stale; re-saving the same
-English changes nothing.
+The basis comparison trims both sides so two callers that store the same English with different
+surrounding whitespace can never produce a permanent false warning; callers still pass `body` as
+the EXACT English they are about to store, not a re-derived copy.
+
+On save the basis becomes the new English only when the Spanish box changed in this save **to a
+written value — text or `''`** — or "The Spanish still matches" was ticked; otherwise it keeps its
+value. **Choosing our Spanish (the new stored value is `null`) never moves the basis** — there is
+no written Spanish left to compare a later English edit against, so moving it would hand an
+"emptied" or a later custom Spanish a basis nobody actually wrote beside. So: a custom English with
+our Spanish default is stale until someone writes Spanish or ticks the box; editing only the
+English makes a written Spanish stale; re-saving the same English changes nothing; and a Q1 row
+(emptied Spanish, no basis) with a custom English, saved by choosing our Spanish, stores `null`
+with the basis still `null` — correctly stale again, because the customer's Spanish changed from
+"the English" back to "our default" without anyone confirming it matches.
 
 ### 12.4 Rows that already have a custom English
 
