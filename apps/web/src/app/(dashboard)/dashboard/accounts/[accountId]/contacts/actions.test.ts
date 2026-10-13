@@ -32,6 +32,9 @@ const dbMocks = {
   serviceDb: vi.fn(() => SERVICE),
   // S-02 Task 3c: the Business name writes the business group.
   setContactsBusiness: vi.fn(), undoSetBusiness: vi.fn(), GROUP_NAME_MAX: 120,
+  // S-09 §7.5: the staff language writers.
+  setContactLanguage: vi.fn(), restoreContactLanguage: vi.fn(), keepContactLanguageHint: vi.fn(),
+  isLanguageTriple: vi.fn((_v: unknown) => true),
 };
 /** The service client and the request client, told apart by identity. */
 const SERVICE = { tag: "service-db" };
@@ -44,6 +47,7 @@ const {
   undoInlinePhoneEditAction, createContactAction,
   assignContactsAction, undoAssignContactsAction,
   setContactBusinessAction, undoContactBusinessAction,
+  setContactLanguageAction, restoreContactLanguageAction, keepContactLanguageHintAction,
 } = await import("./actions");
 const { m } = await import("@/lib/messages");
 
@@ -52,6 +56,7 @@ beforeEach(() => {
   requireAccountAccess.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
   requireAccountOwner.mockReset().mockResolvedValue({ userId: "user_1", isAgency: true });
   dbForRequest.mockReset().mockResolvedValue({});
+  dbMocks.isLanguageTriple.mockImplementation(() => true);
 });
 
 describe("updateContactFieldAction", () => {
@@ -856,5 +861,65 @@ describe("setContactBusinessAction", () => {
     dbMocks.undoSetBusiness.mockResolvedValue("ok");
     expect((await undoContactBusinessAction("a1", "c9", { added: ADDED, removed: null })).ok).toBe(false);
     expect(dbMocks.undoSetBusiness).not.toHaveBeenCalled();
+  });
+});
+
+describe("the language actions (S-09 §7.5, C2, C9)", () => {
+  const BOOKED = { id: "c1", language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" };
+
+  it("set: proves the contact on the CALLER's client, writes on the service client, and returns the prior triple (mutation: write before the proof -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.setContactLanguage.mockResolvedValue(true);
+    expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({
+      ok: true, undo: { language: "es", source: "booking", setAt: "2026-10-03T15:00:00+00:00" },
+    });
+    expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
+    expect(dbMocks.setContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", "en", "user_1");
+    expect(dbMocks.getContact.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.setContactLanguage.mock.invocationCallOrder[0]!);
+  });
+
+  it("a contact the caller cannot see (a Technician's other customer) writes nothing (mutation: skip the proof -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(null);
+    expect(await setContactLanguageAction("a1", "c9", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
+    expect(await restoreContactLanguageAction("a1", "c9", { language: null, source: null, setAt: null })).toMatchObject({ ok: false });
+    expect(await keepContactLanguageHintAction("a1", "c9")).toMatchObject({ ok: false });
+    expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
+    expect(dbMocks.restoreContactLanguage).not.toHaveBeenCalled();
+    expect(dbMocks.keepContactLanguageHint).not.toHaveBeenCalled();
+  });
+
+  it("set refuses a language outside the set before reading anything", async () => {
+    expect(await setContactLanguageAction("a1", "c1", "fr" as never)).toMatchObject({ ok: false });
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+
+  it("restore sends the prior triple back through the RESTORE writer, never as a staff choice (mutation: route Undo through setContactLanguage -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ ...BOOKED, language: "en", language_source: "staff" });
+    dbMocks.restoreContactLanguage.mockResolvedValue(true);
+    const prior = { language: "es" as const, source: "booking" as const, setAt: "2026-10-03T15:00:00+00:00" };
+    expect(await restoreContactLanguageAction("a1", "c1", prior)).toEqual({ ok: true });
+    expect(dbMocks.restoreContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", prior, "user_1");
+    expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
+  });
+
+  it("restore refuses a forged, incoherent prior before the proof (mutation: drop the isLanguageTriple check -> FAILS)", async () => {
+    dbMocks.isLanguageTriple.mockImplementation(() => false);
+    expect(await restoreContactLanguageAction("a1", "c1", { language: "es", source: null, setAt: null } as never)).toMatchObject({ ok: false });
+    expect(dbMocks.getContact).not.toHaveBeenCalled();
+  });
+
+  it("keep stamps only the hint (mutation: call setContactLanguage -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.keepContactLanguageHint.mockResolvedValue(true);
+    expect(await keepContactLanguageHintAction("a1", "c1")).toEqual({ ok: true });
+    expect(dbMocks.keepContactLanguageHint).toHaveBeenCalledWith(SERVICE, "a1", "c1", "user_1");
+    expect(dbMocks.setContactLanguage).not.toHaveBeenCalled();
+  });
+
+  it("a thrown write is the plain failure, never a thrown action", async () => {
+    dbMocks.getContact.mockResolvedValue(BOOKED);
+    dbMocks.setContactLanguage.mockRejectedValue(new Error("db down"));
+    expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({ ok: false, error: m["contact.language.saveFailed"] });
   });
 });

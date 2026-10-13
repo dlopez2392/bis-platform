@@ -6,7 +6,9 @@ import { dbForRequest } from "@/lib/db";
 import { deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
          getContact, setContactPhoneCountry, serviceDb,
          assignContacts, undoAssignContacts, type PreviousAssignee,
-         setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot } from "@bis/db";
+         setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot,
+         setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple,
+         type ContactLanguage, type LanguageTriple } from "@bis/db";
 import { addContactByHand } from "@/lib/contacts/add-contact-by-hand";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
@@ -218,6 +220,72 @@ export async function undoContactBusinessAction(
   } catch (e) {
     console.error(`undoContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
     return { ok: false, error: "Undo failed — please try again." };
+  }
+}
+
+/**
+ * S-09 §7.5: a customer's language, chosen by staff. The contact is proved on the CALLER's own client
+ * first (getContact under RLS: a Technician reaches only their own customers, 0068), then written on
+ * the service client: the client role holds no UPDATE on the language columns (0076, C2). Returns the
+ * prior triple, read in the same proof, for the Undo (C9).
+ */
+export type LanguageActionResult = { ok: true; undo: LanguageTriple } | { ok: false; error: string };
+
+const isContactLanguage = (v: unknown): v is ContactLanguage => v === "en" || v === "es";
+const languageFailed = () => ({ ok: false as const, error: m["contact.language.saveFailed"] });
+
+export async function setContactLanguageAction(
+  accountId: string, contactId: string, language: ContactLanguage,
+): Promise<LanguageActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  if (!isContactLanguage(language)) return languageFailed();
+  try {
+    const before = await getContact(await dbForRequest(), accountId, contactId);
+    if (!before) return languageFailed();
+    const undo: LanguageTriple = {
+      language: (before.language ?? null) as ContactLanguage | null,
+      source: (before.language_source ?? null) as LanguageTriple["source"],
+      setAt: (before.language_set_at ?? null) as string | null,
+    };
+    if (!(await setContactLanguage(serviceDb(), accountId, contactId, language, userId))) return languageFailed();
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true, undo };
+  } catch (e) {
+    console.error(`setContactLanguageAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return languageFailed();
+  }
+}
+
+/** Undo: the prior triple back exactly, through the same proof. A forged source is the caller's own record. */
+export async function restoreContactLanguageAction(
+  accountId: string, contactId: string, prior: LanguageTriple,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+  if (!isLanguageTriple(prior)) return languageFailed();
+  try {
+    if (!(await getContact(await dbForRequest(), accountId, contactId))) return languageFailed();
+    if (!(await restoreContactLanguage(serviceDb(), accountId, contactId, prior, userId))) return languageFailed();
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`restoreContactLanguageAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return languageFailed();
+  }
+}
+
+/** Keep: the hint stays away until a newer sign (§7.4). */
+export async function keepContactLanguageHintAction(
+  accountId: string, contactId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    if (!(await getContact(await dbForRequest(), accountId, contactId))) return languageFailed();
+    if (!(await keepContactLanguageHint(serviceDb(), accountId, contactId, userId))) return languageFailed();
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`keepContactLanguageHintAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return languageFailed();
   }
 }
 
