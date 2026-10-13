@@ -1147,14 +1147,20 @@ async function writeLanguage(
   return (data ?? []).length > 0;
 }
 
-/** A staff choice (S-09 §7.5): `staff`, now. False when the contact is not in this account. */
+/**
+ * A staff choice (S-09 §7.5): `staff`, now. `wrote` is false when the contact is not in this
+ * account; `setAt` is the exact timestamp this call wrote (even when `wrote` is false, so a caller
+ * never needs a read-back just to learn what it would have been — only a `wrote: true` result
+ * means it actually landed).
+ */
 export async function setContactLanguage(
   db: SupabaseClient, accountId: string, contactId: string, language: ContactLanguage, actorId: string,
-): Promise<boolean> {
+): Promise<{ wrote: boolean; setAt: string }> {
+  const setAt = new Date().toISOString();
   const wrote = await writeLanguage(db, accountId, contactId,
-    { language, language_source: "staff", language_set_at: new Date().toISOString() });
+    { language, language_source: "staff", language_set_at: setAt });
   if (wrote) await emit(db, accountId, "contact.language_set", actorId, { contactId, language, source: "staff" }, "user");
-  return wrote;
+  return { wrote, setAt };
 }
 
 /** What the Undo must still find in the row before it is honoured, or stale (`"changed"`). */

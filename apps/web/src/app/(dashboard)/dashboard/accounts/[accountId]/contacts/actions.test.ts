@@ -898,10 +898,8 @@ describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () 
 
   it("set: proves the contact on the CALLER's client, writes on the service client, and returns the PRIOR and WRITTEN triples (mutation: write before the proof -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
-    dbMocks.getContact
-      .mockResolvedValueOnce(BOOKED)
-      .mockResolvedValueOnce({ id: "c1", language: "en", language_source: "staff", language_set_at: WRITTEN_T });
-    dbMocks.setContactLanguage.mockResolvedValue(true);
+    dbMocks.getContact.mockResolvedValueOnce(BOOKED);
+    dbMocks.setContactLanguage.mockResolvedValue({ wrote: true, setAt: WRITTEN_T });
     expect(await setContactLanguageAction("a1", "c1", "en")).toEqual({
       ok: true,
       prior: { language: "es", source: "booking", setAt: "2026-10-03T15:00:00+00:00" },
@@ -909,6 +907,9 @@ describe("the language actions (S-09 §7.5, C2, C9, fix round I1-I4/M1-M3)", () 
     });
     expect(dbMocks.getContact).toHaveBeenCalledWith(REQUEST, "a1", "c1");
     expect(dbMocks.setContactLanguage).toHaveBeenCalledWith(SERVICE, "a1", "c1", "en", "user_1");
+    // The written setAt comes straight from the writer's own result, never a read-back (M-b): a
+    // second getContact call would mean the old read-after-write path crept back in.
+    expect(dbMocks.getContact).toHaveBeenCalledTimes(1);
     expect(dbMocks.getContact.mock.invocationCallOrder[0]!).toBeLessThan(dbMocks.setContactLanguage.mock.invocationCallOrder[0]!);
   });
 

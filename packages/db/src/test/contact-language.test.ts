@@ -12,7 +12,8 @@ const T2 = "2026-10-05T15:00:00.000Z";
 const iso = (v: unknown) => (v === null ? null : new Date(v as string).toISOString());
 
 async function eventsOf(db: SupabaseClient, accountId: string, type: string) {
-  const { data, error } = await db.from("events").select("actor_type, actor_id, payload").eq("account_id", accountId).eq("type", type);
+  const { data, error } = await db.from("events").select("actor_type, actor_id, payload")
+    .eq("account_id", accountId).eq("type", type).order("created_at").order("id");
   if (error) throw new Error(error.message);
   return data;
 }
@@ -48,9 +49,11 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
       const id = await ana(db, accountId);
       await recordLanguageSignal(db, accountId, id, { language: "es", source: "booking", at: T1 }, "public", "system");
       const before = Date.now();
-      expect(await setContactLanguage(db, accountId, id, "en", ACTOR)).toBe(true);
+      const result = await setContactLanguage(db, accountId, id, "en", ACTOR);
+      expect(result.wrote).toBe(true);
       const c = (await getContact(db, accountId, id))!;
       expect([c.language, c.language_source]).toEqual(["en", "staff"]);
+      expect(iso(c.language_set_at)).toEqual(result.setAt);
       expect(Date.parse(c.language_set_at as string)).toBeGreaterThanOrEqual(before - 1000);
       expect((await eventsOf(db, accountId, "contact.language_set")).at(-1)).toEqual(
         { actor_type: "user", actor_id: ACTOR, payload: { contactId: id, language: "en", source: "staff" } });
@@ -121,7 +124,7 @@ describe("the staff writers (S-09 §7.5, C9)", () => {
     withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db, otherAccountId) => {
         const theirs = await ana(db, otherAccountId);
-        expect(await setContactLanguage(db, accountId, theirs, "es", ACTOR)).toBe(false);
+        expect((await setContactLanguage(db, accountId, theirs, "es", ACTOR)).wrote).toBe(false);
         expect(await keepContactLanguageHint(db, accountId, theirs, ACTOR)).toBe(false);
         const written: LanguageTriple = { language: null, source: null, setAt: null };
         expect(await restoreContactLanguage(db, accountId, theirs, { language: "es", source: "staff", setAt: T1 }, written, ACTOR)).toBe("changed");
@@ -206,6 +209,16 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
     const prior: LanguageTriple = { language: null, source: null, setAt: null };
     expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongLanguage, ACTOR)).toBe("changed");
     expect(row.language).toBe("en");
+  });
+
+  // Isolates the SET-AT column of the compare-and-set: language and source both still match the
+  // row, so only a dropped `written.setAt` guard specifically would let this one through.
+  it("a `written` whose setAt alone is wrong never matches, even when language and source do (mutation: drop the written.setAt .eq/.is guard -> FAILS)", async () => {
+    const row: Row = { language: "en", language_source: "staff", language_set_at: T2 };
+    const wrongSetAt: LanguageTriple = { language: "en", source: "staff", setAt: T1 };
+    const prior: LanguageTriple = { language: null, source: null, setAt: null };
+    expect(await restoreContactLanguage(fakeDb(row), "a1", "c1", prior, wrongSetAt, ACTOR)).toBe("changed");
+    expect(row.language_set_at).toBe(T2);
   });
 
   it("M1: an emit failure after the compare-and-set committed is logged, never thrown — the Undo still answers 'updated' (mutation: let the emit error propagate -> FAILS)", async () => {

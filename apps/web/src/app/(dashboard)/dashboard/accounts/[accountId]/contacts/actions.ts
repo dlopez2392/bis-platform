@@ -284,24 +284,27 @@ export async function setContactLanguageAction(
     };
     let threw: unknown = null;
     let wrote = false;
+    let setAt: string | null = null;
     try {
-      wrote = await setContactLanguage(serviceDb(), accountId, contactId, language, userId);
+      const result = await setContactLanguage(serviceDb(), accountId, contactId, language, userId);
+      wrote = result.wrote;
+      setAt = result.setAt;
     } catch (e) {
       threw = e;
     }
-    // The read-after-write below also answers M1 (this file's own rule, R3-M11): the UPDATE may
-    // already have committed before the writer's own emit() threw, so a thrown write is judged by
-    // what the row actually holds, never reported as a failed save just because the event after it
-    // did not land.
-    const after = await getContact(db, accountId, contactId).catch(() => null);
     if (threw) {
+      // The read-back here is the RECOVERY path only: the writer threw before it could tell us its
+      // own setAt, so the UPDATE's own effect (which may already have committed before the writer's
+      // emit() threw — M1, this file's own rule, R3-M11) is the only way left to learn what landed.
+      // A thrown write is judged by what the row actually holds, never reported as a failed save just
+      // because the event after it did not land.
+      const after = await getContact(db, accountId, contactId).catch(() => null);
       console.error(`setContactLanguageAction: account ${accountId} contact ${contactId}: write failed: ${loggableError(threw)}`);
       wrote = after?.language === language && after?.language_source === "staff";
+      setAt = (after?.language_set_at ?? null) as string | null;
     }
     if (!wrote) return await languageError("contact.language.saveFailed", accountId, isAgency);
-    const written: LanguageTriple = {
-      language, source: "staff", setAt: (after?.language_set_at ?? null) as string | null,
-    };
+    const written: LanguageTriple = { language, source: "staff", setAt };
     revalidatePath(`${contactsPath(accountId)}/${contactId}`);
     return { ok: true, prior, written };
   } catch (e) {
