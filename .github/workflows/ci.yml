@@ -54,7 +54,8 @@ name: CI
 #           `pnpm check` and `pnpm --filter web build` from CLAUDE.md, no
 #           more and no less, so CI and a contributor's terminal cannot
 #           disagree about what "green" means. The guard runs and the stack
-#           in front of them are preflights, not gates.
+#           in front of them are preflights, not gates; the stack
+#           diagnostics beside them (2026-10-13) are read-only and exit 0.
 #
 #   e2e     checks that the CI project holds every migration in the branch
 #           (the "CI project FIRST" rule's gate, since no gate runs on that
@@ -222,12 +223,35 @@ jobs:
         if: steps.scope.outputs.docs_only != 'true'
         run: pnpm check
 
+      # NOT a gate (2026-10-13). Kong's 502s came back in bursts with its
+      # upstream keep-alive already off; the hypothesis is Kong running out
+      # of ephemeral ports to PostgREST (ci-local-supabase.sh, KONG'S PORTS).
+      # This prints, pass or fail, the TIME_WAIT count to PostgREST in Kong's
+      # network namespace, its port range and its `ss -s`, so a GREEN run is
+      # the baseline a red one is read against. Numbers only, no log; exits 0
+      # always (ci-stack-diagnostics.test.ts). `!cancelled()`, not
+      # `always()`: a cancelled run has nothing to compare.
+      - name: Stack baseline after pnpm check
+        if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}
+        timeout-minutes: 4
+        run: bash .github/scripts/ci-stack-diagnostics.sh --baseline
+
       # Catches the class `tsc` cannot: Next evaluates route modules during
       # page-data collection. Vercel builds only on main, so without this a
       # branch can look green and break the production deploy on merge.
       - name: Production build
         if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter web build
+
+      # NOT a gate: on a red run only, LAST, while the stack is still up (it
+      # goes with the runner). Containers' restarts and OOM flags, Kong's
+      # ports, Kong's error lines, PostgREST's errors, the runner's memory.
+      # The repo is public: named inspect fields, filtered and bounded log
+      # tails, keys redacted, never an environment; exits 0 always.
+      - name: Stack diagnostics on failure
+        if: failure()
+        timeout-minutes: 4
+        run: bash .github/scripts/ci-stack-diagnostics.sh --failure
 
   e2e:
     runs-on: ubuntu-latest
@@ -439,3 +463,9 @@ jobs:
       - name: Playwright
         if: steps.scope.outputs.docs_only != 'true'
         run: pnpm --filter web test:e2e
+
+      # verify's failure dump, for the same reason: see verify's last step.
+      - name: Stack diagnostics on failure
+        if: failure()
+        timeout-minutes: 4
+        run: bash .github/scripts/ci-stack-diagnostics.sh --failure
