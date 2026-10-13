@@ -40,8 +40,13 @@
 --   alter table public.automations drop column body_es, drop column body_es_basis;
 --   alter table public.calendars drop column followup_body_es, drop column followup_body_es_basis;
 --   alter table public.voice_profiles drop column textback_body_es, drop column textback_body_es_basis;
---   then restore 0065's comment on accounts.language. The Q1 data is lost with the columns; nothing
---   reads it before PR 2.
+--   then restore 0065's comment on accounts.language:
+--     comment on column public.accounts.language is
+--       'UI language for this account''s CLIENT-role sessions. NULL = no preference recorded; '
+--       'resolveLocale() falls through to the default (en). Agency-operator sessions do not read '
+--       'this column (decision 1, 2026-10-10 Spanish-runtime owner decisions) until the parallel '
+--       'staff-and-roles lane''s users.language exists.';
+--   The Q1 data is lost with the columns; nothing reads it before PR 2.
 --
 -- ASCII only, no backslash anywhere (the MCP apply rule).
 
@@ -87,6 +92,9 @@ begin
   if p_source not in ('booking', 'form', 'call') then
     raise exception 'record_language_signal: source must be booking, form or call' using errcode = '22023';
   end if;
+  if not isfinite(p_at) or p_at > now() + interval '1 day' then
+    raise exception 'record_language_signal: p_at must be a real, roughly-current moment' using errcode = '22023';
+  end if;
 
   select true, c.language, c.last_language_signal_at into v_found, v_prior, v_last_at
     from public.contacts c
@@ -100,9 +108,9 @@ begin
     last_language_signal = case when v_last_at is null or p_at >= v_last_at then p_language else c.last_language_signal end,
     last_language_signal_source = case when v_last_at is null or p_at >= v_last_at then p_source else c.last_language_signal_source end,
     last_language_signal_at = case when v_last_at is null or p_at >= v_last_at then p_at else c.last_language_signal_at end,
-    language = case when v_prior is null then p_language else c.language end,
-    language_source = case when v_prior is null then p_source else c.language_source end,
-    language_set_at = case when v_prior is null then p_at else c.language_set_at end
+    language = case when c.language is null then p_language else c.language end,
+    language_source = case when c.language is null then p_source else c.language_source end,
+    language_set_at = case when c.language is null then p_at else c.language_set_at end
    where c.account_id = p_account and c.id = p_contact;
 
   return v_prior is null;
@@ -143,10 +151,13 @@ alter table public.voice_profiles
   add column textback_body_es text null,
   add column textback_body_es_basis text null;
 
--- 5. Q1: an account's already-customised English keeps going to its Spanish customers.
-update public.automations set body_es = '' where body <> '' and recipe_key <> 'instant_reply';
-update public.calendars set followup_body_es = '' where followup_body <> '';
-update public.voice_profiles set textback_body_es = '' where textback_body <> '';
+-- 5. Q1: an account's already-customised English keeps going to its Spanish customers. A whitespace-only
+--    body is the senders' own "use the default" (bookingFollowupEmail's `.trim()`, prepareTextback's
+--    `.trim() ||`, automation's own trim before send): the regex requires one real, non-whitespace
+--    character, not merely a non-empty string.
+update public.automations set body_es = '' where body ~ '[^[:space:]]' and recipe_key <> 'instant_reply';
+update public.calendars set followup_body_es = '' where followup_body ~ '[^[:space:]]';
+update public.voice_profiles set textback_body_es = '' where textback_body ~ '[^[:space:]]';
 
 -- 6. Comments: each column names its one writer.
 comment on column public.contacts.language is
@@ -154,7 +165,7 @@ comment on column public.contacts.language is
 comment on column public.contacts.language_source is
   'How contacts.language was set (0076): booking, form or call (record_language_signal) or staff (setContactLanguage / restoreContactLanguage).';
 comment on column public.contacts.language_set_at is
-  'When contacts.language was set (0076): the evidence''s own time for a sign, the moment of the choice for staff.';
+  'When contacts.language was set (0076): the evidence''s own time for a sign (public.record_language_signal) or the moment of the choice for staff (setContactLanguage).';
 comment on column public.contacts.last_language_signal is
   'The newest language sign the customer gave, en or es (0076). Written only by public.record_language_signal; read for the record''s hint.';
 comment on column public.contacts.last_language_signal_source is
