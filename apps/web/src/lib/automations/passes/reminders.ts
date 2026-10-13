@@ -62,15 +62,15 @@ function subjectFor(r: DueReminder, deadline: Date): HoldSubject {
   };
 }
 
-/** The per-row path, shared by the tick (every due row) and the release (one held row). */
-export async function processReminders(ctx: PassContext, reminders: DueReminder[]): Promise<ReminderCounters> {
-  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0 };
-
-  // S-09 PR 2 (C16): does a text reminder cover this LATE row? Read only for late rows, once per account
-  // per tick (the text pass's own cache shape, sms-reminder.ts). A read failure counts as "no text": the
-  // email then goes at 08:00, the safe side of a missed reminder.
+/**
+ * S-09 PR 2 (C16): does a text reminder cover this LATE row? Read only for late rows, once per account
+ * per call (the text pass's own cache shape, sms-reminder.ts). A read failure counts as "no text": the
+ * email then goes at 08:00, the safe side of a missed reminder. The tick shares one cache across its
+ * rows; a release reads per row (one held row per call), bounded by RELEASE_BATCH (release-held.ts).
+ */
+function textCoverage(ctx: PassContext): (r: DueReminder) => Promise<boolean> {
   const textOn = new Map<string, boolean>();
-  async function textCovers(r: DueReminder): Promise<boolean> {
+  return async (r) => {
     if (!r.late || !normalisePhone(r.contactPhone)) return false;
     if (!textOn.has(r.accountId)) {
       try {
@@ -82,7 +82,14 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
       }
     }
     return textOn.get(r.accountId)!;
-  }
+  };
+}
+
+/** The per-row path, shared by the tick (every due row) and the release (one held row). */
+export async function processReminders(ctx: PassContext, reminders: DueReminder[]): Promise<ReminderCounters> {
+  const c: ReminderCounters = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0 };
+
+  const textCovers = textCoverage(ctx);
 
   for (const reminder of reminders) {
     const deadline = reminderDeadline(reminder, { textCovers: await textCovers(reminder) });
@@ -181,6 +188,16 @@ export const releaseReminder: Releaser = async (ctx, row) => {
   }
   if (new Date(found.due.startsAt).getTime() <= ctx.now.getTime()) {
     await logSkipped(ctx, subjectOf(row), REASONS.appointmentStarted);
+    return "skipped";
+  }
+  // Review (Task 13): inside the sending hours neither holdOrSend nor the email gate checks the deadline
+  // (the gate only drops a deadline at or before the NEXT opening, and there is none inside the hours), so
+  // the release does. Recomputed now, not at hold time: texting turned on overnight moves a late row's
+  // deadline to start - 2h15m, and the 08:00 release must not land beside the text; a release delayed past
+  // start - 45m would give less notice than MORNING_OF_MIN_NOTICE_MS.
+  const deadline = reminderDeadline(found.due, { textCovers: await textCoverage(ctx)(found.due) });
+  if (ctx.now.getTime() >= deadline.getTime()) {
+    await logSkipped(ctx, subjectOf(row), REASONS.windowAfterDeadline);
     return "skipped";
   }
   return verdict(await processReminders(ctx, [found.due]));

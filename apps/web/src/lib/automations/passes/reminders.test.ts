@@ -285,10 +285,29 @@ describe("S-09 PR 2 (C16, Q3): a late reminder's deadline depends on whether a t
     expect(gateDeadline()).toBe(start - 45 * 60 * 1000);
   });
 
-  it("(e2) the same release with texting ON hands the gate the D-029 deadline, start minus 2h15m (mutation: release with { textCovers: false } hard-coded -> FAILS)", async () => {
+  it("(e2) a release with texting ON (an 11:00 appointment, released at 08:00) hands the gate the D-029 deadline, start minus 2h15m (mutation: release with { textCovers: false } hard-coded -> FAILS)", async () => {
     textingOn();
+    dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ startsAt: "2026-09-22T16:00:00.000Z", contactPhone: "+19565550111" }) });
+    expect(await releaseReminder(ctx(AT_0800), held())).toBe("sent");
+    expect(gateDeadline()).toBe(Date.parse("2026-09-22T16:00:00.000Z") - 135 * 60 * 1000);
+  });
+
+  // Review (1): inside the hours neither holdOrSend nor the email gate checks the deadline (email-gate.ts: only
+  // expiresBeforeOpening, and opening is null inside the hours), so the release must.
+  it("(f) held at 05:00 with texting off, texting turned ON before 08:00: the 08:00 release is skipped, never emailed beside the text (mutation: drop the release's deadline check -> sent, FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" })]);
+    expect(await remindersPass.run(ctx(AT_0500))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
+    textingOn();
+    dbMocks.recordAutomationLog.mockClear();
     dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ contactPhone: "+19565550111" }) });
-    await releaseReminder(ctx(AT_0800), held());
-    expect(gateDeadline()).toBe(start - 135 * 60 * 1000);
+    expect(await releaseReminder(ctx(AT_0800), held())).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "skipped", reason: "Not sent: quiet hours ran past the appointment" })]);
+  });
+
+  it("(g) a release delayed to 08:40 for a 09:00 appointment, texting off, is skipped: 20 minutes is under the 45-minute floor (mutation: drop the release's deadline check -> sent, FAILS)", async () => {
+    dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ contactPhone: "+19565550111" }) });
+    expect(await releaseReminder(ctx(new Date("2026-09-22T13:40:00Z")), held())).toBe("skipped");
+    expect(emailSend).not.toHaveBeenCalled();
   });
 });
