@@ -21,6 +21,8 @@ export { createContact, updateContact, listContacts, getContact,
          listTagNamesForContacts, flagMatchesOf,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
+export { recordLanguageSignal, setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple, LANGUAGE_SOURCES,
+         type ContactLanguage, type LanguageSource, type LanguageSignalSource, type LanguageTriple } from "./contacts";
 export { consentStateOf, readConsentState, appendConsentEvent, recordCarrierBlock,
          appendConsentEventGuarded, newestDecidingRow, readConsentHistory, readConsentEvent,
          readConsentActions, consentWriteArgs, consentAppendSql, emailLedgerAddress, readBlockedAddresses,

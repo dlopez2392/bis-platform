@@ -56,7 +56,7 @@ export type CreateContactInput = ContactInput & {
 // to" field shows who holds the customer now. Read here, written only by
 // assignment.ts (see this file's own header).
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -1090,4 +1090,93 @@ export async function setContactPhoneCountry(
   await emit(db, accountId, "contact.updated", actorId,
     { contactId, fields: ["phone", "phone_country_unconfirmed"] }, actorType);
   return "updated";
+}
+
+// ---------------------------------------------------------------------------
+// S-09: a language on every contact (migration 0076). The automatic writer is the SQL function
+// `record_language_signal` (service role only: it sets the language only while it is null, so a
+// staff choice is never overwritten). The staff writers below run on the SERVICE client, after the
+// server action proved the contact on the caller's own client (getContact under RLS): the client role
+// holds no UPDATE on these columns.
+// ---------------------------------------------------------------------------
+export type ContactLanguage = "en" | "es";
+export type LanguageSource = "booking" | "form" | "call" | "staff";
+export type LanguageSignalSource = Exclude<LanguageSource, "staff">;
+/** contacts.language, its source and when it was set: all three null, or all three set (0076). */
+export type LanguageTriple = { language: ContactLanguage | null; source: LanguageSource | null; setAt: string | null };
+export const LANGUAGE_SOURCES: readonly LanguageSource[] = ["booking", "form", "call", "staff"];
+
+/** The shape 0076's coherence check accepts, checked before a write so a forged Undo payload is refused here. */
+export function isLanguageTriple(v: unknown): v is LanguageTriple {
+  if (typeof v !== "object" || v === null) return false;
+  const t = v as Record<string, unknown>;
+  if (t.language === null && t.source === null && t.setAt === null) return true;
+  return (t.language === "en" || t.language === "es")
+    && typeof t.source === "string" && (LANGUAGE_SOURCES as readonly string[]).includes(t.source)
+    && typeof t.setAt === "string" && Number.isFinite(Date.parse(t.setAt));
+}
+
+/**
+ * One customer sign (S-09 §7.1): records it as the contact's last sign and sets the language when it
+ * has none. Emits `contact.language_set` with the caller's actor ONLY when this call set the language.
+ * Throws on an rpc error; every caller wraps it in its own try (a sign must never cost a booking, a
+ * form or a call).
+ */
+export async function recordLanguageSignal(
+  db: SupabaseClient, accountId: string, contactId: string,
+  signal: { language: ContactLanguage; source: LanguageSignalSource; at: Date | string },
+  actorId: string, actorType: ActorType,
+): Promise<boolean> {
+  const at = typeof signal.at === "string" ? signal.at : signal.at.toISOString();
+  const { data, error } = await db.rpc("record_language_signal", {
+    p_account: accountId, p_contact: contactId, p_language: signal.language, p_source: signal.source, p_at: at,
+  });
+  if (error) throw new Error(`recordLanguageSignal failed: ${error.message}`);
+  if (data !== true) return false;
+  await emit(db, accountId, "contact.language_set", actorId,
+    { contactId, language: signal.language, source: signal.source }, actorType);
+  return true;
+}
+
+async function writeLanguage(
+  db: SupabaseClient, accountId: string, contactId: string, patch: Record<string, string | null>,
+): Promise<boolean> {
+  const { data, error } = await db.from("contacts").update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", contactId).select("id");
+  if (error) throw new Error(`contact language write failed: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/** A staff choice (S-09 §7.5): `staff`, now. False when the contact is not in this account. */
+export async function setContactLanguage(
+  db: SupabaseClient, accountId: string, contactId: string, language: ContactLanguage, actorId: string,
+): Promise<boolean> {
+  const wrote = await writeLanguage(db, accountId, contactId,
+    { language, language_source: "staff", language_set_at: new Date().toISOString() });
+  if (wrote) await emit(db, accountId, "contact.language_set", actorId, { contactId, language, source: "staff" }, "user");
+  return wrote;
+}
+
+/** Undo (C9): the prior triple back EXACTLY, its source and time included, "not set" included. */
+export async function restoreContactLanguage(
+  db: SupabaseClient, accountId: string, contactId: string, prior: LanguageTriple, actorId: string,
+): Promise<boolean> {
+  if (!isLanguageTriple(prior)) throw new Error("restoreContactLanguage: not a language triple");
+  const wrote = await writeLanguage(db, accountId, contactId,
+    { language: prior.language, language_source: prior.source, language_set_at: prior.setAt });
+  if (wrote) await emit(db, accountId, "contact.language_set", actorId,
+    { contactId, language: prior.language, source: prior.source, undo: true }, "user");
+  return wrote;
+}
+
+/** Keep (§7.4): the hint stays away until a newer sign. Nothing about the customer changes. */
+export async function keepContactLanguageHint(
+  db: SupabaseClient, accountId: string, contactId: string, actorId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("contacts").update({ language_hint_kept_at: new Date().toISOString() })
+    .eq("account_id", accountId).eq("id", contactId).select("id");
+  if (error) throw new Error(`keepContactLanguageHint failed: ${error.message}`);
+  const wrote = (data ?? []).length > 0;
+  if (wrote) await emit(db, accountId, "contact.language_hint_kept", actorId, { contactId }, "user");
+  return wrote;
 }
