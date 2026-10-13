@@ -12,7 +12,7 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { parseEquipmentFields, EQUIPMENT_LIMITS } from "@/lib/contacts/place-input";
-import { addEquipmentAction, replaceEquipmentAction } from "./places-actions";
+import { addEquipmentAction, replaceEquipmentAction, type PlaceSubjectArg } from "./places-actions";
 
 const hintClass = "text-xs text-muted-foreground";
 type Draft = { name: string; make: string; model: string; serial: string; installed_on: string; warranty_until: string; notes: string };
@@ -30,7 +30,8 @@ export type EquipmentDialogMode = { kind: "add"; placeId: string } | { kind: "re
  * checks it again; a refusal is read out in a polite live region inside the dialog.
  */
 export function EquipmentDialog({ accountId, contactId, today, mode, onDone }: {
-  accountId: string; contactId: string; today: string; mode: EquipmentDialogMode;
+  /** A contact id, or `{ kind: "group", id }` on a group's own page (S-03 part 2, C12). */
+  accountId: string; contactId: PlaceSubjectArg; today: string; mode: EquipmentDialogMode;
   /** The new unit's id and name, once it is saved. */
   onDone: (id: string, name: string) => void;
 }) {

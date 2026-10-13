@@ -4,6 +4,7 @@ import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import {
   removePlaceAction, undoRemovePlaceAction, setPlaceArchivedAction, setPlaceOwnerAction, removeEquipmentAction, undoRemoveEquipmentAction,
+  type PlaceSubjectArg,
 } from "./places-actions";
 
 /**
@@ -38,7 +39,7 @@ const failed = { ok: false as const, error: "places.error.failed" };
 const undoFailed = { ok: false as const, error: "places.error.undoFailed" };
 
 export function placeHandlers({ accountId, contactId, locale, reload, inFlight = new Set<string>() }: {
-  accountId: string; contactId: string; locale: Locale; reload: () => void; inFlight?: Set<string>;
+  accountId: string; contactId: PlaceSubjectArg; locale: Locale; reload: () => void; inFlight?: Set<string>;
 }): PlaceHandlers {
   const tt = (key: string, params?: Record<string, string | number>) => t(m, key as MessageKey, locale, params);
   const say = (a: { error: string; params?: Record<string, string | number> }) => toast.error(tt(a.error, a.params));

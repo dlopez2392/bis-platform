@@ -170,3 +170,25 @@ describe("placeHandlers: the owner change and a double-clicked Undo (fix round 1
     expect(toast.error).not.toHaveBeenCalled();
   });
 });
+
+describe("placeHandlers: a group subject (S-03 part 2, C12 — the household's or business's own page)", () => {
+  const GID = "55555555-5555-4555-8555-555555555555";
+  const GROUP_SUBJECT = { kind: "group" as const, id: GID };
+  const GROUP_SNAPSHOT = { id: P1, account_id: "a1", contact_id: null, client_group_id: GID, label: "Rancho" };
+
+  // The group's own subject travels straight through to the action, never stringified: `contactId`
+  // widened from `string` to `PlaceSubjectArg` (places-actions.ts) is a type-only change here (the
+  // function was already generic over its shape), so the RED this guards is a compile error,
+  // confirmed by `pnpm --filter web typecheck` before the widen; this run proves the runtime
+  // passthrough was never altered by it (mutation: `String(contactId)` before the call -> FAILS).
+  it("removePlace hands the group subject to removePlaceAction untouched, and its Undo the same", async () => {
+    const reload = vi.fn();
+    const h = placeHandlers({ accountId: "a1", contactId: GROUP_SUBJECT, locale: "en", reload });
+    actions.removePlaceAction.mockResolvedValueOnce({ ok: true, undo: { mode: "deleted", snapshot: GROUP_SNAPSHOT } });
+    actions.undoRemovePlaceAction.mockResolvedValue({ ok: true });
+    await h.removePlace("p2", "Rancho");
+    expect(actions.removePlaceAction).toHaveBeenCalledWith("a1", GROUP_SUBJECT, "p2");
+    await pressUndo();
+    expect(actions.undoRemovePlaceAction).toHaveBeenLastCalledWith("a1", GROUP_SUBJECT, { mode: "deleted", snapshot: GROUP_SNAPSHOT });
+  });
+});

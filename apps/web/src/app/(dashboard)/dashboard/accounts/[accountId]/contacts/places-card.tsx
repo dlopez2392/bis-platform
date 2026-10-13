@@ -11,13 +11,13 @@ import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { formatDateUTC } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { EquipmentRow, PlaceRow } from "@bis/db";
+import type { EquipmentRow, GroupKind, PlaceRow } from "@bis/db";
 import { placesLoadFrom, type PlacesLoad } from "@/lib/contacts/places-load";
 import { placeRule, equipmentRule, ownerValue, type PlaceTextField, type EquipmentTextField } from "@/lib/contacts/place-input";
 import {
   placeTitle, cityLine, mapUrl, warrantyStatus, equipmentByPlace, placesInOrder, ownerOptions, sharedWith, type UnitView,
 } from "@/lib/contacts/place-view";
-import { updatePlaceFieldAction, setPlaceOwnerAction, updateEquipmentFieldAction } from "./places-actions";
+import { updatePlaceFieldAction, setPlaceOwnerAction, updateEquipmentFieldAction, type PlaceSubjectArg } from "./places-actions";
 import { placeHandlers, type PlaceHandlers } from "./places-card-handlers";
 import { PlaceDialog } from "./place-dialog";
 import { EquipmentDialog } from "./equipment-dialog";
@@ -25,11 +25,18 @@ import { EquipmentDialog } from "./equipment-dialog";
 export type { PlaceHandlers } from "./places-card-handlers";
 export { placeHandlers } from "./places-card-handlers";
 
+/** The card's own read (S-03 part 2, C12): a contact's route, or the group's own. */
+export function placesRouteFor(accountId: string, contactId: string | undefined, group: { id: string } | undefined): string {
+  return group ? `/api/accounts/${accountId}/groups/${group.id}/places` : `/api/accounts/${accountId}/contacts/${contactId}/places`;
+}
+
 type Data = Extract<PlacesLoad, { status: "ready" }>["data"];
 type Ctx = {
-  accountId: string; contactId: string; canMovePlace: boolean; locale: Locale; data: Data;
+  accountId: string; contactId: PlaceSubjectArg; canMovePlace: boolean; locale: Locale; data: Data;
   subject: { id: string; name: string }; handlers: PlaceHandlers;
   tt: (key: string, params?: Record<string, string | number>) => string;
+  /** S-03 part 2 (C12): the group page's own empty sentence; a contact keeps `places.empty`. */
+  emptyText?: string;
 };
 type Save = (value: string) => Promise<{ ok: true } | { ok: false; error: string }>;
 
@@ -286,17 +293,21 @@ function RemovedList({ ctx, places }: { ctx: Ctx; places: PlaceRow[] }) {
 }
 
 /** Pure: everything the card shows, for every state. Tests and the styleguide render this. */
-export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidden, load, onRetry, handlers }: {
-  accountId: string; contactId: string; canMovePlace: boolean; load: PlacesLoad; onRetry: () => void; handlers: PlaceHandlers;
+export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidden, emptyText, load, onRetry, handlers }: {
+  accountId: string; contactId: PlaceSubjectArg; canMovePlace: boolean; load: PlacesLoad; onRetry: () => void; handlers: PlaceHandlers;
   /** S-03 §8: inside a RecordCard, whose title is the one seen; the h3 still labels the section. */
   headingHidden?: boolean;
+  /** S-03 part 2 (C12): the group page's own sentence ("Homes this household shares…"); a contact keeps `places.empty`. */
+  emptyText?: string;
 }) {
   const locale = useLocale();
   const titleId = useId(); // the styleguide shows several cards on one page
   const tt = (key: string, params?: Record<string, string | number>) => t(m, key as MessageKey, locale, params);
   const ready = load.status === "ready" ? load.data : null;
   const subject = ready
-    ? { id: ready.subject.id, name: [ready.subject.firstName, ready.subject.lastName].filter(Boolean).join(" ") || tt("places.thisCustomer") }
+    ? ready.group
+      ? { id: ready.group.id, name: ready.group.name }
+      : { id: ready.subject.id, name: [ready.subject.firstName, ready.subject.lastName].filter(Boolean).join(" ") || tt("places.thisCustomer") }
     : null;
   const heading = <h3 id={titleId} className={headingHidden ? "sr-only" : "text-[13.5px] font-semibold text-card-foreground"}>{tt("places.title")}</h3>;
   const add = ready && subject ? (
@@ -331,7 +342,7 @@ export function PlacesCardView({ accountId, contactId, canMovePlace, headingHidd
           <Button type="button" size="sm" variant="ghost" className="min-h-11 md:min-h-8" onClick={onRetry}>{tt("places.retry")}</Button>
         </div>
       ) : (
-        <ReadyBody ctx={{ accountId, contactId, canMovePlace, locale, data: ready, subject, handlers, tt }} />
+        <ReadyBody ctx={{ accountId, contactId, canMovePlace, locale, data: ready, subject, handlers, tt, emptyText }} />
       )}
     </section>
   );
@@ -343,7 +354,7 @@ function ReadyBody({ ctx }: { ctx: Ctx }) {
   return (
     <>
       {active.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{ctx.tt("places.empty")}</p>
+        <p className="text-sm text-muted-foreground">{ctx.emptyText ?? ctx.tt("places.empty")}</p>
       ) : (
         <ul>{active.map((p) => <PlaceItem key={p.id} ctx={ctx} place={p} units={units.get(p.id) ?? []} />)}</ul>
       )}
@@ -352,12 +363,24 @@ function ReadyBody({ ctx }: { ctx: Ctx }) {
   );
 }
 
-/** The card on the drawer and the contact page (spec §8): reads its own route, saves at once, Undo on every change (rule 6). */
-export function PlacesCard({ accountId, contactId, canMovePlace, headingHidden }: { accountId: string; contactId: string; canMovePlace: boolean; headingHidden?: boolean }) {
+/**
+ * The card on the drawer and the contact page (spec §8): reads its own route, saves at once, Undo
+ * on every change (rule 6). S-03 part 2 (C12): a group's own page passes `group` instead of
+ * `contactId` (exactly one of the two), and may pass its own `emptyText`.
+ */
+export function PlacesCard(props: { accountId: string; canMovePlace: boolean; headingHidden?: boolean; emptyText?: string }
+  & ({ contactId: string; group?: undefined } | { contactId?: undefined; group: { id: string; kind: GroupKind; name: string } })) {
+  const { accountId, canMovePlace, headingHidden, emptyText } = props;
   const locale = useLocale();
-  // Paired with the id it was read for (the drawer's own pattern): a newly peeked contact reads
+  // A plain string, stable by value across renders even when the caller hands `group` a fresh
+  // object literal each time, so it doubles as the effect's one real dependency (react-hooks/
+  // exhaustive-deps would otherwise want `props.contactId`/`props.group` themselves, and those
+  // ARE unstable by identity).
+  const route = placesRouteFor(accountId, props.contactId, props.group);
+  const subjectArg: PlaceSubjectArg = props.group ? { kind: "group", id: props.group.id } : props.contactId!;
+  // Paired with the route it was read for (the drawer's own pattern): a newly peeked record reads
   // "loading" by mismatch, and only the fetch's own callbacks write state.
-  const [state, setState] = useState<{ contactId: string; load: PlacesLoad }>({ contactId: "", load: { status: "loading" } });
+  const [state, setState] = useState<{ route: string; load: PlacesLoad }>({ route: "", load: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
   useEffect(() => {
     let stale = false;
@@ -365,27 +388,28 @@ export function PlacesCard({ accountId, contactId, canMovePlace, headingHidden }
     // (or a Retry, which goes back to the skeleton first) shows the error state.
     const settle = (load: PlacesLoad) => {
       if (stale) return;
-      setState((s) => (load.status === "error" && s.contactId === contactId && s.load.status === "ready" ? s : { contactId, load }));
+      setState((s) => (load.status === "error" && s.route === route && s.load.status === "ready" ? s : { route, load }));
     };
-    fetch(`/api/accounts/${accountId}/contacts/${contactId}/places`)
+    fetch(route)
       .then(placesLoadFrom)
       .then(settle, () => settle({ status: "error" }));
     return () => { stale = true; };
-  }, [accountId, contactId, nonce]);
-  const load: PlacesLoad = state.contactId === contactId ? state.load : { status: "loading" };
+  }, [route, nonce]);
+  const load: PlacesLoad = state.route === route ? state.load : { status: "loading" };
 
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
-  const handlers = placeHandlers({ accountId, contactId, locale, reload: () => setNonce((n) => n + 1), inFlight });
+  const handlers = placeHandlers({ accountId, contactId: subjectArg, locale, reload: () => setNonce((n) => n + 1), inFlight });
 
   return (
     <PlacesCardView
       accountId={accountId}
-      contactId={contactId}
+      contactId={subjectArg}
       canMovePlace={canMovePlace}
       headingHidden={headingHidden}
+      emptyText={emptyText}
       load={load}
-      onRetry={() => { setState({ contactId: "", load: { status: "loading" } }); setNonce((n) => n + 1); }}
+      onRetry={() => { setState({ route: "", load: { status: "loading" } }); setNonce((n) => n + 1); }}
       handlers={handlers}
     />
   );
