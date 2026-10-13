@@ -471,16 +471,18 @@ The basis comparison trims both sides so two callers that store the same English
 surrounding whitespace can never produce a permanent false warning; callers still pass `body` as
 the EXACT English they are about to store, not a re-derived copy.
 
-On save the basis becomes the new English only when the Spanish box changed in this save **to a
-written value — text or `''`** — or "The Spanish still matches" was ticked; otherwise it keeps its
-value. **Choosing our Spanish (the new stored value is `null`) never moves the basis** — there is
-no written Spanish left to compare a later English edit against, so moving it would hand an
-"emptied" or a later custom Spanish a basis nobody actually wrote beside. So: a custom English with
-our Spanish default is stale until someone writes Spanish or ticks the box; editing only the
-English makes a written Spanish stale; re-saving the same English changes nothing; and a Q1 row
-(emptied Spanish, no basis) with a custom English, saved by choosing our Spanish, stores `null`
-with the basis still `null` — correctly stale again, because the customer's Spanish changed from
-"the English" back to "our default" without anyone confirming it matches.
+On save: if "The Spanish still matches" is ticked, the basis becomes the new English, full stop.
+Otherwise, an UNCHANGED box keeps its stored basis. Otherwise (the Spanish changed this save), a
+WRITTEN value (text or `''`) moves the basis to the new English; **choosing our Spanish clears the
+basis unless the box is ticked** — our Spanish has not been checked against this English, so there
+is nothing a later staleness check could honestly compare it to, and leaving the old basis in place
+would read a written Spanish that was just replaced by our default as still matching an English it
+was never checked against. So: a custom English with our Spanish default is stale until someone
+writes Spanish or ticks the box; editing only the English makes a written Spanish stale;
+re-saving the same English changes nothing; a Q1 row (emptied Spanish, no basis) with a custom
+English, saved by choosing our Spanish, stores `null` with the basis still `null` — correctly stale
+again; and a written Spanish replaced by our default, next to a custom English, clears the basis to
+`null` and is stale too, for the same reason.
 
 ### 12.4 Rows that already have a custom English
 
