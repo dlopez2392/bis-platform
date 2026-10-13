@@ -296,7 +296,11 @@ row, with the phone's save and Undo bumping `retryNonce`, `contact-drawer.tsx:21
 contact id (`:213-217`, `:314-318`). Source, Assigned to and Tags now come from the `who` section; while it loads,
 those three rows show skeleton lines and the fields above them are already editable (they never waited on the
 summary). **Tags error:** "Couldn't load Tags." (`record.card.failed` with `contact.tags`) and Try again; the
-other rows stay.
+other rows stay. The header (name, the dialog's accessible name, Call's aria label, the Email action) is fed
+by the route, and is also unchanged behaviour in the sense that it still only re-reads on a successful save:
+a phone save or Undo bumps `retryNonce` as it always has, and a successful save of first_name, last_name or
+email now bumps it too (final review, item 2), so the header follows a name or email edit instead of staying
+stale until the drawer is reopened.
 
 ### 9.6 The bottom
 
@@ -486,7 +490,13 @@ plus a booking made by the booking page; opened from the list:
   overflows a taller drawer.
 - `places.spec.ts:373-381` asserts the shared place **in the drawer's** Properties card, which leaves: it moves to
   the second member's record page (`recordPage(page)`), where the card is.
-- `contact-detail.spec.ts:47` and `messaging.spec.ts:57` click `drawer.openFull` by key: unchanged (both stay
+- `contacts-drawer.spec.ts:513` (the drawer retry test): the whole-drawer error button's word changed from
+  "Retry" (`common.retry`) to "Try again" (`record.card.retry`) — `contact-drawer.tsx`'s `RecordCardRetry`
+  always renders the latter; the locator now targets `m["record.card.retry"]` with `exact: true`.
+- `contact-detail.spec.ts:47` / `messaging.spec.ts:57` / `contacts-drawer.spec.ts:626` target
+  `[data-drawer-open-full]`, not `drawer.openFull` by key: the drawer carries TWO links named "Open full
+  record" (the header's ↗ and the bottom link), and only the bottom one carries this attribute, so the
+  locator stays unambiguous under strict mode (both `contact-detail.spec.ts` and `messaging.spec.ts` stay
   read-only on `Test Client One`).
 - `i18n-overflow.spec.ts` gains the drawer: the list at `?locale=pseudo&peek=<id>` (C9), measuring
   `[data-record-action]` and `[data-record-facts]` inside the dialog for clipping, as its record-page case does
