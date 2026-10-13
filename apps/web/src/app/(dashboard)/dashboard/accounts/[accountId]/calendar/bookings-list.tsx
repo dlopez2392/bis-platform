@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { recipientLanguage, type BookingRow, type BookingStatus } from "@bis/db";
+import type { BookingRow, BookingStatus } from "@bis/db";
+import { recipientLanguage } from "@bis/db/spanish-box";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
