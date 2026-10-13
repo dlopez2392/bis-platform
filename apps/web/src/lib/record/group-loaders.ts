@@ -67,7 +67,8 @@ export async function loadGroupHeaderPlaces(db: SupabaseClient, accountId: strin
 export async function loadPrimaryText(input: {
   db: SupabaseClient; accountId: string; primary: GroupMember | null; smsGate: SmsGate | null; zone: string; locale: Locale;
 }): Promise<boolean> {
-  if (!input.primary || !input.smsGate) return false;
+  // A closed gate (no approved number yet) hides Text whatever the member's consent says: no read.
+  if (!input.primary || !input.smsGate || !input.smsGate.ok) return false;
   try {
     const contact = await getContact(input.db, input.accountId, input.primary.contactId);
     if (!contact) return false;
@@ -75,7 +76,8 @@ export async function loadPrimaryText(input: {
     const line = composerStateLine(state, input.zone, input.locale);
     return canTextFrom({ phone: contact.phone ?? null, smsGate: input.smsGate, smsBlockedLine: line });
   } catch (e) {
-    log("text gate", input.accountId, e);
+    // Not "text gate": loaders.ts's softSmsGate logs that for the account's gate read.
+    log("primary text", input.accountId, e);
     return false;
   }
 }

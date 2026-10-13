@@ -267,10 +267,15 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     expect(peopleCardProps).toHaveLength(1);
   });
 
-  it("a failed header-places read drops Directions, never the header or the Properties card (mutation: rethrow -> FAILS)", async () => {
+  it("a failed header-places read drops Directions, never the header or the Properties card, and never falls back to the member's own place (spec §6; mutation: rethrow -> FAILS; mutation: fall back on a failed read -> FAILS)", async () => {
     listGroupPlacesMock.mockRejectedValue(new Error("places down"));
+    // The call-first member HAS an addressed place of their own: a failed group read cannot know the
+    // group has no addressed place, so the fallback must not run.
+    listContactPlacesMock.mockResolvedValue({ ...NO_PLACES, places: [place({ id: "p-own", client_group_id: null, contact_id: ANA.contactId, address: "5 Own Ave" })] });
     const html = await render();
     expect(actionIds(html)).toEqual(["call", "email"]);
+    expect(html).not.toContain("5%20Own%20Ave");
+    expect(listContactPlacesMock).not.toHaveBeenCalled();
     expect(placesCardProps).toHaveLength(1);
   });
 
@@ -299,6 +304,13 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     requireAccountAccessMock.mockResolvedValue({ userId: "u1", isAgency: false, role: "owner", canManage: true });
     await render();
     expect(peopleCardProps.at(-1)).toMatchObject({ manager: true });
+  });
+
+  it("Staff is a manager too (C2: Owner, Staff and the agency; mutation: manager = isAgency || role owner -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValue({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    await render();
+    expect(peopleCardProps.at(-1)).toMatchObject({ manager: true });
+    expect(detailsCardProps.at(-1)).toMatchObject({ manager: true });
   });
 
   it("a nameless member reads the page's own '(no name)', never the English catalogue's on a Spanish page (memberName; mutation: build the name with the English (no name) -> FAILS)", async () => {

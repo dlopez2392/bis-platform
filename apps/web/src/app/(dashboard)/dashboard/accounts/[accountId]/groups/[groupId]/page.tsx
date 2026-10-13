@@ -85,9 +85,11 @@ export default async function GroupRecordPage({ params, searchParams }: {
   const primary = people.status === "ready" ? people.page.primary : null;
   const groupUrl = firstGroupMapUrl(places?.places ?? [], []);
   const [ownUrl, canText] = await Promise.all([
-    // D4: the call-first member's OWN first place, only when the group has no addressed place. Soft
-    // (loadHeaderPlaces never throws); the filter keeps out the places of their other groups.
-    !groupUrl && primary
+    // D4: the call-first member's OWN first place, only when the group's places were READ and none
+    // has an address. A failed group read (places null) cannot know that, so it drops Directions
+    // (spec §6) rather than guessing. Soft (loadHeaderPlaces never throws); the filter keeps out the
+    // places of the member's other groups.
+    !groupUrl && places && primary
       ? loadHeaderPlaces(db, accountId, primary.contactId).then((own) =>
         firstGroupMapUrl([], (own?.places ?? []).filter((p) => p.contact_id === primary.contactId)))
       : Promise.resolve(null),

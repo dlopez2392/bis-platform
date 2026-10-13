@@ -94,6 +94,17 @@ describe("group record loaders", () => {
     expect(logged()).toEqual([]);
   });
 
+  it("Text: a closed gate (no approved number yet, most accounts today) is false with no contact read and no ledger client (mutation: drop the gate.ok skip -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(CONTACT);
+    smsRecipientStateMock.mockResolvedValue({ kind: "ok" });
+    for (const reason of ["a2p_not_approved", "no_live_number"] as const) {
+      expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: { ok: false, reason }, zone: "UTC", locale: "en" })).toBe(false);
+    }
+    expect(getContactMock).not.toHaveBeenCalled();
+    expect(ledgerDbMock).not.toHaveBeenCalled();
+    expect(logged()).toEqual([]);
+  });
+
   it("Text: a call-first member getContact cannot see is false, and the ledger client is never built (mutation: build the ledger before the contact check -> FAILS)", async () => {
     getContactMock.mockResolvedValueOnce(null);
     expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
@@ -120,15 +131,15 @@ describe("group record loaders", () => {
     expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
   });
 
-  it("Text fails closed: a throw anywhere is false, logged by card and account (mutation: rethrow -> FAILS)", async () => {
+  it("Text fails closed: a throw anywhere is false, logged as the primary text read by account, apart from the gate read (mutation: rethrow -> FAILS; mutation: the label loaders.ts uses -> FAILS)", async () => {
     getContactMock.mockRejectedValueOnce(new Error("contact down"));
     expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
     getContactMock.mockResolvedValueOnce(CONTACT);
     smsRecipientStateMock.mockRejectedValueOnce(new Error("ledger down"));
     expect(await loadPrimaryText({ db, accountId: "acct1", primary: ANA, smsGate: OPEN_GATE, zone: "UTC", locale: "en" })).toBe(false);
     expect(logged()).toEqual([
-      expect.stringMatching(/^record page: text gate read failed for account acct1: /),
-      expect.stringMatching(/^record page: text gate read failed for account acct1: /),
+      expect.stringMatching(/^record page: primary text read failed for account acct1: /),
+      expect.stringMatching(/^record page: primary text read failed for account acct1: /),
     ]);
     expect(logged().join("\n")).not.toContain("c-ana");
   });
