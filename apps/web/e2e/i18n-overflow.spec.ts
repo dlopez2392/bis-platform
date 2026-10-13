@@ -170,17 +170,18 @@ test.describe("pseudo-locale overflow (F-014)", () => {
   });
 
   /**
-   * S-03 part 2, 2a: the household/business record page's header actions (Call, built from the
-   * call-first member's name) and People's own controls (toggle billing, remove) — never clipped
-   * under the pseudo-locale's +35% padding. ON THE PER-RUN FIXTURE ACCOUNT ONLY, same idiom as the
-   * contact record page case above: one contact and one household of this file's own, made the
-   * call-first member so the header actually renders Call (D4: with nobody chosen, the header shows
-   * none of Call/Text/Email, which would leave this test with nothing of its own to measure there),
-   * deleted in a `finally` (the group before the contact — `client_group_members` cascades on
-   * `contacts.id`, but deleting the group explicitly rather than relying on that cascade keeps this
-   * test's cleanup self-contained, matching record-page.spec.ts's own discipline).
+   * S-03 part 2, 2a/2b: the household/business record page's header actions (Call, built from the
+   * call-first member's name), the summary's fact line (2b: `[data-record-facts]`, the people count
+   * and whatever else the activity set settled) and People's own controls (toggle billing, remove)
+   * — never clipped under the pseudo-locale's +35% padding. ON THE PER-RUN FIXTURE ACCOUNT ONLY, same
+   * idiom as the contact record page case above: one contact and one household of this file's own,
+   * made the call-first member so the header actually renders Call (D4: with nobody chosen, the
+   * header shows none of Call/Text/Email, which would leave this test with nothing of its own to
+   * measure there), deleted in a `finally` (the group before the contact — `client_group_members`
+   * cascades on `contacts.id`, but deleting the group explicitly rather than relying on that cascade
+   * keeps this test's cleanup self-contained, matching record-page.spec.ts's own discipline).
    */
-  test("the group record page: header actions and People's controls wrap, never clip, under the pseudo-locale", async ({ page }) => {
+  test("the group record page: header actions, the fact line and People's controls wrap, never clip, under the pseudo-locale", async ({ page }) => {
     const fixture = readClientFixture();
     if (!fixture) {
       test.skip(true, "No client fixture at e2e/.auth/client-fixture.json; run the full suite.");
@@ -206,9 +207,9 @@ test.describe("pseudo-locale overflow (F-014)", () => {
       const rec = recordPage(page);
       // Positive control: the pseudo-locale is really on (the Call label isn't the plain English one).
       await expect(rec.locator('[data-record-action="call"]')).not.toHaveText(m["groupPage.action.call"].replace("{name}", "Overflow"));
-      const measured = rec.locator("[data-record-action], [data-people-row] button");
+      const measured = rec.locator("[data-record-action], [data-people-row] button, [data-record-facts]");
       const count = await measured.count();
-      expect(count, "no group header actions or People row controls found").toBeGreaterThan(1);
+      expect(count, "no group header actions, People row controls or fact line found").toBeGreaterThan(1);
       for (let i = 0; i < count; i++) {
         const [scrollW, clientW, text] = await measured.nth(i).evaluate((n) => [n.scrollWidth, n.clientWidth, n.textContent]);
         expect(clipFailure(scrollW, clientW, `group page "${text}"`)).toBeNull();
