@@ -104,8 +104,12 @@ exit "\${FAKE_DOCKER_EXIT:-0}"
 // that pid, so the fake sysctl keeps one set of values per namespace: a value
 // written on the runner's own namespace, or another container's, is not one
 // Kong's namespace reads back.
+// Without -n, a runner whose sudo wants a password would sit at the prompt
+// until the job's timeout; this fake refuses, as `sudo -n` does there.
 const FAKE_SUDO = `#!/usr/bin/env bash
 printf 'sudo %s\\n' "$*" >> "$FAKE_DIR/log"
+if [ "$1" != "-n" ]; then echo "fake sudo: a password is required (no -n)" >&2; exit 1; fi
+shift
 exec "$@"
 `;
 const FAKE_NSENTER = `#!/usr/bin/env bash
@@ -387,8 +391,8 @@ describe("ci-local-supabase.sh: a stack whose schema is built in the CI project'
     expect(readRange, "ip_local_port_range read back in Kong's namespace").toBeGreaterThan(writeRange);
     expect(indexOf(r.log, BOOTSTRAP)).toBeGreaterThan(Math.max(readReuse, readRange));
     // As root: the runner's user cannot write a namespace's sysctl.
-    expect(r.log).toContain("sudo nsenter -t 4242 -n sysctl -w net.ipv4.tcp_tw_reuse=1");
-    expect(r.log).toContain("sudo nsenter -t 4242 -n sysctl -w net.ipv4.ip_local_port_range=1024 65000");
+    expect(r.log).toContain("sudo -n nsenter -t 4242 -n sysctl -w net.ipv4.tcp_tw_reuse=1");
+    expect(r.log).toContain("sudo -n nsenter -t 4242 -n sysctl -w net.ipv4.ip_local_port_range=1024 65000");
     // Nothing written on the runner's own namespace instead.
     expect(r.log.filter((l) => /^sysctl -w .*\[netns=host\]$/.test(l))).toEqual([]);
     expect(r.output).toMatch(/::notice::.*tcp_tw_reuse=1.*ip_local_port_range=1024-65000/);

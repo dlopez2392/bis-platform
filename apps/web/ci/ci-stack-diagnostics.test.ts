@@ -58,6 +58,9 @@ exit 0
 const FAKE_SUDO = `#!/usr/bin/env bash
 printf 'sudo %s\\n' "$*" >> "$FAKE_DIR/log"
 [ "\${FAKE_SUDO_EXIT:-0}" = 0 ] || exit "$FAKE_SUDO_EXIT"
+# Without -n, a sudo that wants a password would sit at its prompt.
+if [ "$1" != "-n" ]; then echo "fake sudo: a password is required (no -n)" >&2; exit 1; fi
+shift
 exec "$@"
 `;
 const FAKE_NSENTER = `#!/usr/bin/env bash
@@ -68,10 +71,14 @@ FAKE_NETNS="$pid" exec "$@"
 `;
 // TIME_WAIT sockets: FAKE_TW of them to :3000 in Kong's namespace (4242),
 // FAKE_TW_REST from :3000 in PostgREST's (5151), none anywhere else. A
-// header line unless -H, as the real ss prints one.
+// header line unless -H, as the real ss prints one. FAKE_SS_SLEEP makes
+// every call hang that long first (`exec`, so a kill reaches the sleeper and
+// nothing orphaned holds the pipe), as a walk of tens of thousands of
+// sockets under real exhaustion might.
 const FAKE_SS = `#!/usr/bin/env bash
 ns="\${FAKE_NETNS:-host}"
 printf 'ss %s [netns=%s]\\n' "$*" "$ns" >> "$FAKE_DIR/log"
+[ -z "\${FAKE_SS_SLEEP:-}" ] || exec sleep "$FAKE_SS_SLEEP"
 case "$*" in
   *time-wait*)
     case " $* " in *" -H "*) ;; *) echo "Recv-Q Send-Q Local Address:Port Peer Address:Port Process" ;; esac
@@ -152,7 +159,7 @@ const REST_LOGS = [
   "PGRST_JWT_SECRET=should-never-print",
 ].join("\n") + "\n";
 
-type Run = { status: number | null; output: string; log: string[] };
+type Run = { status: number | null; output: string; log: string[]; seconds: number };
 
 function run(args: string[], extraEnv: Record<string, string> = {}): Run {
   fs.rmSync(path.join(fakeDir, "log"), { force: true });
@@ -165,7 +172,9 @@ function run(args: string[], extraEnv: Record<string, string> = {}): Run {
     FAKE_REST_LOGS: REST_LOGS,
     ...extraEnv,
   });
+  const startedAt = Date.now();
   const r = spawnSync(bash, [SCRIPT, ...args], { env, encoding: "utf8", cwd: REPO });
+  const seconds = (Date.now() - startedAt) / 1000;
   if (r.error) throw r.error;
   const logFile = path.join(fakeDir, "log");
   const output = `${r.stdout}${r.stderr}`;
@@ -176,6 +185,7 @@ function run(args: string[], extraEnv: Record<string, string> = {}): Run {
   expect(output.includes("PGRST_JWT_SECRET"), "printed a container's environment").toBe(false);
   return {
     status: r.status,
+    seconds,
     output,
     log: fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8").trim().split("\n") : [],
   };
@@ -198,7 +208,7 @@ describe("ci-stack-diagnostics.sh --failure: what a red job needs to tell a Kong
   it("counts TIME_WAIT sockets to PostgREST (:3000) inside KONG's network namespace, exactly (no header line), beside the port range and tcp_tw_reuse read there (mutation: count on the runner's own namespace, or drop -H → FAILS)", () => {
     const r = run(["--failure"], { FAKE_TW: "5" });
     expect(r.status, r.output).toBe(0);
-    expect(r.log).toContain("sudo nsenter -t 4242 -n ss -H -tan state time-wait ( dport = :3000 )");
+    expect(r.log).toContain("sudo -n nsenter -t 4242 -n ss -H -tan state time-wait ( dport = :3000 )");
     expect(r.output).toMatch(/TIME_WAIT to PostgREST \(:3000\) in Kong's network namespace: 5\b/);
     expect(r.output).toMatch(/tcp_tw_reuse=1\b/);
     expect(r.output).toMatch(/ip_local_port_range=1024-65000\b/);
@@ -208,7 +218,7 @@ describe("ci-stack-diagnostics.sh --failure: what a red job needs to tell a Kong
 
   it("also counts TIME_WAIT from :3000 in PostgREST's namespace, so a close on the other side reads as such", () => {
     const r = run(["--failure"], { FAKE_TW_REST: "11" });
-    expect(r.log).toContain("sudo nsenter -t 5151 -n ss -H -tan state time-wait ( sport = :3000 )");
+    expect(r.log).toContain("sudo -n nsenter -t 5151 -n ss -H -tan state time-wait ( sport = :3000 )");
     expect(r.output).toMatch(/TIME_WAIT from :3000 in PostgREST's network namespace: 11\b/);
   });
 
@@ -270,6 +280,51 @@ describe("ci-stack-diagnostics.sh --baseline: the same numbers on a green run, f
   it("exits 0 on a runner with no stack", () => {
     const r = run(["--baseline"], { FAKE_DOCKER_EXIT: "1" });
     expect(r.status, r.output).toBe(0);
+  });
+});
+
+// Review of 99639481 (2026-10-13): the step's timeout-minutes was the only
+// bound, and a step GitHub kills for its timeout fails the JOB whatever the
+// script would have exited with: the one way these diagnostics could turn a
+// green `pnpm check` red. So every read is bounded inside the script (a
+// per-call timeout), and so is the whole script (a budget past which later
+// reads are skipped); a read that runs out degrades to "unreadable". Short
+// overrides keep these cases fast; the defaults are pinned against ci.yml.
+describe("ci-stack-diagnostics.sh: no read can outlive its step", () => {
+  it("bounds a read that hangs (here, ss walking a huge socket table): exits 0 well inside the budget, printing the count as unreadable (mutation: drop the per-call timeout → FAILS)", () => {
+    const r = run(["--baseline"], { FAKE_SS_SLEEP: "12", CI_DIAG_CALL_TIMEOUT: "1", CI_DIAG_BUDGET: "60" });
+    expect(r.status, r.output).toBe(0);
+    // Unbounded, two TIME_WAIT reads and an ss -s would take 36s here.
+    expect(r.seconds, r.output).toBeLessThan(10);
+    expect(r.output).toMatch(/TIME_WAIT to PostgREST \(:3000\) in Kong's network namespace: unreadable/);
+    expect(r.output).toMatch(/TIME_WAIT from :3000 in PostgREST's network namespace: unreadable/);
+  }, 60_000);
+
+  it("stops reading once the whole script's budget is spent, saying so, and still exits 0 (mutation: drop the budget → four 5s reads, FAILS)", () => {
+    const r = run(["--failure"], { FAKE_SS_SLEEP: "12", CI_DIAG_CALL_TIMEOUT: "5", CI_DIAG_BUDGET: "3" });
+    expect(r.status, r.output).toBe(0);
+    expect(r.seconds, r.output).toBeLessThan(10);
+    expect(r.output).toMatch(/::warning::.*budget/);
+  }, 60_000);
+
+  it("ci.yml gives every diagnostics step more minutes than the script's default budget plus one last read can take (mutation: lower a step to timeout-minutes: 2 → FAILS)", () => {
+    const script = fs.readFileSync(path.join(REPO, ".github/scripts/ci-stack-diagnostics.sh"), "utf8");
+    const budget = Number(/CI_DIAG_BUDGET:-(\d+)\}/.exec(script)?.[1]);
+    const call = Number(/CI_DIAG_CALL_TIMEOUT:-(\d+)\}/.exec(script)?.[1]);
+    const kill = Number(/timeout -k (\d+) /.exec(script)?.[1]);
+    expect(budget).toBeGreaterThan(0);
+    expect(call).toBeGreaterThan(0);
+    expect(kill).toBeGreaterThan(0);
+    // The budget is checked before each read, so the last read can start just
+    // inside it; then 30s for the script's own process starts, with margin.
+    const worstSeconds = budget + call + kill + 30;
+    const ci = fs.readFileSync(path.join(REPO, ".github/workflows/ci.yml"), "utf8").replace(/\r\n/g, "\n").split("\n");
+    const runs = ci.flatMap((l, i) => (/^\s+run: bash \.github\/scripts\/ci-stack-diagnostics\.sh /.test(l) ? [i] : []));
+    expect(runs).toHaveLength(3);
+    for (const at of runs) {
+      const minutes = ci.slice(at - 3, at).map((l) => /^\s+timeout-minutes: (\d+)\s*$/.exec(l)?.[1]).find(Boolean);
+      expect(Number(minutes) * 60, ci[at]).toBeGreaterThan(worstSeconds);
+    }
   });
 });
 

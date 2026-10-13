@@ -221,7 +221,9 @@ if ! [[ "$kong_pid" =~ ^[1-9][0-9]*$ ]]; then
   echo "::error::Kong ($kong) has no running pid (docker reports '${kong_pid:-<none>}'), so its network namespace cannot be found to widen its ephemeral ports. Nothing was applied. See this script's KONG'S PORTS note."
   exit 1
 fi
-kong_ns() { sudo nsenter -t "$kong_pid" -n "$@"; }
+# sudo -n: a runner without passwordless sudo fails here at once, by the
+# read-back below, instead of waiting at a password prompt.
+kong_ns() { sudo -n nsenter -t "$kong_pid" -n "$@"; }
 # Writes may fail; the read-back below is what decides, and names the value.
 kong_ns sysctl -w net.ipv4.tcp_tw_reuse=1 >/dev/null 2>&1 || true
 kong_ns sysctl -w "net.ipv4.ip_local_port_range=1024 65000" >/dev/null 2>&1 || true

@@ -233,7 +233,7 @@ jobs:
       # `always()`: a cancelled run has nothing to compare.
       - name: Stack baseline after pnpm check
         if: ${{ !cancelled() && steps.scope.outputs.docs_only != 'true' }}
-        timeout-minutes: 2
+        timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --baseline
 
       # Catches the class `tsc` cannot: Next evaluates route modules during
@@ -250,7 +250,7 @@ jobs:
       # tails, keys redacted, never an environment; exits 0 always.
       - name: Stack diagnostics on failure
         if: failure()
-        timeout-minutes: 2
+        timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --failure
 
   e2e:
@@ -467,5 +467,5 @@ jobs:
       # verify's failure dump, for the same reason: see verify's last step.
       - name: Stack diagnostics on failure
         if: failure()
-        timeout-minutes: 2
+        timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --failure

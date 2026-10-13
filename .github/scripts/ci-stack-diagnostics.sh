@@ -26,9 +26,20 @@
 # on a runner where `ss` or `sudo` misbehaves would be a new flake, so
 # nothing here exits non-zero: an unreadable value is printed as such.
 #
+# NOR CAN IT OUTLIVE ITS STEP (review of 99639481, 2026-10-13). GitHub
+# fails the JOB when a step hits its timeout-minutes, whatever the script
+# would have exited with, and under real port exhaustion `ss` walks tens of
+# thousands of sockets. So every external read goes through bounded(): at
+# most CI_DIAG_CALL_TIMEOUT seconds each (TERM, then KILL 2s later), and
+# none starts once CI_DIAG_BUDGET seconds of the script have passed. A read
+# cut short is printed as unreadable. Worst case: the budget, plus one read
+# that started just inside it, plus the kill grace; ci.yml's timeout-minutes
+# on each step is pinned above that (ci-stack-diagnostics.test.ts). sudo -n
+# so a runner without passwordless sudo is refused at once, not prompted.
+#
 # Container names are resolved as ci-local-supabase.sh resolves them, from
-# config.toml's project_id. Needs only bash, docker, sudo, nsenter and ss
-# (all on GitHub's ubuntu runners); each step's timeout-minutes bounds it.
+# config.toml's project_id. Needs only bash, coreutils' timeout, docker,
+# sudo, nsenter and ss (all on GitHub's ubuntu runners).
 #
 # Tested by apps/web/ci/ci-stack-diagnostics.test.ts.
 
@@ -57,16 +68,32 @@ redact() {
     -e 's#([a-z][a-z0-9+.-]*://[^:/@ ]+):[^@ ]+@#\1:<redacted>@#g'
 }
 
+# Whole seconds only; anything else is the default.
+call_timeout="${CI_DIAG_CALL_TIMEOUT:-10}"
+budget="${CI_DIAG_BUDGET:-120}"
+[[ "$call_timeout" =~ ^[1-9][0-9]*$ ]] || call_timeout=10
+[[ "$budget" =~ ^[1-9][0-9]*$ ]] || budget=120
+
+# Runs one external read, bounded by the per-call timeout and by what is left
+# of the budget; past the budget it runs nothing and fails (124, timeout's
+# own code), which every caller already prints as unreadable.
+bounded() {
+  local left=$((budget - SECONDS)) t="$call_timeout"
+  [ "$left" -gt 0 ] || return 124
+  [ "$left" -lt "$t" ] && t="$left"
+  timeout -k 2 "$t" "$@"
+}
+
 pid_of() {
   local pid
-  pid="$(docker inspect -f '{{.State.Pid}}' "$1" 2>/dev/null | tr -d '[:space:]')"
+  pid="$(bounded docker inspect -f '{{.State.Pid}}' "$1" 2>/dev/null | tr -d '[:space:]')"
   [[ "$pid" =~ ^[1-9][0-9]*$ ]] && printf '%s' "$pid"
 }
 kong_pid="$(pid_of "$kong")"
 rest_pid="$(pid_of "$rest")"
 
-# Runs a command in a container's network namespace, as root.
-in_ns() { local pid="$1"; shift; [ -n "$pid" ] && sudo nsenter -t "$pid" -n "$@"; }
+# Runs a command in a container's network namespace, as root, bounded.
+in_ns() { local pid="$1"; shift; [ -n "$pid" ] && bounded sudo -n nsenter -t "$pid" -n "$@"; }
 
 # A count of lines, or "unreadable" when the command itself failed.
 count_lines() {
@@ -102,14 +129,22 @@ kong_ports() {
   echo "::notice title=Kong ports ($label)::TIME_WAIT to :3000: ${tw}, ip_local_port_range=${range:-unreadable}, tcp_tw_reuse=${reuse:-unreadable}"
 }
 
+# Says so when the budget ran out, so a short dump is never read as a quiet stack.
+finish() {
+  if [ "$SECONDS" -ge "$budget" ]; then
+    echo "::warning::ci-stack-diagnostics.sh spent its ${budget}s budget; reads after that were skipped and print as unreadable or empty."
+  fi
+  exit 0
+}
+
 if [ "$mode" = "--baseline" ]; then
   kong_ports
-  exit 0
+  finish
 fi
 
 echo "::group::Containers: name, restarts, OOM-killed, started at"
 for c in "$kong" "$rest" "$db"; do
-  docker inspect -f '{{.Name}} {{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}' "$c" 2>/dev/null \
+  bounded docker inspect -f '{{.Name}} {{.RestartCount}} {{.State.OOMKilled}} {{.State.StartedAt}}' "$c" 2>/dev/null \
     || echo "$c: not running, or docker could not read it"
 done
 echo "::endgroup::"
@@ -120,16 +155,16 @@ echo "::endgroup::"
 
 echo "::group::Kong: [error], [crit] and connect() lines of the last 15 minutes (the last 50)"
 # nginx writes its error log to stderr, hence 2>&1 before the filter.
-docker logs --since 15m "$kong" 2>&1 | grep -E '\[error\]|\[crit\]|connect\(\)' | tail -n 50 | redact
+bounded docker logs --since 15m "$kong" 2>&1 | grep -E '\[error\]|\[crit\]|connect\(\)' | tail -n 50 | redact
 echo "::endgroup::"
 
 echo "::group::PostgREST: error and fatal lines of its last 100"
-docker logs --tail 100 "$rest" 2>&1 | grep -iE 'error|fatal' | tail -n 50 | redact
+bounded docker logs --tail 100 "$rest" 2>&1 | grep -iE 'error|fatal' | tail -n 50 | redact
 echo "::endgroup::"
 
 echo "::group::Runner: free -m and ss -s"
-free -m 2>&1 || echo "(could not read free -m)"
-ss -s 2>&1 || echo "(could not read ss -s)"
+bounded free -m 2>&1 || echo "(could not read free -m)"
+bounded ss -s 2>&1 || echo "(could not read ss -s)"
 echo "::endgroup::"
 
-exit 0
+finish
