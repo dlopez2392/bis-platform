@@ -752,3 +752,41 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
     expect(submitsBooking(render({ after_hours: "hours_then_message", booking_enabled: false }))).toBe(false);
   });
 });
+
+describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () => {
+  const BASE_PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "both", booking_enabled: true, after_hours: "hours_then_message",
+    enabled: true, textback_enabled: true, textback_body: "Custom English body.",
+    textback_body_es: null, textback_body_es_basis: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  };
+
+  function render(over: Partial<VoiceProfileRow> = {}): string {
+    return renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: { ...BASE_PROFILE, ...over },
+      brandName: "Rio Roofing",
+      action: async () => ({ ok: true as const }),
+    }));
+  }
+
+  it("renders the Spanish box beside the English text-back box (mutation: drop the field -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+  });
+
+  it("the card still has exactly ONE primary Save button, even with the Spanish box emptied and its ghost 'Use our Spanish' button showing (rule 8; mutation: a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render({ textback_body_es: "", textback_body_es_basis: null });
+    expect(html).toContain("Use our Spanish");
+    const matches = html.match(/data-variant="default"/g) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  it("opens with our Spanish default (brand name resolved, never accounts.name) when nothing is stored (mutation: defaultEs='' -> FAILS)", () => {
+    const html = render({ textback_body_es: null, textback_body_es_basis: null });
+    // The Spanish phrase, not the English placeholder's brand mention —
+    // `defaultTextbackBody(brandName, "es")`'s own wording.
+    expect(html).toContain("somos Rio Roofing");
+  });
+});

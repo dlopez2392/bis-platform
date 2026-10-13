@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { EmbedSnippet } from "@/components/embed-snippet";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
@@ -116,6 +117,21 @@ export function VoiceProfileForm({
     textbackBody.trim() || defaultTextbackBody(brandName, previewLanguage),
     previewLanguage,
   );
+  // C14/spec §12.3's staleness rule, mirrored here rather than importing
+  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
+  // component — the same "the barrel carries the database client into the
+  // browser bundle" reason `assistantProfileGap`'s own subpath import
+  // exists for, above. Reads the STORED row (plan deviation 5), not the
+  // live `textbackBody` state: a warning that flickered while typing would
+  // describe an edit not yet saved. "Emptied" (stored '') is never stale —
+  // Spanish customers already get English on purpose — and nor is a
+  // never-written basis beside a blank English.
+  const textbackStale = (() => {
+    if (p.textback_body_es !== null && p.textback_body_es.trim() === "") return false;
+    if (p.textback_body.trim() === "" && p.textback_body_es === null) return false;
+    const basis = p.textback_body_es_basis === null ? null : p.textback_body_es_basis.trim();
+    return basis !== p.textback_body.trim();
+  })();
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],
@@ -241,30 +257,45 @@ export function VoiceProfileForm({
               <Label htmlFor="textback_enabled">{m["voice.textback.enabled"]}</Label>
             </div>
             <p className="text-xs text-muted-foreground">{m["voice.textback.help"]}</p>
-            <Label htmlFor="textback_body">{m["voice.textback.body"]}</Label>
-            <textarea
-              id="textback_body" name="textback_body" rows={2}
-              value={textbackBody}
-              onChange={(e) => setTextbackBody(e.target.value)}
-              placeholder={defaultTextbackBody(brandName, previewLanguage)}
-              className={nativeFieldClass}
-            />
-            <p className="text-xs text-muted-foreground" data-testid="textback-sms-count">
-              {m["compose.smsSegments"]
-                .replace("{chars}", String(segmentsFor(previewBody).chars))
-                .replace("{segments}", String(segmentsFor(previewBody).segments))}
-            </p>
-            {/* The count above is of the DISCLOSED body, and those extra
-                characters appear nowhere else on this card — the textarea and
-                its placeholder both show the UNDISCLOSED text, same as
-                `referral-ask-card.tsx`'s own note beside its counter. Says it
-                WITHOUT quoting either language's exact sentence: this field
-                has no channel split (it is always SMS), but its preview
-                switches between the English and Spanish disclosure with
-                `previewLanguage`, and `automations.optOutCounted`'s wording
-                (which quotes "Reply STOP to opt out." verbatim) would be
-                describing text a Spanish caller never receives. */}
-            <p className="text-xs text-muted-foreground">{m["voice.textback.optOutCounted"]}</p>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="min-w-0 space-y-1.5">
+                <Label htmlFor="textback_body">{m["voice.textback.body"]}</Label>
+                <textarea
+                  id="textback_body" name="textback_body" rows={2}
+                  value={textbackBody}
+                  onChange={(e) => setTextbackBody(e.target.value)}
+                  placeholder={defaultTextbackBody(brandName, previewLanguage)}
+                  className={nativeFieldClass}
+                />
+                <p className="text-xs text-muted-foreground" data-testid="textback-sms-count">
+                  {m["compose.smsSegments"]
+                    .replace("{chars}", String(segmentsFor(previewBody).chars))
+                    .replace("{segments}", String(segmentsFor(previewBody).segments))}
+                </p>
+                {/* The count above is of the DISCLOSED body, and those extra
+                    characters appear nowhere else on this card — the textarea and
+                    its placeholder both show the UNDISCLOSED text, same as
+                    `referral-ask-card.tsx`'s own note beside its counter. Says it
+                    WITHOUT quoting either language's exact sentence: this field
+                    has no channel split (it is always SMS), but its preview
+                    switches between the English and Spanish disclosure with
+                    `previewLanguage`, and `automations.optOutCounted`'s wording
+                    (which quotes "Reply STOP to opt out." verbatim) would be
+                    describing text a Spanish caller never receives. */}
+                <p className="text-xs text-muted-foreground">{m["voice.textback.optOutCounted"]}</p>
+              </div>
+              {/* Task 18: the Spanish box, inside this card's ONE form (rule
+                  8) — nothing here saves on its own; Save commits both
+                  boxes together. `composeEs` mirrors `prepareTextback`'s own
+                  fallback (textback.ts), the card's own preview rule. */}
+              <SpanishBodyField
+                idPrefix="voice-textback"
+                stored={{ bodyEs: p.textback_body_es, stale: textbackStale }}
+                defaultEs={defaultTextbackBody(brandName, "es")}
+                composeEs={(x) => withOptOut(x || defaultTextbackBody(brandName, "es"), "es")}
+                sms
+              />
+            </div>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>

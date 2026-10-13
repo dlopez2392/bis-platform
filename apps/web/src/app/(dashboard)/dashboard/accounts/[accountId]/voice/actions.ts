@@ -28,12 +28,15 @@ import { revalidatePath } from "next/cache";
 import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
   reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone, getTransferPhone,
-  enableConcierge, disableConcierge, setForwardCalls,
+  enableConcierge, disableConcierge, setForwardCalls, getBranding, nextSpanishBox,
   type PhoneNumberStatus, type VoiceProfilePatch,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { e164Of } from "@/lib/voice/phone-number";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
+import { defaultTextbackBody } from "@/lib/voice/textback-body";
+import { brandDisplayName } from "@/lib/email/templates/shell";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { m } from "@/lib/messages";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -71,6 +74,44 @@ export async function saveVoiceProfileAction(
   // blank/whitespace submission (bypassed form, stripped JS) must still land
   // on a sane name server-side rather than an empty persona.
   const personaName = String(formData.get("persona_name") ?? "").trim();
+  const textbackBody = String(formData.get("textback_body") ?? "");
+  const bodyEsSubmitted = String(formData.get("body_es") ?? "");
+  // Plan deviation 6: validated for the first time, both languages — a
+  // stored English already past this is not retroactively refused, only its
+  // next save. `automations.bodyTooLong`: the shared cap message every other
+  // Spanish-box save in this PR refuses with, so the sentence a caller reads
+  // does not depend on which card they are on.
+  if (textbackBody.length > AUTOMATION_BODY_MAX_LENGTH || bodyEsSubmitted.length > AUTOMATION_BODY_MAX_LENGTH) {
+    return { ok: false, error: m["automations.bodyTooLong"] };
+  }
+
+  // Both reads below are needed only to compute the Spanish box's next
+  // value (`nextSpanishBox`): the account's brand name (for our Spanish
+  // default, `defaultTextbackBody`) and the CURRENTLY stored Spanish body
+  // and its basis (the English it was last saved beside). A failed read
+  // fails the save outright, as every other read-before-write in this file
+  // does — this is a save, and the operator can press it again.
+  let brandName: string;
+  let current: { textback_body_es: string | null; textback_body_es_basis: string | null } | null;
+  try {
+    const db = serviceDb();
+    const [branding, profile] = await Promise.all([getBranding(db, accountId), getVoiceProfile(db, accountId)]);
+    brandName = brandDisplayName(branding);
+    current = profile;
+  } catch (e) {
+    console.error(`saveVoiceProfileAction: branding/profile read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["voice.profile.saveFailed"] };
+  }
+
+  const { bodyEs, basis } = nextSpanishBox({
+    submitted: bodyEsSubmitted,
+    useOurs: formData.get("body_es_use_ours") === "1",
+    stillMatches: formData.get("body_es_still_matches") === "on",
+    defaultEs: defaultTextbackBody(brandName, "es"),
+    body: textbackBody,
+    stored: { bodyEs: current?.textback_body_es ?? null, basis: current?.textback_body_es_basis ?? null },
+  });
+
   const patch: VoiceProfilePatch = {
     persona_name: personaName || "Sofía",
     greeting_en: String(formData.get("greeting_en") ?? ""),
@@ -82,7 +123,9 @@ export async function saveVoiceProfileAction(
     after_hours: afterHours,
     enabled: formData.get("enabled") === "on",
     textback_enabled: formData.get("textback_enabled") === "on",
-    textback_body: String(formData.get("textback_body") ?? ""),
+    textback_body: textbackBody,
+    textback_body_es: bodyEs,
+    textback_body_es_basis: basis,
   };
 
   try {
