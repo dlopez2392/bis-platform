@@ -7,11 +7,24 @@ name: Seed demo tenant
 # already a secret of the `production` environment — so the only thing standing between the demo
 # tenant and existing was somebody's laptop. This removes that.
 #
-# MANUAL ONLY. There is no `push:` trigger and there must never be one: this
-# writes to the same Supabase project production runs on, and a seed that
-# happens as a side effect of a merge is exactly the kind of surprise the
-# outbound_suppressed guard exists to make survivable rather than routine.
+# NO `push:` trigger, and there must never be one: this writes to the same
+# Supabase project production runs on, and a seed that happens as a side
+# effect of a merge is exactly the kind of surprise the outbound_suppressed
+# guard exists to make survivable rather than routine.
+#
+# A SCHEDULE is the one exception (owner's decision, 2026-10-13): every
+# Monday at 10:17 UTC, 5:17 AM CDT / 4:17 AM CST, before anyone opens the
+# demo. Every timestamp in the demo is anchored to the moment it was seeded,
+# so a demo left alone goes stale: its Website chart stops at the seed day
+# and its "this week" tiles empty out a week later. On 2026-10-13 the
+# production demo was days old and still had the pre-#243 site, which showed
+# "Link a site". A schedule is not a side effect of a merge; it is the same
+# deliberate rebuild, on a clock. GitHub cron is UTC only and does not follow
+# DST; minute 17 rather than 0 because :00 is when GitHub's scheduler is most
+# delayed.
 on:
+  schedule:
+    - cron: '17 10 * * 1'
   workflow_dispatch:
     inputs:
       confirm:
@@ -44,7 +57,9 @@ jobs:
       # DELETES the account it finds at the demo org id before rebuilding it;
       # that is safe (it re-checks both its own guards) but it is not something
       # to start by accident from a dropdown.
+      # A scheduled run has no inputs; the schedule IS the confirmation.
       - name: Check the confirmation
+        if: github.event_name == 'workflow_dispatch'
         run: |
           if [ "${{ inputs.confirm }}" != "seed" ]; then
             echo '::error::Type "seed" in the confirmation box to run this. Nothing was changed.'
