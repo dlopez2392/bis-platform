@@ -1,7 +1,7 @@
-import { listDueFollowups, stampFollowupSent, getDueFollowupById, type DueFollowup } from "@bis/db";
+import { listDueFollowups, stampFollowupSent, getDueFollowupById, chooseBody, type DueFollowup } from "@bis/db";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { bookingFollowupEmail } from "@/lib/email/templates/followup";
+import { bookingFollowupEmail, defaultFollowupBody } from "@/lib/email/templates/followup";
 import { shouldSendFollowupNow, resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import {
@@ -112,8 +112,15 @@ export async function processFollowups(
     try {
       const outcome = await holdOrSend(ctx, subject, async () => {
         const brand = emailBrand(followup.branding);
+
+        // S-09 PR 2 (C11): one language end to end. `chooseBody` may switch a Spanish row to English
+        // (an emptied box), and that RETURNED language drives the subject, the body and the footer.
+        const chosen = chooseBody({
+          language: followup.language, body: followup.followupBody, bodyEs: followup.followupBodyEs,
+          defaults: { en: defaultFollowupBody("en"), es: defaultFollowupBody("es") },
+        });
         const { subject: emailSubject, html, text } = bookingFollowupEmail({
-          brand, body: followup.followupBody,
+          brand, body: chosen.text, locale: chosen.language,
         });
 
         // replyTo reads DueFollowup's OWN top-level `replyToEmail`, not
@@ -129,6 +136,7 @@ export async function processFollowups(
           subject: emailSubject,
           body: text,
           html,
+          language: chosen.language,
         });
 
         // The WORSE of the two migrated paths: the morning band is ~12 ticks
