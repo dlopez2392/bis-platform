@@ -22,8 +22,10 @@ export function entriesOf(p: Record<string, unknown>): TimelineEntry[] {
     ...list(p.opportunities).map((o) => ({ kind: "deal", id: o.id, at: o.created_at, deal: { created_by: null, ...o } })),
     ...list(p.submissions).map((s) => ({ kind: "submission", id: s.id, at: s.created_at, submission: {
       formName: "", answers: [], author_kind: "customer", ...s } })),
+    // author_kind defaults to "customer", a real kind — messages.author_kind has been NOT NULL
+    // since 0074, so null is a shape no real row can carry any more (minors-1b item 4 review fix).
     ...list(p.messages).map((m) => ({ kind: "message", id: m.id, at: m.created_at, message: {
-      channel: "email", subject: null, error: null, author_kind: null, author_id: null, ...m } })),
+      channel: "email", subject: null, error: null, author_kind: "customer", author_id: null, ...m } })),
   ] as unknown as TimelineEntry[];
   return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
 }

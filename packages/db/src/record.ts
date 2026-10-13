@@ -201,6 +201,13 @@ export async function listContactTimelinePage(
       .map((deal): TimelineEntry => ({ kind: "deal", id: deal.id, at: deal.created_at, deal }))),
     settle("forms", async () => (await listContactSubmissions(db, accountId, contactId, page))
       .map((s): TimelineEntry => ({ kind: "submission", id: s.id, at: s.created_at, submission: {
+        // Review note: `?? "customer"` is unreachable AT THIS CALL SITE — `page` above is always a
+        // real object, so listContactSubmissions always selects author_kind here, and the column has
+        // been NOT NULL DEFAULT 'customer' since 0073. Kept rather than removed: the field's type
+        // (SubmissionRow's `author_kind?`) is still genuinely optional for forms.ts's OTHER caller
+        // (the record-summary route, which never passes a page and never selects the column), and
+        // dropping the default would need an unsafe cast here to satisfy that shared type, not a real
+        // simplification.
         id: s.id, created_at: s.created_at, formName: s.formName, answers: s.answers, author_kind: s.author_kind ?? "customer",
       } }))),
     settle("messages", async () => ((await listContactMessages(db, accountId, contactId, { ...page, channels: ["email", "sms"] })) as TimelineMessage[])
