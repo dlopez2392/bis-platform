@@ -23,18 +23,27 @@ describe("group record page loading.tsx", () => {
     const html = renderToStaticMarkup(createElement(Loading));
     expect(html).toContain("data-record-layout");
     expect(cards(html)).toEqual(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((d) => ({ id: d.id, state: "loading", skeleton: true })));
-    expect(cards(html).map((c) => c.id)).toEqual(["properties", "deals", "people", "details"]);
+    // 2b: seven cards, the middle column first (spec §7; mutation: drop the middle three -> FAILS).
+    expect(cards(html).map((c) => c.id)).toEqual(["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
     // A skeleton header, never a spinner.
     expect(html).toMatch(/<header[^>]*data-record-skeleton-header/);
     expect(html).not.toMatch(/animate-spin|spinner/i);
   });
 
-  it("each card draws as many skeleton lines as its registry entry says (mutation: a fixed row count -> FAILS)", () => {
+  it("each card but the timeline draws as many skeleton lines as its registry entry says (mutation: a fixed row count -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(Loading));
-    for (const def of GROUP_RECORD_CARDS) {
+    for (const def of GROUP_RECORD_CARDS.filter((d) => d.id !== "timeline")) {
       const card = html.match(new RegExp(`<section[^>]*data-record-card="${def.id}"[\\s\\S]*?</section>`))![0];
       expect(card.match(/data-slot="skeleton"/g), def.id).toHaveLength(def.skeletonRows);
+      expect(card, def.id).not.toContain("data-timeline-skeleton");
     }
+  });
+
+  it("the timeline loads as its own rows (mark chip, line, time), five of them, not generic lines (spec §8.8; mutation: drop the timeline skeleton -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(Loading));
+    const timeline = html.match(/<section[^>]*data-record-card="timeline"[\s\S]*?<\/section>/)![0];
+    expect(timeline).toContain("data-timeline-skeleton");
+    expect(timeline.match(/data-timeline-skeleton-row/g)).toHaveLength(5);
   });
 
   it("the titles and the page's lang follow the locale the account layout provided (mutation: hard-code English titles -> FAILS)", () => {

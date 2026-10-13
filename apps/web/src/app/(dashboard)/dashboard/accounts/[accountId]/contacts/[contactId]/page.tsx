@@ -272,6 +272,8 @@ export default async function ContactDetailPage({
         lang={locale}
         skipLabel={tr.text("record.skipToDetails")}
         header={<RecordHeader name={name} subtitle={subtitle} actions={actions}
+          // S-03 part 2b (§8.9, R2): the main group's words open its own page.
+          subtitleHref={mainGroup ? `/dashboard/accounts/${accountId}/groups/${mainGroup.id}` : undefined}
           back={{ href: `/dashboard/accounts/${accountId}/contacts`, label: tr.text("record.back") }} />}
         columns={columns}
       />
