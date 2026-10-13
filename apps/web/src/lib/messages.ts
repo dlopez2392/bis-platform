@@ -3932,6 +3932,11 @@ export const m = {
   "groupPage.deals.empty.es": "No hay oportunidades abiertas con estas personas. Aquí aparecen las que se agregan en la página de una persona.",
   "groupPage.deals.more": "Showing {shown} of {count} open deals.",
   "groupPage.deals.more.es": "Se muestran {shown} de {count} oportunidades abiertas.",
+  // S-03 part 2b: the Groups card's way to the household's or business's own page.
+  "groups.open": "Open",
+  "groups.open.es": "Abrir",
+  "groups.openAria": "Open {name}",
+  "groups.openAria.es": "Abrir {name}",
 } as const;
 
 export type MessageKey = keyof typeof m;

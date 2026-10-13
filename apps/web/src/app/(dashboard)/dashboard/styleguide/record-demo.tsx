@@ -34,8 +34,9 @@ const stub = (key: MessageKey) => (
   </RecordCardView>
 );
 
-const header = (all: boolean) => (
+const header = (all: boolean, subtitleHref?: string) => (
   <RecordHeader name="Ana García" subtitle={all ? m["record.group.household"].replace("{group}", "García") : null}
+    subtitleHref={subtitleHref}
     back={{ href: "/dashboard/styleguide", label: m["record.back"] }}
     actions={all ? [
       { id: "call", label: m["record.action.call"], href: "tel:+19565550100", ariaLabel: m["record.action.callAria"].replace("{name}", "Ana García"), primary: true },
@@ -77,6 +78,8 @@ export function RecordDemo() {
       {layout("w-[390px]", "sg-phone")}
       {header(true)}
       {header(false)}
+      {/* S-03 part 2b: a record header whose subtitle links to the group's own page. */}
+      <div data-sg-header-linked>{header(true, "#")}</div>
       <div className="flex flex-wrap gap-4">
         {card("loading", { state: "loading" })}
         {card("ready")}
@@ -89,6 +92,12 @@ export function RecordDemo() {
       </div>
       <div data-sg-timeline-item className="w-[420px] max-w-full rounded-xl border border-border bg-card glass px-4 py-2">
         <TimelineItem kind="booking" icon={CalendarCheck} mark={{ kind: "customer", label: m["provenance.customer"] }}
+          verb={m["record.nextUp.booking"].replace("{when}", "Thu, Oct 16 · 10:00 AM")}
+          status={{ tone: "accent", word: m["calendar.bookings.status.booked"] }}
+          time="Oct 9, 2026, 4:12 PM" dateTime="2026-10-09T21:12:00Z" />
+        {/* S-03 part 2b: a row on a household's or business's merged timeline, naming the member it is about. */}
+        <TimelineItem kind="booking" icon={CalendarCheck} mark={{ kind: "customer", label: m["provenance.customer"] }}
+          subject={{ label: PERSON, href: "#" }}
           verb={m["record.nextUp.booking"].replace("{when}", "Thu, Oct 16 · 10:00 AM")}
           status={{ tone: "accent", word: m["calendar.bookings.status.booked"] }}
           time="Oct 9, 2026, 4:12 PM" dateTime="2026-10-09T21:12:00Z" />

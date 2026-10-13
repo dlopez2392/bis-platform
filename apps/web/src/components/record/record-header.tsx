@@ -11,8 +11,8 @@ export type RecordHeaderAction = {
  * muted, the main group as plain text (C7). The actions follow in the order given, with the one
  * primary first on every width; each is at least 44px tall, and they wrap rather than clip.
  */
-export function RecordHeader({ name, subtitle, back, actions }: {
-  name: string; subtitle?: string | null; back: { href: string; label: string }; actions: RecordHeaderAction[];
+export function RecordHeader({ name, subtitle, subtitleHref, back, actions }: {
+  name: string; subtitle?: string | null; subtitleHref?: string; back: { href: string; label: string }; actions: RecordHeaderAction[];
 }) {
   return (
     <header data-record-header className="min-w-0 space-y-1.5">
@@ -22,7 +22,14 @@ export function RecordHeader({ name, subtitle, back, actions }: {
         {back.label}
       </Link>
       <h1 title={name} className="truncate text-[22px] font-display font-[600] tracking-[-0.02em] text-card-foreground">{name}</h1>
-      {subtitle ? <p data-record-subtitle className="text-sm text-muted-foreground">{subtitle}</p> : null}
+      {subtitle ? (
+        subtitleHref ? (
+          <Link href={subtitleHref} data-record-subtitle
+            className="rounded-[var(--radius-ctl)] text-sm text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            {subtitle}
+          </Link>
+        ) : <p data-record-subtitle className="text-sm text-muted-foreground">{subtitle}</p>
+      ) : null}
       {actions.length > 0 ? (
         <div data-record-actions className="flex flex-wrap gap-2 pt-2">
           {actions.map((a) => (

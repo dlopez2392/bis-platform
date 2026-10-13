@@ -7,8 +7,9 @@ import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import type { ContactGroup, GroupKind, GroupSearchHit } from "@bis/db";
 import { InlineField } from "@/components/inline-field";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { contactDisplayName } from "@/lib/format";
@@ -289,6 +290,11 @@ function GroupRow({ accountId, group, canManageGroups, onChanged }:
           </div>
         ) : <span className="min-w-0 flex-1 truncate font-medium">{group.name}</span>}
         <span className="shrink-0 text-xs text-muted-foreground">{kindLabel(group.kind)}</span>
+        {/* S-03 part 2b: the way to the household's or business's own record page. */}
+        <Link href={`/dashboard/accounts/${accountId}/groups/${group.groupId}`} aria-label={withName(m["groups.openAria"], group.name)}
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 shrink-0 md:min-h-8")} data-group-open={group.groupId}>
+          {m["groups.open"]}
+        </Link>
       </div>
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
         {group.isPrimary ? (
