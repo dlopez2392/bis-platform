@@ -21,6 +21,7 @@ import { loadSummary, loadNextUp, loadRecent, loadTags, loadHeaderPlaces, softSm
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine, type SmsRecipientState } from "@/lib/consent/composer-state";
+import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 
 export const dynamic = "force-dynamic";
 
@@ -141,6 +142,9 @@ export async function GET(
         phone: contact.phone ?? null, company_name: contact.company_name ?? null,
       },
       tags: tags.status === "ready" ? { status: "ready", tags: tags.tags.map((t) => ({ id: t.id, name: t.name })) } : { status: "error" },
+      language: languageView(contact as unknown as ContactLanguageFacts, {
+        accountLanguage: account.error ? undefined : accountRow?.language ?? null, zone: zone.zone, tr,
+      }),
     },
   };
   return NextResponse.json(body);

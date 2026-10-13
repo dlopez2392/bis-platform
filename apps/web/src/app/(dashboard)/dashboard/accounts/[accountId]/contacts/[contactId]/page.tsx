@@ -43,6 +43,7 @@ import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
+import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 
 export const dynamic = "force-dynamic";
 
@@ -232,7 +233,10 @@ export default async function ContactDetailPage({
       ? {
         node: (
           <ContactDetailsBody accountId={accountId} contactId={contactId} contact={contact} fieldDefs={fieldDefs.fieldDefs}
-            email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId} />
+            email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId}
+            language={languageView(contact as unknown as ContactLanguageFacts, {
+              accountLanguage: account.error ? undefined : accountRow?.language ?? null, zone: zone.zone, tr,
+            })} />
         ),
       }
       : cardFailed("contact.details"),

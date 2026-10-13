@@ -184,6 +184,9 @@ const { renderedText } = await import("@/lib/rendered-text");
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
   company_name: null, custom: {}, created_at: "2026-01-01T05:30:00Z",
+  // S-09: the seven 0076 columns languageView reads; null here so every case still builds a "not set" view.
+  language: null, language_source: null, language_set_at: null,
+  last_language_signal: null, last_language_signal_source: null, last_language_signal_at: null, language_hint_kept_at: null,
 };
 
 async function render(search: Record<string, string> = {}) {

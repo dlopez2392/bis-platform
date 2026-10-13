@@ -8,6 +8,7 @@ vi.mock("../actions", () => ({ updateContactFieldAction: async () => ({ ok: true
 vi.mock("../texts-row", () => ({ TextsRow: () => null }));
 vi.mock("../email-row", () => ({ EmailRow: () => null }));
 vi.mock("@/components/assign/assignee-field", () => ({ ContactAssigneeField: () => null }));
+vi.mock("../language-field", () => ({ LanguageField: (p: { view: { phrase: string } }) => createElement("div", { "data-language-stub": p.view.phrase }) }));
 const { ContactDetailsBody, ContactTagsBody } = await import("./contact-fields-panel");
 
 const CONTACT = { id: "ct1", first_name: "Ana", last_name: "Reyes", email: null, phone: null, company_name: null, custom: {}, source: null, attribution: null, assigned_to: null };
@@ -38,5 +39,15 @@ describe("the fields panel's two bodies, moved into record cards unchanged (spec
   it("a tag name is typed text and carries lang=\"\" (mutation: drop the span wrapper -> FAILS)", () => {
     const tags = renderToStaticMarkup(createElement(ContactTagsBody, { accountId: "a1", contactId: "ct1", tags: [{ id: "t1", name: "VIP" }] as never }));
     expect(tags).toContain('<span lang="">VIP</span>');
+  });
+
+  it("the Language line sits directly under Phone, before the Business name (S-09 §8.1; mutation: render it after Source -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ContactDetailsBody, {
+      accountId: "a1", contactId: "ct1", contact: CONTACT as never, fieldDefs: [], email: { status: "error" }, texts: { status: "error" },
+      language: { value: null, valueLabel: null, phrase: "Not set. Messages go out in English.", hint: null },
+    }));
+    const lang = html.indexOf('data-language-stub="Not set. Messages go out in English."');
+    expect(lang).toBeGreaterThan(html.lastIndexOf("Phone"));
+    expect(lang).toBeLessThan(html.indexOf("Business"));
   });
 });

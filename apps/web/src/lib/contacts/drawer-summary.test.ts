@@ -17,7 +17,8 @@ const GOOD: DrawerSummary = {
     seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline" },
   who: { source: "voice", sourceHint: "They called in", assignedTo: null,
     fields: { first_name: "Maria", last_name: "Garcia", email: "maria@example.com", phone: "+19565550100", company_name: null },
-    tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] } },
+    tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] },
+    language: { value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null } },
 };
 const clone = (): Record<string, unknown> => JSON.parse(JSON.stringify(GOOD));
 
@@ -88,6 +89,25 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     (body.who as Record<string, unknown>).tags = { status: "ready", tags: [{ id: 1 }] };
     const who = parseDrawerSummary(body)!.who;
     expect(who).toMatchObject({ status: "ready", assignedTo: undefined, tags: { status: "error" }, source: "voice" });
+  });
+});
+
+describe("who.language (S-09 §8.1, plan deviation 11)", () => {
+  const VIEW = { value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null };
+  const body = (language: unknown) => ({ ...JSON.parse(JSON.stringify(GOOD)), who: { ...GOOD.who, language } });
+  it("a good view passes through", () => {
+    const p = parseDrawerSummary(body(VIEW))!;
+    expect(p.who).toMatchObject({ status: "ready", language: VIEW });
+  });
+  it("absent: the line is left out, the section still ready (mutation: treat absent as malformed -> FAILS)", () => {
+    const b = body(VIEW);
+    delete (b.who as Record<string, unknown>).language;
+    expect(parseDrawerSummary(b)!.who).toMatchObject({ status: "ready", language: undefined });
+  });
+  it("malformed: the who section's error, never the drawer's (mutation: drop the language !== null test -> FAILS)", () => {
+    const p = parseDrawerSummary(body({ ...VIEW, value: "fr" }))!;
+    expect(p).not.toBeNull();
+    expect(p.who.status).toBe("error");
   });
 });
 
