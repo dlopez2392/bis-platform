@@ -321,6 +321,13 @@ export async function setContactsBusiness(
     }
   }
   const results = out.map((r) => ({ contactId: r.contact_id, status: r.status, removed: r.removed, added: r.added }));
+  // S-03 part 2 review fix: each business membership this write deleted is a removal, recorded as
+  // removeMembership records one. A narrow caller's Undo is vouched for only by the NEWEST removal of
+  // that member (groups-actions.ts's removedByCaller), so a delete with no event would leave an older
+  // removal standing as the newest, and its call-first flag replayable.
+  for (const r of results) {
+    if (r.status === "ok" && r.removed) await emitRemoved(db, accountId, r.removed, actorId, actorType);
+  }
   const changed = results.filter((r) => r.status === "ok").map((r) => r.contactId);
   if (changed.length > 0) {
     await emit(db, accountId, "client_group.business_set", actorId, { contactIds: changed }, actorType);
@@ -328,11 +335,39 @@ export async function setContactsBusiness(
   return results;
 }
 
+/** client_group.member_removed: the ids and whether the member was the group's call-first one. Never typed text. */
+async function emitRemoved(
+  db: SupabaseClient, accountId: string,
+  row: Pick<GroupMemberSnapshot, "id" | "contact_id" | "client_group_id" | "is_primary_contact">,
+  actorId: string, actorType: ActorType,
+) {
+  await emit(db, accountId, "client_group.member_removed", actorId,
+    { memberId: row.id, contactId: row.contact_id, groupId: row.client_group_id, wasPrimaryContact: row.is_primary_contact === true },
+    actorType);
+}
+
+/**
+ * The Business name's Undo. undo_set_business deletes the membership the write ADDED (`added`) and
+ * returns no row, so that membership is read first, on the same client, and its removal recorded by
+ * the actor once the Undo has run (S-03 part 2 review fix; see setContactsBusiness). A failed read
+ * throws before anything is deleted. The read is outside the RPC's contact lock: a call-first choice
+ * landing between the two would not be in the event (a migration returning the deleted row closes it).
+ */
 export async function undoSetBusiness(
   db: SupabaseClient, accountId: string, contactId: string, added: string | null, removed: GroupMemberSnapshot | null,
+  actorId: string, actorType: ActorType = "user",
 ): Promise<"ok" | "not_found"> {
-  return rpc<"ok" | "not_found">(db, "undo_set_business",
+  let doomed: Pick<GroupMemberSnapshot, "id" | "contact_id" | "client_group_id" | "is_primary_contact"> | null = null;
+  if (added !== null) {
+    const { data, error } = await db.from("client_group_members").select("id, contact_id, client_group_id, is_primary_contact")
+      .eq("account_id", accountId).eq("id", added).eq("contact_id", contactId).maybeSingle();
+    if (error) throw new Error(`undoSetBusiness member read failed: ${error.message}`);
+    doomed = data as typeof doomed;
+  }
+  const r = await rpc<"ok" | "not_found">(db, "undo_set_business",
     { p_account_id: accountId, p_contact_id: contactId, p_added: added, p_removed: removed });
+  if (r === "ok" && doomed) await emitRemoved(db, accountId, doomed, actorId, actorType);
+  return r;
 }
 
 export async function setPrimaryMembership(db: SupabaseClient, accountId: string, memberId: string, actorId: string) {

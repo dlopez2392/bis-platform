@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  createGroupWithMember, addContactToGroup, searchGroups, setContactsBusiness, listContactGroups,
+  createGroupWithMember, addContactToGroup, searchGroups, setContactsBusiness, undoSetBusiness, listContactGroups,
   GROUP_ROLE_MAX, GROUP_OTHERS_SHOWN,
 } from "../client-groups";
 
@@ -175,5 +175,92 @@ describe("listContactGroups bounds the co-member read and says how many more (mi
     const { db } = listDb([member("m1", "g1")], { g1: { rows: [], count: 0 } });
     const [g] = await listContactGroups(db, "acct", "me");
     expect(g).toMatchObject({ others: [], moreOthers: 0 });
+  });
+});
+
+/**
+ * S-03 part 2 review fix: the Business-name path deletes memberships too (0069's set_contacts_business
+ * deletes the shown business membership; undo_set_business deletes the one the write added). Each such
+ * delete is a removal, so it records client_group.member_removed exactly as removeMembership does: a
+ * narrow Undo is vouched for only by the NEWEST removal of a member (groups-actions.ts), and a delete
+ * with no event would leave an older removal looking like the newest. Ids and the flag only, no typed text.
+ */
+type Insert = { account_id: string; type: string; actor_type: string; actor_id: string; payload: Record<string, unknown> };
+function businessDb(rpcAnswer: unknown, member: { data: unknown; error: { message: string } | null } = { data: null, error: null }) {
+  const inserts: Insert[] = [];
+  const steps: string[] = [];
+  const read = { cols: "", filters: [] as [string, unknown][] };
+  const db = {
+    from(table: string) {
+      if (table === "events") return { insert: async (row: Insert) => { inserts.push(row); steps.push(`emit ${row.type}`); return { error: null }; } };
+      if (table !== "client_group_members") throw new Error(`unexpected read of ${table}`);
+      const b = {
+        select: (cols: string) => { read.cols = cols; return b; },
+        eq: (col: string, v: unknown) => { read.filters.push([col, v]); return b; },
+        maybeSingle: async () => { steps.push("read member"); return member; },
+      };
+      return b;
+    },
+    rpc: async (fn: string) => { steps.push(`rpc ${fn}`); return { data: rpcAnswer, error: null }; },
+  };
+  return { db: db as unknown as SupabaseClient, inserts, steps, read };
+}
+const snapshot = (id: string, groupId: string, isPrimaryContact: boolean) => ({
+  id, account_id: "acct", client_group_id: groupId, contact_id: `c-${id}`, role: "Dueña", is_primary: true,
+  is_billing: false, is_primary_contact: isPrimaryContact, created_at: "2026-10-01T00:00:00Z",
+});
+
+describe("S-03 part 2: the Business-name path records each membership it deletes as a removal", () => {
+  it("setContactsBusiness emits member_removed for every removed snapshot, its flag from the snapshot, before business_set (mutation: drop the member_removed emit -> FAILS)", async () => {
+    const s = businessDb([
+      { contact_id: "c-m1", status: "ok", removed: snapshot("m1", "g1", true), added: "m9" },
+      { contact_id: "c-m2", status: "ok", removed: snapshot("m2", "g2", false), added: null },
+      { contact_id: "c3", status: "ok", removed: null, added: "m8" },
+      { contact_id: "c4", status: "unchanged", removed: null, added: null },
+    ]);
+    await setContactsBusiness(s.db, "acct", [
+      { contactId: "c-m1", name: "Beta" }, { contactId: "c-m2", name: "" }, { contactId: "c3", name: "Acme" }, { contactId: "c4", name: "Acme" },
+    ], "user_owner");
+    expect(s.inserts).toEqual([
+      { account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_owner",
+        payload: { memberId: "m1", contactId: "c-m1", groupId: "g1", wasPrimaryContact: true } },
+      { account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_owner",
+        payload: { memberId: "m2", contactId: "c-m2", groupId: "g2", wasPrimaryContact: false } },
+      { account_id: "acct", type: "client_group.business_set", actor_type: "user", actor_id: "user_owner",
+        payload: { contactIds: ["c-m1", "c-m2", "c3"] } },
+    ]);
+  });
+  it("only a literal true is the flag, and a system writer (the forms lead) is recorded as system (mutation: read the flag by truthiness -> FAILS)", async () => {
+    const odd = { ...snapshot("m1", "g1", false), is_primary_contact: "true" };
+    const s = businessDb([{ contact_id: "c-m1", status: "ok", removed: odd, added: "m9" }]);
+    await setContactsBusiness(s.db, "acct", [{ contactId: "c-m1", name: "Beta" }], "form", "system");
+    expect(s.inserts[0]).toEqual({ account_id: "acct", type: "client_group.member_removed", actor_type: "system", actor_id: "form",
+      payload: { memberId: "m1", contactId: "c-m1", groupId: "g1", wasPrimaryContact: false } });
+  });
+
+  it("undoSetBusiness reads the membership it is about to delete, then records its removal by the actor (mutation: drop the undo's member_removed emit -> FAILS)", async () => {
+    const s = businessDb("ok", { data: { id: "m9", contact_id: "c1", client_group_id: "g9", is_primary_contact: true }, error: null });
+    expect(await undoSetBusiness(s.db, "acct", "c1", "m9", null, "user_tech")).toBe("ok");
+    expect(s.read.cols).toBe("id, contact_id, client_group_id, is_primary_contact");
+    expect(s.read.filters).toEqual([["account_id", "acct"], ["id", "m9"], ["contact_id", "c1"]]);
+    expect(s.steps).toEqual(["read member", "rpc undo_set_business", "emit client_group.member_removed"]);
+    expect(s.inserts).toEqual([{ account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_tech",
+      payload: { memberId: "m9", contactId: "c1", groupId: "g9", wasPrimaryContact: true } }]);
+  });
+  it("undoSetBusiness records nothing when nothing was added, when the added membership is already gone, or when the database refuses", async () => {
+    const none = businessDb("ok");
+    expect(await undoSetBusiness(none.db, "acct", "c1", null, snapshot("m1", "g1", false), "user_tech")).toBe("ok");
+    expect(none.steps).toEqual(["rpc undo_set_business"]);
+    const gone = businessDb("ok", { data: null, error: null });
+    await undoSetBusiness(gone.db, "acct", "c1", "m9", null, "user_tech");
+    expect(gone.inserts).toEqual([]);
+    const refused = businessDb("not_found", { data: { id: "m9", contact_id: "c1", client_group_id: "g9", is_primary_contact: false }, error: null });
+    expect(await undoSetBusiness(refused.db, "acct", "c1", "m9", null, "user_tech")).toBe("not_found");
+    expect(refused.inserts).toEqual([]);
+  });
+  it("a failed read of the membership throws before the undo runs, so no delete goes unrecorded (mutation: ignore the read error -> FAILS)", async () => {
+    const s = businessDb("ok", { data: null, error: { message: "boom" } });
+    await expect(undoSetBusiness(s.db, "acct", "c1", "m9", null, "user_tech")).rejects.toThrow(/undoSetBusiness member read failed: boom/);
+    expect(s.steps).toEqual(["read member"]);
   });
 });

@@ -201,7 +201,7 @@ export async function setContactBusinessAction(
 export async function undoContactBusinessAction(
   accountId: string, contactId: string, undo: BusinessUndo,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  await requireAccountAccess(accountId);
+  const { userId } = await requireAccountAccess(accountId);
   const removed = undo?.removed ?? null;
   if (!isUuidOrNull(undo?.added ?? null) || (removed !== null && removed.contact_id !== contactId)) {
     return { ok: false, error: "Undo failed — please try again." };
@@ -209,7 +209,8 @@ export async function undoContactBusinessAction(
   try {
     const db = await dbForRequest();
     if (!(await getContact(db, accountId, contactId))) return { ok: false, error: "Undo failed — please try again." };
-    const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed);
+    // userId: the Undo deletes the membership the write added, and that removal is recorded as the caller's.
+    const r = await undoSetBusiness(serviceDb(), accountId, contactId, undo.added, removed, userId);
     if (r !== "ok") return { ok: false, error: "Undo failed — please try again." };
     revalidatePath(contactsPath(accountId));
     revalidatePath(`${contactsPath(accountId)}/${contactId}`);

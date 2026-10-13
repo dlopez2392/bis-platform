@@ -324,6 +324,19 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
     expect(db.restoreMembership).not.toHaveBeenCalled();
     expect(String(warn.mock.calls[0]?.[0])).toContain("not the caller's removal");
   });
+  it("a newer removal through the Business name (the Owner renames the business; setContactsBusiness records it) refuses the replay of the caller's older one (review fix 2; mutation: drop the actor check on the newest event -> FAILS; the emit itself is pinned in client-groups-guards.test.ts)", async () => {
+    // The event setContactsBusiness now writes for the membership a rename deleted: the same type and
+    // payload keys as removeMembership's, so the newest-removal lookup sees it.
+    const viaBusinessName = removal({ id: 11, at: "2026-10-12T12:00:00.000Z", actor: OWNER_ID, was: false });
+    events.data = [removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true }), viaBusinessName];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.restoreMembership).not.toHaveBeenCalled();
+    // Without that event the caller's older removal is the newest, and it vouches: the hole review fix 2 closed.
+    events.data = [removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true })];
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+  });
   it("cleared, then removed again by the caller: the newest removal's flag (false) decides, not the older true (mutation: read the removals unordered -> FAILS)", async () => {
     events.data = [
       removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true }),
