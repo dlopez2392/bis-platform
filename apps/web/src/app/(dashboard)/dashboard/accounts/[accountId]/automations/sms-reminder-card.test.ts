@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AutomationRow } from "@bis/db";
+import { m } from "@/lib/messages";
 
 vi.mock("sonner", () => ({ toast: {} }));
 
@@ -56,5 +57,29 @@ describe("the text-reminder card's segment counter", () => {
     const body = "Please text us back if you need to move it, or if we should watch for a dog.";
     expect(body).toHaveLength(76);
     expect(countText(render(body))).toBe("173 characters · 2 message(s)");
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it("renders inside the ONE form, with our Spanish, lang=\"es\", a Spanish preview, and one primary Save (mutation: render outside the form, or a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render("");
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain('data-testid="smsrem-preview-es"');
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
+  });
+
+  it("the Spanish preview starts with the recordatorio lead and ends with the Spanish opt-out line", () => {
+    const html = render("");
+    const found = /data-testid="smsrem-preview-es"[^>]*>([^<]*)</.exec(html);
+    expect(found).not.toBeNull();
+    const text = found![1]!;
+    expect(text.startsWith("Recordatorio: su cita con ")).toBe(true);
+    expect(text.trim().endsWith(m["sms.optOut.es"])).toBe(true);
   });
 });

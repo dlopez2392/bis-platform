@@ -10,20 +10,43 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  serviceDb, upsertAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
+  serviceDb, upsertAutomation, getAutomation, parseReviewRequestConfig, parseNoShowNudgeConfig, parseReferralAskConfig,
   parseReactivationConfig, parseQuoteFollowupConfig, parseInstantReplyConfig,
   QUOTE_FOLLOWUP_MIN_QUIET_DAYS, QUOTE_FOLLOWUP_MAX_QUIET_DAYS,
-  getMailingAddress, getBranding,
-  type ReviewRequestChannel,
+  getMailingAddress, getBranding, brandDisplayName, nextSpanishBox,
+  type ReviewRequestChannel, type RecipeKey,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { m } from "@/lib/messages";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { missingForMarketingEmail } from "@/lib/automations/reactivation-gate";
+import { defaultReviewRequestBody } from "@/lib/automations/review-request-copy";
+import { defaultNoShowNudgeBody } from "@/lib/automations/no-show-nudge-copy";
+import { defaultSmsReminderBody } from "@/lib/automations/sms-reminder-copy";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
 const CHANNELS: readonly ReviewRequestChannel[] = ["email", "sms"];
+
+/**
+ * S-09 PR 2: read the Spanish box's three fields and work out what to store (nextSpanishBox).
+ * Validates the Spanish exactly as the English (length). Reads the stored row for "unchanged"
+ * and the basis. Shared by the four actions in this file (Task 15) and Task 16's. `defaultEs`:
+ * the recipe's own written Spanish default rendered for THIS account's brand, "" for
+ * appointment_confirm (plan deviation 4, its English has no default either).
+ */
+async function spanishBoxPatch(
+  accountId: string, recipe: RecipeKey, formData: FormData, body: string, defaultEs: string,
+): Promise<{ ok: true; bodyEs: string | null; bodyEsBasis: string | null } | { ok: false; error: string }> {
+  const submitted = String(formData.get("body_es") ?? "");
+  if (submitted.trim().length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
+  const row = await getAutomation(serviceDb(), accountId, recipe);
+  const next = nextSpanishBox({
+    submitted, useOurs: formData.get("body_es_use_ours") === "1", stillMatches: formData.get("body_es_still_matches") === "on",
+    defaultEs, body, stored: { bodyEs: row?.body_es ?? null, basis: row?.body_es_basis ?? null },
+  });
+  return { ok: true, bodyEs: next.bodyEs, bodyEsBasis: next.basis };
+}
 
 export async function saveReviewRequestAction(
   accountId: string, formData: FormData,
@@ -50,6 +73,16 @@ export async function saveReviewRequestAction(
   if (reviewUrl && !parsed) return { ok: false, error: m["automations.review.urlInvalid"] };
   if (enabled && !parsed) return { ok: false, error: m["automations.review.urlRequired"] };
 
+  let brandName: string;
+  try {
+    brandName = brandDisplayName(await getBranding(serviceDb(), accountId));
+  } catch (e) {
+    console.error(`saveReviewRequestAction: branding read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.review.saveFailed"] };
+  }
+  const es = await spanishBoxPatch(accountId, "review_request", formData, body, defaultReviewRequestBody(brandName, "es"));
+  if (!es.ok) return es;
+
   // Store the NORMALISED config (`parsed.href`), not the raw string: the pass
   // parses on read and sends the href, so storing the raw form value would
   // let the page preview one string and the send carry another (a bare
@@ -57,7 +90,7 @@ export async function saveReviewRequestAction(
   // when the link is empty and the recipe is off.
   try {
     await upsertAutomation(serviceDb(), accountId, "review_request",
-      { enabled, body, config: parsed ?? { channel, reviewUrl } }, userId);
+      { enabled, body, config: parsed ?? { channel, reviewUrl }, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveReviewRequestAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.review.saveFailed"] };
@@ -82,8 +115,19 @@ export async function saveNoShowNudgeAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  let brandName: string;
   try {
-    await upsertAutomation(serviceDb(), accountId, "no_show_nudge", { enabled, body, config }, userId);
+    brandName = brandDisplayName(await getBranding(serviceDb(), accountId));
+  } catch (e) {
+    console.error(`saveNoShowNudgeAction: branding read failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["automations.noShow.saveFailed"] };
+  }
+  const es = await spanishBoxPatch(accountId, "no_show_nudge", formData, body, defaultNoShowNudgeBody(brandName, "es"));
+  if (!es.ok) return es;
+
+  try {
+    await upsertAutomation(serviceDb(), accountId, "no_show_nudge",
+      { enabled, body, config, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveNoShowNudgeAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.noShow.saveFailed"] };
@@ -254,9 +298,13 @@ export async function saveSmsReminderAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  const es = await spanishBoxPatch(accountId, "sms_reminder", formData, body, defaultSmsReminderBody("es"));
+  if (!es.ok) return es;
+
   try {
     // Nothing to configure: the channel is the recipe, the time is the booking's.
-    await upsertAutomation(serviceDb(), accountId, "sms_reminder", { enabled, body, config: {} }, userId);
+    await upsertAutomation(serviceDb(), accountId, "sms_reminder",
+      { enabled, body, config: {}, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveSmsReminderAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.smsReminder.saveFailed"] };
@@ -276,10 +324,17 @@ export async function saveAppointmentConfirmAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
+  // Plan deviation 4: this recipe's "our Spanish default" is the empty
+  // string — its English has no default either (a blank closing line sends
+  // the question alone).
+  const es = await spanishBoxPatch(accountId, "appointment_confirm", formData, body, "");
+  if (!es.ok) return es;
+
   try {
     // Nothing to configure: the channel IS the recipe (a "Reply YES" email
     // points at a no-reply address), and the time is the booking's.
-    await upsertAutomation(serviceDb(), accountId, "appointment_confirm", { enabled, body, config: {} }, userId);
+    await upsertAutomation(serviceDb(), accountId, "appointment_confirm",
+      { enabled, body, config: {}, bodyEs: es.bodyEs, bodyEsBasis: es.bodyEsBasis }, userId);
   } catch (e) {
     console.error(`saveAppointmentConfirmAction: save failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.appointmentConfirm.saveFailed"] };

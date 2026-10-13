@@ -81,3 +81,18 @@ describe("the no-show nudge card's segment counter", () => {
     expect(email).not.toContain(m["automations.optOutCounted"]);
   });
 });
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it("renders inside the ONE form, with our Spanish, lang=\"es\", the English label, and one primary Save (mutation: render outside the form, or a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
+  });
+});

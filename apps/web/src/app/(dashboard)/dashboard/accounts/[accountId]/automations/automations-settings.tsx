@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
@@ -75,6 +76,21 @@ export function AutomationsSettings({
   const previewBody = body.trim() || defaultReviewRequestBody(brandName);
   const preview = segmentsFor(withOptOut(composeReviewRequestSms(previewBody, reviewUrl)));
 
+  // C14/spec §12.3's staleness rule, mirrored here rather than importing
+  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
+  // component — voice-settings.tsx's own precedent, for the same "the
+  // barrel carries the database client into the browser bundle" reason.
+  // Reads the STORED row (plan deviation 5), not live state.
+  const storedBody = automation?.body ?? "";
+  const storedBodyEs = automation?.body_es ?? null;
+  const storedBasis = automation?.body_es_basis ?? null;
+  const spanishStale = (() => {
+    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
+    if (storedBody.trim() === "" && storedBodyEs === null) return false;
+    const basis = storedBasis === null ? null : storedBasis.trim();
+    return basis !== storedBody.trim();
+  })();
+
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
       success: m["automations.review.saved"],
@@ -127,30 +143,40 @@ export function AutomationsSettings({
             <p className="text-xs text-muted-foreground">{m["automations.review.urlHint"]}</p>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="review-body">{m["automations.review.message"]}</Label>
-            <Textarea
-              id="review-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={defaultReviewRequestBody(brandName)}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="review-body">{m["automations.bodyEn.label"]}</Label>
+              <Textarea
+                id="review-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={defaultReviewRequestBody(brandName)}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.review.messageHint"]}</p>
+              {channel === "sms" ? (
+                <>
+                  <p className="text-xs text-muted-foreground" data-testid="review-sms-count">
+                    {m["compose.smsSegments"]
+                      .replace("{chars}", String(preview.chars))
+                      .replace("{segments}", String(preview.segments))}
+                  </p>
+                  {/* The count above includes the disclosure, and those 23
+                      characters appear nowhere else on this page — the message
+                      box shows the undisclosed default. Its own paragraph, so
+                      the counter's testid still reads as one clean string;
+                      inside the `sms` branch because an emailed review request
+                      carries no opt-out sentence (referral-ask-card.tsx). */}
+                  <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+                </>
+              ) : null}
+            </div>
+            <SpanishBodyField
+              idPrefix="review"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs={defaultReviewRequestBody(brandName, "es")}
+              composeEs={(text) => (channel === "sms" ? withOptOut(composeReviewRequestSms(text, reviewUrl.trim()), "es") : text)}
+              sms={channel === "sms"}
             />
-            <p className="text-xs text-muted-foreground">{m["automations.review.messageHint"]}</p>
-            {channel === "sms" ? (
-              <>
-                <p className="text-xs text-muted-foreground" data-testid="review-sms-count">
-                  {m["compose.smsSegments"]
-                    .replace("{chars}", String(preview.chars))
-                    .replace("{segments}", String(preview.segments))}
-                </p>
-                {/* The count above includes the disclosure, and those 23
-                    characters appear nowhere else on this page — the message
-                    box shows the undisclosed default. Its own paragraph, so
-                    the counter's testid still reads as one clean string;
-                    inside the `sms` branch because an emailed review request
-                    carries no opt-out sentence (referral-ask-card.tsx). */}
-                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
-              </>
-            ) : null}
           </div>
 
           <SubmitButton pending={pending}>{m["automations.review.save"]}</SubmitButton>

@@ -5,6 +5,8 @@ const dbMocks = vi.hoisted(() => ({
   upsertAutomation: vi.fn(),
   // The reactivation save reads these two before turning the recipe on.
   getMailingAddress: vi.fn(), getBranding: vi.fn(),
+  // S-09 PR 2: the Spanish box's "unchanged" read (spanishBoxPatch).
+  getAutomation: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -42,6 +44,10 @@ beforeEach(() => {
     brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null,
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: "owner@rioroofing.com",
   });
+  // No stored row by default — the Spanish box's "unchanged" comparison then
+  // has nothing stored, which is the shape every pre-existing test (none of
+  // which names `body_es`) exercises.
+  dbMocks.getAutomation.mockReset().mockResolvedValue(null);
 });
 
 describe("saveReviewRequestAction", () => {
@@ -56,7 +62,7 @@ describe("saveReviewRequestAction", () => {
     expect(await saveReviewRequestAction("acct_1",
       fd({ enabled: "on", channel: "sms", review_url: ` ${URL} `, body: "Thanks!" }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
-      { enabled: true, body: "Thanks!", config: { channel: "sms", reviewUrl: URL } }, "user_1");
+      expect.objectContaining({ enabled: true, body: "Thanks!", config: { channel: "sms", reviewUrl: URL } }), "user_1");
   });
 
   it("turning it on without a link is refused, with copy that says what to do", async () => {
@@ -79,7 +85,7 @@ describe("saveReviewRequestAction", () => {
     // let a bare origin preview one character short of what goes out.
     expect(await saveReviewRequestAction("acct_1", fd({ enabled: "on", channel: "sms", review_url: "https://x.example" }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
-      { enabled: true, body: "", config: { channel: "sms", reviewUrl: "https://x.example/" } }, "user_1");
+      expect.objectContaining({ enabled: true, body: "", config: { channel: "sms", reviewUrl: "https://x.example/" } }), "user_1");
   });
 
   it("stores a whitespace-only body as empty, so it keeps meaning 'use the default'", async () => {
@@ -88,13 +94,13 @@ describe("saveReviewRequestAction", () => {
     // make those two disagree on a reload.
     expect(await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "  \n  " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
-      { enabled: false, body: "", config: { channel: "email", reviewUrl: "" } }, "user_1");
+      expect.objectContaining({ enabled: false, body: "", config: { channel: "email", reviewUrl: "" } }), "user_1");
   });
 
   it("saves an OFF row with an empty link, so the operator can fill it in later", async () => {
     expect(await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "" }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "review_request",
-      { enabled: false, body: "", config: { channel: "email", reviewUrl: "" } }, "user_1");
+      expect.objectContaining({ enabled: false, body: "", config: { channel: "email", reviewUrl: "" } }), "user_1");
   });
 
   it("an unknown channel and a database failure both come back as a toastable failure", async () => {
@@ -117,7 +123,7 @@ describe("saveNoShowNudgeAction", () => {
   it("saves enabled + channel + trimmed body through serviceDb, validated with the pass's own parser", async () => {
     expect(await saveNoShowNudgeAction("acct_1", fd({ enabled: "on", channel: "sms", body: "  Come back!  " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "no_show_nudge",
-      { enabled: true, body: "Come back!", config: { channel: "sms" } }, "user_1");
+      expect.objectContaining({ enabled: true, body: "Come back!", config: { channel: "sms" } }), "user_1");
   });
 
   it("an unknown channel and a database failure both come back as a toastable failure", async () => {
@@ -432,13 +438,13 @@ describe("saveSmsReminderAction", () => {
   it("saves enabled + trimmed body with an empty config — the recipe has nothing else to configure", async () => {
     expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on", body: " See you soon! " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder",
-      { enabled: true, body: "See you soon!", config: {} }, "user_1");
+      expect.objectContaining({ enabled: true, body: "See you soon!", config: {} }), "user_1");
   });
 
   it("saves an OFF row with an empty body, and reports a database failure as a toastable failure", async () => {
     expect(await saveSmsReminderAction("acct_1", fd({}))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder",
-      { enabled: false, body: "", config: {} }, "user_1");
+      expect.objectContaining({ enabled: false, body: "", config: {} }), "user_1");
     dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
     expect(await saveSmsReminderAction("acct_1", fd({ enabled: "on" })))
       .toEqual({ ok: false, error: m["automations.smsReminder.saveFailed"] });
@@ -456,13 +462,13 @@ describe("saveAppointmentConfirmAction", () => {
   it("saves enabled + trimmed closing line with an empty config — the channel IS the recipe", async () => {
     expect(await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on", body: " Parking is out front. " }))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "appointment_confirm",
-      { enabled: true, body: "Parking is out front.", config: {} }, "user_1");
+      expect.objectContaining({ enabled: true, body: "Parking is out front.", config: {} }), "user_1");
   });
 
   it("saves an OFF row with an empty body, and reports a database failure as a toastable failure", async () => {
     expect(await saveAppointmentConfirmAction("acct_1", fd({}))).toEqual({ ok: true });
     expect(dbMocks.upsertAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "appointment_confirm",
-      { enabled: false, body: "", config: {} }, "user_1");
+      expect.objectContaining({ enabled: false, body: "", config: {} }), "user_1");
     dbMocks.upsertAutomation.mockRejectedValue(new Error("db down"));
     expect(await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on" })))
       .toEqual({ ok: false, error: m["automations.appointmentConfirm.saveFailed"] });
@@ -560,5 +566,43 @@ describe("saveInstantReplyAction", () => {
     expect(await saveInstantReplyAction("acct_1", fd({ body_en: "Hi", body_es: "Hola" })))
       .toEqual({ ok: false, error: m["automations.instantReply.saveFailed"] });
     quiet.mockRestore();
+  });
+});
+
+describe("S-09 PR 2: the Spanish box on save", () => {
+  it("a box equal to our Spanish stores null and leaves the basis (C13; mutation: store the literal -> FAILS)", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ body_es: null, body_es_basis: null });
+    const formData = fd({
+      enabled: "on", channel: "email", review_url: "https://g.page/r", body: "",
+      body_es: "¡Gracias por elegir a Rio Roofing! Si tiene un minuto, nos ayuda mucho que nos deje una reseña:",
+    });
+    await saveReviewRequestAction("acct_1", formData);
+    expect(dbMocks.upsertAutomation.mock.calls[0]![3]).toMatchObject({ bodyEs: null, bodyEsBasis: null });
+  });
+
+  it("an edited Spanish moves the basis to the saved English", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ body_es: null, body_es_basis: null });
+    await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "Thanks!", body_es: "¡Gracias!" }));
+    expect(dbMocks.upsertAutomation.mock.calls[0]![3]).toMatchObject({ bodyEs: "¡Gracias!", bodyEsBasis: "Thanks!" });
+  });
+
+  it("an English-only edit keeps the old basis, so the card warns (mutation: always move it -> FAILS)", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ body_es: "Viejo.", body_es_basis: "Old." });
+    await saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "New.", body_es: "Viejo." }));
+    expect(dbMocks.upsertAutomation.mock.calls[0]![3]).toMatchObject({ bodyEs: "Viejo.", bodyEsBasis: "Old." });
+  });
+
+  it("a Spanish over 1,000 characters is refused like the English (mutation: skip the check -> FAILS)", async () => {
+    dbMocks.getAutomation.mockResolvedValue(null);
+    const result = await saveReviewRequestAction("acct_1",
+      fd({ channel: "email", review_url: "", body: "Thanks!", body_es: "a".repeat(AUTOMATION_BODY_MAX_LENGTH + 1) }));
+    expect(result).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+  });
+
+  it("the confirmation card's stored '' survives an unrelated save (F1)", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ body_es: "", body_es_basis: "" });
+    await saveAppointmentConfirmAction("acct_1", fd({ enabled: "on", body: "", body_es: "" }));
+    expect(dbMocks.upsertAutomation.mock.calls[0]![3]).toMatchObject({ bodyEs: "" });
   });
 });

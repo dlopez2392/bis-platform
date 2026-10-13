@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SmsPreview } from "@/components/sms-preview";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -52,6 +53,20 @@ export function AppointmentConfirmCard({
   const previewText = withOptOut(composeAppointmentConfirm(brandName, when, body));
   const preview = segmentsFor(previewText);
 
+  // C14/spec §12.3's staleness rule, mirrored here rather than importing
+  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
+  // component — voice-settings.tsx's own precedent. Reads the STORED row
+  // (plan deviation 5), not live state.
+  const storedBody = automation?.body ?? "";
+  const storedBodyEs = automation?.body_es ?? null;
+  const storedBasis = automation?.body_es_basis ?? null;
+  const spanishStale = (() => {
+    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
+    if (storedBody.trim() === "" && storedBodyEs === null) return false;
+    const basis = storedBasis === null ? null : storedBasis.trim();
+    return basis !== storedBody.trim();
+  })();
+
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
       success: m["automations.appointmentConfirm.saved"],
@@ -79,13 +94,28 @@ export function AppointmentConfirmCard({
             </p>
           ) : null}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="confirm-body">{m["automations.appointmentConfirm.message"]}</Label>
-            <Textarea
-              id="confirm-body" name="body" rows={2} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="confirm-body">{m["automations.appointmentConfirm.message"]}</Label>
+              <Textarea
+                id="confirm-body" name="body" rows={2} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.appointmentConfirm.messageHint"]}</p>
+            </div>
+            {/* Plan deviation 4: this recipe's "our Spanish default" is the
+                empty string — its English has no default either. */}
+            <SpanishBodyField
+              idPrefix="confirm"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs=""
+              composeEs={(text) => withOptOut(
+                composeAppointmentConfirm(brandName, formatWhen(SMS_REMINDER_PREVIEW_INSTANT, safeZone(accountTimezone, "UTC"), "es"), text, "es"),
+                "es",
+              )}
+              sms
             />
-            <p className="text-xs text-muted-foreground">{m["automations.appointmentConfirm.messageHint"]}</p>
           </div>
 
           {/* The one shared preview box (components/sms-preview.tsx), the

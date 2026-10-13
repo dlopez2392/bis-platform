@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { SubmitButton } from "../../submit-button";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { m } from "@/lib/messages";
@@ -65,6 +66,20 @@ export function NoShowNudgeCard({
   const previewBody = body.trim() || defaultNoShowNudgeBody(brandName);
   const preview = segmentsFor(withOptOut(composeNoShowNudgeSms(previewBody, bookingUrl)));
 
+  // C14/spec §12.3's staleness rule, mirrored here rather than importing
+  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
+  // component — voice-settings.tsx's own precedent. Reads the STORED row
+  // (plan deviation 5), not live state.
+  const storedBody = automation?.body ?? "";
+  const storedBodyEs = automation?.body_es ?? null;
+  const storedBasis = automation?.body_es_basis ?? null;
+  const spanishStale = (() => {
+    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
+    if (storedBody.trim() === "" && storedBodyEs === null) return false;
+    const basis = storedBasis === null ? null : storedBasis.trim();
+    return basis !== storedBody.trim();
+  })();
+
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
       success: m["automations.noShow.saved"],
@@ -108,34 +123,44 @@ export function NoShowNudgeCard({
             ) : null}
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="noshow-body">{m["automations.noShow.message"]}</Label>
-            <Textarea
-              id="noshow-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={defaultNoShowNudgeBody(brandName)}
-            />
-            <p className="text-xs text-muted-foreground">{m["automations.noShow.messageHint"]}</p>
-            {bookingUrl ? (
-              <p className="text-xs text-muted-foreground" data-testid="no-show-link">
-                {m["automations.noShow.linkHint"].replace("{link}", () => bookingUrl)}
-              </p>
-            ) : null}
-            {channel === "sms" ? (
-              <>
-                <p className="text-xs text-muted-foreground" data-testid="no-show-sms-count">
-                  {m["compose.smsSegments"]
-                    .replace("{chars}", String(preview.chars))
-                    .replace("{segments}", String(preview.segments))}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="noshow-body">{m["automations.bodyEn.label"]}</Label>
+              <Textarea
+                id="noshow-body" name="body" rows={3} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={defaultNoShowNudgeBody(brandName)}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.noShow.messageHint"]}</p>
+              {bookingUrl ? (
+                <p className="text-xs text-muted-foreground" data-testid="no-show-link">
+                  {m["automations.noShow.linkHint"].replace("{link}", () => bookingUrl)}
                 </p>
-                {/* The count above includes the disclosure, which appears
-                    nowhere else on this page. Its own paragraph, so the
-                    counter's testid stays one clean string; `sms` branch
-                    only, because an emailed nudge carries no opt-out
-                    sentence (referral-ask-card.tsx). */}
-                <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
-              </>
-            ) : null}
+              ) : null}
+              {channel === "sms" ? (
+                <>
+                  <p className="text-xs text-muted-foreground" data-testid="no-show-sms-count">
+                    {m["compose.smsSegments"]
+                      .replace("{chars}", String(preview.chars))
+                      .replace("{segments}", String(preview.segments))}
+                  </p>
+                  {/* The count above includes the disclosure, which appears
+                      nowhere else on this page. Its own paragraph, so the
+                      counter's testid stays one clean string; `sms` branch
+                      only, because an emailed nudge carries no opt-out
+                      sentence (referral-ask-card.tsx). */}
+                  <p className="text-xs text-muted-foreground">{m["automations.optOutCounted"]}</p>
+                </>
+              ) : null}
+            </div>
+            <SpanishBodyField
+              idPrefix="noshow"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs={defaultNoShowNudgeBody(brandName, "es")}
+              composeEs={(text) => (channel === "sms" ? withOptOut(composeNoShowNudgeSms(text, bookingUrl), "es") : text)}
+              sms={channel === "sms"}
+            />
           </div>
 
           <SubmitButton pending={pending}>{m["automations.noShow.save"]}</SubmitButton>
