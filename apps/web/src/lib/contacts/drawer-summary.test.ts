@@ -70,6 +70,12 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     expect(parseDrawerSummary(body)).toBeNull();
   });
 
+  it("a backslash-slash href (/\\evil.example, which a browser resolves to https://evil.example) is refused, never mistaken for a path (mutation: safeHref's old /^(tel:|\\/(?!\\/)|#|https:\\/\\/)/ -> FAILS)", () => {
+    const body = clone();
+    (body.header as { actions: { href: string }[] }).actions[0]!.href = "/\\evil.example";
+    expect(parseDrawerSummary(body)).toBeNull();
+  });
+
   it("a recent row of a kind this bundle does not know is dropped and the rest stay (mutation: refuse the section -> FAILS)", () => {
     const body = clone();
     (body.recent as { rows: unknown[] }).rows.unshift({ ...ROW, key: "visit-v1", kind: "visit" });

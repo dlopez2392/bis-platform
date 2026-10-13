@@ -317,6 +317,8 @@ export function ContactDrawer({
                                     const saved = await updateContactFieldAction(accountId, row.id, field, v);
                                     // A phone edit can make the number ambiguous, or settle it: re-read the summary so the Check number row follows (review R3-I2).
                                     if (field === "phone") setRetryNonce((n) => n + 1);
+                                    // A name or email edit changes the header (name, dialog accessible name, Call's aria label, Email action), which the route also owns: re-read on those saves too (final review, item 2).
+                                    if (saved.ok && (field === "first_name" || field === "last_name" || field === "email")) setRetryNonce((n) => n + 1);
                                     return saved;
                                   }}
                                   {...(field === "phone" ? {
@@ -461,7 +463,7 @@ function TagsRow({ accountId, contactId, tags, locale, onChanged }: {
       {/* onSubmit, NOT the `action` prop: a failed add must keep the tag the operator typed (lib/forms/use-form-submit.ts). */}
       <form onSubmit={addTag.onSubmit} className="inline-flex items-center gap-1">
         {hidden}
-        <Input name="tag" placeholder={t(m, "contact.addTag", locale)} className="h-7 w-28 text-xs" />
+        <Input name="tag" placeholder={t(m, "contact.addTag", locale)} className="min-h-11 md:min-h-8 w-28 text-xs" />
         <Button type="submit" size="icon-xs" variant="ghost" aria-label={t(m, "contact.addTag", locale)}>
           <Plus className="size-3" aria-hidden />
         </Button>

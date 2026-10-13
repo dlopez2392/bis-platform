@@ -23,6 +23,12 @@ describe("NextUpBody (spec §9.3)", () => {
     expect(html).toContain('data-next-up-row="booking"');
     expect(html).toContain("Appointment · Fri, Oct 16 · 10:00 AM");
   });
+  it("a To-do title is typed text and carries lang=\"\", keeping its title attribute (mutation: drop the span wrapper -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { undated: null, rows: [
+      { kind: "task", id: "t", title: "Llamar a Ana", detail: "Due Oct 20", overdue: false, who: null },
+    ] } }));
+    expect(html).toContain('title="Llamar a Ana"><span lang="">Llamar a Ana</span>');
+  });
   it("empty: one sentence of what shows here and the action that causes it, plus the undated count", () => {
     const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { rows: [], undated: "2 To-dos have no date." } }));
     expect(html).toContain("Nothing coming up.");

@@ -220,7 +220,7 @@ export function ContactTagsBody({ accountId, contactId, tags }: { accountId: str
             aria-label={t(m, "contact.removeTag", locale, { name: tag.name })}
           >
             <Badge variant="secondary" className="gap-1 pr-1.5">
-              {tag.name}
+              <span lang="">{tag.name}</span>
               <X className="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden />
             </Badge>
           </button>

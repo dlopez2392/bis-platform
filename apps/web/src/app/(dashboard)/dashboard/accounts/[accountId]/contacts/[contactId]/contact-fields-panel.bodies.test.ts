@@ -34,4 +34,9 @@ describe("the fields panel's two bodies, moved into record cards unchanged (spec
     expect(input).toContain("min-h-11");
     expect(input).toContain("md:min-h-8");
   });
+
+  it("a tag name is typed text and carries lang=\"\" (mutation: drop the span wrapper -> FAILS)", () => {
+    const tags = renderToStaticMarkup(createElement(ContactTagsBody, { accountId: "a1", contactId: "ct1", tags: [{ id: "t1", name: "VIP" }] as never }));
+    expect(tags).toContain('<span lang="">VIP</span>');
+  });
 });

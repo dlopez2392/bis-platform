@@ -302,6 +302,12 @@ describe("the Texts row follows the contact (consent chain PR-2)", () => {
     expect(drawer).toMatch(/if \(field === "phone"\) setRetryNonce\(\(n\) => n \+ 1\);/);
   });
 
+  it("a name or email save re-reads the route so the header follows (mutation: drop the bump → FAILS)", () => {
+    expect(drawer).toMatch(
+      /if \(saved\.ok && \(field === "first_name" \|\| field === "last_name" \|\| field === "email"\)\) setRetryNonce\(\(n\) => n \+ 1\);/,
+    );
+  });
+
   it("a row action or a pick makes the drawer re-read, and the row hands onChanged to the pick (re-review minor 1; mutation: drop the onChanged prop, or stop passing it to pickPhoneCountry → FAILS)", () => {
     expect(drawer).toMatch(/<TextsRow[\s\S]{0,400}?onChanged=\{\(\) => setRetryNonce\(\(n\) => n \+ 1\)\}/);
     expect(row).toMatch(/run,\s*onChanged,\s*\)\);/);
@@ -707,5 +713,13 @@ describe("ContactDrawer: every section's own state, and the chrome around them (
       expect(cls).toContain("hover:bg-[var(--surface-3)]");
       expect(cls).not.toContain("btn-primary");
     }
+  });
+
+  it("the tag-add Input is a real tap target on a phone (min-h-11 md:min-h-8), matching its twin on the full record page (mutation: revert to h-7 -> FAILS)", () => {
+    const html = renderOpen(READY);
+    const input = html.match(/<input[^>]*name="tag"[^>]*>/)?.[0] ?? "";
+    expect(input).toContain("min-h-11");
+    expect(input).toContain("md:min-h-8");
+    expect(input).not.toMatch(/(?<!file:)\bh-7\b/);
   });
 });

@@ -504,13 +504,14 @@ test.describe("P4 contacts table + drawer (agency session)", () => {
       await route.continue();
     });
 
-    // `exact: true` matters since FIX 1 (final review): InlineField's edit
-    // button now carries the field's VALUE in its accessible name too (e.g.
-    // "Edit First name: Retry" for this very contact), so a substring match
-    // on "Retry" ambiguously matches both that button and the real Retry
-    // button below — Retry A/B being named that is a coincidence of this
-    // spec's own fixture naming, unrelated to the field it collides with.
-    await dialogA.getByRole("button", { name: m["common.retry"], exact: true }).click();
+    // The whole-drawer error button reads m["record.card.retry"] ("Try
+    // again"), not m["common.retry"] ("Retry") — contact-drawer.tsx's own
+    // RecordCardRetry always renders the former. `exact: true` still
+    // matters: InlineField's edit button carries the field's VALUE in its
+    // accessible name too (e.g. "Edit First name: Retry" for this very
+    // contact), so a substring match on "Retry" would ambiguously match
+    // both that button and this one if their words ever collided again.
+    await dialogA.getByRole("button", { name: m["record.card.retry"], exact: true }).click();
 
     // Close A — the overlay would block a real click on row B anyway (see
     // the deep-link test's own comment on this), and this is the realistic
