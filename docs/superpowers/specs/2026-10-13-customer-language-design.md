@@ -681,10 +681,12 @@ select count(distinct contact_id) from calls
   where contact_id is not null and jsonb_array_length(transcript) > 0;   -- candidates for C5's reading
 -- L3's reach: accounts whose null-language contacts switch to Spanish on PR 2's deploy
 select id, brand_name from accounts where language = 'es';
--- §6.5's reach
-select recipe_key, count(*) filter (where body <> '') from automations group by recipe_key;
-select count(*) filter (where followup_body <> '') from calendars;
-select count(*) filter (where textback_body <> '') from voice_profiles;
+-- §6.5's reach (0076's own Q1 data step: a whitespace-only body is the senders' own "use the
+-- default" -- bookingFollowupEmail's `.trim()`, prepareTextback's `.trim() ||` -- so "customised"
+-- means one real, non-whitespace character, not merely a non-empty string)
+select recipe_key, count(*) filter (where body ~ '[^[:space:]]') from automations group by recipe_key;
+select count(*) filter (where followup_body ~ '[^[:space:]]') from calendars;
+select count(*) filter (where textback_body ~ '[^[:space:]]') from voice_profiles;
 ```
 
 The join columns are real: `form_submissions.form_id`, `.contact_id` and `.locale` (`0006_forms.sql:41-42`, `:53`).
