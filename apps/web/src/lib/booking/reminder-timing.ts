@@ -1,5 +1,10 @@
 import { SMS_REMINDER_WINDOW_END_MS } from "@bis/db";
 
+/** S-09 PR 2 (C16, Q3): the least notice a morning-of reminder email is still worth sending with. A
+ *  09:00 appointment gets 45-60 minutes (the release tick lands 08:00-08:15); 08:45 would get less use
+ *  than the confirmation already gave, so it gets none. */
+export const MORNING_OF_MIN_NOTICE_MS = 45 * 60 * 1000;
+
 /**
  * The latest instant an EMAIL reminder is still worth sending — the
  * `deadline` the reminders pass gives `holdOrSend` and the email gate. Past
@@ -17,16 +22,25 @@ import { SMS_REMINDER_WINDOW_END_MS } from "@bis/db";
  * too. With it, a held late email is dropped whenever 08:00 is at or past
  * that deadline.
  *
- * ACCEPTED, and the price of that rule: a late-booked appointment at or
- * before about 10:15 whose late window (3h-4h15m ahead) falls before 08:00 —
- * in practice an early-morning appointment booked the evening before — gets
- * NO separate reminder email. The confirmation it received at booking time is
- * its reminder, plus the text reminder where texting is on. Proved across a
- * whole day of appointments and booking times in
- * lib/automations/cron-coupling.test.ts, which also proves the email and the
- * text never land in the same quarter hour.
+ * S-09 PR 2 (C16, Q3): that deadline applies only when a text reminder WILL go
+ * (`textCovers`: the account has the text reminder on and can text, and the
+ * contact has a textable phone). With no text coming, a late reminder's
+ * deadline is the start minus `MORNING_OF_MIN_NOTICE_MS` (45 minutes): held
+ * overnight, it is released at 08:00 for every appointment after 08:45, so an
+ * early appointment booked the evening before no longer goes without a
+ * reminder where texting is off (every live account until A2P). Appointments
+ * at or before 08:45 still get none: the confirmation is their reminder.
+ * "Email and text never together" (D-029) stands, because the earlier
+ * deadline still applies whenever the text goes. Proved over a whole day of
+ * appointments and booking times, both ways, on an ordinary day, both DST
+ * days and UTC+14, in lib/automations/cron-coupling.test.ts.
+ *
+ * ACCEPTED, with a text coming: a late-booked appointment at or before about
+ * 10:15 whose late window (3h-4h15m ahead) falls before 08:00 gets NO separate
+ * reminder email; the confirmation and the text are its reminders.
  */
-export function reminderDeadline(reminder: { startsAt: string; late: boolean }): Date {
-  const startsAt = new Date(reminder.startsAt);
-  return reminder.late ? new Date(startsAt.getTime() - SMS_REMINDER_WINDOW_END_MS) : startsAt;
+export function reminderDeadline(reminder: { startsAt: string; late: boolean }, opts: { textCovers: boolean }): Date {
+  const startsAt = new Date(reminder.startsAt).getTime();
+  if (!reminder.late) return new Date(startsAt);
+  return new Date(startsAt - (opts.textCovers ? SMS_REMINDER_WINDOW_END_MS : MORNING_OF_MIN_NOTICE_MS));
 }

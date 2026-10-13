@@ -1130,8 +1130,11 @@ export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
  * ACCEPTED, and the price of that rule: a late-booked appointment at or
  * before about 10:15 whose late window falls before 08:00 — an early-morning
  * appointment booked the evening before — gets NO separate reminder email;
- * the confirmation is its reminder (plus the text, where texting is on).
- * Both the no-collision property and that exact cost are proved by a sweep
+ * the confirmation and the text are its reminders. With texting OFF for the
+ * row (no `textCovers`), the late email's deadline is the start minus 45
+ * minutes instead (S-09 PR 2, `MORNING_OF_MIN_NOTICE_MS`): held overnight, it
+ * is released at 08:00 for every appointment after 08:45.
+ * Both the no-collision property and those exact costs are proved by sweeps
  * over a whole day of appointments and booking times, through the real
  * sending-hours functions, in apps/web's cron-coupling.test.ts.
  */

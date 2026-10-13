@@ -3,8 +3,11 @@ import type { DueReminder, AutomationLogRow } from "@bis/db";
 
 const dbMocks = vi.hoisted(() => ({
   listDueReminders: vi.fn(), stampReminderSent: vi.fn(), getDueReminderById: vi.fn(), recordAutomationLog: vi.fn(), getAutomationLogEntry: vi.fn(),
+  getAutomation: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
+const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
+vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
 
 import type { PassContext } from "../context";
 import { remindersPass, releaseReminder } from "./reminders";
@@ -48,6 +51,8 @@ beforeEach(() => {
   dbMocks.stampReminderSent.mockResolvedValue(undefined);
   dbMocks.recordAutomationLog.mockResolvedValue(undefined);
   dbMocks.getAutomationLogEntry.mockResolvedValue(null);   // Task 3: the held path reads the existing row before re-holding
+  dbMocks.getAutomation.mockResolvedValue(null);           // S-09 PR 2 (C16): texting off unless a case turns it on
+  senderMock.resolveSmsSender.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
   emailSend.mockReset().mockResolvedValue({ providerMessageId: "e1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -89,7 +94,10 @@ describe("the email reminder under the fixed hours (08:00-21:00, choice 31)", ()
   // the 08:00 opening — so it is dropped, not held.
   it("D-029 review: a LATE reminder whose window is before 08:00 is dropped, not held to land beside the text reminder (mutation: deadline = start → held, FAILS)", async () => {
     const at0545 = new Date("2026-09-22T10:45:00Z"); // 05:45 CDT
-    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T14:00:00.000Z", late: true })]); // 09:00 CDT
+    // S-09 PR 2 (C16): the drop is the price of a text reminder coming, so texting is on and the phone textable.
+    dbMocks.getAutomation.mockResolvedValue({ enabled: true });
+    senderMock.resolveSmsSender.mockResolvedValue({ ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] });
+    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T14:00:00.000Z", late: true, contactPhone: "+19565550111" })]); // 09:00 CDT
     expect(await remindersPass.run(ctx(at0545))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1 });
     expect(emailSend).not.toHaveBeenCalled();
     expect(logCalls()).toEqual([expect.objectContaining({ status: "skipped", subjectKey: "booking:bk_1" })]);
@@ -97,7 +105,9 @@ describe("the email reminder under the fixed hours (08:00-21:00, choice 31)", ()
 
   it("D-029 review: a late reminder for 11:00 is still held to 08:00 (its 08:45 deadline is after the opening) — 45 minutes before the text", async () => {
     const at0645 = new Date("2026-09-22T11:45:00Z"); // 06:45 CDT
-    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T16:00:00.000Z", late: true })]); // 11:00 CDT
+    dbMocks.getAutomation.mockResolvedValue({ enabled: true });
+    senderMock.resolveSmsSender.mockResolvedValue({ ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] });
+    dbMocks.listDueReminders.mockResolvedValue([row({ startsAt: "2026-09-22T16:00:00.000Z", late: true, contactPhone: "+19565550111" })]); // 11:00 CDT
     expect(await remindersPass.run(ctx(at0645))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
     expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: END })]);
   });
@@ -194,5 +204,91 @@ describe("S-09 PR 2: the reminder email in the customer's language", () => {
     expect(sent.body).toContain("Cancel this booking: https://app.example.com/b/cal_pub/cancel/tok_1");
     expect(sent.body).not.toContain("locale=");
     expect(sent.language).toBe("en");
+  });
+});
+
+describe("S-09 PR 2 (C16, Q3): a late reminder's deadline depends on whether a text reminder will go", () => {
+  // 09:00 CDT on Sept 22, booked late (the evening before). Its late window is 04:45-06:00, outside the hours.
+  const lateRow = (o: Partial<DueReminder> = {}) => row({ startsAt: "2026-09-22T14:00:00.000Z", late: true, ...o });
+  const start = Date.parse("2026-09-22T14:00:00.000Z");
+  const AT_0500 = new Date("2026-09-22T10:00:00Z");   // 05:00 CDT
+  const AT_0800 = new Date(END);                      // 08:00 CDT, the opening
+  const textingOn = () => {
+    dbMocks.getAutomation.mockResolvedValue({ enabled: true });
+    senderMock.resolveSmsSender.mockResolvedValue({ ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] });
+  };
+  const gateDeadline = (i = 0) => (emailSend.mock.calls[i]![0] as { deadline: Date }).deadline.getTime();
+
+  it("(a) texting OFF: held at 05:00 to 08:00, and its deadline is the start minus 45 minutes (mutation: textCovers: true always -> FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" })]);
+    expect(await remindersPass.run(ctx(AT_0500))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "held", heldUntil: END })]);
+    await remindersPass.run(ctx(AT_0800));
+    expect(gateDeadline()).toBe(start - 45 * 60 * 1000);
+    expect(dbMocks.getAutomation).toHaveBeenCalledWith(expect.anything(), "acct_1", "sms_reminder");
+  });
+
+  it("(b) texting ON, a sender and a textable phone: the D-029 deadline, start minus 2h15m, so it is dropped at 05:00 (mutation: ignore the sender -> FAILS)", async () => {
+    textingOn();
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" })]);
+    expect(await remindersPass.run(ctx(AT_0500))).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1 });
+    await remindersPass.run(ctx(AT_0800));
+    expect(gateDeadline()).toBe(start - 135 * 60 * 1000);
+    expect(senderMock.resolveSmsSender).toHaveBeenCalledWith(expect.anything(), "acct_1");
+  });
+
+  it("(b2) the recipe is on but the account cannot text (no cleared sender): no text will go, so start minus 45 minutes (mutation: ignore the sender -> FAILS)", async () => {
+    dbMocks.getAutomation.mockResolvedValue({ enabled: true });
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" })]);
+    await remindersPass.run(ctx(AT_0800));
+    expect(gateDeadline()).toBe(start - 45 * 60 * 1000);
+  });
+
+  it("(b3) a sender but the recipe off: start minus 45 minutes (mutation: ignore the recipe -> FAILS)", async () => {
+    textingOn();
+    dbMocks.getAutomation.mockResolvedValue({ enabled: false });
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" })]);
+    await remindersPass.run(ctx(AT_0800));
+    expect(gateDeadline()).toBe(start - 45 * 60 * 1000);
+  });
+
+  it("(c) texting ON but no textable phone on the contact: start minus 45 minutes (mutation: ignore the phone -> FAILS)", async () => {
+    textingOn();
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: null }), lateRow({ bookingId: "bk_2", contactPhone: "not a phone" })]);
+    await remindersPass.run(ctx(AT_0800));
+    expect(emailSend).toHaveBeenCalledTimes(2);
+    expect([gateDeadline(0), gateDeadline(1)]).toEqual([start - 45 * 60 * 1000, start - 45 * 60 * 1000]);
+  });
+
+  it("(c2) a failed recipe read counts as no text (the safe side), is logged, and is read once per account per tick (mutation: drop the cache -> FAILS)", async () => {
+    dbMocks.getAutomation.mockRejectedValue(new Error("boom"));
+    dbMocks.listDueReminders.mockResolvedValue([lateRow({ contactPhone: "+19565550111" }), lateRow({ bookingId: "bk_2", contactPhone: "+19565550112" })]);
+    expect(await remindersPass.run(ctx(AT_0800))).toEqual({ sent: 2, failed: 0, unstamped: 0, held: 0, blocked: 0 });
+    expect([gateDeadline(0), gateDeadline(1)]).toEqual([start - 45 * 60 * 1000, start - 45 * 60 * 1000]);
+    expect(dbMocks.getAutomation).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("text-reminder read failed for account acct_1"));
+  });
+
+  it("(d) a NOT-late row never reads the recipe or the sender (the cost rule, spec §11.3; mutation: read for every row -> FAILS)", async () => {
+    textingOn();
+    dbMocks.listDueReminders.mockResolvedValue([row({ contactPhone: "+19565550111" })]);
+    await remindersPass.run(ctx(NOON));
+    expect(dbMocks.getAutomation).not.toHaveBeenCalled();
+    expect(senderMock.resolveSmsSender).not.toHaveBeenCalled();
+    expect(gateDeadline()).toBe(Date.parse(row().startsAt));
+  });
+
+  it("(e) the release at 08:00 for the 09:00 late row, texting off, SENDS with the same start-minus-45 deadline (mutation: release with { textCovers: true } -> FAILS)", async () => {
+    dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ contactPhone: "+19565550111" }) });
+    expect(await releaseReminder(ctx(AT_0800), held())).toBe("sent");
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(gateDeadline()).toBe(start - 45 * 60 * 1000);
+  });
+
+  it("(e2) the same release with texting ON hands the gate the D-029 deadline, start minus 2h15m (mutation: release with { textCovers: false } hard-coded -> FAILS)", async () => {
+    textingOn();
+    dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ contactPhone: "+19565550111" }) });
+    await releaseReminder(ctx(AT_0800), held());
+    expect(gateDeadline()).toBe(start - 135 * 60 * 1000);
   });
 });
