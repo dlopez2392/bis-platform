@@ -9,6 +9,7 @@ import { safeZone, formatWhen } from "@/lib/booking/time";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { appointmentConfirmDeadline, tooCloseToAsk } from "../appointment-confirm-gate";
+import { chooseBody } from "@bis/db";
 import { composeAppointmentConfirm } from "../appointment-confirm-copy";
 import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import {
@@ -52,6 +53,9 @@ import type { Pass, PassContext } from "../context";
  *
  * The time is rendered in the BOOKER's zone (safeZone, the email reminder's
  * rule), so a Los Angeles booker of a Texas company reads their own clock.
+ *
+ * S-09 PR 2: in the customer's language (the due row's `language`; an
+ * emptied Spanish box sends the whole text in English).
  */
 export const appointmentConfirmPass: Pass = {
   key: "appointmentConfirms",
@@ -149,12 +153,19 @@ export async function processAppointmentConfirms(
       // zone when the booking carries one (amendment B13), the account's
       // otherwise, and never UTC.
       const zone = safeZone(row.bookerTimezone ?? undefined, row.accountTimezone);
+      // S-09 PR 2: in the customer's language (the due row's `language`; an
+      // emptied Spanish box sends the whole text in English). Our Spanish
+      // default here is the empty string (plan deviation 4).
+      const chosen = chooseBody({
+        language: row.language, body: row.body, bodyEs: row.bodyEs,
+        defaults: { en: "", es: "" },
+      });
       const body = composeAppointmentConfirm(
-        row.brandName, formatWhen(new Date(row.startsAt), zone), row.body);
+        row.brandName, formatWhen(new Date(row.startsAt), zone, chosen.language), chosen.text, chosen.language);
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
           accountId: row.accountId, contactId: row.contactId, to, body,
-          kind: subject.smsKind, accountTimezone: row.accountTimezone,
+          kind: subject.smsKind, accountTimezone: row.accountTimezone, language: chosen.language,
           onProviderFailure: () => stampAppointmentConfirmSmsFailed(ctx.db, row.bookingId),
         });
         // SEND-THEN-STAMP; the stamp before the row's status, as everywhere.

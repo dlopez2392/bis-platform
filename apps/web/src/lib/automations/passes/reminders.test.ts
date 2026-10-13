@@ -174,3 +174,25 @@ describe("consent PR-3: the email goes through the gate", () => {
     expect(dbMocks.stampReminderSent).not.toHaveBeenCalled();
   });
 });
+
+describe("S-09 PR 2: the reminder email in the customer's language", () => {
+  it("es: Spanish subject, intro, date and cancel link, and the gate is told es (mutation: drop `language` from ctx.email.send -> FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row({ language: "es" })]);
+    await remindersPass.run(ctx(NOON));
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Recordatorio: su próxima cita");
+    expect(sent.body).toContain("Le recordamos su próxima cita.");
+    expect(sent.body).toContain("mar, 22 de sept");   // formatWhen(…, "es") of 2026-09-22 15:00 CDT
+    expect(sent.body).toContain("Cancelar esta cita: https://app.example.com/b/cal_pub/cancel/tok_1?locale=es");
+    expect(sent.language).toBe("es");
+  });
+  it("en: today's email, byte for byte, no ?locale (mutation: always add ?locale -> FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row()]);   // row() must now default language: "en" (Task 6 added the field)
+    await remindersPass.run(ctx(NOON));
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Reminder: your upcoming booking");
+    expect(sent.body).toContain("Cancel this booking: https://app.example.com/b/cal_pub/cancel/tok_1");
+    expect(sent.body).not.toContain("locale=");
+    expect(sent.language).toBe("en");
+  });
+});

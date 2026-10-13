@@ -1,7 +1,7 @@
 import { listDueReminders, stampReminderSent, getDueReminderById, type DueReminder } from "@bis/db";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { bookingReminderEmail } from "@/lib/email/templates/booking";
+import { bookingReminderEmail, bookingReminderSubject } from "@/lib/email/templates/booking";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
 import { reminderDeadline } from "@/lib/booking/reminder-timing";
@@ -36,6 +36,9 @@ import type { Pass, PassContext } from "../context";
  * less than a day ahead) has an earlier one — the start minus 2h15m — so a
  * held late email is dropped rather than released at 08:00 beside the text
  * reminder; `reminderDeadline` (lib/booking/reminder-timing.ts) is the rule.
+ *
+ * S-09 PR 2: in the customer's language (the due row's `language`; an
+ * emptied Spanish box sends the whole text in English).
  */
 export const remindersPass: Pass = {
   key: "reminders",
@@ -72,11 +75,16 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
 
       const brand = emailBrand(reminder.branding);
       const bookerZone = safeZone(reminder.bookerTimezone ?? undefined, reminder.accountTimezone);
-      const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone);
-      const cancelUrl = `${ctx.origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}`;
+      // S-09 PR 2: in the customer's language (the due row's `language`; an
+      // emptied Spanish box sends the whole text in English). No editable
+      // body here, so the row's resolved language IS the message's (C11).
+      const locale = reminder.language;
+      const whenBookerZone = formatWhen(new Date(reminder.startsAt), bookerZone, locale);
+      // ?locale=es as the confirmation's cancel link does (b/[publicId]/actions.ts), so the page matches the email.
+      const cancelUrl = `${ctx.origin}/b/${reminder.calendarPublicId}/cancel/${reminder.cancelToken}${locale === "es" ? "?locale=es" : ""}`;
 
       const { html, text } = bookingReminderEmail({
-        brand, whenBookerZone, cancelUrl, meetingUrl: reminder.meetingUrl ?? undefined,
+        brand, whenBookerZone, cancelUrl, meetingUrl: reminder.meetingUrl ?? undefined, locale,
       });
 
       const outcome = await holdOrSend(ctx, subject, async () => {
@@ -92,9 +100,10 @@ export async function processReminders(ctx: PassContext, reminders: DueReminder[
           fromName: brand.name,
           fromAddress: reminder.fromEmail ?? undefined,
           replyTo: normalizeReplyTo(reminder.branding.replyToEmail),
-          subject: "Reminder: your upcoming booking",
+          subject: bookingReminderSubject(locale),
           body: text,
           html,
+          language: locale,
         });
 
         // A send that already left the building counts as `sent` no matter

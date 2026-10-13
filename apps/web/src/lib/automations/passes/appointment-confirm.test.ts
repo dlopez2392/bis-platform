@@ -21,6 +21,8 @@ import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { formatWhen } from "@/lib/booking/time";
 import { appointmentConfirmPass, releaseAppointmentConfirm } from "./appointment-confirm";
+import { m } from "@/lib/messages";
+import { segmentsFor } from "@/lib/sms/segments";
 
 // 09:00 CDT: inside the fixed automated hours (08:00-21:00), so the default
 // tick sends. The quiet-hours case below moves the clock to 02:00 itself.
@@ -310,5 +312,24 @@ describe("appointmentConfirmPass: a refusal is counted as blocked, never as sent
     expect(c).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 1, skippedNoAddress: 0, skippedSmsGate: 0, unresolvableTimezone: 0 });
     expect(send).not.toHaveBeenCalled();
     expect(dbMocks.stampAppointmentConfirmAsked).not.toHaveBeenCalled();
+  });
+});
+
+describe("S-09 PR 2: the confirmation ask in the customer's language", () => {
+  it("es with bodyEs null (our Spanish default, the empty closing line): Spanish lead, GSM-7", async () => {
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row({ language: "es", bodyEs: null })]);
+    await appointmentConfirmPass.run(ctx());
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body.startsWith("Hola, le escribe ")).toBe(true);
+    expect(body).toContain("Responda SI para confirmar");
+    expect(body.endsWith(m["sms.optOut.es"])).toBe(true);
+    expect(segmentsFor(body).encoding).toBe("gsm7");
+  });
+  it("es with bodyEs '' (Q1's emptied state): English lead, English opt-out", async () => {
+    dbMocks.listDueAppointmentConfirms.mockResolvedValue([row({ language: "es", bodyEs: "" })]);
+    await appointmentConfirmPass.run(ctx());
+    const body = send.mock.calls[0]![0].body as string;
+    expect(body.startsWith("Hi, it's ")).toBe(true);
+    expect(body.endsWith(m["sms.optOut.en"])).toBe(true);
   });
 });
