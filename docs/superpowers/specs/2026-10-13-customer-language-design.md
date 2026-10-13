@@ -211,6 +211,12 @@ caller's actor only when it returned true.
 | Form | `lib/forms/enrich.ts`, after `createContact` (`:96-107`) | `pageLanguageSignal(locale, fallback)` with the submission's `locale` (`f/[publicId]/actions.ts:97`, threaded to `enrich`, `:213`) | `"form", "system"` (`:107`) |
 | Call | `lib/voice/finish-call.ts`, after `resolveContactId` (`:417`), meaningful calls only | `clearCallerLanguage(state.transcript)`; none when null | the finish's actor |
 
+Meaningful-only on the call row is enforced by WHERE `contactId` is set, not by a second test: `finishCall` resolves
+the contact only inside `if (meaningful)` (`isMeaningful`, `finish-call.ts:150-154`), so the signal's own
+`if (contactId)` cannot run for a spam, abandoned or transferred call (final review I-3). `recordLanguageSignal`
+throws on an rpc error; an `emit` failure AFTER the rpc set the language is logged and the rpc's answer still
+returned, because the write has committed (final review M-3, the same rule as `restoreContactLanguage`).
+
 ### 7.2 `clearCallerLanguage` (bis-voice, `lib/voice/language.ts`)
 
 From the caller's turns only (the file's own rule, `:1-4`), scored with the existing `ES_MARKERS`, `ES_CHARS` and
@@ -245,13 +251,21 @@ language to the signal's as a staff choice (`staff`, now), which hides it by the
 
 ### 7.5 Staff writes (bis-crm, `contacts/actions.ts`, already `proven-target`, `in-account-service-reads.test.ts:83`)
 
+(As built; amended after the final review. The source is `contacts/actions.ts`.)
+
 - `setContactLanguageAction(accountId, contactId, language)`: `requireAccountAccess`; `getContact` on
-  `dbForRequest()` (null → "not found", nothing written); then on the service client `language = $1,
-  language_source = 'staff', language_set_at = now()`; emits `contact.language_set` with `userId`, `"user"`;
-  returns `{ ok, undo: { language, source, setAt } }` (the prior triple, read in the same proof).
-- `restoreContactLanguageAction(accountId, contactId, prior)`: the same proof, writes the triple back (C9). The
-  prior source is validated against the closed set; a forged `staff` is harmless (it is the caller's own record).
-- `keepContactLanguageAction(accountId, contactId)`: the same proof, `language_hint_kept_at = now()`.
+  `dbForRequest()` (null → the generic `contact.language.saveFailed`, nothing written); then on the service
+  client `language = $1, language_source = 'staff', language_set_at = <this call's timestamp>`; emits
+  `contact.language_set` with `userId`, `"user"`; returns `{ ok: true, prior, written }`: the prior triple
+  (read in the same proof) and the triple this call actually wrote.
+- `restoreContactLanguageAction(accountId, contactId, prior, written)`: the same proof; both triples checked with
+  `isLanguageTriple`; then a compare-and-set ON `written` (the UPDATE's WHERE matches `written`'s language,
+  source and timestamp) writes `prior` back (C9). A row that changed since, or a forged `written`, updates zero
+  rows and the action refuses with `contact.language.changed` ("This customer's language changed since then.
+  Nothing was undone."), writing nothing.
+- `keepContactLanguageHintAction(accountId, contactId)`: the same proof, `language_hint_kept_at = now()`.
+- Every error these three return is translated on the SERVER into the reader's language (`requestLocale` with
+  the person's own language, then the account's), unlike other server actions' English error strings.
 
 ## 8. The record page and the drawer (PR 1, bis-crm)
 
@@ -268,7 +282,7 @@ Position: directly under Phone (it is about how we reach them), the same 92px la
 | State | Line |
 |---|---|
 | Set | **Español** · por su cita (3 oct) / **English** · from their booking (Oct 3) — the value as its endonym (`LANGUAGE_OPTIONS`, `lib/i18n/language-options.ts:7-10`), then the source phrase with the date in the account's zone and the page's language |
-| Not set | "Not set. Messages go out in English, the account's language." (C8; the account clause only when `accounts.language` is set) |
+| Not set | PR 1: "Not set. Messages go out in English." on every account, because nothing in PR 1 sends in Spanish and English is the only fallback that is true today. The account clause ("Messages go out in Spanish, the account's language.", C8, only when `accounts.language` is set) moves to PR 2 with the switch that makes it true (final review I-2). When the line cannot be built (a malformed stored value), it is left out, never a false "Not set." (final review M-2) |
 | Hint | under the line, muted: "Spoke English on the last call. Switch to English?" with two ghost buttons **Switch** and **Keep** (§15). Never a primary: the record's one primary is Call (DESIGN.md rule 8's record-page sentence) |
 | Loading | the Details skeleton line it sits in (rule 7) |
 | Error | the Details card's own error (it reads from the same contact row; no separate fetch) |
@@ -285,7 +299,9 @@ drawer's Esc rule unchanged (part 3 §9.7).
 
 ### 8.4 Bilingual
 
-The page and drawer already render in the reader's language (part 3 D10); every new key has its twin (§15). The
+The page and drawer already render in the reader's language (part 3 D10); every new key has its twin (§15), and the
+three actions' errors (`contact.language.saveFailed`, `contact.language.changed`) are translated on the server
+(§7.5), so a Spanish reader's toast is Spanish. The
 `lang` of the value: the endonym carries its own (`<span lang="es">Español</span>`), so a screen reader on an
 English page says it right.
 
@@ -532,7 +548,8 @@ how the Valley says it, and no accent in a text.
 |---|---|---|
 | `contact.language.label` | Language | Idioma |
 | `contact.language.notSet` | Not set. Messages go out in {language}. | Sin definir. Los mensajes salen en {language}. |
-| `contact.language.notSetAccount` | Not set. Messages go out in {language}, the account's language. | Sin definir. Los mensajes salen en {language}, el idioma de la cuenta. |
+| `contact.language.notSetAccount` (PR 2, with the switch; not in PR 1's catalogue, final review I-2) | Not set. Messages go out in {language}, the account's language. | Sin definir. Los mensajes salen en {language}, el idioma de la cuenta. |
+| `contact.language.choose` (the Select's placeholder when not set) | Choose | Elegir |
 | `contact.language.from.booking` | from their booking ({date}) | por su cita ({date}) |
 | `contact.language.from.form` | from a form they filled in ({date}) | por un formulario que llenó ({date}) |
 | `contact.language.from.call` | from a call ({date}) | por una llamada ({date}) |
@@ -544,10 +561,12 @@ how the Valley says it, and no accent in a text.
 | `contact.language.setToast` | Language set to {value}. | Idioma cambiado a {value}. |
 | `contact.language.keptToast` | We'll ask again if a newer call, booking or form says otherwise. | Le volveremos a preguntar si otra llamada, cita o formulario dice otra cosa. |
 | `contact.language.saveFailed` | Couldn't change the language. Try again. | No se pudo cambiar el idioma. Intente de nuevo. |
+| `contact.language.changed` (a stale Undo, §7.5) | This customer's language changed since then. Nothing was undone. | El idioma de este cliente cambió desde entonces. No se deshizo nada. |
 | `language.name.en` · `.es` (in a sentence) | English · Spanish | inglés · español |
 
 `{value}` is the endonym (English / Español); `{language}` is the in-sentence name. Undo is the existing toast
-Undo key.
+Undo key. In PR 1 `contact.language.notSet` always carries English (§8.2). `saveFailed` and `changed` are action
+errors, translated on the server (§7.5).
 
 ### 15.3 Settings (PR 2; cards' chrome renders in English, keys twinned for the ratchet)
 
@@ -684,7 +703,8 @@ select id, brand_name from accounts where language = 'es';
 -- §6.5's reach (0076's own Q1 data step: a whitespace-only body is the senders' own "use the
 -- default" -- bookingFollowupEmail's `.trim()`, prepareTextback's `.trim() ||` -- so "customised"
 -- means one real, non-whitespace character, not merely a non-empty string)
-select recipe_key, count(*) filter (where body ~ '[^[:space:]]') from automations group by recipe_key;
+select recipe_key, count(*) filter (where body ~ '[^[:space:]]') from automations
+  where recipe_key <> 'instant_reply' group by recipe_key;   -- 0076's data step skips it (C15)
 select count(*) filter (where followup_body ~ '[^[:space:]]') from calendars;
 select count(*) filter (where textback_body ~ '[^[:space:]]') from voice_profiles;
 ```
