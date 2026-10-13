@@ -19,7 +19,7 @@ const db = {
   getContact: vi.fn(), readMembership: vi.fn(), readGroup: vi.fn(),
   searchGroups: vi.fn(), createGroupWithMember: vi.fn(), addContactToGroup: vi.fn(),
   updateMembership: vi.fn(), setPrimaryMembership: vi.fn(), removeMembership: vi.fn(), restoreMembership: vi.fn(),
-  updateGroup: vi.fn(), GROUP_NAME_MAX: 120, GROUP_ROLE_MAX: 60, BILLING_ADDRESS_MAX: 300,
+  updateGroup: vi.fn(), setGroupPrimaryContact: vi.fn(), GROUP_NAME_MAX: 120, GROUP_ROLE_MAX: 60, BILLING_ADDRESS_MAX: 300,
 };
 // The REAL whitespace rule (0069's app.group_ws()), not a stand-in: m1 is about using it.
 vi.mock("@bis/db", async () => ({
@@ -33,7 +33,7 @@ const C = "11111111-1111-4111-8111-111111111111";
 const M = "22222222-2222-4222-8222-222222222222";
 const G = "33333333-3333-4333-8333-333333333333";
 const snap = (over: Partial<{ account_id: string }> = {}) => ({
-  id: M, account_id: "a1", client_group_id: G, contact_id: C, role: null, is_primary: false, is_billing: false, created_at: "x", ...over,
+  id: M, account_id: "a1", client_group_id: G, contact_id: C, role: null, is_primary: false, is_billing: false, is_primary_contact: false, created_at: "x", ...over,
 });
 
 beforeEach(() => {
@@ -165,6 +165,125 @@ describe("I1: a narrow caller restores only a membership THEY removed (no Undo i
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: false, error: "groups.failed" });
     expect(db.restoreMembership).not.toHaveBeenCalled();
+  });
+});
+
+describe("S-03 part 2: who we call first is Owner, Staff and the agency's to choose (C2)", () => {
+  const MB = "44444444-4444-4444-8444-444444444444";
+  const GARCIA = { id: G, kind: "household", name: "Garcia", billingAddress: null };
+  it("a Technician is refused before any read or service write (mutation: drop the seesWholeAccount check -> the service write runs, FAILS)", async () => {
+    access.role = "technician";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: null });
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.readGroup).not.toHaveBeenCalled();
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+  it("an unsettled role (null) is refused the same way: the rule fails closed", async () => {
+    access.role = null;
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.readGroup).not.toHaveBeenCalled();
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+  it("Staff: group and membership proven on the REQUEST client, written on the SERVICE client, previous handed back (mutation: prove on serviceDb -> FAILS)", async () => {
+    access.role = "staff";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: MB });
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: true, previous: MB });
+    expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", G);
+    expect(db.readMembership).toHaveBeenCalledWith(REQUEST, "a1", M);
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, M, "user_1");
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${G}`);
+  });
+  it("a group the request client cannot see is refused and never written (mutation: skip the readGroup proof -> FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(null);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: null });
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+  it("a membership of ANOTHER group is refused (mutation: drop the groupId comparison -> written, FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: MB });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: null });
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+  it("an Undo naming a membership that has gone is groups.failed and moves nothing (plan deviation 6; mutation: answer refused -> FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue(null);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.failed" });
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+  it("the database's not_found is groups.failed and revalidates nothing (mutation: ignore the status -> FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "not_found" });
+    expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.failed" });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("null clears, with no membership read (the agency, whatever its role field says)", async () => {
+    access.isAgency = true;
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: M });
+    expect(await A.setGroupPrimaryContactAction("a1", G, null)).toEqual({ ok: true, previous: M });
+    expect(db.readMembership).not.toHaveBeenCalled();
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, null, "user_1");
+  });
+  it("a bad id is refused before any read (mutation: drop the isUuid checks -> readGroup runs, FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    expect(await A.setGroupPrimaryContactAction("a1", "nope", M)).toEqual({ ok: false, error: "groups.refused" });
+    expect(await A.setGroupPrimaryContactAction("a1", G, "nope")).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.readGroup).not.toHaveBeenCalled();
+    expect(db.setGroupPrimaryContact).not.toHaveBeenCalled();
+  });
+});
+
+describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only when THEIR removal held it (spec §10)", () => {
+  beforeEach(() => { db.getContact.mockResolvedValue({ id: C }); db.restoreMembership.mockResolvedValue("ok"); });
+  it("a snapshot claiming the flag, whose removal event lacks wasPrimaryContact, is restored WITHOUT it (mutation: pass the snapshot through -> FAILS)", async () => {
+    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G } }];
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+  });
+  it("only a literal true counts: the text 'true' in a payload is not the flag (mutation: read it by truthiness -> FAILS)", async () => {
+    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G, wasPrimaryContact: "true" } }];
+    await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never);
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+  });
+  it("the removal event saying wasPrimaryContact restores the flag (mutation: always false -> FAILS)", async () => {
+    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G, wasPrimaryContact: true } }];
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: false } as never)).toEqual({ ok: true });
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+  });
+  it("the lookup selects the payload it judges by (mutation: select id only -> FAILS)", async () => {
+    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G } }];
+    await A.restoreMembershipAction("a1", snap());
+    expect(chain.select).toHaveBeenCalledWith("id, payload");
+  });
+  it("Staff's snapshot passes through as it came (they may choose the call-first member anyway)", async () => {
+    access.role = "staff";
+    await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never);
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
+  });
+  it("restore and remove revalidate the group's own page too (mutation: drop either groupPath revalidate -> FAILS)", async () => {
+    access.role = "staff";
+    await A.restoreMembershipAction("a1", snap());
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${G}`);
+    vi.mocked(revalidatePath).mockClear();
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.removeMembership.mockResolvedValue({ status: "ok", removed: snap() });
+    await A.removeMembershipAction("a1", M);
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${G}`);
   });
 });
 

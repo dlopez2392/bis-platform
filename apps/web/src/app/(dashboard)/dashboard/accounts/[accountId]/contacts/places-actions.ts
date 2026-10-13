@@ -5,7 +5,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { dbForRequest } from "@/lib/db";
 import {
-  getContact, getPlace, getEquipment, addPlace, updatePlace, setPlaceOwner, removePlace, setPlaceArchived,
+  getContact, readGroup, getPlace, getEquipment, addPlace, updatePlace, setPlaceOwner, removePlace, setPlaceArchived,
   restorePlace, addEquipment, replaceEquipment, updateEquipment, removeEquipment, restoreEquipment,
   type PlaceRow, type EquipmentRow, type PlaceOwner, type PlaceCtx,
 } from "@bis/db";
@@ -21,10 +21,11 @@ import { accountTodayForWrite } from "@/lib/contacts/account-today";
 /**
  * Properties and equipment (spec §6). Every write runs on the request client, never the service
  * client (C4), so 0071's RLS, its Technician fences and its two triggers bind it. Before any write:
- * the record is proven readable on that client (getContact), and the target is read on it and must
- * be ON the record: the record's own property, or one shared by a group the record belongs to. So
- * an action can never write a property the caller cannot read, nor record an event against a
- * record the property is not on (events carry the record's id as `contactId`).
+ * the record is proven readable on that client (getContact, or readGroup on a group's own page, S-03
+ * part 2), and the target is read on it and must be ON the record: the record's own property, or one
+ * shared by a group the record belongs to (a group's record is its own properties only). So an
+ * action can never write a property the caller cannot read, nor record an event against a record
+ * the property is not on (events carry the record's id as `contactId`, or `groupId` for a group).
  *
  * places.ts answers a change that changes nothing with the stored row and no write (review round
  * 1). Every change a caller may not make is therefore refused HERE, before places.ts: the owner
@@ -67,12 +68,28 @@ const ownerErrorFor = (e: unknown): PlaceErrorKey => (placeErrorCode(e) === "425
 const forBrowser = <R extends { created_by: string | null }>(row: R): R => ({ ...row, created_by: null });
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const ctxFor = (subject: string, access: { userId: string }): PlaceCtx => ({ subjectId: subject, actorId: access.userId });
+
+/** C12 (S-03 part 2): the record an action is taken from is a contact (a uuid, as every caller has
+ *  passed since 0071) or a group, on the group's own page. Parsed, never trusted: it came from a browser. */
+export type PlaceSubjectArg = string | { kind: "group"; id: string };
+type PlaceSubject = { kind: "contact" | "group"; id: string };
+function subjectOf(raw: unknown): PlaceSubject | null {
+  if (typeof raw === "string") return isUuid(raw) ? { kind: "contact", id: raw.toLowerCase() } : null;
+  if (isRecord(raw) && raw.kind === "group" && isUuid(raw.id)) return { kind: "group", id: raw.id.toLowerCase() };
+  return null;
+}
+/** A contact's ctx is the shape it has been since 0071 (places.ts defaults a missing kind to contact). */
+const ctxFor = (subject: PlaceSubject, access: { userId: string }): PlaceCtx =>
+  subject.kind === "group"
+    ? { subjectId: subject.id, subjectKind: "group", actorId: access.userId }
+    : { subjectId: subject.id, actorId: access.userId };
 const lowerOwner = (o: PlaceOwner): PlaceOwner =>
   o.contactId !== null ? { contactId: o.contactId.toLowerCase(), groupId: null } : { contactId: null, groupId: o.groupId.toLowerCase() };
 
-async function recordVisible(db: SupabaseClient, accountId: string, subject: string): Promise<boolean> {
-  return Boolean(await getContact(db, accountId, subject));
+async function recordVisible(db: SupabaseClient, accountId: string, subject: PlaceSubject): Promise<boolean> {
+  return subject.kind === "group"
+    ? Boolean(await readGroup(db, accountId, subject.id))
+    : Boolean(await getContact(db, accountId, subject.id));
 }
 
 /** Is the record a member of this group, as the caller's own client reads it? */
@@ -83,37 +100,40 @@ async function inGroup(db: SupabaseClient, accountId: string, subject: string, g
   return (data ?? []).length > 0;
 }
 
-/** The record's own, or shared by one of the record's groups. */
+/** The record's own: a contact's own place or one shared by its groups; a group's own place only
+ *  (C12: a member's own places are on the member's page, never the group's). */
 async function ownedByRecord(
-  db: SupabaseClient, accountId: string, subject: string, owner: Pick<PlaceRow, "contact_id" | "client_group_id">,
+  db: SupabaseClient, accountId: string, subject: PlaceSubject, owner: Pick<PlaceRow, "contact_id" | "client_group_id">,
 ): Promise<boolean> {
-  if (owner.contact_id !== null) return owner.contact_id.toLowerCase() === subject;
-  if (owner.client_group_id !== null) return inGroup(db, accountId, subject, owner.client_group_id);
+  if (subject.kind === "group") return owner.contact_id === null && owner.client_group_id?.toLowerCase() === subject.id;
+  if (owner.contact_id !== null) return owner.contact_id.toLowerCase() === subject.id;
+  if (owner.client_group_id !== null) return inGroup(db, accountId, subject.id, owner.client_group_id);
   return false;
 }
 const ownerAsRow = (o: PlaceOwner) => ({ contact_id: o.contactId, client_group_id: o.groupId });
 
 /** The place, read on the caller's client and on this record; null refuses. */
-async function placeOnRecord(db: SupabaseClient, accountId: string, subject: string, placeId: string): Promise<PlaceRow | null> {
+async function placeOnRecord(db: SupabaseClient, accountId: string, subject: PlaceSubject, placeId: string): Promise<PlaceRow | null> {
   const place = await getPlace(db, accountId, placeId.toLowerCase());
   return place && (await ownedByRecord(db, accountId, subject, place)) ? place : null;
 }
 
 /** The unit, read on the caller's client, at a place on this record; null refuses. */
-async function unitOnRecord(db: SupabaseClient, accountId: string, subject: string, equipmentId: string): Promise<EquipmentRow | null> {
+async function unitOnRecord(db: SupabaseClient, accountId: string, subject: PlaceSubject, equipmentId: string): Promise<EquipmentRow | null> {
   const unit = await getEquipment(db, accountId, equipmentId.toLowerCase());
   return unit && (await placeOnRecord(db, accountId, subject, unit.place_id)) ? unit : null;
 }
 
 export async function addPlaceAction(
-  accountId: string, subjectId: string, raw: unknown,
+  accountId: string, subjectArg: PlaceSubjectArg, raw: unknown,
 ): Promise<{ ok: true; place: PlaceRow } | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject) return invalid;
   const rawOwner = isRecord(raw) ? raw.owner : undefined;
-  // No owner named: the record's own property (the add form's default).
-  const named = rawOwner === undefined || rawOwner === null || rawOwner === "" ? { contactId: subject, groupId: null } : parseOwner(rawOwner);
+  // No owner named: the record's own property (the add form's default), a group's on a group's page.
+  const own: PlaceOwner = subject.kind === "group" ? { contactId: null, groupId: subject.id } : { contactId: subject.id, groupId: null };
+  const named = rawOwner === undefined || rawOwner === null || rawOwner === "" ? own : parseOwner(rawOwner);
   if (!named) return invalid;
   const owner = lowerOwner(named);
   const parsed = parsePlaceFields(raw);
@@ -130,11 +150,11 @@ export async function addPlaceAction(
 }
 
 export async function updatePlaceFieldAction(
-  accountId: string, subjectId: string, placeId: string, field: string, value: string,
+  accountId: string, subjectArg: PlaceSubjectArg, placeId: string, field: string, value: string,
 ): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(placeId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(placeId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -151,17 +171,19 @@ export async function updatePlaceFieldAction(
 }
 
 export async function setPlaceOwnerAction(
-  accountId: string, subjectId: string, placeId: string, owner: string,
+  accountId: string, subjectArg: PlaceSubjectArg, placeId: string, owner: string,
 ): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(placeId)) return invalid;
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(placeId)) return invalid;
+  // C12 (S-03 part 2): no "Move to" on a group's page, for anyone; refused before anything is read.
+  if (subject.kind === "group") return refused;
   // Owner and Staff work (spec §4, §5.3). Refused before anything is read, a change that would
   // change nothing included: places.ts answers that one without a write, so it would read as "ok".
   if (!seesWholeAccount(access)) return moveRefused;
   const named = parseOwner(owner);
   if (!named) return invalid;
   const next = lowerOwner(named);
-  const subject = subjectId.toLowerCase();
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -176,11 +198,11 @@ export async function setPlaceOwnerAction(
 }
 
 export async function removePlaceAction(
-  accountId: string, subjectId: string, placeId: string,
+  accountId: string, subjectArg: PlaceSubjectArg, placeId: string,
 ): Promise<{ ok: true; undo: PlaceRemovalUndo } | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(placeId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(placeId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -210,11 +232,11 @@ function parseRemovalUndo(v: unknown, accountId: string): PlaceRemovalUndo | nul
   return null;
 }
 
-export async function undoRemovePlaceAction(accountId: string, subjectId: string, undo: unknown): Promise<Ok | PlaceActionError> {
+export async function undoRemovePlaceAction(accountId: string, subjectArg: PlaceSubjectArg, undo: unknown): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
   const parsed = parseRemovalUndo(undo, accountId);
-  if (!isUuid(subjectId) || !parsed) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !parsed) return invalid;
   const ctx = ctxFor(subject, access);
   const db = await dbForRequest();
   try {
@@ -235,11 +257,11 @@ export async function undoRemovePlaceAction(accountId: string, subjectId: string
 }
 
 export async function setPlaceArchivedAction(
-  accountId: string, subjectId: string, placeId: string, archived: boolean,
+  accountId: string, subjectArg: PlaceSubjectArg, placeId: string, archived: boolean,
 ): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(placeId) || typeof archived !== "boolean") return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(placeId) || typeof archived !== "boolean") return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -253,11 +275,11 @@ export async function setPlaceArchivedAction(
 }
 
 export async function addEquipmentAction(
-  accountId: string, subjectId: string, placeId: string, raw: unknown,
+  accountId: string, subjectArg: PlaceSubjectArg, placeId: string, raw: unknown,
 ): Promise<{ ok: true; unit: EquipmentRow } | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(placeId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(placeId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -273,11 +295,11 @@ export async function addEquipmentAction(
 }
 
 export async function replaceEquipmentAction(
-  accountId: string, subjectId: string, equipmentId: string, raw: unknown,
+  accountId: string, subjectArg: PlaceSubjectArg, equipmentId: string, raw: unknown,
 ): Promise<{ ok: true; unit: EquipmentRow } | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(equipmentId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(equipmentId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -294,11 +316,11 @@ export async function replaceEquipmentAction(
 }
 
 export async function updateEquipmentFieldAction(
-  accountId: string, subjectId: string, equipmentId: string, field: string, value: string,
+  accountId: string, subjectArg: PlaceSubjectArg, equipmentId: string, field: string, value: string,
 ): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(equipmentId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(equipmentId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -315,11 +337,11 @@ export async function updateEquipmentFieldAction(
 }
 
 export async function removeEquipmentAction(
-  accountId: string, subjectId: string, equipmentId: string,
+  accountId: string, subjectArg: PlaceSubjectArg, equipmentId: string,
 ): Promise<{ ok: true; snapshot: EquipmentRow } | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId) || !isUuid(equipmentId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject || !isUuid(equipmentId)) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;
@@ -332,10 +354,10 @@ export async function removeEquipmentAction(
   }
 }
 
-export async function undoRemoveEquipmentAction(accountId: string, subjectId: string, snapshot: unknown): Promise<Ok | PlaceActionError> {
+export async function undoRemoveEquipmentAction(accountId: string, subjectArg: PlaceSubjectArg, snapshot: unknown): Promise<Ok | PlaceActionError> {
   const access = await requireAccountAccess(accountId);
-  if (!isUuid(subjectId)) return invalid;
-  const subject = subjectId.toLowerCase();
+  const subject = subjectOf(subjectArg);
+  if (!subject) return invalid;
   const db = await dbForRequest();
   try {
     if (!(await recordVisible(db, accountId, subject))) return refused;

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   serviceDb, getContact, readMembership, readGroup, searchGroups, createGroupWithMember, addContactToGroup,
-  updateMembership, setPrimaryMembership, removeMembership, restoreMembership, updateGroup,
+  updateMembership, setPrimaryMembership, removeMembership, restoreMembership, updateGroup, setGroupPrimaryContact,
   GROUP_NAME_MAX, GROUP_ROLE_MAX, BILLING_ADDRESS_MAX, dbTrimmedLength,
   type GroupKind, type GroupMemberSnapshot, type GroupSearchHit,
 } from "@bis/db";
@@ -29,6 +29,8 @@ const refused = { ok: false, error: "groups.refused" } as const;
 const failed = { ok: false, error: "groups.failed" } as const;
 const tooLong = { ok: false, error: "groups.tooLong" } as const;
 const contactsPath = (accountId: string) => `/dashboard/accounts/${accountId}/contacts`;
+/** S-03 part 2: the group's own record page, which shows its members and who we call first. */
+const groupPath = (accountId: string, groupId: string) => `/dashboard/accounts/${accountId}/groups/${groupId}`;
 
 /**
  * Fix round 1, I1: a group write can change contacts.company_name (0069's
@@ -174,6 +176,7 @@ export async function removeMembershipAction(
     const r = await removeMembership(serviceDb(), accountId, memberId, userId);
     if (r.status !== "ok") return refuse(L, accountId, r.status, { member: memberId });
     revalidateContacts(accountId, proven.contactId);
+    revalidatePath(groupPath(accountId, proven.groupId));
     return { ok: true, removed: r.removed };
   });
 }
@@ -192,14 +195,18 @@ export async function removeMembershipAction(
  * events_account_created rather than the account's whole history.
  */
 const RESTORE_WINDOW_MS = 24 * 60 * 60 * 1000;
-async function removedByCaller(accountId: string, userId: string, snapshot: GroupMemberSnapshot): Promise<boolean> {
-  const { data, error } = await serviceDb().from("events").select("id")
+async function removedByCaller(
+  accountId: string, userId: string, snapshot: GroupMemberSnapshot,
+): Promise<{ found: boolean; wasPrimaryContact: boolean }> {
+  const { data, error } = await serviceDb().from("events").select("id, payload")
     .eq("account_id", accountId).eq("type", "client_group.member_removed").eq("actor_id", userId)
     .contains("payload", { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id })
     .gte("created_at", new Date(Date.now() - RESTORE_WINDOW_MS).toISOString())
     .limit(1);
   if (error) throw new Error(`restore removal lookup failed: ${error.message}`);
-  return (data ?? []).length > 0;
+  const row = (data ?? [])[0] as { payload?: { wasPrimaryContact?: unknown } } | undefined;
+  // Only a literal true: removeMembership records the stored flag as a boolean (S-03 part 2).
+  return { found: Boolean(row), wasPrimaryContact: row?.payload?.wasPrimaryContact === true };
 }
 
 export async function restoreMembershipAction(accountId: string, snapshot: GroupMemberSnapshot): Promise<GroupResult> {
@@ -215,12 +222,19 @@ export async function restoreMembershipAction(accountId: string, snapshot: Group
   }
   return guarded<object>(L, accountId, async () => {
     if (!(await getContact(await dbForRequest(), accountId, snapshot.contact_id))) return refuse(L, accountId, "contact not visible", ids);
-    if (!seesWholeAccount(access) && !(await removedByCaller(accountId, userId, snapshot))) {
-      return refuse(L, accountId, "not the caller's removal", ids);
+    let toRestore: GroupMemberSnapshot = snapshot;
+    if (!seesWholeAccount(access)) {
+      const removal = await removedByCaller(accountId, userId, snapshot);
+      if (!removal.found) return refuse(L, accountId, "not the caller's removal", ids);
+      // S-03 part 2 (spec §10, C2): the snapshot is a claim from the browser. Who we call first comes
+      // back only when the caller's own removal event recorded that this member held it: a narrow
+      // caller may not choose who the group's Call reaches, so an Undo cannot be a way to choose it.
+      toRestore = { ...snapshot, is_primary_contact: removal.wasPrimaryContact };
     }
-    const r = await restoreMembership(serviceDb(), accountId, snapshot, userId);
+    const r = await restoreMembership(serviceDb(), accountId, toRestore, userId);
     if (r !== "ok") return refuse(L, accountId, r, ids);
     revalidateContacts(accountId, snapshot.contact_id);
+    revalidatePath(groupPath(accountId, snapshot.client_group_id));
     return { ok: true };
   });
 }
@@ -265,5 +279,41 @@ export async function setBillingAddressAction(
     if (!(await provenGroupForManager(access, accountId, groupId))) return refuse(L, accountId, "not a manager, or group not visible", { group: groupId });
     const r = await updateGroup(serviceDb(), accountId, groupId, { billingAddress: address }, access.userId);
     return r.status === "ok" ? { ok: true, previous: r.previous.billingAddress } : refuse(L, accountId, r.status, { group: groupId });
+  });
+}
+
+/**
+ * Who we call first in a household or business (S-03 part 2, migration 0075). Owner, Staff and the
+ * agency only (C2: it decides who the whole group's Call reaches, and a group can hold customers a
+ * Technician does not serve), refused before any read for a narrow caller. The group and, when given,
+ * the membership are proven on the request client, then 0075's function writes on the service client.
+ * `memberId` null clears (the Undo of a first choice). A manager sees every membership, so one that is
+ * not there has gone since (an Undo's `previous`): that is "didn't save", not "you can't" (plan
+ * deviation 6).
+ */
+export async function setGroupPrimaryContactAction(
+  accountId: string, groupId: string, memberId: string | null,
+): Promise<GroupResult<{ previous: string | null }>> {
+  const access = await requireAccountAccess(accountId);
+  const L = "setGroupPrimaryContactAction";
+  const ids = memberId === null ? { group: groupId } : { group: groupId, member: memberId };
+  if (!isUuid(groupId) || (memberId !== null && !isUuid(memberId))) return refuse(L, accountId, "bad input", ids);
+  if (!seesWholeAccount(access)) return refuse(L, accountId, "not a manager", ids);
+  return guarded<{ previous: string | null }>(L, accountId, async () => {
+    const db = await dbForRequest();
+    if (!(await readGroup(db, accountId, groupId))) return refuse(L, accountId, "group not visible", ids);
+    if (memberId !== null) {
+      const proven = await readMembership(db, accountId, memberId);
+      if (!proven) {
+        console.warn(`${L}: account ${accountId}: groups.failed (membership gone): member ${memberId}`);
+        return failed;
+      }
+      // PostgREST echoes ids lowercase; the browser's may not be.
+      if (proven.groupId.toLowerCase() !== groupId.toLowerCase()) return refuse(L, accountId, "membership of another group", ids);
+    }
+    const r = await setGroupPrimaryContact(serviceDb(), accountId, groupId, memberId, access.userId);
+    if (r.status !== "ok") return failed;
+    revalidatePath(groupPath(accountId, groupId));
+    return { ok: true, previous: r.previous };
   });
 }

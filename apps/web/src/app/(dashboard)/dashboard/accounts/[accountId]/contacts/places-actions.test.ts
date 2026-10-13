@@ -59,7 +59,7 @@ const writers = {
   restorePlace: vi.fn(), addEquipment: vi.fn(), replaceEquipment: vi.fn(), updateEquipment: vi.fn(),
   removeEquipment: vi.fn(), restoreEquipment: vi.fn(),
 };
-const reads = { getContact: vi.fn(), getPlace: vi.fn(), getEquipment: vi.fn() };
+const reads = { getContact: vi.fn(), getPlace: vi.fn(), getEquipment: vi.fn(), readGroup: vi.fn() };
 const serviceDb = vi.fn(() => { throw new Error("serviceDb must never be called here"); });
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
@@ -117,6 +117,7 @@ beforeEach(() => {
   reads.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === S || id === OTHER ? { id, first_name: "Sofía" } : null));
   reads.getPlace.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === P ? PLACE : id === P2 ? GROUP_PLACE : null));
   reads.getEquipment.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === U ? UNIT : null));
+  reads.readGroup.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === G ? { id: G, kind: "household", name: "Casa Reyes", billingAddress: null } : null));
   writers.addPlace.mockResolvedValue(PLACE);
   writers.updatePlace.mockResolvedValue({ previous: { label: null }, row: { ...PLACE, label: "Casa" } });
   writers.setPlaceOwner.mockResolvedValue({ previous: { contactId: S, groupId: null }, row: GROUP_PLACE });
@@ -178,6 +179,121 @@ describe("places-actions: the proofs before any write", () => {
     expect(await removeEquipmentAction(A, "nope", U)).toEqual({ ok: false, error: "places.error.invalid" });
     expect(reads.getContact).not.toHaveBeenCalled();
     expect(anyWriterCalled()).toBe(false);
+  });
+});
+
+/**
+ * S-03 part 2 (C12): the group's own page takes the same actions with a group subject. A group's
+ * record is its OWN places only: never a member's, and no "Move to" from there.
+ */
+describe("S-03 part 2: a group subject (the group's own page)", () => {
+  const GS = { kind: "group" as const, id: G };
+  const GUNIT: EquipmentRow = { ...UNIT, place_id: P2 };
+  const GROUP_CTX = { subjectId: G, subjectKind: "group", actorId: "user_1" };
+  const ALL_GROUP: [name: string, run: () => Promise<{ ok: boolean }>][] = [
+    ["addPlaceAction", () => addPlaceAction(A, GS, { address: "1204 Nolana Ave" })],
+    ["updatePlaceFieldAction", () => updatePlaceFieldAction(A, GS, P2, "label", "Casa")],
+    ["setPlaceOwnerAction", () => setPlaceOwnerAction(A, GS, P2, `group:${G}`)],
+    ["removePlaceAction", () => removePlaceAction(A, GS, P2)],
+    ["undoRemovePlaceAction (deleted)", () => undoRemovePlaceAction(A, GS, { mode: "deleted", snapshot: GROUP_PLACE })],
+    ["undoRemovePlaceAction (archived)", () => undoRemovePlaceAction(A, GS, { mode: "archived", placeId: P2 })],
+    ["setPlaceArchivedAction", () => setPlaceArchivedAction(A, GS, P2, false)],
+    ["addEquipmentAction", () => addEquipmentAction(A, GS, P2, { name: "Water heater" })],
+    ["replaceEquipmentAction", () => replaceEquipmentAction(A, GS, U, { name: "New AC", installed_on: "2026-10-01" })],
+    ["updateEquipmentFieldAction", () => updateEquipmentFieldAction(A, GS, U, "make", "Carrier")],
+    ["removeEquipmentAction", () => removeEquipmentAction(A, GS, U)],
+    ["undoRemoveEquipmentAction", () => undoRemoveEquipmentAction(A, GS, GUNIT)],
+  ];
+  beforeEach(() => {
+    reads.getEquipment.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === U ? GUNIT : null));
+  });
+
+  it("adding with no owner named adds the GROUP's own place, proven by readGroup on the request client, never getContact (mutation: default the owner to { contactId: subject } for both kinds -> FAILS)", async () => {
+    expect((await addPlaceAction(A, GS, { address: "1204 Nolana Ave" })).ok).toBe(true);
+    expect(reads.readGroup).toHaveBeenCalledWith(REQUEST, A, G);
+    expect(reads.getContact).not.toHaveBeenCalled();
+    expect(writers.addPlace).toHaveBeenCalledWith(REQUEST, A, { contactId: null, groupId: G },
+      expect.objectContaining({ address: "1204 Nolana Ave" }), GROUP_CTX);
+  });
+
+  it("every action but the owner change works on the group's own place, and each write names the group as its subject (mutation: prove a group subject with getContact -> FAILS)", async () => {
+    for (const [name, run] of ALL_GROUP.filter(([n]) => n !== "setPlaceOwnerAction")) expect([name, (await run()).ok]).toEqual([name, true]);
+    expect(reads.getContact).not.toHaveBeenCalled();
+    expect(reads.readGroup.mock.calls.every((c) => c[0] === REQUEST && c[1] === A && c[2] === G)).toBe(true);
+    // A group's own place is matched on its owner, never by a membership read (the group is no member of itself).
+    expect(memberProbes).toEqual([]);
+    const ctxs = Object.entries(writers).flatMap(([name, w]) => w.mock.calls.map((c) => [name, c[0], c[c.length - 1]]));
+    expect(ctxs).toHaveLength(11);
+    for (const [name, db, ctx] of ctxs) expect([name, db, ctx]).toEqual([name, REQUEST, GROUP_CTX]);
+  });
+
+  it("a group the request client cannot see refuses every action and writes nothing (mutation: skip recordVisible for a group -> FAILS)", async () => {
+    reads.readGroup.mockResolvedValue(null);
+    for (const [name, run] of ALL_GROUP) {
+      expect([name, await run()]).toEqual([name, { ok: false, error: "places.refused" }]);
+      expect([name, anyWriterCalled()]).toEqual([name, false]);
+    }
+  });
+
+  it("a place owned by a CONTACT, even a member's, is not on the group's record (mutation: accept a member's own place on the group page -> FAILS)", async () => {
+    // S is a member of G (memberships), and PLACE is S's own.
+    for (const run of [
+      () => updatePlaceFieldAction(A, GS, P, "label", "Casa"), () => removePlaceAction(A, GS, P),
+      () => setPlaceArchivedAction(A, GS, P, true), () => addEquipmentAction(A, GS, P, { name: "AC" }),
+      () => undoRemovePlaceAction(A, GS, { mode: "deleted", snapshot: PLACE }),
+      () => undoRemovePlaceAction(A, GS, { mode: "archived", placeId: P }),
+    ]) {
+      expect(await run()).toEqual({ ok: false, error: "places.refused" });
+    }
+    // Nor may the group page ADD a place that a contact owns, or one another group owns.
+    expect(await addPlaceAction(A, GS, { owner: `contact:${S}`, address: "1204 Nolana Ave" })).toEqual({ ok: false, error: "places.refused" });
+    expect(await addPlaceAction(A, GS, { owner: `group:${G2}`, address: "1204 Nolana Ave" })).toEqual({ ok: false, error: "places.refused" });
+    // Another group's place is not on this group's record either.
+    reads.getPlace.mockResolvedValue({ ...GROUP_PLACE, client_group_id: G2 });
+    expect(await updatePlaceFieldAction(A, GS, P2, "label", "Casa")).toEqual({ ok: false, error: "places.refused" });
+    expect(anyWriterCalled()).toBe(false);
+  });
+
+  it("the owner change is places.refused from a group's page before anything is read, even for an Owner (C12: no Move to there; mutation: drop the group refusal -> FAILS)", async () => {
+    expect(await setPlaceOwnerAction(A, GS, P2, `group:${G}`)).toEqual({ ok: false, error: "places.refused" });
+    expect(await setPlaceOwnerAction(A, GS, P2, `contact:${S}`)).toEqual({ ok: false, error: "places.refused" });
+    expect(reads.readGroup).not.toHaveBeenCalled();
+    expect(reads.getPlace).not.toHaveBeenCalled();
+    expect(writers.setPlaceOwner).not.toHaveBeenCalled();
+  });
+
+  it("a malformed subject is places.error.invalid before any read, in every action (mutation: trust any object with an id -> FAILS)", async () => {
+    const bad: unknown[] = [{ kind: "group", id: "nope" }, { kind: "contact", id: G }, 42, null, { id: G }, [G]];
+    for (const subject of bad) {
+      const s = subject as never;
+      for (const [name, run] of [
+        ["addPlaceAction", () => addPlaceAction(A, s, { address: "1204 Nolana Ave" })],
+        ["updatePlaceFieldAction", () => updatePlaceFieldAction(A, s, P2, "label", "Casa")],
+        ["setPlaceOwnerAction", () => setPlaceOwnerAction(A, s, P2, `group:${G}`)],
+        ["removePlaceAction", () => removePlaceAction(A, s, P2)],
+        ["undoRemovePlaceAction", () => undoRemovePlaceAction(A, s, { mode: "archived", placeId: P2 })],
+        ["setPlaceArchivedAction", () => setPlaceArchivedAction(A, s, P2, false)],
+        ["addEquipmentAction", () => addEquipmentAction(A, s, P2, { name: "Water heater" })],
+        ["replaceEquipmentAction", () => replaceEquipmentAction(A, s, U, { name: "New AC", installed_on: "2026-10-01" })],
+        ["updateEquipmentFieldAction", () => updateEquipmentFieldAction(A, s, U, "make", "Carrier")],
+        ["removeEquipmentAction", () => removeEquipmentAction(A, s, U)],
+        ["undoRemoveEquipmentAction", () => undoRemoveEquipmentAction(A, s, GUNIT)],
+      ] as const) {
+        expect([JSON.stringify(subject), name, await run()]).toEqual([JSON.stringify(subject), name, { ok: false, error: "places.error.invalid" }]);
+      }
+    }
+    expect(reads.readGroup).not.toHaveBeenCalled();
+    expect(reads.getContact).not.toHaveBeenCalled();
+    expect(reads.getPlace).not.toHaveBeenCalled();
+    expect(anyWriterCalled()).toBe(false);
+  });
+
+  it("an uppercase group id is the same group: proven and written lowercase (mutation: drop the group id's .toLowerCase() -> FAILS)", async () => {
+    const mine: PlaceRow = { ...GROUP_PLACE, client_group_id: LETTERED };
+    reads.readGroup.mockImplementation(async (_db: unknown, _a: string, id: string) => (id === LETTERED ? { id } : null));
+    reads.getPlace.mockResolvedValue(mine);
+    expect(await updatePlaceFieldAction(A, { kind: "group", id: LETTERED.toUpperCase() }, P2, "label", "Casa")).toEqual({ ok: true });
+    expect(writers.updatePlace).toHaveBeenCalledWith(REQUEST, A, P2, { label: "Casa" }, { subjectId: LETTERED, subjectKind: "group", actorId: "user_1" });
   });
 });
 
