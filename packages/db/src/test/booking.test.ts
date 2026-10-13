@@ -2044,7 +2044,7 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
       expect(anaOnly.map((b) => b.id)).toEqual([anaBooking.id]);
     }));
 
-  it("S-09 PR 2: the reminder and the follow-up carry the customer's language — the contact's, else the account's, else English (mutation: drop `language` from REMINDER_SELECT's contact embed -> FAILS)", async () => {
+  it("S-09 PR 2: the due reminder carries the customer's language and phone — the contact's, else the account's, else English (mutation: drop `language` from REMINDER_SELECT's contact embed -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       // Distinct phones: createContact's own dedupe (findDuplicate, contacts.ts) merges a SECOND
@@ -2070,7 +2070,7 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
     });
   });
 
-  it("S-09 PR 2: a calendar's Spanish follow-up box round-trips and reaches the follow-up row (mutation: omit followup_body_es from CALENDAR_COLS -> FAILS)", async () => {
+  it("S-09 PR 2: a calendar's Spanish follow-up box and its basis round-trip through updateCalendarSettings and getOrCreateCalendar (mutation: omit followup_body_es from CALENDAR_COLS -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       await updateCalendarSettings(db, accountId, { followupBodyEs: "Gracias.", followupBodyEsBasis: "Thanks." }, "user_test");
