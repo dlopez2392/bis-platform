@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { m } from "./messages";
+import { m, type MessageKey } from "./messages";
 
 /**
  * Internal roadmap labels must not reach a screen a client can open.
@@ -161,5 +161,38 @@ describe("prefs theme copy in Spanish names the theme, not the account", () => {
   it("says what the brief asked for", () => {
     expect(m["prefs.saved.theme.none.es"]).toBe("Volviste al tema predeterminado.");
     expect(m["prefs.theme.empty.es"]).toBe("Aún no has elegido, así que ves el tema {mode}.");
+  });
+});
+
+describe("the document vault's copy (S-07 part 1)", () => {
+  const CATEGORIES = ["id", "contract", "estimate", "invoice", "photo", "permit", "insurance", "warranty", "other"] as const;
+  it("the nine category words are the spec's table, in both languages (mutation: change documents.category.estimate.es -> FAILS)", () => {
+    const want: Record<(typeof CATEGORIES)[number], [string, string]> = {
+      id: ["ID", "Identificación"], contract: ["Contract", "Contrato"], estimate: ["Estimate or quote", "Presupuesto"],
+      invoice: ["Invoice or receipt", "Factura o recibo"], photo: ["Photo", "Foto"], permit: ["Permit or license", "Permiso o licencia"],
+      insurance: ["Insurance", "Seguro"], warranty: ["Warranty", "Garantía"], other: ["Other", "Otro"],
+    };
+    for (const k of CATEGORIES) {
+      expect([m[`documents.category.${k}` as MessageKey], m[`documents.category.${k}.es` as MessageKey]], k).toEqual(want[k]);
+    }
+  });
+  it("the empty sentence is the spec's, in usted (mutation: 'Sube' for 'Suba' -> FAILS)", () => {
+    expect(m["documents.empty.contact"]).toBe("Contracts, IDs, photos and receipts for this customer are kept here. Upload a file or take a photo.");
+    expect(m["documents.empty.contact.es"]).toBe("Aquí se guardan los contratos, identificaciones, fotos y recibos de este cliente. Suba un archivo o tome una foto.");
+  });
+  it("the four upload failures are the spec's words (mutation: drop 'or contact BIS' -> FAILS)", () => {
+    expect(m["documents.error.tooLarge"]).toBe("Too large: {size}. The limit is 25 MB.");
+    expect(m["documents.error.badType"]).toBe("This kind of file can't be kept here. Use PDF, JPG, PNG, WebP, Word or Excel.");
+    expect(m["documents.error.quota"]).toBe("Your account's 5 GB is full. Delete files you no longer need, or contact BIS.");
+    expect(m["documents.error.upload"]).toBe("Couldn't upload. Try again.");
+  });
+  it("the delete dialog's file line is the owner's wording, both languages (mutation: 'Esto también borra' -> FAILS)", () => {
+    expect(m["contacts.delete.alsoFiles"]).toBe("This also deletes {count} files.");
+    expect(m["contacts.delete.alsoFiles.es"]).toBe("También se borrarán {count} archivos.");
+  });
+  it("the bulk delete dialog has Spanish (mutation: drop bulk.confirmBody.es -> FAILS)", () => {
+    for (const k of ["common.cancel", "bulk.delete", "bulk.confirmTitle", "bulk.confirmTitleOne", "bulk.confirmBody"]) {
+      expect(m[(k + ".es") as MessageKey], k).toBeTruthy();
+    }
   });
 });
