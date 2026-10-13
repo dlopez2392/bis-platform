@@ -51,12 +51,30 @@ describe("splitSummaryBlocks", () => {
     expect(notes?.text).toBe(prose);
   });
 
-  it("labels every block after the first as prose, however many there are", () => {
+  it("labels every block that isn't a marker match as prose, however many there are (mutation: classify by index 0 instead of the marker -> FAILS)", () => {
     const blocks = splitSummaryBlocks(
       "RECORDED — Booked: no appointment was recorded · Intake: nothing captured.\n\nFirst paragraph.\n\nSecond paragraph.",
     );
     expect(blocks.map((b) => b.kind)).toEqual(["facts", "prose", "prose"]);
     expect(blocks.at(-1)?.text).toBe("Second paragraph.");
+  });
+
+  // Review fix: 34 of 271 production calls (the Resaca demo account among
+  // them) have a summary with NO fact line at all — just the model's prose.
+  // Classifying "facts" by POSITION (first block, whatever it is) read that
+  // lone paragraph as the system's own record and, on the timeline row,
+  // rendered nothing (the row only ever shows PROSE blocks). "facts" is now
+  // exactly as explicit as "mismatch": a block earns it only by starting
+  // with the fact line's own marker.
+  it("a lone block with no fact-line marker is prose, never facts by position (mutation: classify by index 0 -> FAILS)", () => {
+    const summary = "Wants a replacement quote — 18-year-old system, says it's making noise.";
+    expect(splitSummaryBlocks(summary)).toEqual([{ kind: "prose", text: summary }]);
+  });
+
+  it("a lone block that DOES start with the fact-line marker is still facts (mutation: require a second block before calling anything facts -> FAILS)", () => {
+    expect(splitSummaryBlocks("RECORDED — Booked: no appointment was recorded · Intake: nothing captured.")).toEqual([
+      { kind: "facts", text: "RECORDED — Booked: no appointment was recorded · Intake: nothing captured." },
+    ]);
   });
 
   it("recognises the warning by its marker wherever it sits, and never calls it facts", () => {

@@ -4,6 +4,17 @@ import { wasTransferred } from "./call-state";
 /** Rendered in place of an empty section so the model cannot read blank as "unknown". */
 const NONE = "(none)";
 
+/**
+ * The marker `summaryFactLine` writes ahead of every fact line it composes.
+ * Shared with summary-blocks.ts (lib/voice/summary-blocks.ts) so that
+ * splitter can tell a real fact line from the model's own prose by content,
+ * not by its position in the joined string — a summary with nothing to
+ * state as fact (choice: no fact line at all, which composeSummary never
+ * actually produces, but a defensive splitter should not assume) must not
+ * have its lone prose paragraph mislabelled "facts" just for sitting first.
+ */
+export const FACT_LINE_MARKER = "RECORDED —";
+
 function bookedAppointments(state: CallState) {
   return state.bookings.filter((b) => b.status === "booked");
 }
@@ -91,7 +102,7 @@ export function summaryFactLine(state: CallState): string {
 
   parts.push(intake.length > 0 ? "Intake: captured" : "Intake: nothing captured");
   if (state.messages.length > 0) parts.push(`Messages: ${state.messages.length}`);
-  return `RECORDED — ${parts.join(" · ")}.`;
+  return `${FACT_LINE_MARKER} ${parts.join(" · ")}.`;
 }
 
 export interface SummaryCheck {
