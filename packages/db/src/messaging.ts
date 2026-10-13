@@ -900,18 +900,34 @@ export function chooseBody(input: {
   return theirs ? { language: "es", text: theirs } : english;
 }
 
-/** C14, spec §12.3: a comparison with the English the Spanish was written beside. No clock. */
+/**
+ * C14, spec §12.3: a comparison with the English the Spanish was written beside. No clock.
+ * "Emptied" is trim-empty, not literally `''` (orchestrator fix 2): a box left all-whitespace
+ * reads the same as emptied, or it would warn about a Spanish body nobody can send. The basis
+ * comparison trims both sides too (orchestrator fix 3), so a caller that stores the English with
+ * different surrounding whitespace than this one reads can't produce a permanent false warning —
+ * callers still pass the exact English they store (see `nextSpanishBox`'s docstring).
+ */
 export function spanishIsStale(input: { body: string; bodyEs: string | null; bodyEsBasis: string | null }): boolean {
-  if (input.bodyEs === "") return false;
+  if (input.bodyEs !== null && input.bodyEs.trim() === "") return false;
   if (input.body.trim() === "" && input.bodyEs === null) return false;
-  return input.bodyEsBasis !== input.body;
+  const basis = input.bodyEsBasis === null ? null : input.bodyEsBasis.trim();
+  return basis !== input.body.trim();
 }
 
 /**
  * The save side (plan deviation 3). Order matters (finding F1): an unchanged box keeps what is
  * stored; "Use our Spanish" stores NULL; a box equal to our default stores NULL (the 0024
- * discipline); anything else is theirs, '' meaning emptied. The basis moves to the new English
- * only when the Spanish changed in this save or "The Spanish still matches" was ticked.
+ * discipline); anything else is theirs, '' meaning emptied. Callers pass `body` as the EXACT
+ * English they are about to store, not a re-derived or re-trimmed copy — `spanishIsStale`'s own
+ * trim guards against incidental whitespace drift, but the basis itself should be the real stored
+ * value.
+ *
+ * The basis moves to the new English only when the Spanish changed IN THIS SAVE to a WRITTEN
+ * value (text or '') or "The Spanish still matches" was ticked (orchestrator fix 1). Choosing our
+ * Spanish (the new value is `null`) never moves the basis: there is no written Spanish left to
+ * compare an English edit against, so moving it would let a later "emptied" or custom Spanish
+ * silently inherit a basis nobody actually wrote beside.
  */
 export function nextSpanishBox(input: {
   submitted: string; useOurs: boolean; stillMatches: boolean; defaultEs: string; body: string;
@@ -924,5 +940,5 @@ export function nextSpanishBox(input: {
   else if (text === input.defaultEs.trim()) bodyEs = null;
   else bodyEs = text;
   const changed = bodyEs !== input.stored.bodyEs;
-  return { bodyEs, basis: changed || input.stillMatches ? input.body : input.stored.basis };
+  return { bodyEs, basis: (changed && bodyEs !== null) || input.stillMatches ? input.body : input.stored.basis };
 }

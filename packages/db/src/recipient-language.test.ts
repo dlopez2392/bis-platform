@@ -50,6 +50,13 @@ describe("spanishIsStale (§12.3, C14)", () => {
     expect(spanishIsStale({ body: "New.", bodyEs: "Viejo.", bodyEsBasis: "Old." })).toBe(true);
     expect(spanishIsStale({ body: "Old.", bodyEs: "Viejo.", bodyEsBasis: "Old." })).toBe(false);
   });
+  it("a whitespace-only box is emptied, not written (mutation: compare bodyEs === '' literally -> FAILS)", () => {
+    expect(spanishIsStale({ body: "New English.", bodyEs: "   ", bodyEsBasis: null })).toBe(false);
+  });
+  it("trimming differences between callers can't cause a false permanent warning (mutation: compare without trimming -> FAILS)", () => {
+    expect(spanishIsStale({ body: "Same.  ", bodyEs: "Viejo.", bodyEsBasis: "Same." })).toBe(false);
+    expect(spanishIsStale({ body: "Same.", bodyEs: "Viejo.", bodyEsBasis: "Same.  " })).toBe(false);
+  });
 });
 
 describe("nextSpanishBox (C13 on save, §12.3's basis rule, plan deviation 3)", () => {
@@ -78,8 +85,13 @@ describe("nextSpanishBox (C13 on save, §12.3's basis rule, plan deviation 3)", 
     expect(nextSpanishBox({ ...base, defaultEs: "", submitted: "", stored: { bodyEs: "", basis: null } }))
       .toEqual({ bodyEs: "", basis: null });
   });
-  it("F1: Use our Spanish stores null even when our default is empty (mutation: ignore useOurs -> FAILS)", () => {
+  it("F1: Use our Spanish stores null even when our default is empty, and the basis does not move (mutation: ignore useOurs -> FAILS)", () => {
     expect(nextSpanishBox({ ...base, defaultEs: "", useOurs: true, submitted: "", stored: { bodyEs: "", basis: null } }))
-      .toEqual({ bodyEs: null, basis: "New English." });
+      .toEqual({ bodyEs: null, basis: null });
+  });
+  it("A1: a Q1 row, custom English, saved with our (non-empty) Spanish default — null, basis unmoved, and now stale (mutation: old basis rule, changed-only -> FAILS)", () => {
+    const next = nextSpanishBox({ ...base, submitted: "Nuestro español.", body: "Custom English.", stored: { bodyEs: "", basis: null } });
+    expect(next).toEqual({ bodyEs: null, basis: null });
+    expect(spanishIsStale({ body: "Custom English.", bodyEs: next.bodyEs, bodyEsBasis: next.basis })).toBe(true);
   });
 });
