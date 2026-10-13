@@ -695,13 +695,26 @@ The join columns are real: `form_submissions.form_id`, `.contact_id` and `.local
 ### 18.3 Backfill (Q4)
 
 **Recommendation: yes, once, after PR 1 merges, Spanish and English alike, from the two kinds of stored evidence
-only.** A script `packages/db/scripts/backfill-contact-language.ts` (dry run by default, printing counts) replays,
-per contact and oldest first, every form submission (C6's page rule on its stored `locale`) and every call
-(`clearCallerLanguage` over the stored `calls.transcript`, never `calls.language`, C5) through
-`record_language_signal` with the evidence's own time. The first signal sets the language, the newest is the last
-signal, so a contact whose history disagrees shows its hint, which is the truth. **Bookings give nothing**: they
-store no language (§4). Run by the orchestrator on bis-ci, then production; agents never run it against a shared
-project. Without it, every existing customer stays "Not set" until their next booking, form or call.
+only.** A script `apps/web/scripts/backfill-contact-language.ts` (never applies anything itself — it only turns an
+evidence file into a SQL file the orchestrator reviews and applies through the Supabase MCP; "dry run" here means
+exactly that: the orchestrator choosing not to apply the file it printed, not a mode flag) replays, per contact and
+oldest first, every form submission (C6's page rule on its stored `locale`) and every call (`clearCallerLanguage`
+over the stored `calls.transcript`, never `calls.language`, C5, and only a call whose `outcome` is meaningful —
+`booked`, `lead` or `message`, never `spam`, `abandoned` or `transferred` — the export's own filter, Task 19 step 7)
+through `record_language_signal` with the evidence's own time. The first signal sets the language, the newest is
+the last signal, so a contact whose history disagrees shows its hint, which is the truth. The generated SQL also
+stamps each backfilled event's `created_at` to the evidence's own time, not `now()`: an event dated today for a
+form submitted months ago would crowd the dashboard activity card's newest-50-events read. **Bookings give
+nothing**: they store no language (§4). Run by the orchestrator on bis-ci, then production; agents never run it
+against a shared project. Without it, every existing customer stays "Not set" until their next booking, form or
+call.
+
+**C6 note, stated as intended:** a form whose own default `locale` is Spanish, served to a submitter on an English
+account, counts as a Spanish signal for that submitter — both live (C6) and in this backfill. The form's chosen
+default is the business's own proxy for what language the page was in; neither reads anything about the actual
+submitter beyond that. A business that intentionally runs a Spanish-only intake form is choosing to read every one
+of its submitters as Spanish speakers, and that is the intended behavior, not a bug the backfill should route
+around.
 
 ### 18.4 PR 2's switch-on
 

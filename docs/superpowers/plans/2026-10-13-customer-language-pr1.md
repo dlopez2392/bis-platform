@@ -2809,17 +2809,21 @@ select count(*) filter (where body_es = '') as emptied from public.automations;
 
 ```sql
 select 'form' as kind, f.account_id as "accountId", fs.contact_id as "contactId", fs.created_at as at,
-       fs.locale, a.language as "accountLanguage", null::text as "callerText"
+       fs.locale, a.language as "accountLanguage", null::text as "callerText", null::text as "outcome"
   from public.form_submissions fs join public.forms f on f.id = fs.form_id join public.accounts a on a.id = f.account_id
  where fs.contact_id is not null
 union all
 select 'call', c.account_id, c.contact_id, c.started_at, null, null,
-       (select string_agg(e->>'text', ' ' order by t.ord) from jsonb_array_elements(c.transcript) with ordinality as t(e, ord) where e->>'role' = 'caller')
+       (select string_agg(e->>'text', ' ' order by t.ord) from jsonb_array_elements(c.transcript) with ordinality as t(e, ord) where e->>'role' = 'caller'),
+       c.outcome
   from public.calls c
- where c.contact_id is not null and jsonb_array_length(c.transcript) > 0;
+ where c.contact_id is not null and jsonb_array_length(c.transcript) > 0
+   and c.outcome in ('booked', 'lead', 'message');
 ```
 
-Run `pnpm --filter web exec tsx scripts/backfill-contact-language.ts --in <evidence.json> --out <signals.sql>`; record its counts line; compare `contacts` with step 6's two candidate counts (it can only be lower). Apply `<signals.sql>` through the MCP `execute_sql`; then read back `select language_source, language, count(*) from public.contacts where language is not null group by 1, 2` and `select count(*) from public.events where actor_id = 'backfill-0076'` (equals the number of contacts the backfill SET). On bis-ci first; production only after bis-ci's read-back matches its counts.
+The call leg's `and c.outcome in ('booked', 'lead', 'message')` matches the live gate (0076's record_language_signal has no opinion on outcome; this is the export deciding a spam/abandoned/transferred call is not meaningful evidence of the caller's language, same test as PR 2's other call-outcome gates). The planner (Task 14) also refuses a non-meaningful `outcome` when the export supplies one, as a second, cheap check — belt and suspenders, not a second source of truth.
+
+Run `pnpm --filter web exec tsx scripts/backfill-contact-language.ts --in <evidence.json> --out <signals.sql>` (add `--chunk N` to split the output on contact boundaries, applied in order, if the file is large enough that one refused statement rolling back the whole batch is a real risk); record its counts line (now `{ evidence, dropped: { badId, badKind, badTime, unknownLocale, unclearCall, nonMeaningfulCall }, files, contacts, signals, es, en, form, call }`); compare `contacts` with step 6's two candidate counts (it can only be lower). Apply `<signals.sql>` (or each chunk file, in order) through the MCP `execute_sql`; then read back `select language_source, language, count(*) from public.contacts where language is not null group by 1, 2` and `select count(*) from public.events where actor_id = 'backfill-0076'` (equals the number of contacts the backfill SET). On bis-ci first; production only after bis-ci's read-back matches its counts.
 - [ ] **Step 8. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 18's findings are closed).
 - [ ] **Step 9. Re-run the backfill once on production after the deploy is live** (step 7's read, script and apply): it covers the window between step 7 and the deploy; already-replayed evidence is a no-op (Task 1's "the same signal twice" case). Record the second counts line. Delete `<SCRATCH>/s09-evidence/`.
 - [ ] **Step 10.** Ledger: the migration line, steps 6, 7 and 9's counts, Task 4's thresholds, the roadmap tracker row for item 5 (PR 1 merged).
