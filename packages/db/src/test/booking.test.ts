@@ -13,7 +13,7 @@ import {
   claimCancelNotice, rescheduleChain, bookingContactEmail, discardQueuedNotice, noticeMessageStatus,
   moveBooking, BookingNotMovableError, bookingWasMoved, countRecentBookings,
   moveStamp, sameMicroInstant,
-  countContactBookingsMade, listContactUpcomingBookings,
+  countContactBookingsMade, listContactUpcomingBookings, listContactBookings, countBookingsMadeFor,
 } from "../booking";
 import { stampAppointmentConfirmAsked, applyConfirmationReply } from "../automations";
 
@@ -1962,5 +1962,80 @@ describe("per-customer booking reads for the record page (S-03 part 1)", () => {
         },
       }) as SupabaseClient;
       await expect(countContactBookingsMade(noCount, accountId, ana)).rejects.toThrow(/countContactBookingsMade failed/);
+    }));
+});
+
+describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)", () => {
+  it("countBookingsMadeFor counts a household's bookings MADE, by D-035's unchanged definition: a reschedule is not one, a later cancel still is, an empty set reads nothing with no read at all (mutation: drop .is('rescheduled_from_id', null) -> 4, FAILS; mutation: drop the `contactIds.length === 0` short-circuit -> the empty-set call throws forContacts' 'an empty set' instead of resolving 0, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, "user_test");
+      const at = (iso: string) => ({ startsAt: new Date(iso), endsAt: new Date(new Date(iso).getTime() + 3_600_000) });
+      const first = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana, ...at("2027-06-02T15:00:00Z") }, "user_test");
+      await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: ana, ...at("2027-06-03T15:00:00Z"), rescheduledFromId: first.id }, "user_test");
+      const benLater = await createBooking(db, accountId, { calendarId: cal.id, contactId: ben, ...at("2027-06-04T15:00:00Z") }, "user_test");
+      await cancelBookingByToken(db, benLater.cancelToken);
+      await createBooking(db, accountId, { calendarId: cal.id, contactId: ben, ...at("2027-06-05T15:00:00Z") }, "user_test");
+      expect(await countBookingsMadeFor(db, accountId, [ana, ben])).toBe(3);
+      expect(await countBookingsMadeFor(db, accountId, [ana])).toBe(1);
+      expect(await countBookingsMadeFor(db, accountId, [])).toBe(0);
+    }));
+
+  it("countBookingsMadeFor fails closed on a count-less answer, never 'booked 0 times' (mutation: restore count ?? 0 -> resolves 0 instead of rejecting, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      // Local copy of head-count-null.test.ts's noCount proxy (:41-52): that file is bis-crm's.
+      const noCount = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop !== "from") return Reflect.get(target, prop, receiver);
+          return (table: string) => {
+            const q = target.from(table);
+            if (table !== "bookings") return q;
+            return { select: (cols: string) => q.select(cols) };
+          };
+        },
+      }) as SupabaseClient;
+      await expect(countBookingsMadeFor(noCount, accountId, [ana])).rejects.toThrow(/countBookingsMadeFor failed/);
+    }));
+
+  it("listContactUpcomingBookings reads a household's set, merged soonest-first, each naming its own contact_id (mutation: drop contact_id from the select -> undefined, FAILS); a single id still reads exactly that person's rows unchanged from part 1 (reverting the signature/select to the pre-2b, single-id-only shape throws 'invalid input syntax for type uuid' on the set call, proven in this task's RED run)", () =>
+    withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, "user_test");
+      const book = async (contactId: string, iso: string) => (await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(iso), endsAt: new Date(new Date(iso).getTime() + 3_600_000) }, "user_test"));
+      const anaFeb = await book(ana, "2027-02-01T15:00:00Z");
+      const benJan = await book(ben, "2027-01-15T15:00:00Z");
+      const anaMar = await book(ana, "2027-03-01T15:00:00Z");
+      const rows = await listContactUpcomingBookings(db, accountId, [ana, ben], "2027-01-01T00:00:00Z");
+      expect(rows.map((r) => ({ id: r.id, contact_id: r.contact_id }))).toEqual([
+        { id: benJan.id, contact_id: ben }, { id: anaFeb.id, contact_id: ana }, { id: anaMar.id, contact_id: ana },
+      ]);
+      const anaOnly = await listContactUpcomingBookings(db, accountId, ana, "2027-01-01T00:00:00Z");
+      expect(anaOnly.map((r) => r.id)).toEqual([anaFeb.id, anaMar.id]);
+    }));
+
+  it("listContactBookings reads a household's set in one page, each row naming its own contact_id (mutation: drop contact_id from the select -> undefined, FAILS); a single id still reads exactly that person's page", () =>
+    withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, "user_test");
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, "user_test");
+      const anaBooking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: ana, startsAt: new Date("2027-07-01T15:00:00Z"), endsAt: new Date("2027-07-01T16:00:00Z") }, "user_test");
+      const benBooking = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId: ben, startsAt: new Date("2027-07-02T15:00:00Z"), endsAt: new Date("2027-07-02T16:00:00Z") }, "user_test");
+      const older = await db.from("bookings").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaBooking.id);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
+      const newer = await db.from("bookings").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benBooking.id);
+      if (newer.error) throw new Error(`newer update failed: ${newer.error.message}`);
+      const both = await listContactBookings(db, accountId, [ana, ben], { limit: 31 });
+      expect(both.map((b) => ({ id: b.id, contact_id: b.contact_id }))).toEqual([
+        { id: benBooking.id, contact_id: ben }, { id: anaBooking.id, contact_id: ana },
+      ]);
+      const anaOnly = await listContactBookings(db, accountId, ana, { limit: 31 });
+      expect(anaOnly.map((b) => b.id)).toEqual([anaBooking.id]);
     }));
 });
