@@ -1907,7 +1907,7 @@ describe("finishCall — the caller's words become the contact's language (S-09 
     expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
   });
 
-  it("a call that is not meaningful signals nothing (mutation: drop the meaningful test -> FAILS)", async () => {
+  it("a call that is not meaningful signals nothing: its contact is resolved only inside `if (meaningful)`, so there is no one to sign (mutation: resolve the contact before that test -> FAILS)", async () => {
     await finishCall(withTranscript(emptyCallState(), { role: "caller", text: "hola, necesito una cita para mañana", at: "t" }), ctx, meta);
     expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
   });

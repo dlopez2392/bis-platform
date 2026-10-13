@@ -431,7 +431,8 @@ export async function finishCall(
 
   // S-09 C5: what the caller's own words say, read strictly; `spokenLanguage` above stays the Calls
   // badge's and the text-back's (a default, not evidence). Its own try: a sign never costs the call.
-  if (meaningful && contactId) {
+  // Meaningful calls only (isMeaningful, above): `contactId` is set inside `if (meaningful)` alone.
+  if (contactId) {
     const heard = clearCallerLanguage(state.transcript);
     if (heard) {
       try {

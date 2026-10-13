@@ -661,6 +661,13 @@ describe("book_appointment — the caller's language becomes the contact's (S-09
     expect(dbMocks.recordLanguageSignal.mock.invocationCallOrder[0]!).toBeGreaterThan(dbMocks.createBooking.mock.invocationCallOrder[0]!);
   });
 
+  it("review M-5: the caller's turn still arriving decides it alone, with nothing in the finished transcript (mutation: read with pendingCallerTurn null -> FAILS)", async () => {
+    const inFlight = { ...emptyCallState(), pendingCallerTurn: { itemId: "item_9", text: "hola, necesito una cita para mañana" } };
+    await runTool(inFlight, ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith(ctx.db, "a1", "ct1",
+      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, "voice", "ai");
+  });
+
   it("a caller who said too little signals nothing (mutation: fall back to the profile's language -> FAILS)", async () => {
     await runTool(emptyCallState(), ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
     expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
