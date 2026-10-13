@@ -41,10 +41,13 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     expect(parseDrawerSummary(body)!.nextUp).toEqual({ status: "error", text: m["record.card.failed.es"].replace("{title}", m["record.card.nextUp.es"]) });
   });
 
-  it("a server's own error section passes through with its words", () => {
+  it("a server's own error section passes through with its words, not the parser's own fallback (mutation: drop the pass-through in section() -> FAILS)", () => {
     const body = clone();
-    body.facts = { status: "error", text: "Couldn't load the summary." };
-    expect(parseDrawerSummary(body)!.facts).toEqual({ status: "error", text: "Couldn't load the summary." });
+    // Deliberately distinct from every parser fallback (record.card.failed, record.summary.failed,
+    // etc.): a test that reused one of those words could pass even if the parser discarded the
+    // server's own text and substituted its own fallback instead.
+    body.facts = { status: "error", text: "Scheduled maintenance until 9am; try again after." };
+    expect(parseDrawerSummary(body)!.facts).toEqual({ status: "error", text: "Scheduled maintenance until 9am; try again after." });
   });
 
   it("no header, or no known locale, is the whole drawer's error: nothing to title it with (mutation: default the header -> FAILS)", () => {
@@ -58,6 +61,12 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
   it("an action whose href is not tel:, a path, an anchor or https is refused (mutation: accept any string -> FAILS)", () => {
     const body = clone();
     (body.header as { actions: { href: string }[] }).actions[0]!.href = "javascript:alert(1)";
+    expect(parseDrawerSummary(body)).toBeNull();
+  });
+
+  it("a protocol-relative href (//evil.example, which a browser reads as https://evil.example) is refused, never mistaken for a path (mutation: safeHref's old /^(tel:|\\/|#|https:\\/\\/)/ -> FAILS)", () => {
+    const body = clone();
+    (body.header as { actions: { href: string }[] }).actions[0]!.href = "//evil.example";
     expect(parseDrawerSummary(body)).toBeNull();
   });
 

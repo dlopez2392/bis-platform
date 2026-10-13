@@ -9,7 +9,7 @@ const access = vi.fn();
 vi.mock("@/lib/auth", () => ({ apiAccountAccess: (...a: unknown[]) => access(...a) }));
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago", language: null }, error: null }));
-const db = { from: () => { const chain = { select: () => chain, eq: () => chain, maybeSingle: () => accountRead() }; return chain; } };
+const db = { from: (table: string) => { order.push(table); const chain = { select: () => chain, eq: () => chain, maybeSingle: () => accountRead() }; return chain; } };
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => db }));
 vi.mock("@/lib/zone", () => ({
   renderZone: async (z?: string) => ({ zone: z ?? "UTC", guessed: !z, label: z ?? "UTC", source: z ? "account" : "fallback" }),
@@ -17,7 +17,8 @@ vi.mock("@/lib/zone", () => ({
 const prefs = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => { order.push("getPersonPrefs"); return prefs(); } }));
 const ledger = { tag: "ledger" };
-vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => { order.push("ledgerDb"); return ledger; } }));
+const ledgerDbFn = vi.fn(() => { order.push("ledgerDb"); return ledger; });
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbFn() }));
 const smsState = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ kind: "ok" }));
 vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: (...a: unknown[]) => smsState(...a) }));
 const gate = vi.fn(async (): Promise<unknown> => ({ ok: false, reason: "a2p_not_approved" }));
@@ -55,6 +56,8 @@ const body = async (q = "") => (await GET(req(q), ctx())).json();
 beforeEach(() => {
   order.length = 0;
   access.mockReset().mockResolvedValue({ userId: "u1", isAgency: true });
+  accountRead.mockReset().mockResolvedValue({ data: { timezone: "America/Chicago", language: null }, error: null });
+  ledgerDbFn.mockReset().mockImplementation(() => { order.push("ledgerDb"); return ledger; });
   prefs.mockReset().mockResolvedValue({ language: null, theme: null });
   smsState.mockReset().mockResolvedValue({ kind: "ok" });
   gate.mockReset().mockResolvedValue({ ok: false, reason: "a2p_not_approved" });
@@ -78,7 +81,7 @@ describe("the drawer's summary route: authorisation first", () => {
     expect(order).toEqual([]);
   });
 
-  it("a contact the caller cannot see is a 404 before ANY other read, the ledger client included (mutation: start the parallel block before getContact -> FAILS)", async () => {
+  it("a contact the caller cannot see is a 404 before ANY other read — the ledger client and the accounts timezone/language read included (mutation: move the accounts read before getContact -> FAILS)", async () => {
     dbMocks.getContact.mockResolvedValueOnce(null);
     expect((await GET(req(), ctx())).status).toBe(404);
     expect(order).toEqual(["getContact"]);
@@ -110,13 +113,62 @@ describe("the drawer's summary route: each section loads and fails on its own (C
     expect(errors).toHaveBeenCalled();
   });
 
-  it("the sections' own error words, in the reader's language", async () => {
+  it("the sections' own error words, in English for an agency reader", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.contactFacts.mockRejectedValueOnce(new Error("down"));
     dbMocks.contactNextUp.mockRejectedValueOnce(new Error("down"));
     dbMocks.listContactTimelinePage.mockRejectedValueOnce(new Error("down"));
     const b = await body();
     expect([b.facts.text, b.nextUp.text, b.recent.text]).toEqual([m["record.summary.failed"], m["record.nextUp.failed"], m["record.activity.failed"]]);
+  });
+
+  it("the same section error words, in Spanish for a Spanish-account client reader (mutation: build the error text in English regardless of locale -> FAILS)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    access.mockResolvedValue({ userId: "u1", isAgency: false });
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    dbMocks.contactFacts.mockRejectedValueOnce(new Error("down"));
+    dbMocks.contactNextUp.mockRejectedValueOnce(new Error("down"));
+    dbMocks.listContactTimelinePage.mockRejectedValueOnce(new Error("down"));
+    const b = await body();
+    expect([b.facts.text, b.nextUp.text, b.recent.text]).toEqual([m["record.summary.failed.es"], m["record.nextUp.failed.es"], m["record.activity.failed.es"]]);
+  });
+
+  it("a view builder throwing (not just a failed read) costs only the sections that build on it — the viewOf guard (mutation: call factsView outside the try/catch -> the route 500s, FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The reads succeed, but the zone every view is built in is unusable: factsView's own
+    // talkedWhen -> calendarDaysAgo -> partsInZone, and nextUpView's own dayKeyIn(now, zone), both
+    // call Intl.DateTimeFormat with this zone directly and do NOT catch — unlike sinceMonth's own
+    // RangeError guard — so both views throw AFTER their (successful) reads. Recent stays ready:
+    // its page is empty, so timelineRows never reaches a date format call. who.tags is untouched —
+    // a separate loader entirely.
+    accountRead.mockResolvedValueOnce({ data: { timezone: "Not/AZone", language: null }, error: null });
+    dbMocks.contactFacts.mockResolvedValueOnce({
+      bookingsMade: { ok: true, value: 0 },
+      lastTalked: { ok: true, value: { at: AT, channel: "call" } },
+      openDeals: { ok: true, value: { count: 0, amount: null } },
+    });
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    const b = await res.json();
+    expect(b.facts.status).toBe("error");
+    expect(b.facts.text).toBe(m["record.summary.failed"]);
+    expect(b.nextUp.status).toBe("error");
+    expect([b.recent.status, b.who.tags.status]).toEqual(["ready", "ready"]);
+    expect(errors).toHaveBeenCalled();
+  });
+
+  it("ledgerDb() itself throwing (not just the ledger read) still answers 200, with Text closed rather than a 500 (mutation: build the ledger client outside smsRead's try/catch -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    gate.mockResolvedValue({ ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"] });
+    ledgerDbFn.mockImplementationOnce(() => { throw new Error("no service key"); });
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    const b = await res.json();
+    // Text would otherwise show (a usable number, an open gate); "unknown" consent closes it —
+    // the degraded line composerStateLine reads for a ledger it could not ask.
+    expect(b.header.actions.map((a: { id: string }) => a.id)).toEqual(["call", "email"]);
+    expect(b.facts.status).toBe("ready");
+    expect(errors).toHaveBeenCalled();
   });
 });
 
@@ -149,6 +201,14 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
     expect(b.recent.emptyText).toBeNull();
     expect(b.recent.failedText).toBe(m["timeline.someFailed"].replace("{what}", m["timeline.what.calls"]));
     expect(b.recent.rows).toHaveLength(1);
+  });
+
+  it("zero rows AND a failed source is still not empty: a failure is not 'nothing' even with nothing to show (mutation: emptyText on rows.length === 0 alone -> FAILS)", async () => {
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [], older: null, failed: ["calls"] });
+    const b = await body();
+    expect(b.recent.rows).toHaveLength(0);
+    expect(b.recent.emptyText).toBeNull();
+    expect(b.recent.failedText).toBe(m["timeline.someFailed"].replace("{what}", m["timeline.what.calls"]));
   });
 });
 
