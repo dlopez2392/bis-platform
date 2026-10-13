@@ -49,6 +49,12 @@ describe("PeopleCardView: rows and the pinned call-first member", () => {
     const html = render("en", { rows: [row({ isPrimaryContact: false })] });
     expect(html).not.toContain('data-people-mark="primary-contact"');
   });
+
+  it("Pays the bills ON uses the SAME dot token as the contact Groups card's Mark component — --accent, not a status green (review round 1, minor 2; mutation: use bg-[var(--good)] -> FAILS)", () => {
+    const html = render("en", { rows: [row({ isBilling: true })] });
+    expect(html).toMatch(/aria-pressed="true"[^>]*><span class="[^"]*"><span aria-hidden="true" class="[^"]*bg-\[var\(--accent\)\][^"]*">/);
+    expect(html).not.toContain("--good");
+  });
 });
 
 describe("PeopleCardView: manager controls (rule 8 — no second primary button)", () => {

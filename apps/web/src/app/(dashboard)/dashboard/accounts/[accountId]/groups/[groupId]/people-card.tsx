@@ -102,7 +102,7 @@ function PersonRow({ accountId, manager, row, handlers, tt, locale }: {
         <Button size="sm" variant="ghost" className="min-h-11 md:min-h-8" aria-pressed={row.isBilling} disabled={busy}
           onClick={act(() => handlers.toggleBilling({ memberId: row.memberId, isBilling: row.isBilling }))}>
           <span className="inline-flex items-center gap-1.5 text-xs">
-            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", row.isBilling ? "bg-[var(--good)]" : "border border-[var(--line-strong)]")} />
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", row.isBilling ? "bg-[var(--accent)]" : "border border-[var(--line-strong)]")} />
             {tt("groups.billing")}
           </span>
         </Button>
