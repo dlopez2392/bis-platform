@@ -48,3 +48,40 @@ export function detectCallerLanguage(
     : state.transcript;
   return detectSpokenLanguage(turns, profileLanguages) === "es" ? "es" : "en";
 }
+
+/**
+ * S-09 C5's thresholds (Q7; plan Task 4). Measured 2026-10-13 on 176 production calls with caller
+ * text: 126 robocalls, 36 rows of six repeated demo scripts, 6 with nothing said, 8 one-off test
+ * calls, so only 7 independent English calls and 0 real Spanish callers. Every set swept
+ * (esMin 2-3, enMin 2-5, enRatio 1.5-3) gave falseEn 0 and falseEs 0; these values tied for best
+ * coverage and were kept. UNVALIDATED on real customer traffic: re-tune once real Spanish calls
+ * exist (spec §19 risk).
+ */
+export type ClearThresholds = { esMin: number; enMin: number; enRatio: number };
+export const CLEAR_THRESHOLDS: ClearThresholds = { esMin: 2, enMin: 3, enRatio: 2 };
+
+/**
+ * The language a CONTACT is recorded as speaking (S-09 C5): a strict reading of the caller's own
+ * turns, the voice profile IGNORED, and null when the words do not say. Never `calls.language`,
+ * which is forced to the profile's language and turns every tie into English: both defaults, not
+ * evidence. Spanish needs the Calls badge's own rule (so the two never disagree about a Spanish
+ * caller); English needs more, because EN_MARKERS holds words a code-switching Spanish speaker says
+ * every sentence, and a false English is the costly error (it sets English or raises a hint).
+ */
+export function clearCallerLanguage(transcript: TranscriptEvent[], t: ClearThresholds = CLEAR_THRESHOLDS): "en" | "es" | null {
+  const callerText = transcript.filter((e) => e.role === "caller").map((e) => e.text).join(" ");
+  const es = score(callerText, ES_MARKERS) + score(callerText, ES_CHARS);
+  const en = score(callerText, EN_MARKERS);
+  if (es >= t.esMin && es > en) return "es";
+  if (en >= t.enMin && en >= t.enRatio * es) return "en";
+  return null;
+}
+
+/** The strict reading over the finished turns plus the one still arriving (C7), as
+ *  `detectCallerLanguage` reads them: a phone booking signals before the call ends. */
+export function clearCallerLanguageNow(
+  state: { transcript: TranscriptEvent[]; pendingCallerTurn: { text: string } | null },
+): "en" | "es" | null {
+  const inFlight = state.pendingCallerTurn?.text.trim();
+  return clearCallerLanguage(inFlight ? [...state.transcript, { role: "caller", text: inFlight, at: "" }] : state.transcript);
+}

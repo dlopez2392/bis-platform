@@ -102,6 +102,47 @@ describe("messaging", () => {
       expect(await searchConversations(db, accountId, { search: "%" })).toEqual([]);
     }));
 
+  // S-09 §9 (C10): the contact's own language rides every ConversationSummary
+  // reader so Conversations can carry the customer's language on their own
+  // words. `record_language_signal` is the SQL function 0076 installs
+  // (service_role only) — the TS wrapper (`recordLanguageSignal`, contacts.ts)
+  // belongs to a concurrent task not yet landed in this file's tree, so this
+  // calls the function directly through the same service-role `db` every
+  // other case in this suite already uses.
+  it("ConversationSummary carries the contact's language — set, then unset (mutation: drop `language` from an embed -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: esContact } = await createContact(db, accountId, { firstName: "Sofía" }, "user_test");
+      const esConvo = await ensureConversation(db, accountId, esContact, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: esConvo.id, channel: "sms", direction: "inbound", body: "Necesito ayuda",
+      }, "user_test");
+      const { error: signalErr } = await db.rpc("record_language_signal", {
+        p_account: accountId, p_contact: esContact, p_language: "es", p_source: "form",
+        p_at: new Date().toISOString(),
+      });
+      if (signalErr) throw new Error(`record_language_signal failed: ${signalErr.message}`);
+
+      const { id: noneContact } = await createContact(db, accountId, { firstName: "Pat" }, "user_test");
+      const noneConvo = await ensureConversation(db, accountId, noneContact, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: noneConvo.id, channel: "sms", direction: "inbound", body: "Need help",
+      }, "user_test");
+
+      const list = await listConversations(db, accountId);
+      expect(list.find((c) => c.id === esConvo.id)?.contactLanguage).toBe("es");
+      expect(list.find((c) => c.id === noneConvo.id)?.contactLanguage).toBeNull();
+
+      const esSummary = await getConversationSummary(db, accountId, esConvo.id);
+      expect(esSummary?.contactLanguage).toBe("es");
+      const noneSummary = await getConversationSummary(db, accountId, noneConvo.id);
+      expect(noneSummary?.contactLanguage).toBeNull();
+
+      const esHits = await searchConversations(db, accountId, { search: "necesito ayuda" });
+      expect(esHits[0]?.contactLanguage).toBe("es");
+      const noneHits = await searchConversations(db, accountId, { search: "need help" });
+      expect(noneHits[0]?.contactLanguage).toBeNull();
+    }));
+
   it("createMessage emits message.created for a successfully inserted message", () =>
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ada" }, "user_test");

@@ -6,7 +6,9 @@ import { dbForRequest } from "@/lib/db";
 import { deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
          getContact, setContactPhoneCountry, serviceDb,
          assignContacts, undoAssignContacts, type PreviousAssignee,
-         setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot } from "@bis/db";
+         setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot,
+         setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple,
+         type ContactLanguage, type LanguageTriple } from "@bis/db";
 import { addContactByHand } from "@/lib/contacts/add-contact-by-hand";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
@@ -15,6 +17,10 @@ import { loggableError } from "@/lib/loggable-error";
 import type { PhoneCountryPickResult, PhoneCountryUndoResult, PhoneCountryPrevious } from "@/lib/contacts/phone-country";
 import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import type { Locale } from "@/lib/i18n/locale";
 import { EDITABLE_FIELDS, FIELD_TO_INPUT_KEY, normalizeFieldInput,
          type EditableField } from "@/lib/contacts/field-input";
 
@@ -218,6 +224,151 @@ export async function undoContactBusinessAction(
   } catch (e) {
     console.error(`undoContactBusinessAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
     return { ok: false, error: "Undo failed — please try again." };
+  }
+}
+
+/**
+ * S-09 §7.5: a customer's language, chosen by staff. The contact is proved on the CALLER's own client
+ * first (getContact under RLS: a Technician reaches only their own customers, 0068), then written on
+ * the service client: the client role holds no UPDATE on the language columns (0076, C2). Returns both
+ * the PRIOR triple and what this call actually WROTE (`written`): the Undo sends `written` straight
+ * back (fix round I3), so the server can refuse it — "changed" — the moment the row no longer holds
+ * it, the same compare-and-set every other Undo in this file runs on its own field.
+ *
+ * Every error here is already in the READER's language (fix round I4, and Task 11's own review of
+ * it): resolved the same way the record page does (`requestLocale` + `getPersonPrefs`, #251's
+ * pattern) — `isOperator` from `requireAccountAccess`'s own `isAgency`, `userLanguage` from
+ * `getPersonPrefs()`, and `account` read fresh off `accounts.language` on the CALLER's own client
+ * (RLS; the same column the record page's own `requestLocale` call reads), so a client-role reader
+ * with no personal `users.language` still gets the ACCOUNT's language, not a silent fallback to
+ * English.
+ */
+export type LanguageActionResult =
+  | { ok: true; prior: LanguageTriple; written: LanguageTriple }
+  | { ok: false; error: string };
+
+const isContactLanguage = (v: unknown): v is ContactLanguage => v === "en" || v === "es";
+
+async function languageError(
+  key: "contact.language.saveFailed" | "contact.language.changed", accountId: string, isAgency: boolean,
+): Promise<{ ok: false; error: string }> {
+  // getPersonPrefs() never rejects (its own doc comment): a failed read means defaults, never a thrown action.
+  const prefs = await getPersonPrefs();
+  let accountLanguageValue: Locale | null = null;
+  try {
+    const db = await dbForRequest();
+    const { data } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+    accountLanguageValue = (data?.language as Locale | null | undefined) ?? null;
+  } catch {
+    // Reading the account's language for an ERROR's own locale must never itself raise a new error;
+    // a failed read here still resolves a locale (no account fallback, same as an unthemed account).
+  }
+  const accountLanguage = { language: accountLanguageValue };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language });
+  return { ok: false, error: t(m, key, locale) };
+}
+
+export async function setContactLanguageAction(
+  accountId: string, contactId: string, language: ContactLanguage,
+): Promise<LanguageActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isContactLanguage(language)) return await languageError("contact.language.saveFailed", accountId, isAgency);
+  try {
+    const db = await dbForRequest();
+    const before = await getContact(db, accountId, contactId);
+    if (!before) return await languageError("contact.language.saveFailed", accountId, isAgency);
+    const prior: LanguageTriple = {
+      language: (before.language ?? null) as ContactLanguage | null,
+      source: (before.language_source ?? null) as LanguageTriple["source"],
+      setAt: (before.language_set_at ?? null) as string | null,
+    };
+    let threw: unknown = null;
+    let wrote = false;
+    let setAt: string | null = null;
+    try {
+      const result = await setContactLanguage(serviceDb(), accountId, contactId, language, userId);
+      wrote = result.wrote;
+      setAt = result.setAt;
+    } catch (e) {
+      threw = e;
+    }
+    if (threw) {
+      // The read-back here is the RECOVERY path only: the writer threw before it could tell us its
+      // own setAt, so the UPDATE's own effect (which may already have committed before the writer's
+      // emit() threw — M1, this file's own rule, R3-M11) is the only way left to learn what landed.
+      // A thrown write is judged by what the row actually holds, never reported as a failed save just
+      // because the event after it did not land.
+      const after = await getContact(db, accountId, contactId).catch(() => null);
+      console.error(`setContactLanguageAction: account ${accountId} contact ${contactId}: write failed: ${loggableError(threw)}`);
+      wrote = after?.language === language && after?.language_source === "staff";
+      setAt = (after?.language_set_at ?? null) as string | null;
+    }
+    if (!wrote) return await languageError("contact.language.saveFailed", accountId, isAgency);
+    const written: LanguageTriple = { language, source: "staff", setAt };
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true, prior, written };
+  } catch (e) {
+    console.error(`setContactLanguageAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return await languageError("contact.language.saveFailed", accountId, isAgency);
+  }
+}
+
+/**
+ * Undo (C9, fix round I3): both `prior` and `written` are validated with `isLanguageTriple` before
+ * ANY read, the contact is proved on the CALLER's own client, and only then does the writer's own
+ * compare-and-set run — against `written` exactly, so a stale Undo (the language moved on since) or a
+ * forged `written` (the browser's own claim, sent back from a `set` that never actually produced it)
+ * answers "changed" rather than overwriting whatever is there now.
+ */
+export async function restoreContactLanguageAction(
+  accountId: string, contactId: string, prior: LanguageTriple, written: LanguageTriple,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isLanguageTriple(prior) || !isLanguageTriple(written)) {
+    return await languageError("contact.language.saveFailed", accountId, isAgency);
+  }
+  try {
+    const db = await dbForRequest();
+    if (!(await getContact(db, accountId, contactId))) return await languageError("contact.language.saveFailed", accountId, isAgency);
+    const outcome = await restoreContactLanguage(serviceDb(), accountId, contactId, prior, written, userId);
+    if (outcome === "changed") return await languageError("contact.language.changed", accountId, isAgency);
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`restoreContactLanguageAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return await languageError("contact.language.saveFailed", accountId, isAgency);
+  }
+}
+
+/** Keep: the hint stays away until a newer sign (§7.4). Nothing about the customer changes, so there is
+ *  no `written` to compare against — a thrown write is judged (M1) by whether `language_hint_kept_at`
+ *  actually moved off what the proof read saw, never by the event emitted after it. */
+export async function keepContactLanguageHintAction(
+  accountId: string, contactId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  try {
+    const db = await dbForRequest();
+    const before = await getContact(db, accountId, contactId);
+    if (!before) return await languageError("contact.language.saveFailed", accountId, isAgency);
+    let threw: unknown = null;
+    let wrote = false;
+    try {
+      wrote = await keepContactLanguageHint(serviceDb(), accountId, contactId, userId);
+    } catch (e) {
+      threw = e;
+    }
+    if (threw) {
+      console.error(`keepContactLanguageHintAction: account ${accountId} contact ${contactId}: write failed: ${loggableError(threw)}`);
+      const after = await getContact(db, accountId, contactId).catch(() => null);
+      wrote = after != null && after.language_hint_kept_at !== before.language_hint_kept_at;
+    }
+    if (!wrote) return await languageError("contact.language.saveFailed", accountId, isAgency);
+    revalidatePath(`${contactsPath(accountId)}/${contactId}`);
+    return { ok: true };
+  } catch (e) {
+    console.error(`keepContactLanguageHintAction: account ${accountId} contact ${contactId}: ${loggableError(e)}`);
+    return await languageError("contact.language.saveFailed", accountId, isAgency);
   }
 }
 

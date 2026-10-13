@@ -381,6 +381,7 @@ describe("ConciergeCard — the render proof", () => {
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "We fix roofs.", services: "",
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
 
@@ -587,6 +588,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: true, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
 
@@ -692,6 +694,7 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
     languages: "en", booking_enabled: true, after_hours: "message_only",
     enabled: true, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
 
@@ -715,6 +718,7 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
     greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
     languages: "en", booking_enabled: true, after_hours: "message_only",
     enabled: true, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
   };
   const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {

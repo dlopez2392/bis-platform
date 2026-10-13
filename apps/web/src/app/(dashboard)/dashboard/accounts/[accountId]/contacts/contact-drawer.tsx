@@ -40,6 +40,7 @@ import { EmailRow } from "./email-row";
 import { TextsRow } from "./texts-row";
 import { SourceField } from "./source-field";
 import { BusinessInlineField } from "./business-field";
+import { LanguageField } from "./language-field";
 import type { ContactRow } from "./contacts-table";
 
 // The body is PARSED (lib/contacts/drawer-summary.ts): checked, not cast, so a server older or newer
@@ -333,6 +334,12 @@ export function ContactDrawer({
                               </dd>
                             </div>
                           ))}
+                          {who?.language ? (
+                            <LanguageField key={`${row.id}:language`} accountId={accountId} contactId={row.id} view={who.language}
+                              onChanged={() => setRetryNonce((n) => n + 1)} />
+                          ) : load.status === "loading" ? (
+                            <div data-drawer-language-skeleton data-testid="drawer-skeleton"><RecordCardSkeleton rows={1} /></div>
+                          ) : null}
                           <div key={`${row.id}:company_name`} className={LABEL_ROW}>
                             <dt className="text-muted-foreground text-xs">{tx("contact.company")}</dt>
                             <dd><BusinessInlineField accountId={accountId} contactId={row.id} value={fieldsRow.company_name ?? null} /></dd>

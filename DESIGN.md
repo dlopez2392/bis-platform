@@ -196,6 +196,13 @@ they re-resolve against the accent each element inherits.
   tell a quiet week from a broken product. Recipients live on the account and
   the field IS the on/off switch — no recipients, no report, and that is not a
   failure.
+- **A customer's language** (decided 2026-10-13) is one fact on their record:
+  set by their own first clear sign (a Spanish booking or form, a call in
+  which they clearly spoke it), changed by staff at any time, never
+  overwritten by a later sign, which offers a Switch instead. Every scheduled
+  message reads it, then the account's language, then English; a reply in
+  the moment follows the moment. One message is in one language, end to end:
+  subject, body, date, button and footer.
 - **Command palette (⌘K):** finds contacts/calls/conversations, jumps to any
   settings section by name, runs actions. Settings sections must be
   registered in the palette index.

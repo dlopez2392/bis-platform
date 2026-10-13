@@ -43,6 +43,7 @@ import type { EmailLoad } from "@/lib/consent/email-row";
 import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
+import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 
 export const dynamic = "force-dynamic";
 
@@ -179,6 +180,9 @@ export default async function ContactDetailPage({
     ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
+  // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole page, and the line
+  // is LEFT OUT (no prop, no row) rather than a "Not set." that would be false for a set contact.
+  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, { zone: zone.zone, tr })) ?? undefined;
 
   const failed = (errorText: string): Slot => ({ node: null, state: "error", errorText });
   const cardFailed = (titleKey: MessageKey) => failed(tr.text("record.card.failed", { title: tr.text(titleKey) }));
@@ -210,6 +214,7 @@ export default async function ContactDetailPage({
             members={assign.members}
             rows={timelineView}
             holdOpenTaskIds={timeline.holdOpen}
+            customerLang={(contact.language as "en" | "es" | null) ?? ""}
             failedText={timelineFailedText(timeline.page.failed, tr)}
             // Rule 5's empty state only on the head, and only when nothing failed: a failed source is not "nothing".
             emptyText={!before && timelineView.length === 0 && timeline.page.failed.length === 0 ? tr.text("timeline.empty") : null}
@@ -232,7 +237,8 @@ export default async function ContactDetailPage({
       ? {
         node: (
           <ContactDetailsBody accountId={accountId} contactId={contactId} contact={contact} fieldDefs={fieldDefs.fieldDefs}
-            email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId} />
+            email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId}
+            language={language} />
         ),
       }
       : cardFailed("contact.details"),

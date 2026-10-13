@@ -21,6 +21,7 @@ import { loadSummary, loadNextUp, loadRecent, loadTags, loadHeaderPlaces, softSm
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine, type SmsRecipientState } from "@/lib/consent/composer-state";
+import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
 
 export const dynamic = "force-dynamic";
 
@@ -113,8 +114,12 @@ export async function GET(
   const rows = recent.status === "ready"
     ? viewOf("recent", () => recentRowsView(timelineRows(recent.page.items, {
       zone: zone.zone, tr, author: { viewerId: access.userId, names: recent.names, personaName: recent.personaName, tr },
-    })))
+    }), (contact.language as "en" | "es" | null) ?? ""))
     : null;
+  // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole response, and the
+  // line is LEFT OUT (no who.language; the drawer reads absent as no line, plan deviation 11) rather
+  // than a "Not set." that would be false for a set contact.
+  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, { zone: zone.zone, tr }));
 
   const body: DrawerSummary = {
     locale,
@@ -141,6 +146,7 @@ export async function GET(
         phone: contact.phone ?? null, company_name: contact.company_name ?? null,
       },
       tags: tags.status === "ready" ? { status: "ready", tags: tags.tags.map((t) => ({ id: t.id, name: t.name })) } : { status: "error" },
+      ...(language ? { language } : {}),
     },
   };
   return NextResponse.json(body);

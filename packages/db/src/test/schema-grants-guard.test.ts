@@ -67,8 +67,8 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   "authenticated agencies": IUD,
   "authenticated blueprints": IUD,
   "authenticated calendars": update([
-    "buffer_minutes", "enabled", "followup_body", "followup_enabled", "max_advance_days", "meeting_type",
-    "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
+    "buffer_minutes", "enabled", "followup_body", "followup_body_es", "followup_body_es_basis", "followup_enabled",
+    "max_advance_days", "meeting_type", "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
   ]).sort(),
   "authenticated checklist_items": IUD,
   "authenticated contact_duplicate_flags": IUD,

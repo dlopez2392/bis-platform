@@ -16,6 +16,7 @@ vi.mock("@bis/db", async (importOriginal) => {
     getForm: (...a: unknown[]) => dbFns.getForm(...a),
     createSubmission: (...a: unknown[]) => dbFns.createSubmission(...a),
     setConciergeSubmission: (...a: unknown[]) => dbFns.setConciergeSubmission(...a),
+    recordLanguageSignal: vi.fn(async () => true),
   };
 });
 vi.mock("@/lib/forms/enrich", () => ({ enrich: enrichMock }));

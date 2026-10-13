@@ -23,6 +23,7 @@ function html(status: string, error: string | null, timezone = "UTC"): string {
     contactName: "Ada",
     composer: null,
     timezone,
+    contactLanguage: null,
   }));
 }
 
@@ -72,9 +73,29 @@ describe("MessageThread's bubble timestamp renders in the ACCOUNT's zone, not th
     const msg = { ...message("sent", null), created_at: "2026-10-08T05:00:00.000Z" };
     const text = renderedText(renderToStaticMarkup(createElement(MessageThread, {
       messages: [msg] as never, contactName: "Ada", composer: null, timezone: "Europe/Berlin",
+      contactLanguage: null,
     })));
     // 05:00 UTC is 7:00 AM in Berlin but 12:00 AM (midnight) in Chicago.
     expect(text).toContain("7:00 AM");
     expect(text).not.toContain("12:00 AM");
+  });
+});
+
+describe("inbound bubbles carry the contact's language (S-09 §9, C10)", () => {
+  const at = "2026-10-09T16:12:00Z";
+  const bubble = (id: string, direction: "inbound" | "outbound", channel: string, body: string) =>
+    ({ id, direction, channel, body, subject: null, status: "delivered", error: null, created_at: at }) as never;
+  const render = (contactLanguage: "en" | "es" | null) => renderToStaticMarkup(createElement(MessageThread, {
+    messages: [bubble("m1", "inbound", "sms", "Necesito cambiar mi cita"), bubble("m2", "outbound", "sms", "Claro"), bubble("m3", "inbound", "voice", "Caller wants a quote.")],
+    contactName: "Ana", composer: null, timezone: "UTC", contactLanguage,
+  }));
+  it("an inbound text takes it; what the business wrote and the call summary do not (mutation: tag every bubble -> FAILS)", () => {
+    const html = render("es");
+    expect(html).toMatch(/<p lang="es"[^>]*>Necesito cambiar mi cita<\/p>/);
+    expect(html).not.toMatch(/<p lang="es"[^>]*>Claro<\/p>/);
+    expect(html).not.toMatch(/<p lang="es"[^>]*>Caller wants a quote\.<\/p>/);
+  });
+  it("no language: the customer's words are typed-unknown, lang=\"\" (mutation: use the page's language -> FAILS)", () => {
+    expect(render(null)).toMatch(/<p lang=""[^>]*>Necesito cambiar mi cita<\/p>/);
   });
 });

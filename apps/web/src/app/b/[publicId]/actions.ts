@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import {
   serviceDb, getCalendarByPublicId, createContact, fillContactBlanks, createBooking, SlotTakenError,
   countRecentBookings, ensureConversation, createMessage,
-  incrementUnreadCount,
+  incrementUnreadCount, recordLanguageSignal,
 } from "@bis/db";
 import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { getMeetingProvider } from "@/lib/meetings/provider";
@@ -27,6 +27,7 @@ import { normalizeLocale } from "@/lib/forms/public-strings";
 import { bookingStrings } from "@/lib/booking/public-strings";
 import { bookingConfirmationSubject } from "@/lib/email/templates/booking";
 import { recordBookingGrant } from "@/lib/consent/grants";
+import { pageLanguageSignal } from "@/lib/contacts/language";
 import { calendarFileUrl } from "@/lib/booking/calendar-file";
 import { bookingMoveUrl } from "@/lib/booking/links";
 
@@ -366,6 +367,19 @@ export async function submitBookingAction(publicId: string, formData: FormData):
     // Evidence only, never throws (lib/consent/grants.ts). As typed, so the
     // ledger keys the number the contact row stores.
     await recordBookingGrant(db, { accountId: calendar.account_id, bookingId, contactId, phoneAsTyped: phone || null });
+
+    // S-09 §7.1 / C6: the page's language is the customer's sign only when it is not what they would
+    // get anyway. Best-effort, its own try: the booking is real and a sign must never cost it. After
+    // createBooking, so a booker who lost the slot race signals nothing.
+    const pageSign = pageLanguageSignal(locale, account?.language ?? null);
+    if (pageSign) {
+      try {
+        await recordLanguageSignal(db, calendar.account_id, contactId,
+          { language: pageSign, source: "booking", at: new Date() }, ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`booking ${publicId}: language signal failed for contact ${contactId}: ${String(e)}`);
+      }
+    }
 
     const contactName = [firstName, lastName].filter(Boolean).join(" ").trim() || email;
 

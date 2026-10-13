@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
-import { createContact } from "../contacts";
+import { createContact, recordLanguageSignal } from "../contacts";
 import { ensureConversation, createMessage } from "../messaging";
 import { getOrCreateCalendar, createBooking, cancelBookingByToken } from "../booking";
 import { assignPhoneNumber } from "../voice";
@@ -417,10 +417,21 @@ describe("groupActivityMembers (S-03 part 2b, C5, D7)", () => {
       expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
       const all = await groupActivityMembers(db, accountId, h.groupId, 10);
       expect(all.people.map((p) => p.contactId)).toEqual([c0, c2, c3, c1]);
-      expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia" });
+      expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia", language: null });
       const cut = await groupActivityMembers(db, accountId, h.groupId, 2);
       expect(cut.people.map((p) => p.contactId)).toEqual([c0, c2]);
       expect(cut.total).toEqual({ ok: true, value: 4 });
+    }));
+
+  it("each member's own language rides along: a contact with a sign reads it, one with none reads null (mutation: drop language from the embed -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const h = await household(db, accountId, 2);
+      const [c0, c1] = h.ids;
+      await recordLanguageSignal(db, accountId, c0!, { language: "es", source: "booking", at: "2026-10-03T15:00:00Z" }, "public", "system");
+      const people = await groupActivityMembers(db, accountId, h.groupId, 10);
+      const byId = new Map(people.people.map((p) => [p.contactId, p]));
+      expect(byId.get(c0!)).toMatchObject({ language: "es" });
+      expect(byId.get(c1!)).toMatchObject({ language: null });
     }));
 });
 

@@ -6,6 +6,7 @@ import {
   createBooking, SlotTakenError, setBookingStatus, getBookingById,
   markHandoffRequested,
   ensureConversation, createMessage, incrementUnreadCount,
+  recordLanguageSignal,
   type CalendarRow, type VoiceProfileRow, type Branding,
 } from "@bis/db";
 import { computeAllSlots, bookableSlot, dayKeyInZone } from "@/lib/booking/availability";
@@ -26,7 +27,7 @@ import {
   type CallState, withLead, withMessage, withTranscript, withBooking, withBookingCancelled,
   withServed, withTransferred,
 } from "../call-state";
-import { detectCallerLanguage } from "../language";
+import { detectCallerLanguage, clearCallerLanguageNow } from "../language";
 import { bookingMode } from "../booking-mode";
 import type { HandoffTarget } from "../handoff";
 
@@ -488,6 +489,18 @@ export async function runTool(
           return { state: { ...state, contactId }, result: { ok: false, slotTaken: true, error: "that time was just taken — offer another" } };
         }
         throw e;
+      }
+
+      // S-09 C7: a phone booking is a sign at the booking, read strictly from the call so far (never the
+      // profile, never calls.language). Best-effort: the booking is real.
+      const heard = clearCallerLanguageNow(state);
+      if (heard) {
+        try {
+          await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
+            { language: heard, source: "booking", at: now }, ACTOR_ID, ACTOR_TYPE);
+        } catch (e) {
+          console.error(`voice booking ${bookingId}: language signal failed: ${String(e)}`);
+        }
       }
 
       let emailFailed = false;

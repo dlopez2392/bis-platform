@@ -42,7 +42,10 @@ const { parseDrawerSummary } = await import("@/lib/contacts/drawer-summary");
 const { m } = await import("@/lib/messages");
 
 const CONTACT = { id: "c1", first_name: "Maria", last_name: "Garcia", email: "maria@example.com", phone: "+19565550100", company_name: null,
-  created_at: "2025-12-02T00:00:00Z", source: "voice", custom: {}, attribution: null, assigned_to: null, phone_country_unconfirmed: false };
+  created_at: "2025-12-02T00:00:00Z", source: "voice", custom: {}, attribution: null, assigned_to: null, phone_country_unconfirmed: false,
+  // S-09: the seven 0076 columns languageView reads; null here so every case still builds a "not set" view.
+  language: null, language_source: null, language_set_at: null,
+  last_language_signal: null, last_language_signal_source: null, last_language_signal_at: null, language_hint_kept_at: null };
 const AT = "2026-10-09T16:12:00Z";
 const BOOKING = { kind: "booking", id: "b1", at: AT, contactId: "c1", booking: { id: "b1", contact_id: "c1", created_at: AT, starts_at: "2026-10-16T15:00:00Z",
   status: "booked", note: null, author_kind: "customer", author_id: null, rescheduled_from_id: null, moved_from_starts_at: null } };
@@ -272,7 +275,27 @@ describe("the drawer's summary route: who they are (D6, Q1)", () => {
       source: "form: Contact us", sourceHint: "Found through ChatGPT", assignedTo: "11111111-1111-4111-8111-111111111111",
       fields: { first_name: "Maria", last_name: "Garcia", email: "maria@example.com", phone: "+19565550100", company_name: null },
       tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] },
+      language: { value: null, valueLabel: null, phrase: "Not set. Messages go out in English.", hint: null },
     });
+  });
+
+  it("who.language is the record page's own view, in the account's zone (S-09 §8.1; mutation: omit language from who -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: null }, error: null });
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" });
+    const b = await body();
+    expect(b.who.language).toEqual({ value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null });
+  });
+
+  it("review M1/M-2: a bad stored language_set_at leaves who.language OUT (the drawer then shows no line), never a false \"Not set.\" and never a 500 (mutation: call languageView outside viewOf -> 500; or fall back to a not-set view -> the key is present; each FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });
+    const res = await GET(req(), ctx());
+    expect(res.status).toBe(200);
+    const b = await res.json();
+    expect(b.who).not.toHaveProperty("language");
+    expect(b.who.fields).toBeDefined();
+    expect(b.facts.status).toBe("ready");
+    expect(errors).toHaveBeenCalled();
   });
 
   it("an unassigned customer sends null, never leaves the field out (mutation: send undefined -> FAILS)", async () => {

@@ -18,6 +18,7 @@ const dbMocks = vi.hoisted(() => ({
   fillContactBlanks: vi.fn(), getContact: vi.fn(),
   markHandoffRequested: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), incrementUnreadCount: vi.fn(),
+  recordLanguageSignal: vi.fn(),
   // D-016 item 3: the email gate now reads the suppression ledger for
   // voice.booked/moved/cancelled too (customer_initiated — the consent
   // ledger read already skips them, but not this one). Allowed by default.
@@ -640,6 +641,42 @@ describe("book_appointment", () => {
       expect(result).toMatchObject({ ok: true, bookingId: "bk1" });
       expect(meetingProviderMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("book_appointment — the caller's language becomes the contact's (S-09 C7)", () => {
+  const slot = { startsAt: new Date("2027-06-01T14:00:00Z"), endsAt: new Date("2027-06-01T15:00:00Z") };
+  beforeEach(() => {
+    computeAllSlotsMock.mockResolvedValue([slot]);
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: false });
+    dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "tok123" });
+    dbMocks.recordLanguageSignal.mockResolvedValue(true);
+  });
+  const spanish = () => ({ ...emptyCallState(), transcript: [{ role: "caller" as const, text: "hola, necesito una cita para mañana", at: "t" }] });
+
+  it("a caller who clearly spoke Spanish signals booking/es as the AI, at the tool's clock, after the booking (mutation: signal before createBooking -> FAILS)", async () => {
+    await runTool(spanish(), ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith(ctx.db, "a1", "ct1",
+      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, "voice", "ai");
+    expect(dbMocks.recordLanguageSignal.mock.invocationCallOrder[0]!).toBeGreaterThan(dbMocks.createBooking.mock.invocationCallOrder[0]!);
+  });
+
+  it("review M-5: the caller's turn still arriving decides it alone, with nothing in the finished transcript (mutation: read with pendingCallerTurn null -> FAILS)", async () => {
+    const inFlight = { ...emptyCallState(), pendingCallerTurn: { itemId: "item_9", text: "hola, necesito una cita para mañana" } };
+    await runTool(inFlight, ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith(ctx.db, "a1", "ct1",
+      { language: "es", source: "booking", at: new Date("2027-06-01T12:00:00Z") }, "voice", "ai");
+  });
+
+  it("a caller who said too little signals nothing (mutation: fall back to the profile's language -> FAILS)", async () => {
+    await runTool(emptyCallState(), ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
+  });
+
+  it("a failed signal never costs the booking (mutation: drop the try -> FAILS)", async () => {
+    dbMocks.recordLanguageSignal.mockRejectedValue(new Error("db down"));
+    const { result } = await runTool(spanish(), ctx, "book_appointment", { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true });
+    expect(result).toMatchObject({ ok: true });
   });
 });
 

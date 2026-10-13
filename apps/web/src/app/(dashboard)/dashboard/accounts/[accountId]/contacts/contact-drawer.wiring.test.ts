@@ -56,7 +56,7 @@ vi.mock("@/components/locale-provider", () => ({
 }));
 const nextUpProps: unknown[] = [];
 vi.mock("./[contactId]/next-up-card", () => ({ NextUpBody: (p: unknown) => { nextUpProps.push(p); return null; } }));
-vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn(), undoInlinePhoneEditAction: vi.fn(), setContactBusinessAction: vi.fn(), undoContactBusinessAction: vi.fn() }));
+vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn(), undoInlinePhoneEditAction: vi.fn(), setContactBusinessAction: vi.fn(), undoContactBusinessAction: vi.fn(), setContactLanguageAction: vi.fn(), restoreContactLanguageAction: vi.fn(), keepContactLanguageHintAction: vi.fn() }));
 vi.mock("./email-actions", () => ({ stopEmailsAction: vi.fn(), undoStopEmailsAction: vi.fn(), resumeEmailsAction: vi.fn() }));
 vi.mock("./[contactId]/actions", () => ({ addTagAction: vi.fn(), removeTagAction: vi.fn() }));
 
@@ -82,7 +82,8 @@ const GOOD = {
   ], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline" },
   who: { source: null, sourceHint: null, assignedTo: null,
     fields: { first_name: "Maria", last_name: "Garcia", email: null, phone: null, company_name: null },
-    tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] } },
+    tags: { status: "ready", tags: [{ id: "t1", name: "vip" }] },
+    language: { value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null } },
 };
 const PARSED = { ...GOOD, who: { status: "ready", ...GOOD.who } };
 
@@ -567,7 +568,7 @@ describe("ContactDrawer on the record kit (S-03 part 3)", () => {
 
   it("while loading, every section is a skeleton carrying the e2e's hook (rule 7, C10; mutation: drop the hook from a section -> FAILS)", () => {
     const html = renderOpen(undefined);
-    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(5);
+    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(6);
     expect(html).toMatch(/data-drawer-section="recent" data-state="loading"/);
   });
 
@@ -618,7 +619,7 @@ describe("ContactDrawer: every section's own state, and the chrome around them (
     expect(html).not.toContain("Somebody Else");
     expect(html).not.toContain("c0-only-tag");
     expect(html).toMatch(/<h2[^>]*>Maria Garcia<\/h2>/);
-    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(5);
+    expect((html.match(/data-testid="drawer-skeleton"/g) ?? []).length).toBe(6);
   });
 
   it("I3: who failed on an ordinary list row says so with Try again, under fields that stay editable (mutation: drop the lower who error -> FAILS)", () => {
@@ -721,5 +722,15 @@ describe("ContactDrawer: every section's own state, and the chrome around them (
     expect(input).toContain("min-h-11");
     expect(input).toContain("md:min-h-8");
     expect(input).not.toMatch(/(?<!file:)\bh-7\b/);
+  });
+
+  it("the Language line is the route's view, keyed by contact, and re-reads the route when it changes (S-09 §8.1; mutation: onChanged router.refresh -> FAILS)", async () => {
+    const { LanguageField } = await import("./language-field");
+    const el = treeOf(READY).find((e) => e.type === LanguageField);
+    expect(el?.props.view).toEqual(GOOD.who.language);
+    expect(el?.props.contactId).toBe("c1");
+    const nonce = states.filter((s) => s.initial === 0);
+    (el!.props.onChanged as () => void)();
+    expect(nonce[0]!.set).toHaveBeenCalledTimes(1);
   });
 });

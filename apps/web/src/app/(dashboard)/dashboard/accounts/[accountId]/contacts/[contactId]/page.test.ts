@@ -184,6 +184,9 @@ const { renderedText } = await import("@/lib/rendered-text");
 const CONTACT = {
   id: "ct1", first_name: "Ana", last_name: "Reyes", email: "ana@example.com", phone: null,
   company_name: null, custom: {}, created_at: "2026-01-01T05:30:00Z",
+  // S-09: the seven 0076 columns languageView reads; null here so every case still builds a "not set" view.
+  language: null, language_source: null, language_set_at: null,
+  last_language_signal: null, last_language_signal_source: null, last_language_signal_at: null, language_hint_kept_at: null,
 };
 
 async function render(search: Record<string, string> = {}) {
@@ -254,6 +257,28 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     expect(emailRowProps).not.toHaveBeenCalled();
     // S-03 part 1: none of the record page's own reads run for a contact the caller cannot see.
     expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
+  });
+
+  it("review I4: the Details card's Language line is the page's own real wiring, in the account's zone (S-09 §8.1; mutation: drop the language prop in page.tsx -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" });
+    const html = await render();
+    expect(html).toMatch(/data-language-row="" data-language="es"/);
+    expect(html).toContain("from their booking (Oct 3)");
+  });
+
+  it("review M1/M-2: a bad stored language_set_at leaves the Language line OUT, never a false \"Not set.\" and never the page (mutation: call languageView outside viewOf -> the render rejects; or fall back to a not-set view -> the row renders; each FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(html).toContain("data-record-header");
+      expect(html).toMatch(/data-record-card="details" data-state="ready"/);
+      expect(html).not.toContain("data-language-row");
+      expect(html).not.toContain("Not set.");
+      expect(errors).toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 

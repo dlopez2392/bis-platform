@@ -58,3 +58,24 @@ describe("recentRowsView (S-03 part 3 C6, §9.4): the drawer's compact rows", ()
     expect(rows[0]!.dateTime).toBe(AT);
   });
 });
+
+describe("recentRowsView's customer language (S-09 §9)", () => {
+  const INBOUND_SMS = message(null);
+  const OUTBOUND_SMS: TimelineEntry = { kind: "message", id: "m2", at: AT, contactId: "c1",
+    message: { id: "m2", channel: "sms", direction: "outbound", status: "delivered", subject: null, body: "Claro, le escribimos", error: null,
+      created_at: AT, author_kind: "person", author_id: "u1" } };
+
+  it("an inbound text's excerpt takes the contact's language; an outbound one stays typed-unknown (mutation: ignore direction -> FAILS)", () => {
+    const tr = makeTr("en");
+    const rows = timelineRows([INBOUND_SMS, OUTBOUND_SMS], { zone: "UTC", tr, author: { viewerId: null, names: {}, personaName: null, tr } });
+    expect(recentRowsView(rows, "es").map((r) => r.excerpt?.lang)).toEqual(["es", ""]);
+    expect(recentRowsView(rows).map((r) => r.excerpt?.lang)).toEqual(["", ""]);
+  });
+
+  it("a customer's booking note takes the contact's language; a staff one (author_kind person) stays typed-unknown (mutation: drop the booking author_kind check -> FAILS)", () => {
+    const staff: TimelineEntry = { ...booking, id: "b2", booking: { ...booking.booking, id: "b2", note: "Bring the long ladder", author_kind: "person", author_id: "u1" } };
+    const tr = makeTr("en");
+    const rows = timelineRows([booking, staff], { zone: "UTC", tr, author: { viewerId: null, names: { u1: "Ana" }, personaName: null, tr } });
+    expect(recentRowsView(rows, "es").map((r) => [r.excerpt?.text, r.excerpt?.lang])).toEqual([["Gate code 4411", "es"], ["Bring the long ladder", ""]]);
+  });
+});

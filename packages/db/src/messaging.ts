@@ -43,6 +43,8 @@ export type ConversationSummary = {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   unreadCount: number;
+  /** S-09 §9: the contact's own language, for the inbound bubble's `lang` attribute; null when not set. */
+  contactLanguage: "en" | "es" | null;
 };
 
 /** A row's position in `listConversations`'s ordering (last_message_at
@@ -610,7 +612,7 @@ export async function listConversations(
   // row, so an unmatched conversation would still come back with a null
   // `contacts` rather than being excluded — `!inner` is what makes the
   // filter apply to the conversation row itself (Mine/Unassigned, spec §8).
-  const embed = opts.assignee ? "contacts!inner(first_name, last_name, assigned_to)" : "contacts(first_name, last_name)";
+  const embed = opts.assignee ? "contacts!inner(first_name, last_name, language, assigned_to)" : "contacts(first_name, last_name, language)";
   let q = db.from("conversations")
     .select(`id, contact_id, last_message_at, unread_count, ${embed}`)
     .eq("account_id", accountId)
@@ -669,6 +671,7 @@ export async function listConversations(
     lastMessageAt: r.last_message_at,
     lastMessagePreview: previews[i] ?? null,
     unreadCount: r.unread_count ?? 0,
+    contactLanguage: r.contacts?.language ?? null,
   }));
 }
 
@@ -708,7 +711,7 @@ export async function getConversationSummary(
   db: SupabaseClient, accountId: string, conversationId: string,
 ): Promise<ConversationSummary | null> {
   const { data, error } = await db.from("conversations")
-    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language)")
     .eq("account_id", accountId).eq("id", conversationId)
     .maybeSingle();
   if (error) throw new Error(`getConversationSummary failed: ${error.message}`);
@@ -722,6 +725,7 @@ export async function getConversationSummary(
     lastMessageAt: r.last_message_at,
     lastMessagePreview: await fetchConversationPreview(db, accountId, r.id),
     unreadCount: r.unread_count ?? 0,
+    contactLanguage: r.contacts?.language ?? null,
   };
 }
 
@@ -838,7 +842,7 @@ export async function searchConversations(
   if (ids.length === 0) return [];
 
   const { data, error } = await db.from("conversations")
-    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name)")
+    .select("id, contact_id, last_message_at, unread_count, contacts(first_name, last_name, language)")
     .eq("account_id", accountId)
     .in("id", ids);
   if (error) throw new Error(`searchConversations failed: ${error.message}`);
@@ -858,6 +862,7 @@ export async function searchConversations(
       lastMessageAt: r.last_message_at,
       lastMessagePreview: preview.get(id) ?? null,
       unreadCount: r.unread_count ?? 0,
+      contactLanguage: r.contacts?.language ?? null,
     }];
   });
 }

@@ -7,6 +7,7 @@ import { m, type MessageKey } from "@/lib/messages";
 import type { FactsView } from "@/lib/record/record-facts";
 import type { NextUpRow, NextUpView, NextUpWho } from "@/lib/record/next-up";
 import type { RecentRowView } from "@/lib/record/recent-rows";
+import { parseLanguageView, type LanguageView } from "@/lib/contacts/language";
 
 /** The editable fields the drawer shows for a `?peek=` stub row (Q1). */
 export type DrawerFields = { first_name: string | null; last_name: string | null; email: string | null; phone: string | null; company_name: string | null };
@@ -26,13 +27,16 @@ export type DrawerSummary = {
   who: {
     source: string | null; sourceHint: string | null; assignedTo: string | null; fields: DrawerFields;
     tags: { status: "ready"; tags: { id: string; name: string }[] } | { status: "error" };
+    /** Absent when the line could not be built (review M-2): the drawer leaves it out, never "Not set.". */
+    language?: LanguageView;
   };
 };
 
 type Failed = { status: "error"; text: string };
-/** `assignedTo` undefined: the server did not say (an older one), so the drawer leaves the line out. */
+/** `assignedTo` undefined: the server did not say (an older one), so the drawer leaves the line out.
+ *  `language` undefined the same way (S-09, plan deviation 11): an older server during a deploy. */
 export type ParsedWho =
-  | ({ status: "ready" } & Omit<DrawerSummary["who"], "assignedTo"> & { assignedTo: string | null | undefined })
+  | ({ status: "ready" } & Omit<DrawerSummary["who"], "assignedTo" | "language"> & { assignedTo: string | null | undefined; language: LanguageView | undefined })
   | Failed;
 export type ParsedDrawerSummary = Omit<DrawerSummary, "who"> & { who: ParsedWho };
 
@@ -103,8 +107,8 @@ function parseRecentRow(r: unknown): RecentRowView | "unknown" | null {
   const status = st === null ? null : isRecord(st) && oneOf(TONES, st.tone) && isStr(st.word) ? { tone: st.tone, word: st.word } : undefined;
   const ex = r.excerpt;
   const excerpt = ex === null ? null
-    : isRecord(ex) && isStr(ex.text) && (ex.lang === "" || ex.lang === "en") && isBool(ex.done)
-      ? { text: ex.text, lang: ex.lang as "" | "en", done: ex.done } : undefined;
+    : isRecord(ex) && isStr(ex.text) && (ex.lang === "" || ex.lang === "en" || ex.lang === "es") && isBool(ex.done)
+      ? { text: ex.text, lang: ex.lang as "" | "en" | "es", done: ex.done } : undefined;
   if (status === undefined || excerpt === undefined) return null;
   return { key: r.key, kind: r.kind, mark: { kind: mark.kind, label: mark.label }, verb: r.verb, status, detail: r.detail, time: r.time, dateTime: r.dateTime, excerpt };
 }
@@ -153,7 +157,9 @@ export function parseDrawerSummary(json: unknown): ParsedDrawerSummary | null {
 
   const w = json.who;
   let who: ParsedWho = { status: "error", text: failed("contact.details") };
-  if (isRecord(w) && strOrNull(w.source) && strOrNull(w.sourceHint) && isRecord(w.fields) && FIELD_KEYS.every((k) => strOrNull((w.fields as Record<string, unknown>)[k]))) {
+  // S-09: absent (an older server) leaves the line out; present but malformed is the who section's error.
+  const language = isRecord(w) && w.language !== undefined ? parseLanguageView(w.language) : undefined;
+  if (isRecord(w) && language !== null && strOrNull(w.source) && strOrNull(w.sourceHint) && isRecord(w.fields) && FIELD_KEYS.every((k) => strOrNull((w.fields as Record<string, unknown>)[k]))) {
     const f = w.fields as Record<(typeof FIELD_KEYS)[number], string | null>;
     const tg = w.tags;
     const tags = isRecord(tg) && tg.status === "ready" && Array.isArray(tg.tags) && tg.tags.every((x) => isRecord(x) && isStr(x.id) && isStr(x.name))
@@ -164,7 +170,7 @@ export function parseDrawerSummary(json: unknown): ParsedDrawerSummary | null {
       // Null is a fact ("Unassigned"); anything else says nothing, and the drawer leaves the line out.
       assignedTo: isStr(w.assignedTo) ? w.assignedTo : w.assignedTo === null ? null : undefined,
       fields: { first_name: f.first_name, last_name: f.last_name, email: f.email, phone: f.phone, company_name: f.company_name },
-      tags,
+      tags, language,
     };
   }
   return { locale, header, facts, nextUp, recent, who };

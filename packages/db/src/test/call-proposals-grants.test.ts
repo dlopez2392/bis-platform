@@ -127,8 +127,8 @@ describe("call_proposals grants", () => {
         [table],
       )).rows.map((r) => r.column_name).sort();
       expect(await updatable("calendars"), "calendars (the control)").toEqual([
-        "buffer_minutes", "enabled", "followup_body", "followup_enabled", "max_advance_days", "meeting_type",
-        "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
+        "buffer_minutes", "enabled", "followup_body", "followup_body_es", "followup_body_es_basis", "followup_enabled",
+        "max_advance_days", "meeting_type", "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
       ]);
       expect(await updatable("call_proposals")).toEqual([]);
     }));

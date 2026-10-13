@@ -5,6 +5,7 @@ const dbMocks = vi.hoisted(() => ({
   createMessage: vi.fn(), incrementUnreadCount: vi.fn(), emit: vi.fn(),
   fillContactBlanks: vi.fn(), updateMessageStatus: vi.fn(), hasRecentOutboundSms: vi.fn(),
   getAlertPhone: vi.fn(), getContact: vi.fn(), recordAutomationLog: vi.fn(), recordUsage: vi.fn(),
+  recordLanguageSignal: vi.fn(),
   // The send gate's reads (lib/consent/gate.ts): the text-back and the staff
   // alert go through the REAL gate, allowed by default.
   readConsentState: vi.fn(), readPhoneCountryFlag: vi.fn(), readAccountTimezone: vi.fn(), getAutomationLogEntry: vi.fn(),
@@ -206,6 +207,7 @@ const meta = { callRowId: "call1", startedAt: new Date("2027-06-01T17:00:00Z"), 
 
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
+  dbMocks.recordLanguageSignal.mockResolvedValue(true);
   summaryMocks.generateSummary.mockReset().mockResolvedValue("RECORDED — test.");
   emailRefs.providerShouldThrow = false;
   emailRefs.send.mockReset().mockResolvedValue({ providerMessageId: "x" });
@@ -1887,5 +1889,33 @@ describe("finishCall — the proposals know about the callback To do", () => {
     await finishCall(withBooking(withTranscript(emptyCallState(), { role: "caller", text: "Book me in", at: "t" }),
       { id: "b1", contactName: "Ana", startsAt: "2027-06-02T15:00:00Z", endsAt: "2027-06-02T16:00:00Z" }), ctx, meta);
     expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ callbackTodo: false }));
+  });
+});
+
+describe("finishCall — the caller's words become the contact's language (S-09 C5)", () => {
+  const lead = { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } };
+  const spoke = (text: string) => withLead(withTranscript(emptyCallState(), { role: "caller", text, at: "t" }), lead);
+
+  it("a meaningful call in clear Spanish signals call/es as the AI at the call's end, read strictly even on an English-only line (mutation: use detectSpokenLanguage -> FAILS)", async () => {
+    await finishCall(spoke("hola, necesito una cita para mañana por favor"), { ...ctx, profileLanguage: "en" }, meta);
+    expect(dbMocks.recordLanguageSignal).toHaveBeenCalledWith({}, "a1", "ct1",
+      { language: "es", source: "call", at: meta.endedAt }, "voice", "ai");
+  });
+
+  it("an unclear call signals nothing, even though calls.language still reads English (mutation: signal spokenLanguage -> FAILS)", async () => {
+    await finishCall(spoke("hi"), ctx, meta);
+    expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
+  });
+
+  it("a call that is not meaningful signals nothing: its contact is resolved only inside `if (meaningful)`, so there is no one to sign (mutation: resolve the contact before that test -> FAILS)", async () => {
+    await finishCall(withTranscript(emptyCallState(), { role: "caller", text: "hola, necesito una cita para mañana", at: "t" }), ctx, meta);
+    expect(dbMocks.recordLanguageSignal).not.toHaveBeenCalled();
+  });
+
+  it("a failed signal never costs the staff alert or the row (mutation: drop the try -> FAILS)", async () => {
+    dbMocks.recordLanguageSignal.mockRejectedValue(new Error("db down"));
+    const r = await finishCall(spoke("hola, necesito una cita para mañana por favor"), ctx, meta);
+    expect(r.notified).toBe(true);
+    expect(dbMocks.finishCallRow).toHaveBeenCalledTimes(1);
   });
 });

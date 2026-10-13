@@ -50,6 +50,8 @@ export type ActivityTimelineProps = {
   emptyText: string | null;
   pager: { olderHref: string | null; newerHref: string | null };
   tr: Tr;
+  /** S-09 §9: the contact's language for what the CUSTOMER typed; "" when not set (C10). */
+  customerLang: "" | "en" | "es";
 };
 
 /** A To-do's due date, in the SAME account zone it was saved from (D-006); no date rather than a throw. */
@@ -118,7 +120,7 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
                 </div>
               ) : null}
               <Row row={row} hidden={hidden} completeAction={boundCompleteTask} timezone={p.timezone} assign={assign}
-                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} />
+                holdOpen={p.holdOpenTaskIds} accountId={p.accountId} tr={tr} customerLang={p.customerLang} />
             </li>
           ))}
         </ol>
@@ -134,9 +136,10 @@ export function ActivityTimeline(p: ActivityTimelineProps) {
   );
 }
 
-function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr }: {
+function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountId, tr, customerLang }: {
   row: TimelineRow; hidden: ReactNode; completeAction: (formData: FormData) => Promise<void>; timezone: string;
   assign: { accountId: string; members: AssignMember[] } | null; holdOpen: string[]; accountId: string; tr: Tr;
+  customerLang: "" | "en" | "es";
 }) {
   const e = row.entry;
   const head = { kind: e.kind, mark: row.mark, verb: row.verb, status: row.status, detail: row.detail, time: row.time, dateTime: e.at };
@@ -185,7 +188,7 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
               {answers.map((a) => (
                 <div key={a.key} className="flex gap-2 text-sm">
                   <dt className="shrink-0 text-muted-foreground">{a.label}:</dt>
-                  <dd lang="" className="min-w-0 break-words text-card-foreground">{a.value}</dd>
+                  <dd lang={e.submission.author_kind === "customer" ? customerLang : ""} className="min-w-0 break-words text-card-foreground">{a.value}</dd>
                 </div>
               ))}
             </dl>
@@ -195,10 +198,13 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "message": {
       const reason = e.message.direction === "outbound" ? messageFailureReason(e.message, tr.locale) : null;
+      // S-09 §9: an inbound message is what the customer typed. The timeline loads only email and sms
+      // (record.ts's listContactMessages `channels`), so the AI's `voice` summary never reaches here.
+      const typedLang = e.message.direction === "inbound" ? customerLang : "";
       return (
         <TimelineItem {...head} icon={e.message.channel === "sms" ? MessageSquare : Mail}>
-          {e.message.subject ? <p lang="" className="text-sm font-medium text-card-foreground">{e.message.subject}</p> : null}
-          <p lang="" className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.message.body}</p>
+          {e.message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{e.message.subject}</p> : null}
+          <p lang={typedLang} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.message.body}</p>
           {reason ? <p className="mt-1 text-xs text-[var(--crit)]">{reason}</p> : null}
         </TimelineItem>
       );
@@ -206,7 +212,7 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     case "booking":
       return (
         <TimelineItem {...head} icon={CalendarCheck}>
-          {e.booking.note ? <p lang="" className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.booking.note}</p> : null}
+          {e.booking.note ? <p lang={e.booking.author_kind === "customer" ? customerLang : ""} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{e.booking.note}</p> : null}
         </TimelineItem>
       );
     case "call": {

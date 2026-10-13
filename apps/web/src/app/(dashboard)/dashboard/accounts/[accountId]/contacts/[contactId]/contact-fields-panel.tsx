@@ -35,6 +35,8 @@ import type { PhoneInlineUndo } from "@/lib/contacts/inline-phone-undo";
 import { CLEAR_FIELD_SENTINEL } from "./constants";
 import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
+import type { LanguageView } from "@/lib/contacts/language";
+import { LanguageField } from "../language-field";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];
@@ -56,10 +58,12 @@ type DetailsProps = {
   members?: AssignMember[];
   /** The viewer's own person here: "You" on a read-only line only for their own customer. */
   viewerId?: string | null;
+  /** S-09: the Language line, built on the server by languageView (page.tsx); absent, no line. */
+  language?: LanguageView;
 };
 
 /** The record page's "Contact Details" card body (S-03 §8): moved in unchanged, minus its Card. */
-export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null }: DetailsProps) {
+export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null, language }: DetailsProps) {
   const router = useRouter();
   const locale = useLocale();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
@@ -92,6 +96,10 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
             </dd>
           </div>
         ))}
+        {language ? (
+          <LanguageField key={`${contactId}:language`} accountId={accountId} contactId={contactId} view={language}
+            onChanged={() => router.refresh()} />
+        ) : null}
         <div className="space-y-0.5">
           <dt className="text-muted-foreground text-xs">{t(m, "contact.company", locale)}</dt>
           <dd><BusinessInlineField accountId={accountId} contactId={contactId} value={contact.company_name ?? null} /></dd>
