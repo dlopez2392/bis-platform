@@ -1104,22 +1104,42 @@ The events chain mock (`:13-15`, `:46-48`) already answers `events.data`; the lo
 
 - [ ] **Step 2: Implement `groups-actions.ts`.** Import `setGroupPrimaryContact` from `@bis/db` (factory check: `groups-actions.test.ts` is the only factory reaching it; Step 1 added it). Add `const groupPath = (accountId: string, groupId: string) => \`/dashboard/accounts/${accountId}/groups/${groupId}\`;` under `contactsPath` (`:31`). Replace `removedByCaller` (`:195-203`) and the narrow branch of `restoreMembershipAction` (`:218-221`):
 
+**Corrected 2026-10-13 (final review):** the snippet below is the shipped form. The first version matched ANY of
+the caller's own removals (`.eq("actor_id", userId)`, unordered), so a Technician could replay an older removal
+taken while the member held the flag after a newer removal by someone else (restore puts the row back under its
+old id, so every earlier removal still matches). The NEWEST removal of that member, by any actor, decides both the
+Undo and the flag. Its ids must be the stored lowercase ones on both sides: `removeMembership` records
+`memberId: r.removed.id` (not the caller's string), the Business-name path records each membership it deletes
+(`setContactsBusiness`, `undoSetBusiness`, commit `4fc64671`), and `restoreMembershipAction` lowercases the
+snapshot's three ids before the lookup and the restore, because jsonb `@>` compares strings exactly while a uuid
+cast ignores case (commit `8ae998f2`).
+
 ```ts
 async function removedByCaller(
-  accountId: string, userId: string, snapshot: GroupMemberSnapshot,
+  accountId: string, userId: string, snapshot: GroupMemberSnapshot,   // snapshot's ids already lowercased
 ): Promise<{ found: boolean; wasPrimaryContact: boolean }> {
-  const { data, error } = await serviceDb().from("events").select("id, payload")
-    .eq("account_id", accountId).eq("type", "client_group.member_removed").eq("actor_id", userId)
+  const { data, error } = await serviceDb().from("events").select("id, actor_id, payload")
+    .eq("account_id", accountId).eq("type", "client_group.member_removed")
     .contains("payload", { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id })
     .gte("created_at", new Date(Date.now() - RESTORE_WINDOW_MS).toISOString())
+    .order("created_at", { ascending: false }).order("id", { ascending: false })
     .limit(1);
   if (error) throw new Error(`restore removal lookup failed: ${error.message}`);
-  const row = (data ?? [])[0] as { payload?: { wasPrimaryContact?: unknown } } | undefined;
-  return { found: Boolean(row), wasPrimaryContact: row?.payload?.wasPrimaryContact === true };
+  const newest = (data ?? [])[0] as { actor_id?: unknown; payload?: { wasPrimaryContact?: unknown } } | undefined;
+  if (!newest || newest.actor_id !== userId) return { found: false, wasPrimaryContact: false };
+  return { found: true, wasPrimaryContact: newest.payload?.wasPrimaryContact === true };
 }
 ```
 
-and inside `restoreMembershipAction`'s `guarded` body:
+and at the top of `restoreMembershipAction`, after the uuid checks (the parameter is renamed `raw`):
+
+```ts
+  const snapshot: GroupMemberSnapshot = {
+    ...raw, id: raw.id.toLowerCase(), contact_id: raw.contact_id.toLowerCase(), client_group_id: raw.client_group_id.toLowerCase(),
+  };
+```
+
+and inside its `guarded` body:
 
 ```ts
     if (!(await getContact(await dbForRequest(), accountId, snapshot.contact_id))) return refuse(L, accountId, "contact not visible", ids);
@@ -1601,7 +1621,7 @@ git commit -m "feat(contacts): the group page's card list, header actions to the
 
 **Files**
 - Modify: `…/contacts/places-card.tsx`, `place-dialog.tsx`, `equipment-dialog.tsx`, `places-card-handlers.ts`
-- Modify tests: `…/contacts/places-card.test.ts`, `places-card.handlers.test.ts`, `places-card.owner.test.ts`
+- Modify tests: `…/contacts/places-card.test.ts`, `places-card.handlers.test.ts` (corrected 2026-10-13 (final review): `places-card.owner.test.ts` was listed but needed no change and was not touched)
 
 **Interfaces**
 - Consumes: Task 3's `PlaceSubjectArg` (`places-actions.ts`), `PlacesResponse.group`, the route `/api/accounts/{a}/groups/{g}/places`; Task 4's `groupPage.places.empty*` keys.
@@ -2134,8 +2154,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
 
   const primary = people.status === "ready" ? people.page.primary : null;
   const groupUrl = firstGroupMapUrl(places?.places ?? [], []);
-  // D4: the call-first member's own first place only when the group has no addressed place (soft, one extra read).
-  const ownUrl = !groupUrl && primary
+  // D4: the call-first member's own first place only when the group's places were READ and none has an address
+  // (soft, one extra read). A failed group read (places null) cannot know that, so Directions is dropped rather
+  // than guessed. Corrected 2026-10-13 (final review): was `!groupUrl && primary` (commit ad5281aa).
+  const ownUrl = !groupUrl && places && primary
     ? firstGroupMapUrl([], ((await loadHeaderPlaces(db, accountId, primary.contactId))?.places ?? []).filter((p) => p.contact_id === primary.contactId))
     : null;
   const canText = await loadPrimaryText({ db, accountId, primary, smsGate, zone: zone.zone, locale });
@@ -2337,12 +2359,13 @@ test("at 390px Properties and Deals are closed, above People (spec §7's phone o
 - [ ] **2. Gates.** Push the branch so `verify` runs the db suite (the `withTestAccount` cases of Task 2 prove red→green there: read the run and confirm each named probe was exercised by the implementer's report). `e2e` stays red until step 4 (the migration check). Then, one at a time on the combined tree: `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check for an in-progress `screenshots.yml` run first).
 - [ ] **3. bis-ci, dry run.** `gh workflow run ci-project-setup.yml --ref feat/s03-group-page -f step=push-dry-run`. Read the run: it lists exactly `0075_group_primary_contact.sql`. Anything else: stop.
 - [ ] **4. bis-ci, push.** `gh workflow run ci-project-setup.yml --ref feat/s03-group-page -f step=push`. Read it for success. Re-run the PR's `e2e` job.
-- [ ] **5. Production.** Warn danlo in chat first. Re-run Task 1 Step 8's byte scan (`0075 0`). MCP `apply_migration`, name `group_primary_contact`, **exactly once; never re-apply**, never touch 0069–0074. Then read-only: `select count(*) from public.client_group_members where is_primary_contact` → `0` (no backfill); `select has_function_privilege('authenticated', 'public.set_group_primary_contact(uuid,uuid,uuid)', 'execute')` → `false`.
-- [ ] **6. Parity.** The runbook's digest between bis-ci and production: they match. Spot check on production: `select count(*) from pg_indexes where indexname = 'client_group_members_one_primary_contact'` → `1`.
-- [ ] **7. PR, merge, deploy.** Open PR 2a only now (body ends with the attribution line). Read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits/{sha}/check-runs`); squash-merge with the SHA pinned. Verify the deploy is READY at the merge SHA; `/` 200, `/sign-in` 200, `/b/bogus` 404. Served-HTML markers (signed in, Preview or production): the "People" card title on `…/groups/<id>` opened by URL; a contact page in Spanish reading "· Familia".
-- [ ] **8. Ledger, runbook, tracker.** Propose the 0075 run-log line for `docs/runbooks/ci-supabase-project.md` to bis-platform; update S-03's row in the roadmap tracker.
+- [ ] **5. Pre-flight, read-only, immediately before step 6 (added 2026-10-13 (final review)).** On production (MCP `execute_sql`): `select count(*) from public.memberships where scope = 'account' and role = 'technician';` → must be `0`. Why: once 0075 replaces `app.restore_member`, `main`'s build (still live until 2a deploys) lets a narrow caller's browser snapshot carry `is_primary_contact: true` into a restore, so a Technician could make their customer a group's call-first member in the window between the apply and 2a's deploy (spec §12). With no technician membership there is nobody to do it. A non-zero count: stop, tell danlo, and apply only when 2a's merge and deploy can follow at once. Record the count in the ledger.
+- [ ] **6. Production.** Warn danlo in chat first. Re-run Task 1 Step 8's byte scan (`0075 0`). MCP `apply_migration`, name `group_primary_contact`, **exactly once; never re-apply**, never touch 0069–0074. Then read-only: `select count(*) from public.client_group_members where is_primary_contact` → `0` (no backfill); `select has_function_privilege('authenticated', 'public.set_group_primary_contact(uuid,uuid,uuid)', 'execute')` → `false`.
+- [ ] **7. Parity.** The runbook's digest between bis-ci and production: they match. Spot check on production: `select count(*) from pg_indexes where indexname = 'client_group_members_one_primary_contact'` → `1`.
+- [ ] **8. PR, merge, deploy.** Open PR 2a only now (body ends with the attribution line). Read the check runs for the HEAD SHA (`gh api repos/{owner}/{repo}/commits/{sha}/check-runs`); squash-merge with the SHA pinned. Verify the deploy is READY at the merge SHA; `/` 200, `/sign-in` 200, `/b/bogus` 404. Served-HTML markers (signed in, Preview or production): the "People" card title on `…/groups/<id>` opened by URL; a contact page in Spanish reading "· Familia".
+- [ ] **9. Ledger, runbook, tracker.** Propose the 0075 run-log line for `docs/runbooks/ci-supabase-project.md` to bis-platform; update S-03's row in the roadmap tracker.
 
-Hazards (spec §12): **2a's app before 0075:** the People read selecting `is_primary_contact` fails, so People shows its error and the header shows no Call, Text or Email (data-safe, order fixed anyway). **0075 before 2a:** a defaulted column and an unused function, safe. **Rollback:** revert the app; 0075 is harmless to the old build; dropping it (Task 1's header) is an owner decision.
+Hazards (spec §12; corrected 2026-10-13 (final review)): **2a's app before 0075:** the People read selecting `is_primary_contact` fails, so People shows its error and the header shows no Call, Text or Email (data-safe); and the contact page's Business-name Undo answers "Undo failed", because `undoSetBusiness` reads the added membership's `is_primary_contact` before it runs (nothing is deleted). The order is fixed. **0075 before 2a:** NOT fully safe: the replaced `app.restore_member` honours a snapshot's `is_primary_contact`, and `main`'s `restoreMembershipAction` passes a narrow caller's snapshot through, so a Technician could take call-first in the window until 2a deploys. Step 5's count of technician memberships (`0`) is what makes the window empty. **Rollback:** revert the app; 0075 is harmless to the old build; dropping it (Task 1's header) is an owner decision.
 
 ---
 

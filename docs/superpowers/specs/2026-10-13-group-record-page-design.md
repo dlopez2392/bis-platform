@@ -155,8 +155,10 @@ action that first proved the target on the request client (`makePrimaryAction`, 
   `schema-grants-guard.test.ts`'s `EXPECTED_WRITES` names no column of this table and does not move.
 - **`public.set_group_primary_contact(p_account_id uuid, p_group_id uuid, p_member_id uuid) returns jsonb`**:
   plpgsql, `set search_path = ''`, not definer; `revoke all … from public, anon, authenticated, service_role;
-  grant execute … to service_role` (0069's loop), and the same pair re-stated for the replaced `app.restore_member`. Locks the group row `for update` (two managers choosing at
-  once queue rather than race the partial index), checks the group is in `p_account_id`, and, when `p_member_id`
+  grant execute … to service_role` (0069's loop), and the same pair re-stated for the replaced `app.restore_member`. Locks the group row `for no key update` (two managers choosing at
+  once queue rather than race the partial index; deliberately not `for update`, which would also queue every
+  member insert behind a choice through the group FK's `for key share`; corrected 2026-10-13 (final review),
+  as plan departure 2 and 0075 already do), checks the group is in `p_account_id`, and, when `p_member_id`
   is not null, that the membership is in that group and that account (`not_found` otherwise); clears the group's
   current holder and sets the new one in the same call; `p_member_id` null clears. Returns `{status, previous}`,
   `previous` the member id that held it before, or null.
@@ -572,9 +574,19 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
 
 **2a, with 0075 (R1).** 0075 on bis-ci (`ci-project-setup.yml`: push-dry-run, then push), then production (MCP
 `apply_migration`), then the parity check (`docs/runbooks/ci-supabase-project.md`), all **before 2a merges** (the e2e job's migration check enforces the first, `.github/scripts/ci-migrations-applied.sh`).
-Safe under the running build: a defaulted column and an unused function. **2a's app before 0075:** the People
+~~Safe under the running build: a defaulted column and an unused function.~~ **Not fully safe under the running
+build (corrected 2026-10-13 (final review)).** 0075 replaces `app.restore_member`, which then honours a
+snapshot's `is_primary_contact` when no other member holds it, and `main`'s `restoreMembershipAction` passes a
+narrow caller's browser snapshot through unstripped. Between 0075's apply and 2a's deploy, a Technician could
+resend a removal snapshot with `is_primary_contact: true` and make their customer a group's call-first member.
+The exposure is nil while no account has a technician membership, so the production apply is preceded, at that
+moment, by a read-only count of technician memberships (plan Task 10); a non-zero count stops the apply until
+2a can deploy right behind it. **2a's app before 0075:** the People
 read selecting `is_primary_contact` fails, so People shows its error state and the header shows no Call, Text or
-Email; data-safe, but the order is fixed anyway. **Rollback:** revert the app; 0075 is harmless to the old build;
+Email; data-safe, but the order is fixed anyway. It also breaks the contact page's Business-name Undo
+(corrected 2026-10-13 (final review)): `undoSetBusiness` reads the added membership's `is_primary_contact`
+before the Undo runs, that read fails without the column, and the Undo answers "Undo failed" (nothing is
+deleted). The fixed order (0075 first) prevents both. **Rollback:** revert the app; 0075 is harmless to the old build;
 drop it (§5) only on an owner decision. Served-HTML marker: the "People" card title on a group page, opened by URL
 (2a ships no link to it, R2); a contact page in Spanish reading "· Familia". Never shown to customers. **Before merge, read-only, by the orchestrator:** the largest group's member
 count on production and bis-ci (**Assumption:** none is near 50 today; this measures it rather than assumes it).
