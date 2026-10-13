@@ -39,3 +39,11 @@ describe("noShowNudgeEmail", () => {
     expect(a.replace(">Pick a new time</a>", ">Leave a review</a>")).toBe(b);
   });
 });
+
+describe("the no-show nudge in Spanish (S-09 PR 2)", () => {
+  it("subject and button are Spanish when locale is es (mutation: hard-coded button -> FAILS)", () => {
+    const { subject, html } = noShowNudgeEmail({ brand, body: "b", bookingUrl: URL, locale: "es" });
+    expect(subject).toBe("¿Quiere escoger otro horario con Rio Roofing?");
+    expect(html).toContain("Escoger otro horario");
+  });
+});

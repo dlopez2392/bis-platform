@@ -1,5 +1,8 @@
 import { proseWithButton } from "./prose-button";
 import type { EmailBrand } from "./shell";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { PublicLocale } from "@/lib/forms/public-strings";
 
 export type ReviewRequestEmailInput = {
   brand: EmailBrand;
@@ -9,6 +12,8 @@ export type ReviewRequestEmailInput = {
   body: string;
   /** Validated http(s) by parseReviewRequestConfig before it reaches here. */
   reviewUrl: string;
+  /** S-09 PR 2: the customer's language. English by default. */
+  locale?: PublicLocale;
 };
 
 /**
@@ -20,6 +25,7 @@ export type ReviewRequestEmailInput = {
  */
 export function reviewRequestEmail(input: ReviewRequestEmailInput):
   { subject: string; html: string; text: string } {
-  const { html, text } = proseWithButton(input.brand, input.body, input.reviewUrl, "Leave a review");
-  return { subject: `Would you leave ${input.brand.name} a review?`, html, text };
+  const locale = input.locale ?? "en";
+  const { html, text } = proseWithButton(input.brand, input.body, input.reviewUrl, t(m, "email.review.button", locale));
+  return { subject: t(m, "email.review.subject", locale, { name: input.brand.name }), html, text };
 }

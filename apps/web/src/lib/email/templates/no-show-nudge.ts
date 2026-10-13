@@ -1,5 +1,8 @@
 import { proseWithButton } from "./prose-button";
 import type { EmailBrand } from "./shell";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { PublicLocale } from "@/lib/forms/public-strings";
 
 export type NoShowNudgeEmailInput = {
   brand: EmailBrand;
@@ -8,6 +11,8 @@ export type NoShowNudgeEmailInput = {
   /** The account's public booking page, `${origin}/b/${public_id}` — built
    *  by the pass from ctx.origin, never configured. */
   bookingUrl: string;
+  /** S-09 PR 2: the customer's language. English by default. */
+  locale?: PublicLocale;
 };
 
 /**
@@ -17,6 +22,7 @@ export type NoShowNudgeEmailInput = {
  */
 export function noShowNudgeEmail(input: NoShowNudgeEmailInput):
   { subject: string; html: string; text: string } {
-  const { html, text } = proseWithButton(input.brand, input.body, input.bookingUrl, "Pick a new time");
-  return { subject: `Want to pick a new time with ${input.brand.name}?`, html, text };
+  const locale = input.locale ?? "en";
+  const { html, text } = proseWithButton(input.brand, input.body, input.bookingUrl, t(m, "email.noShow.button", locale));
+  return { subject: t(m, "email.noShow.subject", locale, { name: input.brand.name }), html, text };
 }

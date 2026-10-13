@@ -1,13 +1,14 @@
 import { shell, button, escapeHtml, type EmailBrand } from "./shell";
 import type { PublicLocale } from "@/lib/forms/public-strings";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 
 /**
- * The confirmation is the one booking email a stranger reads, so it is the
- * one that speaks their language — as do the reschedule and cancellation a
- * phone call sends (D-038). The alert and the reminder stay English:
- * the alert is for the operator, and the reminder runs from a cron that has
- * no booker language on the row yet (a `bookings.locale` column is the
- * recorded follow-up).
+ * The confirmation, the reschedule and the cancellation a phone call sends
+ * follow the language of the moment (the page, the call). The reminder
+ * follows the customer's own language (S-09 PR 2: the contact's, else the
+ * account's, else English), resolved by the due-list. The alert stays
+ * English: it is for the operator.
  */
 const CONFIRMATION_COPY = {
   en: {
@@ -315,15 +316,21 @@ export function bookingRescheduledEmail(input: BookingRescheduledInput):
   return { html, text };
 }
 
+export function bookingReminderSubject(locale: PublicLocale = "en"): string {
+  return t(m, "email.reminder.subject", locale);
+}
+
 export type BookingReminderInput = {
   brand: EmailBrand;
-  /** Pre-formatted in the booker's own zone. */
+  /** Pre-formatted in the booker's own zone, IN `locale` (formatWhen's third argument). */
   whenBookerZone: string;
   cancelUrl: string;
   /** Same discipline as `BookingConfirmationInput.meetingUrl`: present only
    *  when the calendar is `"video"` AND the room still exists at reminder
    *  time — omitted entirely, never a link to nowhere. */
   meetingUrl?: string;
+  /** S-09 PR 2: the customer's language. One message, one language (C11). English by default. */
+  locale?: PublicLocale;
 };
 
 /**
@@ -340,29 +347,31 @@ export type BookingReminderInput = {
  */
 export function bookingReminderEmail(input: BookingReminderInput):
   { html: string; text: string } {
+  const locale = input.locale ?? "en";
+  const join = t(m, "email.reminder.join", locale);
+  const cancel = t(m, "email.reminder.cancel", locale);
+  const intro = t(m, "email.reminder.intro", locale);
   const meetingHtml = input.meetingUrl
-    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, "Join your video meeting")}</p>`
+    ? `<p style="margin:0 0 16px;">${button(input.brand, input.meetingUrl, join)}</p>`
     : "";
 
   // Same reasoning as `bookingConfirmationEmail`'s `cancelHtml`: an empty
   // `cancelUrl` gets no anchor at all, never one pointing nowhere.
   const cancelHtml = input.cancelUrl
-    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">Cancel this booking</a></p>`
+    ? `<p style="margin:0;"><a href="${escapeHtml(input.cancelUrl)}" style="color:#71717a;">${escapeHtml(cancel)}</a></p>`
     : "";
 
   const html = shell(input.brand, `
-    <p style="margin:0 0 12px;">This is a reminder for your upcoming booking.</p>
+    <p style="margin:0 0 12px;">${escapeHtml(intro)}</p>
     <p style="margin:0 0 16px;font-size:16px;">${escapeHtml(input.whenBookerZone)}</p>
     ${meetingHtml}
     ${cancelHtml}
   `);
 
   const text = [
-    "This is a reminder for your upcoming booking.",
-    "",
-    input.whenBookerZone,
-    ...(input.meetingUrl ? ["", `Join your video meeting: ${input.meetingUrl}`] : []),
-    ...(input.cancelUrl ? ["", `Cancel this booking: ${input.cancelUrl}`] : []),
+    intro, "", input.whenBookerZone,
+    ...(input.meetingUrl ? ["", `${join}: ${input.meetingUrl}`] : []),
+    ...(input.cancelUrl ? ["", `${cancel}: ${input.cancelUrl}`] : []),
   ].join("\n");
 
   return { html, text };

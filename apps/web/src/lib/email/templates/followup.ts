@@ -1,4 +1,7 @@
 import { shell, escapeHtml, type EmailBrand } from "./shell";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { PublicLocale } from "@/lib/forms/public-strings";
 
 export type BookingFollowupInput = {
   brand: EmailBrand;
@@ -9,14 +12,19 @@ export type BookingFollowupInput = {
    *  break is inferred the way a human reading it would, rather than making
    *  them author HTML. */
   body: string;
+  /** S-09 PR 2: the customer's language. English by default. */
+  locale?: PublicLocale;
 };
 
 /** The copy sent when the operator never wrote a follow-up body. Exported so
  *  the route/tests can assert against the same string rather than a copy
  *  pasted at each call site drifting out of sync with this one. */
-export const DEFAULT_FOLLOWUP_BODY =
-  "Thanks for coming in! If you have any questions or want to book again, "
-  + "just reply to this email.";
+export const DEFAULT_FOLLOWUP_BODY: string = m["email.followup.defaultBody"];
+
+/** Same default, in `locale`. */
+export function defaultFollowupBody(locale: PublicLocale): string {
+  return t(m, "email.followup.defaultBody", locale);
+}
 
 /**
  * The follow-up sent ~a day after a booking's meeting ends.
@@ -29,7 +37,8 @@ export const DEFAULT_FOLLOWUP_BODY =
  */
 export function bookingFollowupEmail(input: BookingFollowupInput):
   { subject: string; html: string; text: string } {
-  const raw = input.body.trim() ? input.body : DEFAULT_FOLLOWUP_BODY;
+  const locale = input.locale ?? "en";
+  const raw = input.body.trim() ? input.body : defaultFollowupBody(locale);
 
   // Blank lines are the paragraph break, not every single newline the way
   // outboundEmail's <br/> replacement treats them -- a follow-up reads like
@@ -51,7 +60,7 @@ export function bookingFollowupEmail(input: BookingFollowupInput):
   const text = paragraphs.join("\n\n");
 
   return {
-    subject: `Thanks from ${input.brand.name}`,
+    subject: t(m, "email.followup.subject", locale, { name: input.brand.name }),
     html,
     text,
   };

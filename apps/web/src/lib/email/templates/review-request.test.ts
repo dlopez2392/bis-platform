@@ -31,3 +31,11 @@ describe("reviewRequestEmail", () => {
     expect(html).not.toContain("<b>hi</b>");
   });
 });
+
+describe("the review request in Spanish (S-09 PR 2)", () => {
+  it("subject and button are Spanish when locale is es (mutation: hard-coded button -> FAILS)", () => {
+    const { subject, html } = reviewRequestEmail({ brand, body: "b", reviewUrl: URL, locale: "es" });
+    expect(subject).toBe("¿Le gustaría dejarle una reseña a Rio Roofing?");
+    expect(html).toContain("Dejar una reseña");
+  });
+});
