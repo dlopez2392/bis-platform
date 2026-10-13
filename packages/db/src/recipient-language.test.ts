@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox } from "./messaging";
+import { readFileSync } from "node:fs";
+import { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox } from "./spanish-box";
+import * as viaMessaging from "./messaging";
+import * as viaBarrel from "./index";
 
 /** S-09 PR 2, spec §10.2, §12.3, C11-C14. Pure: no database (global-setup still runs for the package). */
 const D = { en: "Our English.", es: "Nuestro español." };
@@ -98,5 +101,25 @@ describe("nextSpanishBox (C13 on save, §12.3's basis rule, plan deviation 3)", 
     const next = nextSpanishBox({ ...base, useOurs: true, submitted: "", body: "Custom.", stored: { bodyEs: "Suyo.", basis: "Custom." } });
     expect(next).toEqual({ bodyEs: null, basis: null });
     expect(spanishIsStale({ body: "Custom.", bodyEs: next.bodyEs, bodyEsBasis: next.basis })).toBe(true);
+  });
+});
+
+describe("spanish-box: one home, reachable from the browser (S-09 PR 2 final review)", () => {
+  it("has no runtime import, so a client component can take the subpath (mutation: import a value -> FAILS)", () => {
+    const src = readFileSync(new URL("./spanish-box.ts", import.meta.url), "utf8");
+    const runtimeImports = src.split("\n").filter((l) => /^import\s/.test(l) && !/^import\s+type\s/.test(l));
+    expect(runtimeImports).toEqual([]);
+  });
+  it("is the same functions through ./messaging and the barrel (mutation: drop a re-export -> FAILS)", () => {
+    for (const mod of [viaMessaging, viaBarrel]) {
+      expect(mod.recipientLanguage).toBe(recipientLanguage);
+      expect(mod.chooseBody).toBe(chooseBody);
+      expect(mod.spanishIsStale).toBe(spanishIsStale);
+      expect(mod.nextSpanishBox).toBe(nextSpanishBox);
+    }
+  });
+  it("is exported as the @bis/db/spanish-box subpath (mutation: drop the exports entry -> FAILS)", () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { exports: Record<string, string> };
+    expect(pkg.exports["./spanish-box"]).toBe("./src/spanish-box.ts");
   });
 });

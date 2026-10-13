@@ -1,5 +1,6 @@
 "use client";
 
+import { spanishIsStale } from "@bis/db/spanish-box";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { CalendarRow } from "@bis/db";
@@ -69,19 +70,13 @@ export function CalendarSettings({
   const [followupBodyText, setFollowupBodyText] = useState(calendar.followup_body);
   const rows = useMemo(() => openHoursToRows(calendar.open_hours), [calendar.open_hours]);
 
-  // Task 17: C14/spec §12.3's staleness rule, mirrored here rather than
-  // importing `spanishIsStale` (packages/db/src/messaging.ts) into this
-  // client component — the same "the barrel carries the database client
-  // into the browser bundle" reason voice-settings.tsx's own mirror exists
-  // for. Reads the STORED row (plan deviation 5), not the live
-  // `followupBodyText` state: a warning that flickered while typing would
-  // describe an edit not yet saved.
-  const followupEsStale = (() => {
-    if (calendar.followup_body_es !== null && calendar.followup_body_es.trim() === "") return false;
-    if (calendar.followup_body.trim() === "" && calendar.followup_body_es === null) return false;
-    const basis = calendar.followup_body_es_basis === null ? null : calendar.followup_body_es_basis.trim();
-    return basis !== calendar.followup_body.trim();
-  })();
+  // Task 17: C14/spec §12.3's staleness rule (`spanishIsStale`, packages/db/src/spanish-box.ts, through
+  // the import-free subpath so the barrel's database client stays out of the browser bundle).
+  // Reads the STORED row (plan deviation 5), not live state: a warning that flickered while
+  // typing would describe an edit not yet saved.
+  const followupEsStale = spanishIsStale({
+    body: calendar.followup_body, bodyEs: calendar.followup_body_es, bodyEsBasis: calendar.followup_body_es_basis,
+  });
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {

@@ -1,5 +1,6 @@
 "use client";
 
+import { spanishIsStale } from "@bis/db/spanish-box";
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { MessageCircle } from "lucide-react";
@@ -117,21 +118,15 @@ export function VoiceProfileForm({
     textbackBody.trim() || defaultTextbackBody(brandName, previewLanguage),
     previewLanguage,
   );
-  // C14/spec §12.3's staleness rule, mirrored here rather than importing
-  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
-  // component — the same "the barrel carries the database client into the
-  // browser bundle" reason `assistantProfileGap`'s own subpath import
-  // exists for, above. Reads the STORED row (plan deviation 5), not the
-  // live `textbackBody` state: a warning that flickered while typing would
-  // describe an edit not yet saved. "Emptied" (stored '') is never stale —
-  // Spanish customers already get English on purpose — and nor is a
-  // never-written basis beside a blank English.
-  const textbackStale = (() => {
-    if (p.textback_body_es !== null && p.textback_body_es.trim() === "") return false;
-    if (p.textback_body.trim() === "" && p.textback_body_es === null) return false;
-    const basis = p.textback_body_es_basis === null ? null : p.textback_body_es_basis.trim();
-    return basis !== p.textback_body.trim();
-  })();
+  // C14/spec §12.3's staleness rule (`spanishIsStale`, packages/db/src/spanish-box.ts, through
+  // the import-free subpath so the barrel's database client stays out of the browser bundle).
+  // Reads the STORED row (plan deviation 5), not live state: a warning that flickered while
+  // typing would describe an edit not yet saved. "Emptied" (stored '') is never stale —
+  // Spanish customers already get English on purpose — and nor is a never-written basis
+  // beside a blank English.
+  const textbackStale = spanishIsStale({
+    body: p.textback_body, bodyEs: p.textback_body_es, bodyEsBasis: p.textback_body_es_basis,
+  });
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
       success: m["voice.profile.saved"],

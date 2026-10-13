@@ -1,5 +1,6 @@
 "use client";
 
+import { spanishIsStale } from "@bis/db/spanish-box";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { AutomationRow } from "@bis/db";
@@ -53,19 +54,14 @@ export function AppointmentConfirmCard({
   const previewText = withOptOut(composeAppointmentConfirm(brandName, when, body));
   const preview = segmentsFor(previewText);
 
-  // C14/spec §12.3's staleness rule, mirrored here rather than importing
-  // `spanishIsStale` (packages/db/src/messaging.ts) into this client
-  // component — voice-settings.tsx's own precedent. Reads the STORED row
-  // (plan deviation 5), not live state.
-  const storedBody = automation?.body ?? "";
+  // C14/spec §12.3's staleness rule (`spanishIsStale`, packages/db/src/spanish-box.ts, through
+  // the import-free subpath so the barrel's database client stays out of the browser bundle).
+  // Reads the STORED row (plan deviation 5), not live state: a warning that flickered while
+  // typing would describe an edit not yet saved.
   const storedBodyEs = automation?.body_es ?? null;
-  const storedBasis = automation?.body_es_basis ?? null;
-  const spanishStale = (() => {
-    if (storedBodyEs !== null && storedBodyEs.trim() === "") return false;
-    if (storedBody.trim() === "" && storedBodyEs === null) return false;
-    const basis = storedBasis === null ? null : storedBasis.trim();
-    return basis !== storedBody.trim();
-  })();
+  const spanishStale = spanishIsStale({
+    body: automation?.body ?? "", bodyEs: storedBodyEs, bodyEsBasis: automation?.body_es_basis ?? null,
+  });
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
