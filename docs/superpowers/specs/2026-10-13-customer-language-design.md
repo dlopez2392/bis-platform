@@ -687,8 +687,8 @@ select count(*) filter (where followup_body <> '') from calendars;
 select count(*) filter (where textback_body <> '') from voice_profiles;
 ```
 
-**Assumption** about column names in the joins (`form_submissions.form_id`, `.contact_id`); bis-db-schema reads them
-before the queries run.
+The join columns are real: `form_submissions.form_id`, `.contact_id` and `.locale` (`0006_forms.sql:41-42`, `:53`).
+**Assumption:** `accounts.brand_name` is the column `brandDisplayName` reads; bis-db-schema checks it before the run.
 
 ### 18.3 Backfill (Q4)
 
