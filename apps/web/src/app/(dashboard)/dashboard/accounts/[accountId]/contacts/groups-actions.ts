@@ -187,26 +187,41 @@ export async function removeMembershipAction(
  * account could add that pair anyway. A narrow caller (a Technician, or a
  * role that could not be settled) gets the Undo only for a removal THEY
  * made: the client_group.member_removed event removeMembership emitted,
- * matched on the same member, contact and group in this account and the same
- * actor, read through the service client because events are hidden from a
- * Technician (0068). Not a request-client readGroup: after removing the only
- * link a Technician had to a group, the group is invisible to them, and that
- * Undo is legitimate. Bounded to RESTORE_WINDOW_MS so the read stays on
+ * matched on the same member, contact and group in this account, read
+ * through the service client because events are hidden from a Technician
+ * (0068). Not a request-client readGroup: after removing the only link a
+ * Technician had to a group, the group is invisible to them, and that Undo is
+ * legitimate. Bounded to RESTORE_WINDOW_MS so the read stays on
  * events_account_created rather than the account's whole history.
+ *
+ * The NEWEST such removal, by ANY actor, decides both whether the Undo is
+ * allowed and the call-first flag it restores (S-03 part 2 review fix).
+ * restore puts the row back under its old id, so every earlier removal of
+ * the same member still matches; were any of the caller's own removals
+ * enough, a Technician could replay an older one (taken while the member
+ * held the flag) after the Owner had removed the member again, or after the
+ * flag was cleared and the member removed once more, and make their
+ * customer the group's call-first member. Only the last removal says what
+ * the row was when it last left: the caller's Undo stands only if that
+ * removal was theirs, and its wasPrimaryContact is the flag. Ordered by
+ * created_at then id (an identity, so it breaks a same-instant tie in
+ * the order the events were written).
  */
 const RESTORE_WINDOW_MS = 24 * 60 * 60 * 1000;
 async function removedByCaller(
   accountId: string, userId: string, snapshot: GroupMemberSnapshot,
 ): Promise<{ found: boolean; wasPrimaryContact: boolean }> {
-  const { data, error } = await serviceDb().from("events").select("id, payload")
-    .eq("account_id", accountId).eq("type", "client_group.member_removed").eq("actor_id", userId)
+  const { data, error } = await serviceDb().from("events").select("id, actor_id, payload")
+    .eq("account_id", accountId).eq("type", "client_group.member_removed")
     .contains("payload", { memberId: snapshot.id, contactId: snapshot.contact_id, groupId: snapshot.client_group_id })
     .gte("created_at", new Date(Date.now() - RESTORE_WINDOW_MS).toISOString())
+    .order("created_at", { ascending: false }).order("id", { ascending: false })
     .limit(1);
   if (error) throw new Error(`restore removal lookup failed: ${error.message}`);
-  const row = (data ?? [])[0] as { payload?: { wasPrimaryContact?: unknown } } | undefined;
+  const newest = (data ?? [])[0] as { actor_id?: unknown; payload?: { wasPrimaryContact?: unknown } } | undefined;
+  if (!newest || newest.actor_id !== userId) return { found: false, wasPrimaryContact: false };
   // Only a literal true: removeMembership records the stored flag as a boolean (S-03 part 2).
-  return { found: Boolean(row), wasPrimaryContact: row?.payload?.wasPrimaryContact === true };
+  return { found: true, wasPrimaryContact: newest.payload?.wasPrimaryContact === true };
 }
 
 export async function restoreMembershipAction(accountId: string, snapshot: GroupMemberSnapshot): Promise<GroupResult> {
@@ -292,13 +307,17 @@ export async function setBillingAddressAction(
  * deviation 6).
  */
 export async function setGroupPrimaryContactAction(
-  accountId: string, groupId: string, memberId: string | null,
+  accountId: string, rawGroupId: string, rawMemberId: string | null,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const access = await requireAccountAccess(accountId);
   const L = "setGroupPrimaryContactAction";
-  const ids = memberId === null ? { group: groupId } : { group: groupId, member: memberId };
-  if (!isUuid(groupId) || (memberId !== null && !isUuid(memberId))) return refuse(L, accountId, "bad input", ids);
+  const ids = rawMemberId === null ? { group: rawGroupId } : { group: rawGroupId, member: rawMemberId };
+  if (!isUuid(rawGroupId) || (rawMemberId !== null && !isUuid(rawMemberId))) return refuse(L, accountId, "bad input", ids);
   if (!seesWholeAccount(access)) return refuse(L, accountId, "not a manager", ids);
+  // Lowercase as PostgREST stores and echoes them (review minor 2): setGroupPrimaryContact compares the
+  // stored `previous` with memberId to skip a no-op's event, and the event and the path carry these ids.
+  const groupId = rawGroupId.toLowerCase();
+  const memberId = rawMemberId === null ? null : rawMemberId.toLowerCase();
   return guarded<{ previous: string | null }>(L, accountId, async () => {
     const db = await dbForRequest();
     if (!(await readGroup(db, accountId, groupId))) return refuse(L, accountId, "group not visible", ids);
@@ -308,8 +327,7 @@ export async function setGroupPrimaryContactAction(
         console.warn(`${L}: account ${accountId}: groups.failed (membership gone): member ${memberId}`);
         return failed;
       }
-      // PostgREST echoes ids lowercase; the browser's may not be.
-      if (proven.groupId.toLowerCase() !== groupId.toLowerCase()) return refuse(L, accountId, "membership of another group", ids);
+      if (proven.groupId.toLowerCase() !== groupId) return refuse(L, accountId, "membership of another group", ids);
     }
     const r = await setGroupPrimaryContact(serviceDb(), accountId, groupId, memberId, access.userId);
     if (r.status !== "ok") return failed;

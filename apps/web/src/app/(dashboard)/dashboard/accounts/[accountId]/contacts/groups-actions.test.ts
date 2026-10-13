@@ -10,9 +10,30 @@ vi.mock("@/lib/db", () => ({ dbForRequest: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
 // The service client: only restore's removal check reads through it directly (events).
-const events = { data: [] as unknown[], error: null as null | { message: string } };
-const chain = { select: vi.fn(), eq: vi.fn(), contains: vi.fn(), gte: vi.fn(), limit: vi.fn() };
+// The chain answers as the table would: its eq and contains filters apply, its order applies, and
+// with no order the rows come back as stored (oldest first), which is what an unordered read may do.
+type EventRow = { id: number; account_id: string; type: string; actor_id: string; created_at: string; payload: Record<string, unknown> };
+const events = { data: [] as EventRow[], error: null as null | { message: string } };
+const chain = { select: vi.fn(), eq: vi.fn(), contains: vi.fn(), gte: vi.fn(), order: vi.fn(), limit: vi.fn() };
 const SERVICE = { service: true, from: vi.fn() };
+const query = { eqs: [] as [string, unknown][], contains: {} as Record<string, unknown>, orders: [] as [keyof EventRow, boolean][] };
+function answer(n: number) {
+  if (events.error) return { data: null, error: events.error };
+  let rows = events.data.filter((r) => query.eqs.every(([c, v]) => r[c as keyof EventRow] === v)
+    && Object.entries(query.contains).every(([k, v]) => r.payload[k] === v));
+  // Stable sorts, last key first, give the ORDER BY's lexicographic order.
+  for (const [col, ascending] of [...query.orders].reverse()) {
+    rows = [...rows].sort((a, b) => (a[col] < b[col] ? -1 : a[col] > b[col] ? 1 : 0) * (ascending ? 1 : -1));
+  }
+  return { data: rows.slice(0, n), error: null };
+}
+const OWNER_ID = "user_owner";
+/** A client_group.member_removed event for M (contact C, group G) in a1, by the caller unless told otherwise. */
+const removal = (over: { id?: number; actor?: string; at?: string; was?: unknown } = {}): EventRow => ({
+  id: over.id ?? 7, account_id: "a1", type: "client_group.member_removed", actor_id: over.actor ?? "user_1",
+  created_at: over.at ?? "2026-10-12T10:00:00.000Z",
+  payload: { memberId: M, contactId: C, groupId: G, ...(over.was === undefined ? {} : { wasPrimaryContact: over.was }) },
+});
 
 const db = {
   serviceDb: vi.fn(),
@@ -44,8 +65,12 @@ beforeEach(() => {
   db.serviceDb.mockReturnValue(SERVICE);
   events.data = []; events.error = null;
   SERVICE.from.mockReturnValue(chain);
-  for (const k of ["select", "eq", "contains", "gte"] as const) chain[k].mockReturnValue(chain);
-  chain.limit.mockImplementation(async () => ({ data: events.data, error: events.error }));
+  query.eqs = []; query.contains = {}; query.orders = [];
+  for (const k of ["select", "gte"] as const) chain[k].mockReturnValue(chain);
+  chain.eq.mockImplementation((c: string, v: unknown) => { query.eqs.push([c, v]); return chain; });
+  chain.contains.mockImplementation((_c: string, v: Record<string, unknown>) => { query.contains = v; return chain; });
+  chain.order.mockImplementation((c: keyof EventRow, o: { ascending: boolean }) => { query.orders.push([c, o.ascending]); return chain; });
+  chain.limit.mockImplementation(async (n: number) => answer(n));
 });
 
 describe("every write proves its target through the request client first (mutation: skip the proof in any action, or move it to serviceDb -> its case FAILS)", () => {
@@ -131,13 +156,15 @@ describe("I1: a narrow caller restores only a membership THEY removed (no Undo i
   it("a Technician restoring their own just-removed membership succeeds, vouched by that exact removal event", async () => {
     db.getContact.mockResolvedValue({ id: C });
     db.restoreMembership.mockResolvedValue("ok");
-    events.data = [{ id: 7 }];
+    events.data = [removal()];
     expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: true });
     expect(SERVICE.from).toHaveBeenCalledWith("events");
     expect(chain.eq).toHaveBeenCalledWith("account_id", "a1");
     expect(chain.eq).toHaveBeenCalledWith("type", "client_group.member_removed");
-    expect(chain.eq).toHaveBeenCalledWith("actor_id", "user_1");
+    // The newest removal by ANYONE decides (review fix): the actor is judged on that row, not filtered in.
+    expect(chain.eq).not.toHaveBeenCalledWith("actor_id", expect.anything());
     expect(chain.contains).toHaveBeenCalledWith("payload", { memberId: M, contactId: C, groupId: G });
+    expect(query.orders).toEqual([["created_at", false], ["id", false]]);
     expect(chain.limit).toHaveBeenCalledWith(1);
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", snap(), "user_1");
   });
@@ -147,7 +174,7 @@ describe("I1: a narrow caller restores only a membership THEY removed (no Undo i
       vi.setSystemTime(new Date("2026-10-11T12:00:00.000Z"));
       db.getContact.mockResolvedValue({ id: C });
       db.restoreMembership.mockResolvedValue("ok");
-      events.data = [{ id: 7 }];
+      events.data = [removal({ at: "2026-10-11T11:00:00.000Z" })];
       expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: true });
       expect(chain.gte).toHaveBeenCalledWith("created_at", "2026-10-10T12:00:00.000Z");
     } finally { vi.useRealTimers(); }
@@ -237,6 +264,20 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
     expect(db.readMembership).not.toHaveBeenCalled();
     expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", G, null, "user_1");
   });
+  it("uppercase ids are the same group and member: proven, written and revalidated lowercase (review minor 2; mutation: drop the lowercasing -> FAILS)", async () => {
+    access.role = "owner";
+    const LG = "abcdef12-3333-4333-8333-33333333333a";
+    const LM = "abcdef12-2222-4222-8222-22222222222b";
+    db.readGroup.mockResolvedValue({ ...GARCIA, id: LG });
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: LG });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "ok", previous: null });
+    expect(await A.setGroupPrimaryContactAction("a1", LG.toUpperCase(), LM.toUpperCase())).toEqual({ ok: true, previous: null });
+    expect(db.readGroup).toHaveBeenCalledWith(REQUEST, "a1", LG);
+    expect(db.readMembership).toHaveBeenCalledWith(REQUEST, "a1", LM);
+    // setGroupPrimaryContact skips its event when previous === memberId: that compare needs the stored (lowercase) form.
+    expect(db.setGroupPrimaryContact).toHaveBeenCalledWith(SERVICE, "a1", LG, LM, "user_1");
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${LG}`);
+  });
   it("a bad id is refused before any read (mutation: drop the isUuid checks -> readGroup runs, FAILS)", async () => {
     access.role = "owner";
     db.readGroup.mockResolvedValue(GARCIA);
@@ -251,24 +292,55 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
 describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only when THEIR removal held it (spec §10)", () => {
   beforeEach(() => { db.getContact.mockResolvedValue({ id: C }); db.restoreMembership.mockResolvedValue("ok"); });
   it("a snapshot claiming the flag, whose removal event lacks wasPrimaryContact, is restored WITHOUT it (mutation: pass the snapshot through -> FAILS)", async () => {
-    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G } }];
+    events.data = [removal()];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
   });
   it("only a literal true counts: the text 'true' in a payload is not the flag (mutation: read it by truthiness -> FAILS)", async () => {
-    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G, wasPrimaryContact: "true" } }];
+    events.data = [removal({ was: "true" })];
     await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never);
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
   });
   it("the removal event saying wasPrimaryContact restores the flag (mutation: always false -> FAILS)", async () => {
-    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G, wasPrimaryContact: true } }];
+    events.data = [removal({ was: true })];
     expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: false } as never)).toEqual({ ok: true });
     expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: true }), "user_1");
   });
-  it("the lookup selects the payload it judges by (mutation: select id only -> FAILS)", async () => {
-    events.data = [{ id: "e1", payload: { memberId: M, contactId: C, groupId: G } }];
+  it("the lookup selects the actor and the payload it judges by (mutation: select id only -> FAILS)", async () => {
+    events.data = [removal()];
     await A.restoreMembershipAction("a1", snap());
-    expect(chain.select).toHaveBeenCalledWith("id, payload");
+    expect(chain.select).toHaveBeenCalledWith("id, actor_id, payload");
+  });
+
+  // Review fix (Important): restore puts the row back under its OLD id, so an older removal of the same
+  // member is still a match. Only the NEWEST removal, by anyone, may vouch for an Undo and its flag.
+  it("an older removal by the caller does not vouch once the Owner has removed the member since: refused, nothing written (mutation: drop the actor check on the newest event -> FAILS)", async () => {
+    events.data = [
+      removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true }),
+      removal({ id: 9, at: "2026-10-12T11:00:00.000Z", actor: OWNER_ID, was: false }),
+    ];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.restoreMembership).not.toHaveBeenCalled();
+    expect(String(warn.mock.calls[0]?.[0])).toContain("not the caller's removal");
+  });
+  it("cleared, then removed again by the caller: the newest removal's flag (false) decides, not the older true (mutation: read the removals unordered -> FAILS)", async () => {
+    events.data = [
+      removal({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true }),
+      removal({ id: 9, at: "2026-10-12T11:00:00.000Z", was: false }),
+    ];
+    expect(await A.restoreMembershipAction("a1", { ...snap(), is_primary_contact: true } as never)).toEqual({ ok: true });
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1", expect.objectContaining({ is_primary_contact: false }), "user_1");
+  });
+  it("two removals in the same instant: the later-written one (higher id) decides (mutation: drop the id tiebreak -> FAILS)", async () => {
+    // Stored caller-first, so a sort on created_at alone (stable) would leave the caller's row on top.
+    events.data = [
+      removal({ id: 7, at: "2026-10-12T11:00:00.000Z", was: true }),
+      removal({ id: 9, at: "2026-10-12T11:00:00.000Z", actor: OWNER_ID }),
+    ];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.restoreMembershipAction("a1", snap())).toEqual({ ok: false, error: "groups.refused" });
+    expect(db.restoreMembership).not.toHaveBeenCalled();
   });
   it("Staff's snapshot passes through as it came (they may choose the call-first member anyway)", async () => {
     access.role = "staff";
