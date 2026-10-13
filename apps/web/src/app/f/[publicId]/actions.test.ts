@@ -14,6 +14,7 @@ const setContactsBusinessMock = vi.fn();
 const ensureConversationMock = vi.fn();
 const createMessageMock = vi.fn();
 const incrementUnreadCountMock = vi.fn();
+const recordLanguageSignalMock = vi.fn();
 
 const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
@@ -57,6 +58,7 @@ const accountRow = {
   // the same projecting mock below (its `select("outbound_suppressed")`
   // finds the key here, same as every other column it asks for).
   outbound_suppressed: false,
+  language: null as "en" | "es" | null,
 };
 
 vi.mock("@bis/db", () => ({
@@ -110,6 +112,7 @@ vi.mock("@bis/db", () => ({
   ensureConversation: (...a: unknown[]) => ensureConversationMock(...a),
   createMessage: (...a: unknown[]) => createMessageMock(...a),
   incrementUnreadCount: (...a: unknown[]) => incrementUnreadCountMock(...a),
+  recordLanguageSignal: (...a: unknown[]) => recordLanguageSignalMock(...a),
   // D-016 item 3: the email gate now reads the suppression ledger for
   // forms.receipt too (customer_initiated — the consent ledger read above
   // skips it, but not this one). Allowed by default.
@@ -169,7 +172,9 @@ beforeEach(() => {
   createMessageMock.mockReset().mockResolvedValue({ id: "msg_1" });
   incrementUnreadCountMock.mockReset();
   instantReplyMock.mockReset().mockResolvedValue({ kind: "skipped", reason: "disabled" });
+  recordLanguageSignalMock.mockReset().mockResolvedValue(true);
   accountRow.outbound_suppressed = false;
+  accountRow.language = null;
   formGrantsMock.mockReset().mockResolvedValue(undefined);
   vi.mocked(sendEmailOrThrow).mockClear();
 });
@@ -996,5 +1001,39 @@ describe("submitFormAction — the business answer becomes a group (S-02 §6 row
         expect.anything(), "acct_1", "sub_1", expect.stringContaining("boom"));
       quiet.mockRestore();
     });
+  });
+});
+
+describe("submitFormAction — the form's language becomes the contact's (S-09 §7.1, C6)", () => {
+  const withName = () => formRow({ fields: [{ key: "first_name", kind: "core.first_name", label: "Name", required: true }] });
+  const token = () => signRenderToken(Date.now() - MIN_FILL_MS - 1000, PUBLIC_ID);
+  const submit = (locale: string) => submitFormAction(PUBLIC_ID, IDLE, fd({ [RENDER_TOKEN_FIELD]: token(), locale, first_name: "María" }));
+
+  it("a Spanish submission on an English account signals form/es with the form/system pair (mutation: never signal -> FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withName());
+    expect((await submit("es")).status).toBe("success");
+    expect(recordLanguageSignalMock).toHaveBeenCalledTimes(1);
+    const [, accountId, contactId, signal, actorId, actorType] = recordLanguageSignalMock.mock.calls[0]!;
+    expect([accountId, contactId, signal.language, signal.source, actorId, actorType]).toEqual(["acct_1", "contact_1", "es", "form", "form", "system"]);
+  });
+
+  it("an English submission on an English account says nothing (mutation: always signal -> FAILS)", async () => {
+    getPublishedFormByPublicIdMock.mockResolvedValue(withName());
+    await submit("en");
+    expect(recordLanguageSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("an English submission on a Spanish account is a sign (mutation: ignore the account's language -> FAILS)", async () => {
+    accountRow.language = "es";
+    getPublishedFormByPublicIdMock.mockResolvedValue(withName());
+    await submit("en");
+    expect(recordLanguageSignalMock.mock.calls[0]![3]).toMatchObject({ language: "en", source: "form" });
+  });
+
+  it("a failed signal costs neither the lead's thread nor its success (mutation: put it in the contact try before the thread -> FAILS)", async () => {
+    recordLanguageSignalMock.mockRejectedValue(new Error("db down"));
+    getPublishedFormByPublicIdMock.mockResolvedValue(withName());
+    expect((await submit("es")).status).toBe("success");
+    expect(createMessageMock).toHaveBeenCalledTimes(1);
   });
 });

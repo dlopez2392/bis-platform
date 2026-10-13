@@ -2,7 +2,7 @@ import type { serviceDb, FormRow } from "@bis/db";
 import {
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
-  setSubmissionProcessingError, setContactsBusiness,
+  setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal,
 } from "@bis/db";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -12,6 +12,7 @@ import { leadReceiptEmail, leadReceiptSubject } from "@/lib/email/templates/lead
 import { isValidEmail } from "@/lib/forms/guards";
 import { e164Of } from "@/lib/voice/phone-number";
 import { sendInstantReply } from "@/lib/automations/instant-reply";
+import { pageLanguageSignal } from "@/lib/contacts/language";
 
 /**
  * Everything that happens to a form submission AFTER its row is durably
@@ -105,6 +106,20 @@ export async function enrich(
       custom,
     }, "form", "system");
     contactId = created.id;
+
+    // S-09 §7.1 / C6: the form's language is the customer's sign only when it differs from the
+    // account's. Its own try INSIDE the contact group: a failed sign must never skip the thread below.
+    // (A concierge lead arrives here too, with the chat's language: it signals as `form`, plan deviation 12.)
+    try {
+      const { data: acct, error: acctErr } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
+      if (acctErr) throw new Error(acctErr.message);
+      const sign = pageLanguageSignal(locale, (acct as { language: "en" | "es" | null } | null)?.language ?? null);
+      if (sign) {
+        await recordLanguageSignal(db, accountId, contactId, { language: sign, source: "form", at: new Date() }, "form", "system");
+      }
+    } catch (e) {
+      console.error(`form ${form.id} submission ${submissionId}: language signal failed for contact ${contactId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // S-02 §6 row 10: the business answer is a group (0069). A returning lead
     // goes through fillBlanks below, which never replaces a business it has.

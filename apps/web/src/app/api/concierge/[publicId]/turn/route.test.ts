@@ -66,6 +66,7 @@ vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
     ...actual,
+    recordLanguageSignal: vi.fn(async () => true),
     serviceDb: () => ({
       from: (table: string) => {
         dbSpy.from.push(table);
