@@ -16,6 +16,8 @@ const CALENDAR_SETTINGS_COLUMNS = [
   "buffer_minutes",
   "enabled",
   "followup_body",     // client-editable settings knob, granted by 0022
+  "followup_body_es",        // PR 2's Spanish box (S-09), client-editable beside followup_body; granted by 0076
+  "followup_body_es_basis",  // the English the Spanish was written beside (S-09 C14); granted by 0076
   "followup_enabled",  // client-editable settings knob, granted by 0022
   "max_advance_days",
   "meeting_type",      // client-editable settings knob, granted by 0022
