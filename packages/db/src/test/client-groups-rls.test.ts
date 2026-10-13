@@ -78,3 +78,51 @@ describe("tenant isolation and the NULL guard", () => {
     }
   }));
 });
+
+describe("S-03 part 2: the group page's reads under the Technician's RLS (spec §4.2, §11.1; plan deviation 10)", () => {
+  const groupRows = async (c: Client, acct: string, g: string) =>
+    (await c.query<{ id: string; is_primary_contact: boolean }>(
+      `select id, is_primary_contact from client_group_members where account_id = $1 and client_group_id = $2 order by created_at, id`,
+      [acct, g])).rows;
+  const count = async (c: Client, acct: string, g: string) =>
+    (await c.query<{ n: number }>("select count(*)::int as n from client_group_members where account_id = $1 and client_group_id = $2", [acct, g])).rows[0]!.n;
+
+  it("a Technician with one member of the household reads the group, ONE member row and a count of 1, and every place of the group (mutation: drop client_group_members_technician_scope -> 2 rows, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      // places_findable (0071) needs an address, a landmark or directions.
+      const place = (await c.query<{ id: string }>(
+        "insert into places (account_id, client_group_id, label, address) values ($1,$2,'The house','12 Palm St') returning id", [s.acct, s.shared])).rows[0]!.id;
+      await actAs(c, claims("tech"));
+      expect(await ids(c, "client_groups", s.acct)).toEqual([s.shared]);
+      expect((await groupRows(c, s.acct, s.shared)).map((r) => r.id)).toEqual([s.mineInShared]);
+      expect(await count(c, s.acct, s.shared)).toBe(1);
+      expect((await c.query("select id from places where account_id = $1 and client_group_id = $2", [s.acct, s.shared])).rows)
+        .toEqual([{ id: place }]);
+      // A group with none of theirs reads as nothing at all: the page's readGroup is null, a 404.
+      expect((await c.query("select 1 from client_groups where id = $1", [s.onlyTheirs])).rowCount).toBe(0);
+    }));
+  for (const p of ["owner", "staff", "agency"] as const) {
+    it(`${p}: both members of the household and a count of 2 (mutation: drop the sees_all_customers branch of client_group_members_technician_scope -> FAILS)`, () => withRollback(async (c) => {
+      const s = await seed(c);
+      await actAs(c, claims(p));
+      expect((await groupRows(c, s.acct, s.shared)).map((r) => r.id).sort()).toEqual([s.mineInShared, s.theirsInShared].sort());
+      expect(await count(c, s.acct, s.shared)).toBe(2);
+    }));
+  }
+  it("the flag is exactly as visible as its row: the Technician reads it on their customer's row and nowhere else (mutation: drop the restrictive member policy -> they read the other's holder row, FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query("update client_group_members set is_primary_contact = true where id = $1", [s.mineInShared]);
+      await actAs(c, claims("tech"));
+      expect(await groupRows(c, s.acct, s.shared)).toEqual([{ id: s.mineInShared, is_primary_contact: true }]);
+      await c.query("reset role");
+      await c.query("update client_group_members set is_primary_contact = false where id = $1", [s.mineInShared]);
+      await c.query("update client_group_members set is_primary_contact = true where id = $1", [s.theirsInShared]);
+      await actAs(c, claims("tech"));
+      expect((await groupRows(c, s.acct, s.shared)).filter((r) => r.is_primary_contact)).toEqual([]);
+      await c.query("reset role");
+      await actAs(c, claims("owner"));
+      expect((await groupRows(c, s.acct, s.shared)).filter((r) => r.is_primary_contact).map((r) => r.id)).toEqual([s.theirsInShared]);
+    }));
+});
