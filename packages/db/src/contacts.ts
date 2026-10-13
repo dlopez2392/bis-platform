@@ -1120,7 +1120,7 @@ export function isLanguageTriple(v: unknown): v is LanguageTriple {
  * One customer sign (S-09 §7.1): records it as the contact's last sign and sets the language when it
  * has none. Emits `contact.language_set` with the caller's actor ONLY when this call set the language.
  * Throws on an rpc error; every caller wraps it in its own try (a sign must never cost a booking, a
- * form or a call).
+ * form or a call). An emit failure AFTER the rpc set the language is logged, never thrown (M-3).
  */
 export async function recordLanguageSignal(
   db: SupabaseClient, accountId: string, contactId: string,
@@ -1133,8 +1133,14 @@ export async function recordLanguageSignal(
   });
   if (error) throw new Error(`recordLanguageSignal failed: ${error.message}`);
   if (data !== true) return false;
-  await emit(db, accountId, "contact.language_set", actorId,
-    { contactId, language: signal.language, source: signal.source }, actorType);
+  // Review M-3 (R3-M11, as restoreContactLanguage below): the rpc has COMMITTED the language by now,
+  // so an emit failure is logged, never thrown — a throw would report a failed sign that landed.
+  try {
+    await emit(db, accountId, "contact.language_set", actorId,
+      { contactId, language: signal.language, source: signal.source }, actorType);
+  } catch (e) {
+    console.error(`recordLanguageSignal: account ${accountId} contact ${contactId}: event emit failed after the rpc committed: ${(e as Error).message}`);
+  }
   return true;
 }
 

@@ -239,3 +239,45 @@ describe("restoreContactLanguage's compare-and-set and M1 (mocked)", () => {
       .rejects.toThrow(/not a language triple/);
   });
 });
+
+/**
+ * Review M-3 (mocked, as the block above and for the same reason): `recordLanguageSignal`'s own
+ * write is the rpc; once it answered true the language has COMMITTED, so an emit failure after it is
+ * logged and the rpc's answer still returned — the same rule `restoreContactLanguage` follows.
+ */
+describe("recordLanguageSignal: an emit failure after the rpc committed (mocked, M-3)", () => {
+  function rpcDb(answer: boolean, emitError: string | null) {
+    const events = { async insert() { return emitError ? { error: { message: emitError } } : { error: null }; } };
+    return {
+      rpc: async (fn: string) => {
+        if (fn !== "record_language_signal") throw new Error(`rpcDb: unexpected rpc ${fn}`);
+        return { data: answer, error: null };
+      },
+      from: (table: string) => {
+        if (table !== "events") throw new Error(`rpcDb: unexpected table ${table}`);
+        return events;
+      },
+    } as unknown as SupabaseClient;
+  }
+  const SIGNAL = { language: "es" as const, source: "booking" as const, at: T1 };
+
+  it("is logged, never thrown, and the rpc's true is still returned (mutation: let the emit error propagate -> rejects, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(recordLanguageSignal(rpcDb(true, "events insert failed"), "a1", "c1", SIGNAL, "public", "system")).resolves.toBe(true);
+      expect(spy.mock.calls.flat().join(" ")).toContain("events insert failed");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a sign that set nothing emits nothing and returns false (mutation: emit when the rpc said false -> the emit error is logged, FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(recordLanguageSignal(rpcDb(false, "events insert failed"), "a1", "c1", SIGNAL, "public", "system")).resolves.toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
