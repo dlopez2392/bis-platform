@@ -296,6 +296,46 @@ describe("the referral EMAIL: the footer, the address and reply-to it needs, and
   });
 });
 
+describe("S-09 PR 2: the referral ask in the customer's language", () => {
+  it("an SMS Spanish contact with our default gets our Spanish, and the gate is told es (mutation: drop `language` from sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({ language: "es", body: "", bodyEs: null })]);
+    const gate = fakeSmsGate({ send: (m) => smsSend(m) });
+    expect(await referralAskPass.run({ ...ctx(), sms: gate })).toEqual({ ...EMPTY, sent: 1 });
+    expect(gate.calls[0]!.language).toBe("es");
+    const body = smsSend.mock.calls[0]![0]!.body as string;
+    expect(body).toContain("Gracias otra vez de parte de Rio Roofing.");
+  });
+
+  it("an SMS Spanish contact whose box was emptied gets the WHOLE text in English (C11; mutation: pass row.language to sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({ language: "es", body: "Thanks for the referral talk.", bodyEs: "" })]);
+    const gate = fakeSmsGate({ send: (m) => smsSend(m) });
+    expect(await referralAskPass.run({ ...ctx(), sms: gate })).toEqual({ ...EMPTY, sent: 1 });
+    expect(gate.calls[0]!.language).toBe("en");
+    const body = smsSend.mock.calls[0]![0]!.body as string;
+    expect(body).toContain("Thanks for the referral talk.");
+  });
+
+  it("an EMAIL Spanish contact with our default gets a Spanish subject, body and footer (mutation: pass \"en\" to marketingFooterReason -> the footer case fails BY NAME)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({ config: { channel: "email" }, language: "es", body: "", bodyEs: null })]);
+    expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Un favor, de parte de Rio Roofing");
+    expect(sent.body).toContain("Gracias otra vez de parte de Rio Roofing.");
+    expect(sent.body).toContain(
+      "Le llega este correo porque ha sido cliente de Rio Roofing. Si prefiere no recibir más mensajes, responda y avísenos.");
+    expect(sent.language).toBe("es");
+  });
+
+  it("an EMAIL Spanish contact whose box was emptied gets the WHOLE email in English (mutation: pass row.language to referralAskSubject -> FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({ config: { channel: "email" }, language: "es", body: "Thanks for coming by.", bodyEs: "" })]);
+    expect(await referralAskPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("One favor, from Rio Roofing");
+    expect(sent.body).toContain("Thanks for coming by.");
+    expect(sent.language).toBe("en");
+  });
+});
+
 describe("THE LADDER — never two rungs on one morning", () => {
   it("holds while the review request went out THIS morning, and sends when it went out the morning before", async () => {
     // 08:05 CDT today: a different local day from the fixture's 09:05 CDT

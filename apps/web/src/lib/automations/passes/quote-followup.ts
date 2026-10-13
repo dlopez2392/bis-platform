@@ -1,7 +1,7 @@
 import {
   listDueQuoteFollowups, getDueQuoteFollowupById, latestInboundByContact,
   stampQuoteFollowupSent, stampQuoteFollowupSmsFailed, countQuoteFollowupsSince,
-  type DueQuoteFollowup,
+  chooseBody, type DueQuoteFollowup, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -197,7 +197,13 @@ export async function processQuoteFollowups(
     attemptsThisTick++;
     sentToday.set(row.accountId, today + 1);
 
-    const body = row.body.trim() || defaultQuoteFollowupBody(row.brandName);
+    // S-09 PR 2 (C11): one language end to end. `chooseBody` may switch a
+    // Spanish row to English (an emptied box), and that RETURNED language
+    // drives the subject, the body — and the gate, on both channels.
+    const chosen = chooseBody({
+      language: row.language, body: row.body, bodyEs: row.bodyEs,
+      defaults: { en: defaultQuoteFollowupBody(row.brandName), es: defaultQuoteFollowupBody(row.brandName, "es") },
+    });
 
     let smsRow: SentSms | null = null;
     try {
@@ -208,11 +214,11 @@ export async function processQuoteFollowups(
           smsRow = await sendAutomationSms(ctx, {
             accountId: row.accountId, contactId: row.contactId, to: target.to,
             kind: subject.smsKind, accountTimezone: row.accountTimezone,
-            body,
+            body: chosen.text, language: chosen.language,
             onProviderFailure: () => stampQuoteFollowupSmsFailed(ctx.db, row.opportunityId),
           });
         } else {
-          await sendEmail(ctx, row, target.to, body);
+          await sendEmail(ctx, row, target.to, chosen.text, chosen.language);
         }
 
         const stamp = await stampWithRetry(() => stampQuoteFollowupSent(ctx.db, row.opportunityId));
@@ -297,7 +303,7 @@ export const releaseQuoteFollowup: Releaser = async (ctx, row) => {
 };
 
 async function sendEmail(
-  ctx: PassContext, row: DueQuoteFollowup, to: string, body: string,
+  ctx: PassContext, row: DueQuoteFollowup, to: string, body: string, language: RecipientLanguage,
 ): Promise<void> {
   // emailBrandNamed, because the row carries the resolved brand name and
   // nothing else — there is no accountName here to get wrong.
@@ -305,8 +311,11 @@ async function sendEmail(
   // The subject is composed here, not inside the template: an account with no
   // brand name has `brandName === ""` (brandDisplayName, branding.ts:197-199)
   // and a template interpolating it would ship "About your quote from ".
+  // S-09 PR 2: `language` is `chosen.language`, the one `chooseBody`
+  // returned — never `row.language` directly, which an emptied Spanish box
+  // has already overridden.
   const { subject, html, text } = quoteFollowupEmail({
-    brand, subject: quoteFollowupSubject(row.brandName), body,
+    brand, subject: quoteFollowupSubject(row.brandName, language), body,
   });
   await ctx.email.send({
     accountId: row.accountId, kind: "automation.quote_followup", contactId: row.contactId,
@@ -319,5 +328,6 @@ async function sendEmail(
     subject,
     body: text,
     html,
+    language,
   });
 }

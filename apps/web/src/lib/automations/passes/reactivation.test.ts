@@ -189,6 +189,28 @@ describe("the reactivation check-in is EMAIL ONLY", () => {
   });
 });
 
+describe("S-09 PR 2: the reactivation check-in in the customer's language (email only, no SMS case)", () => {
+  it("a Spanish contact with our default gets our Spanish, a Spanish subject and a Spanish footer (mutation: pass \"en\" to marketingFooterReason -> the footer case fails BY NAME)", async () => {
+    dbMocks.listDueReactivations.mockResolvedValue([row({ language: "es", body: "", bodyEs: null })]);
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Un saludo de Rio Roofing");
+    expect(sent.body).toContain("Hola, le saluda Rio Roofing.");
+    expect(sent.body).toContain(
+      "Le llega este correo porque ha sido cliente de Rio Roofing. Si prefiere no recibir más mensajes, responda y avísenos.");
+    expect(sent.language).toBe("es");
+  });
+
+  it("a Spanish contact whose box was emptied gets the WHOLE email in English (C11; mutation: pass row.language to reactivationSubject -> FAILS)", async () => {
+    dbMocks.listDueReactivations.mockResolvedValue([row({ language: "es", body: "Thanks for being a customer.", bodyEs: "" })]);
+    expect(await reactivationPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("A note from Rio Roofing");
+    expect(sent.body).toContain("Thanks for being a customer.");
+    expect(sent.language).toBe("en");
+  });
+});
+
 describe("the reactivation check-in's own daily cap", () => {
   it("sends exactly FIVE and skips the sixth, by name and by number", async () => {
     // SIX eligible contacts, so "five send and the sixth is skippedCap"

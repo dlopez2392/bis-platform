@@ -184,6 +184,49 @@ describe("the quote follow-up sends by the CONFIGURED channel", () => {
   });
 });
 
+describe("S-09 PR 2: the quote follow-up in the customer's language", () => {
+  it("an SMS Spanish contact with our default gets our Spanish, and the gate is told es (mutation: drop `language` from sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([row({ language: "es", body: "", bodyEs: null })]);
+    const gate = fakeSmsGate({ send: (m) => smsSend(m) });
+    expect(await quoteFollowupPass.run({ ...ctx(), sms: gate })).toEqual({ ...EMPTY, sent: 1 });
+    expect(gate.calls[0]!.language).toBe("es");
+    const body = smsSend.mock.calls[0]![0]!.body as string;
+    expect(body).toContain("Hola, le escribe Rio Roofing.");
+  });
+
+  it("an SMS Spanish contact whose box was emptied gets the WHOLE text in English (C11; mutation: pass row.language to sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([row({ language: "es", body: "Just checking in on that quote.", bodyEs: "" })]);
+    const gate = fakeSmsGate({ send: (m) => smsSend(m) });
+    expect(await quoteFollowupPass.run({ ...ctx(), sms: gate })).toEqual({ ...EMPTY, sent: 1 });
+    expect(gate.calls[0]!.language).toBe("en");
+    const body = smsSend.mock.calls[0]![0]!.body as string;
+    expect(body).toContain("Just checking in on that quote.");
+  });
+
+  it("an EMAIL Spanish contact with our default gets a Spanish subject and body (mutation: pass \"en\" to quoteFollowupSubject -> FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([row({
+      config: { stageId: STAGE, quietDays: 3, channel: "email" }, language: "es", body: "", bodyEs: null,
+    })]);
+    expect(await quoteFollowupPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Sobre su estimado de Rio Roofing");
+    expect(sent.body).toContain("Hola, le escribe Rio Roofing.");
+    expect(sent.language).toBe("es");
+  });
+
+  it("an EMAIL Spanish contact whose box was emptied gets the WHOLE email in English (mutation: pass row.language to quoteFollowupSubject -> FAILS)", async () => {
+    dbMocks.listDueQuoteFollowups.mockResolvedValue([row({
+      config: { stageId: STAGE, quietDays: 3, channel: "email" }, language: "es",
+      body: "Just checking in on the quote.", bodyEs: "",
+    })]);
+    expect(await quoteFollowupPass.run(ctx())).toEqual({ ...EMPTY, sent: 1 });
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("About your quote from Rio Roofing");
+    expect(sent.body).toContain("Just checking in on the quote.");
+    expect(sent.language).toBe("en");
+  });
+});
+
 describe("the quote follow-up's morning band, caps and cooldown", () => {
   it("outside the morning band nothing goes and NOTHING is logged - the row is due again tomorrow", async () => {
     // 18:00Z is 13:00 CDT, two hours past the band's close. Mutation: drop the

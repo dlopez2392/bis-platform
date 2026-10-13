@@ -1,6 +1,6 @@
 import {
   listDueReactivations, getDueReactivationById, stampReactivationSent, countReactivationsSince,
-  conversationQuietSince, reactivationCutoff, type DueReactivation,
+  conversationQuietSince, reactivationCutoff, chooseBody, type DueReactivation,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -182,18 +182,25 @@ export async function processReactivations(
       }
     }
 
-    const body = row.body.trim() || defaultReactivationBody(row.brandName);
+    // S-09 PR 2 (C11): one language end to end — email only here, so there is
+    // no SMS gate to tell. `chooseBody` may switch a Spanish row to English
+    // (an emptied box), and that RETURNED language drives the subject, the
+    // body and the footer.
+    const chosen = chooseBody({
+      language: row.language, body: row.body, bodyEs: row.bodyEs,
+      defaults: { en: defaultReactivationBody(row.brandName), es: defaultReactivationBody(row.brandName, "es") },
+    });
 
     try {
       const outcome = await holdOrSend(ctx, subject, async () => {
         const brand = emailBrandNamed(row.branding, row.brandName);
         const { subject: line, html, text } = reactivationEmail({
-          brand, subject: reactivationSubject(row.brandName), body,
+          brand, subject: reactivationSubject(row.brandName, chosen.language), body: chosen.text,
           // Non-null here: the check above skipped every row without one.
           mailingAddress: row.mailingAddress!,
           // Composed here like the subject, so the blank-brand branch stays
           // in the copy module and the template only prints.
-          footerReason: marketingFooterReason(row.brandName),
+          footerReason: marketingFooterReason(row.brandName, chosen.language),
         });
         await ctx.email.send({
           accountId: row.accountId, kind: "automation.reactivation", contactId: row.contactId,
@@ -203,6 +210,7 @@ export async function processReactivations(
           fromAddress: row.fromEmail ?? undefined,
           replyTo: normalizeReplyTo(row.replyToEmail),
           subject: line, body: text, html,
+          language: chosen.language,
         });
         const stamp = await stampWithRetry(() => stampReactivationSent(ctx.db, row.contactId));
         if (!stamp.stamped) {
