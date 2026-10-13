@@ -2047,10 +2047,14 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
   it("S-09 PR 2: the reminder and the follow-up carry the customer's language — the contact's, else the account's, else English (mutation: drop `language` from REMINDER_SELECT's contact embed -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
-      const mk = async (firstName: string, email: string) =>
-        (await createContact(db, accountId, { firstName, email, phone: "+19565550111" }, "user_test")).id;
-      const es = await mk("Esa", "es@example.com");
-      const none = await mk("Nadie", "none@example.com");
+      // Distinct phones: createContact's own dedupe (findDuplicate, contacts.ts) merges a SECOND
+      // contact into an existing one that shares either its email OR its phone, so sharing one phone
+      // between these two contacts would have collapsed them into a single row and made the two
+      // `contactId` keys below the same id -- the test caught exactly this once, against real CI.
+      const mk = async (firstName: string, email: string, phone: string) =>
+        (await createContact(db, accountId, { firstName, email, phone }, "user_test")).id;
+      const es = await mk("Esa", "es@example.com", "+19565550111");
+      const none = await mk("Nadie", "none@example.com", "+19565550112");
       await setContactLanguage(db, accountId, es, "es", "user_test");
       const now = new Date("2027-03-01T12:00:00Z");
       for (const [contactId, h] of [[es, 11], [none, 12]] as const) {
