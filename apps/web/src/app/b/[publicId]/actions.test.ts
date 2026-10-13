@@ -1129,6 +1129,22 @@ describe("submitBookingAction — a Spanish booker gets a Spanish confirmation",
     const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
     expect(confirmation.subject).toBe("You're booked in");
   });
+
+  // S-09 PR 2 (spec §16.2 "in-the-moment unchanged"): the confirmation is a
+  // REPLY to the booker's own `?locale=` choice, never a read of a stored
+  // language — not the contact's, not the account's. The account here is
+  // "en" and the mocked contact row (below) also carries "en", yet a
+  // Spanish-posted booking still gets the Spanish confirmation.
+  it("the confirmation follows the posted locale, not recipientLanguage(contact, account) (mutation: route the confirmation's locale through recipientLanguage(contact.language, account.language) → an English subject → FAILS)", async () => {
+    accountRow.language = "en";
+    createContactMock.mockResolvedValue({ id: "contact_1", existing: false, language: "en" });
+
+    const result = await submitBookingAction(PUBLIC_ID, validFormData({ locale: "es" }));
+
+    expect(result.ok).toBe(true);
+    const confirmation = sendMock.mock.calls.map((c) => c[0]).find((c) => c.to === "maria@example.com");
+    expect(confirmation.subject).toBe("Tu cita quedó agendada");
+  });
 });
 
 describe("submitBookingAction — the booking grant (consent chain PR-2, plan Task 10)", () => {

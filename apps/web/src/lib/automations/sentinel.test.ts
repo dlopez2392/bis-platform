@@ -75,17 +75,20 @@ const REMINDER_ROW: DueReminder = {
   bookingId: "bk_rem", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
   cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
   accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null, late: false,
+  language: "en", contactPhone: null,
 };
 const FOLLOWUP_ROW: DueFollowup = {
   bookingId: "bk_fu", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
   contactEmail: "b@example.com", contactName: "B",
   accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
+  language: "en", followupBodyEs: null,
 };
 /** Part B's confirmation ask — 47h past TICK, the near edge of its window. */
 const CONFIRM_ROW: DueAppointmentConfirm = {
   bookingId: "bk_ac", accountId: "acct_1", startsAt: "2026-09-11T13:00:00.000Z", bookerTimezone: null,
   contactId: "ct_6", contactPhone: "9565550104", brandName: BRAND,
   accountTimezone: "America/New_York", body: "",
+  language: "en", bodyEs: null,
 };
 
 /** Part B's referral ask — the ladder's third rung, one strictly-later local
@@ -100,6 +103,7 @@ const REFERRAL_ROW: DueReferralAsk = {
   brandName: BRAND, branding, accountTimezone: "America/New_York",
   fromEmail: null, replyToEmail: null, mailingAddress: "PO Box 12\nMcAllen, TX 78501",
   body: "", config: { channel: "sms" },
+  language: "en", bodyEs: null,
 };
 
 /** Part B’s reactivation check-in — EMAIL ONLY, so the row carries no phone
@@ -117,6 +121,7 @@ const REACTIVATION_ROW: DueReactivation = {
   // the scan also covers the footer, which names the company ("a customer
   // of …") and must name the BRAND, never the label.
   fromEmail: null, replyToEmail: "office@rioroofing.example", mailingAddress: "PO Box 12\nMcAllen, TX 78501", body: "",
+  language: "en", bodyEs: null,
 };
 
 /** Part B's quote follow-up — the only PIPELINE-driven recipe. Five days
@@ -132,6 +137,7 @@ const QUOTE_FOLLOWUP_ROW: DueQuoteFollowup = {
   brandName: BRAND, branding, accountTimezone: "America/New_York",
   fromEmail: null, replyToEmail: null, body: "",
   config: { stageId: "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f", quietDays: 3, channel: "sms" },
+  language: "en", bodyEs: null,
 };
 
 beforeEach(() => {
@@ -141,6 +147,7 @@ beforeEach(() => {
   const review = {
     accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, completedAt: null, smsFailedAt: null, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+    language: "en" as const, bodyEs: null,
   };
   dbMocks.listDueReviewRequests.mockResolvedValue([
     { ...review, bookingId: "bk_rv_email", contactId: "ct_1", contactEmail: "c@example.com", contactPhone: null,
@@ -159,6 +166,7 @@ beforeEach(() => {
     accountId: "acct_1", endsAt: "2026-09-08T20:00:00.000Z", noShowAt: "2026-09-08T20:30:00.000Z", smsFailedAt: null,
     calendarPublicId: "cal_pub_1", calendarEnabled: true, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+    language: "en" as const, bodyEs: null,
   };
   dbMocks.listDueNoShowNudges.mockResolvedValue([
     { ...nudge, bookingId: "bk_ns_email", contactId: "ct_3", contactEmail: "d@example.com", contactPhone: null, config: { channel: "email" } },
@@ -169,6 +177,7 @@ beforeEach(() => {
     bookingId: "bk_sr", accountId: "acct_1", startsAt: "2026-09-09T16:00:00.000Z", bookerTimezone: null,
     smsFailedAt: null, contactId: "ct_5", contactPhone: "9565550103", brandName: BRAND,
     accountTimezone: "America/New_York", body: "",
+    language: "en" as const, bodyEs: null,
   }]);
   // EXPLICIT, like the two above it: the loop over `dbMocks` resets every
   // mock to resolve `undefined`, and a due-list left at that default hands

@@ -866,3 +866,8 @@ export async function searchConversations(
     }];
   });
 }
+
+// S-09 PR 2: the four pure Spanish-box functions live in ./spanish-box (import-free, so client
+// components can reach them through the @bis/db/spanish-box subpath); re-exported here so every
+// existing `from "./messaging"` import keeps working.
+export { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox, type RecipientLanguage, type BodyDefaults } from "./spanish-box";

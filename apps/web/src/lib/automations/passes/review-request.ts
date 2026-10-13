@@ -1,6 +1,6 @@
 import {
   listDueReviewRequests, stampReviewRequested, stampReviewRequestSmsFailed, countReviewRequestsSince,
-  getDueReviewRequestById, type DueReviewRequest, type ReviewRequestConfig,
+  getDueReviewRequestById, chooseBody, type DueReviewRequest, type ReviewRequestConfig, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -227,7 +227,12 @@ export async function processReviewRequests(
     attemptsThisTick++;
     sentToday.set(row.accountId, today + 1);
 
-    const body = row.body.trim() || defaultReviewRequestBody(row.brandName);
+    // S-09 PR 2 (C11): the chosen language drives the template, the link sentence and the gate's footer.
+    const chosen = chooseBody({
+      language: row.language, body: row.body, bodyEs: row.bodyEs,
+      defaults: { en: defaultReviewRequestBody(row.brandName, "en"), es: defaultReviewRequestBody(row.brandName, "es") },
+    });
+    const body = chosen.text;
 
     let smsRow: SentSms | null = null;
     try {
@@ -237,10 +242,11 @@ export async function processReviewRequests(
             accountId: row.accountId, contactId: row.contactId, to: target.to,
             kind: subject.smsKind, accountTimezone: row.accountTimezone,
             body: composeReviewRequestSms(body, config.reviewUrl),
+            language: chosen.language,
             onProviderFailure: () => stampReviewRequestSmsFailed(ctx.db, row.bookingId),
           });
         } else {
-          await sendEmail(ctx, row, config, target.to, body);
+          await sendEmail(ctx, row, config, target.to, body, chosen.language);
         }
 
         // SEND-THEN-STAMP. The stamp comes BEFORE the SMS row's status
@@ -314,11 +320,12 @@ export const releaseReviewRequest: Releaser = async (ctx, row) => {
 
 async function sendEmail(
   ctx: PassContext, row: DueReviewRequest, config: ReviewRequestConfig, to: string, body: string,
+  language: RecipientLanguage,
 ): Promise<void> {
   // emailBrandNamed, because the row carries the resolved brand name and
   // nothing else — there is no accountName here to get wrong.
   const brand = emailBrandNamed(row.branding, row.brandName);
-  const { subject, html, text } = reviewRequestEmail({ brand, body, reviewUrl: config.reviewUrl });
+  const { subject, html, text } = reviewRequestEmail({ brand, body, reviewUrl: config.reviewUrl, locale: language });
   await ctx.email.send({
     accountId: row.accountId, kind: "automation.review_request", contactId: row.contactId,
     origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
@@ -331,5 +338,6 @@ async function sendEmail(
     subject,
     body: text,
     html,
+    language,
   });
 }

@@ -41,6 +41,10 @@ const dbMocks = vi.hoisted(() => ({
   updateCalendarSettings: vi.fn(), setBookingStatus: vi.fn(), undoOperatorCancel: vi.fn(),
   discardQueuedNotice: vi.fn(), noticeMessageStatus: vi.fn(),
   serviceDb: vi.fn(() => ({})),
+  // Task 17: resolves the stored Spanish follow-up box so `nextSpanishBox`
+  // has something to compare against. Read through the SAME request client
+  // the write below uses (`{}` from `dbForRequest`'s mock), never serviceDb.
+  getOrCreateCalendar: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
@@ -52,7 +56,7 @@ import {
 } from "./actions";
 import { BookingNotStartedError, BookingNotRestorableError, SlotTakenError } from "@bis/db";
 import { m } from "@/lib/messages";
-import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
 
 /** The minimum a submission needs beyond `followupBody` for the action to
  *  get past its own validation and reach the patch under test. */
@@ -73,6 +77,8 @@ beforeEach(() => {
   visible.noticeBelongsToBooking.mockReset().mockResolvedValue(true);
   dbMocks.updateCalendarSettings.mockReset();
   dbMocks.updateCalendarSettings.mockResolvedValue(undefined);
+  dbMocks.getOrCreateCalendar.mockReset();
+  dbMocks.getOrCreateCalendar.mockResolvedValue({ followup_body_es: null, followup_body_es_basis: null });
   owner.allowed = true;
   owner.calls = [];
 });
@@ -164,6 +170,82 @@ describe("updateCalendarSettingsAction — follow-up body normalization", () => 
     expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
       {}, "acct_1", expect.objectContaining({ followupBody: "" }), "user_1",
     );
+  });
+});
+
+/**
+ * Task 17: the follow-up card's Spanish box. `nextSpanishBox` (Task 1) does
+ * the save-side rule; this action supplies it the stored row, read through
+ * the SAME request client as the write (never serviceDb() — the settings
+ * grant is client-role, 0022:12-13, and 0076 granted the two columns).
+ */
+describe("updateCalendarSettingsAction — the follow-up's Spanish box (Task 17)", () => {
+  it("a Spanish box equal to our default stores followupBodyEs: null", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", defaultFollowupBody("es"));
+    const r = await updateCalendarSettingsAction("acct_1", fd);
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
+      {}, "acct_1", expect.objectContaining({ followupBodyEs: null }), "user_1",
+    );
+  });
+
+  it("an edited Spanish stores it, with the basis set to the saved English (mutation: drop the basis → FAILS)", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", "Nuestro texto personalizado.");
+    const r = await updateCalendarSettingsAction("acct_1", fd);
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.updateCalendarSettings).toHaveBeenCalledWith(
+      {}, "acct_1",
+      expect.objectContaining({
+        followupBodyEs: "Nuestro texto personalizado.", followupBodyEsBasis: "Custom English",
+      }),
+      "user_1",
+    );
+  });
+
+  it("an English body over 1,000 characters is refused, and nothing is written (mutation: drop the English length check → FAILS)", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", baseFormData("x".repeat(1001)));
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("a Spanish body over 1,000 characters is refused, and nothing is written (mutation: drop the Spanish length check → FAILS)", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", "x".repeat(1001));
+    const r = await updateCalendarSettingsAction("acct_1", fd);
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  // Review round 1 (Important 1): the automations/voice convention checks the
+  // UNTRIMMED length (`voice/actions.ts:84`'s `textbackBody.length`,
+  // `automations/actions.ts`'s `body.length`) — trimming first lets 1,001
+  // spaces (trim-empty) sail past the bound and land in the column untrimmed.
+  it("an English body of 1,001 spaces is still refused (untrimmed length, mutation: check .trim().length instead → FAILS)", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", baseFormData(" ".repeat(1001)));
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("a Spanish body of 1,001 spaces is still refused (untrimmed length, mutation: check .trim().length instead → FAILS)", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", " ".repeat(1001));
+    const r = await updateCalendarSettingsAction("acct_1", fd);
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the stored Spanish box through the request client, not serviceDb (mutation: call serviceDb() in this action → FAILS)", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", "Nuestro texto.");
+    dbMocks.serviceDb.mockClear();
+    await updateCalendarSettingsAction("acct_1", fd);
+    expect(dbMocks.getOrCreateCalendar).toHaveBeenCalledWith({}, "acct_1", "user_1");
+    // serviceDb() is never even CALLED by this action — not just "not the
+    // client used for this read" (a `{}`-returning serviceDb mock would
+    // deep-equal dbForRequest()'s `{}` and could never tell the two apart).
+    expect(dbMocks.serviceDb).not.toHaveBeenCalled();
   });
 });
 

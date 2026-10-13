@@ -56,8 +56,10 @@ describe("languageHint (§7.4): four lines, each with the case only it hides", (
 });
 
 describe("languageView (§8.2, C8): the line, in the reader's language and the account's zone", () => {
-  const view = (c: ContactLanguageFacts, reader: "en" | "es" = "en") =>
-    languageView(c, { zone: "America/Chicago", tr: makeTr(reader) });
+  // A default param collapses an explicit `undefined` into the default (JS semantics), which would
+  // hide the "unreadable account" case from the "no account language" case; a rest tuple keeps them apart.
+  const view = (c: ContactLanguageFacts, reader: "en" | "es" = "en", ...rest: [ContactLanguageFacts["language"] | undefined] | []) =>
+    languageView(c, { zone: "America/Chicago", tr: makeTr(reader), accountLanguage: rest.length > 0 ? rest[0] : null });
 
   it("set: the endonym, then the source and the day in the account's zone (03:00 UTC on Oct 4 is Oct 3 in Chicago)", () => {
     expect(view(set({ language_set_at: "2026-10-04T03:00:00.000Z" }))).toEqual({
@@ -69,10 +71,16 @@ describe("languageView (§8.2, C8): the line, in the reader's language and the a
     expect(phrases).toEqual(["from their booking (Oct 3)", "from a form they filled in (Oct 3)", "from a call (Oct 3)", "set by your team (Oct 3)"]);
     expect(view(set(), "es").phrase).toBe("por su cita (3 oct)");
   });
-  it("not set: English, the only fallback that is true in PR 1 (nothing sends in Spanish yet), in the reader's language (mutation: NAME_KEY.es, or the old notSetAccount sentence -> FAILS)", () => {
-    expect(view(NONE).phrase).toBe("Not set. Messages go out in English.");
-    expect(view(NONE, "es").phrase).toBe("Sin definir. Los mensajes salen en inglés.");
-    expect(view(NONE).value).toBeNull();
+  it("not set names the effective fallback now that sends follow it (C8, spec §8.2; mutation: always notSet -> FAILS)", () => {
+    expect(view(NONE, "en", null).phrase).toBe("Not set. Messages go out in English.");
+    expect(view(NONE, "en", "es").phrase).toBe("Not set. Messages go out in Spanish, the account's language.");
+    expect(view(NONE, "en", "en").phrase).toBe("Not set. Messages go out in English, the account's language.");
+    expect(view(NONE, "es", "es").phrase).toBe("Sin definir. Los mensajes salen en español, el idioma de la cuenta.");
+    expect(view(NONE, "en", null).value).toBeNull();
+  });
+  it("an unreadable account says only 'Not set.', never a guess (mutation: treat undefined as null -> FAILS)", () => {
+    expect(view(NONE, "en", undefined).phrase).toBe("Not set.");
+    expect(view(NONE, "es", undefined).phrase).toBe("Sin definir.");
   });
   it("the hint's words name the sign's source and language (mutation: always the call sentence -> FAILS)", () => {
     expect(view(disagreeing()).hint).toEqual({ language: "en", text: "Spoke English on the last call. Switch to English?" });
@@ -83,7 +91,7 @@ describe("languageView (§8.2, C8): the line, in the reader's language and the a
 
 describe("parseLanguageView: the drawer's body is checked, not cast", () => {
   it("accepts what languageView builds and refuses anything else (mutation: return v as LanguageView -> FAILS)", () => {
-    const good = languageView(disagreeing(), { zone: "UTC", tr: makeTr("en") });
+    const good = languageView(disagreeing(), { zone: "UTC", tr: makeTr("en"), accountLanguage: null });
     expect(parseLanguageView(JSON.parse(JSON.stringify(good)))).toEqual(good);
     for (const bad of [null, {}, { ...good, value: "fr" }, { ...good, phrase: 3 }, { ...good, hint: { language: "en" } }, { ...good, valueLabel: undefined }]) {
       expect(parseLanguageView(bad), JSON.stringify(bad)).toBeNull();

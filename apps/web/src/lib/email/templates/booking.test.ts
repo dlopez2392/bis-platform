@@ -5,7 +5,7 @@ import {
   bookingAlertEmail, bookingConfirmationEmail, bookingReminderEmail, bookingRescheduledEmail,
   bookingPhoneChangeAlertEmail, bookingCancelledEmail, bookingCancelledSubject,
   bookingRescheduledSubject, bookingCancelledByBusinessEmail, bookingCancelledByBusinessSubject,
-  bookingMovedAlertEmail,
+  bookingMovedAlertEmail, bookingReminderSubject,
 } from "./booking";
 
 const UNBRANDED: Branding = {
@@ -679,5 +679,26 @@ describe("bookingMovedAlertEmail — the business hears the customer moved it (F
     expect(subject).not.toMatch(/[\r\n]/);
     expect(html).not.toContain("Open this contact");
     expect(text).not.toContain("Open this contact");
+  });
+});
+
+describe("the reminder in Spanish (spec §11.1, C11)", () => {
+  const brand = {
+    name: "Rio Roofing", logoUrl: null,
+    accent: { accent: "#6D28D9", accentForeground: "#ffffff" } as Parameters<typeof bookingReminderEmail>[0]["brand"]["accent"],
+  };
+  it("subject, intro, video button and cancel link are Spanish when locale is es (mutation: ignore locale -> FAILS)", () => {
+    expect(bookingReminderSubject("es")).toBe("Recordatorio: su próxima cita");
+    expect(bookingReminderSubject()).toBe("Reminder: your upcoming booking");
+    const { html, text } = bookingReminderEmail({ brand, whenBookerZone: "sáb, 17 de oct", cancelUrl: "https://x/c?locale=es", meetingUrl: "https://m", locale: "es" });
+    expect(text).toContain("Le recordamos su próxima cita.");
+    expect(text).toContain("Entrar a la videollamada: https://m");
+    expect(text).toContain("Cancelar esta cita: https://x/c?locale=es");
+    expect(html).toContain("Entrar a la videollamada");
+    expect(text).not.toMatch(/reminder|Cancel this/);
+  });
+  it("no locale is today's English, byte for byte (mutation: default to es -> FAILS)", () => {
+    const { text } = bookingReminderEmail({ brand, whenBookerZone: "Sat, Oct 17", cancelUrl: "https://x/c" });
+    expect(text).toBe("This is a reminder for your upcoming booking.\n\nSat, Oct 17\n\nCancel this booking: https://x/c");
   });
 });

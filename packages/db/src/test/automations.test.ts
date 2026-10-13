@@ -3,7 +3,7 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import { withTestAccount } from "./fixtures";
 import { sweepAbandonedFixtures } from "./sweep-fixtures";
-import { createContact, getContact } from "../contacts";
+import { createContact, getContact, setContactLanguage } from "../contacts";
 import { appendConsentEvent, appendConsentEventGuarded } from "../consent";
 import { setBranding } from "../branding";
 import { createForm, createSubmission } from "../forms";
@@ -262,6 +262,32 @@ describe("listDueReviewRequests — the completion anchor (0026)", () => {
       expect(marked.smsFailedAt).toBeNull();
       expect(list.find((r) => r.bookingId === legacy.id)!.completedAt).toBeNull();
       expect(new Date(list.find((r) => r.bookingId === fresh.id)!.smsFailedAt!).getTime()).toBe(now.getTime());  // Mutation: drop the projection
+    });
+  });
+
+  it("S-09 PR 2: every recipe's due row carries the customer's language and the Spanish box (mutation: drop `language` from REVIEW_REQUEST_SELECT -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Lang", email: "lang@example.com" }, "user_test");
+      const now = new Date("2027-03-10T12:00:00Z");
+      const { id: bookingId } = await createBooking(db, accountId,
+        { calendarId: cal.id, contactId, startsAt: new Date(now.getTime() - 2.5 * HOUR), endsAt: new Date(now.getTime() - 2 * HOUR) },
+        "user_test");
+      await setBookingStatus(db, accountId, bookingId, "completed", "user_test");
+      await upsertAutomation(db, accountId, "review_request",
+        { enabled: true, body: "Thanks.", config: { channel: "email", reviewUrl: "https://g.page/r" }, bodyEs: "Gracias.", bodyEsBasis: "Thanks." }, "user_test");
+      await setContactLanguage(db, accountId, contactId, "es", "user_test");
+      const [row] = await listDueReviewRequests(db, now.toISOString());
+      expect([row!.language, row!.bodyEs]).toEqual(["es", "Gracias."]);
+    });
+  });
+
+  it("S-09 PR 2: upsertAutomation leaves the Spanish box alone when the patch does not name it (C15: the instant reply's save; mutation: write bodyEs ?? null -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await upsertAutomation(db, accountId, "review_request", { enabled: false, body: "", config: {}, bodyEs: "Gracias.", bodyEsBasis: "" }, "user_test");
+      await upsertAutomation(db, accountId, "review_request", { enabled: false, body: "x", config: {} }, "user_test");
+      const row = await getAutomation(db, accountId, "review_request");
+      expect([row!.body_es, row!.body_es_basis]).toEqual(["Gracias.", ""]);
     });
   });
 

@@ -33,7 +33,9 @@ import { BookingsList } from "./bookings-list";
  * silently stopped testing anything.
  */
 
-type Booking = BookingRow & { contact_name: string; contact_email: string | null };
+type Booking = BookingRow & {
+  contact_name: string; contact_email: string | null; contact_language: string | null;
+};
 
 const BASE: Booking = {
   id: "bk_1", account_id: "a1", calendar_id: "cal_1", contact_id: "c1",
@@ -45,7 +47,7 @@ const BASE: Booking = {
   review_request_sms_failed_at: null, no_show_nudge_sms_failed_at: null,
   sms_reminder_failed_at: null,
   confirm_reply: null, confirm_reply_at: null,
-  contact_name: "Ana Reyes", contact_email: "ana@example.com",
+  contact_name: "Ana Reyes", contact_email: "ana@example.com", contact_language: null,
 };
 
 function render(booking: Booking): string {
@@ -285,6 +287,25 @@ function stripComments(src: string): string {
  * in any spelling, or keep the pinned text alive in a comment while the code
  * does otherwise → FAILS).
  */
+/**
+ * Task 17, C18: the Cancel dialog's starting language is the customer's own
+ * — `recipientLanguage(contact, account)`, contact first. `CancelDialog` is
+ * only mounted once `dialogOpen` is true (a click this static render cannot
+ * simulate — this component has no jsdom/RTL coverage anywhere in this
+ * repo), so the wiring is pinned on CODE, the same device the Cancel-button
+ * test above already uses: comments stripped, the exact call pinned.
+ */
+describe("BookingsList — the Cancel dialog's starting language (C18)", () => {
+  it("passes recipientLanguage(contact, account) — contact first — as the dialog's defaultLocale (mutation: swap the arguments → FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const code = stripComments(readFileSync(join(__dirname, "bookings-list.tsx"), "utf8"));
+    expect(code).toMatch(
+      /defaultLocale=\{recipientLanguage\(booking\.contact_language, accountLanguage\)\}/,
+    );
+  });
+});
+
 describe("the row's Cancel button goes through runCancelButton (F-048 I-1)", () => {
   it("opens the dialog and asks the server only from inside runCancelButton's arguments", async () => {
     const { readFileSync } = await import("node:fs");

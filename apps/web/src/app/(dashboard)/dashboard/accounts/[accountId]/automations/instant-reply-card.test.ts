@@ -22,7 +22,7 @@ import { InstantReplyCard } from "./instant-reply-card";
  */
 const ROW: AutomationRow = {
   id: "au3", account_id: "a1", recipe_key: "instant_reply", enabled: false,
-  body: "", config: { bodyEs: "" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { bodyEs: "" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof InstantReplyCard>[0]> = {}): string {

@@ -1,4 +1,7 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+
+type Lang = "en" | "es";
 
 /**
  * One line, the brand name, and NEITHER the price NOR the deal's name. The
@@ -11,9 +14,10 @@ import { m } from "@/lib/messages";
  * `brandName` is the CUSTOMER-FACING name (the due-row carries only that).
  * Function replacement, not a plain string, for names containing `$&`.
  */
-export function defaultQuoteFollowupBody(brandName: string): string {
-  if (!brandName.trim()) return m["automations.quoteFollowup.defaultBodyNoName"];
-  return m["automations.quoteFollowup.defaultBody"].replace("{name}", () => brandName);
+export function defaultQuoteFollowupBody(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.quoteFollowup.defaultBody", language, { name: brandName })
+    : t(m, "automations.quoteFollowup.defaultBodyNoName", language);
 }
 
 /**
@@ -23,7 +27,8 @@ export function defaultQuoteFollowupBody(brandName: string): string {
  * template interpolating it directly would ship "About your quote from "
  * with nothing after it.
  */
-export function quoteFollowupSubject(brandName: string): string {
-  if (!brandName.trim()) return m["automations.quoteFollowup.emailSubjectNoName"];
-  return m["automations.quoteFollowup.emailSubject"].replace("{name}", () => brandName);
+export function quoteFollowupSubject(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.quoteFollowup.emailSubject", language, { name: brandName })
+    : t(m, "automations.quoteFollowup.emailSubjectNoName", language);
 }

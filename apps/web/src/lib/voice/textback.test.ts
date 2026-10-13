@@ -33,6 +33,7 @@ import { m } from "@/lib/messages";
 import type { PassContext } from "@/lib/automations/context";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import { prepareTextback, deliverTextback, releaseTextback, type TextbackRequest } from "./textback";
+import { defaultTextbackBody } from "./textback-body";
 
 /**
  * The missed-call text-back through the send gate (consent chain PR-1).
@@ -45,10 +46,11 @@ const TEN_PM = new Date("2026-10-07T03:00:00Z");   // 22:00 CDT, Tue
 const EIGHT_AM = "2026-10-07T13:00:00.000Z";       // 08:00 CDT, Wed
 const LONG = "Sorry we missed you. ".repeat(9).trim();
 const STOP_EN = m["sms.optOut.en"];
+const STOP_ES = m["sms.optOut.es"];
 
 const request = (over: Partial<TextbackRequest> = {}): TextbackRequest => ({
   callerNumber: "+19562921696", contactId: "ct_1", language: "en", brandName: "Rio Roofing",
-  textbackBody: "", label: "finishCall call1", callId: "call1", now: NOON, ...over,
+  textbackBody: "", textbackBodyEs: null, label: "finishCall call1", callId: "call1", now: NOON, ...over,
 });
 const logWrites = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
 
@@ -172,6 +174,28 @@ describe("prepareTextback: the send gate decides before any row", () => {
     expect(logWrites()).toEqual([expect.objectContaining({
       source: "textback", subjectKey: "call:call1", status: "skipped", reason: "This account isn't sending yet",
     })]);
+  });
+
+  it("S-09 PR 2: a Spanish caller with our default gets our Spanish; the gate is told es", async () => {
+    const pending = await prepared({ language: "es", textbackBody: "", textbackBodyEs: null });
+    const body = (dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body;
+    expect(body).toBe(`${defaultTextbackBody("Rio Roofing", "es")} ${STOP_ES}`);
+    expect(pending.cleared.body).toBe(body);
+  });
+
+  it("S-09 PR 2: a Spanish caller of an account whose box is emptied gets the English body AND the English opt-out (C11; mutation: keep r.language for the gate -> FAILS)", async () => {
+    const pending = await prepared({
+      language: "es", textbackBody: "Sorry we missed you, call back anytime.", textbackBodyEs: "",
+    });
+    const body = (dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body;
+    expect(body).toBe("Sorry we missed you, call back anytime. " + STOP_EN);
+    expect(pending.cleared.body).toBe(body);
+  });
+
+  it("S-09 PR 2: a Spanish caller with a written Spanish box gets it, trimmed", async () => {
+    await prepared({ language: "es", textbackBody: "", textbackBodyEs: "  Perdón, ya le llamamos.  " });
+    const body = (dbMocks.createMessage.mock.calls[0]![2] as { body: string }).body;
+    expect(body).toBe(`Perdón, ya le llamamos. ${STOP_ES}`);
   });
 });
 

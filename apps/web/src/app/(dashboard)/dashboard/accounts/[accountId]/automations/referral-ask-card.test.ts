@@ -21,7 +21,7 @@ import { ReferralAskCard } from "./referral-ask-card";
  */
 const ROW: AutomationRow = {
   id: "au6", account_id: "a1", recipe_key: "referral_ask", enabled: true,
-  body: "", config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof ReferralAskCard>[0]> = {}): string {
@@ -193,5 +193,20 @@ describe("the referral-ask card — what the EMAIL cannot go without", () => {
         expect(html, arm).not.toContain(SETTINGS_LINK);
       }
     }
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it('renders inside the ONE form, with our Spanish, lang="es", the English label, and one primary Save (mutation: render outside the form, or a second data-variant="default" -> FAILS)', () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

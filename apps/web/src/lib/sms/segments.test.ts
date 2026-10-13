@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { segmentsFor } from "./segments";
+import { segmentsFor, gsmFoldVowels, accentCost } from "./segments";
+import { formatWhen } from "@/lib/booking/time";
 
 describe("segmentsFor", () => {
   it("counts GSM-7 at 160 per segment", () => {
@@ -34,5 +35,22 @@ describe("segmentsFor", () => {
 
   it("an empty body is one segment, not zero", () => {
     expect(segmentsFor("")).toEqual({ encoding: "gsm7", chars: 0, segments: 1 });
+  });
+});
+
+describe("Spanish texts stay one alphabet (spec §13, C19)", () => {
+  it("folds exactly the four vowels outside GSM-7 and their capitals; é, ñ, ü, ¿, ¡ stay (mutation: also fold é -> FAILS)", () => {
+    expect(gsmFoldVowels("sáb ÁÍÓÚ íóú é ñ ü ¿¡")).toBe("sab AIOU iou é ñ ü ¿¡");
+  });
+  it("a Saturday in Spanish is GSM-7 once folded (mutation: return text unchanged -> FAILS)", () => {
+    const sat = formatWhen(new Date("2026-10-17T14:30:00Z"), "America/Chicago", "es");
+    expect(segmentsFor(sat).encoding).toBe("ucs2");
+    expect(segmentsFor(gsmFoldVowels(sat)).encoding).toBe("gsm7");
+  });
+  it("accentCost: the parts with the accents and without; null when there are none (mutation: count the unfolded text twice -> FAILS)", () => {
+    const long = "Gracias por su visita, aquí estamos para lo que necesite. ".repeat(2);
+    expect(accentCost(long)).toEqual({ parts: segmentsFor(long).segments, foldedParts: segmentsFor(gsmFoldVowels(long)).segments });
+    expect(accentCost(long)!.parts).toBeGreaterThan(accentCost(long)!.foldedParts);
+    expect(accentCost("Hola, sin acentos.")).toBeNull();
   });
 });

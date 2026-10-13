@@ -27,7 +27,7 @@ const LONG_LINK = "https://search.google.com/local/writereview?placeid=ChIJN1t_t
 
 const ROW: AutomationRow = {
   id: "au1", account_id: "a1", recipe_key: "review_request", enabled: true,
-  body: "", config: { channel: "sms", reviewUrl: SHORT_LINK },
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms", reviewUrl: SHORT_LINK },
   created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
@@ -90,5 +90,22 @@ describe("the review-request card's segment counter", () => {
     const email = render({ automation: { ...ROW, config: { channel: "email", reviewUrl: SHORT_LINK } } });
     expect(email).not.toContain('data-testid="review-sms-count"');
     expect(email).not.toContain(m["automations.optOutCounted"]);
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it("renders inside the ONE form, with our Spanish, lang=\"es\", the English label, and one primary Save (mutation: render outside the form, or a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    // Our Spanish default, rendered for THIS brand.
+    expect(html).toContain("¡Gracias por elegir a Rio Roofing!");
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

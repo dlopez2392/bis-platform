@@ -67,6 +67,10 @@ export interface FinishContext {
    *  send time" — the default is deliberately never persisted, so an operator
    *  who never wrote their own keeps getting the current copy. */
   textbackBody: string;
+  /** `voice_profiles.textback_body_es`. NULL means our written Spanish
+   *  default; '' (emptied) means a Spanish caller gets the whole text, opt-out
+   *  included, in English — C11, via `chooseBody` inside `prepareTextback`. */
+  textbackBodyEs: string | null;
   /** `accounts.language` (0065), read off the account row route.ts already
    *  loads (ACCOUNT_COLS, no extra query). Used for ONE thing: the staff
    *  call-alert TEXT (`composeCallAlertSms`, owner decision B, 2026-10-10 —
@@ -598,6 +602,7 @@ export async function finishCall(
         language: spokenLanguage,
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,
+        textbackBodyEs: ctx.textbackBodyEs,
         label: `finishCall ${meta.callRowId ?? "(no row)"}`,
         // The call's own row and instant: the held row's subject, and the
         // clock the sending hours are judged at (never a freshly-read one).

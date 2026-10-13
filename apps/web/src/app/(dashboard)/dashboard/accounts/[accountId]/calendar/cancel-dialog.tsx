@@ -29,15 +29,19 @@ import { NOTICE_MESSAGE_MAX } from "./undo-window";
  * in `messages.ts` (`.es`).
  */
 export function CancelDialog({
-  contactName, when, onOpenChange, onConfirm,
+  contactName, when, defaultLocale, onOpenChange, onConfirm,
 }: {
   contactName: string;
   /** The appointment's time, already formatted in the account's zone. */
   when: string;
+  /** Task 17, C18: the customer's own language (`recipientLanguage`, read
+   *  by the booking list from the row's contact, else the account), so the
+   *  dialog opens already speaking to them in it. The owner still chooses. */
+  defaultLocale: PublicLocale;
   onOpenChange: (open: boolean) => void;
   onConfirm: (choice: CancelNoticeChoice) => void;
 }) {
-  const [draft, setDraft] = useState<NoticeDraft>(initialDraft);
+  const [draft, setDraft] = useState<NoticeDraft>(() => initialDraft(defaultLocale));
   const name = (key: keyof typeof m) => m[key].replace("{name}", contactName);
 
   function confirm() {

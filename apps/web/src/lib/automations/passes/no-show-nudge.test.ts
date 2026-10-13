@@ -18,6 +18,7 @@ import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import { noShowNudgePass, releaseNoShowNudge } from "./no-show-nudge";
 import { EmailNotSent } from "@/lib/consent/email-gate";
+import { segmentsFor } from "@/lib/sms/segments";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 const TICK = new Date("2026-09-09T14:00:00Z");   // NY 10:00 Wed · CHI 09:00 Wed
@@ -42,6 +43,7 @@ function row(overrides: Partial<DueNoShowNudge> = {}): DueNoShowNudge {
     accountTimezone: "America/New_York",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     body: "", config: { channel: "email" },
+    language: "en", bodyEs: null,
     ...overrides,
   };
 }
@@ -440,6 +442,43 @@ describe("noShowNudgePass: a hold gives back its tick slot, never its daily coun
     dbMocks.listDueNoShowNudges.mockResolvedValue(Array.from({ length: 2 }, (_, i) => sms({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
     const result = await noShowNudgePass.run({ ...ctx(), sms: holdFirst(1) });
     expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});
+
+describe("S-09 PR 2: no-show nudges in the customer's language", () => {
+  it("a Spanish contact, email channel, our default: a Spanish subject and body, and the gate is told es (mutation: drop `language` from the email send -> FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row({ language: "es", body: "", bodyEs: null })]);
+    await noShowNudgePass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("¿Quiere escoger otro horario con Rio Roofing?");
+    expect(sent.body.startsWith("Le estuvimos esperando en su cita con Rio Roofing.")).toBe(true);
+    expect(sent.language).toBe("es");
+  });
+
+  it("a Spanish contact, SMS channel: the text starts with our Spanish default, ends with the booking link, and the gate's opt-out is the Spanish one, GSM-7 throughout (mutation: drop `language` from sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([sms({ language: "es", body: "", bodyEs: null })]);
+    await noShowNudgePass.run(ctx());
+    const sent = smsSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body.startsWith("Le estuvimos esperando en su cita con Rio Roofing.")).toBe(true);
+    expect(sent.body.endsWith("Responde STOP para cancelar.")).toBe(true);
+    expect(sent.body).toContain(URL);
+    expect(segmentsFor(sent.body).encoding).toBe("gsm7");
+  });
+
+  it("a Spanish contact whose Spanish box was emptied gets the WHOLE email in English (mutation: pass row.language to the template -> FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row({ language: "es", body: "", bodyEs: "" })]);
+    await noShowNudgePass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Want to pick a new time with Rio Roofing?");
+    expect(sent.body.startsWith("We missed you at your appointment with Rio Roofing.")).toBe(true);
+    expect(sent.language).toBe("en");
+  });
+
+  it("the operator's own Spanish body is sent exactly, unmodified (mutation: ignore bodyEs -> FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row({ language: "es", body: "", bodyEs: "Gracias, de verdad." })]);
+    await noShowNudgePass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body.startsWith("Gracias, de verdad.")).toBe(true);
   });
 });
 

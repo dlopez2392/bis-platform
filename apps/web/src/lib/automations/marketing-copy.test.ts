@@ -8,6 +8,18 @@ import { marketingFooterReason } from "./marketing-copy";
  * `reactivation-copy.test.ts` with the function, when it stopped being the
  * check-in's alone; the cases are the ones that file carried.
  */
+describe("marketingFooterReason in Spanish (spec §11.2, §13)", () => {
+  it("is Spanish (mutation: ignore language -> FAILS)", () => {
+    expect(marketingFooterReason("Rio Roofing", "es")).toBe(
+      "Le llega este correo porque ha sido cliente de Rio Roofing. Si prefiere no recibir más mensajes, responda y avísenos.");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(marketingFooterReason("Rio Roofing")).toBe(
+      "You're getting this because you've been a customer of Rio Roofing. "
+      + "If you'd rather not hear from us, reply and let us know.");
+  });
+});
+
 describe("marketingFooterReason", () => {
   it("the footer says WHY they are getting it and HOW TO STOP it, naming the brand — and a reply, never a link", () => {
     // The opt-out is "reply and let us know", because neither template

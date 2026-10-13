@@ -29,6 +29,7 @@ function row(overrides: Partial<DueFollowup> = {}): DueFollowup {
     contactEmail: "maria@example.com", contactName: "Maria Garcia", accountTimezone: "America/Chicago",
     branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
     fromEmail: null, replyToEmail: null, followupBody: "How did it go?",
+    language: "en", followupBodyEs: null,
     ...overrides,
   };
 }
@@ -141,6 +142,23 @@ describe("consent PR-3: the email goes through the gate", () => {
     emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
     expect(await followupsPass.run(ctx(MORNING))).toEqual({ ...EMPTY, blocked: 1 });
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+  });
+});
+
+describe("S-09 PR 2: the follow-up in the customer's language", () => {
+  it("a Spanish contact with our default gets our Spanish, a Spanish subject, and the gate is told es (mutation: drop `language` from ctx.email.send -> FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({ language: "es", followupBody: "", followupBodyEs: null })]);
+    await followupsPass.run(ctx(MORNING));
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Gracias de parte de Rio Roofing");
+    expect(sent.body).toBe("¡Gracias por su visita! Si tiene alguna pregunta o quiere hacer otra cita, solo responda a este correo.");
+    expect(sent.language).toBe("es");
+  });
+  it("a Spanish contact whose box was emptied gets the WHOLE email in English (C11; mutation: pass row.language to the template -> FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({ language: "es", followupBody: "Thanks for coming by the shop.", followupBodyEs: "" })]);
+    await followupsPass.run(ctx(MORNING));
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect([sent.subject, sent.body, sent.language]).toEqual(["Thanks from Rio Roofing", "Thanks for coming by the shop.", "en"]);
   });
 });
 

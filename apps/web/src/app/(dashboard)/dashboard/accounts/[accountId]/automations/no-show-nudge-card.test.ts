@@ -24,7 +24,7 @@ const BOOKING_URL = "https://app.bis-rgv.com/b/k7m2p9q4x3wz";
 
 const ROW: AutomationRow = {
   id: "au2", account_id: "a1", recipe_key: "no_show_nudge", enabled: true,
-  body: "", config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { channel: "sms" }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof NoShowNudgeCard>[0]> = {}): string {
@@ -79,5 +79,20 @@ describe("the no-show nudge card's segment counter", () => {
     const email = render({ automation: { ...ROW, config: { channel: "email" } } });
     expect(email).not.toContain('data-testid="no-show-sms-count"');
     expect(email).not.toContain(m["automations.optOutCounted"]);
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it("renders inside the ONE form, with our Spanish, lang=\"es\", the English label, and one primary Save (mutation: render outside the form, or a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

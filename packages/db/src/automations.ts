@@ -4,6 +4,7 @@ import { brandDisplayName, type Branding } from "./branding";
 import { loadSendableRows, ownAccountEmbedsOnly, type AccountBrandInfo, type DueLookup } from "./booking";
 import { emailLedgerAddress } from "./email-address";
 import { readBlockedAddresses, readConsentState } from "./consent";
+import { recipientLanguage, type RecipientLanguage } from "./messaging";
 
 /**
  * The automations spine. Config is GENERIC — one row per (account, recipe)
@@ -21,13 +22,18 @@ export type RecipeKey =
 export type AutomationRow = {
   id: string; account_id: string; recipe_key: RecipeKey;
   enabled: boolean; body: string;
+  /** 0076, S-09 PR 2: NULL = our written Spanish default, '' = emptied (Spanish customers get the
+   *  English), else theirs. Never read for `instant_reply` (C15: its Spanish is config.bodyEs). */
+  body_es: string | null;
+  /** The English the Spanish was written beside (C14). */
+  body_es_basis: string | null;
   /** Raw jsonb. NEVER trusted: parse it with the recipe's own parser on every
    *  read, and validate it on every write. */
   config: unknown;
   created_at: string; updated_at: string;
 };
 
-const AUTOMATION_COLS = "id, account_id, recipe_key, enabled, body, config, created_at, updated_at";
+const AUTOMATION_COLS = "id, account_id, recipe_key, enabled, body, body_es, body_es_basis, config, created_at, updated_at";
 
 export async function getAutomation(
   db: SupabaseClient, accountId: string, recipeKey: RecipeKey,
@@ -47,13 +53,20 @@ export async function getAutomation(
  */
 export async function upsertAutomation(
   db: SupabaseClient, accountId: string, recipeKey: RecipeKey,
-  patch: { enabled: boolean; body: string; config: Record<string, unknown> },
+  patch: {
+    enabled: boolean; body: string; config: Record<string, unknown>;
+    /** S-09 PR 2 (C15): written ONLY when present (`!== undefined`), so a caller that never
+     *  names the box (the instant reply's save, automations/actions.ts:319) can never touch it. */
+    bodyEs?: string | null; bodyEsBasis?: string | null;
+  },
   actorId: string, actorType: ActorType = "user",
 ): Promise<AutomationRow> {
   const { data, error } = await db.from("automations")
     .upsert({
       account_id: accountId, recipe_key: recipeKey,
       enabled: patch.enabled, body: patch.body, config: patch.config,
+      ...(patch.bodyEs !== undefined ? { body_es: patch.bodyEs } : {}),
+      ...(patch.bodyEsBasis !== undefined ? { body_es_basis: patch.bodyEsBasis } : {}),
       updated_at: new Date().toISOString(),
     }, { onConflict: "account_id,recipe_key" })
     .select(AUTOMATION_COLS).single();
@@ -67,7 +80,7 @@ export async function upsertAutomation(
 // Shared by every due-list
 // ---------------------------------------------------------------------------
 
-type EnabledRecipe = { body: string; config: unknown };
+type EnabledRecipe = { body: string; bodyEs: string | null; config: unknown };
 
 /**
  * Every account with `recipeKey` switched on, keyed by account id — the first
@@ -81,11 +94,12 @@ async function listEnabled(
   db: SupabaseClient, recipeKey: RecipeKey, caller: string,
 ): Promise<Map<string, EnabledRecipe>> {
   const { data, error } = await db.from("automations")
-    .select("account_id, body, config")
+    .select("account_id, body, body_es, config")
     .eq("recipe_key", recipeKey).eq("enabled", true);
   if (error) throw new Error(`${caller} automations read failed: ${error.message}`);
-  const rows = (data ?? []) as { account_id: string; body: string; config: unknown }[];
-  return new Map(rows.map((a) => [a.account_id, { body: a.body ?? "", config: a.config }] as const));
+  const rows = (data ?? []) as { account_id: string; body: string; body_es: string | null; config: unknown }[];
+  return new Map(rows.map((a) =>
+    [a.account_id, { body: a.body ?? "", bodyEs: a.body_es ?? null, config: a.config }] as const));
 }
 
 /**
@@ -198,6 +212,10 @@ export type DueReviewRequest = {
   body: string;
   /** Parsed and validated; null when the stored jsonb fails validation. */
   config: ReviewRequestConfig | null;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 /**
@@ -242,7 +260,7 @@ export function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" 
  * anchor".
  */
 const REVIEW_REQUEST_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(account_id, email, phone)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(account_id, email, phone, language)";
 
 function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueReviewRequest {
   return {
@@ -262,6 +280,8 @@ function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe)
     replyToEmail: info.replyToEmail,
     body: auto.body,
     config: parseReviewRequestConfig(auto.config),
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    bodyEs: auto.bodyEs,
   };
 }
 
@@ -296,7 +316,7 @@ export async function listDueReviewRequests(
 
 async function enabledRecipeFor(db: SupabaseClient, accountId: string, recipeKey: RecipeKey): Promise<EnabledRecipe | null> {
   const row = await getAutomation(db, accountId, recipeKey);
-  return row && row.enabled ? { body: row.body ?? "", config: row.config } : null;
+  return row && row.enabled ? { body: row.body ?? "", bodyEs: row.body_es ?? null, config: row.config } : null;
 }
 
 export async function getDueReviewRequestById(db: SupabaseClient, bookingId: string): Promise<DueLookup<DueReviewRequest>> {
@@ -407,6 +427,10 @@ export type DueNoShowNudge = {
   fromEmail: string | null; replyToEmail: string | null;
   body: string;
   config: NoShowNudgeConfig | null;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 /** Candidates, not decisions — `shouldSendNoShowNudgeNow` in the pass picks
@@ -414,7 +438,7 @@ export type DueNoShowNudge = {
  *  `calendars(account_id, ...)` because the rebook link is built from the
  *  calendar: both embeds go through `ownAccountEmbedsOnly`. */
 const NO_SHOW_NUDGE_SELECT =
-  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone)";
+  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone, language)";
 
 function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
   return {
@@ -435,6 +459,8 @@ function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): 
     replyToEmail: info.replyToEmail,
     body: auto.body,
     config: parseNoShowNudgeConfig(auto.config),
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    bodyEs: auto.bodyEs,
   };
 }
 
@@ -553,12 +579,16 @@ export type DueSmsReminder = {
   contactId: string; contactPhone: string | null;
   brandName: string; accountTimezone: string;
   body: string;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 /** No gate follows this list: a text reminder is tied to the appointment,
  *  not to a morning, so the window IS the moment. */
 const SMS_REMINDER_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(account_id, phone)";
+  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(account_id, phone, language)";
 
 function toDueSmsReminder(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueSmsReminder {
   return {
@@ -572,6 +602,8 @@ function toDueSmsReminder(r: any, info: AccountBrandInfo, auto: EnabledRecipe): 
     brandName: brandDisplayName(info.branding),
     accountTimezone: info.accountTimezone,
     body: auto.body,
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    bodyEs: auto.bodyEs,
   };
 }
 
@@ -693,10 +725,14 @@ export type DueAppointmentConfirm = {
    *  (appointment-confirm-copy.ts): "either way we'll see it" is the whole
    *  reason there is no reply-back, so it cannot live in an editable field. */
   body: string;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 const APPOINTMENT_CONFIRM_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, contacts(account_id, phone)";
+  "id, account_id, contact_id, starts_at, booker_timezone, contacts(account_id, phone, language)";
 
 function toDueAppointmentConfirm(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueAppointmentConfirm {
   return {
@@ -709,6 +745,8 @@ function toDueAppointmentConfirm(r: any, info: AccountBrandInfo, auto: EnabledRe
     brandName: brandDisplayName(info.branding),
     accountTimezone: info.accountTimezone,
     body: auto.body,
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    bodyEs: auto.bodyEs,
   };
 }
 
@@ -984,6 +1022,10 @@ export type DueReferralAsk = {
   mailingAddress: string | null;
   body: string;
   config: ReferralAskConfig | null;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 // ONE string literal, never a `+` concatenation, however long the line gets.
@@ -993,7 +1035,7 @@ export type DueReferralAsk = {
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone)";
+  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone, language)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -1018,6 +1060,8 @@ function toDueReferralAsk(
     mailingAddress: info.mailingAddress,
     body: auto.body,
     config: parseReferralAskConfig(auto.config),
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    bodyEs: auto.bodyEs,
   };
 }
 
@@ -1315,6 +1359,10 @@ export type DueReactivation = {
    *  whose address is blank after `.trim()` rather than send without one. */
   mailingAddress: string | null;
   body: string;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 /** One page's worth of candidate conversation, contact already joined.
@@ -1330,6 +1378,7 @@ type ReactivationCandidate = {
   contacts: {
     id: string; account_id: string;
     first_name: string | null; last_name: string | null; email: string;
+    language: string | null;
   };
 };
 
@@ -1394,7 +1443,7 @@ export async function listDueReactivations(
   // other recipe keeps (`parseReviewRequestConfig`'s doc above).
   // Defaulting to nine months here would send on a number the operator never
   // chose, for the one recipe with spam teeth.
-  const cutoffs = new Map<string, { cutoff: Date; months: number; body: string }>();
+  const cutoffs = new Map<string, { cutoff: Date; months: number; body: string; bodyEs: string | null }>();
   for (const [accountId, auto] of enabled) {
     const config = parseReactivationConfig(auto.config);
     if (config === null) {
@@ -1405,7 +1454,7 @@ export async function listDueReactivations(
       continue;
     }
     cutoffs.set(accountId, {
-      cutoff: reactivationCutoff(now, config.months), months: config.months, body: auto.body,
+      cutoff: reactivationCutoff(now, config.months), months: config.months, body: auto.body, bodyEs: auto.bodyEs,
     });
   }
   if (cutoffs.size === 0) return [];
@@ -1475,7 +1524,7 @@ export async function listDueReactivations(
     // which two conversations sharing a `last_message_at` could swap places
     // between pages and one of them would never be read.
     const { data: convos, error: cErr } = await db.from("conversations")
-      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, account_id, first_name, last_name, email)")
+      .select("id, account_id, contact_id, last_message_at, contacts!inner(id, account_id, first_name, last_name, email, language)")
       .in("account_id", accountIds)
       .lte("last_message_at", widest.toISOString())
       .is("contacts.reactivation_sent_at", null)
@@ -1591,6 +1640,8 @@ export async function listDueReactivations(
             accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
             mailingAddress: info.mailingAddress,
             body: conf.body,
+            language: recipientLanguage(c.contacts.language, info.accountLanguage),
+            bodyEs: conf.bodyEs,
           });
         }
       }
@@ -1618,7 +1669,7 @@ export async function getDueReactivationById(
   db: SupabaseClient, contactId: string,
 ): Promise<DueLookup<DueReactivation>> {
   const { data: contact, error } = await db.from("contacts")
-    .select("id, account_id, first_name, last_name, email, reactivation_sent_at")
+    .select("id, account_id, first_name, last_name, email, language, reactivation_sent_at")
     .eq("id", contactId).is("reactivation_sent_at", null)
     .not("email", "is", null).maybeSingle();
   if (error) throw new Error(`getDueReactivationById failed: ${error.message}`);
@@ -1661,7 +1712,7 @@ export async function getDueReactivationById(
     db, [{ account_id: accountId }], "getDueReactivationById");
   if (sendable.length === 0) return { due: null, why: "off" };
 
-  const c = contact as { first_name: string | null; last_name: string | null; email: string };
+  const c = contact as { first_name: string | null; last_name: string | null; email: string; language: string | null };
   const info = accountInfo.get(accountId)!;
   return {
     due: {
@@ -1674,6 +1725,8 @@ export async function getDueReactivationById(
       accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
       mailingAddress: info.mailingAddress,
       body: auto.body,
+      language: recipientLanguage(c.language, info.accountLanguage),
+      bodyEs: auto.bodyEs,
     },
   };
 }
@@ -1839,6 +1892,10 @@ export type DueQuoteFollowup = {
    *  `accounts.name` is, and this row has no field for it. */
   body: string;
   config: QuoteFollowupConfig | null;
+  /** S-09 PR 2 (spec C12): contacts.language, else accounts.language, else English, resolved by the mapper. */
+  language: RecipientLanguage;
+  /** 0076: the recipe's Spanish box as stored (chooseBody reads it). */
+  bodyEs: string | null;
 };
 
 // ONE STRING LITERAL, never a concatenation: supabase-js parses the select at
@@ -1847,7 +1904,7 @@ export type DueQuoteFollowup = {
 // TS2352. Task 5 hit this and every other *_SELECT in the file is a single
 // literal for the same reason.
 const QUOTE_FOLLOWUP_SELECT =
-  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts!inner(account_id, email, phone)";
+  "id, account_id, contact_id, stage_id, stage_changed_at, quote_followup_sms_failed_at, contacts!inner(account_id, email, phone, language)";
 
 /**
  * Latest INBOUND message per contact since `sinceIso` — the "they already
@@ -1938,7 +1995,7 @@ export async function listDueQuoteFollowups(
 
   const now = new Date(nowIso).getTime();
   const DAY = 24 * 60 * 60 * 1000;
-  const configured = new Map<string, { config: QuoteFollowupConfig; quietCutoff: number; body: string }>();
+  const configured = new Map<string, { config: QuoteFollowupConfig; quietCutoff: number; body: string; bodyEs: string | null }>();
   for (const [accountId, auto] of enabled) {
     const config = parseQuoteFollowupConfig(auto.config);
     // An invalid config cannot even be queried for — there is no stage id to
@@ -1953,7 +2010,7 @@ export async function listDueQuoteFollowups(
       continue;
     }
     configured.set(accountId, {
-      config, quietCutoff: now - config.quietDays * DAY, body: auto.body,
+      config, quietCutoff: now - config.quietDays * DAY, body: auto.body, bodyEs: auto.bodyEs,
     });
   }
   if (configured.size === 0) return [];
@@ -2042,6 +2099,8 @@ export async function listDueQuoteFollowups(
         brandName: brandDisplayName(info.branding), branding: info.branding,
         accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
         body: conf.body, config: conf.config,
+        language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+        bodyEs: conf.bodyEs,
       };
     });
 }
@@ -2083,6 +2142,8 @@ export async function getDueQuoteFollowupById(
       brandName: brandDisplayName(info.branding), branding: info.branding,
       accountTimezone: info.accountTimezone, fromEmail: info.fromEmail, replyToEmail: info.replyToEmail,
       body: auto.body, config,
+      language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+      bodyEs: auto.bodyEs,
     },
   };
 }

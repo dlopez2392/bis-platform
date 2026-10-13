@@ -28,7 +28,7 @@ import { ReactivationCard } from "./reactivation-card";
  */
 const ROW: AutomationRow = {
   id: "au7", account_id: "a1", recipe_key: "reactivation", enabled: true,
-  body: "", config: { months: 14 }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: { months: 14 }, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof ReactivationCard>[0]> = {}): string {
@@ -183,5 +183,20 @@ describe("the reactivation card — what it cannot send without", () => {
       expect(html, JSON.stringify(missing))
         .not.toContain(`<p class="text-xs text-muted-foreground" data-testid="reactivation-missing">`);
     }
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it('renders inside the ONE form, with our Spanish, lang="es", the English label, and one primary Save (mutation: render outside the form, or a second data-variant="default" -> FAILS)', () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

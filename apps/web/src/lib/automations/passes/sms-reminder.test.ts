@@ -17,6 +17,8 @@ import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
 import type { AutomationLogRow } from "@bis/db";
 import { smsReminderPass, releaseSmsReminder } from "./sms-reminder";
+import { m } from "@/lib/messages";
+import { segmentsFor } from "@/lib/sms/segments";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 const TICK = new Date("2026-09-09T14:00:00Z");
@@ -32,6 +34,7 @@ function row(overrides: Partial<DueSmsReminder> = {}): DueSmsReminder {
     contactId: "ct_1", contactPhone: "(956) 555-0101",
     brandName: "Rio Roofing", accountTimezone: "America/New_York",
     body: "",
+    language: "en", bodyEs: null,
     ...overrides,
   };
 }
@@ -259,5 +262,26 @@ describe("smsReminderPass hands the gate its own kind (review R2 minor)", () => 
     const gate = fakeSmsGate();
     await smsReminderPass.run({ ...ctx(), sms: gate });
     expect(gate.calls.map((r) => r.kind)).toEqual(["automation.sms_reminder"]);
+  });
+});
+
+describe("S-09 PR 2: the text reminder in the customer's language", () => {
+  it("es with our default: Spanish lead, folded Saturday, Spanish closing line, Spanish opt-out, ONE GSM-7 part set (mutation: no gsm fold -> the encoding check FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ language: "es", body: "", bodyEs: null, startsAt: "2026-10-17T14:30:00.000Z" })]);
+    await smsReminderPass.run(ctx());
+    const body = (smsSend.mock.calls[0]![0] as { body: string }).body;
+    expect(body.startsWith("Recordatorio: su cita con ")).toBe(true);
+    expect(body).toContain("es el sab, 17 de oct");
+    expect(body).toContain("Si necesita hacer un cambio, responda a este mensaje.");
+    expect(body.endsWith(m["sms.optOut.es"])).toBe(true);   // "Responde STOP para cancelar." (messages.ts:1807), not the English
+    expect(segmentsFor(body).encoding).toBe("gsm7");
+  });
+  it("es with an emptied box: the whole text is English, opt-out included (C11; mutation: lead in row.language -> FAILS)", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ language: "es", body: "Call us to move it.", bodyEs: "" })]);
+    await smsReminderPass.run(ctx());
+    const body = (smsSend.mock.calls[0]![0] as { body: string }).body;
+    expect(body.startsWith("Reminder: your appointment")).toBe(true);
+    expect(body).toContain("Call us to move it.");
+    expect(body.endsWith(m["sms.optOut.en"])).toBe(true);   // "Reply STOP to opt out." (messages.ts:1806)
   });
 });

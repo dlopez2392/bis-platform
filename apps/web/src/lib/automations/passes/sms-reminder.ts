@@ -6,6 +6,7 @@ import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { normalisePhone } from "@bis/db/phone";
 import { safeZone, formatWhen } from "@/lib/booking/time";
 import { stampWithRetry } from "@/lib/booking/stamp-retry";
+import { chooseBody } from "@bis/db";
 import { composeSmsReminder, defaultSmsReminderBody } from "../sms-reminder-copy";
 import { sendAutomationSms, markAutomationSmsSent } from "../send-sms";
 import {
@@ -56,6 +57,9 @@ import type { Pass, PassContext } from "../context";
  * The time is rendered in the BOOKER's zone (safeZone, the email
  * reminder's rule), so a Los Angeles booker of a New York company reads
  * their own clock.
+ *
+ * S-09 PR 2: in the customer's language (the due row's `language`; an
+ * emptied Spanish box sends the whole text in English).
  */
 export const smsReminderPass: Pass = {
   key: "smsReminders",
@@ -111,12 +115,19 @@ export async function processSmsReminders(ctx: PassContext, due: DueSmsReminder[
     // and that is this row's failure, not the pass's.
     try {
       const zone = safeZone(row.bookerTimezone ?? undefined, row.accountTimezone);
+      // S-09 PR 2: in the customer's language (the due row's `language`; an
+      // emptied Spanish box sends the whole text in English). The closing
+      // line's box decides the language of the WHOLE text (C11, C15).
+      const chosen = chooseBody({
+        language: row.language, body: row.body, bodyEs: row.bodyEs,
+        defaults: { en: defaultSmsReminderBody("en"), es: defaultSmsReminderBody("es") },
+      });
       const body = composeSmsReminder(
-        row.brandName, formatWhen(new Date(row.startsAt), zone), row.body.trim() || defaultSmsReminderBody());
+        row.brandName, formatWhen(new Date(row.startsAt), zone, chosen.language), chosen.text, chosen.language);
       const outcome = await holdOrSend(ctx, subject, async () => {
         const smsRow = await sendAutomationSms(ctx, {
           accountId: row.accountId, contactId: row.contactId, to, body,
-          kind: subject.smsKind, accountTimezone: row.accountTimezone,
+          kind: subject.smsKind, accountTimezone: row.accountTimezone, language: chosen.language,
           onProviderFailure: () => stampSmsReminderFailed(ctx.db, row.bookingId),
         });
 

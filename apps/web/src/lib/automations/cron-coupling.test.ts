@@ -165,7 +165,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
         const email = land(
           (t) => s >= t + LATE_REMINDER_WINDOW_START_MS && s <= t + LATE_REMINDER_WINDOW_END_MS
             && b <= t - LATE_REMINDER_MIN_AGE_MS,
-          reminderDeadline({ startsAt, late: true }), Math.max(b, s - LATE_REMINDER_WINDOW_END_MS), s);
+          reminderDeadline({ startsAt, late: true }, { textCovers: true }), Math.max(b, s - LATE_REMINDER_WINDOW_END_MS), s);
         const text = land(
           (t) => s >= t + SMS_REMINDER_WINDOW_START_MS && s <= t + SMS_REMINDER_WINDOW_END_MS,
           new Date(s), Math.max(b, s - SMS_REMINDER_WINDOW_END_MS), s);
@@ -181,6 +181,86 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     const latestDropped = Math.max(...droppedStarts);
     expect((latestDropped - dayStart) / MINUTE).toBe(10 * 60 + 15); // the latest that loses it: 10:15 exactly
     expect(droppedStarts.size).toBeGreaterThan(0); // the price is real, and the sweep sees it
+  });
+
+  /**
+   * S-09 PR 2 (C16, Q3): with texting OFF, every late-booked appointment that starts after 08:45 gets its
+   * email at or after 08:00 and at least 45 minutes ahead; none at or before 08:45 gets one. The same
+   * replay as the D-029 case above, run on four days: an ordinary Chicago day, Chicago's spring-forward
+   * day (23 hours; 08:00 CDT is 13:00Z) and fall-back day (25 hours; 08:00 CST is 14:00Z), and UTC+14
+   * (Kiritimati), whose local day starts at 10:00Z the day BEFORE. Times of day are read on the ZONE's
+   * wall clock, never as elapsed minutes from midnight, which drift by an hour on both DST days.
+   * Mutation: MORNING_OF_MIN_NOTICE_MS = 60 minutes -> the 09:00 appointment gets none -> FAILS.
+   * Mutation: reminderDeadline ignores textCovers (start - 2h15m always) -> every start before 10:30 loses
+   * it -> FAILS.
+   */
+  it.each([
+    ["America/Chicago, an ordinary day", "America/Chicago", "2027-04-06T05:00:00Z", "2027-04-07T05:00:00Z"],
+    ["America/Chicago, spring forward", "America/Chicago", "2027-03-14T06:00:00Z", "2027-03-15T05:00:00Z"],
+    ["America/Chicago, fall back", "America/Chicago", "2026-11-01T05:00:00Z", "2026-11-02T06:00:00Z"],
+    ["Pacific/Kiritimati (UTC+14)", "Pacific/Kiritimati", "2027-04-05T10:00:00Z", "2027-04-06T10:00:00Z"],
+  ])("S-09: with no text reminder, a late-booked appointment after 08:45 is emailed at 08:00, at least 45 minutes ahead (%s)", (_label, zone, dayStartIso, dayEndIso) => {
+    const tick = tickIntervalMs(entry!.schedule);
+    const dayStart = Date.parse(dayStartIso);
+    const dayEnd = Date.parse(dayEndIso);
+    type Landing = number | "never";
+    const wall = Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    const wallMinutes = (t: number) => {
+      const parts = wall.formatToParts(new Date(t));
+      return Number(parts.find((p) => p.type === "hour")!.value) * 60 + Number(parts.find((p) => p.type === "minute")!.value);
+    };
+    // The bounds are local midnights: a wrong one would make this sweep a different day.
+    expect([wallMinutes(dayStart), wallMinutes(dayEnd)]).toEqual([0, 0]);
+    const openings = new Map<number, Date | null>();
+    const openingAt = (t: number) => {
+      if (!openings.has(t)) openings.set(t, nextOpening("automated", new Date(t), zone));
+      return openings.get(t)!;
+    };
+    const land = (dueAt: (t: number) => boolean, deadline: Date, from: number, until: number): Landing => {
+      for (let t = Math.ceil(from / tick) * tick; t < until; t += tick) {
+        if (!dueAt(t)) continue;
+        const opening = openingAt(t);
+        if (!opening) return t;
+        if (expiresBeforeOpening(opening, deadline)) continue;
+        return opening.getTime();
+      }
+      return "never";
+    };
+    let earlyEmailed = 0;
+    let checked = 0;
+    const keptStarts = new Set<number>();
+    const eveningBefore0900: number[] = [];
+    for (let s = dayStart; s < dayEnd; s += 15 * MINUTE) {
+      const startsAt = new Date(s).toISOString();
+      const startWall = wallMinutes(s);
+      for (let lead = 3 * 60; lead <= 24 * 60 + 15; lead += 5) {
+        const b = s - lead * MINUTE;
+        if (!isLateBooking(new Date(b).toISOString(), startsAt)) continue;
+        const email = land(
+          (t) => s >= t + LATE_REMINDER_WINDOW_START_MS && s <= t + LATE_REMINDER_WINDOW_END_MS && b <= t - LATE_REMINDER_MIN_AGE_MS,
+          reminderDeadline({ startsAt, late: true }, { textCovers: false }), Math.max(b, s - LATE_REMINDER_WINDOW_END_MS), s);
+        const windowReached = lead * MINUTE >= LATE_REMINDER_WINDOW_START_MS + LATE_REMINDER_MIN_AGE_MS;
+        if (!windowReached) continue;
+        checked++;
+        if (typeof email === "number") {
+          expect(s - email, `start ${startWall}`).toBeGreaterThanOrEqual(45 * MINUTE);
+          expect(wallMinutes(email), `start ${startWall}: inside the sending hours`).toBeGreaterThanOrEqual(8 * 60);
+          expect(wallMinutes(email), `start ${startWall}: inside the sending hours`).toBeLessThan(21 * 60);
+          // Released at the morning opening for an appointment at or before 08:45: what Q3 rules out. (An
+          // appointment just after midnight is emailed the evening before, inside the hours, 3h+ ahead: kept.)
+          if (startWall <= 8 * 60 + 45 && wallMinutes(email) === 8 * 60) earlyEmailed++;
+          keptStarts.add(startWall);
+          // Booked the evening before (19:00 or earlier the day before): held overnight, released at 08:00 sharp.
+          if (startWall === 9 * 60 && lead >= 14 * 60) eveningBefore0900.push(wallMinutes(email));
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+    expect(earlyEmailed).toBe(0);                                   // 07:30, 08:30, 08:45: the confirmation only
+    for (const m of [7 * 60 + 30, 8 * 60 + 30, 8 * 60 + 45]) expect(keptStarts.has(m), `${m}`).toBe(false);
+    for (const m of [9 * 60, 9 * 60 + 30, 10 * 60, 10 * 60 + 15]) expect(keptStarts.has(m), `${m}`).toBe(true);
+    expect(eveningBefore0900.length).toBeGreaterThan(0);
+    expect(new Set(eveningBefore0900)).toEqual(new Set([8 * 60]));
   });
 
   it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {

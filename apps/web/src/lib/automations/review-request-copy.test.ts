@@ -16,6 +16,17 @@ describe("composeReviewRequestSms — the ONE place the link is appended", () =>
   });
 });
 
+describe("defaultReviewRequestBody in Spanish (spec §11.2, §13)", () => {
+  it("is Spanish, usted, with the brand name (mutation: ignore language -> FAILS)", () => {
+    expect(defaultReviewRequestBody("Rio Roofing", "es"))
+      .toBe("¡Gracias por elegir a Rio Roofing! Si tiene un minuto, nos ayuda mucho que nos deje una reseña:");
+  });
+  it("English is unchanged with no third argument", () => {
+    expect(defaultReviewRequestBody("Rio Roofing"))
+      .toBe("Thanks for choosing Rio Roofing! If you have a minute, we'd love a quick review:");
+  });
+});
+
 describe("defaultReviewRequestBody", () => {
   it("names the company, so a text from an unknown number does not read as spam", () => {
     expect(defaultReviewRequestBody("Rio Roofing"))

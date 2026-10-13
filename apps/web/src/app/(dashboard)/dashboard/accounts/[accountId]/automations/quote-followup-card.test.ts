@@ -35,7 +35,7 @@ const STAGES = [{ id: STAGE_ID, label: "Quoted" }, { id: "stg_b", label: "Won" }
 
 const ROW: AutomationRow = {
   id: "au8", account_id: "a1", recipe_key: "quote_followup", enabled: true,
-  body: "", config: { stageId: STAGE_ID, quietDays: 4, channel: "sms" },
+  body: "", body_es: null, body_es_basis: null, config: { stageId: STAGE_ID, quietDays: 4, channel: "sms" },
   created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
@@ -173,5 +173,20 @@ describe("the quote follow-up card", () => {
     });
     expect(html).not.toContain('data-testid="quote-followup-sms-count"');
     expect(html).not.toContain(m["automations.optOutCounted"]);
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it('renders inside the ONE form, with our Spanish, lang="es", the English label, and one primary Save (mutation: render outside the form, or a second data-variant="default" -> FAILS)', () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    expect(html).toContain(m["automations.bodyEn.label"]);
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

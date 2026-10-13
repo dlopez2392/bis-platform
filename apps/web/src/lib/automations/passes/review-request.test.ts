@@ -20,6 +20,7 @@ import type { PassContext } from "../context";
 import { reviewRequestPass, releaseReviewRequest } from "./review-request";
 import { remindersPass } from "./reminders";
 import { EmailNotSent } from "@/lib/consent/email-gate";
+import { segmentsFor } from "@/lib/sms/segments";
 
 const STAMP_ATTEMPTS = STAMP_RETRY_DELAYS_MS.length + 1;
 const TICK = new Date("2026-09-09T14:00:00Z");   // NY 10:00 Wed · CHI 09:00 Wed
@@ -43,6 +44,7 @@ function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
     accountTimezone: "America/New_York",
     fromEmail: "hello@rioroofing.com", replyToEmail: "owner@rioroofing.com",
     body: "", config: { channel: "email", reviewUrl: URL },
+    language: "en", bodyEs: null,
     ...overrides,
   };
 }
@@ -527,6 +529,45 @@ describe("reviewRequestPass: a hold gives back its tick slot, never its daily co
     dbMocks.listDueReviewRequests.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ config: { channel: "sms", reviewUrl: URL }, bookingId: `bk_${i}`, contactId: `ct_${i}` })));
     const result = await reviewRequestPass.run({ ...ctx(), sms: holdFirst(1) });
     expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});
+
+describe("S-09 PR 2: review requests in the customer's language", () => {
+  it("a Spanish contact, email channel, our default: a Spanish subject and body, and the gate is told es (mutation: drop `language` from the email send -> FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ language: "es", body: "", bodyEs: null })]);
+    await reviewRequestPass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("¿Le gustaría dejarle una reseña a Rio Roofing?");
+    expect(sent.body.startsWith("¡Gracias por elegir a Rio Roofing!")).toBe(true);
+    expect(sent.language).toBe("es");
+  });
+
+  it("a Spanish contact, SMS channel: the text starts with our Spanish default, ends with the review link, and the gate's opt-out is the Spanish one, GSM-7 throughout (mutation: drop `language` from sendAutomationSms -> FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({
+      language: "es", body: "", bodyEs: null, config: { channel: "sms", reviewUrl: URL },
+    })]);
+    await reviewRequestPass.run(ctx());
+    const sent = smsSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body.startsWith("¡Gracias por elegir a Rio Roofing!")).toBe(true);
+    expect(sent.body.endsWith("Responde STOP para cancelar.")).toBe(true);
+    expect(sent.body).toContain(URL);
+    expect(segmentsFor(sent.body).encoding).toBe("gsm7");
+  });
+
+  it("a Spanish contact whose Spanish box was emptied gets the WHOLE email in English (mutation: pass row.language to the template -> FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ language: "es", body: "", bodyEs: "" })]);
+    await reviewRequestPass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { subject: string; body: string; language?: string };
+    expect(sent.subject).toBe("Would you leave Rio Roofing a review?");
+    expect(sent.body.startsWith("Thanks for choosing Rio Roofing!")).toBe(true);
+    expect(sent.language).toBe("en");
+  });
+
+  it("the operator's own Spanish body is sent exactly, unmodified (mutation: ignore bodyEs -> FAILS)", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ language: "es", body: "", bodyEs: "Gracias, de verdad." })]);
+    await reviewRequestPass.run(ctx());
+    const sent = emailSend.mock.calls[0]![0] as { body: string };
+    expect(sent.body.startsWith("Gracias, de verdad.")).toBe(true);
   });
 });
 

@@ -75,3 +75,24 @@ describe("bookingFollowupEmail", () => {
     expect(withoutUnsubscribeMarker(html)).not.toContain("unsubscribe");
   });
 });
+
+describe("the follow-up in Spanish (S-09 PR 2)", () => {
+  it("subject and default body are Spanish when locale is es (mutation: default body ignores locale -> FAILS)", () => {
+    const { subject, text } = bookingFollowupEmail({ brand, body: "", locale: "es" });
+    expect(subject).toBe("Gracias de parte de Rio Roofing");
+    expect(text).toBe(
+      "¡Gracias por su visita! Si tiene alguna pregunta o quiere hacer otra cita, solo responda a este correo.",
+    );
+  });
+
+  it("never translates the operator's own words", () => {
+    const { text } = bookingFollowupEmail({ brand, body: "Suyo.", locale: "es" });
+    expect(text).toBe("Suyo.");
+  });
+
+  it("no locale is today's English default and subject", () => {
+    const { subject, text } = bookingFollowupEmail({ brand, body: "" });
+    expect(text).toBe(DEFAULT_FOLLOWUP_BODY);
+    expect(subject).toBe("Thanks from Rio Roofing");
+  });
+});

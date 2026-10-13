@@ -5,6 +5,7 @@ import { newPublicId, ALPHABET } from "./forms";
 import type { Branding } from "./branding";
 import { bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
 import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
+import { recipientLanguage, type RecipientLanguage } from "./messaging";
 
 export type CalendarRow = {
   id: string; account_id: string; public_id: string; enabled: boolean;
@@ -14,6 +15,10 @@ export type CalendarRow = {
   notify_emails: string[];
   meeting_type: "in_person" | "phone" | "video";
   followup_enabled: boolean; followup_body: string;
+  /** S-09 PR 2 (0076): NULL = our Spanish default, '' = emptied (the English), else theirs. */
+  followup_body_es: string | null;
+  /** The English `followup_body` the Spanish box was last saved beside (C14's staleness compare). */
+  followup_body_es_basis: string | null;
 };
 
 export type BookingStatus = "booked" | "cancelled" | "completed" | "no_show";
@@ -51,6 +56,8 @@ export type CalendarSettingsPatch = Partial<{
   meetingType: "in_person" | "phone" | "video";
   followupEnabled: boolean;
   followupBody: string;
+  followupBodyEs: string | null;
+  followupBodyEsBasis: string | null;
 }>;
 
 export type CreateBookingInput = {
@@ -86,6 +93,11 @@ export type DueReminder = {
    *  deadline (`reminderDeadline` in apps/web) so a held one cannot be
    *  released beside the text reminder. Set on every row, by-id reads too. */
   late: boolean;
+  /** S-09 PR 2: the language this reminder is written in — contacts.language, else accounts.language, else
+   *  English (recipientLanguage, resolved HERE once, spec C12). Set on every row, by-id reads too. */
+  language: RecipientLanguage;
+  /** For the late rule's `textCovers` (plan deviation 2): is there a textable phone at all. Unjudged here. */
+  contactPhone: string | null;
 };
 
 export type DueFollowup = {
@@ -100,12 +112,15 @@ export type DueFollowup = {
   branding: Branding;
   fromEmail: string | null; replyToEmail: string | null;
   followupBody: string;
+  language: RecipientLanguage;
+  /** 0076: NULL = our Spanish default, '' = emptied (the English), else theirs. */
+  followupBodyEs: string | null;
 };
 
 const CALENDAR_COLS =
   "id, account_id, public_id, enabled, slot_duration_minutes, buffer_minutes, " +
   "min_notice_hours, max_advance_days, open_hours, notify_emails, " +
-  "meeting_type, followup_enabled, followup_body";
+  "meeting_type, followup_enabled, followup_body, followup_body_es, followup_body_es_basis";
 
 const BOOKING_COLS =
   "id, account_id, calendar_id, contact_id, starts_at, ends_at, status, note, " +
@@ -202,6 +217,8 @@ export async function updateCalendarSettings(
   if (patch.meetingType !== undefined) row.meeting_type = patch.meetingType;
   if (patch.followupEnabled !== undefined) row.followup_enabled = patch.followupEnabled;
   if (patch.followupBody !== undefined) row.followup_body = patch.followupBody;
+  if (patch.followupBodyEs !== undefined) row.followup_body_es = patch.followupBodyEs;
+  if (patch.followupBodyEsBasis !== undefined) row.followup_body_es_basis = patch.followupBodyEsBasis;
   if (Object.keys(row).length === 0) return;
   row.updated_at = new Date().toISOString();
 
@@ -868,8 +885,8 @@ const AWAITING_OUTCOME_LIMIT = 200;
  */
 export async function listCalendarBookings(
   db: SupabaseClient, accountId: string, fromIso: string,
-): Promise<(BookingRow & { contact_name: string; contact_email: string | null })[]> {
-  const cols = `${BOOKING_COLS}, contacts(first_name, last_name, email)`;
+): Promise<(BookingRow & { contact_name: string; contact_email: string | null; contact_language: string | null })[]> {
+  const cols = `${BOOKING_COLS}, contacts(first_name, last_name, email, language)`;
   const [current, awaiting] = await Promise.all([
     db.from("bookings").select(cols)
       .eq("account_id", accountId).gte("ends_at", fromIso)
@@ -889,6 +906,7 @@ export async function listCalendarBookings(
       ...(rest as BookingRow),
       contact_name: contactName || "Unknown",
       contact_email: contacts?.email ?? null,
+      contact_language: contacts?.language ?? null,
     };
   });
 }
@@ -1069,7 +1087,9 @@ export const ACCOUNT_BRAND_COLS =
   "brand_corners, brand_type, brand_mode, reply_to_email, from_email, outbound_suppressed, " +
   // 0048. Appended, not slotted in: one more column in a read every due-list
   // already makes, rather than a second read for the one recipe that prints it.
-  "mailing_address";
+  "mailing_address, " +
+  // S-09 PR 2 (0065, its second reader since 0076): the language of scheduled messages to a contact with none.
+  "language";
 
 /**
  * The cron windows, exported so they can be asserted against the schedule in
@@ -1110,8 +1130,11 @@ export const FOLLOWUP_QUERY_WINDOW_MS = 37 * 60 * 60 * 1000;
  * ACCEPTED, and the price of that rule: a late-booked appointment at or
  * before about 10:15 whose late window falls before 08:00 — an early-morning
  * appointment booked the evening before — gets NO separate reminder email;
- * the confirmation is its reminder (plus the text, where texting is on).
- * Both the no-collision property and that exact cost are proved by a sweep
+ * the confirmation and the text are its reminders. With texting OFF for the
+ * row (no `textCovers`), the late email's deadline is the start minus 45
+ * minutes instead (S-09 PR 2, `MORNING_OF_MIN_NOTICE_MS`): held overnight, it
+ * is released at 08:00 for every appointment after 08:45.
+ * Both the no-collision property and those exact costs are proved by sweeps
  * over a whole day of appointments and booking times, through the real
  * sending-hours functions, in apps/web's cron-coupling.test.ts.
  */
@@ -1134,6 +1157,8 @@ export type AccountBrandInfo = {
   /** Migration 0048. The postal address the reactivation email prints; null
    *  = not set. Carried as stored, untrimmed: the pass judges blankness. */
   mailingAddress: string | null;
+  /** 0065. NULL = no preference. Read by recipientLanguage in every due-list's mapper (S-09 L3). */
+  accountLanguage: RecipientLanguage | null;
 };
 
 /**
@@ -1161,6 +1186,7 @@ export async function loadAccountBrandInfo(
       reply_to_email: string | null; from_email: string | null;
       outbound_suppressed: boolean;
       mailing_address: string | null;
+      language: string | null;
     };
     out.set(accountId, {
       accountTimezone: acct.timezone,
@@ -1178,6 +1204,7 @@ export async function loadAccountBrandInfo(
       fromEmail: acct.from_email ?? null,
       replyToEmail: acct.reply_to_email ?? null,
       mailingAddress: acct.mailing_address ?? null,
+      accountLanguage: acct.language === "en" || acct.language === "es" ? acct.language : null,
     });
   }
   return out;
@@ -1319,7 +1346,7 @@ export function ownAccountEmbedsOnly<T>(
 }
 
 const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url,
-             calendars(account_id, public_id), contacts(account_id, first_name, last_name, email)`;
+             calendars(account_id, public_id), contacts(account_id, first_name, last_name, email, phone, language)`;
 
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -1330,6 +1357,8 @@ function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
     contactName: contactName || "Unknown", accountTimezone: info.accountTimezone,
     branding: info.branding, fromEmail: info.fromEmail, meetingUrl: r.meeting_url ?? null,
     late: isLateBooking(r.created_at, r.starts_at),
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    contactPhone: r.contacts?.phone ?? null,
   };
 }
 
@@ -1451,7 +1480,7 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
  * memory, so without that column the ~12 ticks inside one morning band would
  * each send.
  */
-const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(account_id, followup_body, followup_enabled), contacts(account_id, first_name, last_name, email)`;
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts(account_id, first_name, last_name, email, language)`;
 
 function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
@@ -1460,6 +1489,8 @@ function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
     contactEmail: r.contacts?.email ?? null, contactName: contactName || "Unknown",
     accountTimezone: info.accountTimezone, branding: info.branding,
     fromEmail: info.fromEmail, replyToEmail: info.replyToEmail, followupBody: r.calendars?.followup_body ?? "",
+    language: recipientLanguage(r.contacts?.language, info.accountLanguage),
+    followupBodyEs: r.calendars?.followup_body_es ?? null,
   };
 }
 

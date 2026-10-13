@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { after } from "next/server";
 import {
-  serviceDb, updateCalendarSettings, setBookingStatus, undoOperatorCancel,
+  serviceDb, updateCalendarSettings, getOrCreateCalendar, nextSpanishBox,
+  setBookingStatus, undoOperatorCancel,
   discardQueuedNotice, noticeMessageStatus,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
@@ -13,7 +14,8 @@ import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
 import { callerCanSee, noticeBelongsToBooking } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
-import { DEFAULT_FOLLOWUP_BODY } from "@/lib/email/templates/followup";
+import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
+import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { originFrom } from "@/lib/email/origin";
 import { isValidEmail } from "@/lib/forms/guards";
 import { normalizeLocale } from "@/lib/forms/public-strings";
@@ -120,9 +122,35 @@ export async function updateCalendarSettingsAction(
   // of truth for "use the live default at send time".
   const followupBodyRaw = String(formData.get("followupBody") ?? "");
   const followupBody = followupBodyRaw.trim() === DEFAULT_FOLLOWUP_BODY ? "" : followupBodyRaw;
+  // Task 17, plan deviation 6: neither language had a length check before
+  // this task. Both are bounded here, the submitted English BEFORE it is
+  // compared against anything else below. UNTRIMMED, the automations/voice
+  // convention (`voice/actions.ts`'s `textbackBody.length`,
+  // `automations/actions.ts`'s `body.length`) — trimming first would let
+  // 1,001 spaces (trim-empty) sail past the bound and land in the column.
+  if (followupBody.length > AUTOMATION_BODY_MAX_LENGTH) {
+    return { ok: false, error: m["automations.bodyTooLong"] };
+  }
+  const submittedEs = String(formData.get("body_es") ?? "");
+  if (submittedEs.length > AUTOMATION_BODY_MAX_LENGTH) {
+    return { ok: false, error: m["automations.bodyTooLong"] };
+  }
 
+  const db = await dbForRequest();
   try {
-    await updateCalendarSettings(await dbForRequest(), accountId, {
+    // Task 17: the request client, never serviceDb() — this write is
+    // client-role (0022:12-13), and 0076 granted the two Spanish columns to
+    // the same grant list `booking-grants.test.ts` pins.
+    const current = await getOrCreateCalendar(db, accountId, userId);
+    const es = nextSpanishBox({
+      submitted: submittedEs,
+      useOurs: formData.get("body_es_use_ours") === "1",
+      stillMatches: formData.get("body_es_still_matches") === "on",
+      defaultEs: defaultFollowupBody("es"),
+      body: followupBody,
+      stored: { bodyEs: current.followup_body_es, basis: current.followup_body_es_basis },
+    });
+    await updateCalendarSettings(db, accountId, {
       enabled: formData.get("enabled") === "on",
       slotDurationMinutes,
       bufferMinutes,
@@ -133,6 +161,8 @@ export async function updateCalendarSettingsAction(
       meetingType,
       followupEnabled: formData.get("followupEnabled") === "on",
       followupBody,
+      followupBodyEs: es.bodyEs,
+      followupBodyEsBasis: es.basis,
     }, userId);
   } catch (e) {
     console.error(`updateCalendarSettingsAction: save failed for account ${accountId}: ${String(e)}`);

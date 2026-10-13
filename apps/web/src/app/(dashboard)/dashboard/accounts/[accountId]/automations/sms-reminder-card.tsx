@@ -1,5 +1,6 @@
 "use client";
 
+import { spanishIsStale } from "@bis/db/spanish-box";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { AutomationRow } from "@bis/db";
@@ -9,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { SmsPreview } from "@/components/sms-preview";
+import { SpanishBodyField } from "@/components/spanish-body-field";
 import { SubmitButton } from "../../submit-button";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
@@ -51,6 +53,15 @@ export function SmsReminderCard({
   const composed = withOptOut(composeSmsReminder(brandName, when, body.trim() || defaultSmsReminderBody()));
   const preview = segmentsFor(composed);
 
+  // C14/spec §12.3's staleness rule (`spanishIsStale`, packages/db/src/spanish-box.ts, through
+  // the import-free subpath so the barrel's database client stays out of the browser bundle).
+  // Reads the STORED row (plan deviation 5), not live state: a warning that flickered while
+  // typing would describe an edit not yet saved.
+  const storedBodyEs = automation?.body_es ?? null;
+  const spanishStale = spanishIsStale({
+    body: automation?.body ?? "", bodyEs: storedBodyEs, bodyEsBasis: automation?.body_es_basis ?? null,
+  });
+
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => saveAction(formData), toast, {
       success: m["automations.smsReminder.saved"],
@@ -78,14 +89,30 @@ export function SmsReminderCard({
             </p>
           ) : null}
 
-          <div className="space-y-1.5">
-            <Label htmlFor="smsrem-body">{m["automations.smsReminder.message"]}</Label>
-            <Textarea
-              id="smsrem-body" name="body" rows={2} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={defaultSmsReminderBody()}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="smsrem-body">{m["automations.smsReminder.message"]}</Label>
+              <Textarea
+                id="smsrem-body" name="body" rows={2} maxLength={AUTOMATION_BODY_MAX_LENGTH} value={body}
+                className="min-h-11 md:min-h-8"
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={defaultSmsReminderBody()}
+              />
+              <p className="text-xs text-muted-foreground">{m["automations.smsReminder.messageHint"]}</p>
+            </div>
+            <SpanishBodyField
+              idPrefix="smsrem"
+              stored={{ bodyEs: storedBodyEs, stale: spanishStale }}
+              defaultEs={defaultSmsReminderBody("es")}
+              composeEs={(text) => withOptOut(
+                composeSmsReminder(
+                  brandName, formatWhen(SMS_REMINDER_PREVIEW_INSTANT, safeZone(accountTimezone, "UTC"), "es"),
+                  text || defaultSmsReminderBody("es"), "es",
+                ),
+                "es",
+              )}
+              sms
             />
-            <p className="text-xs text-muted-foreground">{m["automations.smsReminder.messageHint"]}</p>
           </div>
 
           <div className="space-y-1.5">

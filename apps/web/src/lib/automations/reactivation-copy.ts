@@ -1,4 +1,7 @@
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+
+type Lang = "en" | "es";
 
 /**
  * What a past customer receives. Three things it deliberately is not: no
@@ -9,9 +12,10 @@ import { m } from "@/lib/messages";
  * `brandName` is the customer-facing name; a blank one drops the clause.
  * Function replacement, not a plain string, for names containing `$&`.
  */
-export function defaultReactivationBody(brandName: string): string {
-  if (!brandName.trim()) return m["automations.reactivation.defaultBodyNoName"];
-  return m["automations.reactivation.defaultBody"].replace("{name}", () => brandName);
+export function defaultReactivationBody(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.reactivation.defaultBody", language, { name: brandName })
+    : t(m, "automations.reactivation.defaultBodyNoName", language);
 }
 
 /** Plain, the brand name, and no exclamation mark — a subject line that
@@ -20,9 +24,10 @@ export function defaultReactivationBody(brandName: string): string {
  *  does: `brandDisplayName` returns `""` for an account that has never set a
  *  brand name, and a template interpolating it directly would send "A note
  *  from " with nothing after it. */
-export function reactivationSubject(brandName: string): string {
-  if (!brandName.trim()) return m["automations.reactivation.subjectNoName"];
-  return m["automations.reactivation.subject"].replace("{name}", () => brandName);
+export function reactivationSubject(brandName: string, language: Lang = "en"): string {
+  return brandName.trim()
+    ? t(m, "automations.reactivation.subject", language, { name: brandName })
+    : t(m, "automations.reactivation.subjectNoName", language);
 }
 
 // The footer's first line lives in `marketing-copy.ts` as

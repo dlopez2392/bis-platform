@@ -2,9 +2,26 @@ import { describe, it, expect } from "vitest";
 import { m } from "@/lib/messages";
 import { segmentsFor } from "@/lib/sms/segments";
 import { withOptOut } from "@/lib/sms/opt-out";
+import { formatWhen } from "@/lib/booking/time";
 import { appointmentConfirmLead, composeAppointmentConfirm } from "./appointment-confirm-copy";
 
 const WHEN = "Wed, Sep 30, 12:30 PM CDT";
+
+describe("the confirmation ask in Spanish (spec §11.2, §13)", () => {
+  const sat = formatWhen(new Date("2026-10-17T14:30:00Z"), "America/Chicago", "es");
+  it("the lead is Spanish, and the date is folded to GSM-7 (mutation: no gsmFoldVowels -> FAILS)", () => {
+    expect(appointmentConfirmLead("Rio Roofing", sat, "es")).toBe(
+      "Hola, le escribe Rio Roofing. Tiene cita el sab, 17 de oct, 9:30 a.m. CDT. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.");
+  });
+  it("English is unchanged and never folded", () => {
+    expect(appointmentConfirmLead("Rio Roofing", WHEN)).toBe(
+      m["automations.appointmentConfirm.lead"].replace("{name}", "Rio Roofing").replace("{when}", WHEN));
+  });
+  it("a blank brand drops the clause in Spanish too (mutation: always the named lead -> FAILS)", () => {
+    expect(appointmentConfirmLead("  ", sat, "es")).toBe(
+      "Tiene cita el sab, 17 de oct, 9:30 a.m. CDT. Responda SI para confirmar o NO si necesita otro horario. Sea cual sea su respuesta, la vamos a ver.");
+  });
+});
 
 describe("the confirmation ask's copy", () => {
   it("names the brand, states the time, and asks for YES or NO", () => {

@@ -375,6 +375,29 @@ describe("runCallLifecycle — the account's language reaches finishCall (F-013)
   });
 });
 
+// S-09 PR 2: the profile's Spanish text-back box reaches finishCall's
+// context too, pinned to the profile loaded at accept (same rule as
+// textbackBody right beside it).
+describe("runCallLifecycle — the profile's Spanish text-back box reaches finishCall", () => {
+  it("voice_profiles.textback_body_es reaches finishCall's context as textbackBodyEs (mutation: pass null always → FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, textback_body_es: "Perdón, ya le llamamos." });
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ textbackBodyEs: "Perdón, ya le llamamos." });
+  });
+  it("a NULL textback_body_es reaches finishCall's context as null", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, textback_body_es: null });
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ textbackBodyEs: null });
+  });
+});
+
 describe("runCallLifecycle — finish() drains in-flight frames on hangup", () => {
   it("a booking that lands right as the caller hangs up is not lost — finishCall sees the POST-tool state", async () => {
     const { lifecycleDone, ws } = await startLifecycle();

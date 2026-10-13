@@ -195,7 +195,7 @@ const ctx: FinishContext = {
   // Off in the shared context on purpose: the pre-existing "abandoned creates
   // nothing" case below is the regression guard for the default, and it only
   // means something while the default is the off state a real account ships in.
-  textbackEnabled: false, textbackBody: "",
+  textbackEnabled: false, textbackBody: "", textbackBodyEs: null,
 };
 const textbackCtx: FinishContext = { ...ctx, textbackEnabled: true };
 /** A caller who SPOKE and got nothing — classifyOutcome's "abandoned". */
@@ -581,14 +581,35 @@ describe("finishCall — missed-call text-back", () => {
     }));
   });
 
-  it("never translates the operator's OWN body — they wrote it for their customers", async () => {
+  // S-09 PR 2 (C11): a Spanish caller with no Spanish box of their own gets
+  // our written Spanish default, never the operator's untranslated English —
+  // that was the OLD rule (pre-PR-2) and it is gone. Emptying the Spanish box
+  // ('') is now the one way to send a Spanish caller the English text, opt-out
+  // included (the sibling case right below is that one).
+  it("a Spanish caller with no Spanish box of their own gets OUR Spanish default, not the operator's untranslated English", async () => {
     const s = withTranscript(emptyCallState(),
       { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
     await finishCall(s, { ...textbackCtx, textbackBody: "Call us back at 956-555-0100." }, meta);
     expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
-      // Their words, untranslated — and the disclosure in the language the
-      // CALLER spoke, which is the one thing about their message we do change.
-      body: withOptOut("Call us back at 956-555-0100.", "es"),
+      body: withOptOut(defaultTextbackBody("Rio Roofing", "es"), "es"),
+    }));
+  });
+
+  it("a Spanish caller of an account whose Spanish box is emptied gets the operator's English, opt-out included (C11)", async () => {
+    const s = withTranscript(emptyCallState(),
+      { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
+    await finishCall(s, { ...textbackCtx, textbackBody: "Call us back at 956-555-0100.", textbackBodyEs: "" }, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: withOptOut("Call us back at 956-555-0100.", "en"),
+    }));
+  });
+
+  it("S-09 PR 2: finishCall threads the context's own Spanish box to a Spanish caller (mutation: pass null always -> FAILS)", async () => {
+    const s = withTranscript(emptyCallState(),
+      { role: "caller", text: "hola, necesito ayuda con el techo por favor", at: "t" });
+    await finishCall(s, { ...textbackCtx, textbackBodyEs: "  Perdón, ya le llamamos.  " }, meta);
+    expect(smsRefs.send).toHaveBeenCalledWith(expect.objectContaining({
+      body: withOptOut("Perdón, ya le llamamos.", "es"),
     }));
   });
 

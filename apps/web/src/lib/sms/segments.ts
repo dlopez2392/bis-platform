@@ -45,3 +45,23 @@ export function segmentsFor(body: string): SmsSegments {
   const segments = units <= 70 ? 1 : Math.ceil(units / 67);
   return { encoding: "ucs2", chars: units, segments };
 }
+
+/** The four Spanish vowels outside GSM-7 (é, ñ, ü, ¿ and ¡ are inside it, GSM7_BASE above). */
+const FOLD: Readonly<Record<string, string>> = { á: "a", í: "i", ó: "o", ú: "u", Á: "A", Í: "I", Ó: "O", Ú: "U" };
+const FOLD_RE = /[áíóúÁÍÓÚ]/g;
+
+/**
+ * S-09 C19: a Spanish date in a text ("sáb, 17 de oct") would otherwise turn the whole message
+ * into UCS-2 at 70 characters a part. Folds ONLY those eight characters; applied to the date we
+ * render, never to an operator's own words (plan deviation 10).
+ */
+export function gsmFoldVowels(text: string): string {
+  return text.replace(FOLD_RE, (c) => FOLD[c] ?? c);
+}
+
+/** The accent hint (spec §12.2): what the operator's own accents cost, or null when there are none. */
+export function accentCost(body: string): { parts: number; foldedParts: number } | null {
+  if (!FOLD_RE.test(body)) return null;
+  FOLD_RE.lastIndex = 0;
+  return { parts: segmentsFor(body).segments, foldedParts: segmentsFor(gsmFoldVowels(body)).segments };
+}

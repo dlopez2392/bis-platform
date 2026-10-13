@@ -12,6 +12,10 @@ const dbMocks = vi.hoisted(() => ({
   reassignPhoneNumber: vi.fn(), listPhoneNumbersForAccount: vi.fn(),
   setTransferPhone: vi.fn(), enableConcierge: vi.fn(), disableConcierge: vi.fn(),
   getTransferPhone: vi.fn(), setForwardCalls: vi.fn(),
+  // Task 18: the Spanish text-back box needs the account's brand name
+  // (`defaultTextbackBody`'s own "a company name, never `accounts.name`"
+  // rule) to compute our Spanish default.
+  getBranding: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -64,6 +68,7 @@ const fd = (o: Record<string, string>) => {
 beforeEach(() => {
   Object.values(dbMocks).forEach((m) => m.mockReset());
   dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff" });
+  dbMocks.getBranding.mockResolvedValue({ brandName: "Rio Roofing" });
   // The empty-destination case, i.e. the ordinary path every other
   // moveNumberAction test below exercises. Tests that care about an occupied
   // destination override this explicitly.
@@ -637,3 +642,55 @@ describe("setForwardCallsAction (operational-floor spec §3)", () => {
   });
 });
 
+
+// Task 18: the text-back card's Spanish box. `saveVoiceProfileAction` now
+// reads the account's branding (for `defaultTextbackBody`'s brand name) and
+// the current row (for the stored Spanish and its basis) before computing
+// the next `textback_body_es`/`textback_body_es_basis` pair through
+// `nextSpanishBox` (packages/db/src/messaging.ts) — the same pure function
+// every other Spanish box in this PR saves through.
+describe("saveVoiceProfileAction — the Spanish text-back box (Task 18)", () => {
+  it("(a) Spanish equal to our default stores textback_body_es: null", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({
+      greeting_en: "Hi", facts: "stuff", textback_body_es: "Suyo.", textback_body_es_basis: "Old.",
+    });
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const defaultEs = defaultTextbackBody("Rio Roofing", "es");
+    const r = await saveVoiceProfileAction("a1", fd({
+      persona_name: "Alex", languages: "both", textback_body: "Custom body", body_es: defaultEs,
+    }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ textback_body_es: null }), expect.any(String));
+  });
+
+  it("(b) an edited Spanish stores it, with the basis set to the saved English", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({
+      greeting_en: "Hi", facts: "stuff", textback_body_es: null, textback_body_es_basis: null,
+    });
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({
+      persona_name: "Alex", languages: "both", textback_body: "Custom English.", body_es: "Nuestro propio texto.",
+    }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ textback_body_es: "Nuestro propio texto.", textback_body_es_basis: "Custom English." }),
+      expect.any(String));
+  });
+
+  it("(c) English over 1,000 characters is refused, with no save (plan deviation 6)", async () => {
+    const r = await saveVoiceProfileAction("a1", fd({
+      persona_name: "Alex", languages: "both", textback_body: "x".repeat(1001),
+    }));
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("(d) Spanish over 1,000 characters is refused, with no save", async () => {
+    const r = await saveVoiceProfileAction("a1", fd({
+      persona_name: "Alex", languages: "both", textback_body: "Fine.", body_es: "x".repeat(1001),
+    }));
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+});

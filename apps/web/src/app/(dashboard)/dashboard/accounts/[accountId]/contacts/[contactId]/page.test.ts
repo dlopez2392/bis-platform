@@ -259,6 +259,12 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
   });
 
+  it("an unset contact on a Spanish account names the account's language (S-09 PR 2; mutation: pass accountLanguage: undefined always -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const html = await render();
+    expect(html).toContain("Not set. Messages go out in Spanish, the account&#x27;s language.");
+  });
+
   it("review I4: the Details card's Language line is the page's own real wiring, in the account's zone (S-09 §8.1; mutation: drop the language prop in page.tsx -> FAILS)", async () => {
     getContactMock.mockResolvedValue({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "2026-10-03T15:00:00+00:00" });
     const html = await render();

@@ -62,6 +62,7 @@ import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
 import "@/app/c/[publicId]/concierge.css";
 import { m, type MessageKey } from "@/lib/messages";
+import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
 
 export const dynamic = "force-dynamic";
 
@@ -487,6 +488,15 @@ export default async function StyleguidePage({
               testId="styleguide-sms-preview"
             />
           </div>
+        </Section>
+
+        {/* S-09 PR 2 Task 14: the Spanish box every editable automatic message shares, beside its
+            English box on the card (Task 15 pins the pairing). Three of its four stored shapes:
+            nothing stored (our Spanish, pre-filled), stale (the stored row no longer matches a
+            changed English), and emptied (the stored row is the empty string, so Spanish customers
+            get the English message). All through m[…] already — no new literal here. */}
+        <Section title={m["automations.bodyEs.label"]} file="components/spanish-body-field.tsx">
+          <SpanishBodyFieldDemo />
         </Section>
 
         <Section

@@ -26,7 +26,7 @@ import { AppointmentConfirmCard } from "./appointment-confirm-card";
  */
 const ROW: AutomationRow = {
   id: "au5", account_id: "a1", recipe_key: "appointment_confirm", enabled: true,
-  body: "", config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
+  body: "", body_es: null, body_es_basis: null, config: {}, created_at: "2026-09-06T00:00:00Z", updated_at: "2026-09-06T00:00:00Z",
 };
 
 function render(over: Partial<Parameters<typeof AppointmentConfirmCard>[0]> = {}): string {
@@ -62,5 +62,19 @@ describe("the appointment-confirm card's segment counter", () => {
     // unconditionally instead of calling withOptOut → reds.
     const html = render({ automation: { ...ROW, body: "Reply STOP to opt out." } });
     expect(countText(html)).toBe("171 characters · 2 message(s)");
+  });
+});
+
+describe("S-09 PR 2: the Spanish box is wired into the card's own form", () => {
+  it("renders inside the ONE form, empty (our default is '' for this recipe), lang=\"es\", and one primary Save (mutation: render outside the form, or a second data-variant=\"default\" -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain('name="body_es"');
+    expect(html).toContain('lang="es"');
+    const formOpen = html.indexOf("<form");
+    const formClose = html.indexOf("</form>");
+    const spanishIdx = html.indexOf('name="body_es"');
+    expect(spanishIdx).toBeGreaterThan(formOpen);
+    expect(spanishIdx).toBeLessThan(formClose);
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
   });
 });

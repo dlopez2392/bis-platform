@@ -16,6 +16,17 @@ describe("the Cancel dialog's notice draft (F-048)", () => {
     expect(initialDraft()).toEqual({ send: true, locale: "en", message: EN });
   });
 
+  // Task 17, C18: the dialog opens pre-selected to the customer's own
+  // language (the booking list resolves it with `recipientLanguage`).
+  it("initialDraft(locale) starts in the language it is given (mutation: ignore the argument → FAILS)", () => {
+    expect(initialDraft("es")).toEqual({ send: true, locale: "es", message: ES });
+  });
+
+  it("initialDraft() with no argument still defaults to English", () => {
+    expect(initialDraft()).toEqual({ send: true, locale: "en", message: EN });
+    expect(initialDraft("en")).toEqual(initialDraft());
+  });
+
   it("switching language swaps an untouched message for that language's default (mutation: keep the old text → FAILS)", () => {
     expect(withLanguage(initialDraft(), "es")).toEqual({ send: true, locale: "es", message: ES });
     expect(withLanguage(withLanguage(initialDraft(), "es"), "en").message).toBe(EN);
