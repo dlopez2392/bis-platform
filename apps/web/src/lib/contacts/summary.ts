@@ -1,5 +1,16 @@
-import type { ContactSummary } from "@/app/api/accounts/[accountId]/contacts/[contactId]/summary/route";
 import type { ZoneLabel } from "@/lib/zone";
+
+/** The OLD summary body (before S-03 part 3), kept only until Task 6 deletes this file with the old drawer. */
+export type ContactSummary = {
+  tags: { id: string; name: string }[];
+  recent: { kind: "call" | "note" | "submission" | "message" | "opportunity"; label: string; at: string }[];
+  phone_country_unconfirmed: boolean;
+  phone: string | null;
+  zone: ZoneLabel;
+  source: string | null;
+  sourceHint: string | null;
+  assignedTo: string | null;
+};
 
 /**
  * What the drawer can rely on after parsing the summary GET's body. The

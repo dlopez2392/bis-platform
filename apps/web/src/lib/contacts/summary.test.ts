@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type { ContactSummary } from "@/app/api/accounts/[accountId]/contacts/[contactId]/summary/route";
+import type { ContactSummary } from "./summary";
 import { parseContactSummary, summaryLoadFrom } from "./summary";
 
 /**

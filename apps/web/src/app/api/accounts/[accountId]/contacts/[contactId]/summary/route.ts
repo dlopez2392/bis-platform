@@ -1,59 +1,38 @@
 import { NextResponse } from "next/server";
-import {
-  getContact, listContactTags, listNotes, listContactSubmissions,
-  listContactMessages, listContactOpportunities, listContactCalls,
-} from "@bis/db";
-import { normalisePhone } from "@bis/db/phone";
+import { getContact } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
-import { formatCurrency } from "@/lib/format";
-import { m } from "@/lib/messages";
+import { contactDisplayName } from "@/lib/format";
+import { loggableError } from "@/lib/loggable-error";
 import { contactSourceHint } from "@/lib/contacts/lead-source";
-import type { ZoneLabel } from "@/lib/zone";
-import { OUTCOMES } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/format";
+import type { DrawerSummary } from "@/lib/contacts/drawer-summary";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { makeTr } from "@/lib/record/copy";
+import { factsView } from "@/lib/record/record-facts";
+import { nextUpView } from "@/lib/record/next-up";
+import { timelineRows, timelineFailedText } from "@/lib/record/timeline-rows";
+import { TIMELINE_ANCHOR } from "@/lib/record/timeline-pager";
+import { recentRowsView } from "@/lib/record/recent-rows";
+import { headerActions, headerActionLabels, canTextFrom, firstMapUrl } from "@/lib/record/header-actions";
+import { loadSummary, loadNextUp, loadRecent, loadTags, loadHeaderPlaces, softSmsGate } from "@/lib/record/loaders";
+import { ledgerDb } from "@/lib/consent/ledger-db";
+import { smsRecipientState } from "@/lib/consent/recipient-state";
+import { composerStateLine, type SmsRecipientState } from "@/lib/consent/composer-state";
 
 export const dynamic = "force-dynamic";
 
-export type ContactSummary = {
-  tags: { id: string; name: string }[];
-  recent: {
-    kind: "call" | "note" | "submission" | "message" | "opportunity";
-    label: string;
-    at: string;
-  }[];
-  /** F-009 (consent chain spec §6): the number could be Mexican or US, so
-   *  the drawer's Texts row asks which. True when the contact's flag is set
-   *  OR the stored number itself reads both ways — a number saved before the
-   *  backfill ran is still ambiguous, and the send gate refuses it either
-   *  way (gate.ts step 5), so the drawer must offer the fix either way. */
-  phone_country_unconfirmed: boolean;
-  /** The stored phone itself (round 3, review I3): the Check number row's
-   *  pick is judged against the number the OPERATOR SAW, and in the drawer
-   *  that must be this — a real read — never the list row's stub (a
-   *  `?peek=` deep link's row is all-null). */
-  phone: string | null;
-  /** The account's zone, resolved by `renderZone` like every other date
-   *  screen — the drawer prints the opt-out's "Off since" date in it, and
-   *  names the zone on that line when it was `guessed` (#123 m3). */
-  zone: ZoneLabel;
-  /** F-157: the raw `contacts.source` column, for the drawer's inline-edit —
-   *  whatever a creation path recorded or an owner typed, verbatim. */
-  source: string | null;
-  /** F-157: the system's own observed fact next to it (never edited directly
-   *  — see `contactSourceHint`'s own doc comment), or the plain-words
-   *  "Source unknown" when nothing at all was captured, or null when
-   *  `source` itself already says enough. */
-  sourceHint: string | null;
-  /** F-085 part 1 (spec §9): who holds the customer (`contacts.assigned_to`),
-   *  or null when nobody does, for the drawer's "Assigned to" line. */
-  assignedTo: string | null;
-};
-
-const RECENT_LIMIT = 5;
-
+/**
+ * The contact list's drawer (S-03 part 3 §7): the record's quick look, built from the record page's
+ * own loaders and view builders so the two never say different things. Authorisation first: the
+ * contact read on the request client is a 404 before anything else starts, and the ledger client is
+ * built only after it proved the contact (F-085 §7.3). Every string is in ONE locale, resolved here
+ * (C1). Each section is its own status (C2): a failed read or a malformed row costs its section.
+ */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ accountId: string; contactId: string }> },
 ) {
   const { accountId, contactId } = await params;
@@ -63,72 +42,106 @@ export async function GET(
   const contact = await getContact(db, accountId, contactId);
   if (!contact) return NextResponse.json({}, { status: 404 });
 
-  const [tags, notes, submissions, messages, opportunities, calls, account] = await Promise.all([
-    listContactTags(db, accountId, contactId),
-    listNotes(db, accountId, contactId),
-    listContactSubmissions(db, accountId, contactId),
-    listContactMessages(db, accountId, contactId),
-    listContactOpportunities(db, accountId, contactId),
-    listContactCalls(db, accountId, contactId, RECENT_LIMIT),
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+  // The QA override the drawer forwards from the list URL (C9); ignored outside BIS_I18N_QA.
+  const localeParam = new URL(req.url).searchParams.get("locale") ?? undefined;
+  const now = new Date();
+  // The send gate's ledger fact, on the ledger client, built only now (after the proof). A missing
+  // service key is "unknown", which closes Text, never a 500.
+  const smsRead = async (): Promise<SmsRecipientState> => {
+    try {
+      return await smsRecipientState(ledgerDb(), accountId, contact);
+    } catch (e) {
+      console.error(`contact drawer: text consent unreadable for account ${accountId}: ${loggableError(e)}`);
+      return { kind: "unknown" };
+    }
+  };
+  const [prefs, account, summary, nextUp, recent, tags, places, smsGate, smsRecipient] = await Promise.all([
+    getPersonPrefs(),
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
+    loadSummary(db, accountId, contactId),
+    loadNextUp(db, accountId, contactId, now),
+    loadRecent(db, accountId, contactId),
+    loadTags(db, accountId, contactId),
+    loadHeaderPlaces(db, accountId, contactId),
+    softSmsGate(db, accountId),
+    smsRead(),
   ]);
-  // Not a throw on a failed read, the checklist page's reasoning: the zone is
-  // for one date line, and 500ing the whole drawer over it is the worse
-  // failure. `undefined` makes `renderZone` fall back (agency zone, else UTC).
   if (account.error) {
-    console.error(`contact summary: account ${accountId} timezone read failed: ${account.error.message}`);
+    console.error(`contact drawer: account ${accountId} timezone and language read failed: ${account.error.message}`);
   }
-  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+  const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
+  const zone = await renderZone(accountRow?.timezone);
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: accountRow?.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
 
-  type Item = ContactSummary["recent"][number];
-  const items: Item[] = [
-    ...calls.map((c): Item => ({
-      kind: "call",
-      // The localized label ("Booked"/"Abandoned"/…), not the raw
-      // lowercase `calls.outcome` enum — same map the Calls list/detail
-      // pages render from (calls/format.ts). `listContactCalls` types
-      // `outcome` as plain `string` (not `CallOutcome`), so the lookup is
-      // cast rather than indexed directly — which also means an unknown
-      // value falls back to the raw string instead of throwing and taking
-      // the whole summary route down with it.
-      label: m["drawer.recent.call"].replace(
-        "{outcome}",
-        (OUTCOMES as Record<string, { label: string }>)[c.outcome]?.label ?? String(c.outcome),
-      ),
-      at: c.started_at,
-    })),
-    ...notes.map((n): Item => ({
-      kind: "note", label: m["drawer.recent.note"], at: n.created_at,
-    })),
-    ...submissions.map((s: { created_at: string }): Item => ({
-      kind: "submission", label: m["drawer.recent.submission"], at: s.created_at,
-    })),
-    ...messages.map((x: { created_at: string }): Item => ({
-      kind: "message", label: m["drawer.recent.message"], at: x.created_at,
-    })),
-    ...opportunities.map((o): Item => ({
-      kind: "opportunity",
-      label: m["drawer.recent.opportunity"]
-        .replace("{name}", o.name)
-        .replace("{value}", formatCurrency(Number(o.monetary_value))),
-      at: o.created_at,
-    })),
-  ];
-  // Epoch-ms sort — sources return mixed lexical ISO forms (+00:00 vs .000Z)
-  items.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  /** The page's `viewOf` ([contactId]/page.tsx:149-156): a throw while building a view costs its section. */
+  const viewOf = <T,>(section: string, build: () => T): T | null => {
+    try {
+      return build();
+    } catch (e) {
+      console.error(`contact drawer: ${section} view failed for account ${accountId}: ${loggableError(e)}`);
+      return null;
+    }
+  };
 
-  const body: ContactSummary = {
-    tags,
-    recent: items.slice(0, RECENT_LIMIT),
-    phone_country_unconfirmed:
-      contact.phone_country_unconfirmed === true || normalisePhone(contact.phone)?.unconfirmed === true,
-    phone: contact.phone ?? null,
-    zone: { zone: zone.zone, guessed: zone.guessed, label: zone.label },
-    source: contact.source ?? null,
-    sourceHint: contactSourceHint({
-      source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution,
-    }),
-    assignedTo: contact.assigned_to ?? null,
+  const recordHref = `/dashboard/accounts/${accountId}/contacts/${contactId}`;
+  const name = contactDisplayName(contact);
+  const mainGroup = places?.groups.find((g) => g.isPrimary) ?? places?.groups[0] ?? null;
+  const smsBlockedLine = composerStateLine(smsRecipient, zone.zone, locale);
+  const header: DrawerSummary["header"] = {
+    name,
+    subtitle: mainGroup
+      ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
+      : null,
+    subtitleHref: mainGroup ? `/dashboard/accounts/${accountId}/groups/${mainGroup.id}` : null,
+    // Text and Email open the record page's composer on that channel (D8, verified §8.2).
+    actions: headerActionLabels(headerActions({
+      phone: contact.phone ?? null,
+      email: contact.email ?? null,
+      canText: canTextFrom({ phone: contact.phone ?? null, smsGate, smsBlockedLine }),
+      directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
+      composeHref: recordHref,
+    }), tr, name),
+  };
+
+  const facts = summary.status === "ready"
+    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
+    : null;
+  const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
+  const rows = recent.status === "ready"
+    ? viewOf("recent", () => recentRowsView(timelineRows(recent.page.items, {
+      zone: zone.zone, tr, author: { viewerId: access.userId, names: recent.names, personaName: recent.personaName, tr },
+    })))
+    : null;
+
+  const body: DrawerSummary = {
+    locale,
+    header,
+    facts: facts ? { status: "ready", view: facts } : { status: "error", text: tr.text("record.summary.failed") },
+    nextUp: upNext
+      ? { status: "ready", view: upNext, emptyText: tr.text("record.nextUp.empty") }
+      : { status: "error", text: tr.text("record.nextUp.failed") },
+    recent: recent.status === "ready" && rows
+      ? {
+        status: "ready", rows,
+        failedText: timelineFailedText(recent.page.failed, tr),
+        // Rule 5's empty state only when nothing failed: a failed source is not "nothing" (the page's rule).
+        emptyText: rows.length === 0 && recent.page.failed.length === 0 ? tr.text("timeline.empty") : null,
+        seeAllHref: `${recordHref}#${TIMELINE_ANCHOR}`,
+      }
+      : { status: "error", text: tr.text("record.activity.failed") },
+    who: {
+      source: contact.source ?? null,
+      sourceHint: contactSourceHint({ source: contact.source ?? null, custom: contact.custom, attribution: contact.attribution }, locale),
+      assignedTo: contact.assigned_to ?? null,
+      fields: {
+        first_name: contact.first_name ?? null, last_name: contact.last_name ?? null, email: contact.email ?? null,
+        phone: contact.phone ?? null, company_name: contact.company_name ?? null,
+      },
+      tags: tags.status === "ready" ? { status: "ready", tags: tags.tags.map((t) => ({ id: t.id, name: t.name })) } : { status: "error" },
+    },
   };
   return NextResponse.json(body);
 }
