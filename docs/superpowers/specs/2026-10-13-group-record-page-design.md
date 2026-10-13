@@ -8,11 +8,12 @@ up, the timeline; cited below as "part 1 §n"). Data: `docs/superpowers/specs/20
 first"). Design contract: DESIGN.md rules 3, 5, 6, 7, 8, 11, "Record page, documents and provenance (v2)", the
 module contract, the definition of done.
 
-**Delivery (D12): two PRs.** **2a** = the route, the header, People (the Members card), Details, Properties,
-Deals, the contact header's group link and the Groups card's "Open". **2b** = the summary facts, Next up and the
-merged timeline. A section or row marked **[2b]** is 2b's; everything else is 2a's. **2a carries one small
-migration, 0075, which D12 did not expect** — it exists only because the code has no "who we call first" for a
-group (§5, Open point 1). 2b changes no database.
+**Delivery (D12, amended by owner rulings R1–R3 of 2026-10-13, §16): two PRs.** **2a** = the route, the header,
+People (the Members card), Details, Properties, Deals, migration 0075 (the call-first flag, R1), part 1's contact
+header line moved to S-02's kind words (R3) and the `contact.noName` Spanish twin. **2a's page is reachable by URL
+only** (R2). **2b** = the summary facts, Next up, the merged timeline, AND the two entry links (the contact header's
+group link and the Groups card's "Open", R2), so no one reaches the page from the product until it is whole. A
+section or row marked **[2b]** is 2b's; everything else is 2a's. 2b changes no database.
 
 **What is verified and what is not.** Every function name, line and policy below was read off the worktree at
 `d729b373`. Anything not read is labelled **Assumption**.
@@ -32,9 +33,9 @@ Owner (danlo, 2026-10-13), given in the brief:
 | # | Question | Decision |
 |---|---|---|
 | D1 | Route and kit | `/dashboard/accounts/[accountId]/groups/[groupId]` on part 1's kit (`RecordLayout`, `RecordHeader`, `RecordCard`) with its own card list in `apps/web/src/lib/record/record-cards.ts`. Not a top-level nav surface; no Groups list (F-002 is later) |
-| D2 | Entry points | The household/business name in the contact page header becomes a link (part 1 C7 promised it, `2026-10-12-record-page-design.md:72`); the contact page's Groups card gets an "Open" link |
+| D2 | Entry points | The household/business name in the contact page header becomes a link (part 1 C7 promised it, `2026-10-12-record-page-design.md:72`); the contact page's Groups card gets an "Open" link. **Both ship with 2b (R2)** |
 | D3 | Timeline | EVERY member's activity merged (part 1's `listContactTimelinePage` generalised to a set of contact ids), each row naming its member beside the author mark; 30 a page, the same cursor, the same failed and empty states |
-| D4 | Header | Group name and the kind word. Call (`tel:`, the ONE primary), Text, Email go to the PRIMARY member, the label naming them ("Call Ana"); Text and Email open that member's record at its composer. Directions: the group's first addressed property, else the primary's. No primary: all hidden and People shows "Choose who we call first" with Make primary. **See §5 and Open point 1: the column the brief names does not mean this** |
+| D4 | Header | Group name and the kind word. Call (`tel:`, the ONE primary), Text, Email go to the PRIMARY member, the label naming them ("Call Ana"); Text and Email open that member's record at its composer. Directions: the group's first addressed property, else the primary's. No primary: all hidden and People shows "Choose who we call first" with Make primary. **Ruled R1 (§16): a new column, `is_primary_contact`; the column the brief named, `is_primary`, does not mean this** |
 | D5 | Composer | None on the group page |
 | D6 | Cards | Middle: summary facts (members, booked N times on D-035's definition, last talked), Next up (part 1 C9's rules), the merged timeline. Right: Properties and equipment (group-owned places), open Deals across members. Left: People (name, role, Primary and Billing badges, a link each; Make primary, edit role, remove with Undo) and Details (name, kind, billing address inline) |
 | D7 | Scale | Timeline, facts and Next up read at most 50 members (primary first, then most recently active, defined in C5); beyond that one plain line, "Showing activity for 50 of 73 people. Open a person to see theirs." People pages its own list 30 at a time (cursor) |
@@ -42,14 +43,14 @@ Owner (danlo, 2026-10-13), given in the brief:
 | D9 | States | Every card loads, empties and fails on its own; the empty-group copy (§9); the timeline's empty state points to opening a member; a missing or other-account group is a 404 before any read |
 | D10 | Language | English and Spanish from day one (usted, trades Spanish) |
 | D11 | DESIGN.md | One sentence in "Record page" (§15) |
-| D12 | Delivery | 2a and 2b as above; no migration expected (see the Delivery note) |
+| D12 | Delivery | 2a and 2b; no migration expected. **Amended by R1 (0075 lands with 2a) and R2 (the entry links move to 2b)**; see the Delivery note |
 | D13 | Testing | Merge across members with the member named on every row; the 50 cap and its notice; primary-or-hidden actions; Technician scope; 404 before any read; e2e on the per-run fixture account, never Test Client One |
 
 Choices this spec makes:
 
 | # | Choice | PR |
 |---|---|---|
-| C1 | **"Primary" is a new per-group flag, `client_group_members.is_primary_contact`, not `is_primary`.** `is_primary` is the CONTACT's main group: "at most one per contact" (`client_group_members_one_primary unique (contact_id) where is_primary`, `0069_client_groups.sql:79`), so in a household of three every member can hold it at once, and `set_primary_group_membership` (`0069:349-365`, wrapped by `setPrimaryMembership`, `client-groups.ts:226-232`) changes which group is that PERSON's main one, and re-sorts their header line (`[contactId]/page.tsx:161`) and their Business name copy (`app.company_name_for`, `0069:105-112`). It cannot say who the household's phone belongs to. Migration 0075 (§5) adds the flag, one per group. **Pending Open point 1** | 2a |
+| C1 | **"Primary" is a new per-group flag, `client_group_members.is_primary_contact`, not `is_primary`.** `is_primary` is the CONTACT's main group: "at most one per contact" (`client_group_members_one_primary unique (contact_id) where is_primary`, `0069_client_groups.sql:79`), so in a household of three every member can hold it at once, and `set_primary_group_membership` (`0069:349-365`, wrapped by `setPrimaryMembership`, `client-groups.ts:226-232`) changes which group is that PERSON's main one, and re-sorts their header line (`[contactId]/page.tsx:161`) and their Business name copy (`app.company_name_for`, `0069:105-112`). It cannot say who the household's phone belongs to. Migration 0075 (§5) adds the flag, at most one per group. **Ruled R1, 2026-10-13** | 2a |
 | C2 | **Choosing the primary contact is Owner, Staff and the agency only** (`seesWholeAccount`, `lib/auth-role.ts:15-17`), groups spec A6's reason: it decides who the whole group's Call reaches, and a group can hold customers a Technician does not serve. A Technician never sees the "Choose who we call first" prompt (they could not act on it, and its absence tells them nothing, C4) | 2a |
 | C3 | **People reuses the Groups card's member actions as they are**: role (`setRoleAction`), Pays the bills (`setBillingAction`), remove and Undo (`removeMembershipAction`, `restoreMembershipAction`), all keyed by membership id and proven on the request client (`groups-actions.ts:123-227`). **Remove is offered to Owner, Staff and the agency only on this page**: a Technician removing their last visible member here would make the group invisible to them (`app.my_client_group_ids`, `0069:94-98`) and the refreshed page a 404 under their own Undo toast. They remove their customer from a group on that customer's page, as today (groups spec §4) | 2a |
 | C4 | **"You can see" is shown to EVERY narrow reader, never only when something is hidden.** A narrow reader is `!seesWholeAccount(access)` (a Technician, or a client whose role could not be settled, which fails closed, `lib/auth-role.ts:3-9`). Whether a row is hidden cannot be known on the request client, and asking the service client would tell the page the hidden count; showing the qualifier unconditionally leaks nothing, because it reads the same with zero or twenty hidden. It qualifies the people fact and the cap line (§8.6, §9); every other count reads "these people", which is true for both readers | 2a, 2b |
@@ -59,11 +60,11 @@ Choices this spec makes:
 | C8 | **The member comes first on the row**: `{member} · {mark} · {verb} · {status} · {when}`. The mark is never dropped, even when it is the member themself ("Ana García · Customer · texted"): DESIGN.md Provenance makes a row without a mark a defect, and the member's name answers "about whom", not "who did it" | 2b |
 | C9 | **"Last talked" names the member** [2b]: "Last talked 4 days ago with Ana (text)". Across a household the useful fact is who | 2b |
 | C10 | **People pages by the order they joined**, `(client_group_members.created_at asc, id asc)`, 30 a page, its own `?people=` cursor (`lib/cursor.ts`'s `RowCursor`/`encodeCursor`, `:32-47`), one pager at the card's foot. The primary contact is pinned above the rows on the first page and left out of the paged rows, so it is never shown twice. The timeline keeps `?before=`; the two lists never share a pager | 2a |
-| C11 | **The kind word is G4's**: "Household"/"Familia", "Business customer"/"Cliente comercial" (`groups.kind.*`, `lib/messages.ts:3546-3549`; groups spec G4, which also forbids "Company"). D4's "Household/Business" is read as the two kinds; part 1's header uses other words ("Hogar", "Business", `messages.ts:3762-3765`). Open point 3 | 2a |
+| C11 | **The kind word is G4's**: "Household"/"Familia", "Business customer"/"Cliente comercial" (`groups.kind.*`, `lib/messages.ts:3546-3549`; groups spec G4, which also forbids "Company"). **Ruled R3, 2026-10-13: these words everywhere**, so part 1's contact header line, which says "Hogar" and "Business" today (`record.group.household`/`.business`, `messages.ts:3762-3765`), changes to match in 2a (§9.1) | 2a |
 | C12 | **Properties shows the GROUP's own places only**, through a group subject on today's `PlacesCard`. The card is keyed by a contact today: its route is per contact (`api/accounts/[accountId]/contacts/[contactId]/places/route.ts`), its read is `listContactPlaces` (`places.ts:113-161`), and every action proves a contact subject (`places-actions.ts:74-105`). It gains `subject: { kind: 'contact' \| 'group'; id }`, a group route and `listGroupPlaces`; on the group page there is no "Move to" (`canMovePlace` false), which stays on member pages | 2a |
 | C13 | **Deals: open deals of the same ≤50 people** (C5's set; in 2a, before C5 exists, the first 50 by C10's order), newest first, at most 30 rows, an exact count for "Showing 30 of 41 open deals." Each row names its person | 2a |
 | C14 | **Text uses part 1's gate for the primary contact**: `canTextFrom` (`lib/record/header-actions.ts:22-24`) with the account's `softSmsGate` and the primary's `composerStateLine(smsRecipientState(ledger, …))`, the ledger client built only after `getContact(db, accountId, primaryId)` on the request client proved them (`[contactId]/page.tsx:85-89`'s rule). Email: the primary has an email. So Text and Email appear exactly when the composer they land on would open | 2a |
-| C15 | **The two entry points show for every reader who sees the group**, a Technician included: the group a customer of theirs is in is visible to them (§4) | 2a |
+| C15 | **The two entry points show for every reader who sees the group**, a Technician included: the group a customer of theirs is in is visible to them (§4) | 2b (R2) |
 | C16 | **404 before any read**: `isUuid(groupId)` (`lib/assign/action-guards.ts:11`), then `readGroup(db, accountId, groupId)` (`client-groups.ts:150-156`) on the request client; null is `notFound()`. A malformed id is a 404, not a 500 from the uuid cast (the groups route's rule, `api/.../groups/route.ts:19-20`) | 2a |
 | C17 | **Loading is the route's**, as part 1 §9: `groups/[groupId]/loading.tsx` draws `RecordLayout` with a skeleton header and every card of the group list in `state="loading"`, in phone order | 2a |
 
@@ -125,7 +126,7 @@ customers (or, for places and the group row, to a group one of their customers i
 helpers are not reachable as RPCs (`supabase/config.toml:13` exposes `public` and `graphql_public` only;
 **Assumption** that the hosted projects match the local config). No migration is proposed for RLS.
 
-## 5. Data: migration 0075 **(pending Open point 1)**
+## 5. Data: migration 0075 (ruled 2026-10-13, R1; lands with 2a)
 
 The only database change in either PR. By bis-db-schema. Next after `0074_record_provenance_not_null.sql`. ASCII
 only, no backslash; `set local lock_timeout = '5s'`.
@@ -136,28 +137,60 @@ create unique index client_group_members_one_primary_contact
   on public.client_group_members (client_group_id) where is_primary_contact;
 ```
 
-- **Written by server code only**, as every group write is (0069 §3; groups spec A1). `authenticated` keeps SELECT
-  only (`0069:83-87`); a new column on a SELECT-only table needs no grant change, and `schema-grants-guard`'s
-  `EXPECTED_WRITES` does not move.
+"At most one per group" is the partial unique index. "Exactly one" is NOT kept: a group may have none (no
+backfill, a removed holder), and then the People card asks (§8.2).
+
+**Who may write it: server code only, through 0069's member-write path (verified).** 0069 declares its two tables
+"written by server code only (0053's pattern)" (`0069_client_groups.sql:4-6`). 0053 names two server-only shapes:
+"the service role, or a SECURITY DEFINER function that decides for itself what it writes"
+(`0053_server_only_writes.sql:3-6`). 0069's member writes take the FIRST: plain plpgsql functions, `set
+search_path = ''`, not definer, executable by `service_role` only, each checking every row it touches belongs to
+`p_account_id` (`set_primary_group_membership`, `0069:349-365`; the revoke-then-grant loop, `0069:486-500`, there because default privileges hand EXECUTE to anon and authenticated by name, 0043), called by a server
+action that first proved the target on the request client (`makePrimaryAction`, `groups-actions.ts:151-164`).
+0075 follows that path, not a client-callable definer function:
+
+- **Grants: unchanged and sufficient.** `authenticated` already holds SELECT only on `client_group_members`
+  (`revoke insert, update, delete, truncate, references, trigger, maintain … from authenticated`, `0069:85-87`;
+  the table-level revoke covers a column added later), so the client role can read the flag and never write it.
+  `schema-grants-guard.test.ts`'s `EXPECTED_WRITES` names no column of this table and does not move.
 - **`public.set_group_primary_contact(p_account_id uuid, p_group_id uuid, p_member_id uuid) returns jsonb`**:
   plpgsql, `set search_path = ''`, not definer; `revoke all … from public, anon, authenticated, service_role;
-  grant execute … to service_role` (0069's own grants). Locks the group row `for update` (two managers choosing at
-  once queue rather than race the partial unique index), checks the group is in `p_account_id`, and when
-  `p_member_id` is not null that the membership is in that group and account (`not_found` otherwise); clears the
-  group's current holder, sets the new one; `p_member_id` null clears (the Undo of a first choice). Returns
-  `{status, previous}`.
-- **Removal.** `remove_group_membership` already returns `to_jsonb(v_row)` (`0069:367-380`), so the snapshot
-  carries the flag with no change; the group is left with no primary contact (no promotion: silently calling
-  someone else would be worse than asking). **Undo** replaces `app.restore_member` (`0069:169-191`) so it
-  re-sets `is_primary_contact` from the snapshot when no other member of the group holds it now, else restores
-  the membership without it.
+  grant execute … to service_role` (0069's loop), and the same pair re-stated for the replaced `app.restore_member`. Locks the group row `for update` (two managers choosing at
+  once queue rather than race the partial index), checks the group is in `p_account_id`, and, when `p_member_id`
+  is not null, that the membership is in that group and that account (`not_found` otherwise); clears the group's
+  current holder and sets the new one in the same call; `p_member_id` null clears. Returns `{status, previous}`,
+  `previous` the member id that held it before, or null.
+- **No policy change.** RLS on `client_group_members` is row-level, so the flag is exactly as visible as the row
+  it sits on (§4.2).
+
+**What happens, case by case:**
+
+| Event | Result |
+|---|---|
+| A group is created, or the migration runs | No primary contact (no backfill, ruled R1): People asks "Choose who we call first." (Owner, Staff, agency); the header shows no Call, Text or Email |
+| Owner/Staff/agency press "Make primary contact" on a row | `setGroupPrimaryContactAction` → the function sets this member and clears the previous holder; toast "{name} is now the primary contact." with **Undo** |
+| **Undo of "Make primary contact"** | Calls the same action with the returned `previous` (null when there was none, which clears). If `previous` names a membership that has since gone, the function answers `not_found`, the current choice stays, and the toast says "That didn't save. Try again." (`groups.failed`) |
+| **The holder is removed from the group** (People's Remove, or the Groups card on their own page) | The flag goes with the row (it is a column of the deleted membership): the group has **none**; no one is promoted, because silently calling someone else would be worse than asking. Header actions hide; the prompt returns |
+| Undo of that removal | `remove_group_membership` already returns `to_jsonb(v_row)` (`0069:367-380`), so the snapshot carries the flag. 0075 replaces `app.restore_member` (`0069:169-191`) to re-set it when no other member holds it now, else to restore the membership without it. A narrow reader's snapshot is a claim from the browser: the flag is restored only when the removal event's payload records `wasPrimaryContact` (§10) |
+| **The holder's contact is deleted** | Their memberships cascade (`client_group_members_contact_fkey … on delete cascade`, `0069:72-73`), the flag with them: the group has **none**, as above |
+| The group is deleted (no UI does this, §3) or the account is | Cascades (`0069:61`, `:71`); nothing is left to hold |
+| The holder's contact is reassigned away from a Technician | The flag is untouched; that Technician simply stops seeing the row that carries it (below) |
+
+**What a Technician sees of it.** `client_group_members_technician_scope` (`0069:99-100`) shows them only their own
+customers' membership rows, so they read `is_primary_contact` on those rows and nowhere else. When the holder is
+their customer: the "Primary contact" mark on that row, and the header's Call, Text and Email to them. When the
+holder is someone else's customer, or there is none: no mark, no header actions and no prompt (C2), and the page
+reads identically in both cases, so it does not reveal that a holder exists.
+
 - **The sync trigger does not fire** on the new column: it fires on `update of is_primary, client_group_id,
   contact_id` only (`0069:223-225`), so choosing a primary contact never touches anyone's Business name.
-- **No backfill.** No existing data says who a group's phone belongs to; every group starts with none, and its
-  People card asks (D4).
 - **Rollback:** revert the app first; then `drop function public.set_group_primary_contact(uuid, uuid, uuid)`, put
   0069's `app.restore_member` back, `drop index client_group_members_one_primary_contact`, `alter table … drop
   column is_primary_contact`. Lost: the choices made since.
+- **Rollout:** with 2a, before it merges: bis-ci (`ci-project-setup.yml`), then production, then the parity check
+  (§12).
+- **Its tests** (§11.1): `group-primary-contact-schema.test.ts` (the partial unique index, the function, the
+  restore, the sync not firing), the grants cases in the same file, and the RLS cases in `client-groups-rls.test.ts`.
 
 **Indexes for 2b's reads: none needed** (checked for `account_id = $1 and contact_id in (… ≤50 …)`):
 `notes_contact (contact_id, created_at desc)` (`0003_crm_core.sql:104`); `opps_contact (contact_id)` (`0003:93`);
@@ -252,11 +285,12 @@ no body is a compile error (part 1 §8's rule):
 | `details` | who | 2 | 7 | no | `groupPage.card.details` | 3 | 2a |
 
 The phone order is DESIGN.md's (header with Call first, summary and what is next, the timeline, what they have
-closed, then who they are; `DESIGN.md`, Record page). **In 2a the happening column is empty** (Open point 2).
+closed, then who they are; `DESIGN.md`, Record page). **In 2a the happening column is empty**, which is why 2a's
+page is URL-only and the entry links wait for 2b (R2).
 
 **Kit changes, bis-frontend's** (`components/record/*`, ruled part 1 §15):
 
-- **`RecordHeader`**: `subtitle` is `string | null` today (`record-header.tsx:14-16`, rendered as a `<p>`,
+- **`RecordHeader`** [2b, R2]: `subtitle` is `string | null` today (`record-header.tsx:14-16`, rendered as a `<p>`,
   `:25`). It gains `subtitleHref?: string`; with it the group words are a `Link` (UI 400, underline on hover,
   visible focus ring), else today's `<p>`. Used by the contact page (D2) only; the group page's subtitle is the
   kind word, plain.
@@ -347,7 +381,7 @@ Rows newest first under day separators in the account's zone, each `{member} · 
 person to start one." **Some failed:** `timeline.someFailed`. **All failed:** `record.activity.failed`.
 **Loading:** five skeleton rows.
 
-### 8.9 The two entry points (2a)
+### 8.9 The two entry points (2b, R2)
 
 - **Contact header:** the main-group line (`[contactId]/page.tsx:161-164`) passes `subtitleHref` to
   `/dashboard/accounts/{a}/groups/{mainGroup.id}`; the words are unchanged.
@@ -392,8 +426,19 @@ New keys live under `groupPage.*` (part 1 already uses `record.group.*` for the 
 | `groupPage.places.emptyBusiness` | Job sites of this business show up here, with how to get there and the equipment on site. | Aquí aparecen los lugares de trabajo de este negocio, con cómo llegar y el equipo que hay. |
 | `groupPage.deals.empty` | No open deals with these people. Deals added on a person's page show here. | No hay oportunidades abiertas con estas personas. Aquí aparecen las que se agregan en la página de una persona. |
 | `groupPage.deals.more` | Showing {shown} of {count} open deals. | Se muestran {shown} de {count} oportunidades abiertas. |
-| `groups.open` · `groups.openAria` | Open · Open {name} | Abrir · Abrir {name} |
-| `contact.noName.es` (twin only) | — | (sin nombre) |
+| `contact.noName.es` (twin only, `messages.ts:721` has none today) | — | (sin nombre) |
+
+**Changed in 2a (R3), part 1's contact header line** (`messages.ts:3762-3765`), so one customer is never called two
+things:
+
+| Key | English (was → now) | Español (was → now) |
+|---|---|---|
+| `record.group.household` | {group} · Household (unchanged) | {group} · Hogar → {group} · Familia |
+| `record.group.business` | {group} · Business → {group} · Business customer | {group} · Negocio → {group} · Cliente comercial |
+
+The tests that pin this line assert the household's English only (`[contactId]/page.test.ts:798`,
+`record-header.test.ts:6`, both "· Household", unchanged); 2a adds a business and a Spanish case to the page test
+(probe: leave "Negocio" in place → FAILS).
 
 ### 9.2 2b
 
@@ -407,6 +452,7 @@ New keys live under `groupPage.*` (part 1 already uses `record.group.*` for the 
 | `groupPage.cappedVisible` | Showing activity for {shown} of the {total} people you can see. Open a person to see theirs. | Se muestra la actividad de {shown} de las {total} personas que usted puede ver. Abra a una persona para ver la suya. |
 | `groupPage.nextUp.empty` | Nothing coming up for these people. Bookings ahead and To-dos with a due date show here. | No hay nada próximo para estas personas. Aquí aparecen las citas que vienen y los pendientes con fecha. |
 | `groupPage.timeline.empty` | Texts, calls, bookings, notes and To-dos with these people show up here. Open a person to start one. | Aquí aparecen los textos, llamadas, citas, notas y pendientes con estas personas. Abra a una persona para empezar uno. |
+| `groups.open` · `groups.openAria` (R2: with the entry links) | Open · Open {name} | Abrir · Abrir {name} |
 
 `INTERNAL_MILESTONE` and the accents guard run over every key above. A person's name and typed text show as
 typed, never translated.
@@ -442,7 +488,14 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
   crossed member is set → FAILS); executable by `service_role` only (`authenticated` 42501); setting it does not
   change any `company_name` (probe: add the column to the sync trigger's list → a business member's copy is
   recomputed → FAILS by name); remove then restore puts the flag back, and restore while another member now
-  holds it restores the membership without it (probe: restore unconditionally → 23505 → FAILS).
+  holds it restores the membership without it (probe: restore unconditionally → 23505 → FAILS); a deleted
+  holder's contact leaves the group with no holder and no error (probe: `on delete restrict` on the contact FK →
+  FAILS). **Grants**, same file, the `client-groups-schema.test.ts:157-208` shapes: the client role's UPDATE of
+  `is_primary_contact` and an INSERT carrying it are refused 42501 (probe: `grant update (is_primary_contact)` to
+  `authenticated` → FAILS); `set_group_primary_contact` and the replaced `app.restore_member` are executable by
+  `service_role` only, `anon` and `authenticated` 42501 (probe: drop the revoke → FAILS, the 0043 default-privilege
+  trap); `schema-grants-guard.test.ts` passes unchanged, and the "exactly the four policies" case
+  (`client-groups-schema.test.ts:174`) still counts four (probe: add a write policy for the flag → FAILS).
 - **Queries** `packages/db/src/test/group-members.test.ts` (`withTestAccount`, live): `listGroupMembers` pins the
   primary contact first and never repeats it in the rows; 31 members page as 30 then 1 with `next` exact and no
   row lost or repeated at a `created_at` tie (probe: compare `created_at` only → FAILS); `countGroupMembers`
@@ -452,7 +505,10 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
 - **RLS** `client-groups-rls.test.ts` (extended): a Technician with one of three members assigned reads the group
   row, ONE `listGroupMembers` row, `countGroupMembers` = 1, every group place, and a 404-equivalent `readGroup`
   null for a group with none of theirs (probe: drop `client_group_members_technician_scope` → 3 rows → FAILS);
-  Owner, Staff and the agency read 3.
+  Owner, Staff and the agency read 3. **The flag under RLS:** with the holder assigned to the Technician they read
+  `is_primary_contact = true` on that row; with the holder assigned to someone else, no row they can read carries
+  it, and the Owner's client reads the holder (probe: drop the restrictive policy → the Technician reads the
+  other's holder row → FAILS).
 - **Web, pure:** `group-header.test.ts` (Call, Text and Email go to the primary contact and name them; with no
   visible primary all three are absent while Directions stays, probe: fall back to the first member → FAILS;
   Call is the only primary, probe: make Text primary → FAILS; Directions takes the group's first addressed
@@ -471,15 +527,13 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
   service write (probe: drop the `seesWholeAccount` check → the service mock is called → FAILS) and a membership
   of another group; a narrow reader's Undo with `is_primary_contact: true` in a snapshot whose removal event lacks
   `wasPrimaryContact` restores the membership without the flag (probe: pass the snapshot through → FAILS).
-- **Entry points:** the contact page test asserts `subtitleHref` is the main group's URL; `groups-card.test.ts`
-  asserts each row's Open href (probe: link the first group for every row → FAILS).
 - **e2e** `group-page.spec.ts` (bis-e2e-qa runs it; per-run fixture account, never Test Client One; names in
   `e2e/fixtures/fixture-names.test.ts`; rows removed in `afterAll`, each error checked, bookings before contacts
   because `bookings.contact_id` is `on delete restrict`, part 1 §12.1): a household of three seeded with random
-  phones; from Ana's page the header's household words open the group page; the Groups card's Open does too; the
-  header shows no Call until "Make primary contact" on Ana, then "Call Ana" as the only primary; no Text (the
-  fixture account has no approved A2P registration, `record-page.spec.ts:190`); the three people are listed and
-  each name opens that person; at 390px Properties and Deals are closed under People.
+  phones, opened BY URL (2a has no entry link, R2); the People card asks "Choose who we call first." and the header
+  shows no Call until "Make primary contact" on Ana, then "Call Ana" as the only primary; Undo puts the prompt back;
+  no Text (the fixture account has no approved A2P registration, `record-page.spec.ts:190`); the three people are
+  listed and each name opens that person; at 390px Properties and Deals are closed under People.
 
 ### 11.2 2b
 
@@ -503,7 +557,11 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
 - **The page test** (extended): the summary, Next up and timeline each fail alone; the timeline's sources receive
   exactly the ids `groupActivityMembers` returned (probe: pass the first People page's ids → FAILS when the two
   differ); no composer, no add-To-do and no Done render (probe: reuse `ActivityTimeline` → FAILS).
-- **e2e** `group-page.spec.ts` (extended): the household's seeded receptionist call (Ana), booking-page booking
+- **Entry points** (R2): the contact page test asserts `subtitleHref` is the main group's URL (probe: the first
+  group instead of the main one → FAILS); `groups-card.test.ts` asserts each row's Open href (probe: link the first
+  group for every row → FAILS).
+- **e2e** `group-page.spec.ts` (extended): from Ana's page the header's household words open the group page, and
+  so does the Groups card's Open; the household's seeded receptionist call (Ana), booking-page booking
   (Luis) and note (Maria, seeded with the e2e user's Clerk id as `author_id`, which the service role's insert
   keeps: `app.notes_author_guard` rewrites only an `authenticated` insert, `0073_record_provenance.sql:118-122`) all appear on the group timeline, each row with its member's name AND an author mark
   ("Ana García · Sofía · AI", "Luis García · Customer", "Maria García · You"); the summary reads "3 people"; Next up
@@ -512,24 +570,28 @@ HTTP 200 carrying the not-found page; no group data is exposed either way.
 
 ## 12. Rollout, deploy order and rollback
 
-**2a, after Open point 1 is ruled.** 0075 on bis-ci (`ci-project-setup.yml`), then production, then parity, all
-**before merge** (the e2e job's migration check enforces the first, `.github/scripts/ci-migrations-applied.sh`).
+**2a, with 0075 (R1).** 0075 on bis-ci (`ci-project-setup.yml`: push-dry-run, then push), then production (MCP
+`apply_migration`), then the parity check (`docs/runbooks/ci-supabase-project.md`), all **before 2a merges** (the e2e job's migration check enforces the first, `.github/scripts/ci-migrations-applied.sh`).
 Safe under the running build: a defaulted column and an unused function. **2a's app before 0075:** the People
 read selecting `is_primary_contact` fails, so People shows its error state and the header shows no Call, Text or
 Email; data-safe, but the order is fixed anyway. **Rollback:** revert the app; 0075 is harmless to the old build;
-drop it (§5) only on an owner decision. Served-HTML marker: the "People" card title on a group page. On for every
-account; never shown to customers. **Before merge, read-only, by the orchestrator:** the largest group's member
+drop it (§5) only on an owner decision. Served-HTML marker: the "People" card title on a group page, opened by URL
+(2a ships no link to it, R2); a contact page in Spanish reading "· Familia". Never shown to customers. **Before merge, read-only, by the orchestrator:** the largest group's member
 count on production and bis-ci (**Assumption:** none is near 50 today; this measures it rather than assumes it).
 
-**2b: an ordinary merge.** No migration. Rollback: revert. Served-HTML marker: a `data-timeline-subject` on a group
-timeline row.
+**2b: an ordinary merge.** No migration. It also turns on the way in: the contact header's group link and the
+Groups card's Open (R2). Rollback: revert (the page goes back to URL-only). Served-HTML marker: a
+`data-timeline-subject` on a group timeline row, and an `href` to `/groups/` on a contact page's header.
 
 ## 13. Effort and open risks
 
-Inside item 3's 6–9 engineer-weeks (`crm-features.md:1264-1267`): **2a about 1–1.5** (0075 and its tests about
-0.25, the generic registry and kit tweaks, People, Details, the group places subject about 0.75, the entry points,
-page tests and e2e the rest). **2b about 1–1.5** (the set form of seven sources across four domains about 0.5, the
-facts, Next up and ranking about 0.25, the timeline rows with subjects, tests and e2e the rest).
+Inside item 3's 6–9 engineer-weeks (`crm-features.md:1264-1267`); the total is unchanged by R1–R3, about 2–3:
+**2a about 1–1.5** (0075 with its schema, grants and RLS tests about 0.25–0.5, the generic registry, People with
+the call-first choice, Details, the group places subject about 0.75, the part 1 copy change and `contact.noName`
+twin about a day, page tests and e2e the rest). **2b about 1–1.5** (the set form of seven sources across four
+domains about 0.5, the facts, Next up and ranking about 0.25, the timeline rows with subjects, the two entry links
+and `RecordHeader.subtitleHref` moved here from 2a (about a day), tests and e2e the rest). Net: about a day moves
+from 2a to 2b; R1 adds the grants and RLS cases to 2a's 0075 work.
 
 - **"Most recently active" is a proxy** (C5): a customer who only calls without leaving a message, or who has only
   notes, ranks by when they joined. It decides only who is cut past 50, and the cut is said.
@@ -541,46 +603,45 @@ facts, Next up and ranking about 0.25, the timeline rows with subjects, tests an
 - **A primary contact who is not the reader's** leaves a Technician with no Call on the group page; they call
   their own customer from that customer's page.
 - **Names with no name** read "(no name)" in a Spanish page until `contactDisplayName` (`lib/format.ts:119-124`,
-  which reads `m[…]`) takes a locale; the twin lands in 2a, the call-site change is noted in §16.
+  which reads `m[…]`) takes a locale; the twin lands in 2a, threading the locale is a follow-up (§16.2).
 
 ## 14. Needs from other agents (through the orchestrator)
 
-- **bis-db-schema** (2a): migration 0075 (§5) and its schema test.
-- **bis-frontend** (2a, 2b): `RecordHeader.subtitleHref`, `TimelineItem.subject`, their `/styleguide` entries (§7).
+- **bis-db-schema** (2a): migration 0075 (§5), its schema, grants and RLS tests (§11.1), and its apply on bis-ci,
+  production and the parity check before 2a merges.
+- **bis-frontend** (2b): `RecordHeader.subtitleHref` (moved from 2a by R2), `TimelineItem.subject`, their
+  `/styleguide` entries (§7).
 - **bis-comms** (2b): `listContactMessages` taking a set, mapping `contact_id` from the conversation
   (`messaging.ts:742-763`).
 - **bis-booking** (2b): `countBookingsMadeFor`, the set form of `listContactUpcomingBookings` with `contact_id`,
   `listContactBookings` taking a set and returning `contact_id` (`booking.ts:945-1017`).
 - **bis-voice** (2b): `listContactCalls` taking a set and returning `contact_id` (`voice.ts:953-964`).
 - **bis-e2e-qa** (2a, 2b): `group-page.spec.ts` (§11) and the page added to `i18n-overflow.spec.ts`.
-- **Orchestrator:** the read-only group-size measurement (§12); land the DESIGN.md sentence (§15) in 2a.
+- **Orchestrator:** the read-only group-size measurement (§12); land the DESIGN.md sentence (§15) in 2b; file the
+  `contactDisplayName` locale follow-up (§16.2) in the ledger.
 
-## 15. DESIGN.md amendment this ships (D11, in 2a)
+## 15. DESIGN.md amendment this ships (D11, in 2b)
 
 **Record page, appended after "…then who they are.":** "A household or a business has its own record page on the
-same kit (decided 2026-10-13): it is a record, reached from its members' pages, not a new top-level surface."
+same kit (decided 2026-10-13): it is a record, reached from its members' pages, not a new top-level surface." It lands with 2b, because "reached from its members' pages" is true only once the entry links ship (R2).
 
-## 16. Open points for the owner
+## 16. Owner rulings (2026-10-13) and follow-ups
 
-1. **"Primary member" has no column today. Recommend migration 0075 (§5, C1).** D4 names
-   `client_group_members.is_primary`, but that flag is the PERSON's main group, at most one per person
-   (`0069:79`): every member of a household can hold it, and "Make primary" through `setPrimaryMembership`
-   changes that person's main group and their Business name order, not who the household's Call reaches. Options:
-   **(A, recommended)** 0075's `is_primary_contact`, one per group, server-written, set by Owner/Staff, no backfill,
-   so each group asks once; D12's "no migration" no longer holds for 2a. **(B, no migration)** call the member
-   marked "Pays the bills" when exactly one is, else hide and prompt "Mark who pays the bills"; it reuses
-   `setBillingAction` but makes one flag mean two things, and two payers mean no Call at all.
-2. **2a leaves the middle column empty.** The happening cards (summary, Next up, timeline) are 2b's, so a 2a group
-   page reached from the new links shows people, details, properties and deals with nothing in the middle.
-   **Recommend** shipping the two entry points (D2) with 2b instead, so 2a's page is reachable by URL only (review,
-   e2e) until it is whole; the alternative is accepting the gap for the days between the merges.
-3. **The kind word.** D4 says "Household/Business"; groups spec G4 ruled "Household"/"Familia" and "Business
-   customer"/"Cliente comercial" (`messages.ts:3546-3549`), and part 1's header line says "Hogar" and "Business"
-   (`:3762-3765`). **Recommend** G4's words on the group page (C11) and part 1's header line moved to them too
-   (a copy change in 2a: "Hogar" → "Familia", "Business" → "Business customer"), so one customer is never called
-   two things.
+### 16.1 Rulings on this spec's three open points (danlo, 2026-10-13, by choice tiles)
 
-**Findings outside this spec (for the ledger, unfixed):** `contact.noName` has no `.es` twin (`messages.ts:721`)
-and `contactDisplayName` reads `m[…]` (`lib/format.ts:123`), so every nameless customer reads "(no name)" on a
-Spanish page, not only here; 2a adds the twin, the locale parameter is a wider change. Part 1's spec cites
-`countContactBookingsMade` at `booking.ts:915-930`; it is now at `:945-960`.
+| # | Question | Ruled 2026-10-13 (owner) | PR |
+|---|---|---|---|
+| R1 | "Primary member" has no column: `client_group_members.is_primary` is the PERSON's main group, at most one per person (`0069:79`), so a household of three can hold it three times, and `setPrimaryMembership` changes that person's main group and Business name order, not who the household's Call reaches | **A new field via migration 0075, `client_group_members.is_primary_contact`**: at most one per group (partial unique index), written by server code only through 0069's member-write path (a service-role plpgsql function behind a server action that proved the target; no client grant), set by Owner, Staff and the agency from the People card, **no backfill**: every group starts with none and People asks "Choose who we call first." Header Call, Text and Email read it; none → hidden. The cases (a removed holder, a deleted contact, a Technician, the Undo), the rollout and the tests are §5, §12 and §11.1. The recommended option; the "Pays the bills" alternative was not taken | 2a |
+| R2 | 2a would show a page with an empty middle column | **The two entry links (the contact header's group link and the Groups card's "Open") ship WITH 2b**; 2a's page is reachable by URL only | 2a, 2b |
+| R3 | The kind word: D4's "Household/Business", S-02's G4 ("Household"/"Familia", "Business customer"/"Cliente comercial"), part 1's header ("Hogar", "Business") | **S-02's ruling everywhere**: the group page uses `groups.kind.*` (C11), and part 1's contact header line changes to match in 2a (§9.1) | 2a |
+
+### 16.2 Folded-in findings and follow-ups
+
+- **`contact.noName` Spanish twin: in 2a** (§9.1). `messages.ts:721` has no `.es` line today, so a nameless
+  customer reads "(no name)" on a Spanish page.
+- **Follow-up, out of scope:** `contactDisplayName` reads `m[…]` (`lib/format.ts:119-124`), the English
+  catalogue, so the twin shows only where a caller passes the locale. Threading a locale through it touches every
+  caller in the app; it is a follow-up for the ledger, not part of S-03 part 2.
+- **Fixed:** part 1's spec cited `countContactBookingsMade` at `booking.ts:915-930`
+  (`2026-10-12-record-page-design.md:73`, C8); it is at `:945-960` and the cite is corrected in that file in the
+  same commit as these rulings.
