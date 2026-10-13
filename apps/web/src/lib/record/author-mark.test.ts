@@ -22,13 +22,10 @@ const ENTRIES: [string, TimelineEntry, string][] = [
   ["deal", { kind: "deal", id: "d1", at: AT, deal: { id: "d1", name: "Deck", status: "open", monetary_value: 0, created_at: AT, created_by: null } }, "person"],
   ["web chat", { kind: "submission", id: "s1", at: AT, submission: { id: "s1", created_at: AT, formName: "Q", answers: [], author_kind: "ai" } }, "ai"],
   ["typed form", { kind: "submission", id: "s2", at: AT, submission: { id: "s2", created_at: AT, formName: "Q", answers: [], author_kind: "customer" } }, "customer"],
-  ["inbound text, pre-0074", message({ direction: "inbound" }), "customer"],
-  ["outbound text, pre-0074", message({}), "person"],
   ["recipe text", message({ author_kind: "automation" }), "automation"],
   ["staff email", message({ author_kind: "person", author_id: "user_dan", channel: "email" }), "person"],
   ["booking page", booking("customer"), "customer"],
   ["receptionist booking", booking("ai"), "ai"],
-  ["booking, pre-0074", booking(null), "customer"],
   ["call", { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 60, reason: null, summary: "", language: "en" } }, "ai"],
 ];
 
@@ -97,6 +94,13 @@ describe("an author_kind outside the five is the person mark, unnamed: never a s
     ["message", message({ author_kind: "robot", author_id: "user_dan" })],
     ["booking", booking("robot")],
     ["submission", { kind: "submission", id: "s9", at: AT, submission: { id: "s9", created_at: AT, formName: "Q", answers: [], author_kind: "robot" } } as unknown as TimelineEntry],
+    // minors-1b item 4: before 0074 these two columns were nullable; the migration backfilled every
+    // row and closed both with NOT NULL, so a real message or booking can no longer be null — this is
+    // the SAME defence (never a sixth kind, never blank) as the "robot" cases above, now covering the
+    // shape that used to need its own direction-based default (mutation: reintroduce that default ->
+    // the inbound message reads "Customer" and the booking reads "Customer" instead, FAILS).
+    ["message, null (pre-0074 shape, impossible since)", message({ direction: "inbound" })],
+    ["booking, null (pre-0074 shape, impossible since)", booking(null)],
   ])("%s (mutation: pass the column through unchecked -> FAILS)", (_n, entry) => {
     expect(authorOf(entry)).toEqual({ kind: "person", personId: null });
     expect(authorMark(entry, ctx())).toEqual({ kind: "person", label: "Someone on the team" });

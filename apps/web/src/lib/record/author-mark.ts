@@ -15,10 +15,12 @@ const isAuthorKind = (v: unknown): v is AuthorKind => typeof v === "string" && O
 const unnamed = (): { kind: AuthorKind; personId: string | null } => ({ kind: "person", personId: null });
 
 /**
- * Who made a row (spec §6): the kind, from the row's own columns (0073), and the person to name.
- * A NULL author_kind exists only for a row the build before 1b wrote, until 0074; it reads as the
- * backfill's own default (an inbound message the customer's, an outbound one a person's, D9; a
- * booking the customer's, the booking page being its common maker).
+ * Who made a row (spec §6): the kind, from the row's own columns (0073; NOT NULL on messages and
+ * bookings since 0074, so a real row can no longer be missing it). The old NULL-era default (an
+ * inbound message the customer's, an outbound one a person's, D9; a booking the customer's, the
+ * booking page being its common maker) is gone with it — `isAuthorKind`/`unnamed` below are not
+ * specific to NULL, so they stay as the one defence against any value outside the closed five,
+ * null included (a corrupt row; a column read through an unsafe cast, as a test still does).
  */
 export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: string | null } {
   switch (entry.kind) {
@@ -33,12 +35,12 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
       return isAuthorKind(kind) ? { kind, personId: null } : unnamed();
     }
     case "message": {
-      const kind: unknown = entry.message.author_kind ?? (entry.message.direction === "inbound" ? "customer" : "person");
+      const kind: unknown = entry.message.author_kind;
       if (!isAuthorKind(kind)) return unnamed();
       return { kind, personId: kind === "person" ? entry.message.author_id : null };
     }
     case "booking": {
-      const kind: unknown = entry.booking.author_kind ?? "customer";
+      const kind: unknown = entry.booking.author_kind;
       if (!isAuthorKind(kind)) return unnamed();
       return { kind, personId: kind === "person" ? entry.booking.author_id : null };
     }

@@ -762,9 +762,10 @@ export async function listContactMessages(
   return (data ?? []) as ContactMessageRow[];
 }
 
-/** One message as the record reads it; the author pair (0073) is present in page mode only. */
+/** One message as the record reads it; the author pair (0073) is present in page mode only — still
+ *  optional for that reason, but never null when present: 0074 closed the column with NOT NULL. */
 export type ContactMessageRow = Awaited<ReturnType<typeof listMessages>>[number] & {
-  author_kind?: AuthorKind | null;
+  author_kind?: AuthorKind;
   author_id?: string | null;
 };
 
