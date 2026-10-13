@@ -107,12 +107,12 @@ describe("the Texts row's words in Spanish (S-03 part 3 §10.1)", () => {
     expect(howLine({ kind: "keyword", word: "STOP" }, "es")).toBe("mandó STOP por texto");
     expect(howLine({ kind: "free_text", excerpt: "ya no", by: "Ana" }, "es")).toBe("escribió “ya no”, confirmado por Ana");
     expect(textsLine({ kind: "held", eventId: "h", since: "2026-10-03T15:00:00Z", excerpt: "remove me" }, "UTC", "es"))
-      .toBe("Escribió “remove me”. Los textos están en espera.");
+      .toBe("Escribió “remove me”. Los textos están en pausa.");
     expect(textsLine({ kind: "stopped", eventId: "e", since: "2026-10-03T15:00:00Z", how: { kind: "carrier" }, canResume: false }, "UTC", "es"))
       .toMatch(/^Desde el .*2026 · la compañía telefónica lo bloqueó$/);
   });
   it("the status words (mutation: textsStatusWord ignores the locale -> FAILS)", () => {
-    expect([textsStatusWord("allowed", "es"), textsStatusWord("stopped", "es"), textsStatusWord("held", "es")]).toEqual(["Permitido", "Detenido", "En espera"]);
+    expect([textsStatusWord("allowed", "es"), textsStatusWord("stopped", "es"), textsStatusWord("held", "es")]).toEqual(["Permitido", "Detenido", "En pausa"]);
     expect(textsStatusWord("held", "en")).toBe("On hold");
   });
   it("the action's Undo and its crash line (mutation: keep m[\"common.undo\"] -> FAILS)", async () => {
