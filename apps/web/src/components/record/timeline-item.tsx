@@ -1,4 +1,5 @@
 import type { ComponentType, ReactNode } from "react";
+import Link from "next/link";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { AuthorMark, type AuthorKind } from "./author-mark";
@@ -14,6 +15,9 @@ export type TimelineItemProps = {
   kind: string;
   icon: ComponentType<{ className?: string }>;
   mark: { kind: AuthorKind; label: string };
+  /** S-03 part 2 (C8): the member a row is about, on a household's timeline; the mark after it
+   *  still says who did it. */
+  subject?: { label: string; href: string };
   verb: ReactNode;
   status?: { tone: TimelineTone; word: string } | null;
   detail?: string | null;
@@ -29,12 +33,21 @@ const Sep = () => <span aria-hidden="true" className="text-muted-foreground">·<
  * One timeline row (spec §8, §9.4): who · did what · status · detail · when, then the body. Rows sit
  * on `--row-line` rules inside the card (never a box in a glass card); the caller draws the rule.
  */
-export function TimelineItem({ kind, icon: Icon, mark, verb, status, detail, time, dateTime, action, children }: TimelineItemProps) {
+export function TimelineItem({ kind, icon: Icon, mark, subject, verb, status, detail, time, dateTime, action, children }: TimelineItemProps) {
   return (
     <div data-timeline-item={kind} className="flex items-start gap-3 py-[7px]">
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
+          {subject ? (
+            <>
+              <Link href={subject.href} data-timeline-subject title={subject.label}
+                className="max-w-[16rem] truncate rounded-[var(--radius-ctl)] font-medium text-card-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
+                {subject.label}
+              </Link>
+              <Sep />
+            </>
+          ) : null}
           <AuthorMark kind={mark.kind} label={mark.label} />
           <span className="min-w-0 break-words font-medium text-card-foreground">{verb}</span>
           {status ? (

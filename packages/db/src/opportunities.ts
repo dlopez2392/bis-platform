@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
-import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 
 async function stagesOf(db: SupabaseClient, accountId: string, pipelineId: string) {
   const { data, error } = await db.from("pipeline_stages")
@@ -154,14 +154,16 @@ export async function listBoard(
 }
 
 export async function listContactOpportunities(
-  db: SupabaseClient, accountId: string, contactId: string, page?: TimelinePageOpts,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
 ) {
-  const cols = "id, name, status, monetary_value, created_at";
+  if (!page && typeof contactId !== "string") throw new TypeError("listContactOpportunities: a set needs a page");
+  const cols = "id, contact_id, name, status, monetary_value, created_at";
   // created_by (0073) only in page mode. Typed as the narrower list (the select parser cannot read a
   // union of two lists) and added back below as optional, so today's callers keep today's row type.
-  const q = db.from("opportunities")
-    .select((page ? `${cols}, created_by` : cols) as typeof cols)
-    .eq("account_id", accountId).eq("contact_id", contactId);
+  const q = forContacts(
+    db.from("opportunities").select((page ? `${cols}, created_by` : cols) as typeof cols).eq("account_id", accountId),
+    "contact_id", contactId,
+  );
   const { data, error } = await (page ? withTimelinePage(q, "created_at", page) : q.order("created_at", { ascending: false }));
   if (error) throw new Error(error.message);
   return data as (typeof data[number] & { created_by?: string | null })[];

@@ -3,9 +3,13 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RecordHeader } from "./record-header";
 
-const render = (actions: Parameters<typeof RecordHeader>[0]["actions"], subtitle: string | null = "García family · Household") =>
+const render = (
+  actions: Parameters<typeof RecordHeader>[0]["actions"],
+  subtitle: string | null = "García family · Household",
+  subtitleHref?: string,
+) =>
   renderToStaticMarkup(createElement(RecordHeader, {
-    name: "Ana García", subtitle, back: { href: "/dashboard/accounts/a1/contacts", label: "Contacts" }, actions,
+    name: "Ana García", subtitle, subtitleHref, back: { href: "/dashboard/accounts/a1/contacts", label: "Contacts" }, actions,
   }));
 
 const ALL = [
@@ -40,5 +44,22 @@ describe("RecordHeader (spec §9.1)", () => {
     expect(html).not.toContain("data-record-actions");
     expect(html).not.toContain("data-record-subtitle");
     expect(html).toContain('href="/dashboard/accounts/a1/contacts"');
+  });
+
+  it("without subtitleHref, the subtitle is still today's plain <p> (mutation: always render the link -> FAILS)", () => {
+    const html = render(ALL);
+    expect(html).toMatch(/<p data-record-subtitle[^>]*>García family · Household<\/p>/);
+  });
+
+  it("with subtitleHref, the subtitle is a focusable link, carrying data-record-subtitle (mutation: ignore the prop -> FAILS)", () => {
+    const html = render(ALL, "García family · Household", "/dashboard/accounts/a1/groups/g1");
+    expect(html).toMatch(/<a[^>]*data-record-subtitle[^>]*href="\/dashboard\/accounts\/a1\/groups\/g1"[^>]*>García family · Household<\/a>/);
+    expect(html).toMatch(/focus-visible:ring-\[3px\]/);
+  });
+
+  it("the subtitle link is a block, so the header's space-y spacing still applies above it (final review M1; mutation: drop block -> FAILS)", () => {
+    const html = render(ALL, "García family · Household", "/dashboard/accounts/a1/groups/g1");
+    const cls = html.match(/<a[^>]*data-record-subtitle[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(cls.split(/\s+/)).toEqual(expect.arrayContaining(["block", "w-fit"]));
   });
 });

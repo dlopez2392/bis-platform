@@ -57,3 +57,95 @@ describe("the bis-crm timeline sources, paged (S-03 1b, spec §7, C3)", () => {
       expect(rows.every((r) => r.formName === "Quote request")).toBe(true);
     }));
 });
+
+describe("S-03 part 2b: a household's set, each row naming its own contact_id (spec C6, C8, C13)", () => {
+  it("notes: a set reads both people's rows (created_at desc, id desc), each with its own contact_id (probe: drop contact_id from listNotes' select -> undefined, FAILS); a single id still reads exactly that person's rows (probe: route the string through .in([a, b]) -> b's row appears, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
+      const anaNote = await addNote(db, accountId, ana, "ana note", ACTOR);
+      const benNote = await addNote(db, accountId, ben, "ben note", ACTOR);
+      const older = await db.from("notes").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaNote.id);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
+      const newer = await db.from("notes").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benNote.id);
+      if (newer.error) throw new Error(`newer update failed: ${newer.error.message}`);
+      const both = (await listNotes(db, accountId, [ana, ben], { limit: 31 })) as { id: string; contact_id: string }[];
+      expect(both.map((n) => ({ id: n.id, contact_id: n.contact_id }))).toEqual([
+        { id: benNote.id, contact_id: ben },
+        { id: anaNote.id, contact_id: ana },
+      ]);
+      const anaOnly = (await listNotes(db, accountId, ana, { limit: 31 })) as { id: string }[];
+      expect(anaOnly.map((n) => n.id)).toEqual([anaNote.id]);
+    }));
+
+  it("To-dos: a set reads both people's rows, each with its own contact_id (probe: drop contact_id from the select -> undefined, FAILS); a single id still reads exactly that person's rows (probe: route the string through .in([a, b]) -> b's row appears, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
+      const anaTask = await addTask(db, accountId, { contactId: ana, title: "Ana task" }, ACTOR);
+      const benTask = await addTask(db, accountId, { contactId: ben, title: "Ben task" }, ACTOR);
+      const older = await db.from("tasks").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaTask.id);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
+      const newer = await db.from("tasks").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benTask.id);
+      if (newer.error) throw new Error(`newer update failed: ${newer.error.message}`);
+      const both = await listContactTasks(db, accountId, [ana, ben], { limit: 31 });
+      expect(both.map((t) => ({ id: t.id, contact_id: t.contact_id }))).toEqual([
+        { id: benTask.id, contact_id: ben },
+        { id: anaTask.id, contact_id: ana },
+      ]);
+      const anaOnly = await listContactTasks(db, accountId, ana, { limit: 31 });
+      expect(anaOnly.map((t) => t.id)).toEqual([anaTask.id]);
+    }));
+
+  it("deals: a set reads both people's open rows, each with its own contact_id (probe: drop contact_id from the select -> undefined, FAILS); a single id still reads exactly that person's rows (probe: route the string through .in([a, b]) -> b's row appears, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
+      const { pipelineId } = await ensureDefaultPipeline(db, accountId);
+      const anaDeal = await createOpportunity(db, accountId, { contactId: ana, pipelineId, name: "Ana deal", value: 100 }, ACTOR);
+      const benDeal = await createOpportunity(db, accountId, { contactId: ben, pipelineId, name: "Ben deal", value: 200 }, ACTOR);
+      const older = await db.from("opportunities").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaDeal.id);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
+      const newer = await db.from("opportunities").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benDeal.id);
+      if (newer.error) throw new Error(`newer update failed: ${newer.error.message}`);
+      const both = (await listContactOpportunities(db, accountId, [ana, ben], { limit: 31 })) as { id: string; contact_id: string }[];
+      expect(both.map((d) => ({ id: d.id, contact_id: d.contact_id }))).toEqual([
+        { id: benDeal.id, contact_id: ben },
+        { id: anaDeal.id, contact_id: ana },
+      ]);
+      const anaOnly = (await listContactOpportunities(db, accountId, ana, { limit: 31 })) as { id: string }[];
+      expect(anaOnly.map((d) => d.id)).toEqual([anaDeal.id]);
+    }));
+
+  it("submissions: a set reads both people's rows, each with its own contact_id; a single id still reads exactly that person's rows (probe: route the string through .in([a, b]) -> b's row appears, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
+      const form = await createForm(db, accountId, { name: "Quote request" }, ACTOR);
+      const anaSub = await createSubmission(db, accountId, form.id, { answers: [] });
+      const benSub = await createSubmission(db, accountId, form.id, { answers: [] });
+      await linkSubmissionContact(db, accountId, anaSub.id, ana);
+      await linkSubmissionContact(db, accountId, benSub.id, ben);
+      const older = await db.from("form_submissions").update({ created_at: "2026-10-01T00:00:00+00:00" }).eq("id", anaSub.id);
+      if (older.error) throw new Error(`older update failed: ${older.error.message}`);
+      const newer = await db.from("form_submissions").update({ created_at: "2026-10-09T00:00:00+00:00" }).eq("id", benSub.id);
+      if (newer.error) throw new Error(`newer update failed: ${newer.error.message}`);
+      const both = await listContactSubmissions(db, accountId, [ana, ben], { limit: 31 });
+      expect(both.map((s) => ({ id: s.id, contact_id: s.contact_id }))).toEqual([
+        { id: benSub.id, contact_id: ben },
+        { id: anaSub.id, contact_id: ana },
+      ]);
+      const anaOnly = await listContactSubmissions(db, accountId, ana, { limit: 31 });
+      expect(anaOnly.map((s) => s.id)).toEqual([anaSub.id]);
+    }));
+
+  it("every one of the four sources refuses a set with no page: the drawer always passes a single id (probe: drop the guard -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: ben } = await createContact(db, accountId, { firstName: "Ben" }, ACTOR);
+      await expect(listNotes(db, accountId, [ana, ben])).rejects.toThrow("a set needs a page");
+      await expect(listContactTasks(db, accountId, [ana, ben])).rejects.toThrow("a set needs a page");
+      await expect(listContactOpportunities(db, accountId, [ana, ben])).rejects.toThrow("a set needs a page");
+      await expect(listContactSubmissions(db, accountId, [ana, ben])).rejects.toThrow("a set needs a page");
+    }));
+});

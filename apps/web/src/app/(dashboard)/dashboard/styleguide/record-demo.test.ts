@@ -25,12 +25,18 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(new Set(ids).size).toBe(ids.length);
     expect(html).not.toContain(`>${m["record.skipToDetails"]}<`);
   });
-  it("RecordHeader with every action and with none (mutation: drop the no-action header -> 3 headers, FAILS)", () => {
-    // Each of the two layouts carries its own header with every action, so the page has four
-    // headers: two in the layouts, then one with every action and one with none. Exactly one of
-    // the four has no action row.
-    expect(html.match(/data-record-header/g)).toHaveLength(4);
-    expect(html.match(/data-record-actions/g)).toHaveLength(3);
+  it("RecordHeader with every action and with none (mutation: drop the no-action header -> 4 headers, FAILS)", () => {
+    // Each of the two layouts carries its own header with every action, so the page has five
+    // headers: two in the layouts, one with every action, one with none, and one whose subtitle
+    // links to the group (S-03 part 2b). Exactly one of the five has no action row.
+    expect(html.match(/data-record-header/g)).toHaveLength(5);
+    expect(html.match(/data-record-actions/g)).toHaveLength(4);
+  });
+  it("a record header's subtitle can link to the group's own page (S-03 part 2b; mutation: drop subtitleHref -> FAILS)", () => {
+    const start = html.indexOf("data-sg-header-linked");
+    expect(start).toBeGreaterThan(-1);
+    const section = html.slice(start, start + 2000);
+    expect(section).toMatch(/<a[^>]*data-record-subtitle[^>]*href="#"[^>]*>/);
   });
   it("RecordCard loading, ready, empty, error and closed on a phone (mutation: drop a state -> FAILS)", () => {
     for (const s of ["loading", "ready", "empty", "error"]) expect(html).toContain(`data-sg-record-card="${s}"`);
@@ -42,5 +48,8 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect(html).toContain(`>${m["provenance.customer"]}<`);
     expect(html).toContain('data-timeline-item="booking"');
     expect(html).toContain("data-timeline-skeleton");
+  });
+  it("a timeline row can name the member it is about (S-03 part 2b; mutation: drop the subject -> FAILS)", () => {
+    expect(html).toMatch(/<a[^>]*data-timeline-subject[^>]*>Dan López<\/a>/);
   });
 });

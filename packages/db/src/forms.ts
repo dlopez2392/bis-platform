@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
-import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 
 export type FormFieldKind =
   | "core.first_name" | "core.last_name" | "core.email" | "core.phone" | "core.company_name"
@@ -517,11 +517,15 @@ export async function republishFormIfUnchanged(
 }
 
 export async function listContactSubmissions(
-  db: SupabaseClient, accountId: string, contactId: string, page?: TimelinePageOpts,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
 ): Promise<(SubmissionRow & { formName: string; author_kind?: "customer" | "ai" })[]> {
-  const q = db.from("form_submissions")
-    .select(`${SUBMISSION_COLS}, forms(name)${page ? ", author_kind" : ""}`)
-    .eq("account_id", accountId).eq("contact_id", contactId);
+  if (!page && typeof contactId !== "string") throw new TypeError("listContactSubmissions: a set needs a page");
+  const q = forContacts(
+    db.from("form_submissions")
+      .select(`${SUBMISSION_COLS}, forms(name)${page ? ", author_kind" : ""}`)
+      .eq("account_id", accountId),
+    "contact_id", contactId,
+  );
   const { data, error } = await (page ? withTimelinePage(q, "created_at", page) : q.order("created_at", { ascending: false }));
   if (error) throw new Error(error.message);
   return ((data ?? []) as any[]).map((r) => ({

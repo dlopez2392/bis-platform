@@ -807,6 +807,17 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(await render()).toMatch(/data-record-subtitle[^>]*>García · Familia</);
   });
 
+  it("the group line links to the MAIN group's own page, the words unchanged (S-03 part 2b, §8.9, R2; mutation: the first group instead of the main one -> FAILS)", async () => {
+    // The main group is SECOND in the read, so linking the first group would be caught.
+    listContactPlacesMock.mockResolvedValue({ ...NO_PLACES, groups: [
+      { id: "g-other", kind: "business", name: "Acme", isPrimary: false },
+      { id: "g-main", kind: "household", name: "García", isPrimary: true },
+    ] });
+    const html = await render();
+    expect(html).toMatch(/<a (?=[^>]*href="\/dashboard\/accounts\/acct1\/groups\/g-main")(?=[^>]*data-record-subtitle)[^>]*>García · Household<\/a>/);
+    expect(html).not.toContain("/groups/g-other");
+  });
+
   it("a failed places read drops the group line and Directions, never the header (spec §7; mutation: let loadHeaderPlaces rethrow -> FAILS)", async () => {
     listContactPlacesMock.mockRejectedValue(new Error("places down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

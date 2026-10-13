@@ -11,7 +11,7 @@ const view = (d: ContactNextUp, now = new Date("2026-10-12T17:00:00Z"), locale: 
 describe("Next up (spec §9.3, C9)", () => {
   it("overdue To-dos first, then soonest, capped at three (mutation: list bookings before To-dos -> FAILS; mutation: drop the cap -> four rows, FAILS)", () => {
     const v = view(data({
-      bookings: [{ id: "b1", starts_at: "2026-10-13T15:00:00Z" }, { id: "b2", starts_at: "2026-10-20T15:00:00Z" }],
+      bookings: [{ id: "b1", contact_id: "c1", starts_at: "2026-10-13T15:00:00Z" }, { id: "b2", contact_id: "c1", starts_at: "2026-10-20T15:00:00Z" }],
       datedTasks: [{ id: "t-over", title: "Call back", due_at: "2026-10-01T05:00:00Z" }, { id: "t-today", title: "Quote", due_at: "2026-10-12T05:00:00Z" }],
     }));
     expect(v.rows.map((r) => r.id)).toEqual(["t-over", "t-today", "b1"]);
@@ -25,18 +25,18 @@ describe("Next up (spec §9.3, C9)", () => {
     ];
     const v = view(data({ datedTasks: tasks }), new Date("2026-10-13T03:00:00Z"));
     expect(v.rows).toEqual([
-      { kind: "task", id: "a", title: "Call back", detail: "Overdue · was due Oct 1, 2026", overdue: true },
-      { kind: "task", id: "b", title: "Quote", detail: "Due today", overdue: false },
-      { kind: "task", id: "c", title: "Order parts", detail: "Due Oct 20, 2026", overdue: false },
+      { kind: "task", id: "a", title: "Call back", detail: "Overdue · was due Oct 1, 2026", overdue: true, who: null },
+      { kind: "task", id: "b", title: "Quote", detail: "Due today", overdue: false, who: null },
+      { kind: "task", id: "c", title: "Order parts", detail: "Due Oct 20, 2026", overdue: false, who: null },
     ]);
   });
 
   it("a booking reads its day and time in the account's zone", () => {
-    const v = view(data({ bookings: [{ id: "b", starts_at: "2026-10-16T15:00:00Z" }] }));
+    const v = view(data({ bookings: [{ id: "b", contact_id: "c1", starts_at: "2026-10-16T15:00:00Z" }] }));
     // ICU 72+ may put U+202F (narrow no-break space) before AM; this machine's Node 24 printed 0x20.
     const row = v.rows[0] as { kind: string; id: string; label: string };
-    expect({ ...row, label: row.label.replace(/ /g, " ") }).toEqual({ kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM" });
-    expect((view(data({ bookings: [{ id: "b", starts_at: "2026-10-16T15:00:00Z" }] }), undefined, "es").rows[0] as { label: string }).label)
+    expect({ ...row, label: row.label.replace(/ /g, " ") }).toEqual({ kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: null });
+    expect((view(data({ bookings: [{ id: "b", contact_id: "c1", starts_at: "2026-10-16T15:00:00Z" }] }), undefined, "es").rows[0] as { label: string }).label)
       .toMatch(/^Cita · /);
   });
 
@@ -47,12 +47,24 @@ describe("Next up (spec §9.3, C9)", () => {
 
   it("the undated line says 'more' only when rows sit above it (mutation: always the 'more' key -> FAILS; never it -> FAILS)", () => {
     const dated = { datedTasks: [{ id: "t", title: "Quote", due_at: "2026-10-20T05:00:00Z" }] };
-    const booked = { bookings: [{ id: "b", starts_at: "2026-10-20T15:00:00Z" }] };
+    const booked = { bookings: [{ id: "b", contact_id: "c1", starts_at: "2026-10-20T15:00:00Z" }] };
     expect(view(data({ ...dated, undatedCount: 2 })).undated).toBe("2 more To-dos have no date.");
     expect(view(data({ ...booked, undatedCount: 1 })).undated).toBe("1 more To-do has no date.");
     expect(view(data({ undatedCount: 1 })).undated).toBe("1 To-do has no date.");
     expect(view(data({ undatedCount: 3 }), undefined, "es").undated).toBe("3 pendientes no tienen fecha.");
     expect(view(data({ undatedCount: 1 }), undefined, "es").undated).toBe("1 pendiente no tiene fecha.");
     expect(view(data({ ...dated, undatedCount: 1 }), undefined, "es").undated).toBe("1 pendiente más no tiene fecha.");
+  });
+});
+
+describe("Next up across a household (S-03 part 2b, C9)", () => {
+  it("with names each row says whose it is, by its own member; without names, no one (mutation: name every row after the first member -> FAILS)", () => {
+    const d = data({
+      bookings: [{ id: "b1", contact_id: "c2", starts_at: "2026-10-13T15:00:00Z" }],
+      datedTasks: [{ id: "t1", title: "Call back", due_at: "2026-10-01T05:00:00Z", contact_id: "c1" } as ContactNextUp["datedTasks"][number]],
+    });
+    const named = nextUpView(d, { zone: ZONE, now: new Date("2026-10-12T17:00:00Z"), tr: makeTr("en"), names: { c1: { name: "Ana", typed: true }, c2: { name: "Luis", typed: true } } });
+    expect(named.rows.map((r) => [r.id, r.who])).toEqual([["t1", { name: "Ana", typed: true }], ["b1", { name: "Luis", typed: true }]]);
+    expect(view(d).rows.map((r) => r.who)).toEqual([null, null]);
   });
 });

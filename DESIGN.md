@@ -239,6 +239,9 @@ the page (rule 5 extended to the card, not just the screen).
 On a phone it is one column (decided 2026-10-12): the header with Call
 first, the summary and what is next, the timeline, what they have (closed
 until tapped), then who they are.
+A household or a business has its own record page on the same kit
+(decided 2026-10-13): it is a record, reached from its members' pages, not
+a new top-level surface.
 
 **Documents.** Each file states its source ("the client uploaded it"),
 version, expiry in words ("expires in 12 days") and who can see it.

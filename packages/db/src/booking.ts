@@ -4,7 +4,7 @@ import { emit, type ActorType } from "./events";
 import { newPublicId, ALPHABET } from "./forms";
 import type { Branding } from "./branding";
 import { bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
-import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 
 export type CalendarRow = {
   id: string; account_id: string; public_id: string; enabled: boolean;
@@ -959,28 +959,54 @@ export async function countContactBookingsMade(
   return count;
 }
 
-export type UpcomingBooking = { id: string; starts_at: string };
+/**
+ * "Booked {n} times" for a household's set (S-03 part 2b, spec C8/D14): the same D-035 definition
+ * as `countContactBookingsMade`, across every id in `contactIds`, via `forContacts`. An empty set
+ * reads nothing and answers 0 (a group with no members has nothing to count, and PostgREST's
+ * `in.()` is not a query anyone means). THROWS on a read error or a count-less answer, same as
+ * `countContactBookingsMade`.
+ */
+export async function countBookingsMadeFor(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[],
+): Promise<number> {
+  if (contactIds.length === 0) return 0;
+  const { count, error } = await forContacts(
+    db.from("bookings")
+      .select("id", { count: "exact", head: true })
+      .eq("account_id", accountId),
+    "contact_id", contactIds,
+  ).is("rescheduled_from_id", null);
+  if (error) throw new Error(`countBookingsMadeFor failed: ${error.message}`);
+  if (count === null) throw new Error("countBookingsMadeFor failed: no count returned");
+  return count;
+}
+
+export type UpcomingBooking = { id: string; starts_at: string; contact_id: string };
 
 /**
- * The record's "Next up" bookings (S-03 part 1, spec §7): still `booked`, starting at or after
- * `nowIso`, soonest first, at most `limit`. No calendar label: there is one calendar per account
- * (`calendars_one_per_account`, 0016) and it has no name column. THROWS on a read error.
+ * The record's "Next up" bookings (S-03 part 1, spec §7; 2b: a household's set, `forContacts`).
+ * Still `booked`, starting at or after `nowIso`, soonest first across every id given, at most
+ * `limit`. No calendar label: there is one calendar per account (`calendars_one_per_account`, 0016)
+ * and it has no name column. THROWS on a read error.
  */
 export async function listContactUpcomingBookings(
-  db: SupabaseClient, accountId: string, contactId: string, nowIso: string, limit = 3,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], nowIso: string, limit = 3,
 ): Promise<UpcomingBooking[]> {
-  const { data, error } = await db.from("bookings")
-    .select("id, starts_at")
-    .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "booked")
+  const { data, error } = await forContacts(
+    db.from("bookings")
+      .select("id, contact_id, starts_at")
+      .eq("account_id", accountId),
+    "contact_id", contactId,
+  ).eq("status", "booked")
     .gte("starts_at", nowIso)
     .order("starts_at", { ascending: true }).order("id", { ascending: true })
     .limit(limit);
   if (error) throw new Error(`listContactUpcomingBookings failed: ${error.message}`);
-  return (data ?? []).map((r: UpcomingBooking) => ({ id: r.id, starts_at: r.starts_at }));
+  return (data ?? []).map((r: UpcomingBooking) => ({ id: r.id, starts_at: r.starts_at, contact_id: r.contact_id }));
 }
 
 export type ContactBookingRow = {
-  id: string; created_at: string; starts_at: string; status: BookingStatus; note: string | null;
+  id: string; contact_id: string; created_at: string; starts_at: string; status: BookingStatus; note: string | null;
   // NOT NULL since 0074 (the migration backfilled every row the build before 1b had written, then
   // closed the column).
   author_kind: AuthorKind; author_id: string | null; rescheduled_from_id: string | null;
@@ -989,19 +1015,23 @@ export type ContactBookingRow = {
 };
 
 /**
- * The record timeline's bookings (S-03 part 1, 1b; spec §6): one page by (created_at desc, id desc).
- * A booking row reads "booked an appointment for {when}": no calendar label, there is one calendar
- * per account (`calendars_one_per_account`, 0016) and it has no name column. A reschedule (0061)
- * carries the start it replaced, read in ONE extra query for the page. Runs on the caller's client,
- * so RLS (0068's Technician fence) decides what is read. THROWS on a read error.
+ * The record timeline's bookings (S-03 part 1, 1b; 2b: a household's set, `forContacts`; spec §6):
+ * one page by (created_at desc, id desc). A booking row reads "booked an appointment for {when}":
+ * no calendar label, there is one calendar per account (`calendars_one_per_account`, 0016) and it
+ * has no name column. A reschedule (0061) carries the start it replaced, read in ONE extra query
+ * for the page. Runs on the caller's client, so RLS (0068's Technician fence) decides what is read.
+ * THROWS on a read error.
  */
 export async function listContactBookings(
-  db: SupabaseClient, accountId: string, contactId: string, page: TimelinePageOpts,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[], page: TimelinePageOpts,
 ): Promise<ContactBookingRow[]> {
   const { data, error } = await withTimelinePage(
-    db.from("bookings")
-      .select("id, created_at, starts_at, status, note, author_kind, author_id, rescheduled_from_id")
-      .eq("account_id", accountId).eq("contact_id", contactId),
+    forContacts(
+      db.from("bookings")
+        .select("id, contact_id, created_at, starts_at, status, note, author_kind, author_id, rescheduled_from_id")
+        .eq("account_id", accountId),
+      "contact_id", contactId,
+    ),
     "created_at", page);
   if (error) throw new Error(`listContactBookings failed: ${error.message}`);
   const rows = (data ?? []) as Omit<ContactBookingRow, "moved_from_starts_at">[];

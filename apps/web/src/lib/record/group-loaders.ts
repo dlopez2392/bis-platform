@@ -1,6 +1,8 @@
 import {
   listGroupMembers, listOpenDealsFor, listGroupPlaces, getContact,
+  groupActivityMembers, groupFacts, groupNextUp, listTimelinePage, listPeopleNames, getVoiceProfile, TIMELINE_SOURCES,
   type GroupMembersPage, type GroupMember, type GroupPerson, type OpenDealRow, type ContactPlaces,
+  type GroupActivity, type GroupFacts, type GroupNextUp, type TimelinePage,
   type SupabaseClient, type TimelineCursor,
 } from "@bis/db";
 import type { SmsGate } from "@/lib/sms/sender";
@@ -10,6 +12,7 @@ import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { composerStateLine } from "@/lib/consent/composer-state";
 import { loggableError } from "@/lib/loggable-error";
 import { canTextFrom } from "./header-actions";
+import { personIdsOf } from "./author-mark";
 
 /**
  * One loader per group card (S-03 part 2; part 1 C5): each returns a load and NEVER throws, so one
@@ -80,4 +83,79 @@ export async function loadPrimaryText(input: {
     log("primary text", input.accountId, e);
     return false;
   }
+}
+
+export type GroupActivityLoad = { status: "ready"; activity: GroupActivity } | { status: "error" };
+/**
+ * The middle column's set (S-03 part 2b, C5): at most 50 members, the call-first first. A failed
+ * scan is the summary's, Next up's and the timeline's error (they have no set to read); a failed
+ * head count is only the people fact's (`activity.total`, plan deviation 9), logged here as
+ * "activity set (people)" so it is never swallowed.
+ */
+export async function loadGroupActivity(db: SupabaseClient, accountId: string, groupId: string): Promise<GroupActivityLoad> {
+  try {
+    const onError = (name: string, e: unknown) => log(`activity set (${name})`, accountId, e);
+    return { status: "ready", activity: await groupActivityMembers(db, accountId, groupId, undefined, { onError }) };
+  } catch (e) {
+    log("activity set", accountId, e);
+    return { status: "error" };
+  }
+}
+
+export type GroupSummaryLoad = { status: "ready"; facts: GroupFacts } | { status: "error" };
+/** The group summary's facts across the set. Each failed fact is named in the log; whether the
+ *  card has anything left to say is `groupFactsView`'s `allFailed`, which also weighs the count. */
+export async function loadGroupSummary(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<GroupSummaryLoad> {
+  try {
+    return { status: "ready", facts: await groupFacts(db, accountId, contactIds, { onError: (name, e) => log(`summary (${name})`, accountId, e) }) };
+  } catch (e) {
+    log("summary", accountId, e);
+    return { status: "error" };
+  }
+}
+
+export type GroupNextUpLoad = { status: "ready"; data: GroupNextUp } | { status: "error" };
+export async function loadGroupNextUp(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], now: Date,
+): Promise<GroupNextUpLoad> {
+  try {
+    return { status: "ready", data: await groupNextUp(db, accountId, contactIds, now.toISOString()) };
+  } catch (e) {
+    log("next up", accountId, e);
+    return { status: "error" };
+  }
+}
+
+export type GroupTimelineLoad =
+  | { status: "ready"; page: TimelinePage; names: Record<string, string>; personaName: string | null }
+  | { status: "error" };
+/**
+ * The group timeline (S-03 part 2b, C6, C7): loaders.ts's loadTimeline across the set, read-only, so
+ * there is no hold read (no Done here). A source that failed is named in `page.failed`; only when all
+ * seven failed is it the card's error. The names on person marks and the persona are soft.
+ */
+export async function loadGroupTimeline(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
+): Promise<GroupTimelineLoad> {
+  let page: TimelinePage;
+  try {
+    page = await listTimelinePage(db, accountId, contactIds, before, {
+      onError: (source, e) => log(`activity (${source})`, accountId, e),
+    });
+  } catch (e) {
+    log("activity", accountId, e);
+    return { status: "error" };
+  }
+  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  const [names, personaName] = await Promise.all([
+    listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
+      log("activity names", accountId, e);
+      return {} as Record<string, string>;
+    }),
+    getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+      log("activity persona", accountId, e);
+      return null;
+    }),
+  ]);
+  return { status: "ready", page, names, personaName };
 }

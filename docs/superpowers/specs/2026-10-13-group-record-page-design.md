@@ -366,7 +366,12 @@ call})" (part 1's calendar-day words in the account's zone). A failed fact is le
 {what}." with Try again (part 1 §9.2). **The cap line**, under the facts, only when `total > 50`: "Showing
 activity for 50 of {total} people. Open a person to see theirs." (narrow reader: "…of the {total} people you can
 see…"). It sits once, at the top of the middle column, and governs the summary, Next up and the timeline below it
-on every width. **Error** (all facts failed): `record.summary.failed`.
+on every width. **Corrected 2026-10-13 (final review):** the cap line also shows when the total failed but more
+than 50 were scanned (`groupActivityMembers`' `more`), as `groupPage.cap.unknownTotal` (narrow reader:
+`…unknownTotalVisible`), naming no total it does not know. **Empty** (corrected 2026-10-13 (final review)): a
+group with no one in it (an exact count of zero, never a failed count) reads the People card's own sentence by
+kind, `groupPage.people.emptyHousehold` / `…emptyBusiness`, not an empty line. **Error** (all facts failed):
+`record.summary.failed`.
 
 ### 8.7 Next up (`next-up`, 2b)
 
@@ -452,6 +457,8 @@ The tests that pin this line assert the household's English only (`[contactId]/p
 | `groupPage.facts.what.people` | the people in this group | las personas de este grupo |
 | `groupPage.capped` | Showing activity for {shown} of {total} people. Open a person to see theirs. | Se muestra la actividad de {shown} de {total} personas. Abra a una persona para ver la suya. |
 | `groupPage.cappedVisible` | Showing activity for {shown} of the {total} people you can see. Open a person to see theirs. | Se muestra la actividad de {shown} de las {total} personas que usted puede ver. Abra a una persona para ver la suya. |
+| `groupPage.cap.unknownTotal` (corrected 2026-10-13 (final review): the count failed, more than 50 scanned) | Showing activity for {shown} people. Open a person to see theirs. | Se muestra la actividad de {shown} personas. Abra a una persona para ver la suya. |
+| `groupPage.cap.unknownTotalVisible` (corrected 2026-10-13 (final review): the same, narrow reader) | Showing activity for {shown} people you can see. Open a person to see theirs. | Se muestra la actividad de {shown} personas que usted puede ver. Abra a una persona para ver la suya. |
 | `groupPage.nextUp.empty` | Nothing coming up for these people. Bookings ahead and To-dos with a due date show here. | No hay nada próximo para estas personas. Aquí aparecen las citas que vienen y los pendientes con fecha. |
 | `groupPage.timeline.empty` | Texts, calls, bookings, notes and To-dos with these people show up here. Open a person to start one. | Aquí aparecen los textos, llamadas, citas, notas y pendientes con estas personas. Abra a una persona para empezar uno. |
 | `groups.open` · `groups.openAria` (R2: with the entry links) | Open · Open {name} | Abrir · Abrir {name} |

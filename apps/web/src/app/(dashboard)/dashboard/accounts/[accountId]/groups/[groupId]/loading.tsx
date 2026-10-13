@@ -4,6 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLocale } from "@/components/locale-provider";
 import { RecordLayout } from "@/components/record/record-layout";
 import { RecordCard } from "@/components/record/record-card";
+import { TimelineItemSkeleton } from "@/components/record/timeline-item";
 import { GROUP_RECORD_CARDS, columnRuns } from "@/lib/record/record-cards";
 import { t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
@@ -11,8 +12,8 @@ import { m } from "@/lib/messages";
 /**
  * The group page while its reads run (S-03 part 2, C17; DESIGN.md rule 7: skeletons shaped like the
  * content, no spinner). The same layout and the group's cards, in the registry's phone order, each
- * in its "loading" state; the locale is the account layout's, which wraps this boundary. 2a has no
- * middle column, so no timeline skeleton (2b adds it with the three middle cards).
+ * in its "loading" state; the locale is the account layout's, which wraps this boundary. The
+ * timeline loads as its own rows (mark chip, line, time), as the contact page's does.
  */
 export default function Loading() {
   const locale = useLocale();
@@ -30,7 +31,8 @@ export default function Loading() {
     column,
     content: cards.map((def) => (
       <RecordCard key={def.id} id={def.id} title={t(m, def.titleKey, locale)} collapsibleOnPhone={def.collapsibleOnPhone}
-        skeletonRows={def.skeletonRows} state="loading" />
+        skeletonRows={def.skeletonRows} state="loading"
+        skeleton={def.id === "timeline" ? <TimelineItemSkeleton rows={def.skeletonRows} /> : undefined} />
     )),
   }));
   return (

@@ -16,8 +16,10 @@ function fakeDb() {
     }
     b.single = async () => ({ data: { id: "m1" }, error: null });
     b.maybeSingle = async () => ({ data: { id: "conv1" }, error: null });
+    // Task 12 made the conversations read an awaited ARRAY (a set of members' conversations), so it
+    // answers one conversation here; every other awaited read is empty (final review I2).
     b.then = (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-      Promise.resolve({ data: [], error: null }).then(res, rej);
+      Promise.resolve({ data: table === "conversations" ? [{ id: "conv1", contact_id: "c1" }] : [], error: null }).then(res, rej);
     return b;
   };
   const db = { from: (table: string) => chain(table), rpc: async () => ({ data: null, error: null }) };
@@ -47,7 +49,12 @@ describe("listContactMessages' page read (S-03 1b, spec C4, no database)", () =>
     const msg = calls.filter((c) => c.table === "messages");
     const cols = String(msg.find((c) => c.op === "select")?.args[0]).split(",").map((s) => s.trim());
     expect(cols).toEqual(expect.arrayContaining(["author_kind", "author_id", "channel", "created_at"]));
-    expect(msg.filter((c) => c.op === "in")).toEqual([{ table: "messages", op: "in", args: ["channel", ["email", "sms"]] }]);
+    // Task 12: the member's conversations are read as a set, so messages filter on .in(conversation_id).
+    expect(msg.filter((c) => c.op === "in")).toEqual(expect.arrayContaining([
+      { table: "messages", op: "in", args: ["channel", ["email", "sms"]] },
+      { table: "messages", op: "in", args: ["conversation_id", ["conv1"]] },
+    ]));
+    expect(msg.filter((c) => c.op === "in")).toHaveLength(2);
     expect(msg.filter((c) => c.op === "limit").map((c) => c.args[0])).toEqual([31]);
   });
 

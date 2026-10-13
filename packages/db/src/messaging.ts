@@ -4,7 +4,7 @@ import { sanitizeSearchTerm } from "./search-term";
 import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
 import { messageAuthor, type AuthorKind } from "./provenance";
-import { withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -738,35 +738,49 @@ export async function getConversationSummary(
  * message row looks like. A contact who has never been messaged has no
  * conversation row at all — the common case — and reads as an empty list
  * rather than an error.
+ *
+ * S-03 part 2b (C6, C13): `contactId` may also be a household's set of member
+ * ids, for the group record page's merged timeline — in page mode only (the
+ * drawer and the contact page's own no-page call never have a set to give).
+ * Every conversation in the set is read in one query through `forContacts`,
+ * and each returned message is tagged with ITS OWN `contact_id` from the
+ * conversation that carried it, never the set's first member's.
  */
 export async function listContactMessages(
-  db: SupabaseClient, accountId: string, contactId: string,
+  db: SupabaseClient, accountId: string, contactId: string | readonly string[],
   page?: TimelinePageOpts & { channels?: readonly NewMessage["channel"][] },
 ): Promise<ContactMessageRow[]> {
-  const { data: conversation, error } = await db.from("conversations")
-    .select("id").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (typeof contactId !== "string" && !page) throw new TypeError("listContactMessages: a set needs a page");
+  const { data: convos, error } = await forContacts(
+    db.from("conversations").select("id, contact_id").eq("account_id", accountId), "contact_id", contactId);
   if (error) throw new Error(`listContactMessages failed: ${error.message}`);
-  if (!conversation) return [];
-  if (!page) return listMessages(db, accountId, conversation.id as string);
-  // The record timeline (S-03 1b): one page, newest first, with who wrote each (0073). `channels`
-  // keeps the inbox's form/voice copies out (spec C4): those events have rows of their own there.
-  // postgrest-js types a column list built by a template as a ParserError, so the argument is
-  // typed as MESSAGE_COLS and ContactMessageRow adds the author pair as optional (activities.ts's
-  // listContactTasks does the same with created_by).
+  const list = (convos ?? []) as { id: string; contact_id: string }[];
+  if (list.length === 0) return [];
+  // One conversation per customer (`conversations_account_contact_unique`, 0005_messaging.sql:22-25),
+  // so list[0] is that customer's only one for a string id — same row `listMessages` would read.
+  if (!page) return listMessages(db, accountId, list[0]!.id);
+  // The record timeline (S-03 1b, 2b): one page, newest first, with who wrote each (0073) and which
+  // member it belongs to. `channels` keeps the inbox's form/voice copies out (spec C4): those events
+  // have rows of their own there. postgrest-js types a column list built by a template as a
+  // ParserError, so the argument is typed as MESSAGE_COLS and ContactMessageRow adds the author pair
+  // as optional (activities.ts's listContactTasks does the same with created_by).
+  const owner = new Map(list.map((c) => [c.id, c.contact_id]));
   let q = db.from("messages")
     .select(`${MESSAGE_COLS}, author_kind, author_id` as typeof MESSAGE_COLS)
-    .eq("account_id", accountId).eq("conversation_id", conversation.id as string);
+    .eq("account_id", accountId).in("conversation_id", list.map((c) => c.id));
   if (page.channels) q = q.in("channel", [...page.channels]);
   const { data, error: mErr } = await withTimelinePage(q, "created_at", page);
   if (mErr) throw new Error(`listContactMessages failed: ${mErr.message}`);
-  return (data ?? []) as ContactMessageRow[];
+  return ((data ?? []) as ContactMessageRow[]).map((r) => ({ ...r, contact_id: owner.get(r.conversation_id) ?? "" }));
 }
 
-/** One message as the record reads it; the author pair (0073) is present in page mode only — still
- *  optional for that reason, but never null when present: 0074 closed the column with NOT NULL. */
+/** One message as the record reads it; the author pair (0073) and `contact_id` (S-03 2b) are both
+ *  present in page mode only — `contact_id` optional for that reason, the author pair still optional
+ *  because 0074 closed that column with NOT NULL only going forward. */
 export type ContactMessageRow = Awaited<ReturnType<typeof listMessages>>[number] & {
   author_kind?: AuthorKind;
   author_id?: string | null;
+  contact_id?: string;
 };
 
 export async function listMessages(

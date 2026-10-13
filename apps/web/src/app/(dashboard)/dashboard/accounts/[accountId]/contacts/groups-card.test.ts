@@ -81,6 +81,14 @@ describe("GroupsCardView", () => {
     const html = view({ status: "ready", groups: [group()] });
     expect(html).toContain(`aria-label="${m["groups.remove"]}: Garcia"`);
   });
+  it("each row has its own Open link to its own group's page (S-03 part 2b; mutation: link the first group for every row -> FAILS)", () => {
+    const html = view({ status: "ready", groups: [group(), group({ memberId: "m2", groupId: "g2", kind: "business", name: "Acme Roofing" })] });
+    expect(html).toContain('data-group-open="g1" href="/dashboard/accounts/a1/groups/g1"');
+    expect(html).toContain('data-group-open="g2" href="/dashboard/accounts/a1/groups/g2"');
+    expect(html).toContain(`aria-label="${m["groups.openAria"].replace("{name}", "Garcia")}"`);
+    expect(html).toContain(`aria-label="${m["groups.openAria"].replace("{name}", "Acme Roofing")}"`);
+    expect(html).toContain(`>${m["groups.open"]}<`);
+  });
   it("headingHidden keeps the heading for aria-labelledby but hides it, so RecordCard's title is the one seen (S-03 §8; mutation: ignore the prop -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(GroupsCardView, {
       accountId: "a1", contactId: "c1", canManageGroups: true, headingHidden: true, load: { status: "loading" } as never, onRetry: () => {}, onChanged: () => {},

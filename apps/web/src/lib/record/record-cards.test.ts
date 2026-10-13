@@ -44,9 +44,23 @@ describe("the group record page's cards (S-03 part 2, spec §7)", () => {
     const ids = GROUP_RECORD_CARDS.map((c) => c.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
-  it("2a's phone order: what they have, then who they are (mutation: swap people's and properties' phoneOrder -> FAILS)", () => {
-    expect(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((c) => c.id)).toEqual(["properties", "deals", "people", "details"]);
-    expect(columnRuns(GROUP_RECORD_CARDS).map((r) => r.column)).toEqual(["have", "who"]);
+  it("2b's phone order is DESIGN.md's: the summary, Next up, the timeline, what they have, then who they are (spec §7; mutation: swap people's and timeline's phoneOrder -> FAILS)", () => {
+    expect(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((c) => c.id)).toEqual(
+      ["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
+    expect(columnRuns(GROUP_RECORD_CARDS).map((r) => r.column)).toEqual(["happening", "have", "who"]);
+  });
+  it("the middle column's rows are the spec §7 table's: desk order, titles, skeletons, never closed on a phone (mutation: give the timeline 3 skeleton rows -> FAILS)", () => {
+    expect(GROUP_RECORD_CARDS.filter((c) => c.column === "happening")
+      .map((c) => [c.id, c.deskOrder, c.titleKey, c.skeletonRows, c.collapsibleOnPhone])).toEqual([
+      ["summary", 1, "record.card.summary", 1, false],
+      ["next-up", 2, "record.card.nextUp", 3, false],
+      ["timeline", 3, "record.card.activity", 5, false],
+    ]);
+  });
+  it("within a column, desk order agrees with phone order", () => {
+    for (const run of columnRuns(GROUP_RECORD_CARDS)) {
+      expect(run.cards.map((c) => c.deskOrder)).toEqual([...run.cards.map((c) => c.deskOrder)].sort((a, b) => a - b));
+    }
   });
   it("only Properties and Deals collapse on a phone", () => {
     expect(GROUP_RECORD_CARDS.filter((c) => c.collapsibleOnPhone).map((c) => c.id).sort()).toEqual(["deals", "properties"]);
