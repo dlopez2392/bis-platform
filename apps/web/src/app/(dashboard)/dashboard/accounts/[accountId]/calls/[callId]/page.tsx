@@ -29,7 +29,7 @@ import { OutcomePill } from "../outcome-pill";
 import { TextbackFailedBadge } from "../textback-failed-badge";
 import { textbackWindow } from "../textback-window";
 import { sendSmsAction } from "../../conversations/actions";
-import { splitSummaryBlocks, type SummaryBlock } from "./summary-blocks";
+import { splitSummaryBlocks, type SummaryBlock } from "@/lib/voice/summary-blocks";
 import { TranscriptView } from "./transcript-view";
 import { TextbackResend } from "./textback-resend";
 import { CallProposals, type ResolvedStage } from "./proposals";

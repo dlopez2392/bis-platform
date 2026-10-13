@@ -12,6 +12,7 @@ import { TaskAssigneeField } from "@/components/assign/assignee-field";
 import { formatDateInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { messageFailureReason } from "@/lib/email/failure-reason";
+import { splitSummaryBlocks } from "@/lib/voice/summary-blocks";
 import type { AssignMember } from "@/lib/assign/view";
 import type { Locale } from "@/lib/i18n/locale";
 import type { Tr } from "@/lib/record/copy";
@@ -216,8 +217,19 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
       // own language (that is calls.caller_words, shown on the call card,
       // not here; C11).
       const reason = e.call.reason?.trim() || null;
-      const summary = e.call.summary.trim();
-      const words = reason || summary;
+      // calls.summary is composeSummary's own shape (lib/voice/summarize.ts): the
+      // system's fact line, an optional ⚠ MISMATCH warning, then the model's prose
+      // — never the whole string verbatim. Falling back to it here (no reason)
+      // shows only the prose: the fact line is internal bookkeeping a customer's
+      // own row should never carry, and a MISMATCH means the prose is contradicted
+      // by what was actually recorded, so NOTHING is shown rather than a claim this
+      // row cannot stand behind — the row still keeps its verb, status and Open
+      // call link either way (minors-1b item 5).
+      const blocks = reason ? [] : splitSummaryBlocks(e.call.summary);
+      const prose = blocks.some((b) => b.kind === "mismatch")
+        ? null
+        : blocks.filter((b) => b.kind === "prose").map((b) => b.text).join(" ") || null;
+      const words = reason || prose;
       const lang = reason ? "" : "en";
       return (
         <TimelineItem {...head} icon={Phone} action={
