@@ -1,4 +1,6 @@
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { formatDateInZone } from "@/lib/format";
 import type { ToastLike } from "@/lib/ui/guarded-run";
 import type { EmailHow, EmailView } from "./email-view";
@@ -21,13 +23,20 @@ export const EMAIL_TREATMENT = {
   stopped: { label: m["contact.email.stopped"], dot: "bg-destructive", chip: "border-destructive/25 bg-transparent text-muted-foreground" },
 } as const;
 
-export function emailHowLine(how: EmailHow): string {
+const EMAIL_WORD = { allowed: "contact.email.allowed", stopped: "contact.email.stopped" } as const satisfies Record<keyof typeof EMAIL_TREATMENT, MessageKey>;
+
+/** The status's word in the reader's language (rule 3: the dot never stands alone). */
+export function emailStatusWord(kind: keyof typeof EMAIL_TREATMENT, locale: Locale): string {
+  return t(m, EMAIL_WORD[kind], locale);
+}
+
+export function emailHowLine(how: EmailHow, locale: Locale = "en"): string {
   switch (how.kind) {
-    case "unsubscribe_link": return m["contact.email.how.unsubscribeLink"];
-    case "staff": return m["contact.email.how.staff"];
-    case "backfill_0049": return m["contact.email.how.backfill0049"];
-    case "bounced": return m["contact.email.how.bounced"];
-    case "complained": return m["contact.email.how.complained"];
+    case "unsubscribe_link": return t(m, "contact.email.how.unsubscribeLink", locale);
+    case "staff": return t(m, "contact.email.how.staff", locale);
+    case "backfill_0049": return t(m, "contact.email.how.backfill0049", locale);
+    case "bounced": return t(m, "contact.email.how.bounced", locale);
+    case "complained": return t(m, "contact.email.how.complained", locale);
   }
 }
 
@@ -40,24 +49,24 @@ export function emailHowLine(how: EmailHow): string {
  * link), so each gets its own 7am-plain explanation of what actually fixes
  * it. Every other non-resumable how keeps the generic line.
  */
-export function noResumeLine(how: EmailHow): string {
+export function noResumeLine(how: EmailHow, locale: Locale = "en"): string {
   switch (how.kind) {
-    case "bounced": return m["contact.email.bouncedExplain"];
-    case "complained": return m["contact.email.complainedExplain"];
-    default: return m["contact.email.customerOnly"];
+    case "bounced": return t(m, "contact.email.bouncedExplain", locale);
+    case "complained": return t(m, "contact.email.complainedExplain", locale);
+    default: return t(m, "contact.email.customerOnly", locale);
   }
 }
 
 /** The line under the status, or null. A date that will not format drops the date, never throws in a render. */
-export function emailLine(view: EmailView, zone: string): string | null {
+export function emailLine(view: EmailView, zone: string, locale: Locale = "en"): string | null {
   if (view.kind !== "stopped") return null;
   let since: string | null = null;
   try {
-    since = m["contact.email.since"].replace("{date}", formatDateInZone(view.since, zone));
+    since = t(m, "contact.email.since", locale, { date: formatDateInZone(view.since, zone, locale) });
   } catch {
     since = null;
   }
-  const how = emailHowLine(view.how);
+  const how = emailHowLine(view.how, locale);
   return since ? `${since} · ${how}` : how;
 }
 
@@ -81,13 +90,13 @@ export async function emailLoadFrom(res: { ok: boolean; json: () => Promise<unkn
 export type EmailRunner = (work: () => Promise<void>) => boolean | Promise<void>;
 
 async function attempt(
-  act: () => Promise<EmailActionResult>, show: (v: EmailView) => void, toast: ToastLike,
+  act: () => Promise<EmailActionResult>, show: (v: EmailView) => void, toast: ToastLike, locale: Locale,
 ): Promise<Extract<EmailActionResult, { ok: true }> | null> {
   let r: EmailActionResult;
   try {
     r = await act();
   } catch {
-    toast.error(m["inline.crashed"]);
+    toast.error(t(m, "inline.crashed", locale));
     return null;
   }
   if (!r.ok) {
@@ -102,9 +111,10 @@ async function attempt(
 /** One action. Answers whether it went through. Undo runs through the row's own guard. */
 export async function runEmailAction(
   act: () => Promise<EmailActionResult>, show: (v: EmailView) => void, toast: ToastLike,
-  o: { success: string; undo?: (u: EmailUndo) => Promise<EmailActionResult>; run?: EmailRunner; onChanged?: () => void },
+  o: { success: string; undo?: (u: EmailUndo) => Promise<EmailActionResult>; run?: EmailRunner; onChanged?: () => void; locale?: Locale },
 ): Promise<boolean> {
-  const r = await attempt(act, show, toast);
+  const locale = o.locale ?? "en";
+  const r = await attempt(act, show, toast, locale);
   if (!r) return false;
   o.onChanged?.();
   const undo = o.undo;
@@ -115,13 +125,13 @@ export async function runEmailAction(
   }
   toast.success(o.success, {
     action: {
-      label: m["common.undo"],
+      label: t(m, "common.undo", locale),
       onClick: () => {
         const run = o.run ?? ((work) => work());
         const ran = run(async () => {
-          if (await attempt(() => undo(token), show, toast)) o.onChanged?.();
+          if (await attempt(() => undo(token), show, toast, locale)) o.onChanged?.();
         });
-        if (ran === false) toast.error(m["contact.email.undoBusy"]);
+        if (ran === false) toast.error(t(m, "contact.email.undoBusy", locale));
         return ran;
       },
     },

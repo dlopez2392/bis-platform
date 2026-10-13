@@ -1,4 +1,6 @@
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { formatDateInZone } from "@/lib/format";
 import type { ToastLike } from "@/lib/ui/guarded-run";
 import type { TextsHow, TextsView } from "./texts-view";
@@ -21,43 +23,51 @@ export const TEXTS_TREATMENT = {
   held: { label: m["contact.texts.held"], dot: "bg-warning", chip: "border-warning/30 bg-warning/10 text-foreground" },
 } as const;
 
+const TEXTS_WORD = {
+  allowed: "contact.texts.allowed", stopped: "contact.texts.stopped", held: "contact.texts.held",
+} as const satisfies Record<keyof typeof TEXTS_TREATMENT, MessageKey>;
+
+/** The status's word in the reader's language (rule 3: the dot never stands alone). */
+export function textsStatusWord(kind: keyof typeof TEXTS_TREATMENT, locale: Locale): string {
+  return t(m, TEXTS_WORD[kind], locale);
+}
+
 const QUOTE = 60;
 function quote(s: string): string {
   const c = Array.from(s);
   return c.length <= QUOTE ? s : `${c.slice(0, QUOTE - 1).join("")}…`;
 }
 
-export function howLine(how: TextsHow): string {
+export function howLine(how: TextsHow, locale: Locale = "en"): string {
   switch (how.kind) {
-    case "keyword": return m["contact.texts.how.keyword"].replace("{word}", () => how.word);
+    case "keyword": return t(m, "contact.texts.how.keyword", locale, { word: how.word });
     case "free_text": {
       const excerpt = quote(how.excerpt ?? "…");
-      const by = how.by;
-      return by
-        ? m["contact.texts.how.freeTextBy"].replace("{excerpt}", () => excerpt).replace("{name}", () => by)
-        : m["contact.texts.how.freeText"].replace("{excerpt}", () => excerpt);
+      return how.by
+        ? t(m, "contact.texts.how.freeTextBy", locale, { excerpt, name: how.by })
+        : t(m, "contact.texts.how.freeText", locale, { excerpt });
     }
-    case "staff": return m["contact.texts.how.staff"];
-    case "carrier": return m["contact.texts.how.carrier"];
-    case "unsubscribe_link": return m["contact.texts.how.unsubscribeLink"];
+    case "staff": return t(m, "contact.texts.how.staff", locale);
+    case "carrier": return t(m, "contact.texts.how.carrier", locale);
+    case "unsubscribe_link": return t(m, "contact.texts.how.unsubscribeLink", locale);
   }
 }
 
 /** The line under the status, or null. A date that will not format drops the date, never throws in a render. */
-export function textsLine(view: TextsView, zone: string): string | null {
+export function textsLine(view: TextsView, zone: string, locale: Locale = "en"): string | null {
   if (view.kind === "stopped") {
     let since: string | null = null;
     try {
-      since = m["contact.texts.since"].replace("{date}", formatDateInZone(view.since, zone));
+      since = t(m, "contact.texts.since", locale, { date: formatDateInZone(view.since, zone, locale) });
     } catch {
       since = null;
     }
-    const how = howLine(view.how);
+    const how = howLine(view.how, locale);
     return since ? `${since} · ${how}` : how;
   }
   if (view.kind === "held") {
     const excerpt = view.excerpt;
-    return excerpt ? m["contact.texts.heldLine"].replace("{excerpt}", () => quote(excerpt)) : m["compose.smsHeld"];
+    return excerpt ? t(m, "contact.texts.heldLine", locale, { excerpt: quote(excerpt) }) : t(m, "compose.smsHeld", locale);
   }
   return null;
 }
@@ -84,14 +94,14 @@ export async function textsLoadFrom(res: { ok: boolean; json: () => Promise<unkn
 export type TextsRunner = (work: () => Promise<void>) => boolean | Promise<void>;
 
 async function attempt(
-  act: () => Promise<TextsActionResult>, show: (v: TextsView) => void, toast: ToastLike,
+  act: () => Promise<TextsActionResult>, show: (v: TextsView) => void, toast: ToastLike, locale: Locale,
 ): Promise<Extract<TextsActionResult, { ok: true }> | null> {
   let r: TextsActionResult;
   try {
     r = await act();
   } catch {
     // A stale tab posting a server-action id from before a redeploy rejects.
-    toast.error(m["inline.crashed"]);
+    toast.error(t(m, "inline.crashed", locale));
     return null;
   }
   if (!r.ok) {
@@ -106,9 +116,10 @@ async function attempt(
 /** One action. Answers whether it went through. Undo runs through the row's own guard; a refused Undo says so. */
 export async function runTextsAction(
   act: () => Promise<TextsActionResult>, show: (v: TextsView) => void, toast: ToastLike,
-  o: { success: string; undo?: (u: TextsUndo) => Promise<TextsActionResult>; run?: TextsRunner; onChanged?: () => void },
+  o: { success: string; undo?: (u: TextsUndo) => Promise<TextsActionResult>; run?: TextsRunner; onChanged?: () => void; locale?: Locale },
 ): Promise<boolean> {
-  const r = await attempt(act, show, toast);
+  const locale = o.locale ?? "en";
+  const r = await attempt(act, show, toast, locale);
   if (!r) return false;
   o.onChanged?.();
   const undo = o.undo;
@@ -119,13 +130,13 @@ export async function runTextsAction(
   }
   toast.success(o.success, {
     action: {
-      label: m["common.undo"],
+      label: t(m, "common.undo", locale),
       onClick: () => {
         const run = o.run ?? ((work) => work());
         const ran = run(async () => {
-          if (await attempt(() => undo(token), show, toast)) o.onChanged?.();
+          if (await attempt(() => undo(token), show, toast, locale)) o.onChanged?.();
         });
-        if (ran === false) toast.error(m["contact.texts.undoBusy"]);
+        if (ran === false) toast.error(t(m, "contact.texts.undoBusy", locale));
         return ran;
       },
     },

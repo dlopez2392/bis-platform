@@ -9,10 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DotPill } from "@/components/dot-pill";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { runGuarded } from "@/lib/ui/guarded-run";
 import { PHONE_CHECK_TREATMENT, pickPhoneCountry } from "@/lib/contacts/phone-country";
-import { TEXTS_TREATMENT, textsLine, runTextsAction, type TextsLoad } from "@/lib/consent/texts-row";
+import { TEXTS_TREATMENT, textsLine, runTextsAction, textsStatusWord, type TextsLoad } from "@/lib/consent/texts-row";
 import type { TextsView } from "@/lib/consent/texts-view";
+import type { Locale } from "@/lib/i18n/locale";
 import type { TextsActionResult, TextsUndo } from "@/lib/consent/staff-actions";
 import { setPhoneCountryAction, undoPhoneCountryAction } from "./actions";
 import {
@@ -37,10 +40,10 @@ import {
  */
 type Ready = Extract<TextsLoad, { status: "ready" }>;
 
-function Block({ children, state }: { children: React.ReactNode; state?: string }) {
+function Block({ children, state, locale }: { children: React.ReactNode; state?: string; locale: Locale }) {
   return (
     <div className="space-y-1.5" data-testid="texts-row" data-state={state}>
-      <p className="text-muted-foreground font-mono text-[10px] font-medium tracking-[0.14em] uppercase">{m["contact.messages.title"]}</p>
+      <p className="text-muted-foreground font-mono text-[10px] font-medium tracking-[0.14em] uppercase">{t(m, "contact.messages.title", locale)}</p>
       {children}
     </div>
   );
@@ -55,9 +58,10 @@ export function TextsRow({ accountId, contactId, load, onChanged = () => {}, onR
   /** The error state's Retry. */
   onRetry?: () => void;
 }) {
+  const locale = useLocale();
   if (load.status === "loading") {
     return (
-      <Block>
+      <Block locale={locale}>
         <div className="space-y-2" data-testid="texts-row-skeleton">
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-5 w-32" />
@@ -67,9 +71,9 @@ export function TextsRow({ accountId, contactId, load, onChanged = () => {}, onR
   }
   if (load.status === "error") {
     return (
-      <Block>
-        <p className="text-muted-foreground text-sm">{m["contact.texts.loadFailed"]}</p>
-        {onRetry ? <Button size="sm" variant="ghost" onClick={onRetry}>{m["common.retry"]}</Button> : null}
+      <Block locale={locale}>
+        <p className="text-muted-foreground text-sm">{t(m, "contact.texts.loadFailed", locale)}</p>
+        {onRetry ? <Button size="sm" variant="ghost" onClick={onRetry}>{t(m, "common.retry", locale)}</Button> : null}
       </Block>
     );
   }
@@ -80,6 +84,7 @@ export function TextsRow({ accountId, contactId, load, onChanged = () => {}, onR
 function ReadyRow({ accountId, contactId, load, onChanged }: {
   accountId: string; contactId: string; load: Ready; onChanged: () => void;
 }) {
+  const locale = useLocale();
   const [adopted, setAdopted] = useState(load);
   const [view, setView] = useState<TextsView>(load.view);
   const [checking, setChecking] = useState(true);
@@ -115,7 +120,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
   const act = (call: () => Promise<TextsActionResult>, success: string, withUndo = true) => {
     if (pending || busy.current) return;
     run(async () => {
-      await runTextsAction(call, show, toast, { success, undo: withUndo ? undo : undefined, run, onChanged });
+      await runTextsAction(call, show, toast, { success, undo: withUndo ? undo : undefined, run, onChanged, locale });
     });
   };
 
@@ -140,7 +145,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
     if (picked) status.current?.focus();
   }, [picked]);
 
-  const line = textsLine(view, load.zone);
+  const line = textsLine(view, load.zone, locale);
   const pill = view.kind === "allowed" ? TEXTS_TREATMENT.allowed
     : view.kind === "stopped" ? TEXTS_TREATMENT.stopped
     : view.kind === "held" ? TEXTS_TREATMENT.held
@@ -148,7 +153,7 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
   const checkNumber = view.kind === "check_number" && !picked;
 
   return (
-    <Block state={view.kind}>
+    <Block state={view.kind} locale={locale}>
       {/* ONE wrapper in every ready state — right after the Messages label —
           with the status line as ITS first child, so React keeps the same
           status node (its focus, its tabindex) when the state changes under
@@ -159,15 +164,15 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
       <div className="space-y-1.5" data-testid={checkNumber ? "phone-country-row" : undefined}>
         <div ref={status} tabIndex={-1} data-testid="texts-row-status"
           className="flex items-center gap-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <span>{m["contact.messages.texts"]}</span>
-          {picked ? null : <DotPill {...pill} dense data-status={view.kind} />}
+          <span>{t(m, "contact.messages.texts", locale)}</span>
+          {picked ? null : <DotPill {...pill} label={view.kind === "allowed" || view.kind === "stopped" || view.kind === "held" ? textsStatusWord(view.kind, locale) : pill.label} dense data-status={view.kind} />}
         </div>
         {checkNumber ? (
           <>
-            <p className="text-muted-foreground text-xs">{m["contact.phoneCountry.line"]}</p>
+            <p className="text-muted-foreground text-xs">{t(m, "contact.phoneCountry.line", locale)}</p>
             <div className="flex gap-2">
-              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("MX")}>{m["contact.phoneCountry.mx"]}</Button>
-              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("US")}>{m["contact.phoneCountry.us"]}</Button>
+              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("MX")}>{t(m, "contact.phoneCountry.mx", locale)}</Button>
+              <Button size="sm" variant="ghost" disabled={pending} onClick={() => pick("US")}>{t(m, "contact.phoneCountry.us", locale)}</Button>
             </div>
           </>
         ) : null}
@@ -176,13 +181,13 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
 
       {view.kind === "allowed" ? (
         <Button size="sm" variant="ghost" disabled={pending}
-          onClick={() => act(() => stopTextsAction(accountId, contactId, view.newestId), m["contact.texts.stoppedToast"])}>
-          {m["contact.texts.stopTexts"]}
+          onClick={() => act(() => stopTextsAction(accountId, contactId, view.newestId), t(m, "contact.texts.stoppedToast", locale))}>
+          {t(m, "contact.texts.stopTexts", locale)}
         </Button>
       ) : null}
 
       {view.kind === "stopped" && !view.canResume ? (
-        <p className="text-muted-foreground text-xs">{m["contact.texts.customerOnly"]}</p>
+        <p className="text-muted-foreground text-xs">{t(m, "contact.texts.customerOnly", locale)}</p>
       ) : null}
       {view.kind === "stopped" && view.canResume && !resuming ? (
         <Button size="sm" variant="ghost" disabled={pending} onClick={() => {
@@ -191,26 +196,26 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
           setNote("");
           setResuming(true);
         }}>
-          {m["contact.texts.resume"]}
+          {t(m, "contact.texts.resume", locale)}
         </Button>
       ) : null}
       {view.kind === "stopped" && view.canResume && resuming ? (
         <form className="space-y-2" data-testid="texts-resume-form" onSubmit={(e) => {
           e.preventDefault();
-          act(() => resumeTextsAction(accountId, contactId, view.eventId, note), m["contact.texts.resumedToast"], false);
+          act(() => resumeTextsAction(accountId, contactId, view.eventId, note), t(m, "contact.texts.resumedToast", locale), false);
         }}>
-          <Label htmlFor={`texts-resume-${contactId}`}>{m["contact.texts.resumeNoteLabel"]}</Label>
+          <Label htmlFor={`texts-resume-${contactId}`}>{t(m, "contact.texts.resumeNoteLabel", locale)}</Label>
           <Input id={`texts-resume-${contactId}`} name="note" value={note} required aria-required="true" autoFocus
             onChange={(e) => setNote(e.target.value)} />
           <div className="flex gap-2">
             {/* Fix round 1 #4: the server refusal (resumeTexts's own
                 `!text` check) stays the backstop; disabling here just keeps
                 an empty-note submit from ever leaving this row. */}
-            <Button type="submit" size="sm" disabled={pending || !note.trim()}>{m["contact.texts.resumeSubmit"]}</Button>
+            <Button type="submit" size="sm" disabled={pending || !note.trim()}>{t(m, "contact.texts.resumeSubmit", locale)}</Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => {
               setResuming(false);
               queueMicrotask(() => status.current?.focus());
-            }}>{m["contact.texts.resumeCancel"]}</Button>
+            }}>{t(m, "contact.texts.resumeCancel", locale)}</Button>
           </div>
         </form>
       ) : null}
@@ -218,12 +223,12 @@ function ReadyRow({ accountId, contactId, load, onChanged }: {
       {view.kind === "held" ? (
         <div className="flex gap-2">
           <Button size="sm" variant="ghost" disabled={pending}
-            onClick={() => act(() => confirmStopAction(accountId, contactId, view.eventId), m["contact.texts.confirmedToast"])}>
-            {m["contact.texts.confirmStop"]}
+            onClick={() => act(() => confirmStopAction(accountId, contactId, view.eventId), t(m, "contact.texts.confirmedToast", locale))}>
+            {t(m, "contact.texts.confirmStop", locale)}
           </Button>
           <Button size="sm" variant="ghost" disabled={pending}
-            onClick={() => act(() => notAStopAction(accountId, contactId, view.eventId), m["contact.texts.releasedToast"])}>
-            {m["contact.texts.notAStop"]}
+            onClick={() => act(() => notAStopAction(accountId, contactId, view.eventId), t(m, "contact.texts.releasedToast", locale))}>
+            {t(m, "contact.texts.notAStop", locale)}
           </Button>
         </div>
       ) : null}

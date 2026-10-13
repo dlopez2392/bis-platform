@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -47,6 +47,7 @@ describe("BusinessInlineField follows a new value from the server, but not mid-e
 
 vi.mock("./actions", () => ({ setContactBusinessAction: vi.fn(), undoContactBusinessAction: vi.fn() }));
 const { BusinessInlineField } = await import("./business-field");
+const { LocaleProvider } = await import("@/components/locale-provider");
 
 describe("BusinessInlineField renders the stored name", () => {
   it("shows the server's value at rest, and the empty prompt for none", () => {
@@ -54,5 +55,14 @@ describe("BusinessInlineField renders the stored name", () => {
       .toContain(">Acme Roofing</button>");
     expect(renderToStaticMarkup(createElement(BusinessInlineField, { accountId: "a1", contactId: "c1", value: null })))
       .not.toContain(">null</button>");
+  });
+});
+
+describe("BusinessInlineField in Spanish (S-03 part 3 §10.1)", () => {
+  it("names itself Nombre del negocio (mutation: keep m[\"contact.company\"] -> FAILS)", () => {
+    const out = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>,
+      createElement(BusinessInlineField, { accountId: "a1", contactId: "c1", value: null })));
+    expect(out).toContain("Nombre del negocio");
+    expect(out).not.toContain("Business name");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { renderedText } from "@/lib/rendered-text";
 import { m } from "@/lib/messages";
@@ -9,6 +9,7 @@ import { m } from "@/lib/messages";
 vi.mock("./actions", () => ({ updateContactFieldAction: vi.fn() }));
 
 const { SourceField } = await import("./source-field");
+const { LocaleProvider } = await import("@/components/locale-provider");
 
 const html = (source: string | null, sourceHint: string | null) =>
   renderToStaticMarkup(createElement(SourceField, { accountId: "a1", contactId: "c1", source, sourceHint }));
@@ -70,5 +71,14 @@ describe("SourceField — F-157's drawer line", () => {
     expect(hintTag, "the hint <p>").toBeTruthy();
     expect(hintTag).not.toContain("title=");
     expect(hintTag).not.toContain("aria-label");
+  });
+});
+
+describe("SourceField in Spanish (S-03 part 3 §10.1)", () => {
+  it("the label reads Origen, and the field's own chrome follows (mutation: keep m[\"contact.source.label\"] -> FAILS)", () => {
+    const out = renderToStaticMarkup(createElement(LocaleProvider, { locale: "es" } as ComponentProps<typeof LocaleProvider>,
+      createElement(SourceField, { accountId: "a1", contactId: "c1", source: null, sourceHint: "Origen desconocido" })));
+    expect(out).toContain(">Origen<");
+    expect(out).not.toContain(">Source<");
   });
 });

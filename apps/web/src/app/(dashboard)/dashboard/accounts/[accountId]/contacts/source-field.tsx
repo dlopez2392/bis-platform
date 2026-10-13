@@ -2,6 +2,8 @@
 
 import { InlineField } from "@/components/inline-field";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import { useLocale } from "@/components/locale-provider";
 import { updateContactFieldAction } from "./actions";
 
 /**
@@ -28,14 +30,16 @@ export function SourceField({
    *  fills it in needs a fresh read to drop that caption. */
   onSaved?: () => void;
 }) {
+  const locale = useLocale();
   return (
     <div className="grid grid-cols-[92px_minmax(0,1fr)] items-start gap-2">
-      <dt className="text-muted-foreground pt-1 text-xs">{m["contact.source.label"]}</dt>
+      <dt className="text-muted-foreground pt-1 text-xs">{t(m, "contact.source.label", locale)}</dt>
       <dd>
         <InlineField
-          label={m["contact.source.label"]}
+          label={t(m, "contact.source.label", locale)}
           field="source"
           value={source}
+          locale={locale}
           save={async (v) => {
             const saved = await updateContactFieldAction(accountId, contactId, "source", v);
             if (saved.ok) onSaved?.();

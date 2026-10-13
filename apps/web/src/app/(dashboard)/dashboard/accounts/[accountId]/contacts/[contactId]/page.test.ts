@@ -746,14 +746,17 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(cardHtml(html, "next-up")).not.toContain(addTodo);
   });
 
-  it("on a Spanish page the bodies that stay English carry lang=\"en\": Details, Tags and Groups; the timeline is bilingual since 1b (§9.6; mutation: wrap the timeline in lang=\"en\" -> FAILS)", async () => {
+  it("on a Spanish page Details and Tags read Spanish with no lang=\"en\" wrapper, and only the Groups card keeps one (S-03 part 3 §10.2, D10; mutation: leave the Details wrapper -> FAILS; drop the Groups wrapper -> FAILS)", async () => {
     prefsMock.mockResolvedValue({ language: "es", theme: null });
     const html = await render();
     expect(html).toMatch(/data-record-layout[^>]*lang="es"|lang="es"[^>]*data-record-layout/);
     const wrapped = (id: string) => /<div lang="en">/.test(cardHtml(html, id));
-    expect(["details", "tags", "groups"].filter((id) => !wrapped(id))).toEqual([]);
-    // The converted cards inherit the page's Spanish.
-    expect(["summary", "next-up", "deals", "timeline"].filter(wrapped)).toEqual([]);
+    expect(["details", "tags", "summary", "next-up", "deals", "timeline"].filter(wrapped)).toEqual([]);
+    expect(wrapped("groups")).toBe(true);
+    expect(cardHtml(html, "details")).toContain(`>${m["contacts.firstName.es"]}<`);
+    expect(cardHtml(html, "details")).toContain(`>${m["contact.source.label.es"]}<`);
+    expect(cardHtml(html, "details")).toContain(`>${m["assign.field.label.es"]}<`);
+    expect(cardHtml(html, "tags")).toContain(`placeholder="${m["contact.addTag.es"]}"`);
   });
 
   it("a client-role person with no language of their own reads the account's Spanish (mutation: drop language from the accounts select -> English, FAILS)", async () => {

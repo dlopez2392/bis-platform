@@ -223,23 +223,21 @@ export default async function ContactDetailPage({
         ),
       }
       : failed(tr.text("record.activity.failed")),
-    // The Groups card's copy stays English in part 1, as Details' and Tags' (§9.6, D12).
+    // The Groups card's copy stays English (S-03 part 3 D10; spec §16 files its translation).
     groups: { node: <div lang="en"><GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /></div> },
     properties: { node: <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} headingHidden /> },
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
+    // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"
       ? {
         node: (
-          // The fields panel stays English until part 3 (D12).
-          <div lang="en">
-            <ContactDetailsBody accountId={accountId} contactId={contactId} contact={contact} fieldDefs={fieldDefs.fieldDefs}
-              email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId} />
-          </div>
+          <ContactDetailsBody accountId={accountId} contactId={contactId} contact={contact} fieldDefs={fieldDefs.fieldDefs}
+            email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId} />
         ),
       }
       : cardFailed("contact.details"),
     tags: tags.status === "ready"
-      ? { node: <div lang="en"><ContactTagsBody accountId={accountId} contactId={contactId} tags={tags.tags} /></div> }
+      ? { node: <ContactTagsBody accountId={accountId} contactId={contactId} tags={tags.tags} /> }
       : cardFailed("contact.tags"),
     "related-people": { node: <RelationshipsCard accountId={accountId} contactId={contactId} headingHidden /> },
   } satisfies Record<RecordCardId, Slot>;
