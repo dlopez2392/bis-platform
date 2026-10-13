@@ -632,3 +632,23 @@ describe("S-09 PR 2: the Spanish box on save", () => {
     expect(dbMocks.upsertAutomation.mock.calls[0]![3]).toMatchObject({ bodyEs: null, bodyEsBasis: null });
   });
 });
+
+describe("S-09 PR 2: a failed read of the stored row on save", () => {
+  const STAGE_ID = "6f1b2c3d-4e5a-4b7c-8d9e-0a1b2c3d4e5f";
+  const cases: [string, () => Promise<unknown>, string][] = [
+    ["review request", () => saveReviewRequestAction("acct_1", fd({ channel: "email", review_url: "", body: "Hi" })), "automations.review.saveFailed"],
+    ["no-show nudge", () => saveNoShowNudgeAction("acct_1", fd({ channel: "sms", body: "Hi" })), "automations.noShow.saveFailed"],
+    ["referral ask", () => saveReferralAskAction("acct_1", fd({ channel: "sms", body: "Hi" })), "automations.referral.saveFailed"],
+    ["reactivation", () => saveReactivationAction("acct_1", fd({ months: "9", body: "Hi" })), "automations.reactivation.saveFailed"],
+    ["quote follow-up", () => saveQuoteFollowupAction("acct_1", fd({ stage_id: STAGE_ID, quiet_days: "3", channel: "sms" })), "automations.quoteFollowup.saveFailed"],
+    ["text reminder", () => saveSmsReminderAction("acct_1", fd({ body: "Hi" })), "automations.smsReminder.saveFailed"],
+    ["confirmation", () => saveAppointmentConfirmAction("acct_1", fd({ body: "Hi" })), "automations.appointmentConfirm.saveFailed"],
+  ];
+  it.each(cases)("%s: returns the card's own save-failed message and writes nothing (mutation: drop the try around getAutomation -> FAILS)", async (_name, save, key) => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.getAutomation.mockRejectedValue(new Error("read failed"));
+    expect(await save()).toEqual({ ok: false, error: m[key as keyof typeof m] });
+    expect(dbMocks.upsertAutomation).not.toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+});

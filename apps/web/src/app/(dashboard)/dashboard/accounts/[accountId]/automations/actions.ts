@@ -36,14 +36,22 @@ const CHANNELS: readonly ReviewRequestChannel[] = ["email", "sms"];
  * Validates the Spanish exactly as the English (length). Reads the stored row for "unchanged"
  * and the basis. Shared by the four actions in this file (Task 15) and Task 16's. `defaultEs`:
  * the recipe's own written Spanish default rendered for THIS account's brand, "" for
- * appointment_confirm (plan deviation 4, its English has no default either).
+ * appointment_confirm (plan deviation 4, its English has no default either). `saveFailed`: the
+ * card's own save-failed message, returned when the stored row cannot be read (a read that throws
+ * would otherwise escape the action and reach the card as a crash, not as its own toast).
  */
 async function spanishBoxPatch(
-  accountId: string, recipe: RecipeKey, formData: FormData, body: string, defaultEs: string,
+  accountId: string, recipe: RecipeKey, formData: FormData, body: string, defaultEs: string, saveFailed: string,
 ): Promise<{ ok: true; bodyEs: string | null; bodyEsBasis: string | null } | { ok: false; error: string }> {
   const submitted = String(formData.get("body_es") ?? "");
   if (submitted.trim().length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
-  const row = await getAutomation(serviceDb(), accountId, recipe);
+  let row: Awaited<ReturnType<typeof getAutomation>>;
+  try {
+    row = await getAutomation(serviceDb(), accountId, recipe);
+  } catch (e) {
+    console.error(`spanishBoxPatch: reading ${recipe} failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: saveFailed };
+  }
   const next = nextSpanishBox({
     submitted, useOurs: formData.get("body_es_use_ours") === "1", stillMatches: formData.get("body_es_still_matches") === "on",
     defaultEs, body, stored: { bodyEs: row?.body_es ?? null, basis: row?.body_es_basis ?? null },
@@ -83,7 +91,7 @@ export async function saveReviewRequestAction(
     console.error(`saveReviewRequestAction: branding read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.review.saveFailed"] };
   }
-  const es = await spanishBoxPatch(accountId, "review_request", formData, body, defaultReviewRequestBody(brandName, "es"));
+  const es = await spanishBoxPatch(accountId, "review_request", formData, body, defaultReviewRequestBody(brandName, "es"), m["automations.review.saveFailed"]);
   if (!es.ok) return es;
 
   // Store the NORMALISED config (`parsed.href`), not the raw string: the pass
@@ -125,7 +133,7 @@ export async function saveNoShowNudgeAction(
     console.error(`saveNoShowNudgeAction: branding read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.noShow.saveFailed"] };
   }
-  const es = await spanishBoxPatch(accountId, "no_show_nudge", formData, body, defaultNoShowNudgeBody(brandName, "es"));
+  const es = await spanishBoxPatch(accountId, "no_show_nudge", formData, body, defaultNoShowNudgeBody(brandName, "es"), m["automations.noShow.saveFailed"]);
   if (!es.ok) return es;
 
   try {
@@ -163,7 +171,7 @@ export async function saveReferralAskAction(
     console.error(`saveReferralAskAction: branding read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.referral.saveFailed"] };
   }
-  const es = await spanishBoxPatch(accountId, "referral_ask", formData, body, defaultReferralAskBody(brandName, "es"));
+  const es = await spanishBoxPatch(accountId, "referral_ask", formData, body, defaultReferralAskBody(brandName, "es"), m["automations.referral.saveFailed"]);
   if (!es.ok) return es;
 
   // NOT ON BY EMAIL WITHOUT AN ADDRESS AND A REPLY-TO (B21, danlo,
@@ -227,7 +235,7 @@ export async function saveReactivationAction(
     console.error(`saveReactivationAction: branding read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.reactivation.saveFailed"] };
   }
-  const es = await spanishBoxPatch(accountId, "reactivation", formData, body, defaultReactivationBody(brandName, "es"));
+  const es = await spanishBoxPatch(accountId, "reactivation", formData, body, defaultReactivationBody(brandName, "es"), m["automations.reactivation.saveFailed"]);
   if (!es.ok) return es;
 
   // NOT ON WITHOUT AN ADDRESS AND A REPLY-TO (decision A, danlo, 2026-09-22).
@@ -307,7 +315,7 @@ export async function saveQuoteFollowupAction(
     console.error(`saveQuoteFollowupAction: branding read failed for account ${accountId}: ${String(e)}`);
     return { ok: false, error: m["automations.quoteFollowup.saveFailed"] };
   }
-  const es = await spanishBoxPatch(accountId, "quote_followup", formData, body, defaultQuoteFollowupBody(brandName, "es"));
+  const es = await spanishBoxPatch(accountId, "quote_followup", formData, body, defaultQuoteFollowupBody(brandName, "es"), m["automations.quoteFollowup.saveFailed"]);
   if (!es.ok) return es;
 
   try {
@@ -334,7 +342,7 @@ export async function saveSmsReminderAction(
   const body = String(formData.get("body") ?? "").trim();
   if (body.length > AUTOMATION_BODY_MAX_LENGTH) return { ok: false, error: m["automations.bodyTooLong"] };
 
-  const es = await spanishBoxPatch(accountId, "sms_reminder", formData, body, defaultSmsReminderBody("es"));
+  const es = await spanishBoxPatch(accountId, "sms_reminder", formData, body, defaultSmsReminderBody("es"), m["automations.smsReminder.saveFailed"]);
   if (!es.ok) return es;
 
   try {
@@ -363,7 +371,7 @@ export async function saveAppointmentConfirmAction(
   // Plan deviation 4: this recipe's "our Spanish default" is the empty
   // string — its English has no default either (a blank closing line sends
   // the question alone).
-  const es = await spanishBoxPatch(accountId, "appointment_confirm", formData, body, "");
+  const es = await spanishBoxPatch(accountId, "appointment_confirm", formData, body, "", m["automations.appointmentConfirm.saveFailed"]);
   if (!es.ok) return es;
 
   try {
