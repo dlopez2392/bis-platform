@@ -124,12 +124,15 @@ export async function updateCalendarSettingsAction(
   const followupBody = followupBodyRaw.trim() === DEFAULT_FOLLOWUP_BODY ? "" : followupBodyRaw;
   // Task 17, plan deviation 6: neither language had a length check before
   // this task. Both are bounded here, the submitted English BEFORE it is
-  // compared against anything else below.
-  if (followupBody.trim().length > AUTOMATION_BODY_MAX_LENGTH) {
+  // compared against anything else below. UNTRIMMED, the automations/voice
+  // convention (`voice/actions.ts`'s `textbackBody.length`,
+  // `automations/actions.ts`'s `body.length`) — trimming first would let
+  // 1,001 spaces (trim-empty) sail past the bound and land in the column.
+  if (followupBody.length > AUTOMATION_BODY_MAX_LENGTH) {
     return { ok: false, error: m["automations.bodyTooLong"] };
   }
   const submittedEs = String(formData.get("body_es") ?? "");
-  if (submittedEs.trim().length > AUTOMATION_BODY_MAX_LENGTH) {
+  if (submittedEs.length > AUTOMATION_BODY_MAX_LENGTH) {
     return { ok: false, error: m["automations.bodyTooLong"] };
   }
 

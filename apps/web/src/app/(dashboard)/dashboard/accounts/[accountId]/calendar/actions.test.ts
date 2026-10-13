@@ -218,6 +218,24 @@ describe("updateCalendarSettingsAction — the follow-up's Spanish box (Task 17)
     expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
   });
 
+  // Review round 1 (Important 1): the automations/voice convention checks the
+  // UNTRIMMED length (`voice/actions.ts:84`'s `textbackBody.length`,
+  // `automations/actions.ts`'s `body.length`) — trimming first lets 1,001
+  // spaces (trim-empty) sail past the bound and land in the column untrimmed.
+  it("an English body of 1,001 spaces is still refused (untrimmed length, mutation: check .trim().length instead → FAILS)", async () => {
+    const r = await updateCalendarSettingsAction("acct_1", baseFormData(" ".repeat(1001)));
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
+  it("a Spanish body of 1,001 spaces is still refused (untrimmed length, mutation: check .trim().length instead → FAILS)", async () => {
+    const fd = baseFormData("Custom English");
+    fd.set("body_es", " ".repeat(1001));
+    const r = await updateCalendarSettingsAction("acct_1", fd);
+    expect(r).toEqual({ ok: false, error: m["automations.bodyTooLong"] });
+    expect(dbMocks.updateCalendarSettings).not.toHaveBeenCalled();
+  });
+
   it("reads the stored Spanish box through the request client, not serviceDb (mutation: call serviceDb() in this action → FAILS)", async () => {
     const fd = baseFormData("Custom English");
     fd.set("body_es", "Nuestro texto.");
