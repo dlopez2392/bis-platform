@@ -2,7 +2,7 @@ import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
   createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
-  ensureCallbackTask, setCallCard,
+  ensureCallbackTask, setCallCard, recordLanguageSignal,
 } from "@bis/db";
 import { REASONS } from "@/lib/automations/hold-or-send";
 import { emailBrand, brandDisplayName } from "@/lib/email/templates/shell";
@@ -13,7 +13,7 @@ import { prepareTextback, deliverTextback, type PendingTextback } from "./textba
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
 import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
-import { detectSpokenLanguage } from "./language";
+import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
 import { summaryFactLine } from "./summarize";
@@ -426,6 +426,20 @@ export async function finishCall(
       }
     } catch (e) {
       console.error(`finishCall ${meta.callRowId ?? "(no row)"}: lead treatment failed: ${String(e)}`);
+    }
+  }
+
+  // S-09 C5: what the caller's own words say, read strictly; `spokenLanguage` above stays the Calls
+  // badge's and the text-back's (a default, not evidence). Its own try: a sign never costs the call.
+  if (meaningful && contactId) {
+    const heard = clearCallerLanguage(state.transcript);
+    if (heard) {
+      try {
+        await recordLanguageSignal(ctx.db, ctx.accountId, contactId,
+          { language: heard, source: "call", at: meta.endedAt }, ACTOR_ID, ACTOR_TYPE);
+      } catch (e) {
+        console.error(`finishCall ${meta.callRowId ?? "(no row)"}: language signal failed: ${String(e)}`);
+      }
     }
   }
 
