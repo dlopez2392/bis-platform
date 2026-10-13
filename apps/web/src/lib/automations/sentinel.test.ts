@@ -147,6 +147,7 @@ beforeEach(() => {
   const review = {
     accountId: "acct_1", endsAt: "2026-09-08T22:00:00.000Z", followupSentAt: null, completedAt: null, smsFailedAt: null, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+    language: "en" as const, bodyEs: null,
   };
   dbMocks.listDueReviewRequests.mockResolvedValue([
     { ...review, bookingId: "bk_rv_email", contactId: "ct_1", contactEmail: "c@example.com", contactPhone: null,
@@ -165,6 +166,7 @@ beforeEach(() => {
     accountId: "acct_1", endsAt: "2026-09-08T20:00:00.000Z", noShowAt: "2026-09-08T20:30:00.000Z", smsFailedAt: null,
     calendarPublicId: "cal_pub_1", calendarEnabled: true, brandName: BRAND, branding,
     accountTimezone: "America/New_York", fromEmail: null, replyToEmail: null, body: "",
+    language: "en" as const, bodyEs: null,
   };
   dbMocks.listDueNoShowNudges.mockResolvedValue([
     { ...nudge, bookingId: "bk_ns_email", contactId: "ct_3", contactEmail: "d@example.com", contactPhone: null, config: { channel: "email" } },
@@ -175,6 +177,7 @@ beforeEach(() => {
     bookingId: "bk_sr", accountId: "acct_1", startsAt: "2026-09-09T16:00:00.000Z", bookerTimezone: null,
     smsFailedAt: null, contactId: "ct_5", contactPhone: "9565550103", brandName: BRAND,
     accountTimezone: "America/New_York", body: "",
+    language: "en" as const, bodyEs: null,
   }]);
   // EXPLICIT, like the two above it: the loop over `dbMocks` resets every
   // mock to resolve `undefined`, and a due-list left at that default hands

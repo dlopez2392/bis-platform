@@ -12,7 +12,16 @@ const listDueRemindersMock = vi.fn();
 const stampReminderSentMock = vi.fn();
 const listDueFollowupsMock = vi.fn();
 const stampFollowupSentMock = vi.fn();
-vi.mock("@bis/db", () => ({
+vi.mock("@bis/db", async () => {
+  // `chooseBody` (S-09 PR 2, C11) is a PURE function with no DB access —
+  // sourced from the real module rather than hand-copied, so this fixture
+  // can't drift from `messaging.ts`'s own behaviour (same reasoning as the
+  // `reactivationCutoff` THROW below: a copy would carry no coverage while
+  // drifting silently). Every other export stays an explicit bare mock, so
+  // an unlisted one still throws.
+  const actual = await vi.importActual<typeof import("@bis/db")>("@bis/db");
+  return {
+  chooseBody: actual.chooseBody,
   serviceDb: () => ({}),
   listDueReminders: (...a: unknown[]) => listDueRemindersMock(...a),
   stampReminderSent: (...a: unknown[]) => stampReminderSentMock(...a),
@@ -169,7 +178,8 @@ vi.mock("@bis/db", () => ({
   recordHeartbeat: async () => undefined,
   listHeartbeats: async () => [],
   markAlerted: async () => { throw new Error("route.test: nothing is failing"); },
-}));
+  };
+});
 
 const sendMock = vi.fn();
 vi.mock("@/lib/email", () => ({
@@ -252,6 +262,8 @@ function followup(overrides: Record<string, unknown> = {}) {
     fromEmail: "hello@acme.com",
     replyToEmail: "owner@acme.com",
     followupBody: "Great seeing you!",
+    language: "en",
+    followupBodyEs: null,
     ...overrides,
   };
 }
