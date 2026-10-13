@@ -29,6 +29,7 @@ function row(overrides: Partial<DueFollowup> = {}): DueFollowup {
     contactEmail: "maria@example.com", contactName: "Maria Garcia", accountTimezone: "America/Chicago",
     branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
     fromEmail: null, replyToEmail: null, followupBody: "How did it go?",
+    language: "en", followupBodyEs: null,
     ...overrides,
   };
 }

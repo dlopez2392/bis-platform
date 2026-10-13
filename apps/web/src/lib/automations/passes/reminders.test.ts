@@ -23,6 +23,7 @@ function row(overrides: Partial<DueReminder> = {}): DueReminder {
     accountTimezone: "America/Chicago",
     branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
     fromEmail: null, meetingUrl: null, late: false,
+    language: "en", contactPhone: null,
     ...overrides,
   };
 }

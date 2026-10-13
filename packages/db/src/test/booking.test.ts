@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
-import { createContact } from "../contacts";
+import { createContact, setContactLanguage } from "../contacts";
+import { setAccountLanguage } from "../accounts";
 import { ensureConversation, createMessage, updateMessageStatus } from "../messaging";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -834,6 +835,10 @@ describe("booking accessors", () => {
       expect(dueRow?.followupBody).toBe("How did it go?");
       expect(dueRow?.fromEmail).toBeNull();       // fixture account never sets from_email
       expect(dueRow?.replyToEmail).toBeNull();    // fixture account never sets reply_to_email
+      // S-09 PR 2: neither the contact nor the account set a language -> English, and the
+      // calendar's Spanish follow-up box is untouched -> null.
+      expect(dueRow!.language).toBe("en");
+      expect(dueRow!.followupBodyEs).toBeNull();
 
       const noEmailRow = dueList.find((d) => d.bookingId === noEmailDue.id);
       expect(noEmailRow?.contactEmail).toBeNull();
@@ -2038,4 +2043,36 @@ describe("per-customer booking reads take a set (S-03 part 2b, spec C6, C8, C13)
       const anaOnly = await listContactBookings(db, accountId, ana, { limit: 31 });
       expect(anaOnly.map((b) => b.id)).toEqual([anaBooking.id]);
     }));
+
+  it("S-09 PR 2: the reminder and the follow-up carry the customer's language — the contact's, else the account's, else English (mutation: drop `language` from REMINDER_SELECT's contact embed -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      const mk = async (firstName: string, email: string) =>
+        (await createContact(db, accountId, { firstName, email, phone: "+19565550111" }, "user_test")).id;
+      const es = await mk("Esa", "es@example.com");
+      const none = await mk("Nadie", "none@example.com");
+      await setContactLanguage(db, accountId, es, "es", "user_test");
+      const now = new Date("2027-03-01T12:00:00Z");
+      for (const [contactId, h] of [[es, 11], [none, 12]] as const) {
+        await createBooking(db, accountId, { calendarId: cal.id, contactId,
+          startsAt: new Date(`2027-03-02T${h}:00:00Z`), endsAt: new Date(`2027-03-02T${h}:30:00Z`) }, "user_test");
+      }
+      const lang = async () => Object.fromEntries((await listDueReminders(db, now.toISOString())).map((d) => [d.contactId, d.language]));
+      expect(await lang()).toEqual({ [es]: "es", [none]: "en" });
+      await setAccountLanguage(db, accountId, "es", "user_test");
+      expect(await lang()).toEqual({ [es]: "es", [none]: "es" });   // L3: the account's, for a contact with none
+      const due = await listDueReminders(db, now.toISOString());
+      expect(due.find((d) => d.contactId === es)!.contactPhone).toBe("+19565550111");
+    });
+  });
+
+  it("S-09 PR 2: a calendar's Spanish follow-up box round-trips and reaches the follow-up row (mutation: omit followup_body_es from CALENDAR_COLS -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const cal = await getOrCreateCalendar(db, accountId, "user_test");
+      await updateCalendarSettings(db, accountId, { followupBodyEs: "Gracias.", followupBodyEsBasis: "Thanks." }, "user_test");
+      const again = await getOrCreateCalendar(db, accountId, "user_test");
+      expect([again.followup_body_es, again.followup_body_es_basis]).toEqual(["Gracias.", "Thanks."]);
+      expect(cal.id).toBe(again.id);
+    });
+  });
 });

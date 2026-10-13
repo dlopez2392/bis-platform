@@ -75,11 +75,13 @@ const REMINDER_ROW: DueReminder = {
   bookingId: "bk_rem", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
   cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
   accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null, late: false,
+  language: "en", contactPhone: null,
 };
 const FOLLOWUP_ROW: DueFollowup = {
   bookingId: "bk_fu", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
   contactEmail: "b@example.com", contactName: "B",
   accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
+  language: "en", followupBodyEs: null,
 };
 /** Part B's confirmation ask — 47h past TICK, the near edge of its window. */
 const CONFIRM_ROW: DueAppointmentConfirm = {
