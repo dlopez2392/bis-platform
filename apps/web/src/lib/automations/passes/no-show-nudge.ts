@@ -1,6 +1,6 @@
 import {
   listDueNoShowNudges, stampNoShowNudged, stampNoShowNudgeSmsFailed, countNoShowNudgesSince,
-  getDueNoShowNudgeById, type DueNoShowNudge,
+  getDueNoShowNudgeById, chooseBody, type DueNoShowNudge, type RecipientLanguage,
 } from "@bis/db";
 import { emailBrandNamed } from "@/lib/email/templates/shell";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
@@ -208,7 +208,12 @@ export async function processNoShowNudges(
     attemptsThisTick++;
     sentToday.set(row.accountId, today + 1);
 
-    const body = row.body.trim() || defaultNoShowNudgeBody(row.brandName);
+    // S-09 PR 2 (C11): the chosen language drives the template, the link sentence and the gate's footer.
+    const chosen = chooseBody({
+      language: row.language, body: row.body, bodyEs: row.bodyEs,
+      defaults: { en: defaultNoShowNudgeBody(row.brandName, "en"), es: defaultNoShowNudgeBody(row.brandName, "es") },
+    });
+    const body = chosen.text;
     const bookingUrl = `${ctx.origin}/b/${row.calendarPublicId}`;
 
     let smsRow: SentSms | null = null;
@@ -219,10 +224,11 @@ export async function processNoShowNudges(
             accountId: row.accountId, contactId: row.contactId, to: target.to,
             kind: subject.smsKind, accountTimezone: row.accountTimezone,
             body: composeNoShowNudgeSms(body, bookingUrl),
+            language: chosen.language,
             onProviderFailure: () => stampNoShowNudgeSmsFailed(ctx.db, row.bookingId),
           });
         } else {
-          await sendEmail(ctx, row, target.to, body, bookingUrl);
+          await sendEmail(ctx, row, target.to, body, bookingUrl, chosen.language);
         }
 
         // SEND-THEN-STAMP, stamp before the SMS row's status update.
@@ -292,9 +298,10 @@ export const releaseNoShowNudge: Releaser = async (ctx, row) => {
 
 async function sendEmail(
   ctx: PassContext, row: DueNoShowNudge, to: string, body: string, bookingUrl: string,
+  language: RecipientLanguage,
 ): Promise<void> {
   const brand = emailBrandNamed(row.branding, row.brandName);
-  const { subject, html, text } = noShowNudgeEmail({ brand, body, bookingUrl });
+  const { subject, html, text } = noShowNudgeEmail({ brand, body, bookingUrl, locale: language });
   await ctx.email.send({
     accountId: row.accountId, kind: "automation.no_show_nudge", contactId: row.contactId,
     origin: ctx.origin, now: ctx.now, accountZone: row.accountTimezone,
@@ -305,5 +312,6 @@ async function sendEmail(
     subject,
     body: text,
     html,
+    language,
   });
 }
