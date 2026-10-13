@@ -6,7 +6,7 @@ import {
 import { instantKey, TIMELINE_PAGE_SIZE } from "../timeline-cursor";
 
 const note = (id: string, at: string): TimelineEntry =>
-  ({ kind: "note", id, at, note: { id, body: "x", author_id: null, created_at: at } });
+  ({ kind: "note", id, at, contactId: "c", note: { id, body: "x", author_id: null, created_at: at } });
 
 describe("compareTimelineEntries: (at desc, id desc) across tables (spec C3)", () => {
   it("newest first to the microsecond, whatever the spelling (mutation: compare Date.parse -> the 1 µs pair ties, FAILS)", () => {

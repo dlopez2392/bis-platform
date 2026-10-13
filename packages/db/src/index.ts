@@ -273,6 +273,9 @@ export {
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
   type TimelineMessage, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
   type ContactMessageRow,
+  // S-03 part 2b: the household and business page reads its members as one set.
+  listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,
+  type GroupActivity, type GroupFacts, type GroupLastTalked, type GroupNextUp,
 } from "./record";
 
 // Who made a timeline row (S-03 part 1, 1b; migration 0073). See ./provenance.ts.

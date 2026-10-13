@@ -10,7 +10,11 @@ import { addNote, addTask } from "../activities";
 import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity } from "../opportunities";
 import { createForm, createSubmission, linkSubmissionContact } from "../forms";
-import { contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES } from "../record";
+import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from "../client-groups";
+import {
+  contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
+  listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
+} from "../record";
 
 const ACTOR = "user_test";
 const iso = (v: string) => new Date(v).toISOString();
@@ -309,5 +313,173 @@ describe("listPeopleNames (spec §6, Names)", () => {
         const { error: cleanupError } = await db.from("users").delete().in("clerk_user_id", [a, b]);
         if (cleanupError) throw new Error(`record.test cleanup failed on users: ${cleanupError.message}`);
       }
+    }));
+});
+
+// ---- S-03 part 2b: the household and business page reads a SET of members (spec §6, C5, C6, C8, C9).
+
+/** n contacts in one household; returns contact ids and membership ids in join order. */
+async function household(db: SupabaseClient, accountId: string, n: number) {
+  const run = Math.random().toString(36).slice(2, 8);
+  const ids: string[] = [];
+  for (let i = 0; i < n; i++) ids.push((await createContact(db, accountId, { firstName: `P${i}`, lastName: "Garcia" }, ACTOR)).id);
+  const g = await createGroupWithMember(db, accountId, ids[0]!, "household", `Garcia ${run}`, null, ACTOR);
+  if (g.status !== "ok") throw new Error(g.status);
+  const memberIds = [g.memberId];
+  for (const id of ids.slice(1)) {
+    const r = await addContactToGroup(db, accountId, id, g.groupId, null, ACTOR);
+    if (r.status !== "ok") throw new Error(r.status);
+    memberIds.push(r.memberId);
+  }
+  return { groupId: g.groupId, ids, memberIds };
+}
+
+/** A db whose every `.in("contact_id", ...)` on any builder is recorded (the one-id path must stay `.eq`). */
+function recordingIn(db: SupabaseClient, seen: unknown[][]): SupabaseClient {
+  const wrap = (o: object): unknown => new Proxy(o, {
+    get(t, p, r) {
+      const v = Reflect.get(t, p, r) as unknown;
+      if (typeof v !== "function") return v;
+      if (p === "then") return (v as (...a: unknown[]) => unknown).bind(t);
+      return (...a: unknown[]) => {
+        if (p === "in" && a[0] === "contact_id") seen.push(a);
+        const out = (v as (...a: unknown[]) => unknown).apply(t, a);
+        if (out === t) return r;
+        return out !== null && typeof out === "object" ? wrap(out) : out;
+      };
+    },
+  });
+  return wrap(db) as SupabaseClient;
+}
+
+describe("listTimelinePage across a set (S-03 part 2b, C6)", () => {
+  it("merges one member's call, another's booking and a third's note in (at, id) order, each naming its own member (mutation: drop contactId from the call entry -> undefined, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ids: [c1, c2, c3] } = await household(db, accountId, 3);
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+      const { error } = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.id, contact_id: c1, started_at: "2026-10-03T15:00:00+00:00", outcome: "booked" });
+      if (error) throw new Error(error.message);
+      const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+      const b = await createBooking(db, accountId, { calendarId: cal.id, contactId: c2!, startsAt: new Date("2027-03-02T15:00:00Z"), endsAt: new Date("2027-03-02T16:00:00Z") }, ACTOR);
+      const bs = await db.from("bookings").update({ created_at: "2026-10-02T15:00:00+00:00" }).eq("id", b.id);
+      if (bs.error) throw new Error(bs.error.message);
+      const n = await addNote(db, accountId, c3!, "n", ACTOR);
+      const ns = await db.from("notes").update({ created_at: "2026-10-01T15:00:00+00:00" }).eq("id", n.id);
+      if (ns.error) throw new Error(ns.error.message);
+      const page = await listTimelinePage(db, accountId, [c1!, c2!, c3!]);
+      expect(page.items.map((i) => [i.kind, i.contactId])).toEqual([["call", c1], ["booking", c2], ["note", c3]]);
+      expect(page).toMatchObject({ older: null, failed: [] });
+    }));
+
+  it("the contact page's one id is the same page item for item, and stays on `.eq` (mutation: pass the set form for one id -> a contact_id `.in` is recorded, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ids: [c1, c2] } = await household(db, accountId, 2);
+      await addNote(db, accountId, c1!, "mine", ACTOR);
+      await addTask(db, accountId, { contactId: c1!, title: "t" }, ACTOR);
+      await addNote(db, accountId, c2!, "theirs", ACTOR);
+      const seen: unknown[][] = [];
+      const one = await listContactTimelinePage(recordingIn(db, seen), accountId, c1!);
+      const set = await listTimelinePage(db, accountId, [c1!]);
+      expect(seen).toEqual([]);
+      expect(one).toEqual(set);
+      expect(one.items.map((i) => i.kind).sort()).toEqual(["note", "task"]);
+      expect(one.items.every((i) => i.contactId === c1)).toBe(true);
+    }));
+
+  it("an empty set is an empty page, empty facts and an empty Next up, with no read at all (mutation: drop the timeline's short-circuit -> forContacts refuses and all seven sources fail, FAILS)", async () => {
+    const from = vi.fn(() => { throw new Error("no read expected"); });
+    const db = { from } as unknown as SupabaseClient;
+    expect(await listTimelinePage(db, "acct", [])).toEqual({ items: [], older: null, failed: [] });
+    expect(await groupFacts(db, "acct", [])).toEqual({ bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null } });
+    expect(await groupNextUp(db, "acct", [], "2026-10-12T15:00:00Z")).toEqual({ bookings: [], datedTasks: [], undatedCount: 0 });
+    expect(from).not.toHaveBeenCalled();
+  });
+});
+
+describe("groupActivityMembers (S-03 part 2b, C5, D7)", () => {
+  it("the call-first member, then most recently talked to (never-talked last), then newest joined; cut at the cap while the total stays exact (mutation: sort nulls first -> a never-talked member second, FAILS; mutation: drop the call-first rule -> FAILS; mutation: created_at ascending -> FAILS; mutation: total from the cut list -> 2, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const h = await household(db, accountId, 4);
+      const [c0, c1, c2, c3] = h.ids;
+      const talked = async (contactId: string, at: string) => {
+        const { id } = await ensureConversation(db, accountId, contactId, ACTOR);
+        const { error } = await db.from("conversations").update({ last_message_at: at }).eq("id", id);
+        if (error) throw new Error(error.message);
+      };
+      await talked(c0!, "2026-09-01T15:00:00+00:00"); // the oldest talk: first only because they are called first
+      await talked(c2!, "2026-10-05T15:00:00+00:00");
+      // c1 and c3 never talked; c3 joined after c1, so c3 comes before c1.
+      const joined = ["2026-08-01T00:00:00+00:00", "2026-08-02T00:00:00+00:00", "2026-08-03T00:00:00+00:00", "2026-08-04T00:00:00+00:00"];
+      for (const [i, memberId] of h.memberIds.entries()) {
+        const { error } = await db.from("client_group_members").update({ created_at: joined[i] }).eq("id", memberId);
+        if (error) throw new Error(error.message);
+      }
+      expect(await setGroupPrimaryContact(db, accountId, h.groupId, h.memberIds[0]!, ACTOR)).toMatchObject({ status: "ok" });
+      const all = await groupActivityMembers(db, accountId, h.groupId, 10);
+      expect(all.people.map((p) => p.contactId)).toEqual([c0, c2, c3, c1]);
+      expect(all.people[1]).toEqual({ contactId: c2, firstName: "P2", lastName: "Garcia" });
+      const cut = await groupActivityMembers(db, accountId, h.groupId, 2);
+      expect(cut.people.map((p) => p.contactId)).toEqual([c0, c2]);
+      expect(cut.total).toEqual({ ok: true, value: 4 });
+    }));
+});
+
+describe("groupFacts (S-03 part 2b, C8, C9)", () => {
+  it("bookings made across the set, not reschedules (mutation: count the first id only -> 1, FAILS); Last talked is the newest across the set and names its member (mutation: take the older of the two -> FAILS; mutation: map the message's member from the first id -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ids: [c1, c2, c3] } = await household(db, accountId, 3);
+      const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+      const span = (v: string) => ({ startsAt: new Date(v), endsAt: new Date(Date.parse(v) + 3_600_000) });
+      await createBooking(db, accountId, { calendarId: cal.id, contactId: c1!, ...span("2027-03-02T15:00:00Z") }, ACTOR);
+      const first = await createBooking(db, accountId, { calendarId: cal.id, contactId: c2!, ...span("2027-03-03T15:00:00Z") }, ACTOR);
+      await createBooking(db, accountId, { calendarId: cal.id, contactId: c2!, ...span("2027-03-04T15:00:00Z"), rescheduledFromId: first.id }, ACTOR);
+      const { id: conv1 } = await ensureConversation(db, accountId, c1!, ACTOR);
+      await seedMessage(db, accountId, conv1, "sms", "2026-10-03T15:00:00Z", "delivered");
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+      const { error } = await db.from("calls").insert({ account_id: accountId, phone_number_id: num.id, contact_id: c2, started_at: "2026-10-05T15:00:00Z", outcome: "booked" });
+      if (error) throw new Error(error.message);
+      const ids = [c1!, c2!, c3!];
+      const f = await groupFacts(db, accountId, ids);
+      expect(f.bookingsMade).toEqual({ ok: true, value: 2 });
+      const t = f.lastTalked as { ok: true; value: { at: string; channel: string; contactId: string } };
+      expect({ at: iso(t.value.at), channel: t.value.channel, contactId: t.value.contactId })
+        .toEqual({ at: "2026-10-05T15:00:00.000Z", channel: "call", contactId: c2 });
+      const { id: conv3 } = await ensureConversation(db, accountId, c3!, ACTOR);
+      await seedMessage(db, accountId, conv3, "email", "2026-10-06T15:00:00Z", "delivered");
+      await seedMessage(db, accountId, conv1, "sms", "2026-10-07T15:00:00Z", "failed");
+      const g = (await groupFacts(db, accountId, ids)).lastTalked as { ok: true; value: { at: string; channel: string; contactId: string } };
+      expect({ at: iso(g.value.at), channel: g.value.channel, contactId: g.value.contactId })
+        .toEqual({ at: "2026-10-06T15:00:00.000Z", channel: "email", contactId: c3 });
+    }));
+
+  it("a failed read is that fact's { ok: false }, named, never thrown (mutation: let it reject -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ids } = await household(db, accountId, 2);
+      const broken = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === "from") return (table: string) => target.from(table === "conversations" ? "no_such_table_s03" : table);
+          return Reflect.get(target, prop, receiver);
+        },
+      }) as SupabaseClient;
+      const onError = vi.fn();
+      const f = await groupFacts(broken, accountId, ids, { onError });
+      expect(f).toEqual({ bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: false } });
+      expect(onError).toHaveBeenCalledWith("talked", expect.anything());
+    }));
+});
+
+describe("groupNextUp (S-03 part 2b, C9)", () => {
+  it("bookings and dated To-dos across the set each carry their member; the undated count spans the set (mutation: count the first id only -> 1, FAILS; mutation: drop contact_id from the To-do select -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ids: [c1, c2, c3] } = await household(db, accountId, 3);
+      const cal = await getOrCreateCalendar(db, accountId, ACTOR);
+      const b = await createBooking(db, accountId, { calendarId: cal.id, contactId: c1!, startsAt: new Date("2026-10-14T15:00:00Z"), endsAt: new Date("2026-10-14T16:00:00Z") }, ACTOR);
+      const t = await addTask(db, accountId, { contactId: c2!, title: "Quote", dueAt: "2026-10-20T05:00:00Z" }, ACTOR);
+      await addTask(db, accountId, { contactId: c1!, title: "Someday" }, ACTOR);
+      await addTask(db, accountId, { contactId: c3!, title: "Someday too" }, ACTOR);
+      const n = await groupNextUp(db, accountId, [c1!, c2!, c3!], "2026-10-12T15:00:00Z");
+      expect(n.bookings).toEqual([expect.objectContaining({ id: b.id, contact_id: c1 })]);
+      expect(n.datedTasks).toEqual([expect.objectContaining({ id: t.id, contact_id: c2, title: "Quote" })]);
+      expect(n.undatedCount).toBe(2);
     }));
 });

@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  countContactBookingsMade, listContactUpcomingBookings, listContactBookings,
+  countContactBookingsMade, countBookingsMadeFor, listContactUpcomingBookings, listContactBookings,
   type UpcomingBooking, type ContactBookingRow,
 } from "./booking";
 import { listContactCalls, type ContactCallRow } from "./voice";
@@ -8,7 +8,8 @@ import { listNotes, listContactTasks } from "./activities";
 import { listContactOpportunities } from "./opportunities";
 import { listContactSubmissions } from "./forms";
 import { listContactMessages } from "./messaging";
-import { instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
+import { countGroupMembers, GROUP_ACTIVITY_CAP, type GroupPerson } from "./client-groups";
+import { forContacts, instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
 import type { AuthorKind } from "./provenance";
 
 export type { TimelineCursor } from "./timeline-cursor";
@@ -30,7 +31,8 @@ export type LastTalkedChannel = "text" | "email" | "call";
 export type LastTalked = { at: string; channel: LastTalkedChannel };
 export type OpenDeals = { count: number; amount: number | null };
 export type ContactFacts = { bookingsMade: Fact<number>; lastTalked: Fact<LastTalked | null>; openDeals: Fact<OpenDeals> };
-export type FactName = "bookings" | "talked" | "deals";
+/** "people" is the group page's member count (S-03 part 2b, plan deviation 9). */
+export type FactName = "bookings" | "talked" | "deals" | "people";
 /** Past this many open deals the summary leaves the amount out rather than understate it. */
 export const OPEN_DEALS_SUM_CAP = 100;
 
@@ -98,6 +100,57 @@ export async function contactFacts(
   return { bookingsMade, lastTalked: talked, openDeals: deals };
 }
 
+/** "Last talked … with Ana (text)" (S-03 part 2b, C9): across a household, who is the useful fact. */
+export type GroupLastTalked = LastTalked & { contactId: string };
+export type GroupFacts = { bookingsMade: Fact<number>; lastTalked: Fact<GroupLastTalked | null> };
+
+/** The newest email or text that did not fail, across every conversation of the set (C4's filters,
+ *  `newestConversationMessage`'s), with the member whose conversation carried it. */
+async function newestSetMessage(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<GroupLastTalked | null> {
+  const { data: convos, error } = await forContacts(
+    db.from("conversations").select("id, contact_id").eq("account_id", accountId), "contact_id", contactIds);
+  if (error) throw new Error(`newestSetMessage failed: ${error.message}`);
+  const list = (convos ?? []) as { id: string; contact_id: string }[];
+  if (list.length === 0) return null;
+  const owner = new Map(list.map((c) => [c.id, c.contact_id]));
+  const { data, error: mErr } = await db.from("messages").select("conversation_id, channel, created_at")
+    .eq("account_id", accountId).in("conversation_id", list.map((c) => c.id))
+    .in("channel", ["email", "sms"]).not("status", "in", "(failed,bounced)")
+    .order("created_at", { ascending: false }).limit(1);
+  if (mErr) throw new Error(`newestSetMessage failed: ${mErr.message}`);
+  const row = ((data ?? []) as { conversation_id: string; channel: "email" | "sms"; created_at: string }[])[0];
+  const contactId = row ? owner.get(row.conversation_id) : undefined;
+  return row && contactId ? { at: row.created_at, channel: row.channel === "sms" ? "text" : "email", contactId } : null;
+}
+
+async function setLastTalked(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<GroupLastTalked | null> {
+  const [message, calls] = await Promise.all([
+    newestSetMessage(db, accountId, contactIds),
+    listContactCalls(db, accountId, contactIds, 1, { excludeSpam: true }),
+  ]);
+  const call: GroupLastTalked | null = calls[0] ? { at: calls[0].started_at, channel: "call", contactId: calls[0].contact_id } : null;
+  if (!message) return call;
+  if (!call) return message;
+  return Date.parse(call.at) > Date.parse(message.at) ? call : message;
+}
+
+/**
+ * The group page's checked facts across its activity set (S-03 part 2b, spec §8.6, C8, C9). Never
+ * throws: a failed read is that fact's `{ ok: false }`, named to `onError`. An empty set reads
+ * nothing (PostgREST's `in.()` is not a query anyone means).
+ */
+export async function groupFacts(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[],
+  opts: { onError?: (name: FactName, e: unknown) => void } = {},
+): Promise<GroupFacts> {
+  if (contactIds.length === 0) return { bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null } };
+  const [bookingsMade, lastTalked] = await Promise.all([
+    settle("bookings", () => countBookingsMadeFor(db, accountId, contactIds), opts.onError),
+    settle("talked", () => setLastTalked(db, accountId, contactIds), opts.onError),
+  ]);
+  return { bookingsMade, lastTalked };
+}
+
 export type NextUpTask = { id: string; title: string; due_at: string };
 export type ContactNextUp = { bookings: UpcomingBooking[]; datedTasks: NextUpTask[]; undatedCount: number };
 
@@ -125,6 +178,75 @@ export async function contactNextUp(
   return { bookings, datedTasks: (dated.data ?? []) as NextUpTask[], undatedCount: undated.count };
 }
 
+export type GroupNextUp = { bookings: UpcomingBooking[]; datedTasks: (NextUpTask & { contact_id: string })[]; undatedCount: number };
+
+/**
+ * The group page's Next up (S-03 part 2b, C9): `contactNextUp`'s three reads across the set, each row
+ * carrying its member so the card can say whose it is. An empty set reads nothing. THROWS on a read
+ * error or a count-less undated count (#245).
+ */
+export async function groupNextUp(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], nowIso: string, limit = 3,
+): Promise<GroupNextUp> {
+  if (contactIds.length === 0) return { bookings: [], datedTasks: [], undatedCount: 0 };
+  const [bookings, dated, undated] = await Promise.all([
+    listContactUpcomingBookings(db, accountId, contactIds, nowIso, limit),
+    forContacts(db.from("tasks").select("id, contact_id, title, due_at").eq("account_id", accountId), "contact_id", contactIds)
+      .is("completed_at", null).not("due_at", "is", null)
+      .order("due_at", { ascending: true }).order("id", { ascending: true }).limit(limit),
+    forContacts(db.from("tasks").select("id", { count: "exact", head: true }).eq("account_id", accountId), "contact_id", contactIds)
+      .is("completed_at", null).is("due_at", null),
+  ]);
+  if (dated.error) throw new Error(`groupNextUp To-dos failed: ${dated.error.message}`);
+  if (undated.error) throw new Error(`groupNextUp undated count failed: ${undated.error.message}`);
+  if (undated.count === null) throw new Error("groupNextUp undated count failed: no count returned");
+  return { bookings, datedTasks: (dated.data ?? []) as GroupNextUp["datedTasks"], undatedCount: undated.count };
+}
+
+/** How many visible memberships the activity ranking reads, newest-joined first (spec §6, C5). */
+export const GROUP_ACTIVITY_SCAN = 500;
+export type GroupActivity = { people: GroupPerson[]; total: Fact<number> };
+
+/**
+ * C5's set: the call-first member (when visible), then by the customer's one conversation's
+ * last_message_at desc nulls last, then the membership's created_at desc, then contact_id desc; cut at
+ * `cap`. PostgREST cannot order a parent by a to-many embed (groups spec ruling 13.1), so the sort is
+ * here, over at most GROUP_ACTIVITY_SCAN memberships. `total` is the exact visible count, its own read
+ * (plan deviation 9): a failure costs the people fact and the cap line, not the page. THROWS on the scan.
+ */
+export async function groupActivityMembers(
+  db: SupabaseClient, accountId: string, groupId: string, cap = GROUP_ACTIVITY_CAP,
+): Promise<GroupActivity> {
+  type Row = { contact_id: string; is_primary_contact: boolean; created_at: string;
+    contacts: { first_name: string | null; last_name: string | null; conversations: { last_message_at: string | null }[] | null } | null };
+  const [scan, total] = await Promise.all([
+    db.from("client_group_members")
+      .select("contact_id, is_primary_contact, created_at, contacts(first_name, last_name, conversations(last_message_at))")
+      .eq("account_id", accountId).eq("client_group_id", groupId)
+      .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(GROUP_ACTIVITY_SCAN),
+    settle("people", () => countGroupMembers(db, accountId, groupId)),
+  ]);
+  if (scan.error) throw new Error(`groupActivityMembers failed: ${scan.error.message}`);
+  const rows = ((scan.data ?? []) as unknown as Row[]).filter((r) => r.contacts !== null);
+  // instantKey (timeline-cursor.ts) sorts to the microsecond whatever offset PostgREST wrote.
+  const lastAt = (r: Row) => {
+    const v = r.contacts!.conversations?.[0]?.last_message_at ?? null;
+    return v === null ? null : instantKey(v);
+  };
+  const desc = (x: string, y: string) => (x === y ? 0 : x < y ? 1 : -1);
+  rows.sort((a, b) => {
+    const la = lastAt(a), lb = lastAt(b);
+    return Number(b.is_primary_contact) - Number(a.is_primary_contact)
+      || (la === lb ? 0 : la === null ? 1 : lb === null ? -1 : desc(la, lb))
+      || desc(instantKey(a.created_at), instantKey(b.created_at))
+      || desc(a.contact_id, b.contact_id);
+  });
+  return {
+    people: rows.slice(0, cap).map((r) => ({ contactId: r.contact_id, firstName: r.contacts!.first_name, lastName: r.contacts!.last_name })),
+    total,
+  };
+}
+
 export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls";
 export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
 
@@ -147,14 +269,16 @@ export type TimelineMessage = {
    *  closed the column). */
   author_kind: AuthorKind; author_id: string | null;
 };
+/** Every variant names its member (`contactId`, S-03 part 2b): the group page's merged timeline says
+ *  whose row it is. On the contact page it is always that page's contact. */
 export type TimelineEntry =
-  | { kind: "note"; id: string; at: string; note: TimelineNote }
-  | { kind: "task"; id: string; at: string; task: TimelineTask }
-  | { kind: "deal"; id: string; at: string; deal: TimelineDeal }
-  | { kind: "submission"; id: string; at: string; submission: TimelineSubmission }
-  | { kind: "message"; id: string; at: string; message: TimelineMessage }
-  | { kind: "booking"; id: string; at: string; booking: ContactBookingRow }
-  | { kind: "call"; id: string; at: string; call: ContactCallRow };
+  | { kind: "note"; id: string; at: string; contactId: string; note: TimelineNote }
+  | { kind: "task"; id: string; at: string; contactId: string; task: TimelineTask }
+  | { kind: "deal"; id: string; at: string; contactId: string; deal: TimelineDeal }
+  | { kind: "submission"; id: string; at: string; contactId: string; submission: TimelineSubmission }
+  | { kind: "message"; id: string; at: string; contactId: string; message: TimelineMessage }
+  | { kind: "booking"; id: string; at: string; contactId: string; booking: ContactBookingRow }
+  | { kind: "call"; id: string; at: string; contactId: string; call: ContactCallRow };
 export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
@@ -169,7 +293,8 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
 }
 
 /**
- * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3). Seven sources, each read on the
+ * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3), for one person or (2b, C6) a
+ * household's set, each entry naming its member. Seven sources, each read on the
  * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
  * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
  * past the cursor, so the merge of the SUCCESSFUL sources' rows can tell whether more exist: `older`
@@ -178,12 +303,17 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
  * (named in `failed`, and to `onError` for the log, never thrown): its own rows past this page stay
  * unknown, neither promised as `older` nor denied.
  */
-export async function listContactTimelinePage(
-  db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
+export async function listTimelinePage(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
   opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},
 ): Promise<TimelinePage> {
+  // A set with no one in it (a group none of whose members this reader can see) has nothing to
+  // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
+  if (contactIds.length === 0) return { items: [], older: null, failed: [] };
   const limit = opts.limit ?? TIMELINE_PAGE_SIZE;
   const page = { before, limit: limit + 1 };
+  // One person keeps the `.eq` path the contact page has always read; a set is `.in`.
+  const who: string | readonly string[] = contactIds.length === 1 ? contactIds[0]! : contactIds;
   const settle = async (source: TimelineSource, read: () => Promise<TimelineEntry[]>) => {
     try {
       return { source, entries: await read() };
@@ -193,14 +323,15 @@ export async function listContactTimelinePage(
     }
   };
   const results = await Promise.all([
-    settle("notes", async () => (((await listNotes(db, accountId, contactId, page)) ?? []) as TimelineNote[])
-      .map((note): TimelineEntry => ({ kind: "note", id: note.id, at: note.created_at, note }))),
-    settle("todos", async () => (await listContactTasks(db, accountId, contactId, page))
-      .map((t): TimelineEntry => ({ kind: "task", id: t.id, at: t.created_at, task: { ...t, created_by: t.created_by ?? null } }))),
-    settle("deals", async () => (((await listContactOpportunities(db, accountId, contactId, page)) ?? []) as TimelineDeal[])
-      .map((deal): TimelineEntry => ({ kind: "deal", id: deal.id, at: deal.created_at, deal }))),
-    settle("forms", async () => (await listContactSubmissions(db, accountId, contactId, page))
-      .map((s): TimelineEntry => ({ kind: "submission", id: s.id, at: s.created_at, submission: {
+    settle("notes", async () => (((await listNotes(db, accountId, who, page)) ?? []) as (TimelineNote & { contact_id: string })[])
+      .map((note): TimelineEntry => ({ kind: "note", id: note.id, at: note.created_at, contactId: note.contact_id, note }))),
+    settle("todos", async () => (await listContactTasks(db, accountId, who, page))
+      .map((t): TimelineEntry => ({ kind: "task", id: t.id, at: t.created_at, contactId: t.contact_id, task: { ...t, created_by: t.created_by ?? null } }))),
+    settle("deals", async () => (((await listContactOpportunities(db, accountId, who, page)) ?? []) as (TimelineDeal & { contact_id: string })[])
+      .map((deal): TimelineEntry => ({ kind: "deal", id: deal.id, at: deal.created_at, contactId: deal.contact_id, deal }))),
+    // contact_id is nullable on SubmissionRow, but this read filters on it, so every row carries it.
+    settle("forms", async () => (await listContactSubmissions(db, accountId, who, page))
+      .map((s): TimelineEntry => ({ kind: "submission", id: s.id, at: s.created_at, contactId: s.contact_id ?? "", submission: {
         // Review note: `?? "customer"` is unreachable AT THIS CALL SITE — `page` above is always a
         // real object, so listContactSubmissions always selects author_kind here, and the column has
         // been NOT NULL DEFAULT 'customer' since 0073. Kept rather than removed: the field's type
@@ -210,18 +341,27 @@ export async function listContactTimelinePage(
         // simplification.
         id: s.id, created_at: s.created_at, formName: s.formName, answers: s.answers, author_kind: s.author_kind ?? "customer",
       } }))),
-    settle("messages", async () => ((await listContactMessages(db, accountId, contactId, { ...page, channels: ["email", "sms"] })) as TimelineMessage[])
-      .map((message): TimelineEntry => ({ kind: "message", id: message.id, at: message.created_at, message }))),
-    settle("bookings", async () => (await listContactBookings(db, accountId, contactId, page))
-      .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, booking }))),
-    settle("calls", async () => (await listContactCalls(db, accountId, contactId, page.limit, { before }))
-      .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, call }))),
+    // Page mode tags every message with its own conversation's contact_id (listContactMessages).
+    settle("messages", async () => (await listContactMessages(db, accountId, who, { ...page, channels: ["email", "sms"] }))
+      .map((m): TimelineEntry => ({ kind: "message", id: m.id, at: m.created_at, contactId: m.contact_id ?? "", message: m as TimelineMessage }))),
+    settle("bookings", async () => (await listContactBookings(db, accountId, who, page))
+      .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, contactId: booking.contact_id, booking }))),
+    settle("calls", async () => (await listContactCalls(db, accountId, who, page.limit, { before }))
+      .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, contactId: call.contact_id, call }))),
   ]);
   const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
   const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);
   const items = merged.slice(0, limit);
   const last = items.at(-1);
   return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed };
+}
+
+/** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */
+export async function listContactTimelinePage(
+  db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},
+): Promise<TimelinePage> {
+  return listTimelinePage(db, accountId, [contactId], before, opts);
 }
 
 /**
