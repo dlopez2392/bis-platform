@@ -17,7 +17,7 @@
 - **NEVER `git stash`, `git reset`, `git checkout --`, `--amend`, or any history rewrite** in the shared worktree. Another agent's uncommitted work lives in the same tree. To undo your own edit, edit it back. To see committed text, `git show HEAD:<path>`.
 - **Ownership (tag on every task; no task edits a file its owner does not own).**
   - **bis-db-schema:** `packages/db/supabase/migrations/0077_document_vault.sql`; `packages/db/src/document-rules.ts` (new, the constants the tests pin); `packages/db/src/test/{document-vault-schema,document-vault-rls,document-vault-reserve-lock}.test.ts` (new); `packages/db/src/account-teardown.ts` (one list entry, `ACCOUNT_OWNED_TABLES`); `packages/db/src/test/places.test.ts:144-149` (one added ordering line). Writes the migration, never applies it.
-  - **bis-crm:** `packages/db/src/documents.ts` (new) and `packages/db/src/test/documents.test.ts` (new); `packages/db/package.json` (one subpath export, `./document-rules`, Task 3); `packages/db/src/record.ts` (the `documents` timeline source), `packages/db/src/test/record.test.ts` (one case), `packages/db/src/test/timeline-sources.test.ts` (the source list); `packages/db/src/contacts.ts:1023` (one table name in `deleteContacts`' pre-read) and `packages/db/src/test/contacts.test.ts` (one case); `packages/db/src/index.ts` (own lines only); `apps/web/src/lib/documents/{rules,content-check,expiry,documents-load,document-view}.ts` and their tests (new); `…/accounts/contacts/documents-actions.ts` and its test (new); `…/api/contacts/[contactId]/documents/route.ts`, `…/api/groups/[groupId]/documents/route.ts` and their tests (new); `…/accounts/in-account-service-reads.test.ts` (one line); `apps/web/src/lib/record/{record-cards,timeline-rows,author-mark,recent-rows,loaders,group-loaders}.ts` and their tests; `…/accounts/contacts/[contactId]/{page.tsx,activity-timeline.tsx}` and their tests; `…/accounts/groups/[groupId]/{page.tsx,group-timeline.tsx,loading.test.ts}` and their tests; `apps/web/src/lib/messages.ts` and one `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (regenerated in Task 13, never hand-edited).
+  - **bis-crm:** `packages/db/src/documents.ts` (new) and `packages/db/src/test/documents.test.ts` (new); `packages/db/package.json` (one subpath export, `./document-rules`, Task 3); `packages/db/src/record.ts` (the `documents` timeline source), `packages/db/src/test/record.test.ts` (one case), `packages/db/src/test/timeline-sources.test.ts` (the source list); `packages/db/src/contacts.ts:1009-1035` (`deleteContacts`' purge hook) and `packages/db/src/test/contacts.test.ts` (one expectation, one describe); `…/accounts/contacts/{actions.ts,actions.test.ts,bulk-action-bar.tsx,bulk-action-bar.test.ts}` (Task 17: the delete takes the files with it); `packages/db/src/index.ts` (own lines only); `apps/web/src/lib/documents/{rules,content-check,expiry,documents-load,document-view}.ts` and their tests (new); `…/accounts/contacts/documents-actions.ts` and its test (new); `…/api/contacts/[contactId]/documents/route.ts`, `…/api/groups/[groupId]/documents/route.ts` and their tests (new); `…/accounts/in-account-service-reads.test.ts` (one line); `apps/web/src/lib/record/{record-cards,timeline-rows,author-mark,recent-rows,loaders,group-loaders}.ts` and their tests; `…/accounts/contacts/[contactId]/{page.tsx,activity-timeline.tsx}` and their tests; `…/accounts/groups/[groupId]/{page.tsx,group-timeline.tsx,loading.test.ts}` and their tests; `apps/web/src/lib/messages.ts` and one `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (regenerated in Task 13, never hand-edited).
   - **bis-frontend:** `apps/web/src/lib/documents/{strip-image,upload-client}.ts` and their tests (new); `…/accounts/contacts/{documents-card.tsx,documents-card-handlers.ts,document-upload-panel.tsx,document-viewer.tsx}` and their tests (new); `apps/web/src/app/(dashboard)/dashboard/styleguide/{documents-demo.tsx,documents-demo.test.ts}` (new) and `styleguide/page.tsx` (one import, one section).
   - **bis-automations:** `apps/web/src/lib/automations/passes/documents-sweep.ts` and its test (new); `apps/web/src/lib/automations/registry.ts` (one import, one array entry); `apps/web/src/lib/automations/cron-coupling.test.ts` (one case); `apps/web/src/lib/automations/sentinel.test.ts:274` (the registry's pinned key list).
   - **bis-e2e-qa:** `apps/web/e2e/fixtures/sweep.ts`, `apps/web/e2e/fixtures/sweep.test.ts`, `apps/web/e2e/auth.teardown.ts` (the documents leg); `apps/web/e2e/documents.spec.ts` (new); `apps/web/e2e/record-page.spec.ts:48,165` and `apps/web/e2e/group-page.spec.ts:207-208` (the card order lists).
@@ -26,6 +26,8 @@
   - `apps/web/src/lib/messages.ts`: **Task 2 only.** A `.es` twin goes on the line directly under its English key; the block goes directly after `"places.title.es"` (`messages.ts:3804`). No other task adds a key; a task that finds one missing STOPS and reports it, and the orchestrator re-opens Task 2.
   - `packages/db/src/index.ts`: **Task 3 only** (the documents block directly after the places block's closing line `} from "./places";`, and `document-rules` beside it); **Task 8** adds nothing (the timeline types are re-exported by the existing record block, `index.ts` record block, which already exports `TimelineEntry`/`TimelineSource`).
   - `packages/db/src/record.ts`: **Task 8 only.**
+  - `packages/db/src/contacts.ts` (+ `test/contacts.test.ts`): **Task 3 only.**
+  - `…/accounts/in-account-service-reads.test.ts`: **Task 5 → Task 17** (17 edits one comment).
   - `…/accounts/contacts/[contactId]/page.tsx` and `…/groups/[groupId]/page.tsx` (+ tests): **Task 8 → Task 11** (8 touches only timeline wiring; 11 adds the card slot).
   - `apps/web/src/lib/record/record-cards.ts` (+ test): **Task 11 only.**
   - `apps/web/src/lib/i18n/*-baseline.json`: **Task 13 only**, after Tasks 2, 7, 8, 9, 10, 11 and 12 have committed.
@@ -54,7 +56,7 @@
 ## Deviations from the spec (the source decided; evidence cited)
 
 1. **Column names `client_group_id` and `place_id`, not `group_id` and `property_id`** (spec §3.2). Every table that names a group calls it `client_group_id` (`0069_client_groups.sql:62`, `0071_places_and_equipment.sql:40`), and properties are `public.places` (`0071_places_and_equipment.sql:36`); there is no `properties` table. The indexes are renamed with them: `documents_by_contact (account_id, contact_id) where contact_id is not null`, `documents_by_group (account_id, client_group_id) where client_group_id is not null`, `documents_trashed (deleted_at) where deleted_at is not null`.
-2. **A contact or group with documents cannot be deleted out from under them** (spec silent). The record FKs are composite same-account keys (0050's shape, as `places_contact_fkey`, `0071:53-56`) with NO ACTION, not CASCADE: a cascade would delete the rows and strand the stored objects, which nothing could then find or remove. Two consequences, both in this PR: `deleteContacts` (`packages/db/src/contacts.ts:1019-1035`, Owner-only, `…/contacts/actions.ts:477-480`) adds `documents` to its blocked pre-read, so a contact with files is counted `skippedBlocked`, never a failed batch (an Owner's RLS read sees Owners-only files too); and `ACCOUNT_OWNED_TABLES` (`account-teardown.ts:19-28`) gains `documents` before `equipment` (deleting `documents` cascades `document_versions`), or every `withTestAccount` teardown and the e2e fixture teardown would fail on the FK. `opportunity_id` is a plain FK (`opportunities` has no `(account_id, id)` key, `0050_same_account_fks.sql:94-97` adds one only to contacts and calendars), unused in part 1.
+2. **Deleting a customer deletes their files, objects first** (spec silent; owner ruling 2026-10-13, replacing this plan's first answer, which blocked the delete). The order is fixed, and every step is the app's: (1) `bulkDeleteContactsAction` (Owner-only, `…/contacts/actions.ts:466-486`) has `deleteContacts` (`packages/db/src/contacts.ts:1019-1035`) compute the deletable ids exactly as today (bookings, deals and conversations still block, `:1023`); (2) for those ids, `purgeContactDocuments` (service role, Task 3) removes each document's stored objects from the `documents` bucket, then deletes that document's row (its versions cascade), then emits `document.purged` with actor `user` (the Owner); (3) only then are the contact rows deleted. The record FKs stay composite same-account keys (0050's shape, as `places_contact_fkey`, `0071:53-56`) with **NO ACTION, not CASCADE**: the app has already removed every document row before step 3, and the FK is the backstop that makes "no contact row is deleted while a document row still points at it" a database fact, not a hope. Consequences, each named and tested (Tasks 3 and 17): a document uploaded between steps 2 and 3 makes step 3 fail on the FK for the whole statement, the action answers "Delete failed — please try again." and the retry purges it, so nothing is orphaned; a storage removal that fails keeps THAT customer (and the rows of its documents not yet purged), logs the contact and document ids, and the toast says "kept N whose files couldn't be deleted" — one remove call per document, and in 1a a document has exactly one version, so at most that one document's object is in doubt, and the retry finds it again because removing a missing object is not an error (A4). The confirmation dialog states how many files go, counted on the Owner's request client (`countContactDocuments`, a `head: true` count that throws on `count === null`), trashed files included. `ACCOUNT_OWNED_TABLES` (`account-teardown.ts:19-28`) still gains `documents` before `equipment` (deleting `documents` cascades `document_versions`), or every `withTestAccount` teardown and the e2e fixture teardown would fail on the FK. **Groups cannot be deleted in the app today:** nothing under `packages/db/src` or `apps/web/src` calls `.from("client_groups").delete()` (the only `client_groups` write is the update at `client-groups.ts:430`), and 0069's functions remove memberships, never a group (`remove_group_membership`, `0069:367-380`); only the account teardown deletes groups. A future group delete must purge first, and the NO ACTION FK refuses it until it does. `opportunity_id` is a plain FK (`opportunities` has no `(account_id, id)` key, `0050_same_account_fks.sql:94-97` adds one only to contacts and calendars), unused in part 1.
 3. **The timeline row is read from `documents`, not from `events`, and the event payload carries no title** (spec §3.6). `events_read` lets every Owner and Staff read every event in the account (`0001_tenancy.sql:99`), so a title in `document.added`'s payload would show an Owners-only file's name to Staff through the API; and `events_technician_none` (`0068:144-145`) hides every event from a Technician, so their customers' document rows would vanish. Reading `documents` on the request client lets RLS decide (Technician scope and Owners only included). The row: "{who} added a file: {title}" (or "took a photo: {title}" for a camera file) at `created_at`, the person mark from `created_by`, and the status "In the trash" (a dot and the word, rule 3) while it is trashed. Trashing, restoring and purging are recorded as events (`document.trashed`, `document.restored`, `document.purged`, plus `document.added`) with payload `{ documentId, contactId | groupId, category }`; a purged file leaves the timeline because it is gone for good. One row per document keeps the source on the timeline's single cursor column (`timeline-cursor.ts:74-79`); two rows per document would collide on `(at, id)`.
 4. **The sweep's failures are logged to the console and its counters, not to `automation_log`** (spec §5.4). `automation_log` is the client-readable history of what automations sent on a client's behalf, its `source` and `channel` are closed CHECKs (`0046_automation_log.sql:33-39`, channel in `sms|email|ai`), and a new source must arrive with a releaser and a title (`packages/db/src/automation-log.ts:9-27`). The cron route already reports every pass's counters, and `opsWatch` reads each pass's heartbeat (`registry.ts:49-51`), so a stuck delete is visible to the agency without writing a customer-facing log line. The row stays for the next run, as the spec says.
 5. **The card's count is in its first row ("3 files"), not in the card title** (spec §4.1). `RecordCard`'s title is a string the server page builds before the client card reads its own route (`components/record/record-card.tsx:108-124`; `places.title` likewise has no count).
@@ -81,6 +83,8 @@
 - **A7** On Safari, `canvas.toBlob(…, "image/webp")` returns a PNG. Handled, not assumed away: the upload declares `blob.type`, whatever the browser produced (Task 9).
 - **A8** A phone camera's file input hands over a JPEG (iOS converts on capture). A HEIC that arrives anyway is refused with the "kind of file" message (spec §3.1).
 - **A9** PostgREST v14 embeds through a composite foreign key named with `!constraint` (Task 3's `version:document_versions!documents_current_version_fkey(...)` and `versions:document_versions!document_versions_document_fkey(...)`). Check: Task 3's `documents.test.ts` on the replica's PostgREST and CI `verify`; the fallback is named in Task 3.
+- **A11** A backend-created Clerk user with a password signs in on the development instance without an email code (Task 15 step 7). Fallback named there.
+- **A12** Clerk's sign-in page accepts `?__clerk_ticket=<token>` (Task 15 step 7's fallback only).
 - **A10** `db push` (CI's in-runner stack) runs migrations as the same role the bootstrap's `psql "$db_url"` uses, so 0077's `insert into storage.buckets` succeeds there (spec finding F1). Check: CI `verify`.
 
 ## File Structure
@@ -121,7 +125,7 @@
 | 0 | Confirm the base | orchestrator | n/a | — | none |
 | 1 | Migration 0077, `document-rules.ts`, `ACCOUNT_OWNED_TABLES`, and their proof on the replica | bis-db-schema | **opus** | 0 | the migration, `document-rules.ts`, three new tests, `account-teardown.ts`, `places.test.ts` |
 | 2 | Every key (**messages.ts, the only writer**) | bis-crm | sonnet | 0 | `lib/messages.ts` |
-| 3 | `@bis/db` `documents.ts`, `deleteContacts`' pre-read, the barrel, the `./document-rules` subpath | bis-crm | **opus** | 1 | `packages/db/src/{documents,contacts,index}.ts`, `packages/db/package.json`, `test/{documents,contacts}.test.ts` |
+| 3 | `@bis/db` `documents.ts`, `deleteContacts`' purge hook, the barrel, the `./document-rules` subpath | bis-crm | **opus** | 1 | `packages/db/src/{documents,contacts,index}.ts`, `packages/db/package.json`, `test/{documents,contacts}.test.ts` |
 | 4 | Pure web rules: file rules, the content check, expiry words, the load parser | bis-crm | sonnet | 2, 3 | `lib/documents/{rules,content-check,expiry,documents-load}*` |
 | 5 | The server actions | bis-crm | **opus** | 3, 4 | `…/contacts/documents-actions*`, `in-account-service-reads.test.ts` |
 | 6 | The two read routes | bis-crm | sonnet | 3, 4 | `…/api/{contacts,groups}/…/documents/route*`, `lib/documents/document-view.ts` |
@@ -131,9 +135,10 @@
 | 10 | The Documents card, its handlers, `/styleguide` | bis-frontend | **opus** | 6, 9 | `…/contacts/{documents-card,documents-card-handlers}*`, `styleguide/{documents-demo*,page.tsx}` |
 | 11 | The card on both record pages | bis-crm | sonnet | 8, 10 | `lib/record/record-cards*`, `[contactId]/page*`, `groups/[groupId]/{page*,loading.test.ts}` |
 | 12 | The daily pass | bis-automations | sonnet | 3 | `passes/documents-sweep*`, `registry.ts`, `cron-coupling.test.ts`, `sentinel.test.ts` |
-| 13 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 7–12 | `lib/i18n/*-baseline.json` |
-| 14 | The e2e sweep's documents leg, and the spec | bis-e2e-qa | sonnet | 11, 13 | `e2e/{fixtures/sweep*,auth.teardown.ts,documents.spec.ts,record-page.spec.ts,group-page.spec.ts}` |
-| 16 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–14 | none |
+| 13 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 7–12, 17 | `lib/i18n/*-baseline.json` |
+| 17 | Deleting a customer deletes their files (owner ruling) | bis-crm | **opus** | 2, 3, 5 | `…/contacts/{actions,bulk-action-bar}*`, one comment in `in-account-service-reads.test.ts` |
+| 14 | The e2e sweep's documents leg, and the spec | bis-e2e-qa | sonnet | 11, 13, 17 | `e2e/{fixtures/sweep*,auth.teardown.ts,documents.spec.ts,record-page.spec.ts,group-page.spec.ts}` |
+| 16 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–14, 17 | none |
 | 15 | Rollout (orchestrator; LAST) | orchestrator | n/a | 16 | none in the repo |
 
 (Task 15 is listed before 16 by number only; it runs LAST, after Task 16.)
@@ -145,12 +150,12 @@ Wave A (two lanes):    T1 (bis-db-schema)          T2 (bis-crm)
 Wave B:                T3 (bis-crm, after T1)
 Wave C (three lanes):  T4 (bis-crm, after T2+T3)   T8 (bis-crm, 2nd instance, after T2+T3)   T12 (bis-automations, after T3)
 Wave D (two lanes):    T5 (bis-crm, after T4)      T6 (bis-crm, 2nd instance, after T4)
-Wave E:                T7 (bis-frontend, after T4+T5)
+Wave E (two lanes):    T7 (bis-frontend, after T4+T5)   T17 (bis-crm, after T2+T3+T5)
 Wave F:                T9 (bis-frontend, after T7)
 Wave G:                T10 (bis-frontend, after T6+T9)
 Wave H:                T11 (bis-crm, after T8+T10)
-Wave I:                T13 (after T2, T7–T12)
-Wave J:                T14 (after T11+T13)
+Wave I:                T13 (after T2, T7–T12, T17)
+Wave J:                T14 (after T11+T13+T17)
 Checkpoint:            T16
 Rollout:               T15 (orchestrator, LAST)
 ```
@@ -470,7 +475,7 @@ describe("documents and document_versions: checks (spec sections 3.2, 3.3)", () 
       expect((await c.query("select 1 from document_versions where document_id = $1", [id])).rowCount).toBe(0);
     }));
 
-  it("a contact with a document cannot be deleted out from under it (deviation 2; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+  it("a contact row cannot be deleted while a document row points at it (the backstop behind deviation 2's order; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await doc(c, s.acct, { contact_id: s.ana });
@@ -756,8 +761,8 @@ Expected: every case FAILS (no bucket, no `documents` relation, no function). Pa
 -- under the tenant policy, 0068's Technician fence and an Owners-only fence, and writes nothing.
 -- No storage.objects policy is added for anon or authenticated: only the service role reaches the
 -- objects, through URLs it mints after an RLS read. reserve_document_version holds the 5 GiB quota
--- under a lock on the account row. The record FKs are NO ACTION: a contact or group with files cannot
--- be deleted out from under them (their objects would be stranded); the app's deleteContacts skips it.
+-- under a lock on the account row. The record FKs are NO ACTION: the app removes a contact's objects and
+-- document rows BEFORE the contact row (deleteContacts' purge hook), and the FK refuses any delete it did not clear.
 --
 -- APPLY ORDER: CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
 -- apply_migration, once), then the parity check (the fingerprint compares the bucket row), then merge.
@@ -1028,6 +1033,10 @@ describe("the document vault's copy (S-07 part 1)", () => {
     expect(m["documents.error.quota"]).toBe("Your account's 5 GB is full. Delete files you no longer need, or contact BIS.");
     expect(m["documents.error.upload"]).toBe("Couldn't upload. Try again.");
   });
+  it("the delete dialog's file line is the owner's wording, both languages (mutation: 'Esto también borra' -> FAILS)", () => {
+    expect(m["contacts.delete.alsoFiles"]).toBe("This also deletes {count} files.");
+    expect(m["contacts.delete.alsoFiles.es"]).toBe("También se borrarán {count} archivos.");
+  });
 });
 ```
 
@@ -1179,6 +1188,15 @@ describe("the document vault's copy (S-07 part 1)", () => {
   "timeline.documentPhoto.es": "tomó una foto: {title}",
   "timeline.what.documents": "documents",
   "timeline.what.documents.es": "documentos",
+  // Owner ruling 2026-10-13: deleting a customer deletes their files; the dialog says how many.
+  "contacts.delete.alsoFiles": "This also deletes {count} files.",
+  "contacts.delete.alsoFiles.es": "También se borrarán {count} archivos.",
+  "contacts.delete.alsoFilesOne": "This also deletes {count} file.",
+  "contacts.delete.alsoFilesOne.es": "También se borrará {count} archivo.",
+  "contacts.delete.filesFailed": "Couldn't check for files. Close this and try again.",
+  "contacts.delete.filesFailed.es": "No se pudo revisar si hay archivos. Cierre esto e intente de nuevo.",
+  "contacts.delete.keptFiles": "Deleted {count} · kept {kept} whose files couldn't be deleted. Try again.",
+  "contacts.delete.keptFiles.es": "Se borraron {count} · se conservaron {kept} cuyos archivos no se pudieron borrar. Intente de nuevo.",
 ```
 
 - [ ] **Step 4: Run** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/record/record-cards.test.ts` → PASS. Do NOT regenerate the baselines here (Task 13 does, once). If `src/lib/i18n/ratchet.test.ts` reports the new keys as unbaselined, that is expected until Task 13; a key reported WITHOUT a twin is this task's defect.
@@ -1186,15 +1204,15 @@ describe("the document vault's copy (S-07 part 1)", () => {
 
 ---
 
-## Task 3: `@bis/db` `documents.ts`, `deleteContacts`' pre-read, the barrel (bis-crm)
+## Task 3: `@bis/db` `documents.ts`, `deleteContacts`' purge hook, the barrel (bis-crm)
 
 **Review:** opus. **Scratch:** `<SCRATCH>/s07-t3-impl/`; replica + local PostgREST on `55522`/`55523`/`55524` (memory "Local DB replica", 2026-10-08 additions), built with Task 1's recipe through 0077 (`git show HEAD:packages/db/supabase/migrations/0077_document_vault.sql` once Task 1 has committed). **Never against bis-ci** (Global Constraints).
 
 **Files**
 - Create: `packages/db/src/documents.ts`
 - Create: `packages/db/src/test/documents.test.ts`
-- Modify: `packages/db/src/contacts.ts:1009-1035` (`deleteContacts`: doc comment + one table name)
-- Modify: `packages/db/src/test/contacts.test.ts` (one case)
+- Modify: `packages/db/src/contacts.ts:1009-1035` (`deleteContacts`: the `beforeDelete` purge hook; its answer gains `skippedFiles`)
+- Modify: `packages/db/src/test/contacts.test.ts` (the expectation at `:823`, one describe)
 - Modify: `packages/db/src/index.ts` (one block after the places block's `} from "./places";`)
 - Modify: `packages/db/package.json:5-13` (one subpath export, `"./document-rules"`)
 
@@ -1243,6 +1261,13 @@ export type TimelineDocument = {
   created_at: string; deleted_at: string | null; contact_id: string | null; client_group_id: string | null;
 };
 export function listDocumentTimeline(db, accountId: string, who: string | readonly string[], groupId: string | null, page: TimelinePageOpts): Promise<TimelineDocument[]>;
+// Owner ruling 2026-10-13 (deviation 2): a customer's files go with them.
+export function countContactDocuments(db, accountId: string, contactIds: readonly string[]): Promise<number>;   // request client; throws on a null count
+export type ContactPurge = { purgedDocuments: number; keptContacts: string[] };
+export function purgeContactDocuments(db, accountId: string, contactIds: readonly string[], actorId: string): Promise<ContactPurge>;   // service client
+// packages/db/src/contacts.ts
+export function deleteContacts(db, accountId: string, contactIds: string[], opts?: { beforeDelete?: (deletable: string[]) => Promise<string[]> }):
+  Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }>;
 ```
 
 **Assumption A9:** PostgREST v14 embeds through a composite FK named with `!constraint` (`version:document_versions!documents_current_version_fkey(...)` as a to-one, `versions:document_versions!document_versions_document_fkey(storage_path)` as a to-many). Proven by this task's `documents.test.ts` on the replica's PostgREST v14.14 and by CI `verify`; if it fails, replace each embed with a second query by `document_id` in chunks of 100 ids and say so in the report.
@@ -1405,16 +1430,100 @@ describe("the timeline read (plan deviation 3)", () => {
 });
 ```
 
-And in `packages/db/src/test/contacts.test.ts` (add `createDocument` from `"../documents"` and `deleteContacts` from `"../contacts"` to its imports if absent), a new describe at the end of the file:
+Append to the same `documents.test.ts` (owner ruling 2026-10-13: a customer's files go with them). Storage is not part of the replica, so these cases wrap the real service client with a fake `storage` (`withStorage`); the rows, the FK and the events are real:
 
 ```ts
-describe("deleteContacts and documents (0077, plan deviation 2)", () => {
-  it("a contact with a document is skipped as blocked, never a failed batch (mutation: drop 'documents' from the pre-read -> FAILS: the delete throws on documents_contact_fkey)", () =>
+import { countContactDocuments, purgeContactDocuments } from "../documents";
+
+/** The real client, with `storage.from(..).remove` replaced: Postgres stays real, the bucket is faked. */
+function withStorage(db: SupabaseClient, remove: (paths: string[]) => Promise<{ data: unknown; error: { message: string } | null }>): SupabaseClient {
+  return new Proxy(db, { get: (t, p) => (p === "storage" ? { from: () => ({ remove }) } : Reflect.get(t, p, t)) }) as SupabaseClient;
+}
+
+describe("a customer's files go with them (deviation 2)", () => {
+  it("purge: objects first, then the row, then document.purged as the user, trashed files too (mutation: delete the row before the remove -> FAILS on the order)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const a = await readyDoc(db, accountId, ana, { title: "A" });
+      const b = await readyDoc(db, accountId, ana, { title: "B" });
+      await trashDocument(db, accountId, b.id, ACTOR);
+      const order: string[] = [];
+      const svc = withStorage(db, async (paths) => {
+        for (const p of paths) order.push(`object:${p}`);
+        const { data } = await db.from("documents").select("id").in("id", [a.id, b.id]);
+        order.push(`rows-left:${(data ?? []).length}`);
+        return { data: [], error: null };
+      });
+      expect(await purgeContactDocuments(svc, accountId, [ana], "user_owner")).toEqual({ purgedDocuments: 2, keptContacts: [] });
+      expect(order.filter((x) => x.startsWith("object:")).sort()).toEqual([`object:${a.path}`, `object:${b.path}`].sort());
+      expect(order.filter((x) => x.startsWith("rows-left:"))[0]).toBe("rows-left:2");   // the first object went while both rows stood
+      expect(await getDocument(db, accountId, a.id)).toBeNull();
+      expect((await events(db, accountId, "document.purged")).map((e) => (e as { actor_type: string; actor_id: string }).actor_type + ":" + (e as { actor_id: string }).actor_id))
+        .toEqual(["user:user_owner", "user:user_owner"]);
+    }));
+
+  it("a failed removal keeps that customer and its rows, says so in keptContacts, and a retry finishes (mutation: delete the row when remove failed -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const bea = (await createContact(db, accountId, { firstName: "Bea" }, ACTOR)).id;
+      const a = await readyDoc(db, accountId, ana, { title: "A" });
+      const b = await readyDoc(db, accountId, bea, { title: "B" });
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const failing = withStorage(db, async (paths) => (paths.includes(a.path) ? { data: null, error: { message: "storage down" } } : { data: [], error: null }));
+      expect(await purgeContactDocuments(failing, accountId, [ana, bea], "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: [ana] });
+      expect(await getDocument(db, accountId, a.id)).not.toBeNull();
+      expect(await getDocument(db, accountId, b.id)).toBeNull();
+      expect(errors.mock.calls.some(([msg]) => String(msg).includes(a.id) && String(msg).includes(ana))).toBe(true);
+      errors.mockRestore();
+      const ok = withStorage(db, async () => ({ data: [], error: null }));
+      expect(await purgeContactDocuments(ok, accountId, [ana], "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: [] });
+      expect(await getDocument(db, accountId, a.id)).toBeNull();
+    }));
+
+  it("the dialog's count includes trashed files and other contacts' files never count (mutation: filter deleted_at is null -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const bea = (await createContact(db, accountId, { firstName: "Bea" }, ACTOR)).id;
+      await readyDoc(db, accountId, ana, { title: "A" });
+      const t = await readyDoc(db, accountId, ana, { title: "T" });
+      await trashDocument(db, accountId, t.id, ACTOR);
+      await readyDoc(db, accountId, bea, { title: "B" });
+      expect(await countContactDocuments(db, accountId, [ana])).toBe(2);
+      expect(await countContactDocuments(db, accountId, [ana, bea])).toBe(3);
+    }));
+
+  it("a null head count throws, never reads as zero (mutation: `count ?? 0` -> FAILS)", async () => {
+    const chain = { select: () => chain, eq: () => chain, in: async () => ({ count: null, error: null }) };
+    const fake = { from: () => chain } as unknown as SupabaseClient;
+    await expect(countContactDocuments(fake, "acc", ["c1"])).rejects.toThrow(/null/);
+  });
+});
+```
+
+(Add `vi` to this file's `vitest` import, and fold the `countContactDocuments, purgeContactDocuments` import into the file's existing `../documents` import at the top.)
+
+And in `packages/db/src/test/contacts.test.ts` (add `createDocument` from `"../documents"` to its imports; `deleteContacts` and `getContact` are already imported, `contacts.test.ts:9`): the existing case at `:822-823` becomes `expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0 });` (the return gains a field), and a new describe at the end of the file:
+
+```ts
+describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
+  it("beforeDelete sees only the deletable ids, and an id it keeps is not deleted (mutation: delete the kept ids anyway -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
       const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
-      await createDocument(db, { accountId, record: { kind: "contact", id: keep }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
-      expect(await deleteContacts(db, accountId, [keep, go])).toEqual({ deleted: 1, skippedBlocked: 1 });
+      const seen: string[][] = [];
+      const r = await deleteContacts(db, accountId, [keep, go], { beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      expect(seen).toEqual([[keep, go].sort()]);
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+      expect(await getContact(db, accountId, keep)).not.toBeNull();
+      expect(await getContact(db, accountId, go)).toBeNull();
+    }));
+
+  it("without the purge, a contact with a document is NOT deleted: the FK refuses the statement (the backstop; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
+      await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+      await expect(deleteContacts(db, accountId, [c])).rejects.toThrow(/documents_contact_fkey|foreign key/);
+      expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
 });
 ```
@@ -1426,7 +1535,7 @@ describe("deleteContacts and documents (0077, plan deviation 2)", () => {
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit } from "./events";
 import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
-import type { DocumentCategory, DocumentContentType, DocumentSource } from "./document-rules";
+import { DOCUMENT_BUCKET, type DocumentCategory, type DocumentContentType, type DocumentSource } from "./document-rules";
 
 /**
  * The document vault's data layer (0077; spec sections 3 and 5). READS take the caller's client:
@@ -1690,6 +1799,63 @@ export async function purgeDocumentRow(db: SupabaseClient, doc: PurgeCandidate):
   return true;
 }
 
+/** Owner's request client (RLS-safe): how many documents a delete of these contacts takes with it, trashed ones included. A null count is a failure, never zero (memory "head-count null"). */
+export async function countContactDocuments(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<number> {
+  let total = 0;
+  for (let i = 0; i < contactIds.length; i += 100) {
+    const { count, error } = await db.from("documents").select("id", { count: "exact", head: true })
+      .eq("account_id", accountId).in("contact_id", [...contactIds.slice(i, i + 100)]);
+    if (error) throw new Error(`countContactDocuments failed: ${error.message}`);
+    if (count === null) throw new Error("countContactDocuments: the count came back null");
+    total += count;
+  }
+  return total;
+}
+
+export type ContactPurge = { purgedDocuments: number; keptContacts: string[] };
+
+/**
+ * Service client, BEFORE the contacts are deleted (owner ruling 2026-10-13: a customer's files go
+ * with them; plan deviation 2 states the order). Per document: every version's object out of the
+ * bucket (ONE remove call), then the row (its versions cascade), then document.purged with actor
+ * `user`. A failed remove or row delete keeps that CONTACT: its remaining documents are not touched,
+ * the ids are logged, and it is answered in keptContacts, so the caller does not delete it. Removing
+ * an object that is already gone is not an error (plan A4), so a retry finishes what a failure left.
+ */
+export async function purgeContactDocuments(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], actorId: string,
+): Promise<ContactPurge> {
+  const kept = new Set<string>();
+  let purged = 0;
+  for (let i = 0; i < contactIds.length; i += 100) {
+    const { data, error } = await db.from("documents")
+      .select("id, contact_id, category, versions:document_versions!document_versions_document_fkey(storage_path)")
+      .eq("account_id", accountId).in("contact_id", [...contactIds.slice(i, i + 100)]);
+    if (error) throw new Error(`purgeContactDocuments (read) failed: ${error.message}`);
+    for (const d of (data ?? []) as unknown as { id: string; contact_id: string; category: string; versions: { storage_path: string }[] | null }[]) {
+      if (kept.has(d.contact_id)) continue;
+      const paths = (d.versions ?? []).map((v) => v.storage_path);
+      if (paths.length > 0) {
+        const { error: rm } = await db.storage.from(DOCUMENT_BUCKET).remove(paths);
+        if (rm) {
+          kept.add(d.contact_id);
+          console.error(`purgeContactDocuments: account ${accountId} contact ${d.contact_id} document ${d.id}: objects not removed, contact kept: ${rm.message}`);
+          continue;
+        }
+      }
+      const { error: del } = await db.from("documents").delete().eq("account_id", accountId).eq("id", d.id);
+      if (del) {
+        kept.add(d.contact_id);
+        console.error(`purgeContactDocuments: account ${accountId} contact ${d.contact_id} document ${d.id}: objects removed but the row was not, contact kept for the retry: ${del.message}`);
+        continue;
+      }
+      purged++;
+      await emitAfter(db, accountId, "document.purged", actorId, { documentId: d.id, contactId: d.contact_id, category: d.category });
+    }
+  }
+  return { purgedDocuments: purged, keptContacts: [...kept] };
+}
+
 export type TimelineDocument = {
   id: string; title: string; category: DocumentCategory; source: DocumentSource; created_by: string;
   created_at: string; deleted_at: string | null; contact_id: string | null; client_group_id: string | null;
@@ -1718,7 +1884,37 @@ export async function listDocumentTimeline(
 }
 ```
 
-- [ ] **Step 4: `deleteContacts`.** In `packages/db/src/contacts.ts:1023` change the tuple to `["opportunities", "conversations", "bookings", "documents"] as const`, and in its doc comment (`:1009-1018`), after "`on delete restrict` BY DESIGN (0017)", add: "and `documents (account_id, contact_id)` is NO ACTION (0077: a contact's files cannot be stranded; deleteContacts is Owner-only, `…/contacts/actions.ts:477`, and an Owner's request client sees Owners-only files too, so the pre-read misses none)".
+- [ ] **Step 4: `deleteContacts` takes a purge hook** (deviation 2). In `packages/db/src/contacts.ts:1019-1035`, the tuple at `:1023` is UNCHANGED (documents never block); the signature and the tail become:
+
+```ts
+export async function deleteContacts(
+  db: SupabaseClient, accountId: string, contactIds: string[],
+  opts: {
+    /** Runs on the deletable ids (blocked ones already removed) BEFORE any contact row is deleted; answers
+     *  the ids it could not clear, which are then kept. The document vault's purge (0077, deviation 2). */
+    beforeDelete?: (deletable: string[]) => Promise<string[]>;
+  } = {},
+): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }> {
+  if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0, skippedFiles: 0 };
+  const blocked = new Set<string>();
+  for (const table of ["opportunities", "conversations", "bookings"] as const) {
+    const { data, error } = await db.from(table).select("contact_id")
+      .eq("account_id", accountId).in("contact_id", contactIds);
+    if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
+    for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id);
+  }
+  const deletable = contactIds.filter((id) => !blocked.has(id));
+  const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
+  const go = deletable.filter((id) => !kept.has(id));
+  if (go.length === 0) return { deleted: 0, skippedBlocked: blocked.size, skippedFiles: kept.size };
+  const { data, error } = await db.from("contacts").delete()
+    .eq("account_id", accountId).in("id", go).select("id");
+  if (error) throw new Error(`deleteContacts failed: ${error.message}`);
+  return { deleted: (data ?? []).length, skippedBlocked: blocked.size, skippedFiles: kept.size };
+}
+```
+
+and its doc comment (`:1009-1018`) gains: "`documents (account_id, contact_id)` is NO ACTION (0077): a contact's files are purged by `beforeDelete` first (objects, then rows; owner ruling 2026-10-13), and the FK refuses the delete of any contact a purge did not clear, so no stored object is ever stranded."
 - [ ] **Step 5: The barrel and the subpath.** In `packages/db/src/index.ts`, directly after the places block's `} from "./places";`:
 
 ```ts
@@ -1727,6 +1923,7 @@ export {
   listRecordDocuments, getDocument, getDocumentVersion, getUploadingVersion, createDocument, reserveDocumentVersion,
   markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly, trashDocument, restoreDocument,
   listAbandonedUploads, deleteAbandonedVersion, listPurgeableDocuments, purgeDocumentRow, listDocumentTimeline, MAX_DOCUMENTS_READ,
+  countContactDocuments, purgeContactDocuments, type ContactPurge,
   type DocumentRecordRef, type DocumentRow, type DocumentVersionRow, type ListedDocument, type RecordDocuments, type ReserveOutcome,
   type DocumentField, type CasOutcome, type SweepVersion, type PurgeCandidate, type TimelineDocument,
 } from "./documents";
@@ -1739,7 +1936,7 @@ export {
 
 In `packages/db/package.json`'s `exports` (`:5-13`), after `"./relationship-keys": "./src/relationship-keys.ts"`, add `"./document-rules": "./src/document-rules.ts"` (comma on the line before). Browser code (Tasks 4, 7, 9, 10) imports the rules from `@bis/db/document-rules` only, never from the `@bis/db` barrel, which carries server code.
 
-- [ ] **Step 6: Run on the replica + PostgREST** (`documents.test.ts`, the new `contacts.test.ts` case, `places.test.ts`) → PASS. Mutation probes, each red by name: drop `.not("current_version_id", "is", null)` in `listRecordDocuments`; drop `.eq("status", "uploading")` in `markDocumentVersionReady`; drop the `expected` filter in `updateDocumentField`; drop `.eq("deleted_at", expectedDeletedAt)` in `restoreDocument`; `.lt` → `.gt` in `listPurgeableDocuments`; drop the group read in `listDocumentTimeline`; drop `"documents"` from `deleteContacts`.
+- [ ] **Step 6: Run on the replica + PostgREST** (`documents.test.ts`, the new `contacts.test.ts` case, `places.test.ts`) → PASS. Mutation probes, each red by name: drop `.not("current_version_id", "is", null)` in `listRecordDocuments`; drop `.eq("status", "uploading")` in `markDocumentVersionReady`; drop the `expected` filter in `updateDocumentField`; drop `.eq("deleted_at", expectedDeletedAt)` in `restoreDocument`; `.lt` → `.gt` in `listPurgeableDocuments`; drop the group read in `listDocumentTimeline`; delete the kept ids anyway in `deleteContacts`; delete the row before the remove in `purgeContactDocuments`; `count ?? 0` in `countContactDocuments`; `documents_contact_fkey on delete cascade` on the replica (the backstop case).
 - [ ] **Step 7:** `pnpm --filter @bis/db typecheck` and `pnpm --filter web typecheck` → clean.
 - [ ] **Step 8: Commit.** `git add -- packages/db/src/documents.ts packages/db/src/test/documents.test.ts` then `git commit -m "feat(db): the document vault's reads, compare-and-set writes, sweep reads and timeline read (S-07 part 1)" -- packages/db/src/documents.ts packages/db/src/test/documents.test.ts packages/db/src/contacts.ts packages/db/src/test/contacts.test.ts packages/db/src/index.ts packages/db/package.json`
 
@@ -4546,7 +4743,7 @@ export const documentsSweepPass: Pass = {
 
 ## Task 13: Regenerate the i18n baselines (bis-crm)
 
-**Review:** sonnet. **After:** Tasks 2, 7, 8, 9, 10, 11, 12 committed.
+**Review:** sonnet. **After:** Tasks 2, 7, 8, 9, 10, 11, 12 and 17 committed.
 
 - [ ] **Step 1.** `pnpm --filter web exec tsx scripts/generate-i18n-baseline.ts` (the one command, `lib/i18n/ratchet.test.ts:1-9`).
 - [ ] **Step 2.** `git diff --stat -- apps/web/src/lib/i18n/` shows only the two baseline files. In `ratchet-baseline.json`, no NEW file appears with a nonzero count (every new `.tsx` in this PR carries no JSX literal copy); if one does, STOP and send it back to its task's owner rather than baselining it.
@@ -4822,12 +5019,222 @@ test("4. move to trash with Undo, trash again, then Restore from the trash", asy
   const { data } = await db.from("documents").select("deleted_at").eq("contact_id", contactId).eq("title", "Roof before").single();
   expect(data).toEqual({ deleted_at: null });
 });
+
+test("5. deleting the customer from the list says how many files go, then deletes the files with them (owner ruling 2026-10-13)", async ({ page }) => {
+  // Both files are live again after test 4. Read their paths BEFORE the delete.
+  const { data: docs } = await db.from("documents").select("id, current_version_id").eq("contact_id", contactId);
+  const ids = (docs ?? []).map((d: { id: string }) => d.id);
+  expect(ids).toHaveLength(2);
+  const { data: versions } = await db.from("document_versions").select("storage_path").in("document_id", ids);
+  const paths = (versions ?? []).map((v: { storage_path: string }) => v.storage_path);
+
+  // The list's bulk delete, as contacts-drawer.spec.ts:676-760 drives it (read those lines for the row
+  // checkbox, the Delete… button and the typed-count input; reuse its locators, never invent new ones).
+  await page.goto(`/dashboard/accounts/${accountId}/contacts`);
+  const row = page.locator("main [data-contact-row]").filter({ hasText: STAMP });
+  await row.getByRole("checkbox").check();
+  await page.getByRole("button", { name: m["bulk.delete"] }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.locator("[data-delete-files]")).toHaveText("This also deletes 2 files.");
+  await dialog.getByRole("textbox").fill("1");
+  await dialog.getByRole("button", { name: m["bulk.delete"] }).click();
+  await expect(page.getByText(m["bulk.deletedOne"])).toBeVisible();
+
+  const { data: contact } = await db.from("contacts").select("id").eq("id", contactId).maybeSingle();
+  expect(contact).toBeNull();
+  const { data: rows } = await db.from("documents").select("id").in("id", ids);
+  expect(rows ?? []).toEqual([]);
+  for (const p of paths) {
+    const { data: blob } = await db.storage.from(DOCUMENT_BUCKET).download(p);
+    expect(blob, `object ${p} is gone`).toBeNull();
+  }
+  const { data: purged } = await db.from("events").select("actor_type").eq("account_id", accountId).eq("type", "document.purged")
+    .in("payload->>documentId", ids);
+  expect((purged ?? []).map((e: { actor_type: string }) => e.actor_type)).toEqual(["user", "user"]);
+});
 ```
+
+(The `afterAll` above already tolerates a contact and documents that are gone: its reads find nothing and its deletes delete nothing. MUTATION PROBE, static: drop `beforeDelete` from `bulkDeleteContactsAction` → the delete fails on `documents_contact_fkey`, the toast is "Delete failed", and `contact` is not null → test 5 FAILS.)
 
 (Selectors that depend on `InlineField`'s internals — the click-to-edit button and its input in test 2 — are read from `components/inline-field.tsx` before running and adjusted to its real roles; the assertion stays: the stored title is back after Undo.)
 
 - [ ] **Step 6: Static checks only** (the orchestrator runs Playwright): `pnpm --filter web exec vitest run e2e/fixtures/sweep.test.ts e2e/fixtures/fixture-names.test.ts`, `pnpm --filter web exec tsc --noEmit -p e2e` (or the e2e typecheck the repo uses: `grep -n "e2e" apps/web/package.json`), eslint on the touched files.
 - [ ] **Step 7: Commit.** `git add -- apps/web/e2e/documents.spec.ts` then `git commit -m "test(e2e): the document vault on the fixture account, and its objects in the sweep and teardown (S-07 part 1)" -- apps/web/e2e/documents.spec.ts apps/web/e2e/fixtures/sweep.ts apps/web/e2e/fixtures/sweep.test.ts apps/web/e2e/auth.teardown.ts apps/web/e2e/record-page.spec.ts apps/web/e2e/group-page.spec.ts`
+
+---
+
+## Task 17: Deleting a customer deletes their files (bis-crm; owner ruling 2026-10-13)
+
+**Review:** opus. **After:** Tasks 2, 3 and 5 (Task 5 commits `in-account-service-reads.test.ts` first; this task edits one comment there).
+
+**Files**
+- Modify: `…/accounts/contacts/actions.ts:466-486` (`bulkDeleteContactsAction`) and a new `countContactDocumentsAction` beside it; `actions.test.ts:152-165` and its `dbMocks` (`:30`)
+- Modify: `…/accounts/contacts/bulk-action-bar.tsx:3-18` (imports), `:108-160` (state, open, toast), `:228-233` (the Delete button), `:240-268` (the dialog); `bulk-action-bar.test.ts`
+- Modify: `…/accounts/in-account-service-reads.test.ts` (the comment above the existing `contacts/actions.ts` entry, `:72-76`; the entry itself and its reason, `proven-target`, are unchanged)
+
+**Interfaces**
+- Consumes: Task 3's `countContactDocuments`, `purgeContactDocuments`, `deleteContacts(db, accountId, ids, { beforeDelete })`; Task 2's `contacts.delete.alsoFiles` (+`One`), `contacts.delete.filesFailed`, `contacts.delete.keptFiles`; `requireAccountOwner` (`lib/auth.ts:70-78`, returns `{ userId, isAgency }`); `useLocale` (`components/locale-provider.tsx:17`; the contacts list renders under the account layout's provider, and outside one it answers `"en"`, the bar's language today); `Skeleton`.
+- Produces:
+
+```ts
+export function countContactDocumentsAction(accountId: string, contactIds: string[]): Promise<{ ok: true; count: number } | { ok: false }>;
+export function bulkDeleteContactsAction(accountId: string, contactIds: string[]):
+  Promise<{ ok: true; deleted: number; skippedBlocked: number; skippedFiles: number } | { ok: false; error: string }>;
+// bulk-action-bar.tsx
+export type FilesState = { status: "loading" } | { status: "ready"; count: number } | { status: "error" };
+export function DeleteFilesLine(p: { state: FilesState; locale: Locale }): JSX.Element | null;
+export function canConfirmDelete(typed: string, count: number, files: FilesState): boolean;
+```
+
+- [ ] **Step 1: Write the failing tests.**
+
+In `actions.test.ts`, add `countContactDocuments: vi.fn()`, `purgeContactDocuments: vi.fn()` and `serviceDb: vi.fn(() => SERVICE)` (with `const SERVICE = { tag: "service-db" };`) to `dbMocks` if absent (the `vi.mock("@bis/db")` factory check), then in the `bulkDeleteContactsAction` describe:
+
+```ts
+  it("purges each deletable customer's files on the SERVICE client, as the Owner, BEFORE the contacts go, and keeps the ones it could not clear (owner ruling; mutation: call deleteContacts without beforeDelete -> FAILS)", async () => {
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 3, keptContacts: ["y"] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: { beforeDelete?: (ids: string[]) => Promise<string[]> }) => {
+      const kept = await opts!.beforeDelete!(["x", "y"]);
+      return { deleted: 1, skippedBlocked: 0, skippedFiles: kept.length };
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x", "y"])).toEqual({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+    expect(dbMocks.purgeContactDocuments).toHaveBeenCalledWith(SERVICE, "a1", ["x", "y"], "user_1");
+  });
+  it("a purge that throws fails the whole delete, never a silent success (mutation: catch the purge's throw and return [] -> FAILS)", async () => {
+    dbMocks.purgeContactDocuments.mockRejectedValue(new Error("db down"));
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: { beforeDelete?: (ids: string[]) => Promise<string[]> }) => {
+      await opts!.beforeDelete!(["x"]);
+      return { deleted: 1, skippedBlocked: 0, skippedFiles: 0 };
+    });
+    expect((await bulkDeleteContactsAction("a1", ["x"])).ok).toBe(false);
+  });
+});
+
+describe("countContactDocumentsAction", () => {
+  it("counts on the REQUEST client after the Owner check; a failed or null count is ok:false, never 0 (mutation: return { ok: true, count: 0 } on error -> FAILS)", async () => {
+    dbMocks.countContactDocuments.mockResolvedValue(4);
+    const C = "11111111-1111-4111-8111-111111111111";
+    expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: true, count: 4 });
+    expect(requireAccountOwner).toHaveBeenCalledWith("a1");
+    expect(dbMocks.countContactDocuments.mock.calls[0]![0]).not.toBe(SERVICE);
+    dbMocks.countContactDocuments.mockRejectedValue(new Error("countContactDocuments: the count came back null"));
+    expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: false });
+    expect(await countContactDocumentsAction("a1", ["not-a-uuid"])).toEqual({ ok: false });
+  });
+```
+
+(import `countContactDocumentsAction` beside `bulkDeleteContactsAction` at `:66`; the existing "passes through honest counts" case's mock gains `skippedFiles: 0` and its expectation follows.)
+
+In `bulk-action-bar.test.ts` (the action module is already mocked there for the bar's other actions; add `countContactDocumentsAction: vi.fn()` to that mock), add:
+
+```ts
+describe("the delete dialog says how many files go (owner ruling 2026-10-13)", () => {
+  const line = (state: FilesState, locale: "en" | "es" = "en") => renderedText(renderToStaticMarkup(createElement(DeleteFilesLine, { state, locale })));
+  it("in English and Spanish, singular and plural, the owner's words (mutation: drop the One form -> FAILS)", () => {
+    expect(line({ status: "ready", count: 4 })).toBe("This also deletes 4 files.");
+    expect(line({ status: "ready", count: 4 }, "es")).toBe("También se borrarán 4 archivos.");
+    expect(line({ status: "ready", count: 1 })).toBe("This also deletes 1 file.");
+    expect(line({ status: "ready", count: 1 }, "es")).toBe("También se borrará 1 archivo.");
+  });
+  it("no files, no line; counting is a skeleton; a failed count says so (rule 7, rule 5; mutation: show nothing on error -> FAILS)", () => {
+    expect(line({ status: "ready", count: 0 })).toBe("");
+    expect(renderToStaticMarkup(createElement(DeleteFilesLine, { state: { status: "loading" }, locale: "en" }))).toContain("data-delete-files-skeleton");
+    expect(line({ status: "error" })).toBe(m["contacts.delete.filesFailed"]);
+  });
+  it("Delete is enabled only with the typed count AND a known file count (mutation: ignore the file count -> FAILS)", () => {
+    expect(canConfirmDelete("2", 2, { status: "ready", count: 3 })).toBe(true);
+    expect(canConfirmDelete("2", 2, { status: "loading" })).toBe(false);
+    expect(canConfirmDelete("2", 2, { status: "error" })).toBe(false);
+    expect(canConfirmDelete("3", 2, { status: "ready", count: 0 })).toBe(false);
+  });
+});
+```
+
+(imports: `DeleteFilesLine, canConfirmDelete, type FilesState` from `./bulk-action-bar`; `renderedText` from `@/lib/rendered-text`.)
+
+- [ ] **Step 2: Run, see them fail.**
+- [ ] **Step 3: `actions.ts`.** Add `countContactDocuments, purgeContactDocuments` to the `@bis/db` import (`:6-11`; `serviceDb` is already there). Replace `bulkDeleteContactsAction` (`:466-486`) and add the count action after it:
+
+```ts
+export async function bulkDeleteContactsAction(
+  accountId: string, contactIds: string[],
+): Promise<{ ok: true; deleted: number; skippedBlocked: number; skippedFiles: number } | { ok: false; error: string }> {
+  // (the existing Owner-only comment, unchanged)
+  const { userId } = await requireAccountOwner(accountId);
+  if (contactIds.length === 0) return { ok: false, error: "Nothing selected." };
+  try {
+    // Owner ruling 2026-10-13: a customer's files go with them. deleteContacts computes the deletable
+    // ids on the request client; the purge then removes each document's objects and row on the service
+    // client (0077: authenticated has no write on documents and none on storage.objects), BEFORE any
+    // contact row is deleted. A customer whose files could not all be removed is kept (skippedFiles),
+    // and the NO ACTION FK refuses the delete of any contact whose document rows remain.
+    const r = await deleteContacts(await dbForRequest(), accountId, contactIds, {
+      beforeDelete: async (deletable) => (await purgeContactDocuments(serviceDb(), accountId, deletable, userId)).keptContacts,
+    });
+    revalidatePath(contactsPath(accountId));
+    return { ok: true, ...r };
+  } catch {
+    return { ok: false, error: "Delete failed — please try again." };
+  }
+}
+
+/** The delete dialog's file count (owner ruling 2026-10-13), on the Owner's request client. Never 0 on a failure. */
+export async function countContactDocumentsAction(accountId: string, contactIds: string[]): Promise<{ ok: true; count: number } | { ok: false }> {
+  await requireAccountOwner(accountId);
+  if (!Array.isArray(contactIds) || !contactIds.every((id) => isUuid(id))) return { ok: false };
+  if (contactIds.length === 0) return { ok: true, count: 0 };
+  try {
+    return { ok: true, count: await countContactDocuments(await dbForRequest(), accountId, contactIds.map((id) => id.toLowerCase())) };
+  } catch (e) {
+    console.error(`contacts delete: file count failed (account ${accountId}): ${loggableError(e)}`);
+    return { ok: false };
+  }
+}
+```
+
+- [ ] **Step 4: `bulk-action-bar.tsx`.** Imports: `useLocale` from `@/components/locale-provider`, `Skeleton` from `@/components/ui/skeleton`, `t` beside `plural` (`:15`), `type Locale` from `@/lib/i18n/locale`, and `countContactDocumentsAction` in the actions import (`:18-20`). Add, above the component:
+
+```tsx
+/** The delete dialog's file line (owner ruling 2026-10-13): what else goes, in the reader's language. */
+export type FilesState = { status: "loading" } | { status: "ready"; count: number } | { status: "error" };
+
+export function DeleteFilesLine({ state, locale }: { state: FilesState; locale: Locale }) {
+  if (state.status === "loading") return <Skeleton data-delete-files-skeleton className="h-4 w-48" />;
+  if (state.status === "error") return <p data-delete-files="error" className="text-sm text-[var(--crit)]">{t(m, "contacts.delete.filesFailed", locale)}</p>;
+  if (state.count === 0) return null;
+  return <p data-delete-files={state.count} className="text-sm text-card-foreground">{plural(m, "contacts.delete.alsoFiles", state.count, locale, { count: state.count })}</p>;
+}
+
+/** Delete needs the typed count AND a known file count: the dialog must say how many files go before anything goes. */
+export function canConfirmDelete(typed: string, count: number, files: FilesState): boolean {
+  return typed.trim() === String(count) && files.status === "ready";
+}
+```
+
+In the component: `const locale = useLocale();` and `const [files, setFiles] = useState<FilesState>({ status: "loading" });` beside the existing state (`:108-110`), and
+
+```tsx
+  function openConfirm() {
+    const ids = [...selectedIds];
+    setFiles({ status: "loading" });
+    setConfirmOpen(true);
+    void countContactDocumentsAction(accountId, ids)
+      .then((r) => setFiles(r.ok ? { status: "ready", count: r.count } : { status: "error" }))
+      .catch(() => setFiles({ status: "error" }));
+  }
+```
+
+The Delete button (`:229`) calls `openConfirm` instead of `setConfirmOpen(true)`. In the dialog, after `</DialogDescription>` inside `<DialogHeader>`: `<DeleteFilesLine state={files} locale={locale} />`. The destructive button's `disabled` becomes `!canConfirmDelete(typed, count, files)`. In `doDelete` (`:137-157`), after the existing success toast:
+
+```tsx
+    if (r.skippedFiles > 0) {
+      toast.error(t(m, "contacts.delete.keptFiles", locale, { count: r.deleted, kept: r.skippedFiles }));
+    }
+```
+
+- [ ] **Step 5: The service-reads comment.** In `in-account-service-reads.test.ts`, the comment above the `contacts/actions.ts` entry gains: "bulkDeleteContactsAction (0077, owner ruling 2026-10-13): the documents purge runs on the service client only for the ids deleteContacts' request-client pre-read left deletable, scoped to the same account, and only after requireAccountOwner."
+- [ ] **Step 6: Run** the two tests, `in-account-service-reads.test.ts`, `pnpm --filter web typecheck`, eslint on the touched files → clean; probes red by name.
+- [ ] **Step 7: Commit.** `git commit -m "feat(contacts): deleting a customer deletes their files, objects first, and the dialog says how many (S-07 part 1, owner ruling)" -- "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/bulk-action-bar.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/bulk-action-bar.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`
 
 ---
 
@@ -4837,7 +5244,7 @@ test("4. move to trash with Undo, trash again, then Restore from the trash", asy
 
 - [ ] **Step 1.** Read the spec end to end, then `git diff dc3e4ab6...HEAD` in `<WT>`; walk the coverage table below row by row against the diff.
 - [ ] **Step 2.** Web tests by path: every test file Tasks 2 and 4–14 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/lib/consent/scans.test.ts`; `pnpm --filter web typecheck`. The db suites on a replica of your own (Task 1's recipe, port `55521`; PostgREST on `55526`/`55527` for `documents.test.ts`, `record.test.ts`, `contacts.test.ts`, `places.test.ts`), never bis-ci. Re-run two probes of your own choosing, by name.
-- [ ] **Step 3.** Hunt specifically: (a) a service write, a minted URL or a storage call that is not preceded by a request-client read of the record or the document (every export of `documents-actions.ts`); (b) a `serviceDb` mention outside `documents-actions.ts` under the in-account roots; (c) a title in any event payload; (d) a policy or guard built on a nullable boolean without `coalesce`; (e) a second primary in the card, the panel or the viewer (`data-variant="default"`); (f) a colour-only status; (g) a new key without its twin, a JSX literal with a letter, a tú form in new Spanish; (h) a test that cannot fail (memory "vacuous test shapes"), in particular a Spanish assertion compared against `t()`'s output; (i) the migration's ASCII rule; (j) an upload path that crosses a function body (any `File`/`Blob` argument to a server action); (k) the object-then-row order in the finish failure path, the abandon action, the sweep and the e2e teardown.
+- [ ] **Step 3.** Hunt specifically: (a) a service write, a minted URL or a storage call that is not preceded by a request-client read of the record or the document (every export of `documents-actions.ts`); (b) a `serviceDb` mention outside `documents-actions.ts` under the in-account roots; (c) a title in any event payload; (d) a policy or guard built on a nullable boolean without `coalesce`; (e) a second primary in the card, the panel or the viewer (`data-variant="default"`); (f) a colour-only status; (g) a new key without its twin, a JSX literal with a letter, a tú form in new Spanish; (h) a test that cannot fail (memory "vacuous test shapes"), in particular a Spanish assertion compared against `t()`'s output; (i) the migration's ASCII rule; (j) an upload path that crosses a function body (any `File`/`Blob` argument to a server action); (k) the object-then-row order in the finish failure path, the abandon action, the sweep, the e2e teardown AND the contact delete (`purgeContactDocuments` before any contact row; a kept contact never deleted; the FK still NO ACTION); (l) the delete dialog's count read on the request client, throwing on a null count.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent.
 
 ---
@@ -4852,8 +5259,87 @@ Additive migration, so it applies before the merge. Each step reads its own evid
 - [ ] **Step 4. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (after checking no `screenshots.yml` run is in progress; a local e2e run uses bis-ci, whose bucket Step 2 made). The `forms.spec` unread-badge flake is unrelated; never loosen it.
 - [ ] **Step 5. Production.** Pre-flight, read-only through the MCP `execute_sql` on `tlbkbmlrfafquucsmsmm`: `select to_regclass('public.documents'), to_regclass('public.document_versions')` → both null; `select count(*) from storage.buckets where id = 'documents'` → 0; `select to_regprocedure('public.reserve_document_version(uuid,uuid,bigint,text,text,text)')` → null. Then `apply_migration` with 0077's exact text, ONCE. Then Step 2's post-apply reads. Ledger line: `0077 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
 - [ ] **Step 6. Parity** (`docs/runbooks/ci-supabase-project.md` §5): `fingerprint.sql` on both; the `bucket` kind and the two tables' columns, constraints, policies and privileges equal. An allowed difference is only one the runbook already lists.
-- [ ] **Step 7. Preview by hand** (Assumptions A1, A2, A5, A6), only with danlo's OK to touch Test Client One (the one account Preview signs into; it is read-only for SPECS, and this is a person's check): on a throwaway contact made for the purpose, upload a PDF and a phone photo from Safari on an iPhone, open both, then move both to the trash and delete the contact's documents rows only after the daily sweep has purged them (30 days), or leave them trashed. Record in the PR body that the PUT, CORS, the PDF frame and Safari's re-encode worked, or what did not. Without the OK, skip this step and name A1, A2, A5 and Safari's half of A6 as proven by Chromium e2e only.
-- [ ] **Step 8. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 16's findings are closed). The PR body names: deviations 1–9, findings F1–F4, Assumptions A1–A9 and which were proven where, the known edge in Task 8 (an empty group's own documents miss its timeline), and "Not in this PR".
+- [ ] **Step 7. The Safari check on Vercel Preview, on a throwaway fixture account (owner ruling 2026-10-13: never Test Client One, never a live account).** Proves Assumptions A1, A2 and the Safari half of A6 on a real iPhone. Preview runs on bis-ci and the Clerk development instance, so a fixture made the way `auth.setup.ts` makes the per-run client fixture (`apps/web/e2e/auth.setup.ts:166-218`: a Clerk user, an org created by that user, `createAccount`, `setClientAccess`, `createContact`, named `E2E Client Co <stamp>` so the stale-fixture sweep, `e2e/fixtures/sweep.ts:249-280` with `isStaleFixtureAccount`, reclaims it if cleanup is ever missed) can sign in there. The orchestrator writes this script to `<WT>/apps/web/e2e/.auth/safari-check.ts` (`apps/web/.gitignore:15` ignores `/e2e/.auth/`, so it is never committed) and runs it from `<WT>/apps/web` with `pnpm exec tsx e2e/.auth/safari-check.ts <create|verify|cleanup>`:
+
+```ts
+import { config as loadEnv } from "dotenv";
+loadEnv({ path: ".env.local" });
+import { readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { clerkClient } from "@clerk/nextjs/server";
+import { serviceDb, createAccount, setClientAccess, createContact, deleteAccountCascade, DOCUMENT_BUCKET } from "@bis/db";
+import { refuseProduction } from "../fixtures/production-guard";
+import { removeDocumentObjects, emptySweepReport } from "../fixtures/sweep";
+
+refuseProduction(process.env, "The Safari check");          // bis-ci only; production throws here, naming the variable
+const STATE = "e2e/.auth/safari-check.json";
+const db = serviceDb();
+
+async function create() {
+  const stamp = Date.now();
+  const email = `e2e-safari-${stamp}@example.com`;
+  const password = randomBytes(18).toString("base64url");
+  const clerk = await clerkClient();
+  const user = await clerk.users.createUser({ emailAddress: [email], password, firstName: "E2E", lastName: "Safari", skipLegalChecks: true });
+  const org = await clerk.organizations.createOrganization({ name: `E2E Client Co ${stamp}`, createdBy: user.id });
+  const { id: accountId } = await createAccount(db, { clerkOrgId: org.id, name: `E2E Client Co ${stamp}`, actorId: user.id });
+  await setClientAccess(db, accountId, true, user.id);
+  const { id: contactId } = await createContact(db, accountId, { firstName: "Safari", lastName: `Check ${stamp}` }, user.id);
+  writeFileSync(STATE, JSON.stringify({ email, userId: user.id, orgId: org.id, accountId, contactId }));
+  // Printed for danlo only, never pasted into a report or a commit.
+  console.log(`Sign in on the Preview as ${email} / ${password}, then open /dashboard/accounts/${accountId}/contacts/${contactId}`);
+}
+
+/** The stored photo: a JPEG, no APP1 segment at all (no EXIF, so no GPS and no orientation tag; no XMP), and portrait pixels for an upright portrait shot. */
+async function verify() {
+  const s = JSON.parse(readFileSync(STATE, "utf8")) as { accountId: string; contactId: string };
+  const { data: docs, error } = await db.from("documents").select("id, source, current_version_id")
+    .eq("account_id", s.accountId).eq("contact_id", s.contactId);
+  if (error) throw error;
+  const photo = (docs ?? []).find((d: { source: string; current_version_id: string | null }) => d.source === "camera" && d.current_version_id);
+  if (!photo) throw new Error("no camera file on the fixture contact yet");
+  const { data: v, error: vErr } = await db.from("document_versions").select("storage_path, content_type, bytes").eq("id", photo.current_version_id).single();
+  if (vErr) throw vErr;
+  const { data: signed, error: sErr } = await db.storage.from(DOCUMENT_BUCKET).createSignedUrl(v.storage_path, 120);
+  if (sErr || !signed) throw sErr ?? new Error("no signed URL");
+  const bytes = Buffer.from(await (await fetch(signed.signedUrl)).arrayBuffer());
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  // Walk the header segments up to the image data (SOS, FF DA). Metadata lives ONLY there, so a scan of
+  // the compressed data (where any byte pair can occur) is never needed. APP1 (FF E1) is where EXIF,
+  // and with it GPS, and XMP live: a stripped photo has none. SOF0/SOF2 carry height then width.
+  const app1: string[] = [];
+  let height = 0, width = 0;
+  for (let i = 2; i + 4 <= bytes.length && bytes[i] === 0xff;) {
+    const marker = bytes[i + 1]!;
+    if (marker === 0xda) break;
+    const len = bytes.readUInt16BE(i + 2);
+    if (marker === 0xe1) app1.push(bytes.subarray(i + 4, i + 4 + Math.min(len - 2, 29)).toString("latin1"));
+    if (marker === 0xc0 || marker === 0xc2) { height = bytes.readUInt16BE(i + 5); width = bytes.readUInt16BE(i + 7); }
+    i += 2 + len;
+  }
+  const hasExif = app1.some((h) => h.startsWith("Exif"));
+  const hasXmp = app1.some((h) => h.startsWith("http://ns.adobe.com/xap/"));
+  console.log(JSON.stringify({ contentType: v.content_type, bytes: v.bytes, isJpeg, app1Segments: app1.length, hasExif, hasXmp, width, height, portrait: height > width }));
+}
+
+async function cleanup() {
+  const s = JSON.parse(readFileSync(STATE, "utf8")) as { userId: string; orgId: string; accountId: string };
+  const report = emptySweepReport();
+  await removeDocumentObjects(db, s.accountId, report, false);   // objects first (Task 14's helper)
+  await deleteAccountCascade(db, s.accountId, "safari-check");     // then every row, documents included
+  const clerk = await clerkClient();
+  await clerk.organizations.deleteOrganization(s.orgId);
+  await clerk.users.deleteUser(s.userId);
+  if (report.errors.length) throw new Error(report.errors.join("; "));
+  console.log("cleaned up");
+}
+
+const step = process.argv[2];
+await (step === "create" ? create() : step === "verify" ? verify() : step === "cleanup" ? cleanup() : Promise.reject(new Error("create | verify | cleanup")));
+```
+
+  Order: (a) check no `screenshots.yml` run is in progress; `create`; hand danlo the sign-in line privately. (b) danlo, on an iPhone in Safari, signs in on the branch's Preview, opens the contact, holds the phone UPRIGHT (portrait), taps **Take photo** once, takes the photo, taps the panel's Upload, and waits for the row. (c) `verify`, read-only: pass only when `isJpeg` is true, `app1Segments` is 0 (so no EXIF, no GPS, no XMP), `contentType` is `image/jpeg` and `portrait` is true; then danlo opens the row in the viewer and confirms the picture is upright (the stored pixels carry the rotation, since no orientation tag survives). (d) `cleanup`, always, pass or fail; then `select count(*) from accounts where id = '<accountId>'` with `ci:sql` → 0. Record the JSON line and danlo's "upright" in the PR body. **Assumption A11:** a backend-created user with a password signs in on the development instance without an email code (backend-created addresses are auto-verified, `auth.setup.ts:163-164`); if Clerk asks for a code anyway, mint a sign-in token instead (`clerk.signInTokens.createSignInToken({ userId, expiresInSeconds: 600 })`, the call `e2e/fixtures/clerk-identities.ts:70` makes) and open `<preview>/sign-in?__clerk_ticket=<token>` (**Assumption A12:** Clerk's sign-in page accepts the ticket parameter).
+- [ ] **Step 8. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 16's findings are closed). The PR body names: deviations 1–9, findings F1–F4, Assumptions A1–A12 and which were proven where, the known edge in Task 8 (an empty group's own documents miss its timeline), and "Not in this PR".
 - [ ] **Step 9.** Ledger: the migration line; the roadmap tracker row for item 6 moves to `in_progress` (spec §7: `done` only after parts 2 and 3); the first sweep's counters read from the next day's 09:00 UTC cron log.
 
 ---
@@ -4890,9 +5376,12 @@ Additive migration, so it applies before the merge. Each step reads its own evid
 | §6 app tests | Tasks 4–12 |
 | §6 e2e (PR 1a rows) | Task 14 |
 | §7 rollout, CSP, tracker | Task 15, spec finding F3 |
+| Owner ruling 2026-10-13: a customer's files go with them (objects, then rows, then the contact; the dialog's count; bulk delete) | Tasks 2, 3, 17, 14 (test 5); deviation 2 |
+| Owner ruling 2026-10-13: the Safari check on Preview with a throwaway fixture account | Task 15 step 7 |
 | §8 open items | untouched (named, not decided) |
 
 ## Self-review notes (the writer's own pass, 2026-10-13)
 
 - Placeholder scan: every code step carries its code; the two places that point at a file's existing shape (Task 8's render cases in `activity-timeline.rows.test.ts` and `group-timeline.test.ts`, Task 14's `InlineField` selectors) name the exact assertion that must hold and the file to read for the harness, because both depend on fixtures this plan did not open line by line.
+- Owner rulings 2026-10-13 re-checked: deviation 2 now states the delete order (objects, document rows, contact rows) with the FK kept NO ACTION as the backstop, and every failure path is named and tested (Task 3: a failed removal keeps the customer, a retry finishes, a null count throws; Task 17: a throwing purge fails the delete; Task 14 test 5: the objects are gone after a list delete). Groups have no delete path today (deviation 2 cites the evidence). Step 7 never touches Test Client One. `deleteContacts`' new `skippedFiles` field is reflected in its two callers' tests (`contacts.test.ts:823`, `actions.test.ts`'s honest-counts case) and in `bulkDeleteContactsAction`'s return type.
 - Type consistency: `discardDocumentUpload(db, accountId, documentId, versionId: string | null)` (Task 3) is called with `null` by Task 5's quota branch; `DocumentView` (Task 4) is produced by `documentView` (Task 6) and consumed by Tasks 9 and 10; `UploadPhase` (Task 7) by Task 9's panel; `TimelineDocument` (Task 3) by Task 8; `DocumentHandlers` (Task 10) by the styleguide demo.
