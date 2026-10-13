@@ -19,7 +19,7 @@
   - **bis-crm:** `packages/db/src/{client-groups,places,opportunities,activities,forms,record,timeline-cursor}.ts` and their tests (`client-groups.test.ts`, new `group-members.test.ts`, `head-count-null.test.ts` (one added case), `timeline-sources.test.ts`, `record.test.ts`), `packages/db/src/index.ts` (own lines only), `apps/web/src/lib/record/*`, `apps/web/src/lib/contacts/places-load.ts`, `…/contacts/{groups-actions,places-actions}.ts` and their tests, `…/contacts/[contactId]/{page,loading,deals-card,next-up-card}.tsx` and their tests, everything under `…/groups/` (new), `apps/web/src/app/api/accounts/[accountId]/groups/**` (new), `…/accounts/in-account-service-reads.test.ts` (one line each), the `groupPage.*`, `record.group.*` and `contact.noName.es` copy.
   - **bis-frontend:** `apps/web/src/components/record/*`, `apps/web/src/app/(dashboard)/dashboard/styleguide/*`, the Properties card UI (`…/contacts/{places-card.tsx,place-dialog.tsx,equipment-dialog.tsx,places-card-handlers.ts}` and their tests, as S-02 part 3's plan gave them, `2026-10-11-places-and-equipment.md` Task 6), the Groups card UI (`…/contacts/groups-card.tsx` and its tests, S-02 part 1's Task 6), the `groups.open*` copy.
   - **bis-comms:** `packages/db/src/messaging.ts` (`listContactMessages`) and `packages/db/src/test/contact-messages.test.ts`.
-  - **bis-booking:** `packages/db/src/booking.ts` (`countBookingsMadeFor`, `listContactUpcomingBookings`, `listContactBookings`) and `packages/db/src/test/booking.test.ts`.
+  - **bis-booking:** `packages/db/src/booking.ts` (`countBookingsMadeFor`, `listContactUpcomingBookings`, `listContactBookings`) and `packages/db/src/test/booking.test.ts`, plus its one barrel line in `packages/db/src/index.ts` (the booking block).
   - **bis-voice:** `packages/db/src/voice.ts` (`listContactCalls`) and `packages/db/src/test/voice-timeline.test.ts`.
   - **bis-e2e-qa:** `apps/web/e2e/group-page.spec.ts` (new), `apps/web/e2e/i18n-overflow.spec.ts`.
   - **Orchestrator:** merges, rollout (bis-ci, production, parity), the gates, `DESIGN.md` (bis-platform or the orchestrator lands the sentence the plan gives), the ledger.
@@ -118,7 +118,7 @@
 - **2a Group B:** Task 3 alone (it needs Task 2's exports).
 - **2a Group C (two lanes):** Task 5 (bis-frontend: the four Properties UI files and their tests) and Task 6 (bis-crm: the new `…/groups/people-*` and `details-card*` files).
 - **2a D, E:** Task 7, then Task 8.
-- **2b Group F (up to three lanes at once):** Task 11 commits its `forContacts` helper FIRST (Step 1–3, its own commit), then Tasks 12, 13, 14 (three files in three domains) start; Task 15 (components, styleguide, groups-card, messages.ts #1) runs beside them from the start. `index.ts` is edited by Task 2 (2a) and Task 16 (2b) only.
+- **2b Group F (up to three lanes at once):** Task 11 commits its `forContacts` helper FIRST (Step 1–3, its own commit), then Tasks 12, 13, 14 (three files in three domains) start; Task 15 (components, styleguide, groups-card, messages.ts #1) runs beside them from the start. `index.ts` is edited by Task 2 (2a), and in 2b by Task 13 (its one `countBookingsMadeFor` line at the booking block, `:88`) and Task 16 (pre-flight correction 2026-10-13); Task 13 and Task 16 never run at once.
 
 ---
 
