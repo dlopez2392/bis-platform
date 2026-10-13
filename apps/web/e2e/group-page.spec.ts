@@ -57,8 +57,10 @@ test.afterAll(async () => {
   if (made.group) await step("group", () => db.from("client_groups").delete().eq("account_id", accountId).eq("id", made.group!));
   const ids = [made.ana, made.luis, made.maria].filter((x): x is string => Boolean(x));
   await step("contacts", () => db.from("contacts").delete().eq("account_id", accountId).in("id", ids));
-  const { data: left } = await db.from("contacts").select("id").in("id", ids);
-  expect(left ?? []).toEqual([]);
+  // A failed read must fail the check, not read as "nothing left" (final review minor 3).
+  const { data: left, error: leftError } = await db.from("contacts").select("id").in("id", ids);
+  expect(leftError).toBeNull();
+  expect(left).toEqual([]);
 });
 
 test("asks who we call first, then Call Ana is the one primary, and Undo puts the question back (R1, D4)", async ({ page }) => {
