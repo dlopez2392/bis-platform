@@ -17,6 +17,7 @@ import { countConciergeConversationsByIp, countConciergeConversationsForAccount 
 import { countContacts } from "../contacts";
 import { countRecentSubmissions, countFormsMissingNotify } from "../forms";
 import { addPlace, addEquipment, removePlace, getPlace } from "../places";
+import { countGroupMembers } from "../client-groups";
 import { countScreenedCalls, countMisconfiguredScreenedCalls } from "../screened-calls";
 import { countTrafficDays } from "../sites";
 import { countExpiredUsage } from "../usage";
@@ -132,6 +133,11 @@ describe("HEAD count reads fail closed on a count-less answer, never read it as 
   it("countFormsMissingNotify (checklist warning; mutation: restore `count ?? 0` -> warning hidden, FAILS)", async () => {
     await expect(countFormsMissingNotify(noCount(db, "forms"), account))
       .rejects.toThrow(noCountReturned("countFormsMissingNotify"));
+  });
+
+  it("countGroupMembers (the group page's people total; mutation: return count ?? 0 -> resolves 0, FAILS)", async () => {
+    await expect(countGroupMembers(noCount(db, "client_group_members"), account, randomUUID()))
+      .rejects.toThrow(noCountReturned("countGroupMembers"));
   });
 
   it("countScreenedCalls (mutation: restore `count ?? 0` -> FAILS)", async () => {

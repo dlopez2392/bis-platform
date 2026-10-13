@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
+import { isTimelineInstant, type TimelineCursor } from "./timeline-cursor";
 
 /**
  * Client groups (S-02 part 1, migration 0069): households and business
@@ -17,7 +18,10 @@ export const BILLING_ADDRESS_MAX = 300;
 export type GroupKind = "household" | "business";
 export type GroupMemberSnapshot = {
   id: string; account_id: string; client_group_id: string; contact_id: string;
-  role: string | null; is_primary: boolean; is_billing: boolean; created_at: string;
+  role: string | null; is_primary: boolean; is_billing: boolean;
+  /** 0075: who we call first in the group (at most one per group). */
+  is_primary_contact: boolean;
+  created_at: string;
 };
 export type ContactGroupMember = { contactId: string; firstName: string | null; lastName: string | null };
 export type ContactGroup = {
@@ -155,6 +159,110 @@ export async function readGroup(db: SupabaseClient, accountId: string, groupId: 
   return row ? { id: row.id, kind: row.kind, name: row.name, billingAddress: row.billing_address } : null;
 }
 
+/** The People card's page size, and the most members the page's activity reads (spec D7). */
+export const GROUP_MEMBERS_PAGE_SIZE = 30;
+export const GROUP_ACTIVITY_CAP = 50;
+
+export type GroupMember = {
+  memberId: string; contactId: string; firstName: string | null; lastName: string | null;
+  phone: string | null; email: string | null; role: string | null; isBilling: boolean;
+  isPrimaryContact: boolean; joinedAt: string;
+};
+export type GroupMembersPage = { primary: GroupMember | null; members: GroupMember[]; next: TimelineCursor | null };
+export type GroupPerson = { contactId: string; firstName: string | null; lastName: string | null };
+
+type GroupMemberRow = {
+  id: string; contact_id: string; role: string | null; is_billing: boolean; is_primary_contact: boolean; created_at: string;
+  contacts: { first_name: string | null; last_name: string | null; phone: string | null; email: string | null } | null;
+};
+// The composite-FK embed listContactGroups' co-member read already uses; contacts_technician_scope fences it again.
+const GROUP_MEMBER_COLS = "id, contact_id, role, is_billing, is_primary_contact, created_at, contacts(first_name, last_name, phone, email)";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const toMember = (r: GroupMemberRow): GroupMember => ({
+  memberId: r.id, contactId: r.contact_id, firstName: r.contacts?.first_name ?? null, lastName: r.contacts?.last_name ?? null,
+  phone: r.contacts?.phone ?? null, email: r.contacts?.email ?? null, role: r.role, isBilling: r.is_billing,
+  isPrimaryContact: r.is_primary_contact, joinedAt: r.created_at,
+});
+
+/** `(created_at, id) > (v, id)` for PostgREST's `.or()`; validated, then quoted (timeline-cursor.ts's rule). */
+function membersAfterFilter(after: TimelineCursor): string {
+  if (!isTimelineInstant(after.v) || !UUID.test(after.id)) throw new TypeError("group members cursor: malformed");
+  const v = `"${after.v}"`;
+  return `created_at.gt.${v},and(created_at.eq.${v},id.gt.${after.id.toLowerCase()})`;
+}
+
+/**
+ * The group page's People (spec §6, C10): the call-first member, read on EVERY page because the
+ * header calls them (plan deviation 3), then the rest in the order they joined, `limit` a page past
+ * `after`, the holder excluded so they are never shown twice. RLS decides who is visible: a
+ * Technician reads their own customers' memberships only (0069), so `primary` is null when the
+ * holder is someone else's customer. THROWS on a read error or a malformed cursor (before any read).
+ */
+export async function listGroupMembers(
+  db: SupabaseClient, accountId: string, groupId: string, opts: { after?: TimelineCursor; limit?: number } = {},
+): Promise<GroupMembersPage> {
+  const limit = opts.limit ?? GROUP_MEMBERS_PAGE_SIZE;
+  const after = opts.after ? membersAfterFilter(opts.after) : null;
+  let rest = db.from("client_group_members").select(GROUP_MEMBER_COLS)
+    .eq("account_id", accountId).eq("client_group_id", groupId).eq("is_primary_contact", false);
+  if (after) rest = rest.or(after);
+  const [held, page] = await Promise.all([
+    db.from("client_group_members").select(GROUP_MEMBER_COLS)
+      .eq("account_id", accountId).eq("client_group_id", groupId).eq("is_primary_contact", true).maybeSingle(),
+    rest.order("created_at", { ascending: true }).order("id", { ascending: true }).limit(limit + 1),
+  ]);
+  if (held.error) throw new Error(`listGroupMembers primary failed: ${held.error.message}`);
+  if (page.error) throw new Error(`listGroupMembers failed: ${page.error.message}`);
+  const raw = (page.data ?? []) as unknown as GroupMemberRow[];
+  const shown = raw.slice(0, limit);
+  const last = shown.at(-1);
+  const primaryRow = held.data as unknown as GroupMemberRow | null;
+  return {
+    primary: primaryRow && primaryRow.contacts ? toMember(primaryRow) : null,
+    members: shown.filter((r) => r.contacts !== null).map(toMember),
+    next: raw.length > limit && last ? { v: last.created_at, id: last.id } : null,
+  };
+}
+
+/** The exact number of memberships the caller can see. THROWS on a read error or a count-less answer (#245). */
+export async function countGroupMembers(db: SupabaseClient, accountId: string, groupId: string): Promise<number> {
+  const { count, error } = await db.from("client_group_members").select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).eq("client_group_id", groupId);
+  if (error) throw new Error(`countGroupMembers failed: ${error.message}`);
+  if (count === null) throw new Error("countGroupMembers failed: no count returned");
+  return count;
+}
+
+/** The first `limit` people by joined order (C13 in 2a: Deals' set), with their names. THROWS. */
+export async function listGroupPeople(
+  db: SupabaseClient, accountId: string, groupId: string, limit = GROUP_ACTIVITY_CAP,
+): Promise<GroupPerson[]> {
+  const { data, error } = await db.from("client_group_members").select("contact_id, contacts(first_name, last_name)")
+    .eq("account_id", accountId).eq("client_group_id", groupId)
+    .order("created_at", { ascending: true }).order("id", { ascending: true }).limit(limit);
+  if (error) throw new Error(`listGroupPeople failed: ${error.message}`);
+  return ((data ?? []) as unknown as { contact_id: string; contacts: { first_name: string | null; last_name: string | null } | null }[])
+    .filter((r) => r.contacts !== null)
+    .map((r) => ({ contactId: r.contact_id, firstName: r.contacts!.first_name, lastName: r.contacts!.last_name }));
+}
+
+/**
+ * Who we call first (0075's set_group_primary_contact). The CALLER must have proven the group and,
+ * when given, the membership through the request client and checked the caller is a manager (C2).
+ * `memberId` null clears. Answers the member that held it before, for the Undo.
+ */
+export async function setGroupPrimaryContact(
+  db: SupabaseClient, accountId: string, groupId: string, memberId: string | null, actorId: string,
+): Promise<{ status: "ok"; previous: string | null } | { status: "not_found" }> {
+  const r = await rpc<{ status: string; previous?: string | null }>(
+    db, "set_group_primary_contact", { p_account_id: accountId, p_group_id: groupId, p_member_id: memberId });
+  if (r.status !== "ok") return { status: "not_found" };
+  await emit(db, accountId, "client_group.member_updated", actorId,
+    { groupId, memberId, previous: r.previous ?? null, fields: ["is_primary_contact"] });
+  return { status: "ok", previous: r.previous ?? null };
+}
+
 /**
  * Deviation from the brief's literal return type (see the task report): a
  * third status, `"too_long"`, ahead of `roleTooLong`'s check below.
@@ -236,7 +344,9 @@ export async function removeMembership(db: SupabaseClient, accountId: string, me
     db, "remove_group_membership", { p_account_id: accountId, p_member_id: memberId });
   if (r.status !== "ok" || !r.removed) return { status: "not_found" as const };
   await emit(db, accountId, "client_group.member_removed", actorId,
-    { memberId, contactId: r.removed.contact_id, groupId: r.removed.client_group_id });
+    { memberId, contactId: r.removed.contact_id, groupId: r.removed.client_group_id,
+      // S-03 part 2 (spec §10): a narrow caller's Undo restores the call-first flag only when THIS says so.
+      wasPrimaryContact: r.removed.is_primary_contact === true });
   return { status: "ok" as const, removed: r.removed };
 }
 

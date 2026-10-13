@@ -71,13 +71,15 @@ export type ContactPlaceGroup = { id: string; kind: GroupKind; name: string; isP
 export type ContactPlaces = {
   groups: ContactPlaceGroup[]; places: PlaceRow[]; placeCount: number; equipment: EquipmentRow[]; equipmentCount: number;
 };
-/** subjectId: the record the action was taken from, carried in every event payload. */
-export type PlaceCtx = { subjectId: string; actorId: string; actorType?: ActorType };
+/** subjectId: the record the action was taken from, carried in every event payload; a group's page (S-03
+ *  part 2, C12) records it as `groupId`, a contact's as `contactId`. */
+export type PlaceCtx = { subjectId: string; subjectKind?: "contact" | "group"; actorId: string; actorType?: ActorType };
 
 const now = () => new Date().toISOString();
 
 async function event(db: SupabaseClient, accountId: string, type: string, ctx: PlaceCtx, ids: Record<string, unknown>) {
-  await emit(db, accountId, type, ctx.actorId, { contactId: ctx.subjectId, ...ids }, ctx.actorType ?? "user");
+  const subject = ctx.subjectKind === "group" ? { groupId: ctx.subjectId } : { contactId: ctx.subjectId };
+  await emit(db, accountId, type, ctx.actorId, { ...subject, ...ids }, ctx.actorType ?? "user");
 }
 
 /** Named columns only: `fields` may have come from a browser, and a wider object must never reach
@@ -158,6 +160,38 @@ export async function listContactPlaces(db: SupabaseClient, accountId: string, c
       .sort((a, b) => rank(a.id) - rank(b.id));
   }
   return { groups, places, placeCount: placeCount ?? places.length, equipment, equipmentCount };
+}
+
+/**
+ * A group's OWN places (S-03 part 2, C12): `client_group_id = groupId`, active first, capped at
+ * MAX_PLACES_READ with an exact count, and their equipment, as listContactPlaces' second and third
+ * reads with the owner filter swapped. A member's own places are on their own page. `groups` is
+ * always empty: on a group's page there is no other group to rank by. THROWS on a read error or a
+ * count-less answer (#245).
+ */
+export async function listGroupPlaces(db: SupabaseClient, accountId: string, groupId: string): Promise<ContactPlaces> {
+  assertUuid(groupId, "listGroupPlaces");
+  const { data: pData, count: placeCount, error: pErr } = await db.from("places").select(PLACE_COLUMNS, { count: "exact" })
+    .eq("account_id", accountId).eq("client_group_id", groupId)
+    .order("archived_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true }).order("id", { ascending: true })
+    .limit(MAX_PLACES_READ);
+  if (pErr) throw dbError("listGroupPlaces places read failed", pErr);
+  if (placeCount === null) throw new PlaceDbError("listGroupPlaces failed: no count returned", undefined);
+  const places = (pData ?? []) as unknown as PlaceRow[];
+  let equipment: EquipmentRow[] = [];
+  let equipmentCount = 0;
+  if (places.length > 0) {
+    const { data, count, error } = await db.from("equipment").select(EQUIPMENT_COLUMNS, { count: "exact" })
+      .eq("account_id", accountId).in("place_id", places.map((p) => p.id))
+      .order("created_at", { ascending: true }).order("id", { ascending: true })
+      .limit(MAX_EQUIPMENT_READ);
+    if (error) throw dbError("listGroupPlaces equipment read failed", error);
+    if (count === null) throw new PlaceDbError("listGroupPlaces failed: no equipment count returned", undefined);
+    equipment = (data ?? []) as unknown as EquipmentRow[];
+    equipmentCount = count;
+  }
+  return { groups: [], places, placeCount, equipment, equipmentCount };
 }
 
 export async function getPlace(db: SupabaseClient, accountId: string, placeId: string): Promise<PlaceRow | null> {
