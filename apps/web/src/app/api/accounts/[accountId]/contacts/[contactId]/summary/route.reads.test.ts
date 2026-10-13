@@ -9,8 +9,10 @@ import { describe, it, expect, vi } from "vitest";
  */
 type Read = { client: "request" | "ledger"; target: string };
 const reads: Read[] = [];
+const ACCOUNT_ID = "11111111-1111-4111-8111-111111111111";
+const CONTACT_ID = "22222222-2222-4222-8222-222222222222";
 const SINGLE: Record<string, unknown> = {
-  contacts: { id: "c1", account_id: "a1", first_name: "Maria", last_name: "Garcia", email: "maria@example.com", phone: "+19565550100",
+  contacts: { id: CONTACT_ID, account_id: ACCOUNT_ID, first_name: "Maria", last_name: "Garcia", email: "maria@example.com", phone: "+19565550100",
     company_name: null, created_at: "2025-12-02T00:00:00Z", source: null, custom: {}, attribution: null, assigned_to: null,
     phone_country_unconfirmed: false },
   accounts: { timezone: "America/Chicago", language: null },
@@ -46,11 +48,11 @@ vi.mock("@/lib/zone", () => ({ renderZone: async (z?: string) => ({ zone: z ?? "
 const { GET } = await import("./route");
 
 /** Set from the first run (Step 2) and dated; never raised without the report saying why. */
-const MEASURED = 20; // measured 2026-10-13: 20 reads (+1 prefs); was 7 (+0) before S-03 part 3
+const MEASURED = 22; // measured 2026-10-13 (uuid fixture ids): 22 reads (+1 prefs); was 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
 
 describe("reads per drawer open (S-03 part 3 §5: measured, not assumed)", () => {
   it("the contact read first, the ledger only after it, and no more reads than measured (mutation: re-add the unpaged listContactMessages read -> FAILS)", async () => {
-    const res = await GET(new Request("http://x/api/accounts/a1/contacts/c1/summary"), { params: Promise.resolve({ accountId: "a1", contactId: "c1" }) });
+    const res = await GET(new Request(`http://x/api/accounts/${ACCOUNT_ID}/contacts/${CONTACT_ID}/summary`), { params: Promise.resolve({ accountId: ACCOUNT_ID, contactId: CONTACT_ID }) });
     expect(res.status).toBe(200);
     const list = reads.map((r) => `${r.client}:${r.target}`);
     console.info(`drawer reads per open: ${reads.length} through the clients, +1 getPersonPrefs\n${list.join("\n")}`);
