@@ -19,7 +19,7 @@
   - **bis-db-schema:** `packages/db/supabase/migrations/0077_document_vault.sql`; `packages/db/src/document-rules.ts` (new, the constants the tests pin); `packages/db/src/test/{document-vault-schema,document-vault-rls,document-vault-reserve-lock}.test.ts` (new); `packages/db/src/account-teardown.ts` (one list entry, `ACCOUNT_OWNED_TABLES`, and the stored-objects leg of `deleteAccountCascade`) and `packages/db/src/__tests__/account-teardown-storage.test.ts` (new); `packages/db/src/test/places.test.ts:144-149` (one added ordering line). Writes the migration, never applies it.
   - **bis-crm:** `packages/db/src/documents.ts` (new) and `packages/db/src/test/documents.test.ts` (new); `packages/db/package.json` (one subpath export, `./document-rules`, Task 3); `packages/db/src/record.ts` (the `documents` timeline source), `packages/db/src/test/record.test.ts` (one case), `packages/db/src/test/timeline-sources.test.ts` (the source list); `packages/db/src/contacts.ts:1009-1035` (`deleteContacts`' purge hook) and `packages/db/src/test/contacts.test.ts` (one expectation, one describe); `…/accounts/contacts/{actions.ts,actions.test.ts,bulk-action-bar.tsx,bulk-action-bar.test.ts}` (Task 17: the delete takes the files with it); `packages/db/src/index.ts` (own lines only); `apps/web/src/lib/documents/{rules,content-check,expiry,documents-load,document-view}.ts` and their tests (new); `…/accounts/contacts/documents-actions.ts` and its test (new); `…/api/contacts/[contactId]/documents/route.ts`, `…/api/groups/[groupId]/documents/route.ts` and their tests (new); `…/accounts/in-account-service-reads.test.ts` (one line); `apps/web/src/lib/record/{record-cards,timeline-rows,author-mark,recent-rows,loaders,group-loaders}.ts` and their tests; `…/accounts/contacts/[contactId]/{page.tsx,activity-timeline.tsx}` and their tests; `…/accounts/groups/[groupId]/{page.tsx,group-timeline.tsx,loading.test.ts}` and their tests; `apps/web/src/lib/messages.ts` and one `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (regenerated in Task 13, never hand-edited).
   - **bis-frontend:** `apps/web/src/lib/documents/{strip-image,upload-client}.ts` and their tests (new); `…/accounts/contacts/{documents-card.tsx,documents-card-handlers.ts,document-upload-panel.tsx,document-viewer.tsx}` and their tests (new); `apps/web/src/app/(dashboard)/dashboard/styleguide/{documents-demo.tsx,documents-demo.test.ts}` (new) and `styleguide/page.tsx` (one import, one section).
-  - **bis-automations:** `apps/web/src/lib/automations/passes/documents-sweep.ts` and its test (new); `apps/web/src/lib/automations/registry.ts` (one import, one array entry); `apps/web/src/lib/automations/cron-coupling.test.ts` (one case); `apps/web/src/lib/automations/sentinel.test.ts:274` (the registry's pinned key list).
+  - **bis-automations:** `apps/web/src/lib/automations/passes/documents-sweep.ts` and its test (new); `apps/web/src/lib/automations/registry.ts` (one import, one array entry); `apps/web/src/lib/automations/cron-coupling.test.ts` (one case); `apps/web/src/lib/automations/sentinel.test.ts:274` (the registry's pinned key list); `apps/web/src/app/api/cron/reminders/route.test.ts` (its bare `@bis/db` factory and its seven exact bodies, Task 12).
   - **bis-e2e-qa:** `apps/web/e2e/fixtures/sweep.ts`, `apps/web/e2e/fixtures/sweep.test.ts`, `apps/web/e2e/auth.teardown.ts` (the documents leg); `apps/web/e2e/documents.spec.ts` (new); `apps/web/e2e/record-page.spec.ts:48,165` and `apps/web/e2e/group-page.spec.ts:207-208` (the card order lists).
   - **Orchestrator:** the ledger, the bis-ci and production applies of 0077, the parity check, the gates, the PR, the roadmap tracker row. No `DESIGN.md` edit: its "Record page, documents and provenance" section (Documents paragraph) already states this PR's rules.
 - **Shared files, one task at a time, in this order.**
@@ -76,7 +76,7 @@
 
 - **A1** A browser `PUT` to the URL `createSignedUploadUrl` returns, with headers `content-type`, `x-upsert: false` and `cache-control: max-age=3600` and the raw file as the body, stores the object with no `apikey` or `Authorization` header (the token in the URL authorises it). Read: `uploadToSignedUrl` sends exactly those headers for a non-Blob body (`node_modules/.pnpm/@supabase+storage-js@2.110.8/…/dist/index.mjs:756-789`), plus the client's own default headers, which the browser does not have. Check: the e2e upload (Task 14) on the CI stack and on bis-ci.
 - **A2** Supabase Storage answers that cross-origin PUT with permissive CORS. Check: Task 14.
-- **A3** Storage refuses an upload whose `content-type` is outside the bucket's `allowed_mime_types` or larger than `file_size_limit`, and a download answers with the content type the upload declared (the Blob's `type`). The finish step relies on the second half: it refuses an object whose stored type is not the version's declared type (Task 5); Task 14 proves it end to end. The first half is a second line of defence only (the finish step checks the real bytes and size), so a wrong assumption costs nothing but a second line of defence.
+- **A3** Storage refuses an upload whose `content-type` is outside the bucket's `allowed_mime_types` or larger than `file_size_limit`, and a download answers with the content type the upload declared (the Blob's `type`). The finish step relies on the second half: it refuses an object whose stored media type is not the version's declared type (Task 5, compared lowercased and without parameters). Task 5's unit tests use a mocked Blob; the REAL proof is Task 14's e2e, whose PDF and JPEG must finish `ready` through real Storage on the CI stack (and the Safari check, Task 15 step 7). The first half is a second line of defence only (the finish step checks the real bytes and size), so a wrong assumption costs nothing but a second line of defence.
 - **A4** `storage.from(b).remove([paths])` answers with no error for a path that does not exist. The sweep and the failure path treat an error as "try again next run", so a wrong assumption only delays a purge.
 - **A5** A signed URL for a PDF renders in an `<iframe>` (Storage sends no `X-Frame-Options: DENY`) and serves `Content-Type: application/pdf` inline when no `download` option is given. Check: Task 14 asserts the frame's `src` is set; the orchestrator opens one by hand on Preview.
 - **A6** `createImageBitmap(file, { imageOrientation: "from-image" })` applies EXIF orientation, and `canvas.toBlob` output carries no EXIF APP1 segment, in Chromium (Playwright), Safari and Chrome on Android. Task 14 proves the Chromium half (the stored object has no `Exif\0\0`); Safari is a manual check on Preview, named in the PR body.
@@ -134,7 +134,7 @@
 | 9 | Upload panel and viewer | bis-frontend | sonnet | 2, 4, 5, 7 | `…/contacts/{document-upload-panel,document-viewer}*` |
 | 10 | The Documents card, its handlers, `/styleguide` | bis-frontend | **opus** | 6, 9 | `…/contacts/{documents-card,documents-card-handlers}*`, `styleguide/{documents-demo*,page.tsx}` |
 | 11 | The card on both record pages | bis-crm | sonnet | 8, 10 | `lib/record/record-cards*`, `[contactId]/page*`, `groups/[groupId]/{page*,loading.test.ts}` |
-| 12 | The sweep pass (every tick) | bis-automations | sonnet | 3 | `passes/documents-sweep*`, `registry.ts`, `cron-coupling.test.ts`, `sentinel.test.ts` |
+| 12 | The sweep pass (every tick) | bis-automations | sonnet | 3 | `passes/documents-sweep*`, `registry.ts`, `cron-coupling.test.ts`, `sentinel.test.ts`, `app/api/cron/reminders/route.test.ts` |
 | 13 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 7–12, 17 | `lib/i18n/*-baseline.json` |
 | 17 | Deleting a customer deletes their files (owner ruling) | bis-crm | **opus** | 2, 3, 5 | `…/contacts/{actions,bulk-action-bar}*`, one comment in `in-account-service-reads.test.ts` |
 | 14 | The e2e sweep's documents leg, and the spec | bis-e2e-qa | sonnet | 11, 13, 17 | `e2e/{fixtures/sweep*,auth.teardown.ts,documents.spec.ts,record-page.spec.ts,group-page.spec.ts}` |
@@ -1024,10 +1024,10 @@ Expected: all pass (the bucket/storage-policy cases pass against the stub; CI's 
   3. `drop policy document_versions_through_document on public.document_versions;` → the version cases for `staff` and `tech`.
   4. `create or replace` the reserve function with `where v.status = 'ready'` → "counts ready AND uploading".
   5. `create or replace` it without `for no key update` → the lock test.
-  9. `create or replace` `mark_document_version_ready` without its `update public.documents` → "the version turns ready AND becomes current together".
   6. `grant insert on public.documents to authenticated;` → "authenticated holds SELECT and nothing else" AND `schema-grants-guard.test.ts` naming `authenticated documents`.
   7. `drop trigger documents_current_is_ready on public.documents;` → "current_version_id names only a READY version".
   8. `alter table public.documents drop constraint documents_contact_fkey, add constraint documents_contact_fkey foreign key (account_id, contact_id) references public.contacts (account_id, id) on delete cascade;` → "a contact with a document cannot be deleted".
+  9. `create or replace` `mark_document_version_ready` without its `update public.documents` → "the version turns ready AND becomes current together".
 - [ ] **Step 11: `ACCOUNT_OWNED_TABLES`.** In `packages/db/src/account-teardown.ts:26`, insert `"documents", ` immediately before `"equipment"`:
 
 ```ts
@@ -1113,7 +1113,7 @@ describe("deleteAccountCascade removes the document vault's objects before any r
 });
 ```
 
-(The fake's `.delete().eq()` is the chain every leg of `deleteAccountCascade` uses, `account-teardown.ts:110-124`.) **Replica note:** a `withTestAccount` suite that leaves `document_versions` rows now calls the Storage API at teardown; the replica has none, so the agent's local proxy (memory "Local DB replica", 2026-10-08) answers `DELETE /storage/v1/object/documents` with `200 []`. CI `verify` keeps the real `storage-api` (`ci-local-supabase.sh` keeps it out of `EXCLUDE`, script line 96).
+(The fake's `.delete().eq()` is the chain every leg of `deleteAccountCascade` uses, `account-teardown.ts:110-124`.) **Replica note:** a `withTestAccount` suite that leaves `document_versions` rows now calls the Storage API at teardown; the replica has none, so Task 3 Step 2's `proxy.mjs` (written there; nothing before this plan stubbed storage) answers `DELETE /storage/v1/object/documents` with `200 []`. CI `verify` keeps the real `storage-api` (`ci-local-supabase.sh` keeps it out of `EXCLUDE`, script line 96).
 
 - [ ] **Step 12: Commit.**
 
@@ -1326,8 +1326,8 @@ describe("the document vault's copy (S-07 part 1)", () => {
   "contacts.delete.filesFailed.es": "No se pudo revisar si hay archivos. Cierre esto e intente de nuevo.",
   "contacts.delete.keptFiles": "Deleted {count} · kept {kept} whose files couldn't be deleted. Try again.",
   "contacts.delete.keptFiles.es": "Se borraron {count} · se conservaron {kept} cuyos archivos no se pudieron borrar. Intente de nuevo.",
-  "contacts.delete.filesGoneKept": "The files were deleted, but the customers were kept: a new file arrived while deleting. Try again.",
-  "contacts.delete.filesGoneKept.es": "Los archivos se borraron, pero los clientes se conservaron: llegó un archivo nuevo mientras se borraba. Intente de nuevo.",
+  "contacts.delete.filesGoneKept": "The files were deleted, but the customers were kept. Try again.",
+  "contacts.delete.filesGoneKept.es": "Los archivos se borraron, pero los clientes se conservaron. Intente de nuevo.",
 ```
 
 - [ ] **Step 3b: Spanish twins for the bulk delete DIALOG's own strings** (plan review minor 10; Task 17 renders that dialog in the reader's language), each on the line directly under its English key: `"common.cancel.es": "Cancelar",` under `messages.ts:294`; `"bulk.delete.es": "Borrar…",` under `:620`; `"bulk.confirmTitle.es": "¿Borrar {count} contactos?",` under `:622`; `"bulk.confirmTitleOne.es": "¿Borrar 1 contacto?",` under `:628`; `"bulk.confirmBody.es": "Esto no se puede deshacer. Escriba {count} para confirmar.",` under `:629` (line numbers before this task's own block is added; insert from the bottom up). Adding a twin to a frozen key only shrinks the catalogue baseline (Task 13 regenerates it). Add to the Step 1 test: `it("the bulk delete dialog has Spanish (mutation: drop bulk.confirmBody.es -> FAILS)", () => { for (const k of ["common.cancel", "bulk.delete", "bulk.confirmTitle", "bulk.confirmTitleOne", "bulk.confirmBody"]) expect(m[(k + ".es") as MessageKey], k).toBeTruthy(); });`
@@ -1612,16 +1612,26 @@ describe("a customer's files go with them (deviation 2)", () => {
       expect(await getDocument(db, accountId, a.id)).toBeNull();
     }));
 
-  it("a contact with more documents than one page is purged completely (mutation: drop the paging loop -> FAILS with 501)", () =>
-    withTestAccount(async (db, accountId) => {
-      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      for (let n = 0; n < 501; n++) {
-        await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: `D${n}`, category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
-      }
-      const ok = withStorage(db, async () => ({ data: [], error: null }));
-      expect((await purgeContactDocuments(ok, accountId, [ana], "user_owner")).purgedDocuments).toBe(501);
-      expect(await countContactDocuments(db, accountId, [ana])).toBe(0);
-    }));
+  it("the read pages until a short page, so no row cap can truncate it (mutation: read only the first range -> FAILS on the range count)", async () => {
+    // A fake client: PostgREST's own max_rows (1000) would return a 501-row read whole, so only a fake
+    // can show the loop asks again after a FULL page of 500 and stops after a short one.
+    const ranges: [number, number][] = [];
+    const page = (from: number, to: number) => Array.from({ length: from === 0 ? 500 : 1 }, (_, n) => ({
+      id: `d${from + n}`, contact_id: "c1", versions: [] as { storage_path: string }[],
+    })).slice(0, to - from + 1);
+    const docs = {
+      select: () => docs, eq: () => docs, in: () => docs, order: () => docs,
+      range: async (from: number, to: number) => { ranges.push([from, to]); return { data: page(from, to), error: null }; },
+      delete: () => ({ eq: () => ({ eq: async () => ({ error: null }) }) }),
+    };
+    const fake = {
+      from: (t: string) => (t === "documents" ? docs : { insert: async () => ({ error: null }) }),
+      storage: { from: () => ({ remove: async () => ({ data: [], error: null }) }) },
+    } as unknown as SupabaseClient;
+    const r = await purgeContactDocuments(fake, "acc", ["c1"], "user_owner");
+    expect(ranges).toEqual([[0, 499], [500, 999]]);
+    expect(r.purgedDocuments).toBe(501);
+  });
 
   it("the dialog's count includes trashed files and other contacts' files never count (mutation: filter deleted_at is null -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
@@ -1671,7 +1681,31 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
 });
 ```
 
-- [ ] **Step 2: Build the replica with PostgREST and run; see it fail** (`../documents` does not exist).
+- [ ] **Step 2: Build the replica with PostgREST and run; see it fail** (`../documents` does not exist). The replica is Task 1's recipe through 0077 plus a local PostgREST v14.14 (memory "Local DB replica", 2026-10-08 additions: the official Windows build, keys signed with a local-only secret, the CI project's credentials blanked so global-setup sweeps only localhost). In front of it runs THIS proxy, the one place the Storage API is faked (plan re-review N2: nothing existing stubs storage). `deleteAccountCascade` (Task 1 Step 11b) now calls `storage.from("documents").remove(...)` at the teardown of any `withTestAccount` case that left a `document_versions` row, and storage-js sends that as `DELETE {url}/storage/v1/object/documents` with `{ prefixes }` (`@supabase/storage-js` 2.110.8 `dist/index.mjs:1373-1377`). Write `<SCRATCH>/s07-t3-impl/proxy.mjs`:
+
+```js
+// node proxy.mjs <listenPort> <postgrestPort>  — the replica's gateway: /rest/v1/* to PostgREST, a storage stub, nothing else.
+import http from "node:http";
+const [listen, upstream] = process.argv.slice(2).map(Number);
+http.createServer((req, res) => {
+  const path = (req.url ?? "").split("?")[0];
+  if (req.method === "DELETE" && path === "/storage/v1/object/documents") {
+    // Removing objects that do not exist is not an error on real Storage either (plan A4).
+    req.resume();
+    req.on("end", () => { res.writeHead(200, { "content-type": "application/json" }); res.end("[]"); });
+    return;
+  }
+  if (!path.startsWith("/rest/v1/")) { res.writeHead(404, { "content-type": "application/json" }); res.end("{}"); return; }
+  const up = http.request({
+    host: "127.0.0.1", port: upstream, method: req.method, path: (req.url ?? "").slice("/rest/v1".length),
+    headers: { ...req.headers, host: `127.0.0.1:${upstream}` },
+  }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
+  up.on("error", () => { res.writeHead(502); res.end(); });
+  req.pipe(up);
+}).listen(listen, "127.0.0.1");
+```
+
+Run it as `node "<SCRATCH>/s07-t3-impl/proxy.mjs" 55524 55523 </dev/null >/dev/null 2>&1 &` and point `NEXT_PUBLIC_SUPABASE_URL` at `http://127.0.0.1:55524` for the run. Any OTHER storage call reaching it answers 404, so a test that unexpectedly touches storage fails loudly instead of passing on a stub. Reviewers and Task 8 copy this file to their own scratch directory and ports.
 - [ ] **Step 3: Write `packages/db/src/documents.ts`:**
 
 ```ts
@@ -2728,6 +2762,10 @@ describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
     expect(db.discardDocumentUpload).toHaveBeenCalledWith(SERVICE, ACC, D, V);
     expect(db.markDocumentVersionReady).not.toHaveBeenCalled();
   });
+  it("the stored type is compared as a media type: case and parameters do not refuse a real PDF (mutation: compare blob.type raw -> FAILS)", async () => {
+    storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "Application/PDF; charset=binary" }), error: null });
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true });
+  });
   it("a storage removal that fails leaves the rows for the sweep (plan review I3; mutation: discard the rows anyway -> FAILS)", async () => {
     storage.download.mockResolvedValue({ data: new Blob([PDF, new Uint8Array(1)], { type: "application/pdf" }), error: null });
     storage.remove.mockResolvedValue({ data: null, error: { message: "storage down" } });
@@ -2739,7 +2777,7 @@ describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
     db.getDocumentVersion.mockResolvedValue(null);
     expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: false, error: "documents.error.refused" });
     expect(storage.remove).toHaveBeenCalledWith([`${ACC}/${D}/${V}`]);
-    expect(db.discardDocumentUpload).toHaveBeenCalledWith(SERVICE, ACC, D, null);
+    expect(db.discardDocumentUpload).not.toHaveBeenCalled();   // mutation: discard the document here -> FAILS
     vi.clearAllMocks();
     db.getDocument.mockResolvedValue(DOC);
     db.getUploadingVersion.mockResolvedValue(null);
@@ -2977,11 +3015,13 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
     if (!version) {
       // No uploading row. If NO row of that id exists at all (the sweep took it, or a cleanup ran), an
       // object the browser PUT afterwards could still sit at the path the server would have reserved:
-      // remove it. A row that exists (already ready) is never touched.
+      // remove that OBJECT only. A row that exists (already ready) is never touched, and neither is the
+      // document.
       if (!(await getDocumentVersion(svc, accountId, verId))) {
         const { error } = await svc.storage.from(DOCUMENT_BUCKET).remove([`${accountId}/${docId}/${verId}`]);
         if (error) log("finish: orphan object", accountId, error);
-        await discardDocumentUpload(svc, accountId, docId, null).catch((e: unknown) => log("finish: orphan rows", accountId, e));
+        // No row is touched here (plan re-review minor 1): a crafted finish(document, random id) must
+        // never delete a teammate's document whose own upload is still in flight. The sweep owns rows.
       }
       return fail(REFUSED);
     }
@@ -2997,8 +3037,10 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
       await cleanUp(svc, accountId, docId, verId, version.storage_path);
       return fail("documents.error.upload");
     }
-    // The type storage holds for the object must be the declared one, and the bytes must be that type.
-    if (blob.type !== version.content_type || checkDocumentBytes(bytes, version.content_type) !== "ok") {
+    // The type storage holds for the object must be the declared one (its media type: lowercased, any
+    // ";" parameter dropped), and the bytes must be that type.
+    const storedType = blob.type.split(";")[0]!.trim().toLowerCase();
+    if (storedType !== version.content_type || checkDocumentBytes(bytes, version.content_type) !== "ok") {
       await cleanUp(svc, accountId, docId, verId, version.storage_path);
       return fail("documents.error.badType");
     }
@@ -3608,7 +3650,7 @@ export const browserDeps = (): UploadDeps => ({
 
 ## Task 8: The timeline's `documents` source (bis-crm)
 
-**Review:** opus. **Replica:** `55528`/`55529`/`55530` for `record.test.ts` and `timeline-sources.test.ts` (`withTestAccount`).
+**Review:** opus. **Replica:** `55528`/`55529`/`55530` for `record.test.ts` and `timeline-sources.test.ts` (`withTestAccount`), with Task 3 Step 2's `proxy.mjs` as the gateway (its storage stub answers the teardown's object removal).
 
 **Files**
 - Modify: `packages/db/src/record.ts:262-370` (the source type and list, the entry union, `listTimelinePage`)
@@ -4794,6 +4836,7 @@ The `satisfies Record<RecordCardId, Slot>` / `Record<GroupRecordCardId, Slot>` o
 - Modify: `apps/web/src/lib/automations/registry.ts:1-16,18-54` (one import, one doc sentence, one entry after `siteTrafficPass`)
 - Modify: `apps/web/src/lib/automations/cron-coupling.test.ts` (one case)
 - Modify: `apps/web/src/lib/automations/sentinel.test.ts` (its `dbMocks` gain the two sweep reads answering `[]`; the registry's pinned key list at `:274` gains `"documentsSweep"` after `"siteTraffic"`)
+- Modify: `apps/web/src/app/api/cron/reminders/route.test.ts` (plan re-review N1: its `@bis/db` factory, `:15-130`, is BARE, so an unlisted export the every-tick pass dereferences makes `documentsSweep: { errored: 1 }` in every exact body)
 
 **Interfaces**
 - Consumes: Task 3's `listAbandonedUploads`, `deleteAbandonedVersion`, `listPurgeableDocuments`, `purgeDocumentRow`, `DOCUMENT_BUCKET`, `DOCUMENT_TRASH_DAYS`; `Pass`, `PassContext` (`context.ts:15-58`); `runPasses` (`harness.ts:29-50`: a pass that THROWS is recorded `{ errored: 1 }` and its heartbeat `ok: false`); `CRON_PASS_FAILURES_TO_ALERT = 2` (`lib/ops/watch.ts:52-56`: opsWatch alerts when a `cron.pass.*` key fails twice in a row).
@@ -4860,12 +4903,27 @@ In `cron-coupling.test.ts`, import `{ ABANDONED_UPLOAD_MS, SIGNED_UPLOAD_URL_MS 
 ```ts
   it("an upload is called abandoned only after its signed URL has expired and one more tick has passed, so the sweep never deletes a reservation a browser can still fill (mutation: ABANDONED_UPLOAD_MS = 1 h -> FAILS)", () => {
     const tick = tickIntervalMs(entry!.schedule);
+    // A MIRROR of storage-js's own constant (createSignedUploadUrl: "valid for 2 hours", dist/index.mjs:792-793),
+    // stated so a reader sees the number; the >= below is the guard.
     expect(SIGNED_UPLOAD_URL_MS).toBe(2 * 60 * MINUTE);
     expect(ABANDONED_UPLOAD_MS).toBeGreaterThanOrEqual(SIGNED_UPLOAD_URL_MS + tick);
   });
 ```
 
 `sentinel.test.ts`: add `listAbandonedUploads: vi.fn(async () => [])` and `listPurgeableDocuments: vi.fn(async () => [])` to its `dbMocks` (`:30-47` area; its `ctx.db` is `{}`), assert `expect(results.documentsSweep).toEqual({ abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 });` beside the `siteTraffic` assertions, and add `"documentsSweep"` after `"siteTraffic"` in the pinned list at `:274` (its title gains "the documents sweep" after "site traffic"; mutation: register the pass after `opsWatch` → FAILS).
+
+`app/api/cron/reminders/route.test.ts` (the cron route's own suite, whose bodies are exact): in the bare factory, beside `listSitesToSync: async () => []` (`:31`), add
+
+```ts
+  // The documents sweep (S-07) runs every tick: nothing is due here, so it reports its empty counters.
+  // Registering a pass and NOT mocking its reads makes it `errored: 1` in every exact body below.
+  listAbandonedUploads: async () => [],
+  listPurgeableDocuments: async () => [],
+  DOCUMENT_TRASH_DAYS: 30,
+  DOCUMENT_BUCKET: "documents",
+```
+
+beside `EMPTY_SITE_TRAFFIC` (`:307`) add `const EMPTY_DOCUMENTS_SWEEP = { abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 };`, and put `documentsSweep: EMPTY_DOCUMENTS_SWEEP` directly after EVERY `siteTraffic: EMPTY_SITE_TRAFFIC` (`grep -c "siteTraffic: EMPTY_SITE_TRAFFIC"` → `7` before; `grep -c "documentsSweep: EMPTY_DOCUMENTS_SWEEP"` → `7` after; the five one-line bodies at `:395, :418, :441, :457, :550` and the two multi-line ones at `:579, :621`). Mutation: drop `listAbandonedUploads` from the factory → every exact body FAILS with `documentsSweep: { errored: 1 }`. Only two files pin the full pass-key list: `grep -rln "siteTraffic" apps/web/src --include=*.test.ts` → `app/api/cron/reminders/route.test.ts`, `lib/automations/sentinel.test.ts` (and the pass's own test); re-run that grep before committing and add any new hit to this task.
 
 - [ ] **Step 2: Run, see them fail.**
 - [ ] **Step 3: Write `passes/documents-sweep.ts`:**
@@ -4945,8 +5003,8 @@ export const documentsSweepPass: Pass = {
 ```
 
 - [ ] **Step 4: `registry.ts`:** `import { documentsSweepPass } from "./passes/documents-sweep";` after the `siteTrafficPass` import (`:12`); in the doc comment after "The site-traffic pull runs after both — it touches no booking state and sends nothing." add "The documents sweep (S-07) follows it for the same reason: it reads and writes only the document vault."; and in `PASSES` (`:54`) insert `documentsSweepPass` directly after `siteTrafficPass`.
-- [ ] **Step 5: Run** `pnpm --filter web exec vitest run src/lib/automations/passes/documents-sweep.test.ts src/lib/automations/cron-coupling.test.ts src/lib/automations/sentinel.test.ts src/lib/automations/harness.test.ts src/lib/consent/scans.test.ts` → PASS; probes red by name.
-- [ ] **Step 6: Commit.** `git commit -m "feat(automations): the documents sweep, every tick, object first and row second, failing loudly (S-07 part 1)" -- apps/web/src/lib/automations/passes/documents-sweep.ts apps/web/src/lib/automations/passes/documents-sweep.test.ts apps/web/src/lib/automations/registry.ts apps/web/src/lib/automations/cron-coupling.test.ts apps/web/src/lib/automations/sentinel.test.ts`
+- [ ] **Step 5: Run** `pnpm --filter web exec vitest run src/lib/automations/passes/documents-sweep.test.ts src/lib/automations/cron-coupling.test.ts src/lib/automations/sentinel.test.ts src/lib/automations/harness.test.ts src/lib/consent/scans.test.ts src/app/api/cron/reminders/route.test.ts` → PASS; probes red by name.
+- [ ] **Step 6: Commit.** `git commit -m "feat(automations): the documents sweep, every tick, object first and row second, failing loudly (S-07 part 1)" -- apps/web/src/lib/automations/passes/documents-sweep.ts apps/web/src/lib/automations/passes/documents-sweep.test.ts apps/web/src/lib/automations/registry.ts apps/web/src/lib/automations/cron-coupling.test.ts apps/web/src/lib/automations/sentinel.test.ts apps/web/src/app/api/cron/reminders/route.test.ts`
 
 ---
 
@@ -5328,6 +5386,16 @@ In `actions.test.ts`, add `countContactDocuments: vi.fn()`, `purgeContactDocumen
     });
     expect(await bulkDeleteContactsAction("a1", ["x"])).toEqual({ ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" });
   });
+  it("any failure after files went says so; a failure before any file went does not (mutation: key on documents_contact_fkey again -> FAILS on the first expect)", async () => {
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 1, keptContacts: [] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: { beforeDelete?: (ids: string[]) => Promise<string[]> }) => {
+      await opts!.beforeDelete!(["x"]);
+      throw new Error("deleteContacts failed: network");
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x"])).toMatchObject({ ok: false, errorKey: "contacts.delete.filesGoneKept" });
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 0, keptContacts: [] });
+    expect(await bulkDeleteContactsAction("a1", ["x"])).toEqual({ ok: false, error: "Delete failed — please try again." });
+  });
 });
 
 describe("countContactDocumentsAction", () => {
@@ -5402,9 +5470,11 @@ export async function bulkDeleteContactsAction(
     revalidatePath(contactsPath(accountId));
     return { ok: true, ...r };
   } catch (e) {
-    // A file added between the purge and the contact delete: the FK (NO ACTION) refused every contact in
-    // the statement, after other files were already gone. Say exactly that (plan review minor 8).
-    if (purged > 0 && /documents_contact_fkey/.test(String(e))) {
+    // Files were already removed and then the contact delete failed (most likely a file added between the
+    // purge and the delete, which the NO ACTION FK refuses, but ANY failure after a purge leaves the same
+    // state): say exactly that (plan review minor 8, re-review minor 4).
+    console.error(`contacts delete (account ${accountId}): ${loggableError(e)}`);
+    if (purged > 0) {
       revalidatePath(contactsPath(accountId));
       return { ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" };
     }
@@ -5479,7 +5549,7 @@ The Delete button (`:229`) calls `openConfirm` instead of `setConfirmOpen(true)`
 **Reviewer:** opus, fresh context. Runs after Tasks 1–14.
 
 - [ ] **Step 1.** Read the spec end to end, then `git diff dc3e4ab6...HEAD` in `<WT>`; walk the coverage table below row by row against the diff.
-- [ ] **Step 2.** Web tests by path: every test file Tasks 2 and 4–14 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/lib/consent/scans.test.ts`; `pnpm --filter web typecheck`. The db suites on a replica of your own (Task 1's recipe, port `55521`; PostgREST on `55526`/`55527` for `documents.test.ts`, `record.test.ts`, `contacts.test.ts`, `places.test.ts`), never bis-ci. Re-run two probes of your own choosing, by name.
+- [ ] **Step 2.** Web tests by path: every test file Tasks 2 and 4–14 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/lib/consent/scans.test.ts`; `pnpm --filter web typecheck`. The db suites on a replica of your own (Task 1's recipe, port `55521`; PostgREST on `55526`/`55527` for `documents.test.ts`, `record.test.ts`, `contacts.test.ts`, `places.test.ts`), with Task 3 Step 2's `proxy.mjs` as the gateway for the `withTestAccount` suites, never bis-ci. Re-run two probes of your own choosing, by name.
 - [ ] **Step 3.** Hunt specifically: (a) a service write, a minted URL or a storage call that is not preceded by a request-client read of the record or the document (every export of `documents-actions.ts`); (b) a `serviceDb` mention outside `documents-actions.ts` under the in-account roots; (c) a title in any event payload; (d) a policy or guard built on a nullable boolean without `coalesce`; (e) a second primary in the card, the panel or the viewer (`data-variant="default"`); (f) a colour-only status; (g) a new key without its twin, a JSX literal with a letter, a tú form in new Spanish; (h) a test that cannot fail (memory "vacuous test shapes"), in particular a Spanish assertion compared against `t()`'s output; (i) the migration's ASCII rule; (j) an upload path that crosses a function body (any `File`/`Blob` argument to a server action); (k) the object-then-row order in the finish failure path, the abandon action, the sweep, the e2e teardown AND the contact delete (`purgeContactDocuments` before any contact row; a kept contact never deleted; the FK still NO ACTION); (l) the delete dialog's count read on the request client, throwing on a null count.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent.
 
@@ -5620,5 +5690,6 @@ await (step === "create" ? create() : step === "verify" ? verify() : step === "c
 
 - Placeholder scan: every code step carries its code; the two places that point at a file's existing shape (Task 8's render cases in `activity-timeline.rows.test.ts` and `group-timeline.test.ts`, Task 14's `InlineField` selectors) name the exact assertion that must hold and the file to read for the harness, because both depend on fixtures this plan did not open line by line.
 - Owner rulings 2026-10-13 re-checked: deviation 2 now states the delete order (objects, document rows, contact rows) with the FK kept NO ACTION as the backstop, and every failure path is named and tested (Task 3: a failed removal keeps the customer, a retry finishes, a null count throws; Task 17: a throwing purge fails the delete; Task 14 test 5: the objects are gone after a list delete). Groups have no delete path today (deviation 2 cites the evidence). Step 7 never touches Test Client One. `deleteContacts`' new `skippedFiles` field is reflected in its two callers' tests (`contacts.test.ts:823`, `actions.test.ts`'s honest-counts case) and in `bulkDeleteContactsAction`'s return type.
+- Re-review of f806e615 (2026-10-13) applied: N1 the cron route test's bare factory and seven exact bodies; N2 the replica proxy with its storage stub, written as code in Task 3 Step 2; minors 1-6 (no row touched on the orphan-path branch, a fake-client paging test, media-type comparison with Task 14 named as the real proof, the mid-delete message keyed on purged > 0, the mirror label, probe numbering).
 - Plan review of 3104203b (2026-10-13) applied: I1 line numbers and `pnpm install`; I2 the finish step refuses a stored size other than the reserved one; I3 a failed removal keeps the rows for the sweep; I4 the sweep runs every tick and throws on a failure (spec §5.4 amended); I5 `deleteAccountCascade` removes objects first (spec §7 amended); I6 `rowMenuItems`; minors 1-10 as listed in the commit message. Re-checked: every new refusal has its test and its mutation; `discardDocumentUpload` is never called after a failed removal; `mark_document_version_ready` replaces the two-statement write; no event payload carries a title or a category.
 - Type consistency: `discardDocumentUpload(db, accountId, documentId, versionId: string | null)` (Task 3) is called with `null` by Task 5's quota branch; `DocumentView` (Task 4) is produced by `documentView` (Task 6) and consumed by Tasks 9 and 10; `UploadPhase` (Task 7) by Task 9's panel; `TimelineDocument` (Task 3) by Task 8; `DocumentHandlers` (Task 10) by the styleguide demo.
