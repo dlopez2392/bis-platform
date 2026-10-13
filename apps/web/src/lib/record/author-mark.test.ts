@@ -5,28 +5,28 @@ import { makeTr } from "./copy";
 
 const AT = "2026-10-09T16:12:00+00:00";
 const FIVE = ["person", "ai", "automation", "customer", "import"];
-const task = (over: Record<string, unknown> = {}): TimelineEntry => ({ kind: "task", id: "t1", at: AT, task: {
+const task = (over: Record<string, unknown> = {}): TimelineEntry => ({ kind: "task", id: "t1", at: AT, contactId: "c1", task: {
   id: "t1", title: "x", due_at: null, completed_at: null, created_at: AT, consent_event_id: null, call_id: null,
   assigned_to: null, created_by: null, ...over } }) as unknown as TimelineEntry;
-const message = (over: Record<string, unknown>): TimelineEntry => ({ kind: "message", id: "m1", at: AT, message: {
+const message = (over: Record<string, unknown>): TimelineEntry => ({ kind: "message", id: "m1", at: AT, contactId: "c1", message: {
   id: "m1", channel: "sms", direction: "outbound", status: "sent", subject: null, body: "x", error: null, created_at: AT,
   author_kind: null, author_id: null, ...over } }) as unknown as TimelineEntry;
-const booking = (author_kind: string | null): TimelineEntry => ({ kind: "booking", id: "b1", at: AT, booking: {
+const booking = (author_kind: string | null): TimelineEntry => ({ kind: "booking", id: "b1", at: AT, contactId: "c1", booking: {
   id: "b1", created_at: AT, starts_at: AT, status: "booked", note: null, author_kind, author_id: null,
   rescheduled_from_id: null, moved_from_starts_at: null } as never });
 const ENTRIES: [string, TimelineEntry, string][] = [
-  ["note", { kind: "note", id: "n1", at: AT, note: { id: "n1", body: "x", author_id: "user_dan", created_at: AT } }, "person"],
+  ["note", { kind: "note", id: "n1", at: AT, contactId: "c1", note: { id: "n1", body: "x", author_id: "user_dan", created_at: AT } }, "person"],
   ["callback To-do", task({ call_id: "c1" }), "ai"],
   ["stop-hold To-do", task({ consent_event_id: "e1" }), "automation"],
   ["typed To-do", task({ created_by: "user_dan" }), "person"],
-  ["deal", { kind: "deal", id: "d1", at: AT, deal: { id: "d1", name: "Deck", status: "open", monetary_value: 0, created_at: AT, created_by: null } }, "person"],
-  ["web chat", { kind: "submission", id: "s1", at: AT, submission: { id: "s1", created_at: AT, formName: "Q", answers: [], author_kind: "ai" } }, "ai"],
-  ["typed form", { kind: "submission", id: "s2", at: AT, submission: { id: "s2", created_at: AT, formName: "Q", answers: [], author_kind: "customer" } }, "customer"],
+  ["deal", { kind: "deal", id: "d1", at: AT, contactId: "c1", deal: { id: "d1", name: "Deck", status: "open", monetary_value: 0, created_at: AT, created_by: null } }, "person"],
+  ["web chat", { kind: "submission", id: "s1", at: AT, contactId: "c1", submission: { id: "s1", created_at: AT, formName: "Q", answers: [], author_kind: "ai" } }, "ai"],
+  ["typed form", { kind: "submission", id: "s2", at: AT, contactId: "c1", submission: { id: "s2", created_at: AT, formName: "Q", answers: [], author_kind: "customer" } }, "customer"],
   ["recipe text", message({ author_kind: "automation" }), "automation"],
   ["staff email", message({ author_kind: "person", author_id: "user_dan", channel: "email" }), "person"],
   ["booking page", booking("customer"), "customer"],
   ["receptionist booking", booking("ai"), "ai"],
-  ["call", { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 60, reason: null, summary: "", language: "en" } }, "ai"],
+  ["call", { kind: "call", id: "k1", at: AT, contactId: "c1", call: { id: "k1", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 60, reason: null, summary: "", language: "en" } }, "ai"],
 ];
 
 const ctx = (over: Partial<AuthorCtx> = {}): AuthorCtx =>
@@ -40,7 +40,7 @@ describe("authorOf: every row kind and source gives spec §6's kind (mutation: m
 });
 
 describe("authorMark's words (spec §6 Names, D9, D10, D11)", () => {
-  const note = (author_id: string | null): TimelineEntry => ({ kind: "note", id: "n", at: AT, note: { id: "n", body: "x", author_id, created_at: AT } });
+  const note = (author_id: string | null): TimelineEntry => ({ kind: "note", id: "n", at: AT, contactId: "c1", note: { id: "n", body: "x", author_id, created_at: AT } });
   it("names a readable person, says You only for the viewer, and Someone on the team for anyone else (mutation: You for every person -> FAILS)", () => {
     expect(authorMark(note("user_dan"), ctx()).label).toBe("Dan López");
     expect(authorMark(note("user_me"), ctx()).label).toBe("You");
@@ -93,7 +93,7 @@ describe("an author_kind outside the five is the person mark, unnamed: never a s
   it.each([
     ["message", message({ author_kind: "robot", author_id: "user_dan" })],
     ["booking", booking("robot")],
-    ["submission", { kind: "submission", id: "s9", at: AT, submission: { id: "s9", created_at: AT, formName: "Q", answers: [], author_kind: "robot" } } as unknown as TimelineEntry],
+    ["submission", { kind: "submission", id: "s9", at: AT, contactId: "c1", submission: { id: "s9", created_at: AT, formName: "Q", answers: [], author_kind: "robot" } } as unknown as TimelineEntry],
     // minors-1b item 4: before 0074 these two columns were nullable; the migration backfilled every
     // row and closed both with NOT NULL, so a real message or booking can no longer be null — this is
     // the SAME defence (never a sixth kind, never blank) as the "robot" cases above, now covering the

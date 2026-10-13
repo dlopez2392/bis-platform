@@ -25,15 +25,15 @@ const AT = "2026-10-09T16:12:00Z";
 const ENTRIES: TimelineEntry[] = [
   // Production-shaped (summarize.ts's composeSummary): the system's own fact line first, a blank
   // line, then the model's prose — never just prose on its own (minors-1b item 5).
-  { kind: "call", id: "k1", at: AT, call: { id: "k1", started_at: AT, outcome: "booked", duration_secs: 180, reason: null,
+  { kind: "call", id: "k1", at: AT, contactId: "c1", call: { id: "k1", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 180, reason: null,
     summary: "RECORDED — Booked: Dan Lopez at 2026-08-31T14:00:00.000Z · Intake: nothing captured.\n\nCaller wants a quote for a roof leak.",
     language: "es" } },
-  { kind: "booking", id: "b1", at: AT, booking: { id: "b1", created_at: AT, starts_at: "2026-10-16T15:00:00Z", status: "booked", note: null,
+  { kind: "booking", id: "b1", at: AT, contactId: "c1", booking: { id: "b1", contact_id: "c1", created_at: AT, starts_at: "2026-10-16T15:00:00Z", status: "booked", note: null,
     author_kind: "customer", author_id: null, rescheduled_from_id: null, moved_from_starts_at: null } },
-  { kind: "message", id: "m1", at: AT, message: { id: "m1", channel: "email", direction: "outbound", status: "delivered", subject: "Quote",
+  { kind: "message", id: "m1", at: AT, contactId: "c1", message: { id: "m1", channel: "email", direction: "outbound", status: "delivered", subject: "Quote",
     body: "Here it is", error: null, created_at: AT, author_kind: "person", author_id: "user_dan" } },
-  { kind: "deal", id: "d1", at: AT, deal: { id: "d1", name: "Deck build", status: "open", monetary_value: 2400, created_at: AT, created_by: null } },
-  { kind: "note", id: "n1", at: AT, note: { id: "n1", body: "Gate code 4411", author_id: "user_me", created_at: AT } },
+  { kind: "deal", id: "d1", at: AT, contactId: "c1", deal: { id: "d1", name: "Deck build", status: "open", monetary_value: 2400, created_at: AT, created_by: null } },
+  { kind: "note", id: "n1", at: AT, contactId: "c1", note: { id: "n1", body: "Gate code 4411", author_id: "user_me", created_at: AT } },
 ];
 const render = (over: Record<string, unknown> = {}, locale: "en" | "es" = "en") => {
   const tr = makeTr(locale);
@@ -65,7 +65,7 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     // calls.reason (a taken-message body, or an English post-call reading) is of unknown
     // language here — not the caller's own words (calls.caller_words, shown on the call card).
     const reasonEntries: TimelineEntry[] = [
-      { kind: "call", id: "k2", at: AT, call: { id: "k2", started_at: AT, outcome: "message", duration_secs: 60, reason: "Se le gotea el techo", summary: "", language: "es" } },
+      { kind: "call", id: "k2", at: AT, contactId: "c1", call: { id: "k2", contact_id: "c1", started_at: AT, outcome: "message", duration_secs: 60, reason: "Se le gotea el techo", summary: "", language: "es" } },
     ];
     const tr = makeTr("en");
     const rows = timelineRows(reasonEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
@@ -75,8 +75,8 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
   });
   it("a summary with a ⚠ MISMATCH block shows no summary text at all — the prose is contradicted by the recorded state, and the row still has its verb, status and Open-call link (minors-1b item 5; mutation: render the prose anyway -> FAILS)", () => {
     const mismatchEntries: TimelineEntry[] = [
-      { kind: "call", id: "k3", at: AT, call: {
-        id: "k3", started_at: AT, outcome: "booked", duration_secs: 60, reason: null,
+      { kind: "call", id: "k3", at: AT, contactId: "c1", call: {
+        id: "k3", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 60, reason: null,
         summary: "RECORDED — Booked: no appointment was recorded · Intake: nothing captured.\n\n"
           + "⚠ MISMATCH — the notes below mention an appointment, which the system did not record. "
           + "The caller may have been told otherwise on the call. Check before following up.\n\n"
@@ -97,8 +97,8 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
   });
   it("a PROSE-ONLY summary (no fact line at all — 34 of 271 production calls, the Resaca demo account among them) renders on the row (review fix; mutation: classify the lone block as facts by position -> FAILS)", () => {
     const proseOnlyEntries: TimelineEntry[] = [
-      { kind: "call", id: "k4", at: AT, call: {
-        id: "k4", started_at: AT, outcome: "message", duration_secs: 45, reason: null,
+      { kind: "call", id: "k4", at: AT, contactId: "c1", call: {
+        id: "k4", contact_id: "c1", started_at: AT, outcome: "message", duration_secs: 45, reason: null,
         summary: "Wants a replacement quote — 18-year-old system, says it's making noise.",
         language: "en",
       } },
@@ -112,8 +112,8 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
   });
   it("a FACT-LINE-ONLY summary (nothing to show the customer) renders no summary text, but the row keeps its verb, status and Open-call link (mutation: fall back to the raw summary -> FAILS)", () => {
     const factsOnlyEntries: TimelineEntry[] = [
-      { kind: "call", id: "k5", at: AT, call: {
-        id: "k5", started_at: AT, outcome: "booked", duration_secs: 30, reason: null,
+      { kind: "call", id: "k5", at: AT, contactId: "c1", call: {
+        id: "k5", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 30, reason: null,
         summary: "RECORDED — Booked: no appointment was recorded · Intake: nothing captured.",
         language: "en",
       } },
@@ -169,7 +169,7 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
       expect(el).toContain("md:min-h-8");
     }
 
-    const taskEntries = [{ kind: "task", id: "t1", at: AT, task: {
+    const taskEntries = [{ kind: "task", id: "t1", at: AT, contactId: "c1", task: {
       id: "t1", title: "Follow up", due_at: null, completed_at: null, created_at: AT,
       consent_event_id: null, call_id: null, assigned_to: null, created_by: null,
     } }] as unknown as TimelineEntry[];

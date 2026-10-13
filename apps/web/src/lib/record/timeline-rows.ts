@@ -10,7 +10,11 @@ export type TimelineStatus = { tone: TimelineTone; word: string };
 export type TimelineRow = {
   key: string; entry: TimelineEntry; day: string; showDay: boolean; time: string;
   mark: AuthorMarkView; verb: string; status: TimelineStatus | null; detail: string | null;
+  /** The member the row is about, on the group page (S-03 part 2b, C6); null on the contact page,
+   *  and for a member the page holds no name for. Never replaces the author mark. */
+  subject: { label: string; href: string } | null;
 };
+export type TimelineSubjects = Readonly<Record<string, { label: string; href: string }>>;
 
 type StatusMap = Readonly<Record<string, readonly [MessageKey, TimelineTone]>>;
 const MESSAGE_STATUS: StatusMap = {
@@ -92,7 +96,9 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
  * in the ACCOUNT's zone (D-010). Pure; THROWS on a malformed instant, so the page builds it inside
  * its view guard (C5): a bad row costs the timeline card, never the page.
  */
-export function timelineRows(entries: readonly TimelineEntry[], ctx: { zone: string; tr: Tr; author: AuthorCtx }): TimelineRow[] {
+export function timelineRows(
+  entries: readonly TimelineEntry[], ctx: { zone: string; tr: Tr; author: AuthorCtx; subjects?: TimelineSubjects },
+): TimelineRow[] {
   let previousDay: string | null = null;
   return entries.map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
@@ -100,6 +106,7 @@ export function timelineRows(entries: readonly TimelineEntry[], ctx: { zone: str
     const row: TimelineRow = {
       key: `${entry.kind}-${entry.id}`, entry, day, showDay: day !== previousDay,
       time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr),
+      subject: ctx.subjects && Object.hasOwn(ctx.subjects, entry.contactId) ? ctx.subjects[entry.contactId]! : null,
     };
     previousDay = day;
     return row;

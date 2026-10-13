@@ -16,8 +16,8 @@ const props = { emptyText: "Nothing coming up.", addTodoLabel: "Add a To-do" };
 describe("NextUpBody (spec §9.3)", () => {
   it("an overdue To-do is a dot AND a word (rule 3; mutation: drop the dot -> FAILS)", () => {
     const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { undated: null, rows: [
-      { kind: "task", id: "t", title: "Call back", detail: "Overdue · was due Oct 1, 2026", overdue: true },
-      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM" },
+      { kind: "task", id: "t", title: "Call back", detail: "Overdue · was due Oct 1, 2026", overdue: true, who: null },
+      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: null },
     ] } }));
     expect(html).toMatch(/<span aria-hidden="true" class="[^"]*bg-\[var\(--warn\)\][^"]*"><\/span><span[^>]*>Overdue · was due Oct 1, 2026/);
     expect(html).toContain('data-next-up-row="booking"');
@@ -41,5 +41,19 @@ describe("NextUpBody (spec §9.3)", () => {
     expect(html).toContain("Nothing coming up.");
     expect(html).not.toContain("<button");
     expect(focusProps).toEqual([]);
+  });
+});
+
+describe("NextUpBody across a household (S-03 part 2b, C9)", () => {
+  it("a row with `who` reads '… · Ana', on a booking and on a To-do; a row without one names no one (mutation: drop the who span -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { undated: null, rows: [
+      { kind: "task", id: "t", title: "Call back", detail: "Due Oct 20", overdue: false, who: "Ana" },
+      { kind: "booking", id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: "Luis" },
+      { kind: "booking", id: "b2", label: "Appointment · Sat, Oct 17 · 9:00 AM", who: null },
+    ] } }));
+    expect(html.match(/data-next-up-who/g)).toHaveLength(2);
+    // The name is typed text: lang="" so a Spanish page does not read "Ana" as a Spanish word (or the reverse).
+    expect(html).toMatch(/Due Oct 20<\/span><span data-next-up-who="" class="[^"]*">\s*·\s*<span lang="">Ana<\/span><\/span>/);
+    expect(html).toMatch(/Appointment · Fri, Oct 16 · 10:00 AM<span data-next-up-who="" class="[^"]*">\s*·\s*<span lang="">Luis<\/span><\/span>/);
   });
 });

@@ -10,7 +10,20 @@ const listGroupMembersMock = vi.fn();
 const listOpenDealsForMock = vi.fn();
 const listGroupPlacesMock = vi.fn();
 const getContactMock = vi.fn();
+const groupActivityMembersMock = vi.fn();
+const groupFactsMock = vi.fn();
+const groupNextUpMock = vi.fn();
+const listTimelinePageMock = vi.fn();
+const listPeopleNamesMock = vi.fn();
+const getVoiceProfileMock = vi.fn();
 vi.mock("@bis/db", () => ({
+  groupActivityMembers: (...a: unknown[]) => groupActivityMembersMock(...a),
+  groupFacts: (...a: unknown[]) => groupFactsMock(...a),
+  groupNextUp: (...a: unknown[]) => groupNextUpMock(...a),
+  listTimelinePage: (...a: unknown[]) => listTimelinePageMock(...a),
+  listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
+  getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
   listGroupMembers: (...a: unknown[]) => listGroupMembersMock(...a),
   listOpenDealsFor: (...a: unknown[]) => listOpenDealsForMock(...a),
   listGroupPlaces: (...a: unknown[]) => listGroupPlacesMock(...a),
@@ -22,7 +35,10 @@ vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbMock() }));
 const smsRecipientStateMock = vi.fn();
 vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: (...a: unknown[]) => smsRecipientStateMock(...a) }));
 
-const { loadGroupPeople, loadGroupDeals, loadGroupHeaderPlaces, loadPrimaryText } = await import("./group-loaders");
+const {
+  loadGroupPeople, loadGroupDeals, loadGroupHeaderPlaces, loadPrimaryText,
+  loadGroupActivity, loadGroupSummary, loadGroupNextUp, loadGroupTimeline,
+} = await import("./group-loaders");
 
 const db = { tag: "request-db" } as unknown as SupabaseClient;
 const G = "11111111-1111-4111-8111-111111111111";
@@ -38,7 +54,8 @@ const logged = () => errors.mock.calls.map((c) => String(c[0]));
 
 describe("group record loaders", () => {
   beforeEach(() => {
-    for (const f of [listGroupMembersMock, listOpenDealsForMock, listGroupPlacesMock, getContactMock, smsRecipientStateMock]) f.mockReset();
+    for (const f of [listGroupMembersMock, listOpenDealsForMock, listGroupPlacesMock, getContactMock, smsRecipientStateMock,
+      groupActivityMembersMock, groupFactsMock, groupNextUpMock, listTimelinePageMock, listPeopleNamesMock, getVoiceProfileMock]) f.mockReset();
     ledgerDbMock.mockClear();
     errors = vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -142,5 +159,67 @@ describe("group record loaders", () => {
       expect.stringMatching(/^record page: primary text read failed for account acct1: /),
     ]);
     expect(logged().join("\n")).not.toContain("c-ana");
+  });
+});
+
+describe("group record loaders, the middle column (S-03 part 2b)", () => {
+  const IDS = ["c-ana", "c-luis"];
+  const NOW = new Date("2026-10-12T15:00:00Z");
+  beforeEach(() => {
+    for (const f of [groupActivityMembersMock, groupFactsMock, groupNextUpMock, listTimelinePageMock, listPeopleNamesMock, getVoiceProfileMock]) f.mockReset();
+    errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => errors.mockRestore());
+
+  it("the activity set: ready with the set, or the three cards' error on a failed scan, logged by card and account only (mutation: rethrow -> FAILS; mutation: log the group id -> FAILS)", async () => {
+    const activity = { people: [{ contactId: "c-ana", firstName: "Ana", lastName: "García" }], total: { ok: true, value: 1 } };
+    groupActivityMembersMock.mockResolvedValueOnce(activity);
+    expect(await loadGroupActivity(db, "acct1", G)).toEqual({ status: "ready", activity });
+    expect(groupActivityMembersMock).toHaveBeenCalledWith(db, "acct1", G);
+    groupActivityMembersMock.mockRejectedValueOnce(new Error("scan down"));
+    expect(await loadGroupActivity(db, "acct1", G)).toEqual({ status: "error" });
+    expect(logged()).toEqual([expect.stringMatching(/^record page: activity set read failed for account acct1: /)]);
+    expect(logged().join("\n")).not.toContain(G);
+  });
+
+  it("the summary reads exactly the set, logs a failed fact by name, and a throw is the card's error (mutation: rethrow -> FAILS; mutation: drop the onError log -> FAILS)", async () => {
+    const facts = { bookingsMade: { ok: true, value: 2 }, lastTalked: { ok: false } };
+    groupFactsMock.mockImplementationOnce(async (_db, _a, _ids, opts: { onError: (n: string, e: unknown) => void }) => {
+      opts.onError("talked", new Error("messages down"));
+      return facts;
+    });
+    expect(await loadGroupSummary(db, "acct1", IDS)).toEqual({ status: "ready", facts });
+    expect(groupFactsMock).toHaveBeenCalledWith(db, "acct1", IDS, expect.objectContaining({ onError: expect.any(Function) }));
+    expect(logged()).toEqual([expect.stringMatching(/^record page: summary \(talked\) read failed for account acct1: /)]);
+    groupFactsMock.mockRejectedValueOnce(new Error("boom"));
+    expect(await loadGroupSummary(db, "acct1", IDS)).toEqual({ status: "error" });
+    expect(logged().at(-1)).toMatch(/^record page: summary read failed for account acct1: /);
+  });
+
+  it("Next up reads exactly the set at now, and a throw is the card's error (mutation: rethrow -> FAILS)", async () => {
+    const data = { bookings: [], datedTasks: [], undatedCount: 1 };
+    groupNextUpMock.mockResolvedValueOnce(data);
+    expect(await loadGroupNextUp(db, "acct1", IDS, NOW)).toEqual({ status: "ready", data });
+    expect(groupNextUpMock).toHaveBeenCalledWith(db, "acct1", IDS, NOW.toISOString());
+    groupNextUpMock.mockRejectedValueOnce(new Error("tasks down"));
+    expect(await loadGroupNextUp(db, "acct1", IDS, NOW)).toEqual({ status: "error" });
+    expect(logged()).toEqual([expect.stringMatching(/^record page: next up read failed for account acct1: /)]);
+  });
+
+  it("the timeline: one merged page across the set with names and the persona, no hold read; all seven failed or a throw is the card's error (mutation: rethrow -> FAILS; mutation: treat one failed source as the card's error -> FAILS)", async () => {
+    const before = { v: "2026-10-01T00:00:00.000Z", id: "22222222-2222-4222-8222-222222222222" };
+    const page = { items: [{ kind: "note", id: "n1", at: "2026-10-09T16:12:00Z", contactId: "c-ana", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-09T16:12:00Z" } }], older: null, failed: ["calls"] };
+    listTimelinePageMock.mockResolvedValueOnce(page);
+    listPeopleNamesMock.mockResolvedValueOnce({ user_dan: "Dan López" });
+    getVoiceProfileMock.mockResolvedValueOnce({ persona_name: "Sofía" });
+    expect(await loadGroupTimeline(db, "acct1", IDS, before)).toEqual({ status: "ready", page, names: { user_dan: "Dan López" }, personaName: "Sofía" });
+    expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, before, expect.objectContaining({ onError: expect.any(Function) }));
+    expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
+
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+    expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
+    listTimelinePageMock.mockRejectedValueOnce(new Error("boom"));
+    expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
+    expect(logged()).toEqual([expect.stringMatching(/^record page: activity read failed for account acct1: /)]);
   });
 });

@@ -3937,6 +3937,27 @@ export const m = {
   "groups.open.es": "Abrir",
   "groups.openAria": "Open {name}",
   "groups.openAria.es": "Abrir {name}",
+  // S-03 part 2b: the household and business page's middle column.
+  "groupPage.facts.people": "{count} people",
+  "groupPage.facts.people.es": "{count} personas",
+  "groupPage.facts.peopleOne": "1 person",
+  "groupPage.facts.peopleOne.es": "1 persona",
+  "groupPage.facts.peopleVisible": "{count} people you can see",
+  "groupPage.facts.peopleVisible.es": "{count} personas que usted puede ver",
+  "groupPage.facts.peopleVisibleOne": "1 person you can see",
+  "groupPage.facts.peopleVisibleOne.es": "1 persona que usted puede ver",
+  "groupPage.facts.lastTalked": "Last talked {when} with {name} ({channel})",
+  "groupPage.facts.lastTalked.es": "Última conversación {when} con {name} ({channel})",
+  "groupPage.facts.what.people": "the people in this group",
+  "groupPage.facts.what.people.es": "las personas de este grupo",
+  "groupPage.capped": "Showing activity for {shown} of {total} people. Open a person to see theirs.",
+  "groupPage.capped.es": "Se muestra la actividad de {shown} de {total} personas. Abra a una persona para ver la suya.",
+  "groupPage.cappedVisible": "Showing activity for {shown} of the {total} people you can see. Open a person to see theirs.",
+  "groupPage.cappedVisible.es": "Se muestra la actividad de {shown} de las {total} personas que usted puede ver. Abra a una persona para ver la suya.",
+  "groupPage.nextUp.empty": "Nothing coming up for these people. Bookings ahead and To-dos with a due date show here.",
+  "groupPage.nextUp.empty.es": "No hay nada próximo para estas personas. Aquí aparecen las citas que vienen y los pendientes con fecha.",
+  "groupPage.timeline.empty": "Texts, calls, bookings, notes and To-dos with these people show up here. Open a person to start one.",
+  "groupPage.timeline.empty.es": "Aquí aparecen los textos, llamadas, citas, notas y pendientes con estas personas. Abra a una persona para empezar uno.",
 } as const;
 
 export type MessageKey = keyof typeof m;

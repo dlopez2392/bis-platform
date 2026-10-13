@@ -70,6 +70,10 @@ vi.mock("@bis/db", () => ({
   listOpenDealsFor: (...a: unknown[]) => listOpenDealsForMock(...a),
   listContactPlaces: (...a: unknown[]) => listContactPlacesMock(...a),
   getContact: (...a: unknown[]) => getContactMock(...a),
+  // group-loaders.ts's 2b imports (plan Task 16's factory check); the page reads them from Task 17.
+  ...Object.fromEntries(["groupActivityMembers", "groupFacts", "groupNextUp", "listTimelinePage", "listPeopleNames", "getVoiceProfile"]
+    .map((name) => [name, () => { throw new Error(`${name} is not mocked in this test`); }])),
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
 }));
 const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
