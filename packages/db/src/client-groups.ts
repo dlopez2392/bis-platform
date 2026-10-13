@@ -382,8 +382,10 @@ export async function removeMembership(db: SupabaseClient, accountId: string, me
   const r = await rpc<{ status: string; removed?: GroupMemberSnapshot }>(
     db, "remove_group_membership", { p_account_id: accountId, p_member_id: memberId });
   if (r.status !== "ok" || !r.removed) return { status: "not_found" as const };
+  // Every id from the row the database deleted, never the caller's string (S-03 2a final review): jsonb
+  // `@>` compares strings exactly, so a case-variant memberId would hide this removal from the lookup.
   await emit(db, accountId, "client_group.member_removed", actorId,
-    { memberId, contactId: r.removed.contact_id, groupId: r.removed.client_group_id,
+    { memberId: r.removed.id, contactId: r.removed.contact_id, groupId: r.removed.client_group_id,
       // S-03 part 2 (spec §10): a narrow caller's Undo restores the call-first flag only when THIS says so.
       wasPrimaryContact: r.removed.is_primary_contact === true });
   return { status: "ok" as const, removed: r.removed };

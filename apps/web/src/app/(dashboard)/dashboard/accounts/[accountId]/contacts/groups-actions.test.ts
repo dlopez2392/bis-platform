@@ -253,8 +253,19 @@ describe("S-03 part 2: who we call first is Owner, Staff and the agency's to cho
     db.readGroup.mockResolvedValue(GARCIA);
     db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
     db.setGroupPrimaryContact.mockResolvedValue({ status: "not_found" });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await A.setGroupPrimaryContactAction("a1", G, M)).toEqual({ ok: false, error: "groups.failed" });
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+  it("the database's not_found is logged with the ids, one line (spec §10; mutation: drop the log -> FAILS)", async () => {
+    access.role = "owner";
+    db.readGroup.mockResolvedValue(GARCIA);
+    db.readMembership.mockResolvedValue({ contactId: C, groupId: G });
+    db.setGroupPrimaryContact.mockResolvedValue({ status: "not_found" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await A.setGroupPrimaryContactAction("a1", G, M);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toBe(`setGroupPrimaryContactAction: account a1: groups.failed (not_found): group ${G}, member ${M}`);
   });
   it("null clears, with no membership read (the agency, whatever its role field says)", async () => {
     access.isAgency = true;
@@ -369,6 +380,77 @@ describe("S-03 part 2: a narrow caller's Undo restores the call-first flag only 
     db.removeMembership.mockResolvedValue({ status: "ok", removed: snap() });
     await A.removeMembershipAction("a1", M);
     expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${G}`);
+  });
+});
+
+/**
+ * S-03 2a final review (case-variant replay): jsonb `@>` compares strings exactly, a uuid cast does not.
+ * Every id from the browser is lowercased before it reaches a read, a write, an event or the lookup.
+ */
+describe("S-03 2a final review: ids from the browser are lowercased before any read, write or lookup", () => {
+  const LC = "abcdef12-1111-4111-8111-11111111111c";
+  const LM = "abcdef12-2222-4222-8222-22222222222b";
+  const LG = "abcdef12-3333-4333-8333-33333333333a";
+  const UP = { id: LM.toUpperCase(), account_id: "a1", client_group_id: LG.toUpperCase(), contact_id: LC.toUpperCase(),
+    role: null, is_primary: false, is_billing: false, is_primary_contact: true, created_at: "x" };
+  const lettered = (over: { id: number; actor?: string; at: string; was?: boolean; ids?: "upper" }): EventRow => ({
+    id: over.id, account_id: "a1", type: "client_group.member_removed", actor_id: over.actor ?? "user_1", created_at: over.at,
+    payload: over.ids === "upper"
+      ? { memberId: LM.toUpperCase(), contactId: LC, groupId: LG, wasPrimaryContact: over.was ?? false }
+      : { memberId: LM, contactId: LC, groupId: LG, wasPrimaryContact: over.was ?? false },
+  });
+  beforeEach(() => { db.getContact.mockResolvedValue({ id: LC }); db.restoreMembership.mockResolvedValue("ok"); });
+
+  it("an UPPERCASE snapshot over the Owner's newer lowercase removal is refused (mutation: drop the snapshot's lowercasing -> FAILS)", async () => {
+    // The caller's old removal, recorded by the old code with the browser's uppercase member id.
+    events.data = [
+      lettered({ id: 7, at: "2026-10-12T09:00:00.000Z", was: true, ids: "upper" }),
+      lettered({ id: 9, at: "2026-10-12T11:00:00.000Z", actor: OWNER_ID }),
+    ];
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await A.restoreMembershipAction("a1", UP as never)).toEqual({ ok: false, error: "groups.refused" });
+    expect(chain.contains).toHaveBeenCalledWith("payload", { memberId: LM, contactId: LC, groupId: LG });
+    expect(db.restoreMembership).not.toHaveBeenCalled();
+  });
+  it("Staff's uppercase snapshot is proven and restored lowercase, and the pages revalidated lowercase", async () => {
+    access.role = "staff";
+    expect(await A.restoreMembershipAction("a1", UP as never)).toEqual({ ok: true });
+    expect(db.getContact).toHaveBeenCalledWith(REQUEST, "a1", LC);
+    expect(db.restoreMembership).toHaveBeenCalledWith(SERVICE, "a1",
+      expect.objectContaining({ id: LM, contact_id: LC, client_group_id: LG }), "user_1");
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/groups/${LG}`);
+    expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/a1/contacts/${LC}`);
+  });
+  it.each([
+    { name: "remove", run: () => A.removeMembershipAction("a1", LM.toUpperCase()), write: db.removeMembership,
+      ok: { status: "ok", removed: { ...UP, id: LM } }, args: [SERVICE, "a1", LM, "user_1"] },
+    { name: "role", run: () => A.setRoleAction("a1", LM.toUpperCase(), "Madre"), write: db.updateMembership,
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { role: "Madre" }, "user_1"] },
+    { name: "pays", run: () => A.setBillingAction("a1", LM.toUpperCase(), true), write: db.updateMembership,
+      ok: { status: "ok", previous: { role: null, isBilling: false } }, args: [SERVICE, "a1", LM, { isBilling: true }, "user_1"] },
+    { name: "main", run: () => A.makePrimaryAction("a1", LM.toUpperCase()), write: db.setPrimaryMembership,
+      ok: { status: "ok", previous: null }, args: [SERVICE, "a1", LM, "user_1"] },
+  ])("$name: an uppercase member id is proven and written lowercase (mutation: drop the member id's lowercasing -> FAILS)", async ({ run, write, ok, args }) => {
+    db.readMembership.mockResolvedValue({ contactId: LC, groupId: LG });
+    write.mockResolvedValue(ok);
+    expect((await run()).ok).toBe(true);
+    expect(db.readMembership).toHaveBeenCalledWith(REQUEST, "a1", LM);
+    expect(write).toHaveBeenCalledWith(...args);
+  });
+  it("create, add, rename and billing address take uppercase contact and group ids lowercase (mutation: drop their lowercasing -> FAILS)", async () => {
+    access.role = "staff";
+    db.readGroup.mockResolvedValue({ id: LG, kind: "business", name: "Acme", billingAddress: null });
+    db.createGroupWithMember.mockResolvedValue({ status: "ok", groupId: LG, memberId: LM, existed: false, name: "Acme" });
+    db.addContactToGroup.mockResolvedValue({ status: "ok", memberId: LM });
+    db.updateGroup.mockResolvedValue({ status: "ok", previous: { name: "Acme", billingAddress: null } });
+    expect((await A.createGroupAction("a1", LC.toUpperCase(), "business", "Acme")).ok).toBe(true);
+    expect(db.createGroupWithMember).toHaveBeenCalledWith(SERVICE, "a1", LC, "business", "Acme", null, "user_1");
+    expect((await A.addToGroupAction("a1", LC.toUpperCase(), LG.toUpperCase())).ok).toBe(true);
+    expect(db.addContactToGroup).toHaveBeenCalledWith(SERVICE, "a1", LC, LG, null, "user_1");
+    expect((await A.renameGroupAction("a1", LG.toUpperCase(), "Acme Roofing")).ok).toBe(true);
+    expect((await A.setBillingAddressAction("a1", LG.toUpperCase(), "1 Main St")).ok).toBe(true);
+    expect(db.updateGroup.mock.calls.map((c) => c[2])).toEqual([LG, LG]);
+    expect(db.readGroup.mock.calls.every((c) => c[2] === LG)).toBe(true);
   });
 });
 

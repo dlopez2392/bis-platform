@@ -63,6 +63,15 @@ async function guarded<T>(label: string, accountId: string, run: () => Promise<G
   }
 }
 
+/**
+ * S-03 2a final review: an id from the browser, lowercased as PostgREST stores and echoes it, before
+ * any read, write, event payload or jsonb lookup. Postgres casts uuid text case-insensitively but jsonb
+ * `@>` compares strings exactly, so a case-variant id would write events that no lowercase lookup
+ * matches (removedByCaller's newest-removal rule would never see them). A non-uuid is left as it came,
+ * for the uuid checks to refuse.
+ */
+const canonical = <T,>(id: T): T => (isUuid(id) ? (id.toLowerCase() as T) : id);
+
 async function provenMembership(accountId: string, memberId: string) {
   if (!isUuid(memberId)) return null;
   return readMembership(await dbForRequest(), accountId, memberId);
@@ -84,10 +93,11 @@ export async function searchGroupsAction(accountId: string, term: string): Promi
 }
 
 export async function createGroupAction(
-  accountId: string, contactId: string, kind: GroupKind, name: string,
+  accountId: string, rawContactId: string, kind: GroupKind, name: string,
 ): Promise<GroupResult<{ memberId: string; name: string; existed: boolean }>> {
   const { userId } = await requireAccountAccess(accountId);
   const L = "createGroupAction";
+  const contactId = canonical(rawContactId);
   if (!isUuid(contactId) || (kind !== "household" && kind !== "business")) return refuse(L, accountId, "bad input", { contact: contactId });
   // Measured as 0069 trims it (app.group_ws()), not by .trim(), which also strips U+FEFF and others.
   if (typeof name !== "string" || dbTrimmedLength(name) === 0) return failed;
@@ -102,10 +112,12 @@ export async function createGroupAction(
 }
 
 export async function addToGroupAction(
-  accountId: string, contactId: string, groupId: string,
+  accountId: string, rawContactId: string, rawGroupId: string,
 ): Promise<GroupResult<{ memberId: string }>> {
   const { userId } = await requireAccountAccess(accountId);
   const L = "addToGroupAction";
+  const contactId = canonical(rawContactId);
+  const groupId = canonical(rawGroupId);
   const ids = { contact: contactId, group: groupId };
   if (!isUuid(contactId) || !isUuid(groupId)) return refuse(L, accountId, "bad input", ids);
   return guarded<{ memberId: string }>(L, accountId, async () => {
@@ -123,9 +135,10 @@ export async function addToGroupAction(
 }
 
 export async function setRoleAction(
-  accountId: string, memberId: string, role: string | null,
+  accountId: string, rawMemberId: string, role: string | null,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const { userId } = await requireAccountAccess(accountId);
+  const memberId = canonical(rawMemberId);
   // null clears the role: the Undo of a first role sends back the previous value, which was null.
   if (role !== null && typeof role !== "string") return failed;
   if (role !== null && role.trim().length > GROUP_ROLE_MAX) return tooLong;
@@ -138,9 +151,10 @@ export async function setRoleAction(
 }
 
 export async function setBillingAction(
-  accountId: string, memberId: string, isBilling: boolean,
+  accountId: string, rawMemberId: string, isBilling: boolean,
 ): Promise<GroupResult<{ previous: boolean }>> {
   const { userId } = await requireAccountAccess(accountId);
+  const memberId = canonical(rawMemberId);
   if (typeof isBilling !== "boolean") return failed;
   const L = "setBillingAction";
   return guarded<{ previous: boolean }>(L, accountId, async () => {
@@ -151,10 +165,11 @@ export async function setBillingAction(
 }
 
 export async function makePrimaryAction(
-  accountId: string, memberId: string,
+  accountId: string, rawMemberId: string,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const { userId } = await requireAccountAccess(accountId);
   const L = "makePrimaryAction";
+  const memberId = canonical(rawMemberId);
   return guarded<{ previous: string | null }>(L, accountId, async () => {
     const proven = await provenMembership(accountId, memberId);
     if (!proven) return refuse(L, accountId, "membership not visible", { member: memberId });
@@ -166,10 +181,11 @@ export async function makePrimaryAction(
 }
 
 export async function removeMembershipAction(
-  accountId: string, memberId: string,
+  accountId: string, rawMemberId: string,
 ): Promise<GroupResult<{ removed: GroupMemberSnapshot }>> {
   const { userId } = await requireAccountAccess(accountId);
   const L = "removeMembershipAction";
+  const memberId = canonical(rawMemberId);
   return guarded<{ removed: GroupMemberSnapshot }>(L, accountId, async () => {
     const proven = await provenMembership(accountId, memberId);
     if (!proven) return refuse(L, accountId, "membership not visible", { member: memberId });
@@ -224,17 +240,22 @@ async function removedByCaller(
   return { found: true, wasPrimaryContact: newest.payload?.wasPrimaryContact === true };
 }
 
-export async function restoreMembershipAction(accountId: string, snapshot: GroupMemberSnapshot): Promise<GroupResult> {
+export async function restoreMembershipAction(accountId: string, raw: GroupMemberSnapshot): Promise<GroupResult> {
   const access = await requireAccountAccess(accountId);
   const { userId } = access;
   // The snapshot comes back from the browser: its ids are checked, and it must name THIS account.
   const L = "restoreMembershipAction";
   // Never the raw snapshot in the log: only its ids, each checked by refuse().
-  const ids = { member: snapshot?.id, contact: snapshot?.contact_id, group: snapshot?.client_group_id };
-  if (!snapshot || snapshot.account_id !== accountId
-    || !isUuid(snapshot.contact_id) || !isUuid(snapshot.client_group_id) || !isUuid(snapshot.id)) {
+  const ids = { member: raw?.id, contact: raw?.contact_id, group: raw?.client_group_id };
+  if (!raw || raw.account_id !== accountId
+    || !isUuid(raw.contact_id) || !isUuid(raw.client_group_id) || !isUuid(raw.id)) {
     return refuse(L, accountId, "bad snapshot", ids);
   }
+  // Lowercased before the lookup AND the restore (final review): the removal events name the stored,
+  // lowercase ids, and jsonb `@>` would never match an uppercase one to them.
+  const snapshot: GroupMemberSnapshot = {
+    ...raw, id: raw.id.toLowerCase(), contact_id: raw.contact_id.toLowerCase(), client_group_id: raw.client_group_id.toLowerCase(),
+  };
   return guarded<object>(L, accountId, async () => {
     if (!(await getContact(await dbForRequest(), accountId, snapshot.contact_id))) return refuse(L, accountId, "contact not visible", ids);
     let toRestore: GroupMemberSnapshot = snapshot;
@@ -261,9 +282,10 @@ async function provenGroupForManager(access: Awaited<ReturnType<typeof requireAc
 }
 
 export async function renameGroupAction(
-  accountId: string, groupId: string, name: string,
+  accountId: string, rawGroupId: string, name: string,
 ): Promise<GroupResult<{ previous: string }>> {
   const access = await requireAccountAccess(accountId);
+  const groupId = canonical(rawGroupId);
   if (typeof name !== "string" || name.trim().length === 0) return failed;
   if (name.trim().length > GROUP_NAME_MAX) return tooLong;
   const L = "renameGroupAction";
@@ -283,9 +305,10 @@ export async function renameGroupAction(
 }
 
 export async function setBillingAddressAction(
-  accountId: string, groupId: string, address: string | null,
+  accountId: string, rawGroupId: string, address: string | null,
 ): Promise<GroupResult<{ previous: string | null }>> {
   const access = await requireAccountAccess(accountId);
+  const groupId = canonical(rawGroupId);
   // null clears the address: the Undo of a first address sends back the previous value, which was null.
   if (address !== null && typeof address !== "string") return failed;
   if (address !== null && address.trim().length > BILLING_ADDRESS_MAX) return tooLong;
@@ -330,7 +353,11 @@ export async function setGroupPrimaryContactAction(
       if (proven.groupId.toLowerCase() !== groupId) return refuse(L, accountId, "membership of another group", ids);
     }
     const r = await setGroupPrimaryContact(serviceDb(), accountId, groupId, memberId, access.userId);
-    if (r.status !== "ok") return failed;
+    if (r.status !== "ok") {
+      // Spec §10: a failure is logged, ids only. The group or member went between the proof and the write.
+      console.warn(`${L}: account ${accountId}: groups.failed (not_found): group ${groupId}, member ${memberId ?? "none"}`);
+      return failed;
+    }
     revalidatePath(groupPath(accountId, groupId));
     return { ok: true, previous: r.previous };
   });

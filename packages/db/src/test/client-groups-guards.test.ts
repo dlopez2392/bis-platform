@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  createGroupWithMember, addContactToGroup, searchGroups, setContactsBusiness, undoSetBusiness, listContactGroups,
+  createGroupWithMember, addContactToGroup, searchGroups, setContactsBusiness, undoSetBusiness, removeMembership, listContactGroups,
   GROUP_ROLE_MAX, GROUP_OTHERS_SHOWN,
 } from "../client-groups";
 
@@ -262,5 +262,22 @@ describe("S-03 part 2: the Business-name path records each membership it deletes
     const s = businessDb("ok", { data: null, error: { message: "boom" } });
     await expect(undoSetBusiness(s.db, "acct", "c1", "m9", null, "user_tech")).rejects.toThrow(/undoSetBusiness member read failed: boom/);
     expect(s.steps).toEqual(["read member"]);
+  });
+});
+
+/**
+ * S-03 2a final review (case-variant replay): the removal event names the member by the id the
+ * DATABASE returned, never the caller's string. jsonb `@>` compares strings exactly while a uuid cast
+ * ignores case, so an event naming "ABCDEF12-…" would never match the Owner's lowercase one, and a
+ * Technician's old removal would always look newest to groups-actions.ts's lookup.
+ */
+describe("removeMembership records the stored member id, whatever case it was called with (mutation: record the caller's memberId -> FAILS)", () => {
+  it("an uppercase call is recorded lowercase, as the row came back", async () => {
+    const row = { ...snapshot("abcdef12-2222-4222-8222-22222222222b", "abcdef12-3333-4333-8333-33333333333a", true), contact_id: "abcdef12-1111-4111-8111-11111111111c" };
+    const s = businessDb({ status: "ok", removed: row });
+    const r = await removeMembership(s.db, "acct", row.id.toUpperCase(), "user_tech");
+    expect(r.status).toBe("ok");
+    expect(s.inserts).toEqual([{ account_id: "acct", type: "client_group.member_removed", actor_type: "user", actor_id: "user_tech",
+      payload: { memberId: row.id, contactId: row.contact_id, groupId: row.client_group_id, wasPrimaryContact: true } }]);
   });
 });
