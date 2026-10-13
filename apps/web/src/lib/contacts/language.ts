@@ -59,14 +59,22 @@ function shortDay(at: string, zone: string, locale: Tr["locale"]): string {
 }
 
 /**
- * The Details line (§8.2). Not set names English whatever the account's language: in PR 1 nothing
- * sends in Spanish, so English is the only true fallback today. The account's-language wording
- * arrives in PR 2 with the switch that makes it true (spec §8.2, §15.2).
+ * The Details line (§8.2). Not set names what the customer gets (C8): the account's language when it is
+ * set ("…, the account's language."), English when it is not, and only "Not set." when the account row
+ * could not be read (saying "in English" then could be false). Live since S-09 PR 2, which made scheduled
+ * sends follow the account's language.
  */
-export function languageView(c: ContactLanguageFacts, opts: { zone: string; tr: Tr }): LanguageView {
+export function languageView(
+  c: ContactLanguageFacts, opts: { zone: string; tr: Tr; accountLanguage: ContactLanguage | null | undefined },
+): LanguageView {
   const { tr } = opts;
   if (c.language === null || c.language_source === null || c.language_set_at === null) {
-    return { value: null, valueLabel: null, phrase: tr.text("contact.language.notSet", { language: tr.text(NAME_KEY.en) }), hint: null };
+    const phrase = opts.accountLanguage === undefined
+      ? tr.text("contact.language.notSetUnknown")
+      : opts.accountLanguage === null
+        ? tr.text("contact.language.notSet", { language: tr.text(NAME_KEY.en) })
+        : tr.text("contact.language.notSetAccount", { language: tr.text(NAME_KEY[opts.accountLanguage]) });
+    return { value: null, valueLabel: null, phrase, hint: null };
   }
   const hint = languageHint(c);
   return {

@@ -182,7 +182,9 @@ export default async function ContactDetailPage({
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
   // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole page, and the line
   // is LEFT OUT (no prop, no row) rather than a "Not set." that would be false for a set contact.
-  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, { zone: zone.zone, tr })) ?? undefined;
+  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, {
+    zone: zone.zone, tr, accountLanguage: accountRow ? (accountRow.language ?? null) : undefined,
+  })) ?? undefined;
 
   const failed = (errorText: string): Slot => ({ node: null, state: "error", errorText });
   const cardFailed = (titleKey: MessageKey) => failed(tr.text("record.card.failed", { title: tr.text(titleKey) }));

@@ -286,6 +286,20 @@ describe("the drawer's summary route: who they are (D6, Q1)", () => {
     expect(b.who.language).toEqual({ value: "es", valueLabel: "Español", phrase: "from their booking (Oct 3)", hint: null });
   });
 
+  it("an unset contact on a Spanish account names the account's language (S-09 PR 2; mutation: ignore accountRow.language -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: { timezone: "America/Chicago", language: "es" }, error: null });
+    const b = await body();
+    expect(b.who.language.phrase).toBe("Not set. Messages go out in Spanish, the account's language.");
+  });
+
+  it("an unreadable account leaves the Not set line unqualified, never a guessed language (mutation: pass null instead of undefined when the account read fails -> FAILS)", async () => {
+    accountRead.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const b = await body();
+    expect(b.who.language.phrase).toBe("Not set.");
+    expect(errors).toHaveBeenCalled();
+  });
+
   it("review M1/M-2: a bad stored language_set_at leaves who.language OUT (the drawer then shows no line), never a false \"Not set.\" and never a 500 (mutation: call languageView outside viewOf -> 500; or fall back to a not-set view -> the key is present; each FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     dbMocks.getContact.mockResolvedValueOnce({ ...CONTACT, language: "es", language_source: "booking", language_set_at: "not-a-date" });

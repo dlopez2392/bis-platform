@@ -119,7 +119,9 @@ export async function GET(
   // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole response, and the
   // line is LEFT OUT (no who.language; the drawer reads absent as no line, plan deviation 11) rather
   // than a "Not set." that would be false for a set contact.
-  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, { zone: zone.zone, tr }));
+  const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, {
+    zone: zone.zone, tr, accountLanguage: accountRow ? (accountRow.language ?? null) : undefined,
+  }));
 
   const body: DrawerSummary = {
     locale,
