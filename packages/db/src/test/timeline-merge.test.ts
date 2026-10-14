@@ -42,7 +42,7 @@ function fakeDb(tables: Record<string, Row[]>, fail: { throwOn?: string[]; error
     let rows = [...(tables[table] ?? [])];
     let column: string | null = null;
     const b = {
-      select: () => b, eq: () => b, neq: () => b,
+      select: () => b, eq: () => b, neq: () => b, not: () => b,
       in: (c: string, vs: unknown[]) => { read.in = [c, vs]; rows = rows.filter((r) => vs.includes(r[c])); return b; },
       order: (c: string) => { if (c !== "id") column = c; return b; },
       or: (f: string) => {
@@ -156,7 +156,7 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
   });
 
   it("every source failing is still a page, not a throw (mutation: Promise.all without the per-source catch -> rejects, FAILS)", async () => {
-    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls"];
+    const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents"];
     const page = await listContactTimelinePage(fakeDb({}, { throwOn: all }).db, u(100), u(99));
     expect(page).toEqual({ items: [], older: null, failed: [...TIMELINE_SOURCES] });
   });

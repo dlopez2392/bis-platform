@@ -11,6 +11,7 @@ import { listContactMessages } from "./messaging";
 import { countGroupMembers, GROUP_ACTIVITY_CAP, type GroupPerson } from "./client-groups";
 import { forContacts, instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
 import type { AuthorKind } from "./provenance";
+import { listDocumentTimeline, type TimelineDocument } from "./documents";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -259,8 +260,8 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls";
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents";
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
 
 export type TimelineNote = { id: string; body: string; author_id: string | null; created_at: string };
 export type TimelineTask = {
@@ -290,7 +291,9 @@ export type TimelineEntry =
   | { kind: "submission"; id: string; at: string; contactId: string; submission: TimelineSubmission }
   | { kind: "message"; id: string; at: string; contactId: string; message: TimelineMessage }
   | { kind: "booking"; id: string; at: string; contactId: string; booking: ContactBookingRow }
-  | { kind: "call"; id: string; at: string; contactId: string; call: ContactCallRow };
+  | { kind: "call"; id: string; at: string; contactId: string; call: ContactCallRow }
+  /** S-07 (plan deviation 3): one row per listed document, read from `documents` so RLS decides. A group's own file has contactId "". */
+  | { kind: "document"; id: string; at: string; contactId: string; document: TimelineDocument };
 export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
@@ -306,7 +309,8 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
 
 /**
  * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3), for one person or (2b, C6) a
- * household's set, each entry naming its member. Seven sources, each read on the
+ * household's set, each entry naming its member. Eight sources (S-07 added documents; a group page
+ * passes `opts.groupId` so the group's OWN files are read too), each read on the
  * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
  * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
  * past the cursor, so the merge of the SUCCESSFUL sources' rows can tell whether more exist: `older`
@@ -317,7 +321,7 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
  */
 export async function listTimelinePage(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string } = {},
 ): Promise<TimelinePage> {
   // A set with no one in it (a group none of whose members this reader can see) has nothing to
   // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
@@ -360,6 +364,8 @@ export async function listTimelinePage(
       .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, contactId: booking.contact_id, booking }))),
     settle("calls", async () => (await listContactCalls(db, accountId, who, page.limit, { before }))
       .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, contactId: call.contact_id, call }))),
+    settle("documents", async () => (await listDocumentTimeline(db, accountId, who, opts.groupId ?? null, page))
+      .map((d): TimelineEntry => ({ kind: "document", id: d.id, at: d.created_at, contactId: d.contact_id ?? "", document: d }))),
   ]);
   const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
   const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);

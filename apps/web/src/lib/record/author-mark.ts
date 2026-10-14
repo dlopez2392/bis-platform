@@ -45,6 +45,9 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
       return { kind, personId: kind === "person" ? entry.booking.author_id : null };
     }
     case "call": return { kind: "ai", personId: null };
+    // S-07: the person who added the file (documents.created_by is NOT NULL); one the reader cannot
+    // name reads "Someone on the team", still the person mark.
+    case "document": return { kind: "person", personId: entry.document.created_by };
   }
 }
 

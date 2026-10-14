@@ -83,6 +83,16 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     expect(parseDrawerSummary(body)!.recent).toEqual(GOOD.recent);
   });
 
+  it("a document row (S-07) parses and is kept, never dropped as an unknown kind (mutation: drop document from ROW_KINDS -> the row is dropped, FAILS)", () => {
+    const body = clone();
+    const doc = { key: "document-d1", kind: "document", mark: { kind: "person", label: "Ana" }, verb: "added a file: Signed lease",
+      status: { tone: "muted", word: "In the trash" }, detail: "Contract", time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z", excerpt: null };
+    (body.recent as { rows: unknown[] }).rows = [doc];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [doc], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("a recent row whose excerpt carries the contact's language ('es') parses (mutation: keep lang === \"\" || lang === \"en\" -> the row is malformed -> FAILS)", () => {
     const body = clone();
     (body.recent as { rows: unknown[] }).rows = [{ ...ROW, excerpt: { text: "Hola", lang: "es", done: false } }];

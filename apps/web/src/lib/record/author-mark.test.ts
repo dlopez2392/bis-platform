@@ -106,3 +106,13 @@ describe("an author_kind outside the five is the person mark, unnamed: never a s
     expect(authorMark(entry, ctx())).toEqual({ kind: "person", label: "Someone on the team" });
   });
 });
+
+describe("a document row's author (S-07, plan deviation 3)", () => {
+  const doc: TimelineEntry = { kind: "document", id: "d1", at: AT, contactId: "c1", document: {
+    id: "d1", title: "Signed lease", category: "contract", source: "upload", created_by: "user_ana", created_at: AT,
+    deleted_at: null, contact_id: "c1", client_group_id: null } };
+  it("is the person who added it, and the names read asks for them (mutation: return unnamed() for documents -> FAILS)", () => {
+    expect(authorOf(doc)).toEqual({ kind: "person", personId: "user_ana" });
+    expect(personIdsOf([doc])).toEqual(["user_ana"]);
+  });
+});

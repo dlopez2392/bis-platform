@@ -11,6 +11,7 @@ import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity } from "../opportunities";
 import { createForm, createSubmission, linkSubmissionContact } from "../forms";
 import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from "../client-groups";
+import { createDocument, reserveDocumentVersion, markDocumentVersionReady } from "../documents";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
@@ -291,7 +292,8 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(page.failed).toEqual(["calls"]);
       expect(errors).toEqual(["calls"]);
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
-      expect(TIMELINE_SOURCES).toHaveLength(7);
+      // The pinned list, in source order, documents last (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS).
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"]);
     }));
 });
 
@@ -534,5 +536,28 @@ describe("groupActivityMembers, the review's fixes (S-03 part 2b)", () => {
       expect(a.people.map((p) => p.contactId).sort()).toEqual([...h.ids].sort());
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith("people", expect.anything());
+    }));
+});
+
+describe("the documents source (S-07, plan deviation 3)", () => {
+  it("a ready document is one row at its created_at, merged with the others; a group page also reads the group's own (mutation: drop the documents settle -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, "user_t");
+      if (g.status !== "ok") throw new Error(g.status);
+      const add = async (record: { kind: "contact" | "group"; id: string }, title: string) => {
+        const id = await createDocument(db, { accountId, record, title, category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+        const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 5, contentType: "application/pdf", originalName: null, uploadedBy: "user_t" });
+        if (r.status !== "ok") throw new Error(r.status);
+        if (!(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: 5, sha256: "c".repeat(64), actorId: "user_t" }))) throw new Error("not ready");
+        return id;
+      };
+      const mine = await add({ kind: "contact", id: ana }, "Mine");
+      const ours = await add({ kind: "group", id: g.groupId }, "Ours");
+      const contactPage = await listTimelinePage(db, accountId, [ana]);
+      expect(contactPage.items.filter((i) => i.kind === "document").map((i) => i.id)).toEqual([mine]);
+      const groupPage = await listTimelinePage(db, accountId, [ana], undefined, { groupId: g.groupId });
+      expect(groupPage.items.filter((i) => i.kind === "document").map((i) => i.id).sort()).toEqual([mine, ours].sort());
+      expect(groupPage.failed).toEqual([]);
     }));
 });

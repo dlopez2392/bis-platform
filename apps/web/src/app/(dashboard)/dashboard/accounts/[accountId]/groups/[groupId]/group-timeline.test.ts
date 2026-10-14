@@ -131,4 +131,13 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     expect(html).toContain(`>${m["timeline.older.es"]}<`);
     expect(html).toContain(m["timeline.openCall.es"]);
   });
+  it("a document row renders as one: its verb and, for the group's own file (contactId \"\"), no member link (S-07; mutation: return null for the document case -> FAILS)", () => {
+    const docEntries = [{ kind: "document", id: "d1", at: AT, contactId: "", document: { id: "d1", title: "Signed lease", category: "contract", source: "upload",
+      created_by: "user_me", created_at: AT, deleted_at: null, contact_id: null, client_group_id: "g1" } }] as unknown as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(docEntries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const row = rowHtml(render({ rows, tr }, "es"), "document");
+    expect(row).toContain(`>${m["timeline.document.es"].replace("{title}", "Signed lease")}<`);
+    expect(row).not.toContain("data-timeline-subject");
+  });
 });

@@ -79,3 +79,13 @@ describe("recentRowsView's customer language (S-09 §9)", () => {
     expect(recentRowsView(rows, "es").map((r) => [r.excerpt?.text, r.excerpt?.lang])).toEqual([["Gate code 4411", "es"], ["Bring the long ladder", ""]]);
   });
 });
+
+describe("a document in the drawer's Recent (S-07, plan deviation 3)", () => {
+  it("is its head only, never an excerpt of its title (mutation: excerpt the title -> FAILS)", () => {
+    const doc: TimelineEntry = { kind: "document", id: "d1", at: AT, contactId: "c1", document: {
+      id: "d1", title: "Signed lease", category: "contract", source: "upload", created_by: "user_ana", created_at: AT,
+      deleted_at: null, contact_id: "c1", client_group_id: null } };
+    const [d] = view([doc]);
+    expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["document", "added a file: Signed lease", null]);
+  });
+});

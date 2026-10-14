@@ -455,6 +455,8 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
     expect(groupFactsMock).toHaveBeenCalledWith(REQUEST_DB, "acct1", ids, expect.anything());
     expect(groupNextUpMock).toHaveBeenCalledWith(REQUEST_DB, "acct1", ids, expect.any(String));
     expect(listTimelinePageMock).toHaveBeenCalledWith(REQUEST_DB, "acct1", ids, undefined, expect.anything());
+    // S-07: the group's own documents reach its timeline only through its id (mutation: drop group.id at page.tsx's loadGroupTimeline call -> FAILS).
+    expect(listTimelinePageMock).toHaveBeenCalledWith(REQUEST_DB, "acct1", ids, undefined, expect.objectContaining({ groupId: G }));
   });
 
   it("the summary fails alone: Next up and the timeline still render (part 1 C5; mutation: one shared try for the three -> FAILS)", async () => {

@@ -101,7 +101,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
     set ? loadGroupDeals(db, accountId, async () => set.people) : noSet,
     ids ? loadGroupSummary(db, accountId, ids) : noSet,
     ids ? loadGroupNextUp(db, accountId, ids, now) : noSet,
-    ids ? loadGroupTimeline(db, accountId, ids, before) : noSet,
+    ids ? loadGroupTimeline(db, accountId, ids, before, group.id) : noSet,
   ]);
   // Not a throw: a cosmetic zone and a default language must not 500 the page.
   if (account.error) console.error(`group page: account ${accountId} timezone and language read failed: ${account.error.message}`);
