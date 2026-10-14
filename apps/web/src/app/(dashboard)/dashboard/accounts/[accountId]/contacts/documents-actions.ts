@@ -6,7 +6,7 @@ import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
   reserveDocumentVersion, markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
-  trashDocument, restoreDocument, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType,
+  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -131,6 +131,65 @@ export async function startDocumentUploadAction(
   }
 }
 
+export type StartVersionInput = { name: string; size: number; contentType: string };
+
+/**
+ * "Upload new version" (spec 3.3, 4.1): the same reserve-then-PUT-then-finish journey as a first upload,
+ * on an EXISTING listed document. The request-client read proves the caller sees the file (RLS: the
+ * record's visibility, the Technician fence, Owners only); a file still on its first upload (never
+ * listed) or in the trash gets no new version (plan deviation 2; the finish step re-checks the trash).
+ * "Listed" is current_version_id set, which 0077's documents_current_is_ready trigger allows only on a
+ * READY version: refusing here is what keeps "the first ready version is the oldest" true (0078's
+ * comment names the app as its enforcer).
+ * The version's bytes count against the quota from the reservation on (0077's reserve_document_version).
+ * A refused reservation touches nothing; a failure after it removes only the new reservation, never the
+ * document (discardDocumentUpload keeps a document that has a current version).
+ */
+export async function startDocumentVersionUploadAction(
+  accountId: string, documentId: string, input: StartVersionInput,
+): Promise<{ ok: true; documentId: string; versionId: string; uploadUrl: string } | DocFail> {
+  const access = await requireAccountAccess(accountId);
+  if (!isUuid(documentId) || !isRecordObj(input)) return fail(REFUSED);
+  if (!Number.isInteger(input.size) || input.size < 1) return fail("documents.error.upload");
+  if (input.size > DOCUMENT_MAX_BYTES) return fail("documents.error.tooLarge", { size: shownSize(input.size) });
+  if (typeof input.name !== "string" || !extensionAllowed(input.name) || !isDocumentContentType(input.contentType)) {
+    return fail("documents.error.badType");
+  }
+  const contentType: DocumentContentType = input.contentType;
+  const docId = documentId.toLowerCase();
+  let doc: DocumentRow | null = null;
+  try {
+    doc = await visibleDocument(accountId, docId, false);
+  } catch (e) {
+    log("start version: document read", accountId, e);
+    return fail("documents.error.upload");
+  }
+  if (!doc || doc.current_version_id === null) return fail(REFUSED);
+  if (doc.deleted_at !== null) return fail("documents.error.trashed");
+  const svc = serviceDb();
+  let versionId: string | null = null;
+  try {
+    const r = await reserveDocumentVersion(svc, {
+      accountId, documentId: docId, bytes: input.size, contentType,
+      originalName: input.name.slice(0, 255) || null, uploadedBy: access.userId,
+    });
+    if (r.status !== "ok") {
+      return r.status === "over_quota" ? fail("documents.error.quota")
+        : r.status === "too_large" ? fail("documents.error.tooLarge", { size: shownSize(input.size) })
+        : fail(REFUSED);
+    }
+    versionId = r.versionId;
+    const { data, error } = await svc.storage.from(DOCUMENT_BUCKET).createSignedUploadUrl(r.storagePath);
+    if (error || !data) throw new Error(`createSignedUploadUrl: ${error?.message ?? "no data"}`);
+    return { ok: true, documentId: docId, versionId: r.versionId, uploadUrl: data.signedUrl };
+  } catch (e) {
+    log("start version", accountId, e);
+    // Nothing was uploaded yet: only the new reservation goes; the document and its ready versions stay.
+    if (versionId) await discardDocumentUpload(svc, accountId, docId, versionId).catch((x: unknown) => log("start version: cleanup", accountId, x));
+    return fail("documents.error.upload");
+  }
+}
+
 /**
  * Removes a refused or failed upload: the object first, then the rows (spec 5.1 step 3). Never throws.
  * If the object cannot be removed, the rows are LEFT: the version stays `uploading`, so it still counts
@@ -154,12 +213,14 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
   if (!isUuid(documentId) || !isUuid(versionId)) return fail(REFUSED);
   const docId = documentId.toLowerCase();
   const verId = versionId.toLowerCase();
+  let doc: DocumentRow | null = null;
   try {
-    if (!(await visibleDocument(accountId, docId, false))) return fail(REFUSED);
+    doc = await visibleDocument(accountId, docId, false);
   } catch (e) {
     log("finish: document read", accountId, e);
     return fail("documents.error.upload");
   }
+  if (!doc) return fail(REFUSED);
   const svc = serviceDb();
   try {
     const version = await getUploadingVersion(svc, accountId, docId, verId);
@@ -174,6 +235,13 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
         if (error) log("finish: orphan object", accountId, error);
       }
       return fail(REFUSED);
+    }
+    // A version is never added to a file in the trash (plan deviation 2): trashed after this upload's
+    // start, its object and its reservation go now, object first (cleanUp), and the file keeps the
+    // versions it had. A trash that commits after this read is the serial order "ready, then trashed".
+    if (doc.deleted_at !== null) {
+      await cleanUp(svc, accountId, docId, verId, version.storage_path);
+      return fail("documents.error.trashed");
     }
     const { data: blob, error } = await svc.storage.from(DOCUMENT_BUCKET).download(version.storage_path);
     if (error || !blob) {
@@ -236,9 +304,9 @@ export async function getDocumentUrlAction(
     const db = await dbForRequest();
     const version = await getDocumentVersion(db, accountId, versionId.toLowerCase());
     // Opening is not changing: a file the reader cannot see (or one not uploaded yet) is "not found" (review M6).
-    if (!version || version.status !== "ready") return fail("documents.error.notFound");
+    if (!version || version.status !== "ready") return fail("documents.error.fileNotFound");
     const doc = await getDocument(db, accountId, version.document_id);
-    if (!doc) return fail("documents.error.notFound");
+    if (!doc) return fail("documents.error.fileNotFound");
     // Word and Excel are never rendered (spec 4.3): always a download, named after the title.
     const download = mode === "download" || OFFICE_TYPES.includes(version.content_type);
     const { data, error } = await serviceDb().storage.from(DOCUMENT_BUCKET).createSignedUrl(
@@ -350,5 +418,54 @@ export async function restoreDocumentAction(accountId: string, documentId: strin
   } catch (e) {
     log("restore", accountId, e);
     return fail(FAILED);
+  }
+}
+
+/**
+ * Delete forever (spec 3.4, 4.4, 5.1; DESIGN.md "Documents": only a typed name confirms a PERMANENT purge,
+ * and that confirmation is never shared with the trash move). An Owner or the agency only (owner ruling
+ * R1). The request-client read proves the
+ * caller sees the file and that it is in the trash; the typed name must equal its title exactly (plan
+ * deviation 8). Then, on the service client: refuse while any version is still uploading (deviation
+ * 3); claim the row (deviation 4) so a racing Restore changes nothing; remove EVERY version's object;
+ * only then delete the row (its versions cascade) and emit document.purged as the person. A storage
+ * refusal keeps the row, still in the trash; nothing is deleted that still has an object.
+ * A lost claim or a delete that matched nothing is re-read on the service client: no row at all means a
+ * concurrent Delete forever finished this file first (it re-claimed from the marker), and the file being
+ * gone is what was asked, so the answer is success, never "changed" or "try again" (task 4 review).
+ */
+export async function purgeDocumentAction(accountId: string, documentId: string, typedTitle: string): Promise<{ ok: true } | DocFail> {
+  const access = await requireAccountAccess(accountId);
+  // Owner ruling R1 (2026-10-14; spec 3.4): Owners and the agency only, the Owners-only rule (setOwnersOnlyAction).
+  if (!access.canManage) return fail("documents.error.purgeRole");
+  if (!isUuid(documentId) || typeof typedTitle !== "string") return fail(REFUSED);
+  const docId = documentId.toLowerCase();
+  try {
+    const doc = await visibleDocument(accountId, docId, false);
+    if (!doc || doc.deleted_at === null) return fail(REFUSED);
+    if (typedTitle !== doc.title) return fail("documents.purge.mismatch");
+    const svc = serviceDb();
+    const alreadyGone = async (): Promise<boolean> => (await getDocument(svc, accountId, docId)) === null;
+    const versions = await listDocumentVersionStates(svc, accountId, docId);
+    if (versions.some((v) => v.status === "uploading")) return fail("documents.error.purgeUploading");
+    const claimedAt = await claimDocumentForPurge(svc, accountId, docId, doc.deleted_at);
+    if (!claimedAt) return (await alreadyGone()) ? { ok: true } : fail("documents.error.purgeChanged");
+    const paths = versions.map((v) => v.storage_path);
+    if (paths.length > 0) {
+      const { error } = await svc.storage.from(DOCUMENT_BUCKET).remove(paths);
+      if (error) {
+        log(`purge: objects not removed, the file stays in the trash (${docId})`, accountId, error);
+        return fail("documents.error.purge");
+      }
+    }
+    if (!(await deletePurgedDocument(svc, accountId, doc, claimedAt, access.userId))) {
+      if (await alreadyGone()) return { ok: true };
+      log(`purge: objects removed but the row was no longer the claimed one (${docId})`, accountId, "row moved");
+      return fail("documents.error.purge");
+    }
+    return { ok: true };
+  } catch (e) {
+    log("purge", accountId, e);
+    return fail("documents.error.purge");
   }
 }
