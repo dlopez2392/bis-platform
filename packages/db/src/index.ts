@@ -266,6 +266,20 @@ export {
   type EquipmentPatch, type ContactPlaceGroup, type ContactPlaces, type PlaceCtx,
   listGroupPlaces,
 } from "./places";
+// The document vault (0077). See ./documents.ts and ./document-rules.ts.
+export {
+  listRecordDocuments, getDocument, getDocumentVersion, getUploadingVersion, createDocument, reserveDocumentVersion,
+  markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly, trashDocument, restoreDocument,
+  listAbandonedUploads, deleteAbandonedVersion, listPurgeableDocuments, purgeDocumentRow, listDocumentTimeline, MAX_DOCUMENTS_READ,
+  countContactDocuments, purgeContactDocuments, type ContactPurge,
+  type DocumentRecordRef, type DocumentRow, type DocumentVersionRow, type ListedDocument, type RecordDocuments, type ReserveOutcome,
+  type DocumentField, type CasOutcome, type SweepVersion, type PurgeCandidate, type TimelineDocument,
+} from "./documents";
+export {
+  DOCUMENT_BUCKET, DOCUMENT_QUOTA_BYTES, DOCUMENT_MAX_BYTES, DOCUMENT_CONTENT_TYPES, DOCUMENT_CATEGORIES, DOCUMENT_SOURCES,
+  DOCUMENT_TITLE_MAX, DOCUMENT_TRASH_DAYS, isDocumentCategory, isDocumentContentType,
+  type DocumentCategory, type DocumentContentType, type DocumentSource,
+} from "./document-rules";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {

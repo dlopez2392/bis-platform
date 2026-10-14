@@ -14,6 +14,7 @@ import { createContact, updateContact, listContacts, getContact,
 // company goes through this real write path instead of the old, now-removed
 // `createContact(..., { companyName })`.
 import { setContactsBusiness } from "../client-groups";
+import { createDocument } from "../documents";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -820,7 +821,7 @@ describe("bulk contact ops", () => {
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
       const r = await deleteContacts(db, accountId, [free.id, blocked.id]);
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 1 });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
       expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
     }));
@@ -939,5 +940,27 @@ describe("dedupe after the key columns (spec §5)", () => {
         { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
       expect(again.existing).toBe(true);
       expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
+    }));
+});
+
+describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
+  it("beforeDelete sees only the deletable ids, and an id it keeps is not deleted (mutation: delete the kept ids anyway -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
+      const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
+      const seen: string[][] = [];
+      const r = await deleteContacts(db, accountId, [keep, go], { beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      expect(seen).toEqual([[keep, go].sort()]);
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+      expect(await getContact(db, accountId, keep)).not.toBeNull();
+      expect(await getContact(db, accountId, go)).toBeNull();
+    }));
+
+  it("without the purge, a contact with a document is NOT deleted: the FK refuses the statement (the backstop; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
+      await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+      await expect(deleteContacts(db, accountId, [c])).rejects.toThrow(/documents_contact_fkey|foreign key/);
+      expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
 });
