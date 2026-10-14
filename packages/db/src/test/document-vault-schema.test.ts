@@ -28,15 +28,23 @@ async function seed(c: Client) {
   const ana = await one("insert into contacts (account_id, first_name) values ($1,'Ana') returning id", [acct]);
   const bea = await one("insert into contacts (account_id, first_name) values ($1,'Bea') returning id", [other]);
   const casa = await one("insert into client_groups (account_id, kind, name) values ($1,'household','Casa') returning id", [acct]);
-  return { acct, other, ana, bea, casa };
+  const opp = async (account: string, contact: string) => {
+    const pipe = await one("insert into pipelines (account_id, name) values ($1,'Sales') returning id", [account]);
+    const stage = await one("insert into pipeline_stages (account_id, pipeline_id, name, position) values ($1,$2,'New',0) returning id", [account, pipe]);
+    return one("insert into opportunities (account_id, contact_id, pipeline_id, stage_id, name) values ($1,$2,$3,$4,'Roof') returning id",
+      [account, contact, pipe, stage]);
+  };
+  const deal = await opp(acct, ana);
+  const dealB = await opp(other, bea);
+  return { acct, other, ana, bea, casa, deal, dealB };
 }
 
 const doc = (c: Client, acct: string, over: Record<string, unknown> = {}) => {
-  const row = { contact_id: null, client_group_id: null, title: "Contract", category: "contract", source: "upload",
+  const row = { contact_id: null, client_group_id: null, opportunity_id: null, title: "Contract", category: "contract", source: "upload",
     scan_status: "skipped", created_by: "user_dv", ...over };
-  return attempt(c, `insert into documents (account_id, contact_id, client_group_id, title, category, source, scan_status, created_by)
-    values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-    [acct, row.contact_id, row.client_group_id, row.title, row.category, row.source, row.scan_status, row.created_by])
+  return attempt(c, `insert into documents (account_id, contact_id, client_group_id, opportunity_id, title, category, source, scan_status, created_by)
+    values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+    [acct, row.contact_id, row.client_group_id, row.opportunity_id, row.title, row.category, row.source, row.scan_status, row.created_by])
     .then((r) => (r.rows[0] as { id: string }).id);
 };
 
@@ -54,11 +62,13 @@ describe("the documents bucket (spec section 3.1)", () => {
     expect(rows[0]!.allowed_mime_types).toEqual([...DOCUMENT_CONTENT_TYPES]);
   }));
 
-  it("no storage.objects policy names the documents bucket: only the service role reaches its objects (mutation: add a select policy for authenticated naming 'documents' -> FAILS)", () =>
+  it("storage.objects has no policy for anon, authenticated or PUBLIC on ANY bucket, and none names documents: only the service role reaches its objects (mutation: a select policy for authenticated on bucket 'brand-logos' -> FAILS)", () =>
     withRollback(async (c) => {
+      // Any client-role policy on storage.objects is one edit away from covering this bucket, so none is allowed at all.
       const { rows } = await c.query<{ policyname: string }>(
         `select policyname from pg_policies where schemaname = 'storage' and tablename = 'objects'
-           and (coalesce(qual, '') || coalesce(with_check, '')) like '%documents%'`);
+           and (roles && array['public', 'anon', 'authenticated']::name[]
+                or (coalesce(qual, '') || coalesce(with_check, '')) like '%documents%')`);
       expect(rows).toEqual([]);
     }));
 });
@@ -77,6 +87,15 @@ describe("documents and document_versions: checks (spec sections 3.2, 3.3)", () 
     withRollback(async (c) => {
       const s = await seed(c);
       await expect(doc(c, s.acct, { contact_id: s.bea })).rejects.toMatchObject({ code: "23503", constraint: "documents_contact_fkey" });
+    }));
+
+  it("an opportunity from another account is refused by the same-account key; its own account's is filed (mutation: documents_opportunity_fkey as opportunity_id -> opportunities(id) alone -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(doc(c, s.acct, { opportunity_id: s.dealB })).rejects.toMatchObject({ code: "23503", constraint: "documents_opportunity_fkey" });
+      expect(await doc(c, s.acct, { opportunity_id: s.deal })).toMatch(/^[0-9a-f-]{36}$/);
+      // The account that owns the deal is the only one that can block its delete (the teardown order relies on it).
+      await expect(attempt(c, "delete from opportunities where id = $1", [s.deal])).rejects.toMatchObject({ code: "23503", constraint: "documents_opportunity_fkey" });
     }));
 
   it("the category, source and scan_status sets are closed and match document-rules (mutation: add 'receipt' to documents_category_check -> FAILS)", () =>
@@ -165,11 +184,13 @@ describe("documents and document_versions: checks (spec sections 3.2, 3.3)", () 
       expect((await c.query("select 1 from document_versions where document_id = $1", [id])).rowCount).toBe(0);
     }));
 
-  it("a contact row cannot be deleted while a document row points at it (the backstop behind deviation 2's order; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+  it("a contact row cannot be deleted while a document row points at it: the app purges the files first, and the key refuses any delete it did not clear (mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await doc(c, s.acct, { contact_id: s.ana });
-      await expect(attempt(c, "delete from contacts where id = $1", [s.ana])).rejects.toMatchObject({ code: "23503", constraint: "documents_contact_fkey" });
+      // A contact of its own: the seed's Ana carries an opportunity, whose key would refuse the delete first.
+      const { rows: [cleo] } = await c.query<{ id: string }>("insert into contacts (account_id, first_name) values ($1,'Cleo') returning id", [s.acct]);
+      await doc(c, s.acct, { contact_id: cleo!.id });
+      await expect(attempt(c, "delete from contacts where id = $1", [cleo!.id])).rejects.toMatchObject({ code: "23503", constraint: "documents_contact_fkey" });
     }));
 });
 
@@ -219,6 +240,19 @@ describe("mark_document_version_ready: one transaction (plan review minor 4)", (
       expect(rows).toEqual([{ current: true, status: "ready" }]);
       expect(await mark(c, [s.acct, id, r.version_id, 10, "a".repeat(64)])).toEqual({ status: "not_found" });
     }));
+  it("a size other than the reserved one is refused as size_mismatch before any write: the quota is held by the database (mutation: drop the size comparison -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await doc(c, s.acct, { contact_id: s.ana });
+      const r = await reserve(c, [s.acct, id, 1, "application/pdf", "c.pdf", "user_dv"]);
+      for (const bytes of [2, DOCUMENT_MAX_BYTES]) {
+        expect(await mark(c, [s.acct, id, r.version_id, bytes, "a".repeat(64)])).toEqual({ status: "size_mismatch" });
+      }
+      const { rows } = await c.query(
+        "select v.status, v.bytes, v.sha256, d.current_version_id from document_versions v join documents d on d.id = v.document_id where v.id = $1",
+        [r.version_id]);
+      expect(rows).toEqual([{ status: "uploading", bytes: "1", sha256: null, current_version_id: null }]);
+    }));
   it("another document's version, or another account, changes nothing (mutation: drop `and document_id = p_document_id` -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -230,13 +264,21 @@ describe("mark_document_version_ready: one transaction (plan review minor 4)", (
       const { rows } = await c.query("select status from document_versions where id = $1", [vb.version_id]);
       expect(rows).toEqual([{ status: "uploading" }]);
     }));
-  it("executable by service_role only; a NULL argument raises 22004 (mutation: grant execute to authenticated -> FAILS)", () =>
+  it("executable by service_role only; a NULL in ANY argument raises 22004 (mutations: grant execute to authenticated; drop the null guard -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ r: string; ok: boolean }>(
         `select r, has_function_privilege(r, '${MARK}', 'EXECUTE') as ok from (values ('anon'), ('authenticated'), ('service_role')) v(r) order by 1`);
       expect(rows).toEqual([{ r: "anon", ok: false }, { r: "authenticated", ok: false }, { r: "service_role", ok: true }]);
       const s = await seed(c);
-      await expect(mark(c, [s.acct, null, null, 1, "x"])).rejects.toMatchObject({ code: "22004" });
+      const id = await doc(c, s.acct, { contact_id: s.ana });
+      const r = await reserve(c, [s.acct, id, 10, "application/pdf", "c.pdf", "user_dv"]);
+      for (const i of [0, 1, 2, 3, 4]) {
+        const args: unknown[] = [s.acct, id, r.version_id, 10, "a".repeat(64)];
+        args[i] = null;
+        await expect(mark(c, args)).rejects.toMatchObject({ code: "22004" });
+      }
+      const { rows: left } = await c.query("select status from document_versions where id = $1", [r.version_id]);
+      expect(left).toEqual([{ status: "uploading" }]);
     }));
 });
 

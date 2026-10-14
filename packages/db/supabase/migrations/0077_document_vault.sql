@@ -8,8 +8,11 @@
 -- under the tenant policy, 0068's Technician fence and an Owners-only fence, and writes nothing.
 -- No storage.objects policy is added for anon or authenticated: only the service role reaches the
 -- objects, through URLs it mints after an RLS read. reserve_document_version holds the 5 GiB quota
--- under a lock on the account row. The record FKs are NO ACTION: the app removes a contact's objects and
--- document rows BEFORE the contact row (deleteContacts' purge hook), and the FK refuses any delete it did not clear.
+-- under a lock on the account row; mark_document_version_ready refuses a size other than the reserved one,
+-- so the quota is held by the database, not by the caller. Every record link is a composite same-account key
+-- (0050's shape; opportunities gains its (account_id, id) key here for it), so no document can name another
+-- account's record. The record FKs are NO ACTION: the app removes a contact's objects and document rows
+-- BEFORE the contact row (deleteContacts' purge hook), and the FK refuses any delete it did not clear.
 --
 -- APPLY ORDER: CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
 -- apply_migration, once), then the parity check (the fingerprint compares the bucket row), then merge.
@@ -22,6 +25,7 @@
 --   drop function public.reserve_document_version(uuid, uuid, bigint, text, text, text);
 --   drop function public.mark_document_version_ready(uuid, uuid, uuid, bigint, text);
 --   drop function app.documents_current_is_ready();
+--   alter table public.opportunities drop constraint opportunities_account_id_id_key;  -- after documents is gone
 --   then remove the bucket through the Storage API (deleteBucket) once it is empty: a direct
 --   delete from storage.buckets is refused on production by its storage.protect_delete trigger (42501).
 --
@@ -41,14 +45,18 @@ values ('documents', 'documents', false, 26214400, array[
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']);
 
--- 2. Tables.
+-- 2. Tables. opportunities first gains the (account_id, id) key a same-account link needs (0050 gave
+--    contacts and calendars theirs; 0069 and 0071 built client_groups and places with one). id is already
+--    the primary key, so the new key can never refuse an existing row.
+alter table public.opportunities add constraint opportunities_account_id_id_key unique (account_id, id);
+
 create table public.documents (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null references public.accounts(id) on delete cascade,
   contact_id uuid,
   client_group_id uuid,
   place_id uuid,
-  opportunity_id uuid references public.opportunities(id),
+  opportunity_id uuid,
   title text not null constraint documents_title_check check (app.tidy_text(title, 200)),
   category text not null constraint documents_category_check
     check (category in ('id', 'contract', 'estimate', 'invoice', 'photo', 'permit', 'insurance', 'warranty', 'other')),
@@ -68,6 +76,7 @@ create table public.documents (
   constraint documents_contact_fkey foreign key (account_id, contact_id) references public.contacts (account_id, id),
   constraint documents_group_fkey foreign key (account_id, client_group_id) references public.client_groups (account_id, id),
   constraint documents_place_fkey foreign key (account_id, place_id) references public.places (account_id, id),
+  constraint documents_opportunity_fkey foreign key (account_id, opportunity_id) references public.opportunities (account_id, id),
   constraint documents_account_id_id_key unique (account_id, id)
 );
 
@@ -101,6 +110,7 @@ alter table public.documents add constraint documents_current_version_fkey
 
 create index documents_by_contact on public.documents (account_id, contact_id) where contact_id is not null;
 create index documents_by_group on public.documents (account_id, client_group_id) where client_group_id is not null;
+create index documents_by_opportunity on public.documents (account_id, opportunity_id) where opportunity_id is not null;
 create index documents_trashed on public.documents (deleted_at) where deleted_at is not null;
 create index document_versions_by_account on public.document_versions (account_id);
 create index document_versions_uploading on public.document_versions (created_at) where status = 'uploading';
@@ -183,11 +193,13 @@ grant execute on function public.reserve_document_version(uuid, uuid, bigint, te
 -- 7. A version becomes ready and current in ONE transaction (plan review minor 4): the version row and
 --    the document's pointer move together or not at all, so a document is never left with a ready
 --    version that nothing lists (which would count against the quota forever). Only an UPLOADING
---    version of THIS document qualifies; `first` tells the caller whether to emit document.added.
+--    version of THIS document qualifies, and only at the size it reserved: the quota was checked against
+--    that size, so any other size answers size_mismatch before anything is written (the caller removes
+--    the object and its row). `first` tells the caller whether to emit document.added.
 create function public.mark_document_version_ready(
   p_account_id uuid, p_document_id uuid, p_version_id uuid, p_bytes bigint, p_sha256 text)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare v_prior uuid;
+declare v_prior uuid; v_reserved bigint;
 begin
   if p_account_id is null or p_document_id is null or p_version_id is null or p_bytes is null or p_sha256 is null then
     raise exception 'mark_document_version_ready: a required argument is null' using errcode = '22004';
@@ -195,8 +207,14 @@ begin
   select current_version_id into v_prior from public.documents
    where id = p_document_id and account_id = p_account_id for no key update;
   if not found then return jsonb_build_object('status', 'not_found'); end if;
-  update public.document_versions set status = 'ready', bytes = p_bytes, sha256 = p_sha256
-   where id = p_version_id and document_id = p_document_id and account_id = p_account_id and status = 'uploading';
+  select v.bytes into v_reserved from public.document_versions v
+   where v.id = p_version_id and v.document_id = p_document_id and v.account_id = p_account_id and v.status = 'uploading'
+   for update;
+  if not found then return jsonb_build_object('status', 'not_found'); end if;
+  if v_reserved <> p_bytes then return jsonb_build_object('status', 'size_mismatch'); end if;
+  update public.document_versions set status = 'ready', sha256 = p_sha256
+   where id = p_version_id and document_id = p_document_id and account_id = p_account_id and status = 'uploading'
+     and bytes = p_bytes;
   if not found then return jsonb_build_object('status', 'not_found'); end if;
   update public.documents set current_version_id = p_version_id, updated_at = now() where id = p_document_id;
   return jsonb_build_object('status', 'ok', 'first', v_prior is null);

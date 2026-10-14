@@ -60,7 +60,7 @@ HEIC is **not** allowed, because the browser cannot strip its location data (§5
 |---|---|---|
 | id | uuid pk | |
 | account_id | uuid not null → accounts | |
-| contact_id, group_id, property_id, opportunity_id | uuid null, FKs | CHECK: exactly one is non-null. Part 1 writes only contact_id or group_id. |
+| contact_id, client_group_id, place_id, opportunity_id | uuid null, same-account FKs | CHECK: exactly one is non-null. Part 1 writes only contact_id or client_group_id. Each link is a composite `(account_id, <record>_id)` key, so a document can never name another account's record (0077 adds `opportunities_account_id_id_key` for it). Corrected 2026-10-13: every table that names a group calls it `client_group_id`, and properties are `public.places`. |
 | title | text not null | defaults to the file name without its extension; 1–200 chars |
 | category | text not null | CHECK in the nine keys |
 | expires_on | date null | |
@@ -74,7 +74,7 @@ HEIC is **not** allowed, because the browser cannot strip its location data (§5
 | deleted_at | timestamptz null | in the trash when set |
 | deleted_by | text null | |
 
-Indexes: `(account_id, contact_id) where contact_id is not null`, `(account_id, group_id) where group_id is not null`, `(deleted_at) where deleted_at is not null`.
+Indexes: `(account_id, contact_id) where contact_id is not null`, `(account_id, client_group_id) where client_group_id is not null`, `(account_id, opportunity_id) where opportunity_id is not null`, `(deleted_at) where deleted_at is not null`.
 
 ### 3.3 `document_versions`
 Columns: `id`, `document_id → documents on delete cascade`, `account_id`, `storage_path` (unique; `{account_id}/{document_id}/{version_id}` and never derived from a file name), `bytes bigint not null`, `content_type` (the type read from the file's bytes, §5.2), `sha256 text null` (set at finish), `original_name text`, `uploaded_by`, `status` CHECK in (`uploading`, `ready`), `created_at`. A document is listed only once it has a ready version. "Upload a new version" adds a row, and `current_version_id` moves to it when it becomes ready.
@@ -96,7 +96,7 @@ A function `public.reserve_document_version(p_account_id, p_document_id, p_bytes
 3. refuses if the new total would pass **5,368,709,120** bytes (5 GiB)
 4. otherwise inserts the `uploading` version row and returns its id and path
 
-Two simultaneous uploads therefore cannot both slip under the limit. The constant lives in one place, and the app reads it from the same module that tests pin.
+A version becomes ready only at the size it reserved: `mark_document_version_ready` answers `size_mismatch` for any other size before it writes anything, so the stored size can never grow past what the quota checked (amended 2026-10-13 after task review). Two simultaneous uploads therefore cannot both slip under the limit. The constant lives in one place, and the app reads it from the same module that tests pin.
 
 ### 3.6 Timeline
 Adding, trashing, restoring and purging each record an event through `emit` (`packages/db/src/events.ts`): `document.added`, `document.trashed`, `document.restored`, `document.purged`. The payload carries the document id, title and the record it is filed on. A person's action is `actor_type 'user'`, and the daily job's purge is `'system'`. The record timeline shows these as rows with the person mark or the automation mark (DESIGN.md provenance: a row with no mark is a defect). The plan wires them into the contact and group timeline readers.
@@ -196,7 +196,7 @@ One new pass in the cron registry (`lib/automations/registry.ts`), named `docume
 It also follows the existing cron-coupling test rules.
 
 ### 5.5 Teardown and test hygiene
-- `packages/db/src/account-teardown.ts` deletes every object under `{account_id}/` in `documents` before the rows go.
+- `packages/db/src/account-teardown.ts` deletes every object a `document_versions` row of the account names, from `documents`, before the rows go (the rows are the only map to the objects; corrected 2026-10-13, it does not list a prefix).
 - The e2e sweep (`apps/web/e2e/fixtures/sweep.ts`) clears the fixture account's objects, as it does for `brand-logos`.
 
 ## 6. Testing

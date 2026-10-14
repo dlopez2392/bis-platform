@@ -4,14 +4,17 @@ import { deleteAccountCascade } from "../account-teardown";
 
 function fakeDb(paths: string[], removeError: string | null) {
   const log: string[] = [];
+  /** Every filter the function applied, as "<op> <table> <column>=<value>": the fake answers the same rows whatever
+   *  the filter, so only this record proves the paths were read for THIS account. */
+  const filters: string[] = [];
   const db = {
     from: (table: string) => ({
-      select: () => ({ eq: () => ({ order: () => ({ range: async () => ({ data: table === "document_versions" ? paths.map((p) => ({ storage_path: p })) : [], error: null }) }) }) }),
-      delete: () => ({ eq: async () => { log.push(`rows:${table}`); return { error: null }; } }),
+      select: () => ({ eq: (col: string, val: string) => { filters.push(`select ${table} ${col}=${val}`); return { order: () => ({ range: async () => ({ data: table === "document_versions" ? paths.map((p) => ({ storage_path: p })) : [], error: null }) }) }; } }),
+      delete: () => ({ eq: async (col: string, val: string) => { filters.push(`delete ${table} ${col}=${val}`); log.push(`rows:${table}`); return { error: null }; } }),
     }),
     storage: { from: (b: string) => ({ remove: async (ps: string[]) => { log.push(`objects:${b}:${ps.join(",")}`); return { data: [], error: removeError ? { message: removeError } : null }; } }) },
   };
-  return { db: db as unknown as SupabaseClient, log };
+  return { db: db as unknown as SupabaseClient, log, filters };
 }
 
 describe("deleteAccountCascade removes the document vault's objects before any row (plan review I5)", () => {
@@ -20,6 +23,11 @@ describe("deleteAccountCascade removes the document vault's objects before any r
     await deleteAccountCascade(db, "a", "test", { keepBlueprints: true });
     expect(log[0]).toBe("objects:documents:a/d/v1,a/d/v2");
     expect(log.slice(1).every((l) => l.startsWith("rows:"))).toBe(true);
+  });
+  it("the paths are read for the account being deleted, and nothing else (mutation: .eq(\"account_id\", caller) in the storage leg -> FAILS)", async () => {
+    const { db, filters } = fakeDb(["acct-1/d/v1"], null);
+    await deleteAccountCascade(db, "acct-1", "test-caller", { keepBlueprints: true });
+    expect(filters.filter((f) => f.startsWith("select "))).toEqual(["select document_versions account_id=acct-1"]);
   });
   it("no paths, no storage call (mutation: always call remove -> FAILS)", async () => {
     const { db, log } = fakeDb([], null);
