@@ -6,24 +6,27 @@ vi.mock("./documents-actions", () => ({
   trashDocumentAction: vi.fn(), restoreDocumentAction: vi.fn(), setOwnersOnlyAction: vi.fn(), undoOwnersOnlyAction: vi.fn(),
   getDocumentUrlAction: vi.fn(), updateDocumentFieldAction: vi.fn(), undoDocumentFieldAction: vi.fn(),
   startDocumentUploadAction: vi.fn(), finishDocumentUploadAction: vi.fn(), abandonDocumentUploadAction: vi.fn(),
+  startDocumentVersionUploadAction: vi.fn(), purgeDocumentAction: vi.fn(),
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, dropRefusal } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, dropRefusal, rowSavers, versionToast } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
 const view = (over: Record<string, unknown> = {}) => ({
   id: "d1", title: "Signed lease", category: "contract", expiresOn: null, ownersOnly: false, source: "upload",
   addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", deletedAt: null,
-  version: { id: "v1", contentType: "application/pdf", bytes: 1200 }, ...over,
+  version: { id: "v1", contentType: "application/pdf", bytes: 1200 },
+  versions: [{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }],
+  purging: false, ...over,
 });
-const ready = (live: unknown[], trashed: unknown[] = [], capped = false): Load => ({ status: "ready", data: {
-  today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "c1" }, live, trashed, capped } } as Load);
-const handlers = { trash: vi.fn(), restore: vi.fn(), setOwnersOnly: vi.fn(), download: vi.fn(), changed: vi.fn() };
+const ready = (live: unknown[], trashed: unknown[] = [], capped = false, space: { used: number; quota: number } | null = null): Load => ({ status: "ready", data: {
+  today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "c1" }, live, trashed, capped, space } } as Load);
+const handlers = { trash: vi.fn(), restore: vi.fn(), setOwnersOnly: vi.fn(), download: vi.fn(), saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(), changed: vi.fn() };
 const render = (load: Load, over: Partial<Props> = {}) => renderToStaticMarkup(createElement(DocumentsCardView, {
   accountId: "acc", load, canManage: true, emptyText: m["documents.empty.contact"], locale: "en", handlers,
-  onRetry: vi.fn(), onFiles: vi.fn(), onOpen: vi.fn(), panel: null, ...over,
+  onRetry: vi.fn(), onFiles: vi.fn(), onOpen: vi.fn(), panel: null, versionPhases: {}, onNewVersion: vi.fn(), onPurge: vi.fn(), ...over,
 } as Props));
 /** One row's own markup, from its opening <li> to the next row or the end of the list. */
 const rowOf = (html: string, id: string) => {
@@ -168,10 +171,11 @@ describe("the Documents card (spec 4.1, 4.5)", () => {
     expect(renderedText(render(ready([]), { locale: "es", emptyText: m["documents.empty.contact.es"] }))).toContain(m["documents.empty.contact.es"]);
   });
 
-  it("the row menu offers Owners only to an Owner only, with the word for the file's current state (mutation: drop the canManage guard in rowMenuItems -> FAILS)", () => {
-    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "download", "trash"]);
+  it("the row menu: Upload new version for everyone who sees the file, Owners only for an Owner only, in the spec's order (mutations: drop newVersion; drop the canManage guard -> FAILS)", () => {
+    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "trash"]);
     expect(rowMenuItems(view() as never, true).map((i) => [i.id, i.labelKey])).toEqual([
-      ["edit", "documents.edit"], ["ownersOnly", "documents.makeOwnersOnly"], ["download", "documents.download"], ["trash", "documents.trash"]]);
+      ["edit", "documents.edit"], ["ownersOnly", "documents.makeOwnersOnly"], ["newVersion", "documents.newVersion"],
+      ["download", "documents.download"], ["trash", "documents.trash"]]);
     expect(rowMenuItems(view({ ownersOnly: true }) as never, true).find((i) => i.id === "ownersOnly")!.labelKey).toBe("documents.makeTeam");
   });
 });
@@ -238,5 +242,88 @@ describe("the viewer's open file", () => {
     expect(keepOpen("d1", ready([view({ id: "d2" })], [view({ deletedAt: "2026-10-12T00:00:00.000Z" })]))).toBeNull();
     expect(keepOpen("d1", { status: "error" })).toBe("d1");
     expect(keepOpen(null, ready([view()]))).toBeNull();
+  });
+});
+
+describe("versions, Delete forever and the space line on the card (PR 1b)", () => {
+  const GIB = 1_073_741_824;
+  const three = [
+    { id: "v3", contentType: "application/pdf", bytes: 30, createdAt: "2026-10-12T15:00:00.000Z", addedOn: "2026-10-12" },
+    { id: "v2", contentType: "application/pdf", bytes: 20, createdAt: "2026-10-11T15:00:00.000Z", addedOn: "2026-10-11" },
+    { id: "v1", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" },
+  ];
+  it("'Version 3' on a row with three ready versions, nothing on a row with one, in both languages (mutation: show it from one version -> FAILS)", () => {
+    const multi = view({ version: { id: "v3", contentType: "application/pdf", bytes: 30 }, versions: three });
+    const html = render(ready([multi, view({ id: "d2", title: "Roof" })]));
+    expect(rowOf(html, "d1")).toContain("data-document-version");
+    expect(renderedText(rowOf(html, "d1"))).toContain("Version 3");
+    expect(rowOf(html, "d2")).not.toContain("data-document-version");
+    const es = render(ready([multi]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(rowOf(es, "d1"))).toContain(m["documents.version.es"].replace("{n}", "3"));
+  });
+  it("a new version on its way shows its progress on its own row only (mutation: never draw the phase -> FAILS)", () => {
+    const html = render(ready([view(), view({ id: "d2", title: "Roof" })]), { versionPhases: { d1: { kind: "uploading", percent: 45 } } });
+    expect(renderedText(rowOf(html, "d1"))).toContain(m["documents.progress.uploading"].replace("{percent}", "45"));
+    expect(rowOf(html, "d2")).not.toContain("data-version-progress");
+    const checking = render(ready([view()]), { versionPhases: { d1: { kind: "checking" } }, locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(rowOf(checking, "d1"))).toContain(m["documents.progress.checking.es"]);
+  });
+  it("each trashed file offers Delete forever as a ghost beside Restore; the card still has ONE primary (rule 6, rule 8; mutation: make Delete forever default -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z" })]));
+    const trashed = html.slice(html.indexOf('data-document-trashed="t1"'));
+    expect(/<button[^>]*data-document-purge[^>]*>/.exec(trashed)![0]).toContain('data-variant="ghost"');
+    expect(renderedText(trashed)).toContain(m["documents.deleteForever"]);
+    expect(renderedText(trashed)).toContain(m["documents.restore"]);
+    expect(html.match(/data-variant="default"/g)).toHaveLength(1);
+    const es = render(ready([view()], [view({ id: "t1", deletedAt: "2026-10-10T15:00:00.000Z" })]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(es)).toContain(m["documents.deleteForever.es"]);
+  });
+  it("a file whose Delete forever stopped part-way shows 'Being deleted' as a dot and a word, no Restore, and an Owner keeps Delete forever to finish it (review m1; mutation: ignore purging and draw Restore -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z", purging: true })]));
+    const trashed = html.slice(html.indexOf('data-document-trashed="t1"'));
+    expect(trashed).not.toContain("data-document-restore");
+    expect(trashed).toMatch(/data-document-purging[^>]*><span aria-hidden="true"[^>]*><\/span>/);
+    expect(renderedText(trashed)).toContain(m["documents.status.purging"]);
+    expect(trashed).toContain("data-document-purge");
+    const es = render(ready([view()], [view({ id: "t1", deletedAt: "2026-10-10T15:00:00.000Z", purging: true })]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(es)).toContain(m["documents.status.purging.es"]);
+    // A trashed file with no purge begun keeps its Restore.
+    expect(render(ready([view()], [view({ id: "t2", deletedAt: "2026-10-10T15:00:00.000Z" })]))).toContain("data-document-restore");
+  });
+  it("Staff and Technicians see the trashed file and Restore, but no Delete forever (owner ruling R1; mutation: draw it for everyone -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z" })]), { canManage: false });
+    expect(html).toContain('data-document-trashed="t1"');
+    expect(html).toContain("data-document-restore");
+    expect(html).not.toContain("data-document-purge");
+  });
+  it("the space line shows above 80% of the quota only, in both languages, and adds no primary (spec 4.2 item 4; mutation: always draw it -> FAILS)", () => {
+    const over = render(ready([view()], [], false, { used: 4_500_000_000, quota: 5 * GIB }));
+    expect(over).toContain("data-space-used");
+    expect(renderedText(over)).toContain("4.1 of 5 GB used");
+    expect(over.match(/data-variant="default"/g)).toHaveLength(1);
+    expect(render(ready([view()], [], false, { used: 4 * GIB, quota: 5 * GIB }))).not.toContain("data-space-used");
+    expect(render(ready([view()]))).not.toContain("data-space-used");
+    const es = render(ready([view()], [], false, { used: 4_500_000_000, quota: 5 * GIB }), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(es)).toContain(m["documents.spaceUsed.es"].replace("{used}", "4.1").replace("{quota}", "5"));
+  });
+  it("a row's inline edits reach the HANDLERS, never a server action directly (PR 1a review M6; mutation: rowSavers calls updateDocumentFieldAction -> FAILS)", async () => {
+    const actions = await import("./documents-actions");
+    const h = { saveField: vi.fn(async () => ({ ok: true as const, undoPayload: { documentId: "d1", field: "title" as const, prior: "a", written: "b" }, shown: "b" })),
+      undoField: vi.fn(async () => ({ ok: true as const })) };
+    const doc = view() as never;
+    const s = rowSavers(doc, h);
+    await s.save("title")("b");
+    await s.undoWith({ p: 1 });
+    expect(h.saveField).toHaveBeenCalledWith(doc, "title", "b");
+    expect(h.undoField).toHaveBeenCalledWith({ p: 1 });
+    expect(actions.updateDocumentFieldAction).not.toHaveBeenCalled();
+    expect(actions.undoDocumentFieldAction).not.toHaveBeenCalled();
+  });
+  it("the new-version toast: success words, or the refusal in the reader's language with its params; nothing mid-way (mutation: drop params -> FAILS)", () => {
+    expect(versionToast({ kind: "done" }, "Lease", "en")).toEqual({ ok: true, text: "New version of Lease added." });
+    expect(versionToast({ kind: "done" }, "Lease", "es")).toEqual({ ok: true, text: m["documents.versionAdded.es"].replace("{title}", "Lease") });
+    expect(versionToast({ kind: "failed", error: "documents.error.tooLarge", params: { size: "31 MB" } }, "Lease", "es"))
+      .toEqual({ ok: false, text: m["documents.error.tooLarge.es"].replace("{size}", "31 MB") });
+    expect(versionToast({ kind: "uploading", percent: 10 }, "Lease", "en")).toBeNull();
   });
 });
