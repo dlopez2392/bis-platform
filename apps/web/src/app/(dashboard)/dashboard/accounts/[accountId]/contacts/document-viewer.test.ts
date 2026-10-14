@@ -5,7 +5,10 @@ import type { ReactElement } from "react";
 vi.mock("./documents-actions", () => ({ getDocumentUrlAction: vi.fn() }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentViewerBody, DocumentVersionsList, viewerStateFor, fetchKeyFor, imageErrorStep } = await import("./document-viewer");
+const {
+  DocumentViewerBody, DocumentVersionsList, viewerStateFor, fetchKeyFor, imageErrorStep,
+  FIRST_SESSION, sessionAfterImageError, sessionOnOpenChange,
+} = await import("./document-viewer");
 
 const doc = (contentType: string) => ({
   id: "d", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
@@ -76,6 +79,35 @@ describe("one automatic retry for a broken image (PR 1a review M7)", () => {
   });
 });
 
+describe("the viewer's session is pure: the image's error step and a close (Task 7 review I1, M1)", () => {
+  const ready = (key: string) => ({ key, value: { status: "ready" as const, url: "https://s/i", contentType: "image/png" as never } });
+  it("the first error re-mints once and records the version; a second error does not re-mint (mutation: drop the record of the spent retry -> FAILS)", () => {
+    const s0 = { ...FIRST_SESSION, open: true, result: ready("v1:0") };
+    const s1 = sessionAfterImageError(s0, "v1");
+    expect(s1.attempt).toBe(1);
+    expect(s1.autoRetriedFor).toBe("v1");
+    const s2 = sessionAfterImageError({ ...s1, result: ready("v1:1") }, "v1");
+    expect(s2.attempt).toBe(1);
+  });
+  it("the second error is the viewer's error state for the CURRENT key, where Retry lives (mutation: drop the fail branch -> FAILS)", () => {
+    const s1 = { ...FIRST_SESSION, open: true, attempt: 1, autoRetriedFor: "v1", result: ready("v1:1") };
+    const s2 = sessionAfterImageError(s1, "v1");
+    expect(viewerStateFor(fetchKeyFor("v1", s2.attempt), s2.result)).toEqual({ status: "error" });
+  });
+  it("closing bumps the attempt, so reopening the same file mints a fresh link, never the cached one (mutation: a close keeps the attempt -> FAILS)", () => {
+    const opened = sessionOnOpenChange(FIRST_SESSION, true);
+    const landed = { ...opened, result: ready(fetchKeyFor("v1", opened.attempt)!) };
+    expect(viewerStateFor(fetchKeyFor("v1", landed.attempt), landed.result)).toEqual(landed.result.value);
+    const reopened = sessionOnOpenChange(sessionOnOpenChange(landed, false), true);
+    expect(viewerStateFor(fetchKeyFor("v1", reopened.attempt), reopened.result)).toEqual({ status: "loading" });
+  });
+  it("an unchanged open state answers the SAME session, so the render-time adjustment settles (mutation: always a new object -> FAILS)", () => {
+    const opened = sessionOnOpenChange(FIRST_SESSION, true);
+    expect(sessionOnOpenChange(opened, true)).toBe(opened);
+    expect(sessionOnOpenChange(FIRST_SESSION, false)).toBe(FIRST_SESSION);
+  });
+});
+
 describe("the Versions list (spec 4.3)", () => {
   const three = {
     ...doc("application/pdf"),
@@ -116,6 +148,12 @@ describe("the Versions list (spec 4.3)", () => {
     expect(renderedText(rowOf(html, "v3"))).toContain(m["documents.versionCurrent.es"]);
     expect(rowOf(html, "v2")).toContain(`aria-label="${m["documents.downloadVersion.es"].replace("{n}", "2")}"`);
     expect(renderedText(html)).toContain(m["documents.versions.es"]);
+  });
+  it("Current follows the current version's id, not the top row (deviation 7; Task 7 review M2; mutation: i === 0 -> FAILS)", () => {
+    const html = list({ ...three, version: { id: "v2", contentType: "image/jpeg" as never, bytes: 20 } });
+    expect(renderedText(rowOf(html, "v2"))).toContain(m["documents.versionCurrent"]);
+    expect(rowOf(html, "v2")).not.toContain("<button");
+    expect(rowOf(html, "v3")).toMatch(/<button[^>]*aria-label="Download version 3"/);
   });
   it("a file with one version draws no list at all (mutation: render for one version -> FAILS)", () => {
     expect(list({ ...three, versions: [three.versions[0]!] })).toBe("");

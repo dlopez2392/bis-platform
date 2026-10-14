@@ -12,7 +12,7 @@ import {
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
 import { validateInlineRule } from "@/lib/inline-rule";
-import { extensionAllowed, extensionForType, isDay, OFFICE_TYPES, shownSize } from "@/lib/documents/rules";
+import { extensionAllowed, extensionForType, isDay, OFFICE_TYPES, purgeNameKey, shownSize } from "@/lib/documents/rules";
 import { checkDocumentBytes } from "@/lib/documents/content-check";
 
 /**
@@ -425,7 +425,7 @@ export async function restoreDocumentAction(accountId: string, documentId: strin
  * Delete forever (spec 3.4, 4.4, 5.1; DESIGN.md "Documents": only a typed name confirms a PERMANENT purge,
  * and that confirmation is never shared with the trash move). An Owner or the agency only (owner ruling
  * R1). The request-client read proves the
- * caller sees the file and that it is in the trash; the typed name must equal its title exactly (plan
+ * caller sees the file and that it is in the trash; the typed name must equal its title in `purgeNameKey`'s form (plan
  * deviation 8). Then, on the service client: refuse while any version is still uploading (deviation
  * 3); claim the row (deviation 4) so a racing Restore changes nothing; remove EVERY version's object;
  * only then delete the row (its versions cascade) and emit document.purged as the person. A storage
@@ -444,7 +444,7 @@ export async function purgeDocumentAction(accountId: string, documentId: string,
   try {
     const doc = await visibleDocument(accountId, docId, false);
     if (!doc || doc.deleted_at === null) return fail(REFUSED);
-    if (typedTitle !== doc.title) return fail("documents.purge.mismatch");
+    if (purgeNameKey(typedTitle) !== purgeNameKey(doc.title)) return fail("documents.purge.mismatch");
     const svc = serviceDb();
     // Gone, or another Delete forever holds it (its claim marker): the file is deleted or being deleted.
     const alreadyGone = async (): Promise<boolean> => {

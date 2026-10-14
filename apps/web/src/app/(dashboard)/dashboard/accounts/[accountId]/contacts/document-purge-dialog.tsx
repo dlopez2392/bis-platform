@@ -8,14 +8,17 @@ import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import type { DocumentView } from "@/lib/documents/documents-load";
+import { purgeNameKey } from "@/lib/documents/rules";
 
 /**
  * Delete forever (spec 4.4; DESIGN.md "Documents": only a typed name confirms a PERMANENT purge, and the
- * trash move never shares this confirmation). The name must be typed EXACTLY as stored (plan deviation
- * 8); the server checks it again. The dialog's one primary is the destructive button (rule 8).
+ * trash move never shares this confirmation). The name must be typed as the screen shows it, compared in
+ * `purgeNameKey`'s form (plan deviation 8, Task 7 review I2: NFC, whitespace runs as one space, no case
+ * folding); the server compares in the same form again. The dialog's one primary is the destructive
+ * button (rule 8).
  */
 export function canPurge(typed: string, title: string): boolean {
-  return typed === title;
+  return purgeNameKey(typed) === purgeNameKey(title);
 }
 
 const control = "min-h-11 md:min-h-8";
@@ -28,16 +31,20 @@ export function DocumentPurgeForm({ title, versionCount, typed, busy, locale, bo
   const tt = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
   const matches = canPurge(typed, title);
   const nearMiss = typed !== "" && !matches;
+  const hintId = useId();
+  // Review M11: "all of its versions" only when there is more than one. The title is a name in no
+  // language (review M6), so it is its own `lang=""` span inside the sentence: split the raw message at
+  // its placeholder rather than interpolating the title into the sentence's text.
+  const [before, after = ""] = tt(versionCount > 1 ? "documents.purge.body" : "documents.purge.bodyOne").split("{title}");
   return (
     <div data-document-purge-form className="space-y-3">
-      {/* Review M11: "all of its versions" only when there is more than one. */}
-      <p id={bodyId} className="text-sm text-muted-foreground">{tt(versionCount > 1 ? "documents.purge.body" : "documents.purge.bodyOne", { title })}</p>
+      <p id={bodyId} className="text-sm text-muted-foreground">{before}<span lang="">{title}</span>{after}</p>
       <label className="block space-y-1 text-sm">
         <span>{tt("documents.purge.label")}</span>
         <Input lang="" value={typed} autoComplete="off" spellCheck={false} aria-invalid={nearMiss}
-          onChange={(e) => onTyped(e.target.value)} />
+          aria-describedby={nearMiss ? hintId : undefined} onChange={(e) => onTyped(e.target.value)} />
       </label>
-      {nearMiss ? <p data-purge-mismatch className="text-xs text-muted-foreground">{tt("documents.purge.mismatch")}</p> : null}
+      {nearMiss ? <p id={hintId} data-purge-mismatch className="text-xs text-muted-foreground">{tt("documents.purge.mismatch")}</p> : null}
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" className={control} onClick={onCancel}>{tt("documents.cancel")}</Button>
         <Button type="button" variant="destructive" className={control} disabled={!matches || busy} onClick={onConfirm}>
@@ -48,8 +55,11 @@ export function DocumentPurgeForm({ title, versionCount, typed, busy, locale, bo
   );
 }
 
-/** One open dialog per file: keyed by the file, so the typed name never carries over to another (no effect resets it). */
-function PurgeBody({ doc, locale, bodyId, onClose, onConfirm }: {
+/**
+ * One open dialog per file: keyed by the file, so the typed name never carries over to another (no effect
+ * resets it). Exported for its test only (review M3): it must hand the form the file's real version count.
+ */
+export function DocumentPurgeBody({ doc, locale, bodyId, onClose, onConfirm }: {
   doc: DocumentView; locale: Locale; bodyId: string; onClose: () => void; onConfirm: (doc: DocumentView, typed: string) => Promise<boolean>;
 }) {
   const [typed, setTyped] = useState("");
@@ -80,7 +90,7 @@ export function DocumentPurgeDialog({ doc, locale, onClose, onConfirm }: {
   return (
     <Dialog open={doc !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent data-document-purge-dialog aria-describedby={bodyId}>
-        {doc ? <PurgeBody key={doc.id} doc={doc} locale={locale} bodyId={bodyId} onClose={onClose} onConfirm={onConfirm} /> : null}
+        {doc ? <DocumentPurgeBody key={doc.id} doc={doc} locale={locale} bodyId={bodyId} onClose={onClose} onConfirm={onConfirm} /> : null}
       </DialogContent>
     </Dialog>
   );

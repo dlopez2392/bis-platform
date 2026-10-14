@@ -335,6 +335,14 @@ describe("purgeDocumentAction: Delete forever by the typed name (spec 4.4, 5.1; 
     expect(db.listDocumentVersionStates).not.toHaveBeenCalled();
     expect(db.claimDocumentForPurge).not.toHaveBeenCalled();
   });
+  it("the visible form of the name confirms: a run of spaces, a non-breaking space, a decomposed accent; another letter refuses (Task 7 review I2; mutation: compare raw strings -> FAILS)", async () => {
+    for (const [title, typed] of [["Lease  2026", "Lease 2026"], ["Lease\u00a02026", "Lease 2026"], ["Pen\u0303a", "Pe\u00f1a"]] as const) {
+      db.getDocument.mockResolvedValue({ ...TRASHED, title });
+      expect(await A.purgeDocumentAction(ACC, D, typed), JSON.stringify(title)).toEqual({ ok: true });
+    }
+    db.getDocument.mockResolvedValue({ ...TRASHED, title: "Pen\u0303a" });
+    expect(await A.purgeDocumentAction(ACC, D, "Pena")).toEqual({ ok: false, error: "documents.purge.mismatch" });
+  });
   it("only a file in the trash, and only one the caller can see (mutations: drop the trashed check; treat null as visible -> FAILS)", async () => {
     db.getDocument.mockResolvedValueOnce(LISTED);
     expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.refused" });

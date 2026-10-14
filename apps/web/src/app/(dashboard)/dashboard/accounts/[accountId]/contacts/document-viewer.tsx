@@ -46,6 +46,30 @@ export function imageErrorStep(versionId: string | null, autoRetriedFor: string 
   return versionId !== null && autoRetriedFor !== versionId ? "retry" : "fail";
 }
 
+/**
+ * Everything the viewer remembers, in ONE value, so every change to it is a pure step with its own test
+ * (Task 7 review I1, M1); the component only applies the steps.
+ */
+export type ViewerSession = { open: boolean; attempt: number; result: ViewerFetchResult | null; autoRetriedFor: string | null };
+export const FIRST_SESSION: ViewerSession = { open: false, attempt: 0, result: null, autoRetriedFor: null };
+
+/** The image's onError: the first error for a version records it and re-mints; a later one is the error state for the CURRENT key. */
+export function sessionAfterImageError(s: ViewerSession, versionId: string | null): ViewerSession {
+  if (imageErrorStep(versionId, s.autoRetriedFor) === "retry") return { ...s, autoRetriedFor: versionId, attempt: s.attempt + 1 };
+  const key = fetchKeyFor(versionId, s.attempt);
+  return key ? { ...s, result: { key, value: { status: "error" } } } : s;
+}
+
+/**
+ * Open or closed (review M1): a close bumps the attempt, so reopening the same file mints a fresh
+ * 120-second link instead of showing the one cached under the old key, which may have expired. Answers
+ * the SAME object when nothing changed, which is what lets the component apply it during render.
+ */
+export function sessionOnOpenChange(s: ViewerSession, open: boolean): ViewerSession {
+  if (s.open === open) return s;
+  return open ? { ...s, open: true } : { ...s, open: false, attempt: s.attempt + 1 };
+}
+
 export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }: {
   doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void; onImageError: () => void;
 }) {
@@ -114,9 +138,13 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
   // effect does. `attempt` gives Retry a fresh key without a synchronous setState of its own.
   // `viewerStateFor`/`fetchKeyFor` are pure and exported so the decision has its own tests (review I1):
   // a stale result for an older key (an earlier versionId, or a Retry's earlier attempt) is loading,
-  // never the stale value.
-  const [attempt, setAttempt] = useState(0);
-  const [result, setResult] = useState<ViewerFetchResult | null>(null);
+  // never the stale value. Every change to the session is one of the pure steps above (review I1, M1).
+  const [stored, setSession] = useState<ViewerSession>(FIRST_SESSION);
+  // M1: a close is noticed DURING RENDER (React's "adjusting state when a prop changes"), never in an
+  // effect, and whichever way the viewer closed: its own close, or the file leaving the card's list.
+  const session = sessionOnOpenChange(stored, doc !== null);
+  if (session !== stored) setSession(session);
+  const { attempt, result } = session;
   const versionId = doc?.version.id ?? null;
   // The effect depends on these PRIMITIVES, not `doc` itself (review M3): a `doc` re-created with the
   // same fields on every render would otherwise re-run the effect, and re-mint a URL, on every render.
@@ -126,23 +154,16 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
     if (!versionId || !contentType || OFFICE_TYPES.includes(contentType) || !fetchKey) return;
     let cancelled = false;
     void getDocumentUrlAction(accountId, versionId, "view")
-      .then((r) => { if (!cancelled) setResult({ key: fetchKey, value: r.ok ? { status: "ready", url: r.url, contentType: r.contentType } : { status: "error" } }); })
-      .catch(() => { if (!cancelled) setResult({ key: fetchKey, value: { status: "error" } }); });
+      .then((r) => {
+        if (!cancelled) setSession((s) => ({ ...s, result: { key: fetchKey, value: r.ok ? { status: "ready", url: r.url, contentType: r.contentType } : { status: "error" } } }));
+      })
+      .catch(() => { if (!cancelled) setSession((s) => ({ ...s, result: { key: fetchKey, value: { status: "error" } } })); });
     return () => { cancelled = true; };
   }, [accountId, versionId, contentType, fetchKey]);
   const state: ViewerState = viewerStateFor(fetchKey, result);
-  const mint = useCallback(() => setAttempt((a) => a + 1), []);
-  // M7: the version whose ONE automatic retry has been spent. Set in an event handler (the image's
-  // onError), never in an effect.
-  const [autoRetriedFor, setAutoRetriedFor] = useState<string | null>(null);
-  const onImageError = () => {
-    if (imageErrorStep(versionId, autoRetriedFor) === "retry") {
-      setAutoRetriedFor(versionId);
-      mint();
-    } else if (fetchKey) {
-      setResult({ key: fetchKey, value: { status: "error" } });
-    }
-  };
+  const mint = useCallback(() => setSession((s) => ({ ...s, attempt: s.attempt + 1 })), []);
+  // M7: the image's onError applies the pure step (an event handler, never an effect).
+  const onImageError = () => setSession((s) => sessionAfterImageError(s, versionId));
   const tt = (key: MessageKey) => t(m, key, locale);
   return (
     <Dialog open={doc !== null} onOpenChange={(open) => { if (!open) onClose(); }}>

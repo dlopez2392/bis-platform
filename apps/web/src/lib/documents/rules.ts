@@ -66,3 +66,13 @@ export function isDay(v: unknown): v is string {
   const at = new Date(Date.UTC(Number(p[1]), Number(p[2]) - 1, Number(p[3])));
   return at.getUTCFullYear() === Number(p[1]) && at.getUTCMonth() === Number(p[2]) - 1 && at.getUTCDate() === Number(p[3]);
 }
+
+/**
+ * The form Delete forever's typed name is compared in (plan deviation 8, Task 7 review I2), by the browser's
+ * `canPurge` AND the server's `purgeDocumentAction`, so the two can never disagree. A title is compared as
+ * the screen shows it: NFC, so a decomposed "Peña" (n + U+0303) matches the one a keyboard types; and every
+ * run of whitespace, a non-breaking space included, as one space, because a browser draws a double space
+ * and a non-breaking one alike as one ordinary space. Nothing else is forgiven: no case folding, and an edge space still
+ * counts (a stored title has none, `app.tidy_text`, so a typed one is a miss).
+ */
+export const purgeNameKey = (s: string): string => s.normalize("NFC").replace(/\s+/g, " ");
