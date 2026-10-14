@@ -36,4 +36,13 @@ describe("the upload panel (spec 4.2)", () => {
     expect(html).toMatch(/data-panel-retry[^>]*data-variant="ghost"|data-variant="ghost"[^>]*data-panel-retry/);
     expect(renderedText(render({ locale: "es", files: [f("a", "a.pdf", { kind: "checking" })] }))).toContain(m["documents.progress.checking.es"]);
   });
+  it("the batch expiry is one date field bound to the whole batch (mutation: delete the expiry block -> FAILS)", () => {
+    const html = render({ expiresOn: "2026-11-01" });
+    expect(renderedText(html)).toContain(m["documents.panel.expires"]);
+    expect(html).toMatch(/<input[^>]*type="date"[^>]*value="2026-11-01"/);
+  });
+  it("the progress bar respects prefers-reduced-motion (mutation: drop the motion-safe: prefixes -> FAILS)", () => {
+    const html = render({ files: [f("a", "a.pdf", { kind: "uploading", percent: 45 })] });
+    expect(html).toMatch(/class="[^"]*\bmotion-safe:transition-\[width\][^"]*\bmotion-safe:duration-150\b[^"]*"/);
+  });
 });

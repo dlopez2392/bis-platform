@@ -19,6 +19,21 @@ import { getDocumentUrlAction } from "./documents-actions";
  * never rendered, only downloaded. Versions arrive with PR 1b.
  */
 export type ViewerState = { status: "loading" } | { status: "error" } | { status: "ready"; url: string; contentType: DocumentContentType };
+export type ViewerFetchResult = { key: string; value: Exclude<ViewerState, { status: "loading" }> };
+
+/** The key one mint's answer is filed under: a Retry (an incremented attempt) always gets a fresh key. */
+export function fetchKeyFor(versionId: string | null, attempt: number): string | null {
+  return versionId ? `${versionId}:${attempt}` : null;
+}
+
+/**
+ * Pure (review I1): loading unless the last-landed result is filed under the CURRENT key. A result from
+ * an earlier versionId or an earlier Retry attempt carries an older key and is never shown as the answer
+ * to a newer question — it reads as loading until its own answer lands.
+ */
+export function viewerStateFor(fetchKey: string | null, result: ViewerFetchResult | null): ViewerState {
+  return fetchKey !== null && result !== null && result.key === fetchKey ? result.value : { status: "loading" };
+}
 
 export function DocumentViewerBody({ doc, state, locale, onRetry }: { doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void }) {
   const tt = (key: MessageKey) => t(m, key, locale);
@@ -48,19 +63,25 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
   // Loading is DERIVED, never set synchronously in the effect (react-hooks/set-state-in-effect):
   // `result` only ever updates from the promise's own callback, as slot-picker.tsx's `getSlots`
   // effect does. `attempt` gives Retry a fresh key without a synchronous setState of its own.
+  // `viewerStateFor`/`fetchKeyFor` are pure and exported so the decision has its own tests (review I1):
+  // a stale result for an older key (an earlier versionId, or a Retry's earlier attempt) is loading,
+  // never the stale value.
   const [attempt, setAttempt] = useState(0);
-  const [result, setResult] = useState<{ key: string; value: Exclude<ViewerState, { status: "loading" }> } | null>(null);
+  const [result, setResult] = useState<ViewerFetchResult | null>(null);
   const versionId = doc?.version.id ?? null;
-  const fetchKey = versionId ? `${versionId}:${attempt}` : null;
+  // The effect depends on these PRIMITIVES, not `doc` itself (review M3): a `doc` re-created with the
+  // same fields on every render would otherwise re-run the effect, and re-mint a URL, on every render.
+  const contentType = doc?.version.contentType ?? null;
+  const fetchKey = fetchKeyFor(versionId, attempt);
   useEffect(() => {
-    if (!versionId || !doc || OFFICE_TYPES.includes(doc.version.contentType) || !fetchKey) return;
+    if (!versionId || !contentType || OFFICE_TYPES.includes(contentType) || !fetchKey) return;
     let cancelled = false;
     void getDocumentUrlAction(accountId, versionId, "view")
       .then((r) => { if (!cancelled) setResult({ key: fetchKey, value: r.ok ? { status: "ready", url: r.url, contentType: r.contentType } : { status: "error" } }); })
       .catch(() => { if (!cancelled) setResult({ key: fetchKey, value: { status: "error" } }); });
     return () => { cancelled = true; };
-  }, [accountId, versionId, doc, fetchKey]);
-  const state: ViewerState = fetchKey && result?.key === fetchKey ? result.value : { status: "loading" };
+  }, [accountId, versionId, contentType, fetchKey]);
+  const state: ViewerState = viewerStateFor(fetchKey, result);
   const mint = useCallback(() => setAttempt((a) => a + 1), []);
   const tt = (key: MessageKey) => t(m, key, locale);
   return (
