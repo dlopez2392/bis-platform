@@ -882,18 +882,25 @@ describe("Delete forever's writes (spec 4.4, 5.1; deviations 3 and 4)", () => {
       expect(states.map((s) => s.storage_path)).not.toContain(other.path);
     }));
 
-  it("refuses to answer past 1000 versions rather than truncate the purge's object list (review M5; mutation: drop the length check -> FAILS)", async () => {
-    const rows = Array.from({ length: 1001 }, (_, i) => ({ storage_path: `p${i}`, status: "ready" }));
-    const calls: string[] = [];
-    const chain: Record<string, unknown> = {};
-    for (const k of ["select", "eq"]) chain[k] = (...a: unknown[]) => { calls.push(`${k}:${String(a[0])}`); return chain; };
-    chain.limit = async (n: number) => { calls.push(`limit:${n}`); return { data: rows, error: null }; };
-    const fakeDb = { from: () => chain } as unknown as SupabaseClient;
-    await expect(listDocumentVersionStates(fakeDb, "a", "d")).rejects.toThrow(/more than 1000/);
-    expect(calls).toContain("limit:1001");
-  });
+  it("answers EVERY version past PostgREST's 1000-row cap, so the purge's object list is never cut short (review M5 and its re-review; mutation: read only the first page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      // 1001 more, inserted directly (the reserve rpc would take a round trip each): 1002 in all, past
+      // max_rows = 1000 (config.toml, the kit, hosted), which caps a single read silently.
+      const extra = Array.from({ length: 1001 }, () => {
+        const id = crypto.randomUUID();
+        return { id, document_id: d.id, account_id: accountId, storage_path: `${accountId}/${d.id}/${id}`, bytes: 1,
+          content_type: "application/pdf", uploaded_by: ACTOR, status: "uploading" };
+      });
+      const { error } = await db.from("document_versions").insert(extra);
+      if (error) throw error;
+      const states = await listDocumentVersionStates(db, accountId, d.id);
+      expect(states).toHaveLength(1002);
+      expect(states.map((s) => s.storage_path).sort()).toEqual([d.path, ...extra.map((v) => v.storage_path)].sort());
+    }));
 
-  it("the claim re-stamps deleted_at and marks the row only while it still holds the instant the proof read; no Restore, old instant or new, brings it back (mutations: claim without .eq('deleted_at', expected) -> FAILS on the wrong-instant case; claim without changing deleted_at -> FAILS on the old-instant restore; drop restoreDocument's marker filter -> FAILS on the new-instant restore)", () =>
+  it("the claim re-stamps deleted_at and marks the row only while it still holds the instant the proof read; no Restore, old instant or new, brings it back (mutations: claim without .eq('deleted_at', expected) -> FAILS on the wrong-instant case; claim without changing deleted_at -> FAILS on the new instant equalling the old (and on the delete case's stale call); drop restoreDocument's marker filter -> FAILS on the new-instant restore)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const d = await readyDoc(db, accountId, ana);
@@ -944,7 +951,7 @@ describe("Delete forever's writes (spec 4.4, 5.1; deviations 3 and 4)", () => {
 });
 ```
 
-Why each can fail (checked while writing): the first case's version list has three entries (the uploading one included) without the ready filter, and is reversed when sorted oldest first; the second case would read `[]` if the current were dropped; the fake cases pin the rpc name and argument and the null rule; the states case returns `other.path` too without the document filter; the claim case's wrong-instant call claims (and so moves `deleted_at`) without the `deleted_at` filter, and the Restore with the old instant answers `updated` if the claim leaves `deleted_at` unchanged; the live case is claimed if the filter is relaxed; the delete case's stale call deletes without the instant filter, and the event comparison is exact (`toEqual`), so `actor_type: "system"` or a `title` key fails it.
+Why each can fail (checked while writing): the first case's version list has three entries (the uploading one included) without the ready filter, and is reversed when sorted oldest first; the second case would read `[]` if the current were dropped; the fake cases pin the rpc name and argument and the null rule; the states case returns `other.path` too without the document filter; the 1002-version case (a replica case, Task 3 fix round: PostgREST's max_rows = 1000 caps one read silently, so the first design's `.limit(1001)` and its refusal past 1000 could never fire) answers 500 rows if only the first page is read, and 1000 if the page size is raised past the cap; the claim case's wrong-instant call claims (and so moves `deleted_at`) without the `deleted_at` filter, and a claim that leaves `deleted_at` unchanged answers the old instant (`expect(claimed).not.toBe(t.deletedAt)`) and lets the delete case's stale call delete (the old-instant Restore is refused by the marker either way, so it does not catch this); the live case is claimed if the filter is relaxed; the delete case's stale call deletes without the instant filter, and the event comparison is exact (`toEqual`), so `actor_type: "system"` or a `title` key fails it.
 
 - [ ] **Step 3: Run red.** From `<WT>/packages/db`: `source <dir>/env-run.sh && pnpm exec vitest run src/test/documents.test.ts > <dir>/red.log 2>&1; echo $? > <dir>/red.exit`. Expected: exit 1; the new cases fail on missing exports (`documentSpaceUsed is not a function`, and so on) and `versions` being `undefined`; the existing cases still pass. Paste the summary block.
 
@@ -1012,18 +1019,26 @@ export async function documentSpaceUsed(db: SupabaseClient, accountId: string): 
 
 export type DocumentVersionState = { storage_path: string; status: "uploading" | "ready" };
 
+const VERSION_STATES_PAGE = 500;
+
 /**
- * Service client, AFTER the request-client proof: every version of ONE document, for Delete forever's
- * object list and its in-flight check. Asks for 1001 and refuses past 1000 (review M5): a purge must
- * never act on a list PostgREST's row cap could have cut short.
+ * Service client, AFTER the request-client proof: EVERY version of ONE document, for Delete forever's
+ * object list and its in-flight check. Paged (review M5's re-review): PostgREST caps one read at
+ * max_rows (1000) silently, so a `.limit(1001)` never sees a 1001st row and a purge would delete rows
+ * whose objects it never removed. Pages of 500 on the primary key, a stable total order, until a short
+ * page (purgeContactDocuments' shape); 500 sits under the cap, so a full page is never mistaken for the last.
  */
 export async function listDocumentVersionStates(db: SupabaseClient, accountId: string, documentId: string): Promise<DocumentVersionState[]> {
-  const { data, error } = await db.from("document_versions").select("storage_path, status")
-    .eq("account_id", accountId).eq("document_id", documentId).limit(1001);
-  if (error) throw new Error(`listDocumentVersionStates failed: ${error.message}`);
-  const rows = (data ?? []) as DocumentVersionState[];
-  if (rows.length > 1000) throw new Error(`listDocumentVersionStates: document ${documentId} has more than 1000 versions`);
-  return rows;
+  const rows: DocumentVersionState[] = [];
+  for (let from = 0; ; from += VERSION_STATES_PAGE) {
+    const { data, error } = await db.from("document_versions").select("storage_path, status")
+      .eq("account_id", accountId).eq("document_id", documentId)
+      .order("id").range(from, from + VERSION_STATES_PAGE - 1);
+    if (error) throw new Error(`listDocumentVersionStates failed: ${error.message}`);
+    const page = (data ?? []) as DocumentVersionState[];
+    rows.push(...page);
+    if (page.length < VERSION_STATES_PAGE) return rows;
+  }
 }
 
 /** `deleted_by` of a row Delete forever has claimed (plan deviation 4): restoreDocument never restores it. */
@@ -1125,7 +1140,7 @@ In `packages/db/src/index.ts`, the documents block (`:270-277`): add `documentSp
 
 - [ ] **Step 5: Run green.** The Step 3 command with `green.log`/`green.exit`. Expected: exit 0; every case in the file passes. Also `pnpm --filter @bis/db typecheck` → clean, and from `<WT>`: `pnpm --filter web typecheck` → the only errors, if any, are in the two routes' `documentView` (Task 5 adds `versions` to the view; `ListedDocument` gaining a field breaks nothing else). Paste both.
 
-- [ ] **Step 6: Mutation probes, red BY NAME, restored.** (1) drop `.filter((v) => v.status === "ready")`; (2) sort ascending; (3) replace `readyVersionsOf`'s return with `return ready.length > 1 ? ready : [];` → the one-version case fails; (4) `Number(data ?? 0)` path: replace the parse with `const n = Number(data ?? 0);` → the null case fails; (5) drop `.eq("document_id", documentId)`; (6) drop `.eq("deleted_at", expectedDeletedAt)` in the claim; (7) claim with `update({ deleted_by: actorId, updated_at: stamp })` (no new `deleted_at`) → the Restore case fails; (8) `actorType "system"` in `deletePurgedDocument`'s emit (pass `"system"` as the sixth argument of `emitAfter`); (9) drop `.eq("deleted_at", claimedAt)` in the delete → the stale case fails; (10) drop `.neq("deleted_by", DOCUMENT_PURGING_MARK)` in `restoreDocument` → the claim case's new-instant restore fails; (11) emit nothing when `first` is false → the versions case fails on `document.version_added`; (12) drop the `rows.length > 1000` check → the 1001 case fails; (13) `db.from("documents")` in `listDocumentVersionTimeline` (with the documents columns) → the timeline case fails; (14) drop the group read → its group expectation fails. Use `<SCRATCH>/s07-t3-impl/mutate.cjs`'s find/replace approach or edit by hand and edit back; paste each failing line.
+- [ ] **Step 6: Mutation probes, red BY NAME, restored.** (1) drop `.filter((v) => v.status === "ready")`; (2) sort ascending; (3) replace `readyVersionsOf`'s return with `return ready.length > 1 ? ready : [];` → the one-version case fails; (4) `Number(data ?? 0)` path: replace the parse with `const n = Number(data ?? 0);` → the null case fails; (5) drop `.eq("document_id", documentId)`; (6) drop `.eq("deleted_at", expectedDeletedAt)` in the claim; (7) claim with `update({ deleted_by: DOCUMENT_PURGING_MARK, updated_at: stamp })` (no new `deleted_at`) → the claim case fails on `expect(claimed).not.toBe(t.deletedAt)` and the delete case on its stale call (not on the old-instant Restore, which the marker refuses anyway); (8) `actorType "system"` in `deletePurgedDocument`'s emit (pass `"system"` as the sixth argument of `emitAfter`); (9) drop `.eq("deleted_at", claimedAt)` in the delete → the stale case fails; (10) drop `.neq("deleted_by", DOCUMENT_PURGING_MARK)` in `restoreDocument` → the claim case's new-instant restore fails; (11) emit nothing when `first` is false → the versions case fails on `document.version_added`; (12) read only the first page (`return rows;` in place of the short-page test) → the 1002-version case fails, and a page size of 1001 → it fails at 1000 (the cap); (13) `db.from("documents")` in `listDocumentVersionTimeline` (with the documents columns) → the timeline case fails; (14) drop the group read → its group expectation fails. Use `<SCRATCH>/s07-t3-impl/mutate.cjs`'s find/replace approach or edit by hand and edit back; paste each failing line.
 
 - [ ] **Step 7: Commit.** `git commit -m "feat(db): the card reads every ready version; the space read; Delete forever's claim, marker, list and delete; document.version_added and the version timeline read (S-07 part 1b)" -- packages/db/src/documents.ts packages/db/src/index.ts packages/db/src/test/documents.test.ts`
 
@@ -3348,7 +3363,7 @@ Additive migration, so it applies before the merge. Each step reads its own evid
 ## Self-review notes (the writer's own pass, 2026-10-14)
 
 - Vacuity pass, every prescribed test: each names its mutation and the "why each can fail" paragraph under each task says how. Caught and fixed while writing: a `not.toContain("disabled")` on the purge button that the button's own `disabled:opacity-50` class would defeat (now the attribute `disabled=""`); a tautological regex on the destructive tag; a messages case that was green before the keys existed (now `toMatch` on the new key, red on `undefined`); a "live document" claim case whose mutation was not a real one (renamed to the one it catches). Every copy assertion goes through `renderedText`; every Spanish assertion fills `m["….es"]` by hand.
-- Revision of 2026-10-14 (owner rulings R1, R2; review I2, I3, M1–M11), re-checked case by case: the flipped Staff purge case now asserts a refusal with nothing read (mutation: drop `canManage`); the agency case catches an owner-only rule; the handler's two refusal cases expect a reload and `true` (mutation: return false); the in-flight case pins `once`; the claim case's new-instant Restore pins the marker; the 1001-version case pins the cap and the `limit(1001)`; the one-version purge body pins M11; the messages case pins M6's no-time wording; every new-version case (view rows, RLS, grants, event, timeline read, record paging, author, row words in both languages, Recent, drawer parse, both renders, `MEASURED`) names its mutation in its title and in its task's "why each can fail". The `document.added` count in Task 3's versions case is labelled a 1a pin (M4). M10's busy toast has no unit test, said so in Task 8's probes.
+- Revision of 2026-10-14 (owner rulings R1, R2; review I2, I3, M1–M11), re-checked case by case: the flipped Staff purge case now asserts a refusal with nothing read (mutation: drop `canManage`); the agency case catches an owner-only rule; the handler's two refusal cases expect a reload and `true` (mutation: return false); the in-flight case pins `once`; the claim case's new-instant Restore pins the marker; the 1002-version replica case pins the paging past PostgREST's 1000-row cap (fix round: the first design's `limit(1001)` refusal was dead code under max_rows); the one-version purge body pins M11; the messages case pins M6's no-time wording; every new-version case (view rows, RLS, grants, event, timeline read, record paging, author, row words in both languages, Recent, drawer parse, both renders, `MEASURED`) names its mutation in its title and in its task's "why each can fail". The `document.added` count in Task 3's versions case is labelled a 1a pin (M4). M10's busy toast has no unit test, said so in Task 8's probes.
 - Request-client proof: both new actions read the document on `dbForRequest()` before any service call; the finish's trash branch runs after the existing proof; the routes stay request-only (the space read is 0078 on the request client).
 - Types: `ListedDocument.versions` (Task 3) → `DocumentView.versions` (Task 5) → the row label (Task 8) and `DocumentVersionsList` (Task 7); `DocumentsResponse.space` (Task 5) → `spaceUsedText` (Task 5) → the card (Task 8); `startDocumentVersionUploadAction` (Task 4) → `VersionDeps.startVersion` (Task 6) → `browserVersionDeps` (Task 8); `purgeDocumentAction` (Task 4) → `handlers.purge` (Task 8) → `DocumentPurgeDialog.onConfirm` (Task 7); `DocumentHandlers` (Task 8) → `demoHandlers`.
 - Every fixture that builds a `DocumentView` gains `versions` in the task that owns its file: the route tests and `documents-load.test.ts` (Task 5), the viewer test (Task 7), the card, handler and demo tests (Task 8). Typecheck is clean only after Task 8; Tasks 5–7 list the remaining errors instead of editing another task's files.

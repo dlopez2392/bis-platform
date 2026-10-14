@@ -528,18 +528,25 @@ describe("Delete forever's writes (spec 4.4, 5.1; deviations 3 and 4)", () => {
       expect(states.map((s) => s.storage_path)).not.toContain(other.path);
     }));
 
-  it("refuses to answer past 1000 versions rather than truncate the purge's object list (review M5; mutation: drop the length check -> FAILS)", async () => {
-    const rows = Array.from({ length: 1001 }, (_, i) => ({ storage_path: `p${i}`, status: "ready" }));
-    const calls: string[] = [];
-    const chain: Record<string, unknown> = {};
-    for (const k of ["select", "eq"]) chain[k] = (...a: unknown[]) => { calls.push(`${k}:${String(a[0])}`); return chain; };
-    chain.limit = async (n: number) => { calls.push(`limit:${n}`); return { data: rows, error: null }; };
-    const fakeDb = { from: () => chain } as unknown as SupabaseClient;
-    await expect(listDocumentVersionStates(fakeDb, "a", "d")).rejects.toThrow(/more than 1000/);
-    expect(calls).toContain("limit:1001");
-  });
+  it("answers EVERY version past PostgREST's 1000-row cap, so the purge's object list is never cut short (review M5 and its re-review; mutation: read only the first page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      // 1001 more, inserted directly (the reserve rpc would take a round trip each): 1002 in all, past
+      // max_rows = 1000 (config.toml, the kit, hosted), which caps a single read silently.
+      const extra = Array.from({ length: 1001 }, () => {
+        const id = crypto.randomUUID();
+        return { id, document_id: d.id, account_id: accountId, storage_path: `${accountId}/${d.id}/${id}`, bytes: 1,
+          content_type: "application/pdf", uploaded_by: ACTOR, status: "uploading" };
+      });
+      const { error } = await db.from("document_versions").insert(extra);
+      if (error) throw error;
+      const states = await listDocumentVersionStates(db, accountId, d.id);
+      expect(states).toHaveLength(1002);
+      expect(states.map((s) => s.storage_path).sort()).toEqual([d.path, ...extra.map((v) => v.storage_path)].sort());
+    }));
 
-  it("the claim re-stamps deleted_at and marks the row only while it still holds the instant the proof read; no Restore, old instant or new, brings it back (mutations: claim without .eq('deleted_at', expected) -> FAILS on the wrong-instant case; claim without changing deleted_at -> FAILS on the old-instant restore; drop restoreDocument's marker filter -> FAILS on the new-instant restore)", () =>
+  it("the claim re-stamps deleted_at and marks the row only while it still holds the instant the proof read; no Restore, old instant or new, brings it back (mutations: claim without .eq('deleted_at', expected) -> FAILS on the wrong-instant case; claim without changing deleted_at -> FAILS on the new instant equalling the old (and on the delete case's stale call); drop restoreDocument's marker filter -> FAILS on the new-instant restore)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const d = await readyDoc(db, accountId, ana);

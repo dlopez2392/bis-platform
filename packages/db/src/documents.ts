@@ -268,18 +268,26 @@ export async function documentSpaceUsed(db: SupabaseClient, accountId: string): 
 
 export type DocumentVersionState = { storage_path: string; status: "uploading" | "ready" };
 
+const VERSION_STATES_PAGE = 500;
+
 /**
- * Service client, AFTER the request-client proof: every version of ONE document, for Delete forever's
- * object list and its in-flight check. Asks for 1001 and refuses past 1000 (review M5): a purge must
- * never act on a list PostgREST's row cap could have cut short.
+ * Service client, AFTER the request-client proof: EVERY version of ONE document, for Delete forever's
+ * object list and its in-flight check. Paged (review M5's re-review): PostgREST caps one read at
+ * max_rows (1000) silently, so a `.limit(1001)` never sees a 1001st row and a purge would delete rows
+ * whose objects it never removed. Pages of 500 on the primary key, a stable total order, until a short
+ * page (purgeContactDocuments' shape); 500 sits under the cap, so a full page is never mistaken for the last.
  */
 export async function listDocumentVersionStates(db: SupabaseClient, accountId: string, documentId: string): Promise<DocumentVersionState[]> {
-  const { data, error } = await db.from("document_versions").select("storage_path, status")
-    .eq("account_id", accountId).eq("document_id", documentId).limit(1001);
-  if (error) throw new Error(`listDocumentVersionStates failed: ${error.message}`);
-  const rows = (data ?? []) as DocumentVersionState[];
-  if (rows.length > 1000) throw new Error(`listDocumentVersionStates: document ${documentId} has more than 1000 versions`);
-  return rows;
+  const rows: DocumentVersionState[] = [];
+  for (let from = 0; ; from += VERSION_STATES_PAGE) {
+    const { data, error } = await db.from("document_versions").select("storage_path, status")
+      .eq("account_id", accountId).eq("document_id", documentId)
+      .order("id").range(from, from + VERSION_STATES_PAGE - 1);
+    if (error) throw new Error(`listDocumentVersionStates failed: ${error.message}`);
+    const page = (data ?? []) as DocumentVersionState[];
+    rows.push(...page);
+    if (page.length < VERSION_STATES_PAGE) return rows;
+  }
 }
 
 /** `deleted_by` of a row Delete forever has claimed (plan deviation 4): restoreDocument never restores it. */
