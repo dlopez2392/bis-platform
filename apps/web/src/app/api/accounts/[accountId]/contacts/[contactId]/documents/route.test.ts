@@ -44,6 +44,7 @@ describe("the Documents card's read for a contact", () => {
   });
   it("the reader's own file says you; an unreadable name is null, the card's 'Someone on the team' (mutation: name the viewer from names -> FAILS)", async () => {
     db.listRecordDocuments.mockResolvedValue({ live: [row({ created_by: "user_me" }), row({ id: "d2", created_by: "user_gone" })], trashed: [], liveMore: false, trashedMore: true });
+    db.listPeopleNames.mockResolvedValue({ user_ana: "Ana", user_me: "Me Name" });
     const body = await (await call()).json();
     expect(body.live.map((d: { addedBy: unknown }) => d.addedBy)).toEqual([{ you: true, name: null }, { you: false, name: null }]);
     expect(body.capped).toBe(true);
