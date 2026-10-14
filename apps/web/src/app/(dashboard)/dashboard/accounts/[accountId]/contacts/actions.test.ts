@@ -225,7 +225,7 @@ describe("bulkDeleteContactsAction", () => {
 
 describe("countContactDocumentsAction", () => {
   const C = "11111111-1111-4111-8111-111111111111";
-  it("counts on the REQUEST client after the Owner check; a failed or null count is ok:false, never 0 (mutation: return { ok: true, count: 0 } on error -> FAILS; count on serviceDb() -> FAILS)", async () => {
+  it("counts on the REQUEST client after the Owner check; a failed or null count is ok:false, never 0 (mutation: return { ok: true, count: 0 } on error -> FAILS; count on serviceDb() -> FAILS; delete the isUuid guard -> FAILS)", async () => {
     dbForRequest.mockResolvedValue(REQUEST);
     dbMocks.countContactDocuments.mockResolvedValue(4);
     expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: true, count: 4 });
@@ -234,6 +234,8 @@ describe("countContactDocumentsAction", () => {
     expect(dbMocks.countContactDocuments.mock.calls[0]!.slice(1)).toEqual(["a1", [C]]);
     dbMocks.countContactDocuments.mockRejectedValue(new Error("countContactDocuments: the count came back null"));
     expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: false });
+    // A count that WOULD succeed, so only the id guard can answer ok:false here (review fix round).
+    dbMocks.countContactDocuments.mockResolvedValue(4);
     expect(await countContactDocumentsAction("a1", ["not-a-uuid"])).toEqual({ ok: false });
   });
   it("a caller who is not the Owner is refused by the guard's redirect before anything is counted (mutation: requireAccountAccess as the guard -> FAILS)", async () => {

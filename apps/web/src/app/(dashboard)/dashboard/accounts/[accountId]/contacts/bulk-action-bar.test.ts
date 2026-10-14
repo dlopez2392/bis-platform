@@ -22,7 +22,7 @@ vi.mock("sonner", () => ({ toast: toasts }));
 
 const {
   applyBulkTag, BulkActionBar, assignSelected, bulkAssignChoices,
-  DeleteFilesLine, canConfirmDelete, deleteDialogCopy, announceDeleteResult,
+  DeleteFilesLine, canConfirmDelete, deleteDialogCopy, announceDeleteResult, latestCountSettler,
 } = await import("./bulk-action-bar");
 type FilesState = import("./bulk-action-bar").FilesState;
 const BAR_SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "bulk-action-bar.tsx"), "utf8");
@@ -274,5 +274,20 @@ describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
     toasts.error.mockReset();
     announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0 }, "en");
     expect(toasts.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("only the newest file count lands (review fix round)", () => {
+  it("an earlier opening's slow answer never overwrites the current one, before or after it lands (mutation: drop the newest-only check -> FAILS)", () => {
+    const seq = { current: 0 };
+    const seen: FilesState[] = [];
+    const first = latestCountSettler(seq, (s) => seen.push(s));
+    const second = latestCountSettler(seq, (s) => seen.push(s));
+    first({ status: "ready", count: 9 });
+    expect(seen).toEqual([]);
+    second({ status: "ready", count: 1 });
+    first({ status: "error" });
+    expect(seen).toEqual([{ status: "ready", count: 1 }]);
+    expect(BAR_SRC).toContain("const settle = latestCountSettler(countSeq, setFiles);");
   });
 });

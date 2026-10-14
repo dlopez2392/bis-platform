@@ -125,7 +125,19 @@ export function deleteDialogCopy(count: number, locale: Locale): { title: string
   };
 }
 
-type DeleteResult = Awaited<ReturnType<typeof bulkDeleteContactsAction>>;
+/**
+ * One opening of the delete dialog: claims the next sequence number and answers a setter that lands
+ * only while this opening is still the newest. A slow count for an earlier selection must never stand
+ * in for the current one (it could enable Delete beside the wrong file line).
+ */
+export function latestCountSettler(
+  seq: { current: number }, setFiles: (next: FilesState) => void,
+): (next: FilesState) => void {
+  const mine = ++seq.current;
+  return (next) => { if (mine === seq.current) setFiles(next); };
+}
+
+type DeleteResult =Awaited<ReturnType<typeof bulkDeleteContactsAction>>;
 
 /**
  * What a bulk delete says afterwards. A failure after the files were already removed says exactly
@@ -204,8 +216,7 @@ export function BulkActionBar({
 
   function openConfirm() {
     const ids = [...selectedIds];
-    const seq = ++countSeq.current;
-    const settle = (next: FilesState) => { if (seq === countSeq.current) setFiles(next); };
+    const settle = latestCountSettler(countSeq, setFiles);
     setFiles({ status: "loading" });
     setConfirmOpen(true);
     void countContactDocumentsAction(accountId, ids)
