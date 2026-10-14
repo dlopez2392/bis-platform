@@ -1,18 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactElement } from "react";
 vi.mock("./documents-actions", () => ({ getDocumentUrlAction: vi.fn() }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentViewerBody, viewerStateFor, fetchKeyFor } = await import("./document-viewer");
+const { DocumentViewerBody, DocumentVersionsList, viewerStateFor, fetchKeyFor, imageErrorStep } = await import("./document-viewer");
 
 const doc = (contentType: string) => ({
   id: "d", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
   addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
   version: { id: "v", contentType: contentType as never, bytes: 10 },
+  versions: [{ id: "v", contentType: contentType as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }],
+  purging: false,
 });
 const body = (contentType: string, state: Parameters<typeof DocumentViewerBody>[0]["state"]) =>
-  renderToStaticMarkup(createElement(DocumentViewerBody, { doc: doc(contentType), state, locale: "en", onRetry: vi.fn() }));
+  renderToStaticMarkup(createElement(DocumentViewerBody, { doc: doc(contentType), state, locale: "en", onRetry: vi.fn(), onImageError: vi.fn() }));
 
 describe("the viewer's body (spec 4.3)", () => {
   it("an image renders inline from the minted URL; a PDF in a frame (mutation: render a PDF as <img> -> FAILS)", () => {
@@ -52,5 +55,69 @@ describe("the fetch decision is pure (review I1): loading while the last answer 
     expect(viewerStateFor(afterRetry, ready)).toEqual({ status: "loading" });
     const landed: Parameters<typeof viewerStateFor>[1] = { key: afterRetry!, value: { status: "error" } };
     expect(viewerStateFor(afterRetry, landed)).toEqual({ status: "error" });
+  });
+});
+
+describe("one automatic retry for a broken image (PR 1a review M7)", () => {
+  it("the first error for a version re-mints once; the second is the error state; a new version gets its own retry (mutation: always 'retry' -> FAILS)", () => {
+    expect(imageErrorStep("v1", null)).toBe("retry");
+    expect(imageErrorStep("v1", "v1")).toBe("fail");
+    expect(imageErrorStep("v2", "v1")).toBe("retry");
+    expect(imageErrorStep(null, null)).toBe("fail");
+  });
+  it("the image's onError is the bounded handler, never the Retry button's re-mint (mutation: onError={onRetry} -> FAILS)", () => {
+    const onRetry = vi.fn();
+    const onImageError = vi.fn();
+    const el = DocumentViewerBody({
+      doc: doc("image/png"), state: { status: "ready", url: "https://s/i", contentType: "image/png" }, locale: "en", onRetry, onImageError,
+    }) as ReactElement<{ onError?: unknown; src?: string }>;
+    expect(el.props.src).toBe("https://s/i");
+    expect(el.props.onError).toBe(onImageError);
+  });
+});
+
+describe("the Versions list (spec 4.3)", () => {
+  const three = {
+    ...doc("application/pdf"),
+    version: { id: "v3", contentType: "application/pdf" as never, bytes: 30 },
+    versions: [
+      { id: "v3", contentType: "application/pdf" as never, bytes: 30, createdAt: "2026-10-13T10:00:00Z", addedOn: "2026-10-13" },
+      { id: "v2", contentType: "image/jpeg" as never, bytes: 20, createdAt: "2026-10-10T10:00:00Z", addedOn: "2026-10-10" },
+      { id: "v1", contentType: "application/pdf" as never, bytes: 10, createdAt: "2026-10-01T10:00:00Z", addedOn: "2026-10-01" },
+    ],
+  };
+  const list = (d: typeof three, locale: "en" | "es" = "en") =>
+    renderToStaticMarkup(createElement(DocumentVersionsList, { doc: d, locale, when: (day: string) => `on ${day}`, onDownload: vi.fn() }));
+  const rowOf = (html: string, id: string) => {
+    const at = html.indexOf(`data-document-version-row="${id}"`);
+    return html.slice(html.lastIndexOf("<li", at), html.indexOf("</li>", at));
+  };
+  it("newest first, numbered by upload order, the newest the highest (mutation: number by index + 1 -> FAILS)", () => {
+    const html = list(three);
+    expect(html.indexOf('"v3"')).toBeLessThan(html.indexOf('"v2"'));
+    expect(html.indexOf('"v2"')).toBeLessThan(html.indexOf('"v1"'));
+    expect(renderedText(rowOf(html, "v3"))).toContain("Version 3 · on 2026-10-13");
+    expect(renderedText(rowOf(html, "v1"))).toContain("Version 1 · on 2026-10-01");
+  });
+  it("the current version is marked Current and offers no second Download; each older one has a ghost Download named for its number (mutation: a Download on the current row -> FAILS)", () => {
+    const html = list(three);
+    expect(renderedText(rowOf(html, "v3"))).toContain(m["documents.versionCurrent"]);
+    expect(rowOf(html, "v3")).not.toContain("<button");
+    expect(rowOf(html, "v2")).toMatch(/<button[^>]*aria-label="Download version 2"/);
+    expect(rowOf(html, "v2")).toMatch(/data-variant="ghost"/);
+    expect(html).not.toContain('data-variant="default"');
+  });
+  it("its heading is the label role, as record-section.tsx writes it (mutation: drop the mono label -> FAILS)", () => {
+    expect(list(three)).toMatch(/<h3[^>]*class="[^"]*font-mono[^"]*tracking-\[0\.14em\][^"]*"[^>]*>Versions</);
+  });
+  it("Spanish: the line, Current and the Download name are the Spanish catalogue's (mutation: an English word in es -> FAILS)", () => {
+    const html = list(three, "es");
+    expect(renderedText(rowOf(html, "v2"))).toContain(m["documents.versionLine.es"].replace("{n}", "2").replace("{when}", "on 2026-10-10"));
+    expect(renderedText(rowOf(html, "v3"))).toContain(m["documents.versionCurrent.es"]);
+    expect(rowOf(html, "v2")).toContain(`aria-label="${m["documents.downloadVersion.es"].replace("{n}", "2")}"`);
+    expect(renderedText(html)).toContain(m["documents.versions.es"]);
+  });
+  it("a file with one version draws no list at all (mutation: render for one version -> FAILS)", () => {
+    expect(list({ ...three, versions: [three.versions[0]!] })).toBe("");
   });
 });

@@ -16,7 +16,9 @@ import { getDocumentUrlAction } from "./documents-actions";
 /**
  * The viewer (spec 4.3): a dialog over the page (Esc closes, the Dialog's own behaviour). Images and
  * PDFs show inline from a 120-second URL minted when it opens and again on Retry; Word and Excel are
- * never rendered, only downloaded. Versions arrive with PR 1b.
+ * never rendered, only downloaded. Every ready version is listed, newest first, each older one offered
+ * for download (spec 4.3). A broken image re-mints its URL once on its own, then shows the error state
+ * (PR 1a review M7).
  */
 export type ViewerState = { status: "loading" } | { status: "error" } | { status: "ready"; url: string; contentType: DocumentContentType };
 export type ViewerFetchResult = { key: string; value: Exclude<ViewerState, { status: "loading" }> };
@@ -35,7 +37,18 @@ export function viewerStateFor(fetchKey: string | null, result: ViewerFetchResul
   return fetchKey !== null && result !== null && result.key === fetchKey ? result.value : { status: "loading" };
 }
 
-export function DocumentViewerBody({ doc, state, locale, onRetry }: { doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void }) {
+/**
+ * A broken image (PR 1a review M7): the FIRST error for a version re-mints its URL once on its own (a
+ * 120-second URL can expire between mint and paint); any later error is the viewer's error state, with
+ * the Retry button the person presses. Never an endless loop of mints.
+ */
+export function imageErrorStep(versionId: string | null, autoRetriedFor: string | null): "retry" | "fail" {
+  return versionId !== null && autoRetriedFor !== versionId ? "retry" : "fail";
+}
+
+export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }: {
+  doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void; onImageError: () => void;
+}) {
   const tt = (key: MessageKey) => t(m, key, locale);
   if (OFFICE_TYPES.includes(doc.version.contentType)) {
     return <p className="text-sm text-muted-foreground">{tt("documents.viewer.noPreview")}</p>;
@@ -51,14 +64,50 @@ export function DocumentViewerBody({ doc, state, locale, onRetry }: { doc: Docum
   }
   if (isImageType(state.contentType)) {
     // eslint-disable-next-line @next/next/no-img-element -- a short-lived private URL; next/image would cache it.
-    return <img src={state.url} alt={doc.title} className="mx-auto max-h-[70vh] w-auto rounded-[var(--radius-ctl)]" onError={onRetry} />;
+    return <img src={state.url} alt={doc.title} className="mx-auto max-h-[70vh] w-auto rounded-[var(--radius-ctl)]" onError={onImageError} />;
   }
   return <iframe src={state.url} title={doc.title} className="h-[70vh] w-full rounded-[var(--radius-ctl)] border border-[var(--line)]" />;
 }
 
-export function DocumentViewer({ accountId, doc, header, locale, onClose, onDownload }: {
+/**
+ * The Versions list (spec 4.3): every ready version, newest first, numbered by upload order (the newest
+ * the highest); the current one says "Current" and has no Download of its own (the dialog's Download is
+ * it); each older one has a ghost Download. Drawn only when there is more than one version.
+ */
+export function DocumentVersionsList({ doc, locale, when, onDownload }: {
+  doc: DocumentView; locale: Locale; when: (addedOn: string) => string; onDownload: (versionId: string) => void;
+}) {
+  if (doc.versions.length < 2) return null;
+  const tt = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const total = doc.versions.length;
+  return (
+    <section data-document-versions aria-label={tt("documents.versions")}>
+      <h3 className="mb-1 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">{tt("documents.versions")}</h3>
+      <ul>
+        {doc.versions.map((v, i) => {
+          const n = total - i;
+          return (
+            <li key={v.id} data-document-version-row={v.id}
+              className="flex items-center justify-between gap-2 border-t border-[var(--row-line)] py-1.5 text-sm first:border-t-0">
+              <span className="tabular-nums">{tt("documents.versionLine", { n, when: when(v.addedOn) })}</span>
+              {v.id === doc.version.id ? (
+                <span className="text-xs text-muted-foreground">{tt("documents.versionCurrent")}</span>
+              ) : (
+                <Button type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
+                  aria-label={tt("documents.downloadVersion", { n })} onClick={() => onDownload(v.id)}>{tt("documents.download")}</Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+export function DocumentViewer({ accountId, doc, header, locale, onClose, onDownload, versionWhen, onDownloadVersion }: {
   accountId: string; doc: DocumentView | null; header: { source: string; expiry: string | null }; locale: Locale;
   onClose: () => void; onDownload: (doc: DocumentView) => void;
+  versionWhen: (addedOn: string) => string; onDownloadVersion: (doc: DocumentView, versionId: string) => void;
 }) {
   // Loading is DERIVED, never set synchronously in the effect (react-hooks/set-state-in-effect):
   // `result` only ever updates from the promise's own callback, as slot-picker.tsx's `getSlots`
@@ -83,6 +132,17 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
   }, [accountId, versionId, contentType, fetchKey]);
   const state: ViewerState = viewerStateFor(fetchKey, result);
   const mint = useCallback(() => setAttempt((a) => a + 1), []);
+  // M7: the version whose ONE automatic retry has been spent. Set in an event handler (the image's
+  // onError), never in an effect.
+  const [autoRetriedFor, setAutoRetriedFor] = useState<string | null>(null);
+  const onImageError = () => {
+    if (imageErrorStep(versionId, autoRetriedFor) === "retry") {
+      setAutoRetriedFor(versionId);
+      mint();
+    } else if (fetchKey) {
+      setResult({ key: fetchKey, value: { status: "error" } });
+    }
+  };
   const tt = (key: MessageKey) => t(m, key, locale);
   return (
     <Dialog open={doc !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -101,7 +161,8 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
                 ) : null}
               </DialogDescription>
             </DialogHeader>
-            <DocumentViewerBody doc={doc} state={state} locale={locale} onRetry={mint} />
+            <DocumentViewerBody doc={doc} state={state} locale={locale} onRetry={mint} onImageError={onImageError} />
+            <DocumentVersionsList doc={doc} locale={locale} when={versionWhen} onDownload={(id) => onDownloadVersion(doc, id)} />
             <div className="flex justify-end">
               <Button type="button" className="min-h-11 md:min-h-8" onClick={() => onDownload(doc)}>{tt("documents.download")}</Button>
             </div>
