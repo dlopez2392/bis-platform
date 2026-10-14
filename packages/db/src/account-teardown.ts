@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { DOCUMENT_BUCKET } from "./document-rules";
 
 /**
  * Every table owned by one account, in the order they must be deleted.
@@ -22,7 +23,7 @@ export const ACCOUNT_OWNED_TABLES = [
   "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
-  "opportunities", "pipeline_stages", "pipelines", "custom_fields",
+  "documents", "opportunities", "pipeline_stages", "pipelines", "custom_fields",
   "custom_values", "tags", "equipment", "places", "contact_relationships", "client_group_members", "client_groups", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;
@@ -86,6 +87,11 @@ export const ACCOUNT_OWNED_TABLES = [
  * A table added with the usual `restrict` and left off the list is a different
  * story and still a bug: it surfaces as "cleanup failed on accounts" here, or
  * much later as a unique-constraint failure in an unrelated suite.
+ *
+ * `documents` (0077) sits before `opportunities`, `places`, `client_groups` and `contacts`: its record
+ * FKs are NO ACTION toward all four (a file's record cannot vanish under it; `opportunity_id` is unused
+ * in part 1 but already a plain FK), and deleting it cascades its `document_versions`. Postgres deletes
+ * the ROWS only; the stored objects are removed by `deleteAccountCascade` itself, before any row, below.
  */
 
 /**
@@ -107,6 +113,22 @@ export async function deleteAccountCascade(
   db: SupabaseClient, accountId: string, caller: string,
   opts: { keepBlueprints?: boolean } = {},
 ): Promise<void> {
+  // 0077: the document vault's objects BEFORE any row, because the rows are the only map to them. Read from
+  // document_versions (every status), paged; no storage call at all for an account that has none. A failed
+  // removal throws like every other leg here, before a single row is gone, so a retry finds them again.
+  const paths: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await db.from("document_versions").select("storage_path")
+      .eq("account_id", accountId).order("id").range(from, from + 999);
+    if (error) throw new Error(`${caller} cleanup failed reading document paths: ${error.message}`);
+    const page = (data ?? []) as { storage_path: string }[];
+    paths.push(...page.map((r) => r.storage_path));
+    if (page.length < 1000) break;
+  }
+  for (let i = 0; i < paths.length; i += 100) {
+    const { error } = await db.storage.from(DOCUMENT_BUCKET).remove(paths.slice(i, i + 100));
+    if (error) throw new Error(`${caller} cleanup failed removing document objects: ${error.message}`);
+  }
   for (const table of ACCOUNT_OWNED_TABLES) {
     const { error } = await db.from(table).delete().eq("account_id", accountId);
     if (error) throw new Error(`${caller} cleanup failed on ${table}: ${error.message}`);

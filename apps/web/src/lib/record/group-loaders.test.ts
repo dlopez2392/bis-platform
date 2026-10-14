@@ -23,7 +23,7 @@ vi.mock("@bis/db", () => ({
   listTimelinePage: (...a: unknown[]) => listTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
-  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"],
   listGroupMembers: (...a: unknown[]) => listGroupMembersMock(...a),
   listOpenDealsFor: (...a: unknown[]) => listOpenDealsForMock(...a),
   listGroupPlaces: (...a: unknown[]) => listGroupPlacesMock(...a),
@@ -218,7 +218,7 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     expect(logged()).toEqual([expect.stringMatching(/^record page: next up read failed for account acct1: /)]);
   });
 
-  it("the timeline: one merged page across the set with names and the persona, no hold read; all seven failed or a throw is the card's error (mutation: rethrow -> FAILS; mutation: treat one failed source as the card's error -> FAILS)", async () => {
+  it("the timeline: one merged page across the set with names and the persona, no hold read; every source failed or a throw is the card's error (mutation: rethrow -> FAILS; mutation: treat one failed source as the card's error -> FAILS)", async () => {
     const before = { v: "2026-10-01T00:00:00.000Z", id: "22222222-2222-4222-8222-222222222222" };
     const page = { items: [{ kind: "note", id: "n1", at: "2026-10-09T16:12:00Z", contactId: "c-ana", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-09T16:12:00Z" } }], older: null, failed: ["calls"] };
     listTimelinePageMock.mockResolvedValueOnce(page);
@@ -228,10 +228,18 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, before, expect.objectContaining({ onError: expect.any(Function) }));
     expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
 
-    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"] });
     expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
     listTimelinePageMock.mockRejectedValueOnce(new Error("boom"));
     expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
     expect(logged()).toEqual([expect.stringMatching(/^record page: activity read failed for account acct1: /)]);
+  });
+
+  it("the timeline reads the group's own documents too: the group id reaches listTimelinePage (S-07, plan deviation 3; mutation: drop the groupId pass-through -> FAILS)", async () => {
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [] });
+    listPeopleNamesMock.mockResolvedValueOnce({});
+    getVoiceProfileMock.mockResolvedValueOnce(null);
+    await loadGroupTimeline(db, "acct1", IDS, undefined, G);
+    expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, undefined, expect.objectContaining({ groupId: G }));
   });
 });

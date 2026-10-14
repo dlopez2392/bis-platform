@@ -131,16 +131,16 @@ export type GroupTimelineLoad =
   | { status: "error" };
 /**
  * The group timeline (S-03 part 2b, C6, C7): loaders.ts's loadTimeline across the set, read-only, so
- * there is no hold read (no Done here). A source that failed is named in `page.failed`; only when all
- * seven failed is it the card's error. The names on person marks and the persona are soft.
+ * there is no hold read (no Done here). A source that failed is named in `page.failed`; only when every
+ * source failed is it the card's error. `groupId` (S-07) adds the group's OWN documents to the page. The names on person marks and the persona are soft.
  */
 export async function loadGroupTimeline(
-  db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor, groupId?: string,
 ): Promise<GroupTimelineLoad> {
   let page: TimelinePage;
   try {
     page = await listTimelinePage(db, accountId, contactIds, before, {
-      onError: (source, e) => log(`activity (${source})`, accountId, e),
+      onError: (source, e) => log(`activity (${source})`, accountId, e), groupId,
     });
   } catch (e) {
     log("activity", accountId, e);

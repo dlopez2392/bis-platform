@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -76,7 +77,7 @@ vi.mock("@bis/db", () => ({
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
-  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"],
   getContact: (...args: unknown[]) => getContactMock(...args),
   listContactTags: (...args: unknown[]) => listContactTagsMock(...args),
   listNotes: (...args: unknown[]) => listNotesMock(...args),
@@ -126,6 +127,11 @@ vi.mock("../relationships-card", () => ({ RelationshipsCard: (p: unknown) => { r
 // route on the client and has its own tests (places-card.test.ts).
 const placesCardProps: unknown[] = [];
 vi.mock("../places-card", () => ({ PlacesCard: (p: unknown) => { placesCardProps.push(p); return null; } }));
+// S-07 part 1: the Documents card, between Properties and Details. Recorded, not run: it fetches
+// its own route on the client and has its own tests (documents-card.test.ts).
+vi.mock("../documents-card", () => ({
+  DocumentsCard: (p: Record<string, unknown>) => createElement("div", { "data-documents-mock": JSON.stringify(p) }),
+}));
 const timelineProps = vi.fn();
 vi.mock("./activity-timeline", () => ({
   ActivityTimeline: (props: Record<string, unknown>) => {
@@ -614,7 +620,7 @@ describe("ContactDetailPage: the Properties card (S-02 part B2)", () => {
     // The default access is the agency's, which may move a property.
     expect(placesCardProps).toEqual([{ accountId: "acct1", contactId: "ct1", canMovePlace: true, headingHidden: true }]);
     // Between the Groups card and Deals (S-03 part 1: the registry's order, each a record card).
-    expect(order(html).slice(3, 6)).toEqual(["groups", "properties", "deals"]);
+    expect(order(html).slice(3, 7)).toEqual(["groups", "properties", "deals", "documents"]);
   });
 
   it("a Technician's page hands the card canMovePlace false (mutation: pass true -> FAILS)", async () => {
@@ -659,8 +665,19 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     } finally { errors.mockRestore(); }
   };
 
-  it("renders the nine cards in the phone order, which is the DOM order on every width (C6; mutation: render the who column first -> FAILS)", async () => {
-    expect(order(await render())).toEqual(["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"]);
+  it("renders the ten cards in the phone order, which is the DOM order on every width (C6; mutation: render the who column first -> FAILS)", async () => {
+    expect(order(await render())).toEqual(["summary", "next-up", "timeline", "groups", "properties", "deals", "documents", "details", "tags", "related-people"]);
+  });
+
+  it("the Documents card gets the page's accountId, record, canManage and the contact's empty text (S-07 part 1; mutation: pass canManage: true always -> FAILS for a Staff requireAccountAccess stub)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-s");
+    const html = await render();
+    expect(html).toContain('data-record-card="documents"');
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"] });
   });
 
   it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {
@@ -929,8 +946,8 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
     expect(props().emptyText).toBeNull();
   });
 
-  it("all seven sources failed: the card's error, and Text and Email hide with the composer (D3)", async () => {
-    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+  it("all eight sources failed: the card's error, and Text and Email hide with the composer (D3)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"] });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();

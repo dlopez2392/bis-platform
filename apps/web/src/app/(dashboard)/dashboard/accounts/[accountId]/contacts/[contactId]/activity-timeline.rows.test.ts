@@ -20,6 +20,7 @@ const { ActivityTimeline } = await import("./activity-timeline");
 const { legacyTimeline } = await import("./activity-timeline.fixture");
 const { makeTr } = await import("@/lib/record/copy");
 const { timelineRows } = await import("@/lib/record/timeline-rows");
+const { m } = await import("@/lib/messages");
 
 const AT = "2026-10-09T16:12:00Z";
 const ENTRIES: TimelineEntry[] = [
@@ -180,5 +181,17 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     const doneButton = taskHtml.match(/<button[^>]*>done<\/button>/)?.[0] ?? "";
     expect(doneButton).toContain("min-h-11");
     expect(doneButton).toContain("md:min-h-8");
+  });
+  it("a document row renders as one: its verb, and a trashed file's dot and word (S-07, rule 3; mutation: return null for the document case -> FAILS)", () => {
+    const docEntries: TimelineEntry[] = [{ kind: "document", id: "d1", at: AT, contactId: "c1", document: { id: "d1", title: "Signed lease", category: "contract", source: "upload",
+      created_by: "user_me", created_at: AT, deleted_at: "2026-10-10T00:00:00Z", contact_id: "c1", client_group_id: null } }];
+    const tr = makeTr("es");
+    const rows = timelineRows(docEntries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "es", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    const row = html.match(/<div data-timeline-item="document"[\s\S]*?<\/li>/)?.[0] ?? "";
+    expect(row).toContain(`>${m["timeline.document.es"].replace("{title}", "Signed lease")}<`);
+    expect(row).toMatch(new RegExp(`data-timeline-status="muted"[^>]*><span aria-hidden="true"[^>]*></span><span>${m["documents.status.trashed.es"]}</span>`));
+    expect(row).toContain(`>${m["provenance.you.es"]}<`);
   });
 });

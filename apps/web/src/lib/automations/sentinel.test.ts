@@ -33,6 +33,8 @@ const dbMocks = vi.hoisted(() => ({
   isAccountOutboundSuppressed: vi.fn(),
   ensureConversation: vi.fn(), createMessage: vi.fn(), updateMessageStatus: vi.fn(),
   listSitesToSync: vi.fn(),
+  // The documents sweep, every tick: two reads, no write when nothing is due.
+  listAbandonedUploads: vi.fn(async () => []), listPurgeableDocuments: vi.fn(async () => []),
   listAccountsDueWeeklyReport: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
@@ -208,6 +210,9 @@ beforeEach(() => {
   // RUN under the sentinel, not error out of the harness: a pass that quietly
   // fails is a pass the scan never looked at (the withBookingCancelled lesson).
   dbMocks.listSitesToSync.mockResolvedValue([]);
+  // The documents sweep, same treatment: nothing is due, so it must run to real counters, not errored.
+  dbMocks.listAbandonedUploads.mockResolvedValue([]);
+  dbMocks.listPurgeableDocuments.mockResolvedValue([]);
   dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
@@ -255,6 +260,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     // not to `errored`.
     expect(results.siteTraffic).toEqual(expect.objectContaining({ synced: 0, failed: 0 }));
     expect(results.siteTraffic).not.toHaveProperty("errored");
+    expect(results.documentsSweep).toEqual({ abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 });
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
@@ -270,8 +276,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
   });
 
   /**

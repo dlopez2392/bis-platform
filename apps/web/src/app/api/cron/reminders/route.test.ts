@@ -29,6 +29,12 @@ vi.mock("@bis/db", async () => {
   // The site-traffic pass reads sites; none are linked in this suite, so it
   // reports its empty counters under its own key beside the others.
   listSitesToSync: async () => [],
+  // The documents sweep (S-07) runs every tick: nothing is due here, so it reports its empty counters.
+  // Registering a pass and NOT mocking its reads makes it `errored: 1` in every exact body below.
+  listAbandonedUploads: async () => [],
+  listPurgeableDocuments: async () => [],
+  DOCUMENT_TRASH_DAYS: 30,
+  DOCUMENT_BUCKET: "documents",
   // The two weekly-report passes read accounts and the agency row. Nothing is
   // due in this suite, so they report their empty counters beside the others.
   // Registering a pass and NOT mocking its read here makes it `errored: 1` in
@@ -305,6 +311,7 @@ const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAl
 // must never look like a successful quiet tick.
 const EMPTY_WEEKLY_AGENCY = { sent: 0, failed: 0, skippedNoRecipient: 1, skippedNotMonday: 0, skippedAlreadySent: 0, unresolvableTimezone: 0, unstamped: 0 };
 const EMPTY_SITE_TRAFFIC = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
+const EMPTY_DOCUMENTS_SWEEP = { abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 };
 const EMPTY_SMS_REMINDERS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
 };
@@ -392,7 +399,7 @@ describe("GET /api/cron/reminders", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
+    expect(body).toEqual({ sent: 1, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_ok");
     expect(stampReminderSentMock).not.toHaveBeenCalledWith(expect.anything(), "bk_fail");
@@ -415,7 +422,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -438,7 +445,7 @@ describe("GET /api/cron/reminders", () => {
 
     // Counted as sent, never as failed: folding the stamp into the outer catch
     // would misreport a stamp failure as a send failure in triage.
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 1, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(stampReminderSentMock).toHaveBeenCalledTimes(STAMP_ATTEMPTS);
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
@@ -454,7 +461,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
+    expect(body).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(stampReminderSentMock).toHaveBeenCalledWith(expect.anything(), "bk_fail");
   });
@@ -547,7 +554,7 @@ describe("GET /api/cron/reminders", () => {
     const res = await GET(req(`Bearer ${SECRET}`));
     const body = await res.json();
 
-    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
+    expect(body).toEqual({ sent: 0, failed: 1, unstamped: 0, held: 0, blocked: 0, releaseHeld: EMPTY_RELEASE, followups: EMPTY_FOLLOWUPS, reviewRequests: EMPTY_REVIEW_REQUESTS, referralAsks: EMPTY_REFERRAL_ASKS, noShowNudges: EMPTY_NO_SHOW_NUDGES, smsReminders: EMPTY_SMS_REMINDERS, appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS, reactivations: EMPTY_REACTIVATIONS, quoteFollowups: EMPTY_QUOTE_FOLLOWUPS, siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP, weeklyClientReport: EMPTY_WEEKLY_CLIENT, weeklyAgencyReport: EMPTY_WEEKLY_AGENCY, usageReport: EMPTY_USAGE_REPORT, opsWatch: EMPTY_OPS_WATCH });
     expect(sendMock).not.toHaveBeenCalled();
     expect(stampReminderSentMock).not.toHaveBeenCalled();
   });
@@ -576,7 +583,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS,
       reactivations: EMPTY_REACTIVATIONS,
       quoteFollowups: EMPTY_QUOTE_FOLLOWUPS,
-      siteTraffic: EMPTY_SITE_TRAFFIC,
+      siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP,
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,
       usageReport: EMPTY_USAGE_REPORT,
@@ -618,7 +625,7 @@ describe("GET /api/cron/reminders — follow-up pass", () => {
       appointmentConfirms: EMPTY_APPOINTMENT_CONFIRMS,
       reactivations: EMPTY_REACTIVATIONS,
       quoteFollowups: EMPTY_QUOTE_FOLLOWUPS,
-      siteTraffic: EMPTY_SITE_TRAFFIC,
+      siteTraffic: EMPTY_SITE_TRAFFIC, documentsSweep: EMPTY_DOCUMENTS_SWEEP,
       weeklyClientReport: EMPTY_WEEKLY_CLIENT,
       weeklyAgencyReport: EMPTY_WEEKLY_AGENCY,
       usageReport: EMPTY_USAGE_REPORT,

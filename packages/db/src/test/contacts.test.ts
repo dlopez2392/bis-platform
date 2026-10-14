@@ -14,6 +14,8 @@ import { createContact, updateContact, listContacts, getContact,
 // company goes through this real write path instead of the old, now-removed
 // `createContact(..., { companyName })`.
 import { setContactsBusiness } from "../client-groups";
+import { createDocument, reserveDocumentVersion, markDocumentVersionReady, purgeContactDocuments, getDocument } from "../documents";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -820,7 +822,7 @@ describe("bulk contact ops", () => {
         stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
       });
       const r = await deleteContacts(db, accountId, [free.id, blocked.id]);
-      expect(r).toEqual({ deleted: 1, skippedBlocked: 1 });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 0 });
       expect(await getContact(db, accountId, free.id)).toBeNull();
       expect(await getContact(db, accountId, blocked.id)).not.toBeNull();
     }));
@@ -939,5 +941,54 @@ describe("dedupe after the key columns (spec §5)", () => {
         { firstName: "Same", email: "same@example.com", phone: "+19562921696" }, "test");
       expect(again.existing).toBe(true);
       expect(again.flagged, "one contact matching both ways is not a conflict").toBe(false);
+    }));
+});
+
+describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
+  it("beforeDelete sees only the deletable ids, and an id it keeps is not deleted (mutation: delete the kept ids anyway -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const keep = (await createContact(db, accountId, { firstName: "Keep" }, "user_t")).id;
+      const go = (await createContact(db, accountId, { firstName: "Go" }, "user_t")).id;
+      const seen: string[][] = [];
+      const r = await deleteContacts(db, accountId, [keep, go], { beforeDelete: async (ids) => { seen.push([...ids].sort()); return [keep]; } });
+      expect(seen).toEqual([[keep, go].sort()]);
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+      expect(await getContact(db, accountId, keep)).not.toBeNull();
+      expect(await getContact(db, accountId, go)).toBeNull();
+    }));
+
+  it("another account's customer id never reaches the purge, and its file and row stay (mutation: drop the request-client contacts proof -> FAILS)", () =>
+    withTestAccount(async (dbB, accountB) =>
+      withTestAccount(async (db, accountA) => {
+        const bContact = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
+        const bDoc = await createDocument(dbB, { accountId: accountB, record: { kind: "contact", id: bContact }, title: "B", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+        const r = await reserveDocumentVersion(dbB, { accountId: accountB, documentId: bDoc, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: "user_t" });
+        if (r.status !== "ok") throw new Error(r.status);
+        expect(await markDocumentVersionReady(dbB, { accountId: accountB, documentId: bDoc, versionId: r.versionId, bytes: 10, sha256: "c".repeat(64), actorId: "user_t" })).toBe(true);
+        const removed: string[] = [];
+        const svc = new Proxy(db, { get: (t, p) => (p === "storage"
+          ? { from: () => ({ remove: async (paths: string[]) => { removed.push(...paths); return { data: [], error: null }; } }) }
+          : Reflect.get(t, p, t)) }) as SupabaseClient;
+        const seen: string[][] = [];
+        const res = await deleteContacts(db, accountA, [bContact], { beforeDelete: async (ids) => {
+          seen.push([...ids]);
+          return (await purgeContactDocuments(svc, accountA, ids, "user_owner")).keptContacts;
+        } });
+        expect(res).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0 });
+        expect(seen).toEqual([]);
+        expect(removed).toEqual([]);
+        expect(await getDocument(dbB, accountB, bDoc)).not.toBeNull();
+        expect(await getContact(dbB, accountB, bContact)).not.toBeNull();
+        const { data: ev, error } = await db.from("events").select("id").in("account_id", [accountA, accountB]).eq("type", "document.purged");
+        if (error) throw error;
+        expect(ev).toEqual([]);
+      })));
+
+  it("without the purge, a contact with a document is NOT deleted: the FK refuses the statement (the backstop; mutation: documents_contact_fkey on delete cascade -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Has file" }, "user_t")).id;
+      await createDocument(db, { accountId, record: { kind: "contact", id: c }, title: "ID", category: "id", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+      await expect(deleteContacts(db, accountId, [c])).rejects.toThrow(/documents_contact_fkey|foreign key/);
+      expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
 });

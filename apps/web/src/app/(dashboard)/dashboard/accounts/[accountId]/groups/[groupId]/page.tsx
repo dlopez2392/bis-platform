@@ -29,6 +29,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { renderZone } from "@/lib/zone";
 import { PlacesCard } from "../../contacts/places-card";
+import { DocumentsCard } from "../../contacts/documents-card";
 import { DealsBody } from "../../contacts/[contactId]/deals-card";
 import { SummaryBody } from "../../contacts/[contactId]/summary-card";
 import { NextUpBody } from "../../contacts/[contactId]/next-up-card";
@@ -45,6 +46,9 @@ const PEOPLE_EMPTY_KEY = {
 } as const satisfies Record<GroupKind, MessageKey>;
 const PLACES_EMPTY_KEY = {
   household: "groupPage.places.emptyHousehold", business: "groupPage.places.emptyBusiness",
+} as const satisfies Record<GroupKind, MessageKey>;
+const DOCUMENTS_EMPTY_KEY = {
+  household: "documents.empty.household", business: "documents.empty.business",
 } as const satisfies Record<GroupKind, MessageKey>;
 
 /**
@@ -101,7 +105,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
     set ? loadGroupDeals(db, accountId, async () => set.people) : noSet,
     ids ? loadGroupSummary(db, accountId, ids) : noSet,
     ids ? loadGroupNextUp(db, accountId, ids, now) : noSet,
-    ids ? loadGroupTimeline(db, accountId, ids, before) : noSet,
+    ids ? loadGroupTimeline(db, accountId, ids, before, group.id) : noSet,
   ]);
   // Not a throw: a cosmetic zone and a default language must not 500 the page.
   if (account.error) console.error(`group page: account ${accountId} timezone and language read failed: ${account.error.message}`);
@@ -221,6 +225,10 @@ export default async function GroupRecordPage({ params, searchParams }: {
           moreText={deals.count > deals.deals.length ? tr.text("groupPage.deals.more", { shown: deals.deals.length, count: deals.count }) : null} />,
       }
       : failed("record.card.deals"),
+    documents: {
+      node: <DocumentsCard accountId={accountId} record={{ kind: "group", id: group.id }} canManage={access.canManage}
+        emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} />,
+    },
     people: people.status === "ready"
       ? {
         node: <PeopleCard accountId={accountId} groupId={group.id} kind={group.kind} manager={manager}

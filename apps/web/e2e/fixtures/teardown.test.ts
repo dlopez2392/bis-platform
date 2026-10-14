@@ -51,6 +51,7 @@ vi.mock("@bis/db", () => ({
 }));
 vi.mock("./sweep", () => ({
   deleteAccountCascade: vi.fn(),
+  removeDocumentObjects: vi.fn(async () => []),
   emptySweepReport: () => ({ errors: [] }),
 }));
 

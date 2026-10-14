@@ -45,7 +45,7 @@ const made: {
 } = {};
 /** The form answer: typed words, so the "shown once" check counts them on the timeline. */
 const WORDS = `Fence quote ${stamp}`;
-const PHONE_ORDER = ["summary", "next-up", "timeline", "groups", "properties", "deals", "details", "tags", "related-people"];
+const PHONE_ORDER = ["summary", "next-up", "timeline", "groups", "properties", "deals", "documents", "details", "tags", "related-people"];
 const url = (id: string, q = "") => `/dashboard/accounts/${fixture().accountId}/contacts/${id}${q}`;
 /** A card's phone disclosure: the button in its title (h2), never a control inside its body. */
 const disclosure = (id: string) => `[data-record-card="${id}"] h2 > button[aria-expanded]`;
@@ -162,7 +162,7 @@ test("at 390px the order is header, summary, Next up, timeline, the closed 'have
     return Boolean(header.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING);
   });
   expect(headerFirst).toBe(true);
-  for (const id of ["groups", "properties", "deals"]) {
+  for (const id of ["groups", "properties", "deals", "documents"]) {
     await expect(rec.locator(disclosure(id))).toHaveAttribute("aria-expanded", "false");
   }
   // A closed card mounts no body, so the Groups card's own section is not on the page at all.

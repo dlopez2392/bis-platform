@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import type { TimelineEntry } from "@bis/db";
+import type { TimelineDocument, TimelineEntry } from "@bis/db";
+import { m } from "@/lib/messages";
 import { timelineRows, timelineFailedText } from "./timeline-rows";
-import { makeTr } from "./copy";
+import { makeTr, type Tr } from "./copy";
 
 const author = (locale: "en" | "es" = "en") => ({ viewerId: null, names: {}, personaName: null, tr: makeTr(locale) });
 const rows = (entries: TimelineEntry[], locale: "en" | "es" = "en", zone = "America/Chicago") =>
@@ -110,5 +111,32 @@ describe("timelineRows: the member a group row is about (S-03 part 2b, C6)", () 
   });
   it("without subjects (the contact page) every row's subject is null (mutation: build a subject from entry.contactId always -> FAILS)", () => {
     expect(rows(entries).map((x) => x.subject)).toEqual([null, null, null]);
+  });
+});
+
+describe("a document row (S-07, plan deviation 3)", () => {
+  const doc = (over: Partial<TimelineDocument> = {}): TimelineEntry => ({
+    kind: "document", id: "d1", at: "2026-10-13T15:00:00.000Z", contactId: "c1",
+    document: { id: "d1", title: "Signed lease", category: "contract", source: "upload", created_by: "user_ana",
+      created_at: "2026-10-13T15:00:00.000Z", deleted_at: null, contact_id: "c1", client_group_id: null, ...over },
+  });
+  const author = (tr: Tr) => ({ viewerId: "user_me", names: { user_ana: "Ana" }, personaName: null, tr });
+  it("reads '<who> added a file: <title>', its category as the detail, the person mark; a camera file reads 'took a photo' (mutation: drop the camera branch -> FAILS)", () => {
+    const tr = makeTr("en");
+    const [row] = timelineRows([doc()], { zone: "America/Chicago", tr, author: author(tr) });
+    expect([row!.verb, row!.detail, row!.mark, row!.status]).toEqual(["added a file: Signed lease", "Contract", { kind: "person", label: "Ana" }, null]);
+    const [photo] = timelineRows([doc({ source: "camera" })], { zone: "America/Chicago", tr, author: author(tr) });
+    expect(photo!.verb).toBe("took a photo: Signed lease");
+  });
+  it("a trashed file carries 'In the trash' as a dot and a word, in Spanish too (mutation: drop the trashed status -> FAILS)", () => {
+    const tr = makeTr("es");
+    const [row] = timelineRows([doc({ deleted_at: "2026-10-14T00:00:00.000Z" })], { zone: "America/Chicago", tr, author: author(tr) });
+    expect(row!.status).toEqual({ tone: "muted", word: m["documents.status.trashed.es"] });
+    expect(row!.verb).toBe(m["timeline.document.es"].replace("{title}", "Signed lease"));
+    expect(row!.detail).toBe(m["documents.category.contract.es"]);
+  });
+  it("a failed documents source is named (mutation: drop documents from SOURCE_KEY -> typecheck FAILS; at runtime the word is missing)", () => {
+    expect(timelineFailedText(["documents"], makeTr("en"))).toBe("Couldn't load documents.");
+    expect(timelineFailedText(["documents"], makeTr("es"))).toBe(m["timeline.someFailed.es"].replace("{what}", m["timeline.what.documents.es"]));
   });
 });

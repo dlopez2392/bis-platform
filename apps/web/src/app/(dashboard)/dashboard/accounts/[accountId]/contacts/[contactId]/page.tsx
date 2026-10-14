@@ -29,6 +29,7 @@ import { RelationshipsCard } from "../relationships-card";
 import { ActivityTimeline } from "./activity-timeline";
 import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
+import { DocumentsCard } from "../documents-card";
 import { SummaryBody } from "./summary-card";
 import { NextUpBody } from "./next-up-card";
 import { DealsBody } from "./deals-card";
@@ -234,6 +235,10 @@ export default async function ContactDetailPage({
     groups: { node: <div lang="en"><GroupsCard accountId={accountId} contactId={contactId} canManageGroups={assign.canAssign} headingHidden /></div> },
     properties: { node: <PlacesCard accountId={accountId} contactId={contactId} canMovePlace={assign.canAssign} headingHidden /> },
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
+    documents: {
+      node: <DocumentsCard accountId={accountId} record={{ kind: "contact", id: contactId }} canManage={access.canManage}
+        emptyText={tr.text("documents.empty.contact")} />,
+    },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"
       ? {

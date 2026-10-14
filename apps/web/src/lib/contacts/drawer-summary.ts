@@ -50,7 +50,7 @@ const LOCALES: Readonly<Record<Locale, true>> = { en: true, es: true };
 const TONES: Readonly<Record<TimelineTone, true>> = { accent: true, good: true, warn: true, crit: true, muted: true };
 const AUTHORS: Readonly<Record<AuthorKind, true>> = { person: true, ai: true, automation: true, customer: true, import: true };
 const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
-  note: true, task: true, deal: true, submission: true, message: true, booking: true, call: true,
+  note: true, task: true, deal: true, submission: true, message: true, booking: true, call: true, document: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,

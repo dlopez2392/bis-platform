@@ -40,7 +40,7 @@
  * at every entry point that a human can invoke.
  */
 import { clerkClient } from "@clerk/nextjs/server";
-import { serviceDb, ACCOUNT_OWNED_TABLES } from "@bis/db";
+import { serviceDb, ACCOUNT_OWNED_TABLES, DOCUMENT_BUCKET } from "@bis/db";
 import {
   FIXTURE_BLUEPRINT_PREFILTER, FIXTURE_EMAIL_RE, FIXTURE_NAME_PREFILTER, STALE_AFTER_MS,
   isStaleFixture, isStaleFixtureAccount, isStaleFixtureBlueprint, isStaleFixtureForm,
@@ -48,6 +48,8 @@ import {
 } from "./stale";
 
 const BUCKET = "brand-logos";
+/** The document vault's PRIVATE bucket (0077), two folders deep: see removeDocumentObjects. */
+const DOCUMENTS = DOCUMENT_BUCKET;
 
 // `@supabase/supabase-js` is a dependency of @bis/db, not of apps/web, so its
 // types are not importable here — the client's type is taken from the factory
@@ -262,6 +264,8 @@ export async function sweepStaleAccounts(
     report.accounts.push({ id: account.id, name: account.name });
     const objects = await removePrefix(db, account.id, report, dryRun);
     report.orphanObjects.push(...objects);
+    // The document vault's objects (0077): deleteAccountCascade below takes the rows, never the objects.
+    report.orphanObjects.push(...(await removeDocumentObjects(db, account.id, report, dryRun)));
     // The org behind the row, BY ID, and BEFORE the row: sweepClerkOrgs
     // finds orgs by NAME, and D-005 renames an org to its brand name on every
     // Branding save — the per-run fixture's brand is "Rio Roofing <stamp>"
@@ -310,7 +314,41 @@ async function removePrefix(
 }
 
 /**
- * @param now         injected so the window is testable and so one sweep uses
+ * The document vault's objects for one account (0077: `{account}/{document}/{version}`, two folders
+ * deep, so brand-logos' one-level list would find only the document folders and remove nothing).
+ * The bucket is PRIVATE; these objects still outlive their rows, which is why the fixture's teardown
+ * and this sweep remove them. Every error is REPORTED, never thrown, like every other leg. Exported
+ * for auth.teardown.ts (the fixture account's objects, by its known id) and sweep.test.ts.
+ */
+export async function removeDocumentObjects(
+  db: Db, accountId: string, report: SweepReport, dryRun: boolean,
+): Promise<string[]> {
+  const bucket = db.storage.from(DOCUMENTS);
+  const { data: folders, error } = await bucket.list(accountId, { limit: 1000 });
+  if (error) {
+    report.errors.push(`documents list ${accountId}: ${error.message}`);
+    return [];
+  }
+  const paths: string[] = [];
+  for (const folder of folders ?? []) {
+    const { data: files, error: e } = await bucket.list(`${accountId}/${folder.name}`, { limit: 1000 });
+    if (e) {
+      report.errors.push(`documents list ${accountId}/${folder.name}: ${e.message}`);
+      continue;
+    }
+    paths.push(...(files ?? []).map((f: { name: string }) => `${accountId}/${folder.name}/${f.name}`));
+  }
+  if (paths.length > 0 && !dryRun) {
+    for (let i = 0; i < paths.length; i += 100) {
+      const { error: rmError } = await bucket.remove(paths.slice(i, i + 100));
+      if (rmError) report.errors.push(`documents remove ${accountId}: ${rmError.message}`);
+    }
+  }
+  return paths;
+}
+
+/**
+ * @param now        injected so the window is testable and so one sweep uses
  *                    a single clock for all four systems.
  * @param dryRun      true = report only. The default everywhere a human runs it.
  * @param maxAgeMs    how old a fixture must be before it is fair game.
@@ -358,6 +396,27 @@ export async function sweepStaleFixtures({
     if (account) continue;
     const objects = await removePrefix(db, entry.name, report, dryRun);
     report.orphanObjects.push(...objects);
+  }
+
+  // 3b. The same rule for the document vault's PRIVATE bucket (0077): an account folder whose
+  // account row no longer exists. Its objects sit two folders deep, so removeDocumentObjects lists
+  // each document folder rather than removing the one-level listing as the logo leg above does.
+  const { data: docPrefixes, error: docListError } = await db.storage.from(DOCUMENTS).list();
+  if (docListError) {
+    report.errors.push(`documents list root: ${docListError.message}`);
+  }
+  for (const entry of docPrefixes ?? []) {
+    if (!isUuid(entry.name)) continue;
+    const { data: account, error } = await db
+      .from("accounts").select("id").eq("id", entry.name).maybeSingle();
+    if (error) {
+      report.errors.push(`accounts lookup ${entry.name}: ${error.message}`);
+      continue;
+    }
+    // An account that still exists owns its files, whatever its age: a real client's documents are
+    // never this sweep's.
+    if (account) continue;
+    report.orphanObjects.push(...(await removeDocumentObjects(db, entry.name, report, dryRun)));
   }
 
   // 4. Forms a killed `forms.spec.ts` run left behind. Unlike every leg

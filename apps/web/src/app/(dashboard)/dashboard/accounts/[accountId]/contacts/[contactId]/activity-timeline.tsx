@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Phone, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -179,6 +179,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     }
     case "deal":
       return <TimelineItem {...head} icon={DollarSign} />;
+    // S-07: a file added to the record; FileText is the form submission's, so a file wears the paperclip.
+    case "document":
+      return <TimelineItem {...head} icon={Paperclip} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

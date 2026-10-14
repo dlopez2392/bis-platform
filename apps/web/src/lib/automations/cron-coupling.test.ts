@@ -9,6 +9,7 @@ import {
   LATE_REMINDER_WINDOW_START_MS, LATE_REMINDER_WINDOW_END_MS, LATE_REMINDER_MIN_AGE_MS, isLateBooking,
 } from "@bis/db";
 import { FOLLOWUP_MAX_AGE_MS } from "@/lib/booking/followup-timing";
+import { ABANDONED_UPLOAD_MS, SIGNED_UPLOAD_URL_MS } from "./passes/documents-sweep";
 import { reminderDeadline } from "@/lib/booking/reminder-timing";
 import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
 import { SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS } from "./caps";
@@ -261,6 +262,14 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     for (const m of [9 * 60, 9 * 60 + 30, 10 * 60, 10 * 60 + 15]) expect(keptStarts.has(m), `${m}`).toBe(true);
     expect(eveningBefore0900.length).toBeGreaterThan(0);
     expect(new Set(eveningBefore0900)).toEqual(new Set([8 * 60]));
+  });
+
+  it("an upload is called abandoned only after its signed URL has expired and one more tick has passed, so the sweep never deletes a reservation a browser can still fill (mutation: ABANDONED_UPLOAD_MS = 1 h -> FAILS)", () => {
+    const tick = tickIntervalMs(entry!.schedule);
+    // A MIRROR of storage-js's own constant (createSignedUploadUrl: "valid for 2 hours", dist/index.mjs:792-793),
+    // stated so a reader sees the number; the >= below is the guard.
+    expect(SIGNED_UPLOAD_URL_MS).toBe(2 * 60 * MINUTE);
+    expect(ABANDONED_UPLOAD_MS).toBeGreaterThanOrEqual(SIGNED_UPLOAD_URL_MS + tick);
   });
 
   it("the no-show nudge cap is the follow-up cap: same derivation, nothing to defer to", () => {

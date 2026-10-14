@@ -44,7 +44,7 @@ export type TimelineLoad =
 
 /**
  * The timeline card's load (S-03 1b, spec §7, C3, C5): one merged server page; a source that failed
- * is named in `page.failed` and the rest still render; only when ALL seven failed is it the card's
+ * is named in `page.failed` and the rest still render; only when EVERY source failed is it the card's
  * error. Then three soft reads, none of which can cost the card: the hold check (fails CLOSED), the
  * names on person marks (fails to "Someone on the team"), the receptionist's persona (fails to "Sofía").
  */
@@ -91,7 +91,7 @@ export type RecentLoad =
 /**
  * The list drawer's Recent (S-03 part 3 §6): the head of the record page's merged timeline, five
  * rows. No hold read and no ledger: those stand in for Done (`loadTimeline`, above), and the drawer
- * has no Done. A failed source is named in `page.failed`; all seven failed is the section's error.
+ * has no Done. A failed source is named in `page.failed`; every source failed is the section's error.
  * The names on person marks and the persona are soft, exactly as on the page. Never throws.
  */
 export async function loadRecent(db: SupabaseClient, accountId: string, contactId: string): Promise<RecentLoad> {

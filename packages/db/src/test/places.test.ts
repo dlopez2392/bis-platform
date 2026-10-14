@@ -147,6 +147,11 @@ describe("account teardown (spec §5.3)", () => {
     expect(at("places")).toBeLessThan(at("client_group_members"));
     expect(at("places")).toBeLessThan(at("contacts"));
   });
+  it("lists documents (0077) ahead of every table its NO ACTION FKs reference: opportunities, places, client groups, contacts (mutation: drop it, or put it before equipment but after opportunities -> FAILS)", () => {
+    const at = (t: string) => ACCOUNT_OWNED_TABLES.indexOf(t as (typeof ACCOUNT_OWNED_TABLES)[number]);
+    expect(at("documents")).toBeGreaterThanOrEqual(0);
+    for (const t of ["opportunities", "places", "client_groups", "contacts"]) expect(at("documents")).toBeLessThan(at(t));
+  });
 });
 
 // ---- Review round 1: every event, tenant fences, refusals and no-op writes ----

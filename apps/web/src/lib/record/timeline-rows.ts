@@ -36,6 +36,7 @@ const DEAL_STATUS: StatusMap = {
 const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
+  documents: "timeline.what.documents",
 };
 
 /** A deal's amount, or null when it has none: 0 and null are not an amount anyone entered
@@ -87,6 +88,13 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       verb: tr.text("timeline.answeredCall"),
       status: statusOf(CALL_OUTCOME, entry.call.outcome, tr),
       detail: entry.call.duration_secs ? tr.text("timeline.minutes", { count: Math.max(1, Math.round(entry.call.duration_secs / 60)) }) : null,
+    };
+    // S-07: a file the camera took reads as a photo; a trashed one is still listed, with "In the trash"
+    // as a dot and a word (rule 3). The category is the detail, in the page's language.
+    case "document": return {
+      verb: tr.text(entry.document.source === "camera" ? "timeline.documentPhoto" : "timeline.document", { title: entry.document.title }),
+      status: entry.document.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
+      detail: tr.text(`documents.category.${entry.document.category}`),
     };
   }
 }

@@ -10,6 +10,7 @@ import { appointmentConfirmPass } from "./passes/appointment-confirm";
 import { reactivationPass } from "./passes/reactivation";
 import { quoteFollowupPass } from "./passes/quote-followup";
 import { siteTrafficPass } from "./passes/site-traffic";
+import { documentsSweepPass } from "./passes/documents-sweep";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 import { usageReportPass } from "./passes/usage-report";
@@ -36,7 +37,9 @@ import { opsWatchPass } from "./passes/ops-watch";
  * (part B) reads nothing the other booking passes write and writes only its
  * own stamp, so it sits WITH them rather than between them: after the text
  * reminder, before the site-traffic pull. The site-traffic pull
- * runs after both — it touches no booking state and sends nothing. The weekly
+ * runs after both — it touches no booking state and sends nothing. The documents
+ * sweep (S-07) follows it for the same reason: it reads and writes only the
+ * document vault. The weekly
  * reports run last of all: the client pass first (spec, "Recorded
  * consequence" — the roll-up fires on its own gate, not after all client
  * emails, so this order is a reading convenience, not a dependency), then
@@ -51,4 +54,4 @@ import { opsWatchPass } from "./passes/ops-watch";
  * a pass failing for the second time is reported in the same tick.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];

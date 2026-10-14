@@ -42,6 +42,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
       const prose = blocks.filter((b) => b.kind === "prose").map((b) => b.text).join(" ");
       return prose ? { text: prose, lang: "en", done: false } : null;
     }
+    // S-07: the head already names the file; the drawer opens nothing of it here.
+    case "document": return null;
   }
 }
 

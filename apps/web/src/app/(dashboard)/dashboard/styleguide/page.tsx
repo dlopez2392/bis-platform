@@ -47,6 +47,7 @@ import { ChoiceTilesDemo } from "./choice-tiles-demo";
 import { AssignDemo } from "./assign-demo";
 import { RelationshipsDemo } from "./relationships-demo";
 import { PlacesDemo } from "./places-demo";
+import { DocumentsDemo } from "./documents-demo";
 import { RecordDemo } from "./record-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -257,6 +258,12 @@ export default async function StyleguidePage({
             and a Technician's view, which has no Belongs to), empty, loading and error. */}
         <Section title={m["places.title"]} file="accounts/[accountId]/contacts/places-card.tsx">
           <PlacesDemo />
+        </Section>
+
+        {/* S-07 part 1 (spec 4): the Documents card on the record, loaded (English and Spanish), empty,
+            loading, in error, and with its upload panel open mid-batch. */}
+        <Section title={m["documents.title"]} file="accounts/[accountId]/contacts/documents-card.tsx">
+          <DocumentsDemo />
         </Section>
 
         {/* S-03 part 1 (spec §15): the record kit: layout at both widths, header with all and no
