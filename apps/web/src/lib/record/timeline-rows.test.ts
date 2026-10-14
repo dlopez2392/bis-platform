@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { TimelineDocument, TimelineEntry } from "@bis/db";
+import type { TimelineDocument, TimelineDocumentVersion, TimelineEntry } from "@bis/db";
 import { m } from "@/lib/messages";
 import { timelineRows, timelineFailedText } from "./timeline-rows";
 import { makeTr, type Tr } from "./copy";
@@ -138,5 +138,26 @@ describe("a document row (S-07, plan deviation 3)", () => {
   it("a failed documents source is named (mutation: drop documents from SOURCE_KEY -> typecheck FAILS; at runtime the word is missing)", () => {
     expect(timelineFailedText(["documents"], makeTr("en"))).toBe("Couldn't load documents.");
     expect(timelineFailedText(["documents"], makeTr("es"))).toBe(m["timeline.someFailed.es"].replace("{what}", m["timeline.what.documents.es"]));
+  });
+});
+
+describe("a new version's row (owner ruling R2)", () => {
+  const ver = (over: Partial<TimelineDocumentVersion> = {}): TimelineEntry => ({
+    kind: "documentVersion", id: "v2", at: "2026-10-14T15:00:00.000Z", contactId: "c1",
+    version: { id: "v2", document_id: "d1", title: "Signed lease", category: "contract", uploaded_by: "user_ana",
+      created_at: "2026-10-14T15:00:00.000Z", deleted_at: null, contact_id: "c1", client_group_id: null, ...over },
+  });
+  const author = (tr: Tr) => ({ viewerId: "user_me", names: { user_ana: "Ana" }, personaName: null, tr });
+  it("reads '<who> uploaded a new version of <title>', the category as detail, the person mark (mutation: reuse timeline.document -> FAILS)", () => {
+    const tr = makeTr("en");
+    const [row] = timelineRows([ver()], { zone: "America/Chicago", tr, author: author(tr) });
+    expect([row!.verb, row!.detail, row!.mark, row!.status, row!.key]).toEqual(
+      ["uploaded a new version of Signed lease", "Contract", { kind: "person", label: "Ana" }, null, "documentVersion-v2"]);
+  });
+  it("in Spanish, and a trashed file's version carries 'In the trash' as a dot and a word (mutation: drop the trashed status -> FAILS)", () => {
+    const tr = makeTr("es");
+    const [row] = timelineRows([ver({ deleted_at: "2026-10-15T00:00:00.000Z" })], { zone: "America/Chicago", tr, author: author(tr) });
+    expect(row!.verb).toBe(m["timeline.documentVersion.es"].replace("{title}", "Signed lease"));
+    expect(row!.status).toEqual({ tone: "muted", word: m["documents.status.trashed.es"] });
   });
 });

@@ -140,4 +140,14 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     expect(row).toContain(`>${m["timeline.document.es"].replace("{title}", "Signed lease")}<`);
     expect(row).not.toContain("data-timeline-subject");
   });
+  it("a new-version row renders as one: its verb, the uploader's mark and, for the group's own file (contactId \"\"), no member link (S-07 1b, owner ruling R2; mutation: return null for the documentVersion case -> FAILS)", () => {
+    const verEntries = [{ kind: "documentVersion", id: "v2", at: AT, contactId: "", version: { id: "v2", document_id: "d1", title: "Signed lease", category: "contract",
+      uploaded_by: "user_me", created_at: AT, deleted_at: null, contact_id: null, client_group_id: "g1" } }] as unknown as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(verEntries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const row = rowHtml(render({ rows, tr }, "es"), "documentVersion");
+    expect(row).toContain(`>${m["timeline.documentVersion.es"].replace("{title}", "Signed lease")}<`);
+    expect(row).toContain(`>${m["provenance.you.es"]}<`);
+    expect(row).not.toContain("data-timeline-subject");
+  });
 });

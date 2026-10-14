@@ -560,4 +560,30 @@ describe("the documents source (S-07, plan deviation 3)", () => {
       expect(groupPage.items.filter((i) => i.kind === "document").map((i) => i.id).sort()).toEqual([mine, ours].sort());
       expect(groupPage.failed).toEqual([]);
     }));
+
+  it("a new version is its own row, under the same documents source, and the timeline pages through it on one cursor (owner ruling R2; mutations: drop the version read from the documents settle -> FAILS; read versions without the page cursor -> FAILS on page 2)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Plan", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+      const ready = async () => {
+        const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 5, contentType: "application/pdf", originalName: null, uploadedBy: "user_up" });
+        if (r.status !== "ok") throw new Error(r.status);
+        if (!(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: 5, sha256: "c".repeat(64), actorId: "user_up" }))) throw new Error("not ready");
+        return r.versionId;
+      };
+      await ready();
+      const v2 = await ready();
+      const v3 = await ready();
+      const all = await listTimelinePage(db, accountId, [ana]);
+      expect(all.failed).toEqual([]);
+      expect(all.items.filter((i) => i.kind === "document" || i.kind === "documentVersion").map((i) => [i.kind, i.id]))
+        .toEqual([["documentVersion", v3], ["documentVersion", v2], ["document", id]]);
+      const v = all.items.find((i) => i.kind === "documentVersion")!;
+      expect(v.kind === "documentVersion" && [v.version.title, v.version.uploaded_by, v.contactId]).toEqual(["Plan", "user_up", ana]);
+      // One row per page: the version rows page on the same (at, id) cursor as every other row.
+      const p1 = await listTimelinePage(db, accountId, [ana], undefined, { limit: 1 });
+      const p2 = await listTimelinePage(db, accountId, [ana], p1.older!, { limit: 1 });
+      const p3 = await listTimelinePage(db, accountId, [ana], p2.older!, { limit: 1 });
+      expect([p1, p2, p3].map((p) => p.items.map((i) => i.id))).toEqual([[v3], [v2], [id]]);
+    }));
 });

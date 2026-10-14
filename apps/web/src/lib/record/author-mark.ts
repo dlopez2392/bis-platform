@@ -48,6 +48,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // S-07: the person who added the file (documents.created_by is NOT NULL); one the reader cannot
     // name reads "Someone on the team", still the person mark.
     case "document": return { kind: "person", personId: entry.document.created_by };
+    // S-07 1b: the person who uploaded the new version (document_versions.uploaded_by is NOT NULL).
+    case "documentVersion": return { kind: "person", personId: entry.version.uploaded_by };
   }
 }
 
