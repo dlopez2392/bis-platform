@@ -222,3 +222,44 @@ describe("the document vault's copy (S-07 part 1)", () => {
     expect(m["bulk.confirmBody.es"]).toBe("Esto no se puede deshacer. Escriba {count} para confirmar.");
   });
 });
+
+describe("the document vault's copy, PR 1b (versions, Delete forever, space used)", () => {
+  const WANT: Record<string, [string, string]> = {
+    "documents.error.fileNotFound": ["We can't find this file anymore. Reload the page.", "Ya no encontramos este archivo. Vuelva a cargar la página."],
+    "documents.error.trashed": ["This file is in the trash. Restore it first.", "Este archivo está en la papelera. Restáurelo primero."],
+    "documents.newVersion": ["Upload new version", "Subir una versión nueva"],
+    "documents.versionAdded": ["New version of {title} added.", "Se agregó una versión nueva de {title}."],
+    "documents.version": ["Version {n}", "Versión {n}"],
+    "documents.versions": ["Versions", "Versiones"],
+    "documents.versionLine": ["Version {n} · {when}", "Versión {n} · {when}"],
+    "documents.versionCurrent": ["Current", "Actual"],
+    "documents.downloadVersion": ["Download version {n}", "Descargar la versión {n}"],
+    "documents.deleteForever": ["Delete forever", "Borrar para siempre"],
+    "documents.purge.body": ["This deletes {title} and all of its versions for good. It can't be undone.", "Esto borra {title} y todas sus versiones para siempre. No se puede deshacer."],
+    "documents.purge.bodyOne": ["This deletes {title} for good. It can't be undone.", "Esto borra {title} para siempre. No se puede deshacer."],
+    "documents.purge.label": ["Type the file's name to confirm", "Escriba el nombre del archivo para confirmar"],
+    "documents.purge.mismatch": ["The name doesn't match. Type it exactly as shown.", "El nombre no coincide. Escríbalo tal como aparece."],
+    "documents.purged": ["{title} was deleted for good.", "{title} se borró para siempre."],
+    "documents.error.purgeUploading": ["A new version of this file is still uploading. Try again later.", "Todavía se está subiendo una versión nueva de este archivo. Intente de nuevo más tarde."],
+    "documents.error.purgeRole": ["Only an Owner can delete a file forever.", "Solo un dueño puede borrar un archivo para siempre."],
+    "documents.error.purgeChanged": ["Someone changed this file first, so it was not deleted.", "Alguien cambió este archivo primero, así que no se borró."],
+    "documents.error.purge": ["Couldn't delete that file. Try again.", "No se pudo borrar ese archivo. Intente de nuevo."],
+    "documents.spaceUsed": ["{used} of {quota} GB used", "{used} de {quota} GB usados"],
+    "timeline.documentVersion": ["uploaded a new version of {title}", "subió una nueva versión de {title}"],
+    "documents.status.purging": ["Being deleted", "Se está borrando"],
+  };
+  it("every new key is the plan's wording, in both languages (mutation: 'Sube' for 'Suba'-style tú in any .es, or any word changed -> FAILS)", () => {
+    for (const [k, [en, es]] of Object.entries(WANT)) {
+      expect([m[k as MessageKey], m[`${k}.es` as MessageKey]], k).toEqual([en, es]);
+    }
+  });
+  it("the file's own 'not found' says file, and the record's still says record and the in-flight refusal promises no time (review M6) (mutations: point fileNotFound at the record wording -> FAILS; 'Try again in a few minutes.' -> FAILS)", () => {
+    expect(m["documents.error.fileNotFound"]).toMatch(/\bfile\b/);
+    expect(m["documents.error.fileNotFound.es"]).toMatch(/\barchivo\b/);
+    // Review M6: the in-flight refusal can last hours, so it promises no time.
+    expect(m["documents.error.purgeUploading"]).not.toMatch(/minute/);
+    expect(m["documents.error.purgeUploading.es"]).not.toMatch(/minuto/);
+    expect([m["documents.error.notFound"], m["documents.error.notFound.es"]]).toEqual([
+      "We can't find this record anymore. Reload the page.", "Ya no encontramos este registro. Vuelva a cargar la página."]);
+  });
+});
