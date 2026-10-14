@@ -84,6 +84,16 @@ export function keepOpen(openId: string | null, load: DocumentsLoad): string | n
 }
 
 /**
+ * Delete forever's target survives a re-read only while that read still lists it in the TRASH (final
+ * review 1): purged, restored or gone elsewhere, it is forgotten, so a later re-trash of the same file
+ * never reopens the dialog by itself. A failed read keeps it, as keepOpen does.
+ */
+export function keepPurge(purgeId: string | null, load: DocumentsLoad): string | null {
+  if (!purgeId || load.status !== "ready") return purgeId;
+  return load.data.trashed.some((d) => d.id === purgeId) ? purgeId : null;
+}
+
+/**
  * The row menu (spec 4.1), as data: the component maps it one to one, and the test reads it (the menu's
  * content renders in a portal only while open). Owners only is the Owner's and the agency's.
  */
@@ -371,6 +381,8 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const [state, setState] = useState<{ route: string; load: DocumentsLoad }>({ route: "", load: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it.
+  const [purgeId, setPurgeId] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
@@ -378,6 +390,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       setState((s) => (load.status === "error" && s.route === route && s.load.status === "ready" ? s : { route, load }));
       // A file that left the list is forgotten, so an Undo or a Restore later never reopens the viewer by itself.
       setOpenId((id) => keepOpen(id, load));
+      setPurgeId((id) => keepPurge(id, load));
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
@@ -475,9 +488,6 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       else if (said) toast.error(said.text);
     }).then((ran) => { if (ran === null) toast.error(t(m, "documents.error.busy", locale)); });
   };
-  // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it, and
-  // closes by itself when a re-read no longer lists it in the trash.
-  const [purgeId, setPurgeId] = useState<string | null>(null);
 
   const panel = files.length > 0 ? (
     <DocumentUploadPanel files={files} ownersOnly={ownersOnly} expiresOn={expiresOn} canChooseOwnersOnly={canManage} busy={busy} locale={locale}

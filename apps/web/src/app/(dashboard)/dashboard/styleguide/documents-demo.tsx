@@ -13,7 +13,7 @@ import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-u
  * Upload gives way to the panel's, rule 8). A client component of its own because the card's handlers
  * are functions a server page cannot hand down (places-demo.tsx's reasoning); here they do nothing.
  * The loaded card shows a contract expiring in 12 days (a warn dot), a camera photo you took, an ID
- * that expired (a crit dot) and is Owners only (a lock and the word), and one file in the trash. Tab
+ * that expired (a crit dot) and is Owners only (a lock and the word), and two files in the trash (one whose Delete forever stopped part-way: "Being deleted", no Restore). Tab
  * through it to see the focus rings. Each loaded card shows a contract on its second version, the account above
  * 80% of its space, and Delete forever beside Restore in the trash; the panel card shows a new version
  * uploading; then the viewer's Versions list and the typed-name form on their own.
@@ -34,7 +34,9 @@ const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
     { ...base, id: "sg-3", title: "Driver license", category: "id", createdAt: "2026-09-01T15:00:00.000Z", addedOn: "2026-09-01", ownersOnly: true,
       expiresOn: "2026-10-01", addedBy: { you: false, name: null } },
   ],
-  trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" }],
+  trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" },
+    // A Delete forever that stopped part-way: "Being deleted" as a dot and a word, no Restore; an Owner keeps Delete forever to finish it.
+    { ...base, id: "sg-5", title: "Old invoice", category: "invoice", createdAt: "2026-07-01T15:00:00.000Z", addedOn: "2026-07-01", deletedAt: "2026-10-09T15:00:00.000Z", purging: true }],
   space: { used: 4_500_000_000, quota: 5_368_709_120 },
 };
 const READY: DocumentsLoad = { status: "ready", data: DATA };

@@ -35,7 +35,7 @@ describe("styleguide: the Documents card in every state (DoD: /styleguide gains 
     const esText = renderedText(es.slice(0, es.indexOf("data-documents-card", es.indexOf("data-documents-card") + 1)));
     expect(esText).toContain(m["documents.ownersOnly.es"]);
     expect(esText).toContain(m["documents.count.es"].replace("{count}", "3"));
-    expect(esText).toContain(m["documents.trashList.es"].replace("{count}", "1"));
+    expect(esText).toContain(m["documents.trashList.es"].replace("{count}", "2"));
   });
 
   it("shows every rule-3 mark the card has: a near expiry, a past one, Owners only and the trash (mutation: drop the expiring file -> FAILS)", () => {
@@ -49,7 +49,12 @@ describe("styleguide: the Documents card in every state (DoD: /styleguide gains 
     expect(html.match(/data-document-version(?=[\s>=])/g)).toHaveLength(3);
     expect(html.match(/data-space-used/g)).toHaveLength(3);
     expect(html.match(/data-version-progress/g)).toHaveLength(1);
-    expect(html.match(/data-document-purge(?=[\s>=])/g)).toHaveLength(3);
+    // Two trashed files per loaded card (one ordinary, one whose Delete forever stopped part-way), three loaded cards.
+    expect(html.match(/data-document-purge(?=[\s>=])/g)).toHaveLength(6);
+    expect(html.match(/data-document-restore/g)).toHaveLength(3);
+    expect(html.match(/data-document-purging[^>]*><span aria-hidden="true"[^>]*><\/span>/g)).toHaveLength(3);
+    expect(text).toContain(m["documents.status.purging"]);
+    expect(renderedText(html.slice(html.indexOf('lang="es"')))).toContain(m["documents.status.purging.es"]);
     expect(html).toContain("data-document-versions");
     expect(html).toContain("data-document-purge-form");
     expect(text).toContain(m["documents.purge.mismatch"]);

@@ -236,8 +236,10 @@ describe("Delete forever (spec 4.4; rule 6)", () => {
   });
   it("a purge that throws is the purge failure, in words (mutation: drop the .catch -> FAILS)", async () => {
     actions.purgeDocumentAction.mockRejectedValue(new Error("stale"));
-    expect(await documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() }).purge(DOC, "Lease")).toBe(true);
+    const reload = vi.fn();
+    expect(await documentHandlers({ accountId: "acc", locale: "en", reload }).purge(DOC, "Lease")).toBe(true);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.purge"]);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 

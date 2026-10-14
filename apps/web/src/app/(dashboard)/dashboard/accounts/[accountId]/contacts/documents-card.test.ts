@@ -10,7 +10,7 @@ vi.mock("./documents-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, dropRefusal, rowSavers, versionToast } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -325,5 +325,17 @@ describe("versions, Delete forever and the space line on the card (PR 1b)", () =
     expect(versionToast({ kind: "failed", error: "documents.error.tooLarge", params: { size: "31 MB" } }, "Lease", "es"))
       .toEqual({ ok: false, text: m["documents.error.tooLarge.es"].replace("{size}", "31 MB") });
     expect(versionToast({ kind: "uploading", percent: 10 }, "Lease", "en")).toBeNull();
+  });
+});
+
+describe("keepPurge: the Delete forever target outlives a re-read only while the trash still lists it (final review 1)", () => {
+  it("a file gone from the trash is forgotten, so a later re-trash never reopens the dialog by itself (mutation: settle leaves purgeId alone / keepPurge returns its input -> FAILS)", () => {
+    const trashed = view({ id: "t1", deletedAt: "2026-10-12T00:00:00.000Z" });
+    expect(keepPurge("t1", ready([view()], [trashed]))).toBe("t1");
+    expect(keepPurge("t1", ready([view()], []))).toBeNull();
+    // Restored elsewhere: live again, not in the trash, so the dialog must not survive to the next trash.
+    expect(keepPurge("t1", ready([view({ id: "t1" })], []))).toBeNull();
+    expect(keepPurge("t1", { status: "error" })).toBe("t1");
+    expect(keepPurge(null, ready([view()], [trashed]))).toBeNull();
   });
 });
