@@ -9,13 +9,13 @@ vi.mock("./documents-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
 const view = (over: Record<string, unknown> = {}) => ({
   id: "d1", title: "Signed lease", category: "contract", expiresOn: null, ownersOnly: false, source: "upload",
-  addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-10T15:00:00.000Z", deletedAt: null,
+  addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", deletedAt: null,
   version: { id: "v1", contentType: "application/pdf", bytes: 1200 }, ...over,
 });
 const ready = (live: unknown[], trashed: unknown[] = [], capped = false): Load => ({ status: "ready", data: {
@@ -128,7 +128,7 @@ describe("the Documents card (spec 4.1, 4.5)", () => {
     expect(loading).toContain("data-documents-skeleton");
     expect(loading).not.toMatch(/animate-spin|spinner/);
     const error = render({ status: "error" });
-    expect(error).toContain('role="alert"');
+    expect(error).toMatch(/role="alert"[^>]*data-record-error|data-record-error[^>]*role="alert"/);
     expect(renderedText(error)).toContain(m["documents.loadFailed"]);
     expect(error).toMatch(/data-variant="ghost"[^>]*>Retry</);
   });
@@ -177,23 +177,60 @@ describe("the Documents card (spec 4.1, 4.5)", () => {
 });
 
 describe("addedWhen, sourceLine and documentsRouteFor", () => {
-  it("relative days in the reader's language; a name the reader cannot read is 'Someone on the team' (mutation: show null as blank -> FAILS)", () => {
-    expect(addedWhen("2026-10-13T09:00:00.000Z", "2026-10-13T15:00:00.000Z", "en")).toBe("today");
-    expect(addedWhen("2026-10-12T09:00:00.000Z", "2026-10-13T15:00:00.000Z", "es")).toBe("ayer");
-    expect(sourceLine(view({ addedBy: { you: false, name: null } }) as never, "2026-10-13T15:00:00.000Z", "en")).toBe("Added by Someone on the team · 3 days ago");
-    expect(sourceLine(view({ addedBy: { you: false, name: null } }) as never, "2026-10-13T15:00:00.000Z", "es"))
+  it("relative CALENDAR days in the reader's language; a name the reader cannot read is 'Someone on the team' (mutation: show null as blank -> FAILS)", () => {
+    expect(addedWhen("2026-10-13", "2026-10-13", "en")).toBe("today");
+    expect(addedWhen("2026-10-12", "2026-10-13", "es")).toBe("ayer");
+    expect(sourceLine(view({ addedBy: { you: false, name: null } }) as never, "2026-10-13", "en")).toBe("Added by Someone on the team · 3 days ago");
+    expect(sourceLine(view({ addedBy: { you: false, name: null } }) as never, "2026-10-13", "es"))
       .toBe(m["documents.addedBy.es"].replace("{name}", m["assign.someone.es"]).replace("{when}", "hace 3 días"));
-    expect(sourceLine(view({ addedBy: { you: true, name: null }, source: "camera" }) as never, "2026-10-13T15:00:00.000Z", "es"))
+    expect(sourceLine(view({ addedBy: { you: true, name: null }, source: "camera" }) as never, "2026-10-13", "es"))
       .toBe(m["documents.photoBy.es"].replace("{name}", m["documents.you.es"]).replace("{when}", "hace 3 días"));
   });
 
-  it("a file stamped a little after the server's now (clock skew) reads 'today', never 'tomorrow' (mutation: drop the floor at zero -> FAILS)", () => {
-    expect(addedWhen("2026-10-13T16:00:00.000Z", "2026-10-13T15:00:00.000Z", "en")).toBe("today");
-    expect(addedWhen("2026-10-14T16:00:00.000Z", "2026-10-13T15:00:00.000Z", "es")).toBe("hoy");
+  it("an evening upload read the next morning says 'yesterday', in both languages, from the account's own days (mutation: elapsed-hours arithmetic on createdAt -> FAILS)", () => {
+    // 21:30 on the 12th in the account's zone (02:30Z on the 13th), read at 08:00 on the 13th (13:00Z): 10.5 hours, one calendar day.
+    const evening = view({ createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12" });
+    const html = render(ready([evening]));
+    expect(renderedText(html)).toContain("Added by Ana · yesterday");
+    const es = renderedText(render(ready([evening]), { locale: "es", emptyText: m["documents.empty.contact.es"] }));
+    expect(es).toContain(m["documents.addedBy.es"].replace("{name}", "Ana").replace("{when}", "ayer"));
+  });
+
+  it("a day ahead of the account's today (clock skew) reads 'today', never 'tomorrow' (mutation: drop the floor at zero -> FAILS)", () => {
+    expect(addedWhen("2026-10-14", "2026-10-13", "en")).toBe("today");
+    expect(addedWhen("2026-10-14", "2026-10-13", "es")).toBe("hoy");
   });
 
   it("a contact reads its own route, a group its own (mutation: one route for both -> FAILS)", () => {
     expect(documentsRouteFor("acc", { kind: "contact", id: "c1" })).toBe("/api/accounts/acc/contacts/c1/documents");
     expect(documentsRouteFor("acc", { kind: "group", id: "g1" })).toBe("/api/accounts/acc/groups/g1/documents");
+  });
+});
+
+describe("the upload lock (one batch or one retry at a time)", () => {
+  it("a second run while the first holds the lock does nothing, and the lock is free again however the first ends (mutation: drop the held check -> FAILS)", async () => {
+    const lock = { held: false };
+    let release!: () => void;
+    const run = vi.fn(() => new Promise<string>((r) => { release = () => r("done"); }));
+    const first = exclusive(lock, run);
+    expect(lock.held).toBe(true);
+    const second = exclusive(lock, run);
+    // Asserted before either settles, so the mutation fails on this line rather than hanging on a second, never-released run.
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await second).toBeNull();
+    release();
+    expect(await first).toBe("done");
+    expect(lock.held).toBe(false);
+    await expect(exclusive(lock, () => Promise.reject(new Error("x")))).rejects.toThrow("x");
+    expect(lock.held).toBe(false);
+  });
+});
+
+describe("the viewer's open file", () => {
+  it("is forgotten when a ready read no longer lists it, so a later Undo or Restore never reopens it by itself (mutation: keep the id -> FAILS)", () => {
+    expect(keepOpen("d1", ready([view()]))).toBe("d1");
+    expect(keepOpen("d1", ready([view({ id: "d2" })], [view({ deletedAt: "2026-10-12T00:00:00.000Z" })]))).toBeNull();
+    expect(keepOpen("d1", { status: "error" })).toBe("d1");
+    expect(keepOpen(null, ready([view()]))).toBeNull();
   });
 });

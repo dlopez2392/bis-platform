@@ -11,7 +11,8 @@ import { isDay } from "./rules";
  */
 export type DocumentView = {
   id: string; title: string; category: DocumentCategory; expiresOn: string | null; ownersOnly: boolean; source: DocumentSource;
-  addedBy: { you: boolean; name: string | null }; createdAt: string; deletedAt: string | null;
+  /** `addedOn`: the day it was added, YYYY-MM-DD in the ACCOUNT's zone (the route's), for "yesterday" against `today`. */
+  addedBy: { you: boolean; name: string | null }; createdAt: string; addedOn: string; deletedAt: string | null;
   version: { id: string; contentType: DocumentContentType; bytes: number };
 };
 export type DocumentsResponse = {
@@ -32,7 +33,7 @@ function isView(v: unknown, trashed: boolean): boolean {
     && (v.expiresOn === null || isDay(v.expiresOn)) && typeof v.ownersOnly === "boolean"
     && (v.source === "upload" || v.source === "camera")
     && typeof v.addedBy.you === "boolean" && (v.addedBy.name === null || typeof v.addedBy.name === "string")
-    && instant(v.createdAt) && (trashed ? instant(v.deletedAt) : v.deletedAt === null)
+    && instant(v.createdAt) && isDay(v.addedOn) && (trashed ? instant(v.deletedAt) : v.deletedAt === null)
     && str(v.version.id) && isDocumentContentType(v.version.contentType)
     && typeof v.version.bytes === "number" && v.version.bytes > 0;
 }

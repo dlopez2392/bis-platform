@@ -8,7 +8,7 @@ const { DocumentViewerBody, viewerStateFor, fetchKeyFor } = await import("./docu
 
 const doc = (contentType: string) => ({
   id: "d", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
-  addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", deletedAt: null,
+  addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
   version: { id: "v", contentType: contentType as never, bytes: 10 },
 });
 const body = (contentType: string, state: Parameters<typeof DocumentViewerBody>[0]["state"]) =>

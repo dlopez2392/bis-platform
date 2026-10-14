@@ -12,7 +12,7 @@ const { m } = await import("@/lib/messages");
 
 const DOC = {
   id: "d1", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
-  addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", deletedAt: null,
+  addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
   version: { id: "v1", contentType: "application/pdf" as const, bytes: 1 },
 };
 const undoOf = () => (toast.success.mock.calls.at(-1)![1] as { action: { label: string; onClick: () => void } }).action;
@@ -102,6 +102,16 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
     await flush();
     expect(actions.undoOwnersOnlyAction).toHaveBeenCalledWith("acc", "d1", false, true);
     expect(actions.setOwnersOnlyAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("an Owners-only change the server refused says why and offers no Undo (mutation: delete the !r.ok guard in setOwnersOnly -> FAILS)", async () => {
+    actions.setOwnersOnlyAction.mockResolvedValue({ ok: false, error: "documents.error.ownersOnlyRole" });
+    const reload = vi.fn();
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload });
+    await h.setOwnersOnly(DOC, true);
+    expect(toast.error).toHaveBeenCalledWith(m["documents.error.ownersOnlyRole.es"]);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("letting the team see it again says so in its own words (mutation: always the Owners-only sentence -> FAILS)", async () => {

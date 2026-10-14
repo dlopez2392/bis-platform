@@ -4,16 +4,16 @@ import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
-import { accountToday } from "@/lib/contacts/account-today";
 import type { DocumentsResponse } from "@/lib/documents/documents-load";
-import { documentView } from "@/lib/documents/document-view";
+import { documentView, documentsClock } from "@/lib/documents/document-view";
 
 export const dynamic = "force-dynamic";
 
 /**
  * The Documents card's own read for a group (spec 4.5: it loads and fails on its own). Request
  * client only: 0077's RLS decides (the group's visibility, the Technician fence, Owners only).
- * `today` is the account's own day, for expiry words; `now` the server's instant, for purge words.
+ * `today` is the account's own day, for expiry words; each row's `addedOn` its added day in the same
+ * zone, for "yesterday"; `now` the server's instant, for purge words.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ accountId: string; groupId: string }> }) {
   const { accountId, groupId: raw } = await params;
@@ -24,7 +24,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   try {
     const group = await readGroup(db, accountId, groupId);
     if (!group) return NextResponse.json({}, { status: 404 });
-    const [docs, today] = await Promise.all([listRecordDocuments(db, accountId, { kind: "group", id: groupId }), accountToday(db, accountId)]);
+    const [docs, { today, zone }] = await Promise.all([listRecordDocuments(db, accountId, { kind: "group", id: groupId }), documentsClock(db, accountId)]);
     const all = [...docs.live, ...docs.trashed];
     const names = await listPeopleNames(db, [...new Set(all.map((d) => d.created_by))]).catch((e: unknown) => {
       console.error(`documents read names (account ${accountId}): ${loggableError(e)}`);
@@ -32,8 +32,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
     });
     const body: DocumentsResponse = {
       today, now: new Date().toISOString(), record: { kind: "group", id: groupId, groupKind: group.kind },
-      live: docs.live.map((d) => documentView(d, access.userId, names)),
-      trashed: docs.trashed.map((d) => documentView(d, access.userId, names)),
+      live: docs.live.map((d) => documentView(d, access.userId, names, zone)),
+      trashed: docs.trashed.map((d) => documentView(d, access.userId, names, zone)),
       capped: docs.liveMore || docs.trashedMore,
     };
     return NextResponse.json(body);

@@ -73,7 +73,7 @@ export function DocumentUploadPanel(p: {
                   ) : null}
                   {failed ? (
                     <Button type="button" variant="ghost" size="sm" data-panel-retry className={cn("min-h-11 md:min-h-8", focusRing)}
-                      onClick={() => p.onRetry(f.key)}>{tt("documents.retry")}</Button>
+                      disabled={p.busy} onClick={() => p.onRetry(f.key)}>{tt("documents.retry")}</Button>
                   ) : null}
                 </div>
               ) : null}

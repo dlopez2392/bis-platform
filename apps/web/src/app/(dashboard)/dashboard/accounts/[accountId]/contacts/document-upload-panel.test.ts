@@ -45,4 +45,10 @@ describe("the upload panel (spec 4.2)", () => {
     const html = render({ files: [f("a", "a.pdf", { kind: "uploading", percent: 45 })] });
     expect(html).toMatch(/class="[^"]*\bmotion-safe:transition-\[width\][^"]*\bmotion-safe:duration-150\b[^"]*"/);
   });
+  it("a failed file's Retry is disabled while the batch or another retry runs, so a double click never files it twice (mutation: drop disabled={p.busy} on Retry -> FAILS)", () => {
+    const failed = [f("c", "c.pdf", { kind: "failed", error: "documents.error.upload" })];
+    const retryTag = (busy: boolean) => /<button[^>]*data-panel-retry[^>]*>/.exec(render({ files: failed, busy }))![0];
+    expect(retryTag(true)).toMatch(/\sdisabled=""/);
+    expect(retryTag(false)).not.toMatch(/\sdisabled=""/);
+  });
 });

@@ -14,20 +14,20 @@ import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-u
  * that expired (a crit dot) and is Owners only (a lock and the word), and one file in the trash. Tab
  * through it to see the focus rings.
  */
-const base: Omit<DocumentView, "id" | "title" | "category" | "createdAt"> = {
+const base: Omit<DocumentView, "id" | "title" | "category" | "createdAt" | "addedOn"> = {
   addedBy: { you: false, name: "Ana" }, deletedAt: null, ownersOnly: false, source: "upload", expiresOn: null,
   version: { id: "sg-v", contentType: "application/pdf", bytes: 120_000 },
 };
 const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
   today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "sg-c" }, capped: false,
   live: [
-    { ...base, id: "sg-1", title: "Signed contract", category: "contract", createdAt: "2026-10-10T15:00:00.000Z", expiresOn: "2026-10-25" },
-    { ...base, id: "sg-2", title: "Roof, before", category: "photo", source: "camera", createdAt: "2026-10-12T15:00:00.000Z",
+    { ...base, id: "sg-1", title: "Signed contract", category: "contract", createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", expiresOn: "2026-10-25" },
+    { ...base, id: "sg-2", title: "Roof, before", category: "photo", source: "camera", createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12",
       addedBy: { you: true, name: null }, version: { id: "sg-v2", contentType: "image/jpeg", bytes: 800_000 } },
-    { ...base, id: "sg-3", title: "Driver license", category: "id", createdAt: "2026-09-01T15:00:00.000Z", ownersOnly: true,
+    { ...base, id: "sg-3", title: "Driver license", category: "id", createdAt: "2026-09-01T15:00:00.000Z", addedOn: "2026-09-01", ownersOnly: true,
       expiresOn: "2026-10-01", addedBy: { you: false, name: null } },
   ],
-  trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", deletedAt: "2026-10-10T15:00:00.000Z" }],
+  trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" }],
 };
 const READY: DocumentsLoad = { status: "ready", data: DATA };
 const EMPTY: DocumentsLoad = { status: "ready", data: { ...DATA, live: [], trashed: [] } };

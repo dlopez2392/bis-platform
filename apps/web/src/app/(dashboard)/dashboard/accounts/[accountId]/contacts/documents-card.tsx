@@ -16,7 +16,7 @@ import { t, plural } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { documentsLoadFrom, type DocumentsLoad, type DocumentView } from "@/lib/documents/documents-load";
-import { expiryView, expiryText, purgeDaysLeft, purgeText } from "@/lib/documents/expiry";
+import { dayDiff, expiryView, expiryText, purgeDaysLeft, purgeText } from "@/lib/documents/expiry";
 import { MAX_BATCH, defaultCategory, titleFromFileName, typeForFile } from "@/lib/documents/rules";
 import { browserDeps, uploadOne, type UploadBatch } from "@/lib/documents/upload-client";
 import { updateDocumentFieldAction, undoDocumentFieldAction, type DocumentUndo } from "./documents-actions";
@@ -36,21 +36,38 @@ export function documentsRouteFor(accountId: string, record: DocRecord): string 
     : `/api/accounts/${accountId}/contacts/${record.id}/documents`;
 }
 
-const DAY_MS = 86_400_000;
 /**
- * "today", "yesterday", "3 days ago" in the reader's language, counted in whole elapsed days from the
- * server's `now` (the browser's clock never decides it). A clock skew that puts `createdAt` after
- * `now` reads "today", never "in 1 day".
+ * "today", "yesterday", "3 days ago" in the reader's language: whole CALENDAR days from the day the file
+ * was added to the account's today, both YYYY-MM-DD in the account's zone (the route computes them), so
+ * an evening upload reads "yesterday" the next morning, never "today". `dayDiff` is the expiry words'
+ * own day arithmetic. A day ahead of today (clock skew) reads "today", never "tomorrow".
  */
-export function addedWhen(createdAt: string, now: string, locale: Locale): string {
-  const days = Math.max(0, Math.floor((Date.parse(now) - Date.parse(createdAt)) / DAY_MS));
+export function addedWhen(addedOn: string, today: string, locale: Locale): string {
+  const days = Math.max(0, dayDiff(addedOn, today));
   return new Intl.RelativeTimeFormat(locale === "es" ? "es-US" : "en-US", { numeric: "auto" }).format(-days, "day");
 }
 
 /** "Added by Ana · 3 days ago" / "Photo taken by you · today"; a person the reader cannot name is "Someone on the team". */
-export function sourceLine(doc: DocumentView, now: string, locale: Locale): string {
+export function sourceLine(doc: DocumentView, today: string, locale: Locale): string {
   const name = doc.addedBy.you ? t(m, "documents.you", locale) : doc.addedBy.name ?? t(m, "assign.someone", locale);
-  return t(m, doc.source === "camera" ? "documents.photoBy" : "documents.addedBy", locale, { name, when: addedWhen(doc.createdAt, now, locale) });
+  return t(m, doc.source === "camera" ? "documents.photoBy" : "documents.addedBy", locale, { name, when: addedWhen(doc.addedOn, today, locale) });
+}
+
+/**
+ * One upload write at a time for the whole card: a batch, or one file's Retry. A second run while the
+ * lock is held answers null and does nothing (a double click on Retry, or a Retry during a batch, would
+ * otherwise reserve and file the same file twice). The lock is released however the run ends.
+ */
+export async function exclusive<T>(lock: { held: boolean }, run: () => Promise<T>): Promise<T | null> {
+  if (lock.held) return null;
+  lock.held = true;
+  try { return await run(); } finally { lock.held = false; }
+}
+
+/** The viewer's file survives a re-read only while that read still lists it (trashed elsewhere, or by this card's own menu). */
+export function keepOpen(openId: string | null, load: DocumentsLoad): string | null {
+  if (!openId || load.status !== "ready") return openId;
+  return load.data.live.some((d) => d.id === openId) ? openId : null;
 }
 
 /**
@@ -94,8 +111,8 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function DocumentRow({ accountId, doc, today, now, canManage, locale, handlers, onOpen }: {
-  accountId: string; doc: DocumentView; today: string; now: string; canManage: boolean; locale: Locale;
+function DocumentRow({ accountId, doc, today, canManage, locale, handlers, onOpen }: {
+  accountId: string; doc: DocumentView; today: string; canManage: boolean; locale: Locale;
   handlers: DocumentHandlers; onOpen: (d: DocumentView) => void;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, locale, params);
@@ -137,7 +154,7 @@ function DocumentRow({ accountId, doc, today, now, canManage, locale, handlers, 
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span>{tt(`documents.category.${doc.category}` as MessageKey)}</span>
             <span aria-hidden="true">·</span>
-            <span>{sourceLine(doc, now, locale)}</span>
+            <span>{sourceLine(doc, today, locale)}</span>
             <ExpiryLine expiresOn={doc.expiresOn} today={today} locale={locale} />
             {doc.ownersOnly ? (
               <span data-owners-only className="inline-flex items-center gap-1">
@@ -224,7 +241,7 @@ export function DocumentsCardView(p: {
   if (p.load.status === "error") {
     return (
       // Announced, plain words and a ghost Retry: RecordCardError's look, inside the record card's own boundary.
-      <div data-documents-card role="alert" className="space-y-2 text-sm">
+      <div data-documents-card data-record-error role="alert" className="space-y-2 text-sm">
         <p className="text-muted-foreground">{tt("documents.loadFailed")}</p>
         <Button type="button" size="sm" variant="ghost" className={control} onClick={p.onRetry}>{tt("documents.retry")}</Button>
       </div>
@@ -265,7 +282,7 @@ export function DocumentsCardView(p: {
       ) : (
         <ul>
           {data.live.map((doc) => (
-            <DocumentRow key={doc.id} accountId={p.accountId} doc={doc} today={data.today} now={data.now} canManage={p.canManage}
+            <DocumentRow key={doc.id} accountId={p.accountId} doc={doc} today={data.today} canManage={p.canManage}
               locale={p.locale} handlers={p.handlers} onOpen={p.onOpen} />
           ))}
         </ul>
@@ -309,11 +326,14 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const route = documentsRouteFor(accountId, record);
   const [state, setState] = useState<{ route: string; load: DocumentsLoad }>({ route: "", load: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
+  const [openId, setOpenId] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
       if (stale) return;
       setState((s) => (load.status === "error" && s.route === route && s.load.status === "ready" ? s : { route, load }));
+      // A file that left the list is forgotten, so an Undo or a Restore later never reopens the viewer by itself.
+      setOpenId((id) => keepOpen(id, load));
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
@@ -332,13 +352,17 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const [ownersOnly, setOwnersOnly] = useState(false);
   const [expiresOn, setExpiresOn] = useState("");
   const [busy, setBusy] = useState(false);
-  const [openId, setOpenId] = useState<string | null>(null);
+  // ONE lock for every upload write on the card (exclusive): held for a whole batch and for each Retry.
+  const [lock] = useState(() => ({ held: false }));
 
   const closePanel = () => { setFiles([]); setOwnersOnly(false); setExpiresOn(""); };
   const onFiles = (chosen: File[], from: "upload" | "camera") => {
-    // A batch on its way is never replaced by a second drop.
-    if (busy) return;
+    // A batch on its way is never replaced by a second drop (no copy says so yet: see the Task 10 report).
+    if (lock.held) return;
     if (chosen.length > MAX_BATCH) { toast.error(t(m, "documents.error.tooMany", locale)); return; }
+    // A new batch starts with the batch choices cleared.
+    setOwnersOnly(false);
+    setExpiresOn("");
     setSource(from);
     setFiles(chosen.map((file) => {
       const type = typeForFile(file.name, file.type);
@@ -353,28 +377,26 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
     setPhase(f.key, end);
     return end.kind === "done";
   };
-  /** Files that finished leave the panel and join the list; failed ones stay with their reason and Retry. */
-  const settleBatch = (done: Set<string>, all: PanelFile[]) => {
+  /** Under the lock: `busy` disables the panel's Upload, Retry, Remove and Cancel for as long as it is held. */
+  const locked = (run: () => Promise<void>) => exclusive(lock, async () => {
+    setBusy(true);
+    try { await run(); } finally { setBusy(false); }
+  });
+  /** Files that finished leave the panel and join the list; failed ones stay with their reason and Retry. The panel closes when none is left. */
+  const settle = (done: Set<string>) => {
+    if (done.size === 0) return;
     reload();
-    if (all.every((f) => done.has(f.key))) closePanel();
-    else setFiles((fs) => fs.filter((f) => !done.has(f.key)));
+    setFiles((fs) => fs.filter((f) => !done.has(f.key)));
   };
-  const onUpload = async () => {
-    const all = files;
-    setBusy(true);
+  const onUpload = () => locked(async () => {
     const done = new Set<string>();
-    for (const f of all) if (await runOne(f)) done.add(f.key);
-    setBusy(false);
-    settleBatch(done, all);
-  };
-  const onRetryFile = async (key: string) => {
+    for (const f of files) if (await runOne(f)) done.add(f.key);
+    settle(done);
+  });
+  const onRetryFile = (key: string) => locked(async () => {
     const f = files.find((x) => x.key === key);
-    if (!f) return;
-    setBusy(true);
-    const ok = await runOne(f);
-    setBusy(false);
-    if (ok) settleBatch(new Set([key]), files);
-  };
+    if (f && (await runOne(f))) settle(new Set([key]));
+  });
 
   const panel = files.length > 0 ? (
     <DocumentUploadPanel files={files} ownersOnly={ownersOnly} expiresOn={expiresOn} canChooseOwnersOnly={canManage} busy={busy} locale={locale}
@@ -395,7 +417,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
         onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel} />
       <DocumentViewer accountId={accountId} doc={open} locale={locale} onClose={() => setOpenId(null)}
         onDownload={(d) => void handlers.download(d)}
-        header={{ source: open && ready ? sourceLine(open, ready.now, locale) : "", expiry: openExpiry ? expiryText(openExpiry, locale) : null }} />
+        header={{ source: open && ready ? sourceLine(open, ready.today, locale) : "", expiry: openExpiry ? expiryText(openExpiry, locale) : null }} />
     </>
   );
 }
