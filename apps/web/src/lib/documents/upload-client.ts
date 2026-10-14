@@ -61,6 +61,7 @@ export async function uploadOne(
   const put = await deps.put(started.uploadUrl, prepared.blob, prepared.contentType, (percent) => onPhase({ kind: "uploading", percent }))
     .catch(() => false);
   if (!put) {
+    // Abandon's answer is ignored: if it fails, the reservation stays `uploading` and the documents sweep removes it.
     await deps.abandon(accountId, started.documentId, started.versionId).catch(() => undefined);
     return { kind: "failed", error: "documents.error.upload" };
   }
@@ -69,18 +70,35 @@ export async function uploadOne(
   return finished.ok ? { kind: "done" } : failed(finished);
 }
 
-/** Browser only: XHR, because fetch reports no upload progress. */
+/**
+ * An upload that makes no progress for this long is abandoned, so the card can offer Retry. A stall
+ * clock, not a total timeout: 25 MB on a slow phone uplink (about 1.5 Mbps) takes some 140 seconds
+ * and must not be cut off while bytes are still moving.
+ */
+export const UPLOAD_STALL_MS = 60_000;
+
+/**
+ * Browser only: XHR, because fetch reports no upload progress. cache-control is stored with the
+ * object and served back on every read; a private document is never cached by a browser or the CDN.
+ */
 export function xhrPut(url: string, body: Blob, contentType: string, onProgress: (percent: number) => void): Promise<boolean> {
   return new Promise((resolve) => {
     const xhr = new XMLHttpRequest();
+    let stall: ReturnType<typeof setTimeout> | undefined;
+    const arm = () => { clearTimeout(stall); stall = setTimeout(() => xhr.abort(), UPLOAD_STALL_MS); };
+    const settle = (ok: boolean) => { clearTimeout(stall); resolve(ok); };
     xhr.open("PUT", url);
     xhr.setRequestHeader("content-type", contentType);
     xhr.setRequestHeader("x-upsert", "false");
-    xhr.setRequestHeader("cache-control", "max-age=3600");
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100))); };
-    xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
-    xhr.onerror = () => resolve(false);
-    xhr.onabort = () => resolve(false);
+    xhr.setRequestHeader("cache-control", "private, no-store");
+    xhr.upload.onprogress = (e) => {
+      arm();
+      if (e.lengthComputable) onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)));
+    };
+    xhr.onload = () => settle(xhr.status >= 200 && xhr.status < 300);
+    xhr.onerror = () => settle(false);
+    xhr.onabort = () => settle(false);
+    arm();
     xhr.send(body);
   });
 }

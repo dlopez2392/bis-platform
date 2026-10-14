@@ -4,7 +4,7 @@ import type { UploadDeps } from "./upload-client";
 vi.mock("@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions", () => ({
   startDocumentUploadAction: vi.fn(), finishDocumentUploadAction: vi.fn(), abandonDocumentUploadAction: vi.fn(),
 }));
-const { prepareFile, uploadOne, xhrPut } = await import("./upload-client");
+const { prepareFile, uploadOne, xhrPut, UPLOAD_STALL_MS } = await import("./upload-client");
 
 const C = "11111111-1111-4111-8111-111111111111";
 const batch = { record: { kind: "contact" as const, id: C }, ownersOnly: false, expiresOn: null, source: "upload" as const };
@@ -90,6 +90,12 @@ describe("uploadOne: start, PUT, finish, in that order (spec 4.2, V6)", () => {
     expect([url, body, type]).toEqual(["https://u", stripped, "image/jpeg"]);
     expect(body).toBe(stripped);
   });
+  it("PUTs with the type the browser PRODUCED, not the chosen file's own (Safari's WebP comes back PNG) (mutation: PUT with the chosen file's own type -> FAILS)", async () => {
+    const d = deps({ strip: vi.fn(async () => new Blob([new Uint8Array(5)], { type: "image/png" })) });
+    await uploadOne("acc", { file: file("a.webp", "image/webp"), title: "a", category: "photo" }, batch, d, () => {});
+    expect(mockOf(d.start).mock.calls[0]![1]).toMatchObject({ contentType: "image/png", name: "a.webp" });
+    expect(mockOf(d.put).mock.calls[0]![2]).toBe("image/png");
+  });
   it("finish's refusal reaches the card with its key; a start that throws is Couldn't upload with nothing PUT (mutation: report done whatever finish answers -> FAILS)", async () => {
     const refused = deps({ finish: vi.fn(async () => ({ ok: false as const, error: "documents.error.badType" })) });
     expect(await uploadOne("acc", { file: file("a.pdf", "application/pdf"), title: "a", category: "other" }, batch, refused, () => {}))
@@ -122,16 +128,18 @@ describe("xhrPut (spec 4.2: progress, straight to storage)", () => {
     open(method: string, url: string) { this.method = method; this.url = url; }
     setRequestHeader(k: string, v: string) { this.headers[k.toLowerCase()] = v; }
     send(body: unknown) { this.sent = body; }
+    aborted = false;
+    abort() { this.aborted = true; this.onabort?.(); }
   }
 
-  it("PUTs the blob itself with the declared type and reports whole percents (mutation: drop the content-type header -> FAILS)", async () => {
+  it("PUTs the blob itself with the declared type, never cacheable, and reports whole percents (mutation: drop the content-type header, or cache-control max-age=3600 -> FAILS)", async () => {
     vi.stubGlobal("XMLHttpRequest", FakeXhr);
     const body = new Blob([new Uint8Array(3)], { type: "image/png" });
     const seen: number[] = [];
     const p = xhrPut("https://storage/x?token=t", body, "image/png", (n) => seen.push(n));
     const x = FakeXhr.last;
     expect([x.method, x.url, x.sent]).toEqual(["PUT", "https://storage/x?token=t", body]);
-    expect(x.headers).toEqual({ "content-type": "image/png", "x-upsert": "false", "cache-control": "max-age=3600" });
+    expect(x.headers).toEqual({ "content-type": "image/png", "x-upsert": "false", "cache-control": "private, no-store" });
     x.upload.onprogress!({ lengthComputable: true, loaded: 1, total: 3 });
     x.upload.onprogress!({ lengthComputable: false, loaded: 2, total: 0 });
     x.upload.onprogress!({ lengthComputable: true, loaded: 3, total: 3 });
@@ -152,5 +160,41 @@ describe("xhrPut (spec 4.2: progress, straight to storage)", () => {
     const aborted = xhrPut("https://u", body, "application/pdf", () => {});
     FakeXhr.last.onabort!();
     expect([await refused, await errored, await aborted]).toEqual([false, false, false]);
+  });
+
+  it("an upload with no progress for UPLOAD_STALL_MS is aborted and answers false; progress resets the clock (mutation: no stall timer -> FAILS)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+      let answer: boolean | undefined;
+      void xhrPut("https://u", new Blob([new Uint8Array(1)]), "application/pdf", () => {}).then((v) => { answer = v; });
+      const x = FakeXhr.last;
+      await vi.advanceTimersByTimeAsync(UPLOAD_STALL_MS - 1_000);
+      x.upload.onprogress!({ lengthComputable: true, loaded: 1, total: 4 });
+      await vi.advanceTimersByTimeAsync(UPLOAD_STALL_MS - 1_000);
+      expect(answer).toBeUndefined();
+      expect(x.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(x.aborted).toBe(true);
+      expect(answer).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a finished upload stops the stall clock (mutation: never clear the timer -> FAILS)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+      const p = xhrPut("https://u", new Blob([new Uint8Array(1)]), "application/pdf", () => {});
+      const x = FakeXhr.last;
+      x.status = 200;
+      x.onload!();
+      expect(await p).toBe(true);
+      await vi.advanceTimersByTimeAsync(UPLOAD_STALL_MS * 2);
+      expect(x.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
