@@ -351,6 +351,71 @@ describe("a customer's files go with them (deviation 2)", () => {
     expect(r.purgedDocuments).toBe(501);
   });
 
+  it("never throws after the first deletion: a later chunk's failed read keeps its contacts and the answer comes back (mutation: rethrow after a deletion -> FAILS)", async () => {
+    // A fake client: 101 ids are two chunks of 100; chunk 1 holds one file, chunk 2's read fails.
+    const ids = Array.from({ length: 101 }, (_, n) => `c${n}`);
+    let chunk: string[] = [];
+    const removed: string[] = [];
+    const docs = {
+      select: () => docs, eq: () => docs, order: () => docs,
+      in: (_c: string, v: string[]) => { chunk = v; return docs; },
+      range: async () => (chunk.includes("c100")
+        ? { data: null, error: { message: "read down" } }
+        : { data: [{ id: "d0", contact_id: "c0", versions: [{ storage_path: "acc/d0/v0" }] }], error: null }),
+      delete: () => ({ eq: () => ({ eq: (_c: string, id: string) => ({ select: async () => ({ data: [{ id }], error: null }) }) }) }),
+    };
+    const fake = {
+      from: (t: string) => (t === "documents" ? docs : { insert: async () => ({ error: null }) }),
+      storage: { from: () => ({ remove: async (paths: string[]) => { removed.push(...paths); return { data: [], error: null }; } }) },
+    } as unknown as SupabaseClient;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await purgeContactDocuments(fake, "acc", ids, "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: ["c100"] });
+      expect(removed).toEqual(["acc/d0/v0"]);
+      expect(errors.mock.calls.some(([msg]) => String(msg).includes("read down") && String(msg).includes("c100"))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("a deleted row with no stored object counts as a deletion too (mutation: only a removed object marks the purge as started -> FAILS)", async () => {
+    // A document still being created has no version yet: its row goes with no remove call at all.
+    const ids = Array.from({ length: 101 }, (_, n) => `c${n}`);
+    let chunk: string[] = [];
+    const docs = {
+      select: () => docs, eq: () => docs, order: () => docs,
+      in: (_c: string, v: string[]) => { chunk = v; return docs; },
+      range: async () => (chunk.includes("c100")
+        ? { data: null, error: { message: "read down" } }
+        : { data: [{ id: "d0", contact_id: "c0", versions: [] }], error: null }),
+      delete: () => ({ eq: () => ({ eq: (_c: string, id: string) => ({ select: async () => ({ data: [{ id }], error: null }) }) }) }),
+    };
+    const fake = {
+      from: (t: string) => (t === "documents" ? docs : { insert: async () => ({ error: null }) }),
+      storage: { from: () => ({ remove: async () => ({ data: [], error: null }) }) },
+    } as unknown as SupabaseClient;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await purgeContactDocuments(fake, "acc", ids, "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: ["c100"] });
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it("a failed read before anything is removed still throws: nothing is gone, so try again is true (mutation: swallow every read error -> FAILS)", async () => {
+    const docs = {
+      select: () => docs, eq: () => docs, in: () => docs, order: () => docs,
+      range: async () => ({ data: null, error: { message: "read down" } }),
+    };
+    const fake = { from: () => docs, storage: { from: () => ({ remove: async () => ({ data: [], error: null }) }) } } as unknown as SupabaseClient;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(purgeContactDocuments(fake, "acc", ["c1"], "user_owner")).rejects.toThrow(/read down/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("the dialog's count includes trashed files and other contacts' files never count (mutation: filter deleted_at is null -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;

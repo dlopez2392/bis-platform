@@ -294,28 +294,43 @@ export type ContactPurge = { purgedDocuments: number; keptContacts: string[] };
  * `user`. A failed remove or row delete keeps that CONTACT: its remaining documents are not touched,
  * the ids are logged, and it is answered in keptContacts, so the caller does not delete it. Removing
  * an object that is already gone is not an error (plan A4), so a retry finishes what a failure left.
+ * Never throws after the first deletion; unread contacts come back as kept. A read that fails before
+ * any object was removed throws (nothing is gone, so "try again" is true); once one has been removed,
+ * a failed read keeps the contacts of that chunk and of every later one, logged, and the answer is
+ * returned, so the caller reports what really happened (the NO ACTION FK still guards those contacts).
  */
 export async function purgeContactDocuments(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], actorId: string,
 ): Promise<ContactPurge> {
   const kept = new Set<string>();
   let purged = 0;
+  // Set once any object has left the bucket or any row is deleted: from then on a throw would tell the
+  // caller nothing went.
+  let removedAny = false;
   for (let i = 0; i < contactIds.length; i += 100) {
     // Read EVERY document of this chunk first (paged, so PostgREST's row cap can never truncate it
     // silently), then delete: deleting while paging would shift the pages.
     type Row = { id: string; contact_id: string; versions: { storage_path: string }[] | null };
     const rows: Row[] = [];
-    for (let from = 0; ; from += 500) {
-      const { data, error } = await db.from("documents")
-        .select("id, contact_id, versions:document_versions!document_versions_document_fkey(storage_path)")
-        .eq("account_id", accountId).in("contact_id", [...contactIds.slice(i, i + 100)])
-        // A stable total order (the primary key) for the paging: without it two pages may overlap or skip
-        // rows. Nothing is deleted until every page is read, so the ranges cannot shift under the loop.
-        .order("id").range(from, from + 499);
-      if (error) throw new Error(`purgeContactDocuments (read) failed: ${error.message}`);
-      const page = (data ?? []) as unknown as Row[];
-      rows.push(...page);
-      if (page.length < 500) break;
+    try {
+      for (let from = 0; ; from += 500) {
+        const { data, error } = await db.from("documents")
+          .select("id, contact_id, versions:document_versions!document_versions_document_fkey(storage_path)")
+          .eq("account_id", accountId).in("contact_id", [...contactIds.slice(i, i + 100)])
+          // A stable total order (the primary key) for the paging: without it two pages may overlap or skip
+          // rows. Nothing is deleted until every page is read, so the ranges cannot shift under the loop.
+          .order("id").range(from, from + 499);
+        if (error) throw new Error(`purgeContactDocuments (read) failed: ${error.message}`);
+        const page = (data ?? []) as unknown as Row[];
+        rows.push(...page);
+        if (page.length < 500) break;
+      }
+    } catch (e) {
+      if (!removedAny) throw e;
+      const unread = contactIds.slice(i);
+      for (const id of unread) kept.add(id);
+      console.error(`purgeContactDocuments: account ${accountId}: ${(e as Error).message}; after ${purged} purged, ${unread.length} contact(s) not read are kept: ${unread.join(",")}`);
+      break;
     }
     for (const d of rows) {
       if (kept.has(d.contact_id)) continue;
@@ -327,6 +342,7 @@ export async function purgeContactDocuments(
           console.error(`purgeContactDocuments: account ${accountId} contact ${d.contact_id} document ${d.id}: objects not removed, contact kept: ${rm.message}`);
           continue;
         }
+        removedAny = true;
       }
       const { data: gone, error: del } = await db.from("documents").delete().eq("account_id", accountId).eq("id", d.id).select("id");
       if (del) {
@@ -336,6 +352,7 @@ export async function purgeContactDocuments(
       }
       // A row another purge already took is not this purge's: neither counted nor announced.
       if ((gone ?? []).length === 0) continue;
+      removedAny = true;
       purged++;
       await emitAfter(db, accountId, "document.purged", actorId, { documentId: d.id, contactId: d.contact_id });
     }
