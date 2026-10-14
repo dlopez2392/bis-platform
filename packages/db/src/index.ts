@@ -272,8 +272,11 @@ export {
   markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly, trashDocument, restoreDocument,
   listAbandonedUploads, deleteAbandonedVersion, listPurgeableDocuments, purgeDocumentRow, listDocumentTimeline, MAX_DOCUMENTS_READ,
   countContactDocuments, purgeContactDocuments, type ContactPurge,
+  documentSpaceUsed, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, listDocumentVersionTimeline,
+  DOCUMENT_PURGING_MARK,
   type DocumentRecordRef, type DocumentRow, type DocumentVersionRow, type ListedDocument, type RecordDocuments, type ReserveOutcome,
   type DocumentField, type CasOutcome, type SweepVersion, type PurgeCandidate, type TimelineDocument,
+  type DocumentVersionState, type TimelineDocumentVersion,
 } from "./documents";
 export {
   DOCUMENT_BUCKET, DOCUMENT_QUOTA_BYTES, DOCUMENT_MAX_BYTES, DOCUMENT_CONTENT_TYPES, DOCUMENT_CATEGORIES, DOCUMENT_SOURCES,
