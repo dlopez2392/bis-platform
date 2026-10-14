@@ -45,6 +45,8 @@ const dbMocks = {
   // S-09 §7.5: the staff language writers.
   setContactLanguage: vi.fn(), restoreContactLanguage: vi.fn(), keepContactLanguageHint: vi.fn(),
   isLanguageTriple: vi.fn<(v: unknown) => boolean>(() => true),
+  // S-07 (owner ruling 2026-10-13): a customer's files go with them.
+  countContactDocuments: vi.fn(), purgeContactDocuments: vi.fn(),
 };
 /** The service client and the request client, told apart by identity. */
 const SERVICE = { tag: "service-db" };
@@ -63,7 +65,7 @@ const REQUEST = {
 vi.mock("@bis/db", () => dbMocks);
 
 const {
-  updateContactFieldAction, bulkDeleteContactsAction, bulkAddTagAction, bulkRemoveTagAction,
+  updateContactFieldAction, bulkDeleteContactsAction, countContactDocumentsAction, bulkAddTagAction, bulkRemoveTagAction,
   setPhoneCountryAction, undoPhoneCountryAction,
   undoInlinePhoneEditAction, createContactAction,
   assignContactsAction, undoAssignContactsAction,
@@ -151,9 +153,9 @@ describe("updateContactFieldAction", () => {
 
 describe("bulkDeleteContactsAction", () => {
   it("passes through honest counts", async () => {
-    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1 });
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
     const r = await bulkDeleteContactsAction("a1", ["x", "y", "z"]);
-    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1 });
+    expect(r).toEqual({ ok: true, deleted: 2, skippedBlocked: 1, skippedFiles: 0 });
   });
   it("returns ok:false instead of throwing when the db op throws", async () => {
     dbMocks.deleteContacts.mockRejectedValue(new Error("boom"));
@@ -172,6 +174,73 @@ describe("bulkDeleteContactsAction", () => {
     await expect(bulkDeleteContactsAction("a1", ["x"])).rejects.toBe(denied);
     expect(requireAccountOwner).toHaveBeenCalledWith("a1");
     expect(dbMocks.deleteContacts).not.toHaveBeenCalled();
+  });
+
+  // S-07, owner ruling 2026-10-13: deleting a customer deletes their files. deleteContacts proves
+  // the ids on the REQUEST client (RLS), and only the ids it left deletable reach the purge, which
+  // runs on the SERVICE client (0077: authenticated has no write on documents or storage.objects).
+  type DeleteOpts = { beforeDelete?: (ids: string[]) => Promise<string[]> };
+  it("purges each deletable customer's files on the SERVICE client, as the Owner, BEFORE the contacts go, and keeps the ones it could not clear (owner ruling; mutation: call deleteContacts without beforeDelete -> FAILS)", async () => {
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 3, keptContacts: ["y"] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {
+      const kept = await opts!.beforeDelete!(["x", "y"]);
+      return { deleted: 1, skippedBlocked: 0, skippedFiles: kept.length };
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x", "y"])).toEqual({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 1 });
+    expect(dbMocks.purgeContactDocuments).toHaveBeenCalledWith(SERVICE, "a1", ["x", "y"], "user_1");
+  });
+  it("the deletable ids are proven on the REQUEST client: deleteContacts never gets the service client (mutation: deleteContacts(serviceDb(), …) -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
+    await bulkDeleteContactsAction("a1", ["x"]);
+    expect(dbMocks.deleteContacts.mock.calls[0]![0]).toBe(REQUEST);
+  });
+  it("a purge that throws fails the whole delete, never a silent success (mutation: catch the purge's throw and return [] -> FAILS)", async () => {
+    dbMocks.purgeContactDocuments.mockRejectedValue(new Error("db down"));
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {
+      await opts!.beforeDelete!(["x"]);
+      return { deleted: 1, skippedBlocked: 0, skippedFiles: 0 };
+    });
+    expect((await bulkDeleteContactsAction("a1", ["x"])).ok).toBe(false);
+  });
+  it("a file that arrives mid-delete: the FK keeps the customers and the answer says the files already went (mutation: drop the errorKey branch -> FAILS)", async () => {
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 2, keptContacts: [] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {
+      await opts!.beforeDelete!(["x"]);
+      throw new Error('deleteContacts failed: update or delete on table "contacts" violates foreign key constraint "documents_contact_fkey" on table "documents"');
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x"])).toEqual({ ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" });
+  });
+  it("any failure after files went says so; a failure before any file went does not (mutation: key on documents_contact_fkey again -> FAILS on the first expect)", async () => {
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 1, keptContacts: [] });
+    dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {
+      await opts!.beforeDelete!(["x"]);
+      throw new Error("deleteContacts failed: network");
+    });
+    expect(await bulkDeleteContactsAction("a1", ["x"])).toMatchObject({ ok: false, errorKey: "contacts.delete.filesGoneKept" });
+    dbMocks.purgeContactDocuments.mockResolvedValue({ purgedDocuments: 0, keptContacts: [] });
+    expect(await bulkDeleteContactsAction("a1", ["x"])).toEqual({ ok: false, error: "Delete failed — please try again." });
+  });
+});
+
+describe("countContactDocumentsAction", () => {
+  const C = "11111111-1111-4111-8111-111111111111";
+  it("counts on the REQUEST client after the Owner check; a failed or null count is ok:false, never 0 (mutation: return { ok: true, count: 0 } on error -> FAILS; count on serviceDb() -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.countContactDocuments.mockResolvedValue(4);
+    expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: true, count: 4 });
+    expect(requireAccountOwner).toHaveBeenCalledWith("a1");
+    expect(dbMocks.countContactDocuments.mock.calls[0]![0]).toBe(REQUEST);   // the request client, by identity
+    expect(dbMocks.countContactDocuments.mock.calls[0]!.slice(1)).toEqual(["a1", [C]]);
+    dbMocks.countContactDocuments.mockRejectedValue(new Error("countContactDocuments: the count came back null"));
+    expect(await countContactDocumentsAction("a1", [C])).toEqual({ ok: false });
+    expect(await countContactDocumentsAction("a1", ["not-a-uuid"])).toEqual({ ok: false });
+  });
+  it("a caller who is not the Owner is refused by the guard's redirect before anything is counted (mutation: requireAccountAccess as the guard -> FAILS)", async () => {
+    const denied = new Error("REDIRECT:/dashboard/accounts/a1/dashboard");
+    requireAccountOwner.mockRejectedValueOnce(denied);
+    await expect(countContactDocumentsAction("a1", [C])).rejects.toBe(denied);
+    expect(dbMocks.countContactDocuments).not.toHaveBeenCalled();
   });
 });
 

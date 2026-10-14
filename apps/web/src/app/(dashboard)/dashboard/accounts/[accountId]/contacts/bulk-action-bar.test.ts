@@ -5,19 +5,26 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { m } from "@/lib/messages";
+import { renderedText } from "@/lib/rendered-text";
 
 const bulkAddTagAction = vi.fn();
 const bulkRemoveTagAction = vi.fn();
 const bulkDeleteContactsAction = vi.fn();
 const assignContactsAction = vi.fn();
 const undoAssignContactsAction = vi.fn();
+const countContactDocumentsAction = vi.fn();
 vi.mock("./actions", () => ({
   bulkAddTagAction, bulkRemoveTagAction, bulkDeleteContactsAction, assignContactsAction, undoAssignContactsAction,
+  countContactDocumentsAction,
 }));
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("sonner", () => ({ toast: toasts }));
 
-const { applyBulkTag, BulkActionBar, assignSelected, bulkAssignChoices } = await import("./bulk-action-bar");
+const {
+  applyBulkTag, BulkActionBar, assignSelected, bulkAssignChoices,
+  DeleteFilesLine, canConfirmDelete, deleteDialogCopy, announceDeleteResult,
+} = await import("./bulk-action-bar");
+type FilesState = import("./bulk-action-bar").FilesState;
 const BAR_SRC = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "bulk-action-bar.tsx"), "utf8");
 
 beforeEach(() => {
@@ -194,5 +201,78 @@ describe("BulkActionBar: Assign to… (F-085)", () => {
     assignContactsAction.mockRejectedValue(new Error("stale"));
     await assignSelected("a1", ["c1"], ANA.userId, ANA.label, () => {});
     expect(toasts.error).toHaveBeenCalledWith(m["assign.failed"]);
+  });
+});
+
+// S-07, owner ruling 2026-10-13: deleting a customer deletes their files, and the dialog says how
+// many BEFORE anything goes. Spanish is pinned to the literal owner's words, never t()'s output (a
+// missing twin falls back to English silently).
+describe("the delete dialog says how many files go (owner ruling 2026-10-13)", () => {
+  const cat = m as Record<string, string>;
+  const line = (state: FilesState, locale: "en" | "es" = "en") =>
+    renderedText(renderToStaticMarkup(createElement(DeleteFilesLine, { state, locale }))).trim();
+  it("in English and Spanish, singular and plural, the owner's words (mutation: drop the One form -> FAILS)", () => {
+    expect(line({ status: "ready", count: 4 })).toBe("This also deletes 4 files.");
+    expect(line({ status: "ready", count: 4 }, "es")).toBe("También se borrarán 4 archivos.");
+    expect(line({ status: "ready", count: 1 })).toBe("This also deletes 1 file.");
+    expect(line({ status: "ready", count: 1 }, "es")).toBe("También se borrará 1 archivo.");
+  });
+  it("no files, no line; counting is a skeleton; a failed count says so, in the reader's language (rule 7, rule 5; mutation: show nothing on error -> FAILS)", () => {
+    expect(renderToStaticMarkup(createElement(DeleteFilesLine, { state: { status: "ready", count: 0 }, locale: "en" }))).toBe("");
+    const loading = renderToStaticMarkup(createElement(DeleteFilesLine, { state: { status: "loading" }, locale: "en" }));
+    expect(loading).toContain("data-delete-files-skeleton");
+    expect(renderedText(loading).trim()).toBe("");
+    expect(line({ status: "error" })).toBe(m["contacts.delete.filesFailed"]);
+    expect(line({ status: "error" }, "es")).toBe(cat["contacts.delete.filesFailed.es"]);
+    expect(cat["contacts.delete.filesFailed.es"]).toBe("No se pudo revisar si hay archivos. Cierre esto e intente de nuevo.");
+  });
+  it("Delete is enabled only with the typed count AND a known file count (mutation: ignore the file count -> FAILS)", () => {
+    expect(canConfirmDelete("2", 2, { status: "ready", count: 3 })).toBe(true);
+    expect(canConfirmDelete(" 2 ", 2, { status: "ready", count: 0 })).toBe(true);
+    expect(canConfirmDelete("2", 2, { status: "loading" })).toBe(false);
+    expect(canConfirmDelete("2", 2, { status: "error" })).toBe(false);
+    expect(canConfirmDelete("3", 2, { status: "ready", count: 0 })).toBe(false);
+  });
+  it("the dialog's own words are in the reader's language (plan review minor 10; mutation: read m[\"bulk.confirmBody\"] directly -> FAILS)", () => {
+    expect(deleteDialogCopy(2, "es")).toEqual({
+      title: "¿Borrar 2 contactos?", body: "Esto no se puede deshacer. Escriba 2 para confirmar.", cancel: "Cancelar", confirm: "Borrar…",
+    });
+    expect(deleteDialogCopy(1, "es").title).toBe("¿Borrar 1 contacto?");
+    expect(deleteDialogCopy(1, "en").title).toBe("Delete 1 contact?");
+    expect(deleteDialogCopy(3, "en")).toEqual({
+      title: "Delete 3 contacts?", body: "This can't be undone. Type 3 to confirm.", cancel: "Cancel", confirm: "Delete…",
+    });
+  });
+  it("the dialog is wired to them: Delete opens through openConfirm (which counts), the line sits in the header, the copy comes from deleteDialogCopy, and the destructive button is gated on canConfirmDelete (mutation: setConfirmOpen(true) on the Delete button -> FAILS)", () => {
+    expect(BAR_SRC).toMatch(/onClick=\{openConfirm\}/);
+    expect(BAR_SRC).not.toContain("onClick={() => setConfirmOpen(true)}");
+    expect(BAR_SRC).toMatch(/countContactDocumentsAction\(accountId, ids\)/);
+    expect(BAR_SRC).toMatch(/<\/DialogDescription>\s*<DeleteFilesLine state=\{files\} locale=\{locale\} \/>\s*<\/DialogHeader>/);
+    expect(BAR_SRC).toContain("disabled={!canConfirmDelete(typed, count, files)}");
+    expect(BAR_SRC).toContain("deleteDialogCopy(count, locale)");
+    expect(BAR_SRC).not.toContain('m["bulk.confirmBody"]');
+    expect(BAR_SRC).toContain("announceDeleteResult(r, locale)");
+  });
+});
+
+describe("what the delete says afterwards (owner ruling 2026-10-13)", () => {
+  const cat = m as Record<string, string>;
+  it("files gone but the customers kept says exactly that, in the reader's language (mutation: always toast r.error -> FAILS)", () => {
+    announceDeleteResult({ ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" }, "es");
+    expect(toasts.error).toHaveBeenCalledWith(cat["contacts.delete.filesGoneKept.es"]);
+    expect(cat["contacts.delete.filesGoneKept.es"]).toBe("Los archivos se borraron, pero los clientes se conservaron. Intente de nuevo.");
+    expect(toasts.success).not.toHaveBeenCalled();
+  });
+  it("a plain failure toasts the action's own error", () => {
+    announceDeleteResult({ ok: false, error: "Delete failed — please try again." }, "en");
+    expect(toasts.error).toHaveBeenCalledWith("Delete failed — please try again.");
+  });
+  it("customers kept because their files could not go are named after the success line (mutation: drop the skippedFiles toast -> FAILS)", () => {
+    announceDeleteResult({ ok: true, deleted: 1, skippedBlocked: 0, skippedFiles: 2 }, "es");
+    expect(toasts.success).toHaveBeenCalledWith(m["bulk.deletedOne"]);
+    expect(toasts.error).toHaveBeenCalledWith("Se borraron 1 · se conservaron 2 cuyos archivos no se pudieron borrar. Intente de nuevo.");
+    toasts.error.mockReset();
+    announceDeleteResult({ ok: true, deleted: 3, skippedBlocked: 0, skippedFiles: 0 }, "en");
+    expect(toasts.error).not.toHaveBeenCalled();
   });
 });

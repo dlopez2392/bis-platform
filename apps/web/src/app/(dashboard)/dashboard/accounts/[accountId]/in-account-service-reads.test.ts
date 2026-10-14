@@ -82,6 +82,9 @@ const ALLOWED: Record<string, Reason> = {
   // createContactAction's narrow-caller flag write moved to lib/contacts/add-contact-by-hand.ts.
   // The language actions (S-09 §7.5) follow the same rule: the service writers run only after
   // getContact on the request client found the contact.
+  // bulkDeleteContactsAction (0077, owner ruling 2026-10-13): the documents purge runs on the service
+  // client only for the ids deleteContacts' request-client pre-read left deletable, scoped to the same
+  // account, and only after requireAccountOwner.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).

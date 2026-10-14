@@ -8,7 +8,8 @@ import { deleteContacts, addTagToContacts, removeTagFromContacts, updateContact,
          assignContacts, undoAssignContacts, type PreviousAssignee,
          setContactsBusiness, undoSetBusiness, GROUP_NAME_MAX, type GroupMemberSnapshot,
          setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple,
-         type ContactLanguage, type LanguageTriple } from "@bis/db";
+         type ContactLanguage, type LanguageTriple,
+         countContactDocuments, purgeContactDocuments } from "@bis/db";
 import { addContactByHand } from "@/lib/contacts/add-contact-by-hand";
 import { seesWholeAccount } from "@/lib/auth-role";
 import { MAX_ASSIGN, MAX_MOVED_TASKS, isUuid, isUuidOrNull, isRefusal } from "@/lib/assign/action-guards";
@@ -466,7 +467,10 @@ export async function bulkRemoveTagAction(
 
 export async function bulkDeleteContactsAction(
   accountId: string, contactIds: string[],
-): Promise<{ ok: true; deleted: number; skippedBlocked: number } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; deleted: number; skippedBlocked: number; skippedFiles: number }
+  | { ok: false; error: string; errorKey?: "contacts.delete.filesGoneKept" }
+> {
   // Staff and roles: delete is Owner-only (requireAccountOwner's own doc
   // comment). Staff (and a client whose role could not be settled) are
   // redirected to their own dashboard — never 403'd, and never swallowed
@@ -474,14 +478,52 @@ export async function bulkDeleteContactsAction(
   // caller. 0066's RESTRICTIVE policy refuses the same write at the DB
   // layer too, but this guard runs FIRST: it must never be possible for a
   // refused delete to read back as "deleted: 0" success.
-  await requireAccountOwner(accountId);
+  const { userId } = await requireAccountOwner(accountId);
   if (contactIds.length === 0) return { ok: false, error: "Nothing selected." };
+  // Owner ruling 2026-10-13: a customer's files go with them. deleteContacts proves the deletable ids
+  // on the REQUEST client (RLS reads which of these ids are this account's contacts, and drops the
+  // linked ones); only those reach beforeDelete, where the purge removes each document's objects and
+  // then its row on the SERVICE client (0077: authenticated has no write on documents and none on
+  // storage.objects), BEFORE any contact row is deleted. A customer whose files could not all be
+  // removed is kept (skippedFiles), and the NO ACTION FK refuses the delete of any contact whose
+  // document rows remain.
+  let purged = 0;
   try {
-    const r = await deleteContacts(await dbForRequest(), accountId, contactIds);
+    const r = await deleteContacts(await dbForRequest(), accountId, contactIds, {
+      beforeDelete: async (deletable) => {
+        const p = await purgeContactDocuments(serviceDb(), accountId, deletable, userId);
+        purged = p.purgedDocuments;
+        return p.keptContacts;
+      },
+    });
     revalidatePath(contactsPath(accountId));
     return { ok: true, ...r };
-  } catch {
+  } catch (e) {
+    console.error(`contacts delete (account ${accountId}): ${loggableError(e)}`);
+    // Files were already removed and then the contact delete failed (most likely a file added between
+    // the purge and the delete, which the NO ACTION FK refuses, but ANY failure after a purge leaves
+    // the same state): say exactly that, never a plain "try again" that hides the files went.
+    if (purged > 0) {
+      revalidatePath(contactsPath(accountId));
+      return { ok: false, error: "Delete failed — please try again.", errorKey: "contacts.delete.filesGoneKept" };
+    }
     return { ok: false, error: "Delete failed — please try again." };
+  }
+}
+
+/** The delete dialog's file count (owner ruling 2026-10-13), on the Owner's request client, so RLS
+ *  decides what is counted. Never 0 on a failure: a failed or null count is ok:false. */
+export async function countContactDocumentsAction(
+  accountId: string, contactIds: string[],
+): Promise<{ ok: true; count: number } | { ok: false }> {
+  await requireAccountOwner(accountId);
+  if (!Array.isArray(contactIds) || !contactIds.every((id) => isUuid(id))) return { ok: false };
+  if (contactIds.length === 0) return { ok: true, count: 0 };
+  try {
+    return { ok: true, count: await countContactDocuments(await dbForRequest(), accountId, contactIds.map((id) => id.toLowerCase())) };
+  } catch (e) {
+    console.error(`contacts delete: file count failed (account ${accountId}): ${loggableError(e)}`);
+    return { ok: false };
   }
 }
 
