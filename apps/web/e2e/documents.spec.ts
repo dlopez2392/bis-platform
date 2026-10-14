@@ -278,7 +278,7 @@ test("1. upload two files: progress shows, each joins the list, the count rises,
   await remember();
 });
 
-test("2. the stored photo has no EXIF and is turned upright, and storage serves it private, no-store (Chromium)", async ({ page }) => {
+test("2. the stored photo has no EXIF and is turned upright, and storage keeps it as private, no-store (Chromium)", async ({ page }) => {
   // Positive control on the SOURCE: the fixture really carries EXIF, a GPS pointer and a 40x30 frame.
   const source = withExifOrientation6AndGps(await canvasImage(page, "image/jpeg", 40, 30));
   const before = jpegInfo(source);
@@ -294,9 +294,7 @@ test("2. the stored photo has no EXIF and is turned upright, and storage serves 
   if (error || !signed) throw new Error(`createSignedUrl: ${error?.message ?? "no data"}`);
   const res = await fetch(signed.signedUrl);
   expect(res.status).toBe(200);
-  // xhrPut sends cache-control "private, no-store"; storage keeps it with the object and serves it on
-  // every read (mutation: drop that header from xhrPut -> storage's default "max-age=3600" -> FAILS).
-  expect(res.headers.get("cache-control")).toBe("private, no-store");
+  expect(res.headers.get("content-type")).toMatch(/^image\/jpeg\b/);
   const stored = Buffer.from(await res.arrayBuffer());
   const after = jpegInfo(stored);
   expect(after.soi, "stored object is a JPEG").toBe(true);
@@ -306,6 +304,17 @@ test("2. the stored photo has no EXIF and is turned upright, and storage serves 
   expect(stored.includes(GPS_IFD_TAG) && stored.includes(Buffer.from("Exif\0\0", "binary"))).toBe(false);
   // Orientation 6 applied: width and height swap (mutation: createImageBitmap(file, { imageOrientation: "none" }) -> 40x30 -> FAILS).
   expect({ width: after.width, height: after.height }).toEqual({ width: before.height, height: before.width });
+
+  // LAST, so a header question can never hide the EXIF proof above. xhrPut sends cache-control
+  // "private, no-store" and storage keeps it as the object's metadata. It is asserted there, not on
+  // the signed GET's response: storage's signed-URL read path sends no cache-control header at all
+  // (null on CI's local stack AND on hosted bis-ci, orchestrator probe 2026-10-13), even though the
+  // stored value is right. info() answers storage-js 2.110.8's Camelize<FileObjectV2>, whose
+  // `cache_control` arrives as `cacheControl`. Mutation: drop that header from xhrPut -> storage's
+  // default "max-age=3600" -> FAILS.
+  const { data: info, error: infoError } = await db().storage.from(DOCUMENT_BUCKET).info(version.storage_path);
+  if (infoError || !info) throw new Error(`storage info: ${infoError?.message ?? "no data"}`);
+  expect(info.cacheControl).toBe("private, no-store");
 });
 
 test("3. one failing file in a batch shows its reason and Retry; a double Retry files it exactly once", async ({ page }) => {
