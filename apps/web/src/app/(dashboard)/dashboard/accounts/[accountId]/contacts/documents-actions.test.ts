@@ -20,7 +20,8 @@ const db = {
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
   return { ...db, DOCUMENT_BUCKET: real.DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES: real.DOCUMENT_MAX_BYTES,
-    isDocumentCategory: real.isDocumentCategory, isDocumentContentType: real.isDocumentContentType };
+    isDocumentCategory: real.isDocumentCategory, isDocumentContentType: real.isDocumentContentType,
+    DOCUMENT_PURGING_MARK: real.DOCUMENT_PURGING_MARK };
 });
 const A = await import("./documents-actions");
 
@@ -248,6 +249,15 @@ describe("startDocumentVersionUploadAction (spec 3.3, 4.1: Upload new version)",
     expect(db.createDocument).not.toHaveBeenCalled();
     expect(storage.createSignedUploadUrl).toHaveBeenCalledWith(`${ACC}/${D}/${V}`);
   });
+  it("an id with hex letters, sent uppercased, is lowercased for the proof read, the reservation and the answer (review I1: D has no letters; mutation: use the raw input id -> FAILS)", async () => {
+    const HEX = "abcdef12-3456-4789-8abc-def012345678";
+    db.reserveDocumentVersion.mockResolvedValue({ status: "ok", versionId: V, storagePath: `${ACC}/${HEX}/${V}` });
+    expect(await A.startDocumentVersionUploadAction(ACC, HEX.toUpperCase(), vInput()))
+      .toEqual({ ok: true, documentId: HEX, versionId: V, uploadUrl: "https://x/upload?token=t" });
+    expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, HEX);
+    expect(db.reserveDocumentVersion.mock.calls[0]![1]).toMatchObject({ documentId: HEX });
+    expect(storage.createSignedUploadUrl).toHaveBeenCalledWith(`${ACC}/${HEX}/${V}`);
+  });
   it("a file the caller cannot see, or one never listed, is refused and nothing is reserved (mutations: treat null as visible; drop the current-version check -> FAILS)", async () => {
     db.getDocument.mockResolvedValueOnce(null);
     expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.refused" });
@@ -371,6 +381,21 @@ describe("purgeDocumentAction: Delete forever by the typed name (spec 4.4, 5.1; 
     expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
     expect(storage.remove).not.toHaveBeenCalled();
     expect(db.deletePurgedDocument).not.toHaveBeenCalled();
+  });
+  it("a lost claim whose row another Delete forever is mid-way through (the purging marker) is success: the file is being deleted (review M1; mutation: treat only a missing row as gone -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(TRASHED)
+      .mockResolvedValueOnce({ ...TRASHED, deleted_at: "2026-10-14T09:00:01+00:00", deleted_by: "documents:purging" });
+    db.claimDocumentForPurge.mockResolvedValue(null);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+  it("a delete that matched nothing because another Delete forever re-claimed the row (the purging marker) is success (review M1; mutation: treat only a missing row as gone -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(TRASHED)
+      .mockResolvedValueOnce({ ...TRASHED, deleted_at: "2026-10-14T09:00:01+00:00", deleted_by: "documents:purging" });
+    db.deletePurgedDocument.mockResolvedValue(false);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
   });
   it("Staff (and a Technician) are refused before anything is read: Delete forever is an Owner's and the agency's (owner ruling R1, deviation 5; mutation: drop the canManage check -> FAILS)", async () => {
     requireAccountAccess.mockResolvedValue(STAFF);

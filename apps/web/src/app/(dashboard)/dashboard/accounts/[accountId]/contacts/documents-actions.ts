@@ -6,7 +6,7 @@ import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
   reserveDocumentVersion, markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
-  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType,
+  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -431,8 +431,9 @@ export async function restoreDocumentAction(accountId: string, documentId: strin
  * only then delete the row (its versions cascade) and emit document.purged as the person. A storage
  * refusal keeps the row, still in the trash; nothing is deleted that still has an object.
  * A lost claim or a delete that matched nothing is re-read on the service client: no row at all means a
- * concurrent Delete forever finished this file first (it re-claimed from the marker), and the file being
- * gone is what was asked, so the answer is success, never "changed" or "try again" (task 4 review).
+ * concurrent Delete forever finished this file first, and a row carrying DOCUMENT_PURGING_MARK means one
+ * holds it now (it re-claimed from the marker). The file being gone, or going, is what was asked, so the
+ * answer is success, never "changed" or "try again" (task 4 review I2, M1).
  */
 export async function purgeDocumentAction(accountId: string, documentId: string, typedTitle: string): Promise<{ ok: true } | DocFail> {
   const access = await requireAccountAccess(accountId);
@@ -445,7 +446,11 @@ export async function purgeDocumentAction(accountId: string, documentId: string,
     if (!doc || doc.deleted_at === null) return fail(REFUSED);
     if (typedTitle !== doc.title) return fail("documents.purge.mismatch");
     const svc = serviceDb();
-    const alreadyGone = async (): Promise<boolean> => (await getDocument(svc, accountId, docId)) === null;
+    // Gone, or another Delete forever holds it (its claim marker): the file is deleted or being deleted.
+    const alreadyGone = async (): Promise<boolean> => {
+      const now = await getDocument(svc, accountId, docId);
+      return now === null || now.deleted_by === DOCUMENT_PURGING_MARK;
+    };
     const versions = await listDocumentVersionStates(svc, accountId, docId);
     if (versions.some((v) => v.status === "uploading")) return fail("documents.error.purgeUploading");
     const claimedAt = await claimDocumentForPurge(svc, accountId, docId, doc.deleted_at);
