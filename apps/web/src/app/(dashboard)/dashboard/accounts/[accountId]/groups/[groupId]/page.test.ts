@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, type MockInstance } from "vitest";
+import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 /**
@@ -82,7 +83,7 @@ vi.mock("@bis/db", () => ({
   listTimelinePage: (...a: unknown[]) => listTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
-  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"],
+  TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"],
 }));
 const groupActivityMembersMock = vi.fn();
 const groupFactsMock = vi.fn();
@@ -112,6 +113,11 @@ const peopleCardProps: Record<string, unknown>[] = [];
 vi.mock("./people-card", () => ({ PeopleCard: (p: Record<string, unknown>) => { peopleCardProps.push(p); return null; } }));
 const detailsCardProps: Record<string, unknown>[] = [];
 vi.mock("./details-card", () => ({ DetailsCard: (p: Record<string, unknown>) => { detailsCardProps.push(p); return null; } }));
+// S-07 part 1: the Documents card, between Deals and People. Recorded, not run: it fetches its own
+// route on the client and has its own tests (documents-card.test.ts).
+vi.mock("../../contacts/documents-card", () => ({
+  DocumentsCard: (p: Record<string, unknown>) => createElement("div", { "data-documents-mock": JSON.stringify(p) }),
+}));
 
 const NOT_FOUND = new Error("NEXT_NOT_FOUND");
 vi.mock("next/navigation", () => ({
@@ -268,8 +274,26 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     const html = await render();
     const ids = [...html.matchAll(/data-record-card="([\w-]+)"/g)].map((x) => x[1]);
     expect(ids).toEqual(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((d) => d.id));
-    expect(ids).toEqual(["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
+    expect(ids).toEqual(["summary", "next-up", "timeline", "properties", "deals", "documents", "people", "details"]);
     expect([...html.matchAll(/data-record-column="(\w+)"/g)].map((x) => x[1])).toEqual(["happening", "have", "who"]);
+  });
+
+  it("the Documents card gets the page's accountId, record, canManage and the household's empty text (S-07 part 1; mutation: use the household sentence for both -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    const html = await render();
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: false, emptyText: m["documents.empty.household"] });
+  });
+
+  it("a business group gets the business's empty text, not the household's (mutation: use the household sentence for both -> FAILS)", async () => {
+    readGroupMock.mockResolvedValue({ ...GROUP, kind: "business", name: "Rio Roofing" });
+    const html = await render();
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: true, emptyText: m["documents.empty.business"] });
   });
 
   it("each card fails on its own: People failing leaves Properties, Deals and Details (mutation: one Promise.all with no per-card loads -> the render rejects, FAILS)", async () => {

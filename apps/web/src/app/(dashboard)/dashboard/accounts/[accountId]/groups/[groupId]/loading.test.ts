@@ -23,8 +23,8 @@ describe("group record page loading.tsx", () => {
     const html = renderToStaticMarkup(createElement(Loading));
     expect(html).toContain("data-record-layout");
     expect(cards(html)).toEqual(cardsInPhoneOrder(GROUP_RECORD_CARDS).map((d) => ({ id: d.id, state: "loading", skeleton: true })));
-    // 2b: seven cards, the middle column first (spec §7; mutation: drop the middle three -> FAILS).
-    expect(cards(html).map((c) => c.id)).toEqual(["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
+    // S-07 part 1: eight cards, the middle column first (spec §7; mutation: drop the middle three -> FAILS).
+    expect(cards(html).map((c) => c.id)).toEqual(["summary", "next-up", "timeline", "properties", "deals", "documents", "people", "details"]);
     // A skeleton header, never a spinner.
     expect(html).toMatch(/<header[^>]*data-record-skeleton-header/);
     expect(html).not.toMatch(/animate-spin|spinner/i);
