@@ -4,7 +4,7 @@
 
 **Goal:** Finish part 1 of the staff vault: upload a new version of a file from its row menu (the row reads "Version 2" once a second version is ready), see every version newest first in the viewer and download an older one, give each new version its own timeline row ("Ana uploaded a new version of Lease") and a `document.version_added` event, let an Owner or the agency delete a trashed file forever by typing its name exactly (objects first, then rows, then `document.purged`), and show "4.1 of 5 GB used" on the card above 80% of the quota. Folded in from PR 1a's final review: a new version is never added to a trashed file, the image viewer retries on its own at most once, "not found" for a file says "file", and the `/styleguide` demo never reaches a real server action.
 
-**Architecture:** One additive migration, **0078**, adds two read paths. First, `public.document_version_timeline`, a `security_invoker` view of every ready version after a document's first, carrying its document's title, category, record and trash state, so the timeline's existing documents source reads the new-version rows under the caller's own RLS (the Owners-only and Technician fences apply unchanged). Second, `public.document_space_used(uuid)`: a `SECURITY DEFINER` sum, executable by `authenticated`, that counts exactly what 0077's `reserve_document_version` counts (every version of the account, ready or uploading, trashed documents included), so the card's line and the quota refusal cannot disagree, and a Staff member or a Technician gets the ACCOUNT's number, not their RLS-visible slice. Everything else is app code on 0077 as it stands: a new version reuses `reserve_document_version` and `mark_document_version_ready` through a new start action (`startDocumentVersionUploadAction`) and the existing finish action, which now also refuses (and cleans up) a version whose document went to the trash mid-upload. The card's read embeds every ready version of each document. Delete forever is one server action: a request-client read proves the file is visible and trashed and the typed name matches, the caller must be an Owner or the agency (owner ruling R1), then the service client claims the row (a compare-and-set re-stamp of `deleted_at` that also marks `deleted_by` as `purging:<actor>`, which `restoreDocument` refuses, so no Restore can win once the claim lands), removes every version's object, deletes the row, and emits.
+**Architecture:** One additive migration, **0078**, adds two read paths. First, `public.document_version_timeline`, a `security_invoker` view of every ready version after a document's first, carrying its document's title, category, record and trash state, so the timeline's existing documents source reads the new-version rows under the caller's own RLS (the Owners-only and Technician fences apply unchanged). Second, `public.document_space_used(uuid)`: a `SECURITY DEFINER` sum, executable by `authenticated`, that counts exactly what 0077's `reserve_document_version` counts (every version of the account, ready or uploading, trashed documents included), so the card's line and the quota refusal cannot disagree, and a Staff member or a Technician gets the ACCOUNT's number, not their RLS-visible slice. Everything else is app code on 0077 as it stands: a new version reuses `reserve_document_version` and `mark_document_version_ready` through a new start action (`startDocumentVersionUploadAction`) and the existing finish action, which now also refuses (and cleans up) a version whose document went to the trash mid-upload. The card's read embeds every ready version of each document. Delete forever is one server action: the caller must be an Owner or the agency (owner ruling R1, checked before any read), then a request-client read proves the file is visible and trashed and the typed name matches, then the service client claims the row (a compare-and-set re-stamp of `deleted_at` that also sets `deleted_by` to the constant `DOCUMENT_PURGING_MARK`, `"documents:purging"`, which `restoreDocument` refuses, so no Restore can win once the claim lands), removes every version's object, deletes the row, and emits.
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8 (`rpc`, `@supabase/storage-js` `createSignedUploadUrl`, `createSignedUrl`, `remove`); Next.js 16.3.6 App Router (server actions, route handlers, client components); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it).
 
@@ -165,7 +165,7 @@ Paste both values in the report; stop if they differ.
 3. **Delete forever refuses while any version of the file is still uploading** (spec §4.4 silent). Purging the rows while a browser's PUT is in flight would land that object after its row is gone, where nothing finds it (PR #258 follow-up "an upload that lands after its records are gone"). The refusal says so ("A new version of this file is still uploading. Try again later."; review M6: it promises no time, because it can last hours) and lasts at most until the sweep removes an abandoned reservation (three hours, `ABANDONED_UPLOAD_MS`, PR 1a deviation 6). Residual, named: a new-version start whose request read saw the file live just before it was trashed, and whose reservation lands after the purge's version read, can still leave one object behind; that is the general follow-up, not closed here.
 4. **Delete forever claims the row before it removes anything, and a claimed row is never restored** (spec §5.1 amended in this revision; review M1). The claim is one compare-and-set: `deleted_at` re-stamped and `deleted_by` set to the marker `DOCUMENT_PURGING_MARK` (`"documents:purging"`), only while `deleted_at` still equals the instant the proof read. `restoreDocument` gains `.neq("deleted_by", DOCUMENT_PURGING_MARK)`, so BOTH remaining Restore-during-purge cases the review named are closed, not just named: (a) a Restore carrying the NEW timestamp (a card that re-read after the claim) landing while objects are being removed is refused by the marker; (b) `deletePurgedDocument` failing after the objects are gone leaves a row that no Restore can bring back as an empty file. Consequences, named: a purge that fails part-way leaves the file in the trash, marked, NOT restorable (its objects may be partly gone); Delete forever again finishes it (the claim accepts the row's current instant), and the 30-day sweep does too (from the claim's instant). The actor of a purge is in `document.purged`'s event, so `deleted_by` losing it costs nothing. Cost: one filter in `restoreDocument` and one test.
 5. **Delete forever is for Owners and the agency only** (owner ruling R1, 2026-10-14; spec §3.4 amended). The action refuses unless `access.canManage` (the Owners-only rule, `documents-actions.ts:297`), before any read; the card draws no Delete forever for anyone else, who still sees the trashed file and its Restore. The 30-day automatic purge is unchanged.
-6. **A new version emits `document.version_added` and has its own timeline row** (owner ruling R2, 2026-10-14; spec §3.6 amended). The event: `markDocumentVersionReady` emits `document.version_added` with `{ documentId, versionId, contactId | groupId }` when 0077 answers `first: false` (`documents.ts:144` emits only on `first` today); no title, no category (PR 1a deviation 3's reason). The row: "{who} uploaded a new version of {title}", the person mark from `uploaded_by`, "In the trash" while the file is trashed, the category as its detail, at the version's `created_at`. **Its source** is a 0078 view, `public.document_version_timeline` (`security_invoker = true`): every READY version that has an older ready version of the same document, joined to its document's title, category, record and trash state. Why a view and not code: "after the first" cannot be expressed as a PostgREST filter, and filtering it out in JS after a paged read breaks the timeline's k-way merge (a page that loses rows to the filter can skip a qualifying row older than its window forever); and the first ready version is always the oldest (a new version can only be reserved once the document has a ready current one, `startDocumentVersionUploadAction`'s check, and a document whose first upload fails is discarded whole). Why it is safe: `security_invoker` runs the view with the caller's privileges, so `documents`' policies (tenant, Technician fence, Owners only) and `document_versions_through_document` apply exactly as to the card; 0078 grants it SELECT to `authenticated` only and revokes everything else; `schema-grants-guard.test.ts` gets its first reviewed `rlsOff` entry. **It joins the existing `documents` timeline source** (one more read inside the same `settle`), so `TIMELINE_SOURCES` and every test pinning it are unchanged, a failed read shows as "Couldn't load documents", and paging stays on one `(at, id)` cursor (a version's id is its own uuid, never a document's). New entry kind `documentVersion`: every exhaustive map of kinds (`drawer-summary.ts` `ROW_KINDS`, `contact-drawer.tsx` `ROW_ICON`) and every switch (`author-mark.ts`, `timeline-rows.ts`, `recent-rows.ts`, both timelines) gains it, or the drawer drops the row silently; `tsc` refuses the two `Record` maps without it. The drawer's read fence rises 23 → 24.
+6. **A new version emits `document.version_added` and has its own timeline row** (owner ruling R2, 2026-10-14; spec §3.6 amended). The event: `markDocumentVersionReady` emits `document.version_added` with `{ documentId, versionId, contactId | groupId }` when 0077 answers `first: false` (`documents.ts:144` emits only on `first` today); no title, no category (PR 1a deviation 3's reason). The row: "{who} uploaded a new version of {title}", the person mark from `uploaded_by`, "In the trash" while the file is trashed, the category as its detail, at the version's `created_at`. **Its source** is a 0078 view, `public.document_version_timeline` (`security_invoker = true`): every READY version that has an older ready version of the same document, joined to its document's title, category, record and trash state. Why a view and not code: "after the first" cannot be expressed as a PostgREST filter, and filtering it out in JS after a paged read breaks the timeline's k-way merge (a page that loses rows to the filter can skip a qualifying row older than its window forever); and the first ready version is always the oldest (a new version can only be reserved once the document has a ready current one, `startDocumentVersionUploadAction`'s check, and a document whose first upload fails is discarded whole). Why it is safe: `security_invoker` runs the view with the caller's privileges, so `documents`' policies (tenant, Technician fence, Owners only) and `document_versions_through_document` apply exactly as to the card; 0078 revokes everything (Supabase's default ALL included) and grants SELECT to `authenticated` and `service_role` only (anon nothing, no write privilege for anyone but the owner); `schema-grants-guard.test.ts` gets its first reviewed `rlsOff` entry. **It joins the existing `documents` timeline source** (one more read inside the same `settle`), so `TIMELINE_SOURCES` and every test pinning it are unchanged, a failed read shows as "Couldn't load documents", and paging stays on one `(at, id)` cursor (a version's id is its own uuid, never a document's). New entry kind `documentVersion`: every exhaustive map of kinds (`drawer-summary.ts` `ROW_KINDS`, `contact-drawer.tsx` `ROW_ICON`) and every switch (`author-mark.ts`, `timeline-rows.ts`, `recent-rows.ts`, both timelines) gains it, or the drawer drops the row silently; `tsc` refuses the two `Record` maps without it. The drawer's read fence rises 23 → 24.
 7. **"Version N" is the count of READY versions; the Versions list numbers versions by upload order** (`created_at`). After two new versions of one file upload at once, the one that finished last is current and is marked "Current" wherever it sits in the list. Rare, honest, and named.
 8. **The typed name is compared exactly** (no trim, no case folding), in the browser and again on the server: the spec says "typed exactly", and 0077's `app.tidy_text` title check (`0077:60`) already forbids edge spaces, so an exact match is always typeable.
 9. **The space-used number reaches every member, Technicians included** (an aggregate of bytes, never a row, a name or a count of files). The spec's §4.2 item 4 puts it on the card, which every member sees.
@@ -428,7 +428,7 @@ describe("document_version_timeline: a row per NEW version (owner ruling R2; pla
       expect(row).toEqual({ document_id: d, account_id: s.acct, uploaded_by: "user_up", title: "File", category: "other", contact_id: s.ana, client_group_id: null, trashed: true });
     }));
 
-  it("runs under the CALLER's RLS: a Staff member never sees an Owners-only file's new version, an unassigned Technician sees none, another account sees none (mutation: drop `security_invoker = true` -> FAILS)", () =>
+  it("runs under the CALLER's RLS: a Staff member never sees an Owners-only file's new version, another account sees none (mutation: drop `security_invoker = true` -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const secret = await doc(c, s.acct, s.ana, { ownersOnly: true });
@@ -440,20 +440,39 @@ describe("document_version_timeline: a row per NEW version (owner ruling R2; pla
       await actAsMember(c, s.acct, ORG, "staff");
       expect(await timelineIds(c)).toEqual([]);
       await c.query("reset role");
-      await actAsMember(c, s.acct, ORG, "technician");
-      expect(await timelineIds(c)).toEqual([]);
-      await c.query("reset role");
       await actAsMember(c, s.other, `${ORG}_b`, "owner");
       expect(await timelineIds(c)).toEqual([]);
     }));
 
-  it("SELECT for authenticated and nothing else; anon nothing; the view is security_invoker (mutation: grant insert to authenticated, or leave the default grants -> FAILS)", () =>
+  it("a Technician sees a TEAM file's new version only on a customer assigned to them (review m3: team-visible files, so only the Technician fence can hide them; mutation: drop policy documents_technician_scope -> FAILS on the unassigned leg)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const bo = (await c.query<{ id: string }>("insert into contacts (account_id, first_name) values ($1,'Bo') returning id", [s.acct])).rows[0]!.id;
+      const theirs = await doc(c, s.acct, bo);                       // owners_only false: the team may see it
+      await versionAt(c, s.acct, theirs, "2026-10-01T10:00:00Z");
+      await versionAt(c, s.acct, theirs, "2026-10-02T10:00:00Z");
+      const mine = await doc(c, s.acct, s.ana);
+      await versionAt(c, s.acct, mine, "2026-10-01T11:00:00Z");
+      const mineNew = await versionAt(c, s.acct, mine, "2026-10-02T11:00:00Z");
+      const sub = await actAsMember(c, s.acct, ORG, "technician");
+      expect(await timelineIds(c)).toEqual([]);                      // nothing assigned: neither customer's file
+      await c.query("reset role");
+      await c.query("update contacts set assigned_to = (select id from users where clerk_user_id = $1) where id = $2", [sub, s.ana]);
+      await actAs(c, { org_id: ORG, sub });
+      expect(await timelineIds(c)).toEqual([mineNew]);               // assigned Ana: hers only, never Bo's
+    }));
+
+  it("SELECT for authenticated and service_role and nothing else; anon nothing; the view is security_invoker (mutations: grant insert to authenticated, or leave the default grants -> FAILS; drop service_role from the grant -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ k: string }>(
         `select r || ' ' || p as k from (values ('anon'), ('authenticated')) v(r)
           cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) x(p)
          where has_table_privilege(r, 'public.document_version_timeline', p) order by 1`);
       expect(rows.map((r) => r.k)).toEqual(["authenticated SELECT"]);
+      // Review m4: service_role reads it too (the orchestrator's read-only checks), and writes nothing.
+      const { rows: [svc] } = await c.query<{ sel: boolean; ins: boolean }>(
+        "select has_table_privilege('service_role', 'public.document_version_timeline', 'SELECT') as sel, has_table_privilege('service_role', 'public.document_version_timeline', 'INSERT') as ins");
+      expect(svc).toEqual({ sel: true, ins: false });
       const { rows: [o] } = await c.query<{ opts: string[] | null }>(
         "select c.reloptions as opts from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relname = 'document_version_timeline'");
       expect(o!.opts).toEqual(["security_invoker=true"]);
@@ -461,7 +480,7 @@ describe("document_version_timeline: a row per NEW version (owner ruling R2; pla
 });
 ```
 
-Why each case can fail (the writer's check; the implementer re-runs each probe): case 1 sums to 100 with a ready-only filter and to 1130 without the account filter; case 2's reserve `used` (725) includes the trashed document, so a live-only sum (25) differs; case 3 is 0 under `security invoker` (the positive control proves RLS hides the row, so the 50 can only come from the definer); case 4 refuses the agency token without `is_agency()`; case 5's first caller has `is_agency()` NULL and `current_account_id()` = the other account, so `not (NULL or false)` is NULL and the `if` falls through without the coalesce, and its second caller has both NULL; case 7's privilege list changes with any grant. The view's first case returns the first version too without the `exists` clause, and the uploading one without the status filter (its document has an older ready version); its second case shows the Owner's row to the Staff member, the Technician and the other account without `security_invoker` (the view would run as its owner, past RLS; the Owner's row is the positive control that the row exists); its third catches Supabase's default ALL grant (`bootstrap/ci-project.sql:58-63`) left un-revoked, and a dropped `security_invoker` option. `has_function_privilege(… 'anon' …)` is `true` if `PUBLIC` keeps EXECUTE, so the revoke from `public` is pinned too.
+Why each case can fail (the writer's check; the implementer re-runs each probe): case 1 sums to 100 with a ready-only filter and to 1130 without the account filter; case 2's reserve `used` (725) includes the trashed document, so a live-only sum (25) differs; case 3 is 0 under `security invoker` (the positive control proves RLS hides the row, so the 50 can only come from the definer); case 4 refuses the agency token without `is_agency()`; case 5's first caller has `is_agency()` NULL and `current_account_id()` = the other account, so `not (NULL or false)` is NULL and the `if` falls through without the coalesce, and its second caller has both NULL; case 7's privilege list changes with any grant. The view's first case returns the first version too without the `exists` clause, and the uploading one without the status filter (its document has an older ready version); its second case shows the Owner's row to the Staff member and the other account without `security_invoker`; the Technician case uses team-visible files (no Owners-only fence to mask it), so its unassigned leg is red only through the Technician fence and its assigned leg is the positive control (the view would run as its owner, past RLS; the Owner's row is the positive control that the row exists); its third catches Supabase's default ALL grant (`bootstrap/ci-project.sql:58-63`) left un-revoked, and a dropped `security_invoker` option. `has_function_privilege(… 'anon' …)` is `true` if `PUBLIC` keeps EXECUTE, so the revoke from `public` is pinned too.
 
 - [ ] **Step 3: Run it red on `pre`.** From `<WT>/packages/db` in Git Bash:
 
@@ -561,7 +580,7 @@ node -e 'const fs=require("fs");const check=(p)=>{const b=fs.readFileSync(p);let
 
 Expected: `control` a number above 0, `0078 0`.
 
-- [ ] **Step 6: Rebuild and run green on `post`.** Re-run `replica.sh 55540 <dir>` (now `post = pre + 0078`), then the Step 3 command with `/post` and `post.log`/`post.exit`. Expected: exit 0, 10 passed. Also run `src/test/schema-grants-guard.test.ts` on `post` → passes, and on `pre` → its `rlsOff` case fails (the edit is only right beside the view). Paste the summary block.
+- [ ] **Step 6: Rebuild and run green on `post`.** Re-run `replica.sh 55540 <dir>` (now `post = pre + 0078`), then the Step 3 command with `/post` and `post.log`/`post.exit`. Expected: exit 0, 11 passed. Also run `src/test/schema-grants-guard.test.ts` on `post` → passes, and on `pre` → its `rlsOff` case fails (the edit is only right beside the view). Paste the summary block.
 
 - [ ] **Step 7: Mutation probes, each red BY NAME on `post`, then restored.** Apply each with `psql -p 55540 -d post` as a `create or replace function` (or a `grant`) of the mutated text, run the file, paste the failing assertion line, then re-run `replica.sh` (it rebuilds `post` clean) before the next:
   1. `… where v.account_id = p_account_id and v.status = 'ready'` → case 1 fails (100 ≠ 130).
@@ -576,6 +595,7 @@ Expected: `control` a number above 0, `0078 0`.
   10. recreate the view without the `exists (…)` clause → the view's first case fails (the first version listed).
   11. recreate it without `with (security_invoker = true)` → its second case fails (the Staff member sees the Owners-only row) and its third (reloptions).
   12. `grant insert on public.document_version_timeline to authenticated;` → its third case fails, and `schema-grants-guard.test.ts` fails naming the view's write.
+  12b. `drop policy documents_technician_scope on public.documents;` → the Technician case fails on its unassigned leg (and shows Bo's version on the assigned leg).
   13. revert Step 4b's guard edit with 0078 applied → `schema-grants-guard.test.ts` fails naming `document_version_timeline`; with the edit on `pre` (no view) it fails the other way, so the allow-list is green only beside the view.
 
 - [ ] **Step 8: Commit.**
@@ -623,6 +643,7 @@ git commit -m "feat(db): 0078 document_space_used and the new-version timeline v
 | `documents.error.purge` | Couldn't delete that file. Try again. | No se pudo borrar ese archivo. Intente de nuevo. |
 | `documents.spaceUsed` | {used} of {quota} GB used | {used} de {quota} GB usados |
 | `timeline.documentVersion` | uploaded a new version of {title} | subió una nueva versión de {title} |
+| `documents.status.purging` | Being deleted | Se está borrando |
 
 `documents.error.notFound` stays (the start action's "this record" answer, `documents-actions.ts:98`); Task 4 moves only the file's answers to `fileNotFound`. `timeline.documentVersion` follows the timeline's own voice: the row reads "{mark} {verb}" exactly as `timeline.document` ("added a file: {title}" / "agregó un archivo: {title}", `messages.ts:3949-3950`) does, third person, no usted form needed. `documents.purge.body` is for a file with two or more versions, `documents.purge.bodyOne` for one (review M11). `purgeUploading` promises no time (review M6: it can last up to three hours).
 
@@ -652,6 +673,7 @@ describe("the document vault's copy, PR 1b (versions, Delete forever, space used
     "documents.error.purge": ["Couldn't delete that file. Try again.", "No se pudo borrar ese archivo. Intente de nuevo."],
     "documents.spaceUsed": ["{used} of {quota} GB used", "{used} de {quota} GB usados"],
     "timeline.documentVersion": ["uploaded a new version of {title}", "subió una nueva versión de {title}"],
+    "documents.status.purging": ["Being deleted", "Se está borrando"],
   };
   it("every new key is the plan's wording, in both languages (mutation: 'Sube' for 'Suba'-style tú in any .es, or any word changed -> FAILS)", () => {
     for (const [k, [en, es]] of Object.entries(WANT)) {
@@ -720,6 +742,8 @@ describe("the document vault's copy, PR 1b (versions, Delete forever, space used
   "documents.spaceUsed.es": "{used} de {quota} GB usados",
   "timeline.documentVersion": "uploaded a new version of {title}",
   "timeline.documentVersion.es": "subió una nueva versión de {title}",
+  "documents.status.purging": "Being deleted",
+  "documents.status.purging.es": "Se está borrando",
 ```
 
 - [ ] **Step 4: Run.** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/i18n/ratchet.test.ts` → the vault describes PASS; the ratchet's twin check passes (its baseline step is Task 9; if the catalogue-baseline case fails ONLY on the count of new keys, that is expected until Task 9 and is stated in the report). `pnpm --filter web typecheck` → clean.
@@ -1655,7 +1679,7 @@ export function spaceUsedText(space: DocumentsSpace | null, locale: Locale): str
 
 // apps/web/src/lib/documents/documents-load.ts
 export type DocumentVersionView = { id: string; contentType: DocumentContentType; bytes: number; createdAt: string; addedOn: string };
-export type DocumentView = { /* every 1a field, unchanged */ versions: DocumentVersionView[] };   // ready, newest first, includes `version`
+export type DocumentView = { /* every 1a field, unchanged */ versions: DocumentVersionView[]; purging: boolean };   // purging: a Delete forever began and did not finish (deviation 4): never restorable   // ready, newest first, includes `version`
 export type DocumentsResponse = { /* every 1a field, unchanged */ space: DocumentsSpace | null };
 
 // apps/web/src/lib/documents/document-view.ts
@@ -1707,6 +1731,7 @@ const view = {
     { id: "v2", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-02T00:00:00Z", addedOn: "2026-10-01" },
     { id: "v1", contentType: "image/jpeg", bytes: 900, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" },
   ],
+  purging: false,
 };
 const body: DocumentsResponse = {
   today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "c1" },
@@ -1725,6 +1750,8 @@ and extend the `it.each` refusal table with:
     ["no space field at all", res({ ...body, space: undefined })],
     ["a negative usage", res({ ...body, space: { used: -1, quota: 5_368_709_120 } })],
     ["a zero quota", res({ ...body, space: { used: 1, quota: 0 } })],
+    ["no purging flag", res({ ...body, live: [{ ...view, purging: undefined }] })],
+    ["a LIVE file marked purging", res({ ...body, live: [{ ...view, purging: true }] })],
 ```
 
 and one more case:
@@ -1753,12 +1780,21 @@ In BOTH route tests (`…/contacts/[contactId]/documents/route.test.ts` and `…
         { id: "v1", contentType: "image/jpeg", bytes: 1200, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" },
         { id: "v0", contentType: "application/pdf", bytes: 800, createdAt: "2026-09-20T15:00:00Z", addedOn: "2026-09-20" },
       ],
+      purging: false,
 ```
 
   (Chicago: midnight UTC on Oct 1 is Sept 30; 15:00 UTC on Sept 20 is Sept 20. The storage path and the original name never travel: `toEqual` is exact.)
 - append two cases to the describe:
 
 ```ts
+  it("a trashed file whose Delete forever began is 'purging'; any other trashed file is not, and the marker never travels (review m1; mutation: purging always false -> FAILS)", async () => {
+    db.listRecordDocuments.mockResolvedValue({ live: [row()], trashed: [
+      row({ id: "t1", deleted_at: "2026-10-13T03:00:00Z", deleted_by: "documents:purging" }),
+      row({ id: "t2", deleted_at: "2026-10-13T03:00:00Z", deleted_by: "user_ana" })], liveMore: false, trashedMore: false });
+    const body = await (await call()).json();
+    expect([body.live[0].purging, body.trashed[0].purging, body.trashed[1].purging]).toEqual([false, true, false]);
+    expect(JSON.stringify(body)).not.toContain("documents:purging");
+  });
   it("reports the account's usage on the REQUEST client, against the 5 GB quota (mutation: read it on serviceDb() -> the mock throws -> FAILS)", async () => {
     const body = await (await call()).json();
     expect(db.documentSpaceUsed).toHaveBeenCalledWith(REQUEST, ACC);
@@ -1813,7 +1849,7 @@ export function spaceUsedText(space: DocumentsSpace | null, locale: Locale): str
 export type DocumentVersionView = { id: string; contentType: DocumentContentType; bytes: number; createdAt: string; addedOn: string };
 ```
 
-add `versions: DocumentVersionView[];` to `DocumentView` (after `version`, with the comment `/** Every READY version, newest first; always includes \`version\` (spec 4.3). */`), add `space: DocumentsSpace | null;` to `DocumentsResponse`, and:
+add `purging: boolean;` to `DocumentView` (review m1: `true` only on a trashed file whose `deleted_by` is `DOCUMENT_PURGING_MARK`), and add `versions: DocumentVersionView[];` to `DocumentView` (after `version`, with the comment `/** Every READY version, newest first; always includes \`version\` (spec 4.3). */`), add `space: DocumentsSpace | null;` to `DocumentsResponse`, and:
 
 ```ts
 function isVersionView(v: unknown): boolean {
@@ -1830,6 +1866,7 @@ function isSpace(v: unknown): boolean {
 In `isView`, append to the returned conjunction:
 
 ```ts
+    && typeof v.purging === "boolean" && (trashed || v.purging === false)
     && Array.isArray(v.versions) && v.versions.length > 0 && v.versions.every(isVersionView)
     && v.versions.some((x) => isObj(x) && x.id === (v.version as Obj).id)
 ```
@@ -1848,9 +1885,10 @@ import type { DocumentView } from "./documents-load";
 import type { DocumentsSpace } from "./space";
 ```
 
-add to the object `documentView` returns, after `version: {…}`:
+add to the object `documentView` returns, after `version: {…}`, the purge state (review m1; `deleted_by` is in `DOC_COLS`, `documents.ts:32-33`; import `DOCUMENT_PURGING_MARK` from `@bis/db` beside `documentSpaceUsed`, and add `DOCUMENT_PURGING_MARK: "documents:purging"` to BOTH route tests' bare `@bis/db` mock objects):
 
 ```ts
+    purging: d.deleted_at !== null && d.deleted_by === DOCUMENT_PURGING_MARK,
     versions: d.versions.map((v) => ({
       id: v.id, contentType: v.content_type, bytes: v.bytes, createdAt: v.created_at, addedOn: dayKeyInZone(new Date(v.created_at), zone),
     })),
@@ -1885,7 +1923,7 @@ Both routes: import `documentsSpace` beside `documentView, documentsClock`; repl
 
 - [ ] **Step 4: Run green.** The Step 2 command → all pass. `pnpm --filter web typecheck` → the only errors left are in files Tasks 7 and 8 own (fixtures that build a `DocumentView` without `versions`: the card, viewer and handler tests and the styleguide demo); list them in the report, do not edit them. `pnpm --filter web exec eslint` on the touched files → clean.
 
-- [ ] **Step 5: Probes, red BY NAME, restored.** (1) `>=` in `spaceUsedText`; (2) `Math.round`; (3) drop `&& isSpace(body.space)`; (4) drop the `versions.some(… version.id)` line; (5) in the contact route, `documentsSpace(serviceDb(), accountId)` (import `serviceDb`) → the REQUEST-client case fails; (6) replace `documentsSpace`'s body with a bare `return { used: await documentSpaceUsed(db, accountId), quota: DOCUMENT_QUOTA_BYTES };` → the omitted-read case fails in BOTH route tests (run both).
+- [ ] **Step 5: Probes, red BY NAME, restored.** (1) `>=` in `spaceUsedText`; (2) `Math.round`; (3) drop `&& isSpace(body.space)`; (4) drop the `versions.some(… version.id)` line; (4b) `purging: false` always in `documentView` → the purging route case fails in BOTH route tests; (4c) drop `(trashed || v.purging === false)` → the live-marked parser case fails; (5) in the contact route, `documentsSpace(serviceDb(), accountId)` (import `serviceDb`) → the REQUEST-client case fails; (6) replace `documentsSpace`'s body with a bare `return { used: await documentSpaceUsed(db, accountId), quota: DOCUMENT_QUOTA_BYTES };` → the omitted-read case fails in BOTH route tests (run both).
 
 - [ ] **Step 6: Commit.** `git commit -m "feat(documents): the card's read carries every ready version and the account's usage (S-07 part 1b)" -- apps/web/src/lib/documents/space.ts apps/web/src/lib/documents/space.test.ts apps/web/src/lib/documents/documents-load.ts apps/web/src/lib/documents/documents-load.test.ts apps/web/src/lib/documents/document-view.ts "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/documents/route.ts" "apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/documents/route.test.ts" "apps/web/src/app/api/accounts/[accountId]/groups/[groupId]/documents/route.ts" "apps/web/src/app/api/accounts/[accountId]/groups/[groupId]/documents/route.test.ts"` (after `git add -- apps/web/src/lib/documents/space.ts apps/web/src/lib/documents/space.test.ts`).
 
@@ -2074,6 +2112,7 @@ In `document-viewer.test.ts`: change the mock factory at `:4` to `vi.mock("./doc
 
 ```ts
   versions: [{ id: "v", contentType: contentType as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }],
+  purging: false,
 ```
 
 change `body()` (`:14-15`) to pass `onImageError: vi.fn()`, and append:
@@ -2431,7 +2470,7 @@ export const demoHandlers: DocumentHandlers;   // inert: never calls a server ac
 
 - [ ] **Step 1: Write the failing tests.**
 
-**`documents-card-handlers.test.ts`.** Add `updateDocumentFieldAction: vi.fn(), undoDocumentFieldAction: vi.fn(), purgeDocumentAction: vi.fn(),` to the hoisted `actions` object (`:5-8`); give `DOC` (`:13-17`) `versions: [{ id: "v1", contentType: "application/pdf" as const, bytes: 1, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }],`; change the first Download case's mocked error (`:139`) to `"documents.error.fileNotFound"` and its expectation (`:146`) to `m["documents.error.fileNotFound.es"]`; append:
+**`documents-card-handlers.test.ts`.** Add `updateDocumentFieldAction: vi.fn(), undoDocumentFieldAction: vi.fn(), purgeDocumentAction: vi.fn(),` to the hoisted `actions` object (`:5-8`); give `DOC` (`:13-17`) `versions: [{ id: "v1", contentType: "application/pdf" as const, bytes: 1, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }], purging: false,`; change the first Download case's mocked error (`:139`) to `"documents.error.fileNotFound"` and its expectation (`:146`) to `m["documents.error.fileNotFound.es"]`; append:
 
 ```ts
 describe("inline edits go through the handlers (PR 1a review M6: the styleguide injects inert ones)", () => {
@@ -2526,7 +2565,7 @@ describe("Download of an older version (spec 4.3)", () => {
 });
 ```
 
-**`documents-card.test.ts`.** In the actions mock factory (`:5-9`) add `startDocumentVersionUploadAction: vi.fn(), purgeDocumentAction: vi.fn(),`; extend the import at `:12` with `rowSavers, versionToast`; give `view()` (`:15-19`) a `versions` array of its one version (`[{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }]`, before `...over`); give `ready()` (`:20-21`) a fourth parameter `space: { used: number; quota: number } | null = null` and put `space` into `data`; add `saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(),` to `handlers` (`:22`); add `versionPhases: {}, onNewVersion: vi.fn(), onPurge: vi.fn(),` to `render`'s defaults (`:23-26`). Replace the `rowMenuItems` case (`:171-177`) with:
+**`documents-card.test.ts`.** In the actions mock factory (`:5-9`) add `startDocumentVersionUploadAction: vi.fn(), purgeDocumentAction: vi.fn(),`; extend the import at `:12` with `rowSavers, versionToast`; give `view()` (`:15-19`) a `versions` array of its one version (`[{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }]`) and `purging: false`, both before `...over`; give `ready()` (`:20-21`) a fourth parameter `space: { used: number; quota: number } | null = null` and put `space` into `data`; add `saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(),` to `handlers` (`:22`); add `versionPhases: {}, onNewVersion: vi.fn(), onPurge: vi.fn(),` to `render`'s defaults (`:23-26`). Replace the `rowMenuItems` case (`:171-177`) with:
 
 ```ts
   it("the row menu: Upload new version for everyone who sees the file, Owners only for an Owner only, in the spec's order (mutations: drop newVersion; drop the canManage guard -> FAILS)", () => {
@@ -2573,6 +2612,18 @@ describe("versions, Delete forever and the space line on the card (PR 1b)", () =
     expect(html.match(/data-variant="default"/g)).toHaveLength(1);
     const es = render(ready([view()], [view({ id: "t1", deletedAt: "2026-10-10T15:00:00.000Z" })]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
     expect(renderedText(es)).toContain(m["documents.deleteForever.es"]);
+  });
+  it("a file whose Delete forever stopped part-way shows 'Being deleted' as a dot and a word, no Restore, and an Owner keeps Delete forever to finish it (review m1; mutation: ignore purging and draw Restore -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z", purging: true })]));
+    const trashed = html.slice(html.indexOf('data-document-trashed="t1"'));
+    expect(trashed).not.toContain("data-document-restore");
+    expect(trashed).toMatch(/data-document-purging[^>]*><span aria-hidden="true"[^>]*><\/span>/);
+    expect(renderedText(trashed)).toContain(m["documents.status.purging"]);
+    expect(trashed).toContain("data-document-purge");
+    const es = render(ready([view()], [view({ id: "t1", deletedAt: "2026-10-10T15:00:00.000Z", purging: true })]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(es)).toContain(m["documents.status.purging.es"]);
+    // A trashed file with no purge begun keeps its Restore.
+    expect(render(ready([view()], [view({ id: "t2", deletedAt: "2026-10-10T15:00:00.000Z" })]))).toContain("data-document-restore");
   });
   it("Staff and Technicians see the trashed file and Restore, but no Delete forever (owner ruling R1; mutation: draw it for everyone -> FAILS)", () => {
     const html = render(ready([view()], [view({ id: "t1", title: "Old ID", deletedAt: "2026-10-10T15:00:00.000Z" })]), { canManage: false });
@@ -2849,7 +2900,20 @@ In `DocumentsCardView` (`:237-323`):
 ```
 
 - the row (`:296-297`): `<DocumentRow key={doc.id} doc={doc} today={data.today} canManage={p.canManage} locale={p.locale} handlers={p.handlers} phase={p.versionPhases[doc.id] ?? null} onOpen={p.onOpen} onNewVersion={p.onNewVersion} />`
-- in the trash row, after the Restore button (`:314-315`), for an Owner or the agency only (owner ruling R1; the server refuses anyone else too):
+- in the trash row (review m1): a file whose Delete forever began and did not finish (`doc.purging`) can never be restored (deviation 4), so its Restore button (`:314-315`) is replaced by the state as a dot and a word (rule 3):
+
+```tsx
+                {doc.purging ? (
+                  <span data-document-purging className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-[var(--warn)]" />{tt("documents.status.purging")}
+                  </span>
+                ) : (
+                  <Button type="button" variant="ghost" size="sm" data-document-restore className={control}
+                    onClick={() => void p.handlers.restore(doc)}>{tt("documents.restore")}</Button>
+                )}
+```
+
+- after it, for an Owner or the agency only (owner ruling R1; the server refuses anyone else too), Delete forever, which also finishes a purge that stopped part-way:
 
 ```tsx
                 {p.canManage ? (
@@ -2921,7 +2985,7 @@ and replace the returned fragment (`:424-433`) with:
 
 - [ ] **Step 5: The styleguide.** In `documents-demo.tsx`:
 - imports: add `import { addedWhen, type DocumentHandlers } from "../accounts/[accountId]/contacts/documents-card";` (alongside `DocumentsCardView`), `import { DocumentVersionsList } from "../accounts/[accountId]/contacts/document-viewer";`, `import { DocumentPurgeForm } from "../accounts/[accountId]/contacts/document-purge-dialog";`.
-- `base` (`:17-20`): add `versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }],`.
+- `base` (`:17-20`): add `versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }], purging: false,`.
 - `DATA.live[0]` (`sg-1`): add `versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }, { id: "sg-v0", contentType: "application/pdf", bytes: 98_000, createdAt: "2026-09-28T15:00:00.000Z", addedOn: "2026-09-28" }],` (so it reads "Version 2").
 - `DATA.live[1]` (`sg-2`, the camera photo): add `versions: [{ id: "sg-v2", contentType: "image/jpeg", bytes: 800_000, createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12" }],` (its own version).
 - `DATA`: add `space: { used: 4_500_000_000, quota: 5_368_709_120 },` (above 80%: the line shows). `EMPTY`: `{ ...DATA, live: [], trashed: [], space: null }`.
@@ -2958,7 +3022,7 @@ Update the module comment (`:8-16`): add "Each loaded card shows a contract on i
 
 - [ ] **Step 6: Run green.** The Step 2 command, plus `"src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-viewer.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-purge-dialog.test.ts" src/lib/documents src/components/ui/material.test.ts src/lib/i18n/ratchet.test.ts` (the ratchet may fail ONLY on the baseline count until Task 9; say so). `pnpm --filter web typecheck` → clean (no errors anywhere now). eslint on every touched file → clean, including `react-hooks/set-state-in-effect`.
 
-- [ ] **Step 7: Probes, red BY NAME, restored.** (1) `rowSavers`'s `save` → `updateDocumentFieldAction(…)` directly (import it) → the M6 card case fails; (2) `demoHandlers.saveField` → `documentHandlers({ accountId: "sg", locale: "en", reload: noop }).saveField(…)` → the demo's inert case fails; (3) offer an Undo on purge success (`offer(…)`) → the success case fails; (4) on a refusal, `return false` without `reload()` → both refusal cases fail; (4b) draw Delete forever without `p.canManage` → the R1 card case fails; (4c) M10's `.then` has no unit test (a race between two user gestures is not reachable without a DOM); the reviewer checks it by reading; (5) `download`'s `versionId ?? doc.version.id` → `doc.version.id` → the older-version case fails; (6) `doc.versions.length > 0` for the row label → the one-version case fails; (7) `variant="default"` on Delete forever → the trash case fails; (8) drop `data.space` (pass `null` to `spaceUsedText`) → the space case fails; (9) in `versionToast`, drop `end.params` → its tooLarge case fails.
+- [ ] **Step 7: Probes, red BY NAME, restored.** (1) `rowSavers`'s `save` → `updateDocumentFieldAction(…)` directly (import it) → the M6 card case fails; (2) `demoHandlers.saveField` → `documentHandlers({ accountId: "sg", locale: "en", reload: noop }).saveField(…)` → the demo's inert case fails; (3) offer an Undo on purge success (`offer(…)`) → the success case fails; (4) on a refusal, `return false` without `reload()` → both refusal cases fail; (4b) draw Delete forever without `p.canManage` → the R1 card case fails; (4b2) always draw Restore (ignore `doc.purging`) → the m1 card case fails; (4c) M10's `.then` has no unit test (a race between two user gestures is not reachable without a DOM); the reviewer checks it by reading; (5) `download`'s `versionId ?? doc.version.id` → `doc.version.id` → the older-version case fails; (6) `doc.versions.length > 0` for the row label → the one-version case fails; (7) `variant="default"` on Delete forever → the trash case fails; (8) drop `data.space` (pass `null` to `spaceUsedText`) → the space case fails; (9) in `versionToast`, drop `end.params` → its tooLarge case fails.
 
 - [ ] **Step 8: Commit.** `git commit -m "feat(documents): Upload new version, Version N, Delete forever and the space line on the card; edits through the handlers; inert styleguide (S-07 part 1b)" -- "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-handlers.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-handlers.test.ts" "apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.tsx" "apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.test.ts"`
 
