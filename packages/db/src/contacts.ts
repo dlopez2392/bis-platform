@@ -1037,7 +1037,14 @@ export async function deleteContacts(
     if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
     for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
   }
-  const deletable = contactIds.filter((id) => !blocked.has(id));
+  // The proof (review I1): only ids this client READS as this account's contacts go on. The ids come
+  // from the browser, and beforeDelete hands them to a service-role purge, so a filter there alone is
+  // not enough; on a request client RLS decides this read too.
+  const { data: mine, error: mineError } = await db.from("contacts").select("id")
+    .eq("account_id", accountId).in("id", contactIds);
+  if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
+  const ours = new Set((mine ?? []).map((r) => r.id as string));
+  const deletable = contactIds.filter((id) => ours.has(id) && !blocked.has(id));
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { deleted: 0, skippedBlocked: blocked.size, skippedFiles: kept.size };

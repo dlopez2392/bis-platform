@@ -142,8 +142,14 @@ export async function markDocumentVersionReady(db: SupabaseClient, a: {
   const r = data as { status: string; first?: boolean };
   if (r.status !== "ok") return false;
   if (r.first) {
-    const doc = await getDocument(db, a.accountId, a.documentId);
-    if (doc) await emitAfter(db, a.accountId, "document.added", a.actorId, { documentId: doc.id, ...recordPayload(doc) });
+    // Best-effort, read included: the version IS ready and current, so a failed read for the event's
+    // record ids is logged, never answered as a failed upload (the caller would remove a listed file).
+    try {
+      const doc = await getDocument(db, a.accountId, a.documentId);
+      if (doc) await emit(db, a.accountId, "document.added", a.actorId, { documentId: doc.id, ...recordPayload(doc) });
+    } catch (e) {
+      console.error(`documents: account ${a.accountId}: document.added emit failed after the write committed: ${(e as Error).message}`);
+    }
   }
   return true;
 }
@@ -303,6 +309,8 @@ export async function purgeContactDocuments(
       const { data, error } = await db.from("documents")
         .select("id, contact_id, versions:document_versions!document_versions_document_fkey(storage_path)")
         .eq("account_id", accountId).in("contact_id", [...contactIds.slice(i, i + 100)])
+        // A stable total order (the primary key) for the paging: without it two pages may overlap or skip
+        // rows. Nothing is deleted until every page is read, so the ranges cannot shift under the loop.
         .order("id").range(from, from + 499);
       if (error) throw new Error(`purgeContactDocuments (read) failed: ${error.message}`);
       const page = (data ?? []) as unknown as Row[];
@@ -320,12 +328,14 @@ export async function purgeContactDocuments(
           continue;
         }
       }
-      const { error: del } = await db.from("documents").delete().eq("account_id", accountId).eq("id", d.id);
+      const { data: gone, error: del } = await db.from("documents").delete().eq("account_id", accountId).eq("id", d.id).select("id");
       if (del) {
         kept.add(d.contact_id);
         console.error(`purgeContactDocuments: account ${accountId} contact ${d.contact_id} document ${d.id}: objects removed but the row was not, contact kept for the retry: ${del.message}`);
         continue;
       }
+      // A row another purge already took is not this purge's: neither counted nor announced.
+      if ((gone ?? []).length === 0) continue;
       purged++;
       await emitAfter(db, accountId, "document.purged", actorId, { documentId: d.id, contactId: d.contact_id });
     }

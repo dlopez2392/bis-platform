@@ -76,6 +76,28 @@ describe("an upload's life (spec 5.1)", () => {
       expect(await events(db, accountId, "document.added")).toEqual([]);
     }));
 
+  it("a ready upload is reported ready even when the read for its event fails (mutation: the document read outside the best-effort path -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Read fails", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: BYTES, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (r.status !== "ok") throw new Error(r.status);
+      // The real client, except that a read of `documents` fails: the rpc (the write) stays real.
+      const failing: { maybeSingle: () => Promise<unknown> } & Record<string, unknown> = {
+        maybeSingle: async () => ({ data: null, error: { message: "read down" } }),
+      };
+      failing.select = () => failing; failing.eq = () => failing;
+      const flaky = new Proxy(db, { get: (t, p) => (p === "from" ? (table: string) => (table === "documents" ? failing : t.from(table)) : Reflect.get(t, p, t)) }) as SupabaseClient;
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await markDocumentVersionReady(flaky, { accountId, documentId: id, versionId: r.versionId, bytes: BYTES, sha256: HASH, actorId: ACTOR })).toBe(true);
+        expect(errors.mock.calls.some(([msg]) => String(msg).includes("document.added") && String(msg).includes("read down"))).toBe(true);
+      } finally {
+        errors.mockRestore();
+      }
+      expect((await listRecordDocuments(db, accountId, { kind: "contact", id: ana })).live.map((x) => x.id)).toEqual([id]);
+    }));
+
   it("a second finish is refused: only an uploading version becomes ready (mutation: drop `and status = 'uploading'` from mark_document_version_ready -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
@@ -129,6 +151,27 @@ describe("edits, trash and restore are compare-and-set (spec 4.1, 4.4)", () => {
       await trashDocument(db, accountId, d.id, ACTOR);
       expect(await updateDocumentField(db, accountId, d.id, "title", "X")).toBe("changed");
     }));
+
+  it("trash and restore events carry the document and its record only, never its title or category (mutation: category in the trashed or restored payload -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const t1 = await trashDocument(db, accountId, d.id, ACTOR);
+      if (t1.status !== "trashed") throw new Error("not trashed");
+      expect(await restoreDocument(db, accountId, d.id, t1.deletedAt, ACTOR)).toBe("updated");
+      const row = { actor_type: "user", actor_id: ACTOR, payload: { documentId: d.id, contactId: ana } };
+      expect(await events(db, accountId, "document.trashed")).toEqual([row]);
+      expect(await events(db, accountId, "document.restored")).toEqual([row]);
+    }));
+
+  it("Owners only on a trashed file changes nothing (mutation: drop .is('deleted_at', null) in setDocumentOwnersOnly -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      await trashDocument(db, accountId, d.id, ACTOR);
+      expect(await setDocumentOwnersOnly(db, accountId, d.id, true)).toBe("changed");
+      expect((await getDocument(db, accountId, d.id))!.owners_only).toBe(false);
+    }));
 });
 
 describe("the sweep's reads (spec 5.4)", () => {
@@ -163,11 +206,13 @@ describe("the sweep's reads (spec 5.4)", () => {
 });
 
 describe("the timeline read (plan deviation 3)", () => {
-  it("a contact's ready documents, trashed ones included; a group page adds the group's own (mutation: drop the group read -> FAILS)", () =>
+  it("a contact's ready documents, trashed ones included, never one still uploading; a group page adds the group's own (mutation: drop the group read, or the current_version_id filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
       if (g.status !== "ok") throw new Error(g.status);
+      const pending = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Pending", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      await reserveDocumentVersion(db, { accountId, documentId: pending, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
       const a = await readyDoc(db, accountId, ana, { title: "Mine" });
       const gid = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "Ours", category: "permit", expiresOn: null, ownersOnly: false, source: "camera", createdBy: ACTOR });
       const r = await reserveDocumentVersion(db, { accountId, documentId: gid, bytes: 10, contentType: "image/jpeg", originalName: null, uploadedBy: ACTOR });
@@ -188,7 +233,7 @@ function withStorage(db: SupabaseClient, remove: (paths: string[]) => Promise<{ 
 }
 
 describe("a customer's files go with them (deviation 2)", () => {
-  it("purge: objects first, then the row, then document.purged as the user, trashed files too (mutation: delete the row before the remove -> FAILS on the order)", () =>
+  it("purge: objects first, then the row, then document.purged as the user, trashed files too, never a title (mutation: delete the row before the remove -> FAILS on the order; a title in document.purged -> FAILS on the payload)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const a = await readyDoc(db, accountId, ana, { title: "A" });
@@ -205,30 +250,85 @@ describe("a customer's files go with them (deviation 2)", () => {
       expect(order.filter((x) => x.startsWith("object:")).sort()).toEqual([`object:${a.path}`, `object:${b.path}`].sort());
       expect(order.filter((x) => x.startsWith("rows-left:"))[0]).toBe("rows-left:2");   // the first object went while both rows stood
       expect(await getDocument(db, accountId, a.id)).toBeNull();
-      expect((await events(db, accountId, "document.purged")).map((e) => `${e.actor_type}:${e.actor_id}`))
-        .toEqual(["user:user_owner", "user:user_owner"]);
+      const byDoc = (x: { payload: unknown }) => (x.payload as { documentId: string }).documentId;
+      expect((await events(db, accountId, "document.purged")).sort((x, y) => byDoc(x).localeCompare(byDoc(y)))).toEqual(
+        [a.id, b.id].sort().map((documentId) => ({ actor_type: "user", actor_id: "user_owner", payload: { documentId, contactId: ana } })));
     }));
+
+  it("purge reads the caller's account only: another account's customer id touches nothing (mutation: drop the purge read's account filter -> FAILS)", () =>
+    withTestAccount(async (dbB, accountB) =>
+      withTestAccount(async (db, accountA) => {
+        const bContact = (await createContact(dbB, accountB, { firstName: "Bo" }, ACTOR)).id;
+        const bDoc = await readyDoc(dbB, accountB, bContact);
+        const removed: string[] = [];
+        const svc = withStorage(db, async (paths) => { removed.push(...paths); return { data: [], error: null }; });
+        expect(await purgeContactDocuments(svc, accountA, [bContact], "user_owner")).toEqual({ purgedDocuments: 0, keptContacts: [] });
+        expect(removed).toEqual([]);
+        expect(await getDocument(dbB, accountB, bDoc.id)).not.toBeNull();
+        expect([...(await events(db, accountA, "document.purged")), ...(await events(dbB, accountB, "document.purged"))]).toEqual([]);
+      })));
 
   it("a failed removal keeps that customer and its rows, says so in keptContacts, and a retry finishes (mutation: delete the row when remove failed -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const bea = (await createContact(db, accountId, { firstName: "Bea" }, ACTOR)).id;
       const a = await readyDoc(db, accountId, ana, { title: "A" });
+      const a2 = await readyDoc(db, accountId, ana, { title: "A2" });
       const b = await readyDoc(db, accountId, bea, { title: "B" });
+      const anaPaths = [a.path, a2.path];
+      const tried: string[] = [];
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       try {
-        const failing = withStorage(db, async (paths) => (paths.includes(a.path) ? { data: null, error: { message: "storage down" } } : { data: [], error: null }));
+        // Every one of Ana's objects fails; once her first fails, her second must not even be tried.
+        const failing = withStorage(db, async (paths) => {
+          tried.push(...paths);
+          return paths.some((p) => anaPaths.includes(p)) ? { data: null, error: { message: "storage down" } } : { data: [], error: null };
+        });
         expect(await purgeContactDocuments(failing, accountId, [ana, bea], "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: [ana] });
+        expect(tried.filter((p) => anaPaths.includes(p))).toHaveLength(1);
         expect(await getDocument(db, accountId, a.id)).not.toBeNull();
+        expect(await getDocument(db, accountId, a2.id)).not.toBeNull();
         expect(await getDocument(db, accountId, b.id)).toBeNull();
-        expect(errors.mock.calls.some(([msg]) => String(msg).includes(a.id) && String(msg).includes(ana))).toBe(true);
+        expect(errors.mock.calls.some(([msg]) => String(msg).includes(ana) && (String(msg).includes(a.id) || String(msg).includes(a2.id)))).toBe(true);
       } finally {
         errors.mockRestore();
       }
       const ok = withStorage(db, async () => ({ data: [], error: null }));
-      expect(await purgeContactDocuments(ok, accountId, [ana], "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: [] });
+      expect(await purgeContactDocuments(ok, accountId, [ana], "user_owner")).toEqual({ purgedDocuments: 2, keptContacts: [] });
       expect(await getDocument(db, accountId, a.id)).toBeNull();
     }));
+
+  it("a failed row delete keeps that customer; a row already gone is neither counted nor announced (mutation: count without the deleted row, or drop kept.add on a failed delete -> FAILS)", async () => {
+    // A fake client: the real service role can always delete the row, so only a fake reaches these branches.
+    const inserted: unknown[] = [];
+    const rows = [
+      { id: "d1", contact_id: "c1", versions: [{ storage_path: "p1" }] },
+      { id: "d2", contact_id: "c2", versions: [{ storage_path: "p2" }] },
+      { id: "d3", contact_id: "c3", versions: [{ storage_path: "p3" }] },
+    ];
+    const answer: Record<string, { data: { id: string }[] | null; error: { message: string } | null }> = {
+      d1: { data: null, error: { message: "row delete down" } },
+      d2: { data: [], error: null },             // someone else's purge took it first
+      d3: { data: [{ id: "d3" }], error: null },
+    };
+    const docs = {
+      select: () => docs, eq: () => docs, in: () => docs, order: () => docs,
+      range: async () => ({ data: rows, error: null }),
+      delete: () => ({ eq: () => ({ eq: (_c: string, id: string) => ({ select: async () => answer[id] }) }) }),
+    };
+    const fake = {
+      from: (t: string) => (t === "documents" ? docs : { insert: async (row: unknown) => { inserted.push(row); return { error: null }; } }),
+      storage: { from: () => ({ remove: async () => ({ data: [], error: null }) }) },
+    } as unknown as SupabaseClient;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await purgeContactDocuments(fake, "acc", ["c1", "c2", "c3"], "user_owner")).toEqual({ purgedDocuments: 1, keptContacts: ["c1"] });
+      expect(inserted.map((e) => (e as { payload: { documentId: string } }).payload.documentId)).toEqual(["d3"]);
+      expect(errors.mock.calls.some(([msg]) => String(msg).includes("d1") && String(msg).includes("c1"))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
+  });
 
   it("the read pages until a short page, so no row cap can truncate it (mutation: read only the first range -> FAILS on the range count)", async () => {
     // A fake client: PostgREST's own max_rows (1000) would return a 501-row read whole, so only a fake
@@ -240,7 +340,7 @@ describe("a customer's files go with them (deviation 2)", () => {
     const docs = {
       select: () => docs, eq: () => docs, in: () => docs, order: () => docs,
       range: async (from: number, to: number) => { ranges.push([from, to]); return { data: page(from, to), error: null }; },
-      delete: () => ({ eq: () => ({ eq: async () => ({ error: null }) }) }),
+      delete: () => ({ eq: () => ({ eq: (_c: string, id: string) => ({ select: async () => ({ data: [{ id }], error: null }) }) }) }),
     };
     const fake = {
       from: (t: string) => (t === "documents" ? docs : { insert: async () => ({ error: null }) }),
