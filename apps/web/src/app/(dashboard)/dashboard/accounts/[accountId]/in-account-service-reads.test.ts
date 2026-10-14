@@ -83,6 +83,9 @@ const ALLOWED: Record<string, Reason> = {
   // The language actions (S-09 §7.5) follow the same rule: the service writers run only after
   // getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
+  // The document vault (S-07): every service write and every minted URL follows a request-client read of the
+  // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions.ts": "proven-target",
   // The Groups card: every service write follows a request-client read of its contact, membership or group;
   // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
