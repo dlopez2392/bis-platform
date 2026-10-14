@@ -41,8 +41,10 @@ grant execute on function public.document_space_used(uuid) to authenticated;
 
 -- 2. The timeline's new-version rows (owner ruling 2026-10-14; plan deviation 6): every READY version
 --    that has an older ready version of the same document (the first is the "added a file" row, read
---    from documents). A new version can only be reserved once its document has a ready current one,
---    so the first ready version is always the oldest. security_invoker: the view runs with the CALLER's
+--    from documents). The first ready version is the oldest only because the APP refuses to start a
+--    new version until the document has a ready current one (startDocumentVersionUploadAction, plan
+--    Task 4); reserve_document_version (0077) checks only that the document exists, so the database
+--    does not hold this rule. security_invoker: the view runs with the CALLER's
 --    privileges, so the documents policies (tenant, Technician fence, Owners only) and
 --    document_versions_through_document decide every row, as for the card. The first view in public:
 --    schema-grants-guard.test.ts lists it, a reviewed decision. SELECT only; the default ALL grant a
