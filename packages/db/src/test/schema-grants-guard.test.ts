@@ -15,7 +15,8 @@ import { withRollback } from "./db";
  * or materialized view cannot enable row level security, so one created in
  * `public` always lands in `rlsOff`: that is deliberate, and it forces an
  * explicit, reviewed decision here rather than a silent read path around the
- * tables' policies. There are none today. The allow-list IS the client role's
+ * tables' policies. There is one: document_version_timeline (0078),
+ * security_invoker, SELECT-only. The allow-list IS the client role's
  * write surface, written out: changing it is a deliberate, reviewed edit.
  * Privileges are read with has_table_privilege / has_column_privilege, which
  * count a grant to PUBLIC as the role's own and see PG17's MAINTAIN.
@@ -105,7 +106,12 @@ const EXPECTED_WRITES: Record<string, string[]> = {
 
 describe("schema guard: every public table, view, materialized view and foreign table", () => {
   it("has row level security enabled (mutation: disable it on any table, or create any view -> FAILS naming it)", () =>
-    withRollback(async (c) => { expect((await writeSurface(c)).rlsOff).toEqual([]); }));
+    withRollback(async (c) => {
+      // 0078 (S-07 1b): the one view in public, security_invoker (the tables' RLS decides every row its caller
+      // reads) and SELECT-only, reviewed in docs/superpowers/plans/2026-10-14-document-vault-pr1b.md deviation 6.
+      // document-space-used.test.ts pins its security_invoker option and its grants.
+      expect((await writeSurface(c)).rlsOff).toEqual(["document_version_timeline"]);
+    }));
 
   it("has no policy that applies to PUBLIC", () =>
     withRollback(async (c) => { expect((await writeSurface(c)).publicPolicies).toEqual([]); }));
