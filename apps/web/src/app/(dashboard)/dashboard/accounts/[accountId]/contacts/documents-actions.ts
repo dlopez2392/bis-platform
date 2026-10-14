@@ -40,6 +40,12 @@ const FAILED = "documents.error.failed";
 const TITLE_RULE = { kind: "text", max: 200, required: true } as const;
 /** Spec 4.3: a URL lives 120 seconds and is minted again on demand. */
 const URL_SECONDS = 120;
+/**
+ * The size a refusal shows, rounded UP to a tenth of a MB: one byte over the limit reads "25.1 MB",
+ * never "Too large: 25 MB. The limit is 25 MB." (review M3).
+ */
+// Tenths counted exactly (an integer over a power of two), so a whole size is never pushed up a tenth by float error.
+const shownSize = (bytes: number): string => formatMb((Math.ceil((bytes * 10) / 1_048_576) * 1_048_576) / 10, "en");
 
 function log(where: string, accountId: string, e: unknown): void {
   console.error(`documents ${where} (account ${accountId}): ${loggableError(e)}`);
@@ -84,7 +90,7 @@ export async function startDocumentUploadAction(
   if (!record) return fail(REFUSED);
   if (input.ownersOnly === true && !access.canManage) return fail("documents.error.ownersOnlyRole");
   if (!Number.isInteger(input.size) || input.size < 1) return fail("documents.error.upload");
-  if (input.size > DOCUMENT_MAX_BYTES) return fail("documents.error.tooLarge", { size: formatMb(input.size, "en") });
+  if (input.size > DOCUMENT_MAX_BYTES) return fail("documents.error.tooLarge", { size: shownSize(input.size) });
   if (typeof input.name !== "string" || !extensionAllowed(input.name) || !isDocumentContentType(input.contentType)) {
     return fail("documents.error.badType");
   }
@@ -114,7 +120,7 @@ export async function startDocumentUploadAction(
     if (r.status !== "ok") {
       await discardDocumentUpload(svc, accountId, documentId, null);
       return r.status === "over_quota" ? fail("documents.error.quota")
-        : r.status === "too_large" ? fail("documents.error.tooLarge", { size: formatMb(input.size, "en") })
+        : r.status === "too_large" ? fail("documents.error.tooLarge", { size: shownSize(input.size) })
         : fail(REFUSED);
     }
     const { data, error } = await svc.storage.from(DOCUMENT_BUCKET).createSignedUploadUrl(r.storagePath);
@@ -164,9 +170,9 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
   try {
     const version = await getUploadingVersion(svc, accountId, docId, verId);
     if (!version) {
-      // No uploading row. If NO row of that id exists at all (the sweep took it, or a cleanup ran), an
-      // object the browser PUT afterwards could still sit at the path the server would have reserved:
-      // remove that OBJECT only. A row that exists (already ready) is never touched, and no row is: a
+      // No uploading row. If NO row of that id exists at all (the sweep took it, or a refused finish
+      // or an abandon cleaned it up after removing its object), an object the browser PUT afterwards
+      // could still sit at the path the server reserved: remove that OBJECT only. A row that exists (already ready) is never touched, and no row is: a
       // crafted finish(document, random id) must never delete a teammate's document whose own upload
       // is still in flight. The sweep owns rows.
       if (!(await getDocumentVersion(svc, accountId, verId))) {
@@ -177,7 +183,12 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
     }
     const { data: blob, error } = await svc.storage.from(DOCUMENT_BUCKET).download(version.storage_path);
     if (error || !blob) {
-      await cleanUp(svc, accountId, docId, verId, version.storage_path);
+      // No object (or no answer from storage): the rows are LEFT uploading (review M2). The signed
+      // upload URL lives 2 hours, so a PUT still in flight could land after this; with its rows gone
+      // nothing would ever find that object. The sweep removes object and rows together once the URL
+      // has expired (its cutoff is later than the URL life), and the reservation counts against the
+      // quota until then.
+      log("finish: object not downloadable, rows left for the sweep", accountId, error ?? "no data");
       return fail("documents.error.upload");
     }
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -230,9 +241,10 @@ export async function getDocumentUrlAction(
   try {
     const db = await dbForRequest();
     const version = await getDocumentVersion(db, accountId, versionId.toLowerCase());
-    if (!version || version.status !== "ready") return fail(REFUSED);
+    // Opening is not changing: a file the reader cannot see (or one not uploaded yet) is "not found" (review M6).
+    if (!version || version.status !== "ready") return fail("documents.error.notFound");
     const doc = await getDocument(db, accountId, version.document_id);
-    if (!doc) return fail(REFUSED);
+    if (!doc) return fail("documents.error.notFound");
     // Word and Excel are never rendered (spec 4.3): always a download, named after the title.
     const download = mode === "download" || OFFICE_TYPES.includes(version.content_type);
     const { data, error } = await serviceDb().storage.from(DOCUMENT_BUCKET).createSignedUrl(

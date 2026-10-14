@@ -84,7 +84,7 @@ describe("startDocumentUploadAction (spec 5.1)", () => {
     expect(db.createDocument).not.toHaveBeenCalled();
   });
   it.each([
-    ["oversize", input({ size: 26_214_401 }), { ok: false, error: "documents.error.tooLarge", params: { size: "25 MB" } }],
+    ["oversize (one byte over reads 25.1 MB, never \"25 MB\" beside a 25 MB limit; mutation: round to nearest -> FAILS)", input({ size: 26_214_401 }), { ok: false, error: "documents.error.tooLarge", params: { size: "25.1 MB" } }],
     ["a disallowed type", input({ name: "x.svg", contentType: "image/svg+xml" }), { ok: false, error: "documents.error.badType" }],
     ["an allowed type with a disallowed extension", input({ name: "x.exe" }), { ok: false, error: "documents.error.badType" }],
     ["an allowed extension with a disallowed type (mutation: drop isDocumentContentType; the svg case above cannot fail it, its extension is refused too)",
@@ -111,7 +111,6 @@ describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
     expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
   });
   it.each([
-    ["a missing object", () => storage.download.mockResolvedValue({ data: null, error: { message: "not found" } }), "documents.error.upload"],
     ["a stored size other than the reserved size (an understated size; mutation: drop the size comparison -> FAILS)",
       () => storage.download.mockResolvedValue({ data: new Blob([PDF, new Uint8Array(1)], { type: "application/pdf" }), error: null }), "documents.error.upload"],
     ["a type mismatch (an EXE named .pdf)", () => storage.download.mockResolvedValue({ data: new Blob([EXE], { type: "application/pdf" }), error: null }), "documents.error.badType"],
@@ -122,6 +121,13 @@ describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
     expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: false, error });
     expect(storage.remove).toHaveBeenCalledWith([`${ACC}/${D}/${V}`]);
     expect(db.discardDocumentUpload).toHaveBeenCalledWith(SERVICE, ACC, D, V);
+    expect(db.markDocumentVersionReady).not.toHaveBeenCalled();
+  });
+  it("a missing object leaves the rows uploading for the sweep: a PUT still in flight on the 2-hour URL would otherwise land with no row and never be swept (mutation: clean up the rows -> FAILS)", async () => {
+    storage.download.mockResolvedValue({ data: null, error: { message: "Object not found" } });
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: false, error: "documents.error.upload" });
+    expect(db.discardDocumentUpload).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
     expect(db.markDocumentVersionReady).not.toHaveBeenCalled();
   });
   it("the stored type is compared as a media type: case and parameters do not refuse a real PDF (mutation: compare blob.type raw -> FAILS)", async () => {
@@ -182,9 +188,9 @@ describe("abandonDocumentUploadAction (spec 5.1)", () => {
 });
 
 describe("getDocumentUrlAction (spec 5.1)", () => {
-  it("refuses a version the reader cannot see (RLS read on the request client) and mints nothing (mutation: read the version on the service client -> FAILS)", async () => {
+  it("a version the reader cannot see is 'not found' (opening is not changing; RLS read on the request client) and nothing is minted (mutation: read the version on the service client, or answer refused -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(null);
-    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.notFound" });
     expect(db.getDocumentVersion).toHaveBeenCalledWith(REQUEST, ACC, V);
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
@@ -208,15 +214,15 @@ describe("getDocumentUrlAction (spec 5.1)", () => {
     expect(storage.createSignedUrl).toHaveBeenCalledWith("p", 120, undefined);
     expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
   });
-  it("a version whose document the reader cannot see is refused and nothing is minted (mutation: skip the document read -> FAILS)", async () => {
+  it("a version whose document the reader cannot see is 'not found' and nothing is minted (mutation: skip the document read -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
     db.getDocument.mockResolvedValue(null);
-    expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.notFound" });
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
   it("a version still uploading is never minted (mutation: drop the ready check -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue({ ...readyVersion("application/pdf"), status: "uploading" });
-    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.notFound" });
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
 });
@@ -268,6 +274,35 @@ describe("trash and restore (spec 4.4)", () => {
     db.getDocument.mockResolvedValue(null);
     expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: false, error: "documents.error.refused" });
     expect(db.trashDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe("every document action proves the document on the REQUEST client before its service write (review I1)", () => {
+  const SIX = [
+    ["edit", () => A.updateDocumentFieldAction(ACC, D, "title", "New"), db.updateDocumentField],
+    ["undo edit", () => A.undoDocumentFieldAction(ACC, { documentId: D, field: "title", prior: "Lease", written: "New" }), db.updateDocumentField],
+    ["owners only", () => A.setOwnersOnlyAction(ACC, D, true), db.setDocumentOwnersOnly],
+    ["undo owners only", () => A.undoOwnersOnlyAction(ACC, D, false, true), db.setDocumentOwnersOnly],
+    ["trash", () => A.trashDocumentAction(ACC, D), db.trashDocument],
+    ["restore", () => A.restoreDocumentAction(ACC, D, "2026-10-13T15:00:00Z"), db.restoreDocument],
+  ] as const;
+  beforeEach(() => {
+    db.updateDocumentField.mockResolvedValue("updated");
+    db.setDocumentOwnersOnly.mockResolvedValue("updated");
+    db.trashDocument.mockResolvedValue({ status: "trashed", deletedAt: "2026-10-13T15:00:00Z" });
+    db.restoreDocument.mockResolvedValue("updated");
+  });
+  it.each(SIX)("%s: the first document read is on the request client, before the service write (mutation: read it on serviceDb() -> FAILS)", async (_l, run, write) => {
+    expect((await run()).ok).toBe(true);
+    expect(db.getDocument.mock.calls[0]![0]).toBe(REQUEST);
+    expect(db.getDocument.mock.calls[0]!.slice(1)).toEqual([ACC, D]);
+    expect(write.mock.calls[0]![0]).toBe(SERVICE);
+    expect(db.getDocument.mock.invocationCallOrder[0]!).toBeLessThan(write.mock.invocationCallOrder[0]!);
+  });
+  it.each(SIX)("%s: a document the caller cannot see is refused and nothing is written (mutation: skip the request-client read -> FAILS)", async (_l, run, write) => {
+    db.getDocument.mockResolvedValue(null);
+    expect(await run()).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(write).not.toHaveBeenCalled();
   });
 });
 
