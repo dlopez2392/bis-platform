@@ -7,7 +7,10 @@ type ZoneAnswer = { data: { timezone: string } | null; error: { message: string 
 const zoneRead = vi.fn<(...read: string[]) => Promise<ZoneAnswer>>(async () => ({ data: { timezone: "America/Chicago" }, error: null }));
 const REQUEST = { tag: "request-db", from: (t: string) => ({ select: (c: string) => ({ eq: (k: string, v: string) => ({ maybeSingle: () => zoneRead(t, c, k, v) }) }) }) };
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
-const db = { readGroup: vi.fn(), listRecordDocuments: vi.fn(), listPeopleNames: vi.fn(), serviceDb: vi.fn(() => { throw new Error("never"); }) };
+const db = {
+  readGroup: vi.fn(), listRecordDocuments: vi.fn(), listPeopleNames: vi.fn(), documentSpaceUsed: vi.fn(),
+  serviceDb: vi.fn(() => { throw new Error("never"); }), DOCUMENT_PURGING_MARK: "documents:purging",
+};
 vi.mock("@bis/db", () => db);
 // The real zone rule needs the agency fallback (serviceDb); here the stored zone, or UTC when there is none.
 vi.mock("@/lib/zone", () => ({ renderZone: async (z?: string) => ({ zone: z ?? "UTC", guessed: !z, label: z ?? "UTC" }) }));
@@ -20,6 +23,10 @@ const row = (over: Record<string, unknown> = {}) => ({
   owners_only: false, source: "camera", current_version_id: "v1", created_by: "user_ana", created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z", deleted_at: null, deleted_by: null,
   version: { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "x" },
+  versions: [
+    { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "2026-10-01T00:00:00Z" },
+    { id: "v0", document_id: "d1", account_id: ACC, storage_path: "q", bytes: 800, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-09-20T15:00:00Z" },
+  ],
   ...over,
 });
 const call = (id = G) => GET(new Request("http://x"), { params: Promise.resolve({ accountId: ACC, groupId: id }) });
@@ -32,6 +39,7 @@ beforeEach(() => {
   db.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Casa", billingAddress: null });
   db.listRecordDocuments.mockResolvedValue({ live: [row()], trashed: [], liveMore: false, trashedMore: false });
   db.listPeopleNames.mockResolvedValue({ user_ana: "Ana" });
+  db.documentSpaceUsed.mockResolvedValue(4_500_000_000);
 });
 
 afterEach(() => vi.useRealTimers());
@@ -46,6 +54,11 @@ describe("the Documents card's read for a group", () => {
       id: "d1", title: "Lease", category: "contract", expiresOn: null, ownersOnly: false, source: "camera",
       addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
       version: { id: "v1", contentType: "image/jpeg", bytes: 1200 },
+      versions: [
+        { id: "v1", contentType: "image/jpeg", bytes: 1200, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" },
+        { id: "v0", contentType: "application/pdf", bytes: 800, createdAt: "2026-09-20T15:00:00Z", addedOn: "2026-09-20" },
+      ],
+      purging: false,
     });
     expect(JSON.stringify(body)).not.toContain("user_ana");
     expect(body).toMatchObject({ today: "2026-10-13", record: { kind: "group", id: G, groupKind: "household" }, capped: false });
@@ -84,5 +97,24 @@ describe("the Documents card's read for a group", () => {
   it("a read failure is a 500 (the card's error state), never a partial body", async () => {
     db.listRecordDocuments.mockRejectedValue(new Error("down"));
     expect((await call()).status).toBe(500);
+  });
+  it("a trashed file whose Delete forever began is 'purging'; any other trashed file is not, and the marker never travels (review m1; mutation: purging always false -> FAILS)", async () => {
+    db.listRecordDocuments.mockResolvedValue({ live: [row()], trashed: [
+      row({ id: "t1", deleted_at: "2026-10-13T03:00:00Z", deleted_by: "documents:purging" }),
+      row({ id: "t2", deleted_at: "2026-10-13T03:00:00Z", deleted_by: "user_ana" })], liveMore: false, trashedMore: false });
+    const body = await (await call()).json();
+    expect([body.live[0].purging, body.trashed[0].purging, body.trashed[1].purging]).toEqual([false, true, false]);
+    expect(JSON.stringify(body)).not.toContain("documents:purging");
+  });
+  it("reports the account's usage on the REQUEST client, against the 5 GB quota (mutation: read it on serviceDb() -> the mock throws -> FAILS)", async () => {
+    const body = await (await call()).json();
+    expect(db.documentSpaceUsed).toHaveBeenCalledWith(REQUEST, ACC);
+    expect(body.space).toEqual({ used: 4_500_000_000, quota: 5_368_709_120 });
+  });
+  it("a failed usage read is omitted, never a 500 and never zero: the card still loads (mutation: let the error reach the route's catch -> 500 -> FAILS)", async () => {
+    db.documentSpaceUsed.mockRejectedValue(new Error("42501"));
+    const res = await call();
+    expect(res.status).toBe(200);
+    expect((await res.json()).space).toBeNull();
   });
 });
