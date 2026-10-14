@@ -196,6 +196,10 @@ describe("the document vault's copy (S-07 part 1)", () => {
     expect(m["documents.error.upload"]).toBe("Couldn't upload. Try again.");
     expect(m["documents.error.upload.es"]).toBe("No se pudo subir. Intente de nuevo.");
   });
+  it("a drop while a batch is still uploading says so, in both languages (mutation: change documents.error.busy.es -> FAILS)", () => {
+    expect(m["documents.error.busy"]).toBe("Wait for these files to finish uploading, then add more.");
+    expect(m["documents.error.busy.es"]).toBe("Espere a que terminen de subir estos archivos y luego agregue más.");
+  });
   it("the delete dialog's file line is the owner's wording, both languages (mutation: 'Esto también borra' -> FAILS)", () => {
     expect(m["contacts.delete.alsoFiles"]).toBe("This also deletes {count} files.");
     expect(m["contacts.delete.alsoFiles.es"]).toBe("También se borrarán {count} archivos.");

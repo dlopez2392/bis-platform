@@ -2,7 +2,7 @@ import { DOCUMENT_MAX_BYTES, isDocumentContentType, type DocumentCategory, type 
 import {
   startDocumentUploadAction, finishDocumentUploadAction, abandonDocumentUploadAction, type DocRecordArg,
 } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions";
-import { typeForFile, isImageType, formatMb } from "./rules";
+import { typeForFile, isImageType, shownSize } from "./rules";
 import { stripImage, type ImageType } from "./strip-image";
 
 /**
@@ -41,7 +41,7 @@ export async function prepareFile(file: File, strip: UploadDeps["strip"]): Promi
     contentType = isDocumentContentType(blob.type) ? blob.type : declared;
   }
   // The size that counts is the size STORED, so it is checked after the re-encode (a 30 MB photo may fit once redrawn).
-  if (blob.size > DOCUMENT_MAX_BYTES) return refusal("documents.error.tooLarge", { size: formatMb(blob.size, "en") });
+  if (blob.size > DOCUMENT_MAX_BYTES) return refusal("documents.error.tooLarge", { size: shownSize(blob.size) });
   if (blob.size < 1) return refusal("documents.error.upload");
   return { ok: true, blob, contentType };
 }

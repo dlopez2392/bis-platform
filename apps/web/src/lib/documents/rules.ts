@@ -50,6 +50,14 @@ export function formatMb(bytes: number, locale: Locale): string {
   return `${n} MB`;
 }
 
+/**
+ * The size a "too large" refusal shows, rounded UP to a tenth of a MB: one byte over the limit reads
+ * "25.1 MB", never "Too large: 25 MB. The limit is 25 MB." (review M3). Pure, browser-safe: the
+ * server action and the browser's prepare step both show the same number for the same file.
+ * Tenths counted exactly (an integer over a power of two), so a whole size is never pushed up a tenth by float error.
+ */
+export const shownSize = (bytes: number): string => formatMb((Math.ceil((bytes * 10) / 1_048_576) * 1_048_576) / 10, "en");
+
 const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
 export function isDay(v: unknown): v is string {
   if (typeof v !== "string") return false;

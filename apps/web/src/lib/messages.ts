@@ -3920,6 +3920,8 @@ export const m = {
   "documents.error.upload.es": "No se pudo subir. Intente de nuevo.",
   "documents.error.tooMany": "Choose up to 10 files at a time.",
   "documents.error.tooMany.es": "Elija hasta 10 archivos a la vez.",
+  "documents.error.busy": "Wait for these files to finish uploading, then add more.",
+  "documents.error.busy.es": "Espere a que terminen de subir estos archivos y luego agregue más.",
   "documents.error.open": "Couldn't open this file. Try again.",
   "documents.error.open.es": "No se pudo abrir este archivo. Intente de nuevo.",
   "documents.progress.uploading": "Uploading {percent}%",

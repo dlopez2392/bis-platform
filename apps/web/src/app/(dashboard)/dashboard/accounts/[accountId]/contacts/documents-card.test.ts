@@ -9,7 +9,7 @@ vi.mock("./documents-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, dropRefusal } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -223,6 +223,12 @@ describe("the upload lock (one batch or one retry at a time)", () => {
     expect(lock.held).toBe(false);
     await expect(exclusive(lock, () => Promise.reject(new Error("x")))).rejects.toThrow("x");
     expect(lock.held).toBe(false);
+  });
+  it("a drop while the lock is held is refused with the wait sentence, never silently; over ten is refused as too many; otherwise it opens (mutation: answer null while held -> FAILS)", () => {
+    expect(dropRefusal(true, 1)).toBe("documents.error.busy");
+    expect(dropRefusal(true, 11)).toBe("documents.error.busy");
+    expect(dropRefusal(false, 11)).toBe("documents.error.tooMany");
+    expect(dropRefusal(false, 10)).toBeNull();
   });
 });
 

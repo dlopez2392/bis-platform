@@ -12,7 +12,7 @@ import {
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
 import { validateInlineRule } from "@/lib/inline-rule";
-import { extensionAllowed, extensionForType, formatMb, isDay, OFFICE_TYPES } from "@/lib/documents/rules";
+import { extensionAllowed, extensionForType, isDay, OFFICE_TYPES, shownSize } from "@/lib/documents/rules";
 import { checkDocumentBytes } from "@/lib/documents/content-check";
 
 /**
@@ -40,12 +40,6 @@ const FAILED = "documents.error.failed";
 const TITLE_RULE = { kind: "text", max: 200, required: true } as const;
 /** Spec 4.3: a URL lives 120 seconds and is minted again on demand. */
 const URL_SECONDS = 120;
-/**
- * The size a refusal shows, rounded UP to a tenth of a MB: one byte over the limit reads "25.1 MB",
- * never "Too large: 25 MB. The limit is 25 MB." (review M3).
- */
-// Tenths counted exactly (an integer over a power of two), so a whole size is never pushed up a tenth by float error.
-const shownSize = (bytes: number): string => formatMb((Math.ceil((bytes * 10) / 1_048_576) * 1_048_576) / 10, "en");
 
 function log(where: string, accountId: string, e: unknown): void {
   console.error(`documents ${where} (account ${accountId}): ${loggableError(e)}`);

@@ -64,6 +64,17 @@ export async function exclusive<T>(lock: { held: boolean }, run: () => Promise<T
   try { return await run(); } finally { lock.held = false; }
 }
 
+/**
+ * What a drop (or a pick) of `count` files answers before the panel opens: refused with the wait
+ * sentence while a batch or a Retry holds the upload lock (a batch on its way is never replaced, and
+ * never silently), refused as too many past MAX_BATCH, otherwise null and the panel opens.
+ */
+export function dropRefusal(lockHeld: boolean, count: number): MessageKey | null {
+  if (lockHeld) return "documents.error.busy";
+  if (count > MAX_BATCH) return "documents.error.tooMany";
+  return null;
+}
+
 /** The viewer's file survives a re-read only while that read still lists it (trashed elsewhere, or by this card's own menu). */
 export function keepOpen(openId: string | null, load: DocumentsLoad): string | null {
   if (!openId || load.status !== "ready") return openId;
@@ -357,9 +368,9 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
 
   const closePanel = () => { setFiles([]); setOwnersOnly(false); setExpiresOn(""); };
   const onFiles = (chosen: File[], from: "upload" | "camera") => {
-    // A batch on its way is never replaced by a second drop (no copy says so yet: see the Task 10 report).
-    if (lock.held) return;
-    if (chosen.length > MAX_BATCH) { toast.error(t(m, "documents.error.tooMany", locale)); return; }
+    // A batch on its way is never replaced by a second drop; the person is told to wait.
+    const refused = dropRefusal(lock.held, chosen.length);
+    if (refused) { toast.error(t(m, refused, locale)); return; }
     // A new batch starts with the batch choices cleared.
     setOwnersOnly(false);
     setExpiresOn("");

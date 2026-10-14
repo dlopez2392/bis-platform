@@ -42,7 +42,11 @@ describe("prepareFile (spec 4.2, 5.3)", () => {
     expect(await prepareFile(file("a.heic", "image/heic"), deps().strip)).toEqual({ ok: false, error: "documents.error.badType" });
     expect(await prepareFile(file("a.svg", "image/svg+xml"), deps().strip)).toEqual({ ok: false, error: "documents.error.badType" });
     const big = await prepareFile(file("a.png", "image/png", 10), async () => new Blob([new Uint8Array(26_214_401)], { type: "image/png" }));
-    expect(big).toEqual({ ok: false, error: "documents.error.tooLarge", params: { size: "25 MB" } });
+    expect(big).toEqual({ ok: false, error: "documents.error.tooLarge", params: { size: "25.1 MB" } });
+  });
+  it("the browser's oversize size rounds UP like the server's: 26,230,000 bytes reads 25.1 MB, never \"25 MB\" beside a 25 MB limit (mutation: round to nearest -> FAILS)", async () => {
+    const r = await prepareFile(file("a.pdf", "application/pdf", 26_230_000), deps().strip);
+    expect(r).toEqual({ ok: false, error: "documents.error.tooLarge", params: { size: "25.1 MB" } });
   });
   it("an image the browser cannot redraw is refused as Couldn't upload, never sent unstripped (mutation: fall back to the original file -> FAILS)", async () => {
     const r = await prepareFile(file("a.jpg", "image/jpeg"), async () => { throw new Error("decode"); });
