@@ -1,6 +1,6 @@
 import { DOCUMENT_MAX_BYTES, isDocumentContentType, type DocumentCategory, type DocumentContentType } from "@bis/db/document-rules";
 import {
-  startDocumentUploadAction, finishDocumentUploadAction, abandonDocumentUploadAction, type DocRecordArg,
+  startDocumentUploadAction, startDocumentVersionUploadAction, finishDocumentUploadAction, abandonDocumentUploadAction, type DocRecordArg,
 } from "@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions";
 import { typeForFile, isImageType, shownSize } from "./rules";
 import { stripImage, type ImageType } from "./strip-image";
@@ -46,20 +46,16 @@ export async function prepareFile(file: File, strip: UploadDeps["strip"]): Promi
   return { ok: true, blob, contentType };
 }
 
-export async function uploadOne(
-  accountId: string, item: UploadItem, batch: UploadBatch, deps: UploadDeps, onPhase: (p: UploadPhase) => void,
+type Started = { ok: true; documentId: string; versionId: string; uploadUrl: string };
+const failedPhase = (r: Refusal): UploadPhase => (r.params ? { kind: "failed", error: r.error, params: r.params } : { kind: "failed", error: r.error });
+
+/** The shared tail of both journeys: PUT with progress, give the reservation back on a failed PUT, then finish. */
+async function sendAndFinish(
+  accountId: string, started: Started, blob: Blob, contentType: string,
+  deps: Pick<UploadDeps, "put" | "abandon" | "finish">, onPhase: (p: UploadPhase) => void,
 ): Promise<UploadPhase> {
-  const failed = (r: Refusal): UploadPhase => (r.params ? { kind: "failed", error: r.error, params: r.params } : { kind: "failed", error: r.error });
-  const prepared = await prepareFile(item.file, deps.strip);
-  if (!prepared.ok) return failed(prepared);
-  const started = await deps.start(accountId, {
-    record: batch.record, name: item.file.name, title: item.title, size: prepared.blob.size, contentType: prepared.contentType,
-    category: item.category, expiresOn: batch.expiresOn, ownersOnly: batch.ownersOnly, source: batch.source,
-  }).catch((): Refusal => refusal("documents.error.upload"));
-  if (!started.ok) return failed(started);
   onPhase({ kind: "uploading", percent: 0 });
-  const put = await deps.put(started.uploadUrl, prepared.blob, prepared.contentType, (percent) => onPhase({ kind: "uploading", percent }))
-    .catch(() => false);
+  const put = await deps.put(started.uploadUrl, blob, contentType, (percent) => onPhase({ kind: "uploading", percent })).catch(() => false);
   if (!put) {
     // Abandon's answer is ignored: if it fails, the reservation stays `uploading` and the documents sweep removes it.
     await deps.abandon(accountId, started.documentId, started.versionId).catch(() => undefined);
@@ -67,7 +63,38 @@ export async function uploadOne(
   }
   onPhase({ kind: "checking" });
   const finished = await deps.finish(accountId, started.documentId, started.versionId).catch((): Refusal => refusal("documents.error.upload"));
-  return finished.ok ? { kind: "done" } : failed(finished);
+  return finished.ok ? { kind: "done" } : failedPhase(finished);
+}
+
+export async function uploadOne(
+  accountId: string, item: UploadItem, batch: UploadBatch, deps: UploadDeps, onPhase: (p: UploadPhase) => void,
+): Promise<UploadPhase> {
+  const prepared = await prepareFile(item.file, deps.strip);
+  if (!prepared.ok) return failedPhase(prepared);
+  const started = await deps.start(accountId, {
+    record: batch.record, name: item.file.name, title: item.title, size: prepared.blob.size, contentType: prepared.contentType,
+    category: item.category, expiresOn: batch.expiresOn, ownersOnly: batch.ownersOnly, source: batch.source,
+  }).catch((): Refusal => refusal("documents.error.upload"));
+  if (!started.ok) return failedPhase(started);
+  return sendAndFinish(accountId, started, prepared.blob, prepared.contentType, deps, onPhase);
+}
+
+export type VersionDeps = Pick<UploadDeps, "finish" | "abandon" | "put" | "strip"> & { startVersion: typeof startDocumentVersionUploadAction };
+
+/**
+ * "Upload new version" (spec 3.3, 4.1): one file, prepared exactly as a first upload is (an image
+ * re-encoded, its size checked AS STORED), reserved as a new version of `documentId`, then the same
+ * PUT and finish. The finish makes it the current version once its bytes are checked (0077).
+ */
+export async function uploadVersion(
+  accountId: string, documentId: string, file: File, deps: VersionDeps, onPhase: (p: UploadPhase) => void,
+): Promise<UploadPhase> {
+  const prepared = await prepareFile(file, deps.strip);
+  if (!prepared.ok) return failedPhase(prepared);
+  const started = await deps.startVersion(accountId, documentId, { name: file.name, size: prepared.blob.size, contentType: prepared.contentType })
+    .catch((): Refusal => refusal("documents.error.upload"));
+  if (!started.ok) return failedPhase(started);
+  return sendAndFinish(accountId, started, prepared.blob, prepared.contentType, deps, onPhase);
 }
 
 /**
@@ -105,5 +132,10 @@ export function xhrPut(url: string, body: Blob, contentType: string, onProgress:
 
 export const browserDeps = (): UploadDeps => ({
   start: startDocumentUploadAction, finish: finishDocumentUploadAction, abandon: abandonDocumentUploadAction,
+  put: xhrPut, strip: stripImage,
+});
+
+export const browserVersionDeps = (): VersionDeps => ({
+  startVersion: startDocumentVersionUploadAction, finish: finishDocumentUploadAction, abandon: abandonDocumentUploadAction,
   put: xhrPut, strip: stripImage,
 });

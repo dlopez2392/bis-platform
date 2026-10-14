@@ -3,8 +3,9 @@ import type { UploadDeps } from "./upload-client";
 // "use server" modules cannot load in vitest; every dependency is injected through UploadDeps below.
 vi.mock("@/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions", () => ({
   startDocumentUploadAction: vi.fn(), finishDocumentUploadAction: vi.fn(), abandonDocumentUploadAction: vi.fn(),
+  startDocumentVersionUploadAction: vi.fn(),
 }));
-const { prepareFile, uploadOne, xhrPut, UPLOAD_STALL_MS } = await import("./upload-client");
+const { prepareFile, uploadOne, uploadVersion, xhrPut, UPLOAD_STALL_MS } = await import("./upload-client");
 
 const C = "11111111-1111-4111-8111-111111111111";
 const batch = { record: { kind: "contact" as const, id: C }, ownersOnly: false, expiresOn: null, source: "upload" as const };
@@ -200,5 +201,53 @@ describe("xhrPut (spec 4.2: progress, straight to storage)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+function versionDeps(over: Partial<import("./upload-client").VersionDeps> = {}) {
+  const calls: string[] = [];
+  const d = {
+    calls,
+    strip: vi.fn(async (f: Blob) => { calls.push("strip"); return new Blob([new Uint8Array(7)], { type: f.type }); }),
+    startVersion: vi.fn(async () => { calls.push("startVersion"); return { ok: true as const, documentId: "d", versionId: "v2", uploadUrl: "https://u2" }; }),
+    put: vi.fn(async (_u: string, _b: Blob, _t: string, p: (n: number) => void) => { calls.push("put"); p(60); return true; }),
+    finish: vi.fn(async () => { calls.push("finish"); return { ok: true as const }; }),
+    abandon: vi.fn(async () => { calls.push("abandon"); return { ok: true as const }; }),
+    ...over,
+  };
+  return d as unknown as import("./upload-client").VersionDeps & { calls: string[] };
+}
+
+describe("uploadVersion (spec 3.3, 4.1: Upload new version)", () => {
+  it("prepares the file (an image is re-encoded), reserves a version of THIS document at the size AS STORED, PUTs, then finishes that version (mutation: start a new document -> FAILS)", async () => {
+    const d = versionDeps();
+    const phases: unknown[] = [];
+    const end = await uploadVersion("acc", "doc-1", file("roof.jpg", "image/jpeg", 50), d, (p) => phases.push(p));
+    expect(end).toEqual({ kind: "done" });
+    expect(d.calls).toEqual(["strip", "startVersion", "put", "finish"]);
+    expect(mockOf(d.startVersion)).toHaveBeenCalledWith("acc", "doc-1", { name: "roof.jpg", size: 7, contentType: "image/jpeg" });
+    expect(mockOf(d.put).mock.calls[0]!.slice(0, 1)).toEqual(["https://u2"]);
+    expect(mockOf(d.finish)).toHaveBeenCalledWith("acc", "d", "v2");
+    expect(phases).toEqual([{ kind: "uploading", percent: 0 }, { kind: "uploading", percent: 60 }, { kind: "checking" }]);
+  });
+  it("a refused start is the answer, with its params, and nothing is sent (mutation: PUT anyway -> FAILS)", async () => {
+    const d = versionDeps({ startVersion: vi.fn(async () => ({ ok: false as const, error: "documents.error.trashed" })) as never });
+    expect(await uploadVersion("acc", "doc-1", file("a.pdf", "application/pdf"), d, () => {})).toEqual({ kind: "failed", error: "documents.error.trashed" });
+    expect(d.put).not.toHaveBeenCalled();
+  });
+  it("a failed PUT gives the reservation back at once and answers the upload failure (mutation: skip abandon -> FAILS)", async () => {
+    const d = versionDeps({ put: vi.fn(async () => false) as never });
+    expect(await uploadVersion("acc", "doc-1", file("a.pdf", "application/pdf"), d, () => {})).toEqual({ kind: "failed", error: "documents.error.upload" });
+    expect(mockOf(d.abandon)).toHaveBeenCalledWith("acc", "d", "v2");
+    expect(d.finish).not.toHaveBeenCalled();
+  });
+  it("a refused finish is the answer (mutation: answer done whatever finish says -> FAILS)", async () => {
+    const d = versionDeps({ finish: vi.fn(async () => ({ ok: false as const, error: "documents.error.badType" })) as never });
+    expect(await uploadVersion("acc", "doc-1", file("a.pdf", "application/pdf"), d, () => {})).toEqual({ kind: "failed", error: "documents.error.badType" });
+  });
+  it("a file of a kind the vault refuses never reaches the server (mutation: skip prepareFile -> FAILS)", async () => {
+    const d = versionDeps();
+    expect(await uploadVersion("acc", "doc-1", file("a.exe", ""), d, () => {})).toEqual({ kind: "failed", error: "documents.error.badType" });
+    expect(d.startVersion).not.toHaveBeenCalled();
   });
 });
