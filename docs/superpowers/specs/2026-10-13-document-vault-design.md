@@ -16,7 +16,7 @@ Item 6 is split into three parts, each with its own spec, plan and PRs (decided 
 **Not in part 1:**
 - no customer-facing anything (`client_visible` exists, is always false, and has no control)
 - no documents on properties or deals (their link columns exist but stay unused)
-- no document in the list drawer
+- no Documents card in the list drawer; its newest-rows list includes file rows like any timeline row (amended 2026-10-13, plan deviation 10)
 - no scanning
 - no model ever reads a document (rule 14 / decision 6 is untouched)
 - no per-tenant off switch (the tax-preparer hold stays as written in `crm-features.md` :3058)
@@ -27,7 +27,7 @@ Item 6 is split into three parts, each with its own spec, plan and PRs (decided 
 |---|---|
 | V1 | Staff vault first. Scanning arrives with customer uploads, in part 2. |
 | V2 | A document is filed on a customer (contact) or a household/business (group), exactly one. |
-| V3 | Anyone who can see the record sees its documents (a Technician only for assigned customers). An **Owners only** flag limits a file to Owners and agency staff. This is enforced by RLS on the row. The stored file is reachable only through a server-minted signed URL issued after an RLS read. |
+| V3 | Anyone who can see the record sees its documents (a Technician only for assigned customers). An **Owners only** flag limits a file to Owners and agency staff. This is enforced by RLS on the row. The stored file is reachable only through a server-minted signed URL issued after an RLS read. Staff can infer that an Owners-only file exists (not its name or category) from `document.*` events, which every member may read; accepted for part 1 (amended 2026-10-13). |
 | V4 | One default quota for every account: **5 GB per account, 25 MB per file**. Trashed files count until they are purged. |
 | V5 | Categories are a fixed bilingual list, stored as keys: `id`, `contract`, `estimate`, `invoice`, `photo`, `permit`, `insurance`, `warranty`, `other`. |
 | V6 | Uploads are server-reserved and go directly to storage: a start action, then a browser PUT to a signed upload URL, then a finish action. They never pass through a Vercel function body, which is capped at 4.5 MB. |
@@ -99,12 +99,14 @@ A function `public.reserve_document_version(p_account_id, p_document_id, p_bytes
 A version becomes ready only at the size it reserved: `mark_document_version_ready` answers `size_mismatch` for any other size before it writes anything, so the stored size can never grow past what the quota checked (amended 2026-10-13 after task review). Two simultaneous uploads therefore cannot both slip under the limit. The constant lives in one place, and the app reads it from the same module that tests pin.
 
 ### 3.6 Timeline
-Adding, trashing, restoring and purging each record an event through `emit` (`packages/db/src/events.ts`): `document.added`, `document.trashed`, `document.restored`, `document.purged`. The payload carries the document id, title and the record it is filed on. A person's action is `actor_type 'user'`, and the daily job's purge is `'system'`. The record timeline shows these as rows with the person mark or the automation mark (DESIGN.md provenance: a row with no mark is a defect). The plan wires them into the contact and group timeline readers.
+Adding, trashing, restoring and purging each record an event through `emit` (`packages/db/src/events.ts`): `document.added`, `document.trashed`, `document.restored`, `document.purged`. The payload carries the document id and the record it is filed on, and no title or category (an Owners-only file's name must not reach Staff through the events every member may read). A person's action is `actor_type 'user'`, and the daily job's purge is `'system'`.
+
+The record timeline does NOT read these events (amended 2026-10-13, plan deviation 3): its file row is read from the `documents` table on the request client, under RLS, so Technician scope and Owners only decide what each reader sees. One row per document, "{who} added a file: {title}" (or "took a photo: {title}") at its creation, with the person mark from who created it (DESIGN.md provenance: a row with no mark is a defect) and the status "In the trash" (a dot and the word) while it is trashed; a purged file leaves the timeline. The plan wires this source into the contact and group timeline readers.
 
 ## 4. What people see
 
 ### 4.1 The Documents card
-- **Placement:** a `documents` entry in `RECORD_CARDS` and in `GROUP_RECORD_CARDS` (`lib/record/record-cards.ts`), in the "what they have" column. On a phone it sits in the "what they have" group, closed until tapped (the record page's phone order). The list drawer is unchanged.
+- **Placement:** a `documents` entry in `RECORD_CARDS` and in `GROUP_RECORD_CARDS` (`lib/record/record-cards.ts`), in the "what they have" column. On a phone it sits in the "what they have" group, closed until tapped (the record page's phone order). The list drawer gets no Documents card; its five newest timeline rows include file rows like any timeline row, which RLS decides (amended 2026-10-13, plan deviation 10).
 - **Title:** "Documents" / "Documentos", with the count.
 - **Actions:**
   - **Upload** is the card's one primary button (rule 8: the card is its own view).
@@ -180,7 +182,8 @@ Anything else, or a mismatch with the declared type, is refused and deleted: an 
 
 ### 5.3 EXIF stripping
 - **Images (JPEG, PNG, WebP)** are decoded and redrawn on a canvas in the browser, with orientation applied, and re-encoded:
-  - JPEG at quality 0.9; PNG stays PNG; WebP re-encodes as WebP
+  - JPEG at quality 0.9; PNG stays PNG; WebP re-encodes as WebP, or as PNG where the browser has no WebP encoder (Safari), and the upload declares the type the browser actually produced (amended 2026-10-13)
+  - an animated image is flattened to its first frame
   - this drops GPS and camera metadata
   - an image over 4096 px on its long side is scaled down to 4096
 - **PDFs and Office files** are stored as given.
