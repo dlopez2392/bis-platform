@@ -204,8 +204,8 @@ test("at 390px the middle column comes first, then Properties and Deals closed, 
   const rec = recordPage(page);
   const order = await rec.locator("[data-record-card]").evaluateAll((els) => els.map((e) => e.getAttribute("data-record-card")));
   // 2b: the summary, Next up and the timeline lead (GROUP_RECORD_CARDS); 2a's four follow.
-  expect(order).toEqual(["summary", "next-up", "timeline", "properties", "deals", "people", "details"]);
-  for (const id of ["properties", "deals"]) {
+  expect(order).toEqual(["summary", "next-up", "timeline", "properties", "deals", "documents", "people", "details"]);
+  for (const id of ["properties", "deals", "documents"]) {
     await expect(rec.locator(`[data-record-card="${id}"] h2 > button[aria-expanded]`)).toHaveAttribute("aria-expanded", "false");
   }
 });

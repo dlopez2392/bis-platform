@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { config as loadEnv } from "dotenv";
 import { clerkClient } from "@clerk/nextjs/server";
 import { serviceDb, setClientAccess, removeBrandLogo } from "@bis/db";
-import { deleteAccountCascade, emptySweepReport } from "./fixtures/sweep";
+import { deleteAccountCascade, emptySweepReport, removeDocumentObjects } from "./fixtures/sweep";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -76,6 +76,16 @@ teardown("delete the client-access e2e fixture", async () => {
     } catch (e) {
       console.error(`e2e teardown: failed to delete brand logo ${fixture.brandLogoPath}: ${String(e)}`);
     }
+  }
+
+  // The document vault's objects (0077): the rows go with the cascade below, the objects do not, and
+  // once the account row is gone only the sweep's orphan leg could still find them.
+  try {
+    const report = emptySweepReport();
+    await removeDocumentObjects(db, fixture.accountId, report, false);
+    for (const err of report.errors) console.error(`e2e teardown: ${err}`);
+  } catch (e) {
+    console.error(`e2e teardown: document objects: ${String(e)}`);
   }
 
   try {

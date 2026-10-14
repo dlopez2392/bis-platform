@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { STALE_AFTER_MS } from "./stale";
-import { emptySweepReport, sweepClerkOrgs, sweepClerkUsers, sweepStaleAccounts, type ClerkForSweep } from "./sweep";
+import {
+  emptySweepReport, removeDocumentObjects, sweepClerkOrgs, sweepClerkUsers, sweepStaleAccounts, type ClerkForSweep,
+} from "./sweep";
 
 // A real stamp shape (see stale.test.ts), old enough to be stale against NOW.
 const STAMP = 1786412389258;
@@ -246,5 +248,97 @@ describe("sweepClerkOrgs after the accounts leg", () => {
     await sweepClerkOrgs(clerk, report, NOW, STALE_AFTER_MS, /* dryRun */ false);
     expect(report.clerkOrgs.filter((o) => o.id === "org_stale_0")).toHaveLength(1);
     expect(deleted).not.toContain("org_stale_0");
+  });
+});
+
+/**
+ * The document vault (0077) stores `{account}/{document}/{version}`: two folders deep. brand-logos'
+ * one-level list would see only the document FOLDERS (Supabase reports a folder with a null id) and
+ * remove nothing, so every object a killed run left would outlive its account for good.
+ */
+describe("removeDocumentObjects: the documents bucket is two folders deep (account/document/version)", () => {
+  function fakeBucket(tree: Record<string, { name: string; id: string | null }[]>, failList?: string) {
+    const removed: string[][] = [];
+    const buckets: string[] = [];
+    const remove = vi.fn(async (paths: string[]) => { removed.push(paths); return { data: [], error: null }; });
+    const db = { storage: { from: (b: string) => {
+      buckets.push(b);
+      return {
+        list: async (prefix: string) => (prefix === failList
+          ? { data: null, error: { message: "storage 503" } }
+          : { data: tree[prefix] ?? [], error: null }),
+        remove,
+      };
+    } } } as unknown as Parameters<typeof removeDocumentObjects>[0];
+    return { db, removed, remove, buckets };
+  }
+  const TREE = {
+    acct: [{ name: "doc1", id: null }, { name: "doc2", id: null }],
+    "acct/doc1": [{ name: "v1", id: "o1" }],
+    "acct/doc2": [{ name: "v2", id: "o2" }, { name: "v3", id: "o3" }],
+  };
+
+  it("lists the account's document folders, then each folder's objects, and removes them all (mutation: list one level only, as brand-logos does -> FAILS)", async () => {
+    const { db, removed, buckets } = fakeBucket(TREE);
+    const report = emptySweepReport();
+    const paths = await removeDocumentObjects(db, "acct", report, false);
+    expect(paths.sort()).toEqual(["acct/doc1/v1", "acct/doc2/v2", "acct/doc2/v3"]);
+    expect(removed.flat().sort()).toEqual(paths.sort());
+    // The PRIVATE vault bucket, never brand-logos (mutation: bucket "brand-logos" -> FAILS).
+    expect([...new Set(buckets)]).toEqual(["documents"]);
+    expect(report.errors).toEqual([]);
+  });
+
+  it("dry run lists every path and removes nothing (mutation: ignore dryRun -> FAILS)", async () => {
+    const { db, remove } = fakeBucket(TREE);
+    const paths = await removeDocumentObjects(db, "acct", emptySweepReport(), true);
+    expect(paths.sort()).toEqual(["acct/doc1/v1", "acct/doc2/v2", "acct/doc2/v3"]);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it("a folder that cannot be listed is reported, and the other folders still go (mutation: throw or stop on the first error -> FAILS)", async () => {
+    const { db, removed } = fakeBucket(TREE, "acct/doc1");
+    const report = emptySweepReport();
+    const paths = await removeDocumentObjects(db, "acct", report, false);
+    expect(paths.sort()).toEqual(["acct/doc2/v2", "acct/doc2/v3"]);
+    expect(removed.flat().sort()).toEqual(["acct/doc2/v2", "acct/doc2/v3"]);
+    expect(report.errors).toEqual(["documents list acct/doc1: storage 503"]);
+  });
+
+  it("removes in batches of at most 100 paths", async () => {
+    const files = Array.from({ length: 150 }, (_, i) => ({ name: `v${i}`, id: `o${i}` }));
+    const { db, removed } = fakeBucket({ acct: [{ name: "doc", id: null }], "acct/doc": files });
+    const paths = await removeDocumentObjects(db, "acct", emptySweepReport(), false);
+    expect(paths).toHaveLength(150);
+    expect(removed.map((r) => r.length)).toEqual([100, 50]);
+  });
+
+  it("the accounts leg takes a stale fixture account's documents too (mutation: drop the documents line in sweepStaleAccounts -> FAILS)", async () => {
+    const stale = { id: "acct_stale", name: `E2E Client Co ${STAMP}`, clerk_org_id: null };
+    const removed: string[][] = [];
+    const db = {
+      from: () => ({
+        select: () => ({ like: async () => ({ data: [stale], error: null }) }),
+        delete: () => ({ eq: async () => ({ error: null }) }),
+      }),
+      storage: { from: (b: string) => ({
+        list: async (prefix: string) => ({
+          data: b !== "documents" ? []
+            : prefix === "acct_stale" ? [{ name: "doc1", id: null }]
+            : prefix === "acct_stale/doc1" ? [{ name: "v1", id: "o1" }] : [],
+          error: null,
+        }),
+        remove: async (paths: string[]) => { if (b === "documents") removed.push(paths); return { error: null }; },
+      }) },
+    } as unknown as Parameters<typeof sweepStaleAccounts>[0];
+    const clerk = {
+      users: { getUserList: vi.fn(), deleteUser: vi.fn() },
+      organizations: { getOrganizationList: vi.fn(), deleteOrganization: vi.fn() },
+    } as unknown as ClerkForSweep;
+    const report = emptySweepReport();
+    await sweepStaleAccounts(db, clerk, report, NOW, STALE_AFTER_MS, /* dryRun */ false);
+    expect(report.orphanObjects).toEqual(["acct_stale/doc1/v1"]);
+    expect(removed).toEqual([["acct_stale/doc1/v1"]]);
+    expect(report.errors).toEqual([]);
   });
 });
