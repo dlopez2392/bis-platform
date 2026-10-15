@@ -7,9 +7,10 @@ test.describe("the style guide", () => {
     await expect(page.getByRole("heading", { name: "Style guide" })).toBeVisible();
     await expect(page.getByRole("button", { name: "destructive" })).toBeVisible();
     // DESIGN.md rule 3 — status is dot + WORD, never colour alone. This is
-    // m["setup.state.unknown"] ("Couldn't check — reload to retry"); getByText
-    // is a substring match, so the leading phrase is the right anchor.
-    await expect(page.getByText("Couldn't check")).toBeVisible();
+    // m["setup.state.unknown"] ("Couldn't check — reload to retry"), matched
+    // in full: the documents demo's "Couldn't check this file" rows (S-07 2a)
+    // share the leading phrase, so a substring anchor resolves to several.
+    await expect(page.getByText("Couldn't check — reload to retry", { exact: true })).toBeVisible();
     // The rail's sixth kind, which only exists on the rail (StateKind + locked).
     await expect(page.getByText("Locked", { exact: true })).toBeVisible();
   });
