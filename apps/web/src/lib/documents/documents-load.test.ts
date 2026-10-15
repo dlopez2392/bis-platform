@@ -47,6 +47,11 @@ describe("documentsLoadFrom: anything but a well-formed 200 is the card's error 
   it("a null space is a good body: the line is simply not drawn (mutation: refuse a null space -> FAILS)", async () => {
     expect(await documentsLoadFrom(res({ ...body, space: null }))).toEqual({ status: "ready", data: { ...body, space: null } });
   });
+  it("S-07 2b: a file the CUSTOMER sent (source 'customer') parses; an unknown source still does not (mutation: keep the two-source check -> the whole load reads as an error -> FAILS)", async () => {
+    const sent = { ...body, live: [{ ...view, source: "customer" }] };
+    expect(await documentsLoadFrom(res(sent))).toEqual({ status: "ready", data: sent });
+    expect(await documentsLoadFrom(res({ ...body, live: [{ ...view, source: "fax" }] }))).toEqual({ status: "error" });
+  });
   it("'locked' (a password-protected file) parses (owner ruling 2026-10-15)", async () => {
     const locked = { ...body, live: [{ ...view, version: { ...view.version, scan: "locked" }, versions: [{ ...view.versions[0], scan: "locked" }, view.versions[1]] }] };
     expect(await documentsLoadFrom(res(locked))).toEqual({ status: "ready", data: locked });

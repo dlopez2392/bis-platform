@@ -1,5 +1,6 @@
 import { recordDocumentScan, signedScannerUrl, DOCUMENT_BUCKET, type SupabaseClient } from "@bis/db";
 import { requestScan, scannerConfig, type ScanVerdict } from "./scan-client";
+import { openReceivedTaskFor } from "@/lib/document-requests/request-task";
 
 /**
  * Scans ONE ready version and records what happened (spec 3.2-3.4). Called by the finish action at
@@ -28,10 +29,15 @@ import { requestScan, scannerConfig, type ScanVerdict } from "./scan-client";
 export const MAX_SCAN_ATTEMPTS = 3;
 export type ScanTarget = { accountId: string; versionId: string; storagePath: string; attempts: number };
 export type ScanResult = "clean" | "infected" | "unscannable" | "pending" | "stale" | "unreached" | "held";
-export type ScanDeps = { configured: () => boolean; scan: (objectUrl: string) => Promise<ScanVerdict> };
-export type ScanOptions = { holdErrors?: boolean };
+export type ScanDeps = {
+  configured: () => boolean; scan: (objectUrl: string) => Promise<ScanVerdict>;
+  /** S-07 2b: runs once a clean verdict is RECORDED (never on stale); best-effort, it never changes the answer. */
+  afterClean?: (db: SupabaseClient, v: ScanTarget, now: Date) => Promise<void>;
+};
+/** `now`: the caller's clock (the retry pass passes its ctx.now); a fresh Date when absent. */
+export type ScanOptions = { holdErrors?: boolean; now?: Date };
 
-const REAL: ScanDeps = { configured: () => scannerConfig() !== null, scan: (u) => requestScan(u) };
+const REAL: ScanDeps = { configured: () => scannerConfig() !== null, scan: (u) => requestScan(u), afterClean: openReceivedTaskFor };
 
 async function removeThenRecord(
   db: SupabaseClient, v: ScanTarget, verdict: "infected" | "unscannable", signature: string | null,
@@ -84,7 +90,11 @@ export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanD
   const verdict = await deps.scan(objectUrl);
   if (verdict.verdict === "clean") {
     const r = await recordDocumentScan(db, { accountId: v.accountId, versionId: v.versionId, verdict: "clean" });
-    return r.status === "ok" ? "clean" : "stale";
+    if (r.status !== "ok") return "stale";
+    // S-07 2b: a customer file's clean verdict opens its request's To-do (0080's trigger already set
+    // completed_at when it was the last item). Best-effort: the verdict stands whatever happens here.
+    await deps.afterClean?.(db, v, opts.now ?? new Date()).catch(() => undefined);
+    return "clean";
   }
   if (verdict.verdict === "infected") return removeThenRecord(db, v, "infected", verdict.signature);
   // Owner ruling 2026-10-15: keep clamd's named cause (Heuristics.Encrypted.* = a password) so the note can say why.
