@@ -532,7 +532,7 @@ jobs:
             qpdf --empty /w/in.pdf
             qpdf --encrypt '' owner-only-128 128 --use-aes=y -- /w/in.pdf /w/owner-aes128.pdf
             qpdf --encrypt '' owner-only-256 256 -- /w/in.pdf /w/owner-aes256.pdf
-            qpdf --encrypt '' owner-only-rc4 128 --allow-weak-crypto -- /w/in.pdf /w/owner-rc4-128.pdf
+            qpdf --allow-weak-crypto --encrypt '' owner-only-rc4 128 -- /w/in.pdf /w/owner-rc4-128.pdf
             qpdf --encrypt open-me owner-pw 256 -- /w/in.pdf /w/user-password-aes256.pdf
           "
       - name: Start it beside the real clamd
