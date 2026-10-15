@@ -12,6 +12,7 @@ loadEnv({ path: ".env.local" });
  * the REAL shim and a fake clamd that Playwright starts (playwright.config.ts; plan deviation 5).
  * ON THE PER-RUN FIXTURE ACCOUNT ONLY, on one contact made here with a stamped last name; never Test
  * Client One. afterAll removes every object and row this file made, checking each error, and re-reads.
+ * SERIAL: test 1's clean file is test 3's.
  */
 test.describe.configure({ mode: "serial", timeout: 90_000 });
 
@@ -21,8 +22,11 @@ let accountId = "";
 let contactId = "";
 const db = () => serviceDb();
 
-// The EICAR test string, joined here from two halves so no file carries it whole (Global Constraints).
-const EICAR = ["X5O!P%@AP[4\\PZX54(P^)7CC)7}$", "EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"].join("");
+// The EICAR test string, joined here from two halves so no file carries it whole (Global Constraints;
+// same HEAD/TAIL split as services/scanner/test/eicar.mjs).
+const EICAR_HEAD = "X5O!P%@AP[4\\PZX54(P^)7CC)7}$";
+const EICAR_TAIL = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*";
+const EICAR = EICAR_HEAD + EICAR_TAIL;
 const pdf = (marker: string) => Buffer.from(
   `%PDF-1.4\n% ${marker}\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n`, "binary");
 
@@ -150,6 +154,8 @@ test("2. a file with a virus is removed at once: the row says so as a dot and a 
  * still clears on its own, bounded as the brief notes (POLL_SLOW_MS = 30s, so the last wait is <= 45s).
  */
 test("3. Checking outlasts the fast poll, then clears without a reload once the verdict lands; aged, the slow words join and it clears again without a reload (mutations: the card's timer keyed on [pollMs] alone -> FAILS; settle not bumping reads -> FAILS)", async ({ page }) => {
+  // Both bounded phases together run close to the describe's 90s budget; this test gets its own room.
+  test.setTimeout(150_000);
   const v = await versionOf("Insurance");
 
   // Phase A: young (now), so the card polls on the FAST interval (5s). At least three such intervals
