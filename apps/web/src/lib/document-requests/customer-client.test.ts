@@ -141,9 +141,10 @@ describe("uploadCustomerFile", () => {
     ["not_found", { status: 404, body: { error: "not_found" } }, { kind: "closed" }],
     ["bad_type", { status: 400, body: { error: "bad_type" } }, { kind: "refused", why: "customerDocs.why.type" }],
     ["upload", { status: 400, body: { error: "upload" } }, { kind: "failed" }],
-    ["a 503", { status: 503, body: { error: "failed" } }, { kind: "failed" }],
-    ["a network error", "throw", { kind: "failed" }],
-  ])("finish refuses with %s", async (_name, finish, expected) => {
+    ["a 503 (the server failed AFTER the bytes landed: the file may be stored)", { status: 503, body: { error: "failed" } }, { kind: "failed", maybeStored: true }],
+    ["a 504 with no JSON body", { status: 504, body: {} }, { kind: "failed", maybeStored: true }],
+    ["a network error (the bytes landed; whether finish ran is unknown)", "throw", { kind: "failed", maybeStored: true }],
+  ])("finish refuses with %s (Task 9 review ruling: a failure after a good PUT is maybeStored, so the page re-reads; mutation: plain failed → FAILS)", async (_name, finish, expected) => {
     const { deps } = fake({ finish });
     expect((await run(pdf(), deps)).end).toEqual(expected);
   });

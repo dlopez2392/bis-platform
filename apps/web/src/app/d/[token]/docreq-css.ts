@@ -4,7 +4,9 @@
  * `/u`'s convention (its UNSUB_CSS): `var(--token, fallback)`, so an unthemed account renders exactly
  * these fallbacks and a themed one the tokens publicFormTheme put on <main>. Public trees never load
  * globals.css, so the fallbacks are the light tokens' own values (tokens.css:93-95 for the three state
- * colours). No backticks inside this literal. Browser-safe: no import at all.
+ * colours). The red dot is --form-error, which publicFormTheme lifts per mode against the tenant's own
+ * ground (--crit measured 2.92:1 on a dark tenant, Task 9 review); --good and --warn are never set on a
+ * public tree, so they stay the light fallbacks. No backticks inside this literal. Browser-safe: no import.
  */
 export const DOCREQ_CSS = `
 .bis-docreq-page { background: var(--background, transparent); min-height: 100vh; --public-measure: 480px; }
@@ -28,7 +30,7 @@ export const DOCREQ_CSS = `
 .bis-docreq-dot { flex: none; width: 8px; height: 8px; border-radius: 999px; margin-top: 7px; }
 .bis-docreq-dot--good { background: var(--good, #15803D); }
 .bis-docreq-dot--warn { background: var(--warn, #B45309); }
-.bis-docreq-dot--crit { background: var(--crit, #B91C1C); }
+.bis-docreq-dot--crit { background: var(--form-error, #B91C1C); }
 .bis-docreq-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
 .bis-docreq-primary, .bis-docreq-ghost {
   display: inline-flex; align-items: center; justify-content: center; min-height: 44px; box-sizing: border-box;

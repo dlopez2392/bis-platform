@@ -7,6 +7,7 @@ import { t } from "@/lib/i18n/t";
 import { loadPage, loadPageSafe } from "./data";
 import { CustomerUploadList } from "./customer-upload-list";
 import { DOCREQ_CSS } from "./docreq-css";
+import { docCopy } from "./copy";
 import "@/styles/public-brand.css";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +29,6 @@ const UNBRANDED: Branding = {
   replyToEmail: null,
 };
 
-/** "the business" opening a sentence reads "The business"; a brand name is never re-cased ("eBay Movers"). */
-const opening = (business: string, named: boolean, lang: "en" | "es") =>
-  (named ? business : business.charAt(0).toLocaleUpperCase(lang) + business.slice(1));
-
 const DEAD_END: Record<"expired" | "revoked" | "not_found", MessageKey> = {
   expired: "customerDocs.expired", revoked: "customerDocs.revoked", not_found: "customerDocs.notFound",
 };
@@ -47,23 +44,24 @@ export default async function CustomerDocsPage({ params }: { params: Promise<{ t
   const { token } = await params;
   const page = await loadPage(token);
   const lang = page.language;
-  const brandName = page.branding ? brandDisplayName(page.branding) : "";
-  const lead = opening(page.business, brandName !== "", lang);
-  const tt = (k: MessageKey, p?: Record<string, string>) => t(m, k, lang, { business: page.business, ...p });
+  // The brand name, or null when the account has none: then every sentence that would name the business
+  // is its own no-name wording (docCopy), never "the business"/"el negocio" dropped into the {business} hole.
+  const business = (page.branding && brandDisplayName(page.branding)) || null;
+  const tt = docCopy(lang, business);
   const { style, darkCss, themed } = publicFormTheme(page.branding ?? UNBRANDED, false, parseHostMode(undefined));
 
   let body: React.ReactNode;
   if (page.state === "open") {
     body = (
       <>
-        <h1 className="bis-docreq-title">{tt("customerDocs.heading", { business: lead })}</h1>
+        <h1 className="bis-docreq-title">{tt("customerDocs.heading")}</h1>
         <p className="bis-docreq-detail">{tt("customerDocs.intro")}</p>
         {/* Only what the list needs crosses to the browser: never the Branding (it carries replyToEmail). */}
-        <CustomerUploadList token={token} locale={lang} business={page.business} items={page.items} />
+        <CustomerUploadList token={token} locale={lang} business={business} items={page.items} />
       </>
     );
   } else if (page.state === "completed") {
-    body = <h1 className="bis-docreq-title">{tt("customerDocs.done", { business: lead })}</h1>;
+    body = <h1 className="bis-docreq-title">{tt("customerDocs.done")}</h1>;
   } else {
     body = (
       <>
@@ -77,7 +75,7 @@ export default async function CustomerDocsPage({ params }: { params: Promise<{ t
     <main className="bis-docreq-page" lang={lang} style={style} {...(themed ? { "data-tenant-theme": "" } : {})}>
       {darkCss ? <style>{darkCss}</style> : null}
       <style>{DOCREQ_CSS}</style>
-      <PublicBrand name={brandName || null} logoUrl={page.logoUrl} />
+      <PublicBrand name={business} logoUrl={page.logoUrl} />
       <div className="bis-docreq">
         {body}
         {page.state === "not_found" ? null : (

@@ -11,8 +11,8 @@ import { CustomerUploadView, afterUpload } from "./customer-upload-list";
 
 type Item = { key: string; label: string; files: CustomerFile[]; local: CustomerPhase[] };
 const item = (o: Partial<Item> = {}): Item => ({ key: "id", label: "ID", files: [], local: [], ...o });
-const view = (locale: "en" | "es", items: Item[]) =>
-  renderToStaticMarkup(createElement(CustomerUploadView, { locale, business: "Casa Verde", items, onPick: () => {} }));
+const view = (locale: "en" | "es", items: Item[], business: string | null = "Casa Verde") =>
+  renderToStaticMarkup(createElement(CustomerUploadView, { locale, business, items, onPick: () => {} }));
 const text = (locale: "en" | "es", items: Item[]) => renderedText(view(locale, items)).replace(/\s+/g, " ");
 /** Each item's own markup, so "one primary per item" is counted per item, not across the list. */
 const itemsOf = (html: string) => html.split(/(?=<li[^>]*data-docreq-item)/).slice(1);
@@ -120,6 +120,42 @@ describe("CustomerUploadView: the controls", () => {
   });
 });
 
+describe("CustomerUploadView: no brand name (Task 9 review, Important)", () => {
+  it("the over-quota refusal reads its own no-name sentence, exactly, in English and Spanish: never \"llame a el negocio\" (mutation: always use the {business} key → FAILS)", () => {
+    const lines = (locale: "en" | "es", p: CustomerPhase) => linesOf(view(locale, [item({ local: [p] })], null)).map((l) => renderedText(l).trim());
+    expect(lines("en", FULL)).toEqual(["We couldn't accept this file · Please call the business at (956) 555-0123."]);
+    expect(lines("es", FULL)).toEqual(["No pudimos aceptar este archivo · Por favor llame al negocio al (956) 555-0123."]);
+    expect(lines("en", FULL_NO_PHONE)).toEqual(["We couldn't accept this file · Please call the business."]);
+    expect(lines("es", FULL_NO_PHONE)).toEqual(["No pudimos aceptar este archivo · Por favor llame al negocio."]);
+  });
+});
+
+/** What a live region can announce: the words outside every aria-hidden span (the dot, and an upload's moving percent). */
+const liveText = (html: string) => renderedText(html.replace(/<span[^>]*aria-hidden="true"[^>]*>[^<]*<\/span>/g, "")).replace(/\s+/g, " ").trim();
+
+describe("CustomerUploadView: what the live region announces (Task 9 review, minor 3)", () => {
+  it("the moving percent is a progressbar, hidden from the live text: 45 % and 46 % announce the same, so only phase changes are heard (mutation: percent not aria-hidden → FAILS)", () => {
+    const at = (percent: number) => view("en", [item({ local: [{ kind: "uploading", percent }] })]);
+    expect(liveText(at(45))).toBe(liveText(at(46)));
+    expect(at(45)).toMatch(/role="progressbar"[^>]*aria-valuenow="45"/);
+    expect(at(45)).toMatch(/role="progressbar"[^>]*aria-label="Uploading 45 %"/);
+  });
+
+  it("a phase change IS announced: Uploading, then Checking, then Received each change the live text", () => {
+    const of = (p: CustomerPhase) => liveText(view("es", [item({ local: [p] })]));
+    const uploading = of({ kind: "uploading", percent: 10 });
+    expect(of({ kind: "checking" })).not.toBe(uploading);
+    expect(of({ kind: "checking" })).toContain("Revisando");
+    expect(of({ kind: "received" })).toContain("Recibido");
+  });
+
+  it("the Received and Checking words are never hidden from it", () => {
+    const t = liveText(view("en", [item({ files: [{ state: "received", ageMs: 0 }, { state: "checking", ageMs: 0 }] })]));
+    expect(t).toContain("Received");
+    expect(t).toContain("Checking");
+  });
+});
+
 describe("afterUpload: what the list does when one upload ends", () => {
   it.each<[string, ReturnType<typeof afterUpload>, CustomerPhase]>([
     ["received", "server", { kind: "received" }],
@@ -128,12 +164,13 @@ describe("afterUpload: what the list does when one upload ends", () => {
     ["a password", "server", { kind: "refused", why: "customerDocs.why.password" }],
     ["unscannable", "server", { kind: "refused", why: "customerDocs.why.unscannable" }],
     ["closed", "closed", { kind: "closed" }],
-    ["failed", "local", { kind: "failed" }],
+    ["failed before anything was stored", "local", { kind: "failed" }],
+    ["failed AFTER a good PUT (the server may have filed it; Task 9 review ruling)", "refresh", { kind: "failed", maybeStored: true }],
     ["a wrong type", "local", { kind: "refused", why: "customerDocs.why.type" }],
     ["too large", "local", { kind: "refused", why: "customerDocs.why.size" }],
     ["the daily limit", "local", { kind: "refused", why: "customerDocs.why.limit" }],
     ["storage full", "local", FULL],
-  ])("%s → %s (the server lists a scanned file; a refusal before storing stays as the page's own line; mutation: keep a virus local → FAILS)", (_n, expected, end) => {
+  ])("%s → %s (the server lists a scanned file; a refusal before storing stays as the page's own line; mutations: keep a virus local, or no refresh after a post-PUT failure → FAILS)", (_n, expected, end) => {
     expect(afterUpload(end)).toBe(expected);
   });
 });

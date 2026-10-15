@@ -17,12 +17,14 @@ export const loadPage = cache((token: string) => customerPage(serviceDb(), token
  * `loadFormSafe`): a cached rejection re-throws for every caller, and a throw from a layout or from
  * `generateMetadata` escapes every `error.tsx` to Next's bare shell. Only the page component's own call
  * may throw; `error.tsx` catches it inside the shell this keeps standing. Never logs the token.
+ * Itself `cache()`d, so the layout and the metadata share one catch and a failed read logs ONCE per
+ * request, not once per caller (Task 9 review nit).
  */
-export async function loadPageSafe(token: string): Promise<CustomerPage | null> {
+export const loadPageSafe = cache(async (token: string): Promise<CustomerPage | null> => {
   try {
     return await loadPage(token);
   } catch (e) {
     console.error(`customer documents page: read failed: ${loggableError(e)}`);
     return null;
   }
-}
+});

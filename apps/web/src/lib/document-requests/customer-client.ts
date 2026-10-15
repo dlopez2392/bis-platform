@@ -15,7 +15,8 @@ export type CustomerPhase =
   | { kind: "received" }
   | { kind: "refused"; why: MessageKey; params?: Record<string, string> }
   | { kind: "closed" }
-  | { kind: "failed" };
+  /** maybeStored: the bytes landed but the finish never answered (or the server failed): the server may have filed it, so the page re-reads (Task 9 review ruling). */
+  | { kind: "failed"; maybeStored?: true };
 
 export type CustomerDeps = {
   post: (path: string, body: unknown) => Promise<{ status: number; body: Record<string, unknown> }>;
@@ -28,6 +29,7 @@ const refused = (why: MessageKey, params?: Record<string, string>): CustomerPhas
 /** The request itself is shut (the routes' 404/410 words): the page re-reads and turns into its dead end. */
 const CLOSED = new Set(["expired", "revoked", "completed", "not_found"]);
 const FAILED: CustomerPhase = { kind: "failed" };
+const MAYBE_STORED: CustomerPhase = { kind: "failed", maybeStored: true };
 
 function startRefusal(body: Record<string, unknown>): CustomerPhase {
   const error = body.error;
@@ -41,8 +43,9 @@ function startRefusal(body: Record<string, unknown>): CustomerPhase {
   return FAILED;
 }
 
-function finishRefusal(body: Record<string, unknown>): CustomerPhase {
+function finishRefusal(status: number, body: Record<string, unknown>): CustomerPhase {
   const error = body.error;
+  if (status >= 500) return MAYBE_STORED;
   if (typeof error === "string" && CLOSED.has(error)) return { kind: "closed" };
   if (error === "bad_type") return refused("customerDocs.why.type");
   return FAILED;
@@ -83,8 +86,8 @@ export async function uploadCustomerFile(
 
   onPhase({ kind: "checking" });
   const finish = await deps.post(`${base}/finish`, { documentId, versionId }).catch(() => null);
-  if (!finish) return FAILED;
-  if (finish.status !== 200) return finishRefusal(finish.body);
+  if (!finish) return MAYBE_STORED;
+  if (finish.status !== 200) return finishRefusal(finish.status, finish.body);
   return FINISHED[String(finish.body.state)] ?? FAILED;
 }
 

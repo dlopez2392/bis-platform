@@ -114,15 +114,46 @@ describe("/d/[token] page", () => {
     expect(text).not.toContain("{");
   });
 
-  it("an account with no brand name: the brand header shows no 'the business', and a sentence that OPENS with it is capitalised", async () => {
-    const unnamed = page({ business: "el negocio", branding: { ...BRANDING, brandName: null }, logoUrl: null });
-    const es = await render(unnamed);
-    expect(es.html).not.toContain("bis-brand-name");
-    expect(es.text).toContain("El negocio le pide estos documentos");
-    expect(es.text).toContain("Solo el negocio los verá.");
-    const done = await render({ ...unnamed, state: "completed", language: "en", business: "the business" });
-    expect(done.text).toContain("Thank you. The business has everything it asked for.");
-    expect(done.text).toContain("Questions? Call the business at (956) 555-0123.");
+  // Task 9 review (Important): with no brand name, Spanish read "Pida a el negocio …" and "Llame a el
+  // negocio al …". Each sentence now has its own no-name wording in the catalogue; every state, in both
+  // languages, is compared with the exact sentence (mutation: always use the {business} key → FAILS).
+  const NO_NAME: Record<CustomerPage["state"], Record<"en" | "es", string[]>> = {
+    open: {
+      en: ["The business asks for these documents", "Upload each one below. Only the business will see them.", "Questions? Call the business at (956) 555-0123."],
+      es: ["El negocio le pide estos documentos", "Suba cada uno abajo. Solo el negocio los verá.", "¿Preguntas? Llame al negocio al (956) 555-0123."],
+    },
+    completed: {
+      en: ["Thank you. The business has everything it asked for.", "Questions? Call the business at (956) 555-0123."],
+      es: ["Gracias. El negocio ya tiene todo lo que pidió.", "¿Preguntas? Llame al negocio al (956) 555-0123."],
+    },
+    expired: {
+      en: ["This link has expired.", "Ask the business for a new link.", "Questions? Call the business at (956) 555-0123."],
+      es: ["Este enlace venció.", "Pida al negocio un enlace nuevo.", "¿Preguntas? Llame al negocio al (956) 555-0123."],
+    },
+    revoked: {
+      en: ["This link is no longer active.", "Ask the business for a new link.", "Questions? Call the business at (956) 555-0123."],
+      es: ["Este enlace ya no está activo.", "Pida al negocio un enlace nuevo.", "¿Preguntas? Llame al negocio al (956) 555-0123."],
+    },
+    not_found: {
+      en: ["This link doesn't work.", "Ask the business for a new link."],
+      es: ["Este enlace no funciona.", "Pida al negocio un enlace nuevo."],
+    },
+  };
+  it.each((Object.keys(NO_NAME) as CustomerPage["state"][]).flatMap((state) => (["en", "es"] as const).map((lang) => [state, lang] as const)))(
+    "no brand name, %s (%s): each sentence is its own no-name wording, never 'a el' or a lower-case opening, and the header names nothing",
+    async (state, lang) => {
+      const fallback = lang === "es" ? "el negocio" : "the business";
+      const { html, text } = await render(page({ state, language: lang, business: fallback, branding: { ...BRANDING, brandName: null }, logoUrl: null }));
+      const sentences = [...html.matchAll(/<(h1|p)[^>]*class="bis-docreq-(?:title|detail|call)"[^>]*>(.*?)<\/\1>/g)].map((x) => renderedText(x[2]!).trim());
+      expect(sentences).toEqual(NO_NAME[state][lang]);
+      expect(text).not.toMatch(/\b(a|de) el\b/);
+      expect(html).not.toContain("bis-brand-name");
+    },
+  );
+
+  it("no brand name and no live number: the call line without a phone, in Spanish", async () => {
+    const { text } = await render(page({ state: "completed", phone: null, business: "el negocio", branding: null, logoUrl: null }));
+    expect(text).toContain("¿Preguntas? Comuníquese con el negocio.");
   });
 
   it("a brand name is never re-cased: 'eBay Movers' stays as the business wrote it", async () => {
@@ -142,5 +173,18 @@ describe("/d/[token] page", () => {
     });
     data.loadPageSafe.mockResolvedValue(null);
     expect((await generateMetadata({ params: Promise.resolve({ token: "tok" }) })).title).toBe("Send documents");
+  });
+});
+
+describe("the red status dot (Task 9 review, minor 2)", () => {
+  it("paints from --form-error, which publicFormTheme lifts per mode, not --crit (2.92:1 on a dark tenant; mutation: back to --crit → FAILS)", async () => {
+    const { DOCREQ_CSS } = await import("./docreq-css");
+    expect(DOCREQ_CSS).toMatch(/\.bis-docreq-dot--crit \{ background: var\(--form-error, #B91C1C\); \}/);
+    expect(DOCREQ_CSS).not.toMatch(/var\(--crit\b/);
+    const dark = publicFormTheme({ ...BRANDING, brandMode: "dark" }, false);
+    const lifted = (dark.style as Record<string, string>)["--form-error"] ?? /--form-error:\s*([^;]+);/.exec(dark.darkCss ?? "")?.[1];
+    // A real colour that is not the light fallback (an undefined would pass a bare not.toBe).
+    expect(lifted).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(lifted!.toLowerCase()).not.toBe("#b91c1c");
   });
 });

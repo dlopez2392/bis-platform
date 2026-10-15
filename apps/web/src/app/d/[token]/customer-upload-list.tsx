@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState, startTransition } from "react";
 import { useRouter } from "next/navigation";
-import { m, type MessageKey } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import type { MessageKey } from "@/lib/messages";
 import {
   CUSTOMER_STATE_KEY, nextCustomerPollMs, pollKey, type CustomerFile, type CustomerFileState,
 } from "@/lib/document-requests/customer-state";
 import { uploadCustomerFile, browserCustomerDeps, type CustomerPhase } from "@/lib/document-requests/customer-client";
+import { docCopy } from "./copy";
 
 type Locale = "en" | "es";
 type Tone = "good" | "warn" | "crit";
@@ -22,34 +22,47 @@ const REMOVED: ReadonlySet<CustomerFileState> = new Set(["virus", "password", "u
 /**
  * What the list does when one upload ends: "server" — the file is stored and the server now lists it
  * (Checking, Received, or removed by the scan), so the local line goes and the page re-reads; "closed" —
- * the request shut meanwhile, so the page re-reads into its dead end; "local" — nothing was stored
- * (a refusal before the bytes, or a failure), so the line stays as the page's own.
+ * the request shut meanwhile, so the page re-reads into its dead end; "refresh" — the bytes landed but
+ * the finish never answered, so the line stays AND the page re-reads, and the server's truth lists the
+ * file if it was filed (Task 9 review ruling); "local" — nothing was stored (a refusal before the bytes,
+ * or a failure), so the line stays as the page's own.
  */
-export function afterUpload(end: CustomerPhase): "server" | "closed" | "local" {
+export function afterUpload(end: CustomerPhase): "server" | "closed" | "refresh" | "local" {
   if (end.kind === "received" || end.kind === "checking") return "server";
   if (end.kind === "refused" && SCAN_WHY.has(end.why)) return "server";
   if (end.kind === "closed") return "closed";
+  if (end.kind === "failed" && end.maybeStored) return "refresh";
   return "local";
 }
 
-function Line({ tone, children }: { tone: Tone; children: string }) {
+/**
+ * One status line: a dot and a word (rule 3). `progress` makes the word a progressbar whose moving
+ * percent is hidden from the live region, so a screen reader hears each PHASE (Uploading, Checking,
+ * Received), not every percent (Task 9 review): the value rides on aria-valuenow and the name.
+ */
+function Line({ tone, children, progress }: { tone: Tone; children: string; progress?: number }) {
   return (
     <li className="bis-docreq-line">
       <span className={`bis-docreq-dot bis-docreq-dot--${tone}`} aria-hidden="true"></span>
-      <span>{children}</span>
+      {progress === undefined ? <span>{children}</span> : (
+        <span role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} aria-label={children}>
+          <span aria-hidden="true">{children}</span>
+        </span>
+      )}
     </li>
   );
 }
 
 /**
- * Presentational (plan review I7): every word is rendered here with `{ business, ...params }`, so a
- * sentence naming the business never leaves "{business}" behind. A file is a dot and a word, never its
- * name, title, size or a link: the customer sees what happened to what they sent, nothing stored.
+ * Presentational (plan review I7): every word goes through docCopy with the business, so a sentence
+ * naming it never leaves "{business}" behind; `business` is the brand name, or null when the account has
+ * none, and then each sentence is its own no-name wording ("llame al negocio", never "a el"). A file is
+ * a dot and a word, never its name, title, size or a link: nothing stored is shown back.
  */
 export function CustomerUploadView({ locale, business, items, onPick }: {
-  locale: Locale; business: string; items: CustomerItemView[]; onPick: (itemKey: string, file: File) => void;
+  locale: Locale; business: string | null; items: CustomerItemView[]; onPick: (itemKey: string, file: File) => void;
 }) {
-  const tt = (k: MessageKey, p?: Record<string, string | number>) => t(m, k, locale, { business, ...p });
+  const tt = docCopy(locale, business);
   const refusedLine = (why: MessageKey, p?: Record<string, string>) => `${tt("customerDocs.refused")} · ${tt(why, p)}`;
   const fileLine = (f: CustomerFile, i: number) => (
     REMOVED.has(f.state)
@@ -59,7 +72,7 @@ export function CustomerUploadView({ locale, business, items, onPick }: {
   const localLine = (p: CustomerPhase, i: number) => {
     const key = `l${i}`;
     switch (p.kind) {
-      case "uploading": return <Line key={key} tone="warn">{tt("customerDocs.uploading", { percent: p.percent })}</Line>;
+      case "uploading": return <Line key={key} tone="warn" progress={p.percent}>{tt("customerDocs.uploading", { percent: p.percent })}</Line>;
       case "checking": return <Line key={key} tone="warn">{tt("customerDocs.checking")}</Line>;
       case "received": return <Line key={key} tone="good">{tt("customerDocs.received")}</Line>;
       case "refused": return <Line key={key} tone="crit">{refusedLine(p.why, p.params)}</Line>;
@@ -112,7 +125,7 @@ type LocalEntry = { id: number; itemKey: string; phase: CustomerPhase };
  * stored (afterUpload), then the re-read lists it.
  */
 export function CustomerUploadList({ token, locale, business, items }: {
-  token: string; locale: Locale; business: string; items: { key: string; label: string; files: CustomerFile[] }[];
+  token: string; locale: Locale; business: string | null; items: { key: string; label: string; files: CustomerFile[] }[];
 }) {
   const router = useRouter();
   const [local, setLocal] = useState<LocalEntry[]>([]);
@@ -142,8 +155,10 @@ export function CustomerUploadList({ token, locale, business, items }: {
     void uploadCustomerFile(token, itemKey, file, browserCustomerDeps(), set)
       .catch((): CustomerPhase => ({ kind: "failed" }))
       .then((end) => {
-        if (afterUpload(end) === "local") {
+        const next = afterUpload(end);
+        if (next === "local" || next === "refresh") {
           set(end);
+          if (next === "refresh") router.refresh();
           return;
         }
         // One transition: the local line goes in the same commit as the re-read that lists the file.
