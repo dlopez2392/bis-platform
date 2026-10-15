@@ -78,11 +78,11 @@ describe("Delete forever's typed name (spec 4.4; DESIGN.md Documents; plan devia
 });
 
 describe("the dialog's body hands the form the file's real version count (Task 7 review M3)", () => {
-  const v = (id: string) => ({ id, contentType: "application/pdf" as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-10-01" });
+  const v = (id: string) => ({ id, contentType: "application/pdf" as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-10-01", scan: "clean" as const });
   const doc = (versions: ReturnType<typeof v>[]) => ({
     id: "d", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
     addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-10-01", deletedAt: "2026-10-13T00:00:00Z",
-    version: { id: versions[0]!.id, contentType: "application/pdf" as never, bytes: 10 }, versions, purging: false,
+    version: { id: versions[0]!.id, contentType: "application/pdf" as never, bytes: 10, scan: "clean" as const, createdAt: "2026-10-01T00:00:00Z" }, versions, purging: false,
   });
   // Radix's Title needs its Dialog's context; the Root draws its children (only Content portals).
   const body = (d: ReturnType<typeof doc>) => text(renderToStaticMarkup(createElement(Dialog, { open: false },

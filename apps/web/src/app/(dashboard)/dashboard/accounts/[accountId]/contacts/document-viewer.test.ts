@@ -13,8 +13,8 @@ const {
 const doc = (contentType: string) => ({
   id: "d", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
   addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
-  version: { id: "v", contentType: contentType as never, bytes: 10 },
-  versions: [{ id: "v", contentType: contentType as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }],
+  version: { id: "v", contentType: contentType as never, bytes: 10, scan: "clean" as const, createdAt: "2026-10-01T00:00:00Z" },
+  versions: [{ id: "v", contentType: contentType as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", scan: "clean" as const }],
   purging: false,
 });
 const body = (contentType: string, state: Parameters<typeof DocumentViewerBody>[0]["state"]) =>
@@ -111,11 +111,11 @@ describe("the viewer's session is pure: the image's error step and a close (Task
 describe("the Versions list (spec 4.3)", () => {
   const three = {
     ...doc("application/pdf"),
-    version: { id: "v3", contentType: "application/pdf" as never, bytes: 30 },
+    version: { id: "v3", contentType: "application/pdf" as never, bytes: 30, scan: "clean" as const, createdAt: "2026-10-13T10:00:00Z" },
     versions: [
-      { id: "v3", contentType: "application/pdf" as never, bytes: 30, createdAt: "2026-10-13T10:00:00Z", addedOn: "2026-10-13" },
-      { id: "v2", contentType: "image/jpeg" as never, bytes: 20, createdAt: "2026-10-10T10:00:00Z", addedOn: "2026-10-10" },
-      { id: "v1", contentType: "application/pdf" as never, bytes: 10, createdAt: "2026-10-01T10:00:00Z", addedOn: "2026-10-01" },
+      { id: "v3", contentType: "application/pdf" as never, bytes: 30, createdAt: "2026-10-13T10:00:00Z", addedOn: "2026-10-13", scan: "clean" as const },
+      { id: "v2", contentType: "image/jpeg" as never, bytes: 20, createdAt: "2026-10-10T10:00:00Z", addedOn: "2026-10-10", scan: "clean" as const },
+      { id: "v1", contentType: "application/pdf" as never, bytes: 10, createdAt: "2026-10-01T10:00:00Z", addedOn: "2026-10-01", scan: "clean" as const },
     ],
   };
   const list = (d: typeof three, locale: "en" | "es" = "en") =>
@@ -150,12 +150,44 @@ describe("the Versions list (spec 4.3)", () => {
     expect(renderedText(html)).toContain(m["documents.versions.es"]);
   });
   it("Current follows the current version's id, not the top row (deviation 7; Task 7 review M2; mutation: i === 0 -> FAILS)", () => {
-    const html = list({ ...three, version: { id: "v2", contentType: "image/jpeg" as never, bytes: 20 } });
+    const html = list({ ...three, version: { id: "v2", contentType: "image/jpeg" as never, bytes: 20, scan: "clean" as const, createdAt: "2026-10-10T10:00:00Z" } });
     expect(renderedText(rowOf(html, "v2"))).toContain(m["documents.versionCurrent"]);
     expect(rowOf(html, "v2")).not.toContain("<button");
     expect(rowOf(html, "v3")).toMatch(/<button[^>]*aria-label="Download version 3"/);
   });
   it("a file with one version draws no list at all (mutation: render for one version -> FAILS)", () => {
     expect(list({ ...three, versions: [three.versions[0]!] })).toBe("");
+  });
+});
+
+describe("the viewer and virus scanning (S-07 2a; spec 3.3, 3.5)", () => {
+  const withScan = (scan: "clean" | "pending" | "infected" | "unscannable" | "locked") => {
+    const d = doc("application/pdf");
+    return { ...d, version: { ...d.version, scan, createdAt: "2026-10-13T14:59:00.000Z" }, versions: d.versions.map((v) => ({ ...v, scan })) };
+  };
+  it("a file that cannot be opened shows its sentence in both languages and never a frame or an image, whatever the state says (mutations: render the iframe for pending -> FAILS; one sentence for every state -> FAILS)", () => {
+    const ready = { status: "ready" as const, url: "https://x/sign", contentType: "application/pdf" as const };
+    for (const [scan, key] of [["pending", "documents.viewer.scanning"], ["infected", "documents.viewer.virusRemoved"], ["unscannable", "documents.viewer.unscannable"], ["locked", "documents.viewer.passwordRemoved"]] as const) {
+      const html = renderToStaticMarkup(createElement(DocumentViewerBody, { doc: withScan(scan) as never, state: ready, locale: "es", onRetry: vi.fn(), onImageError: vi.fn() }));
+      expect(html).toContain("data-viewer-notice");
+      expect(renderedText(html)).toContain(m[`${key}.es` as keyof typeof m]);
+      expect(html).not.toContain("<iframe");
+      expect(html).not.toContain("<img");
+    }
+  });
+  it("the Versions list: the shown clean version is Current, an older clean one downloads, a newer Checking one shows its dot and word and no button (mutation: offer Download on a pending version -> FAILS)", () => {
+    const d = withScan("clean");
+    const twoMore = { ...d, versions: [
+      { id: "v3", contentType: "application/pdf" as const, bytes: 9, createdAt: "2026-10-13T14:59:00.000Z", addedOn: "2026-10-13", scan: "pending" as const },
+      { ...d.versions[0]!, scan: "clean" as const },
+      { id: "v0", contentType: "application/pdf" as const, bytes: 8, createdAt: "2026-10-01T10:00:00.000Z", addedOn: "2026-10-01", scan: "clean" as const },
+    ] };
+    const html = renderToStaticMarkup(createElement(DocumentVersionsList, { doc: twoMore as never, locale: "es", when: () => "hoy", onDownload: vi.fn() }));
+    const rowFor = (id: string) => html.slice(html.indexOf(`data-document-version-row="${id}"`), html.indexOf("</li>", html.indexOf(`data-document-version-row="${id}"`)));
+    expect(rowFor("v3")).toContain('data-version-scan="pending"');
+    expect(renderedText(rowFor("v3"))).toContain(m["documents.status.scanning.es"]);
+    expect(rowFor("v3")).not.toContain("<button");
+    expect(renderedText(rowFor(d.version.id))).toContain(m["documents.versionCurrent.es"]);
+    expect(rowFor("v0")).toContain("<button");
   });
 });

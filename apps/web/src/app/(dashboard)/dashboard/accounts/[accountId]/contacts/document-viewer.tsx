@@ -11,6 +11,8 @@ import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { OFFICE_TYPES, isImageType } from "@/lib/documents/rules";
 import type { DocumentView } from "@/lib/documents/documents-load";
+import { viewerNotice, scanLabel } from "@/lib/documents/scan-state";
+import { cn } from "@/lib/utils";
 import { getDocumentUrlAction } from "./documents-actions";
 
 /**
@@ -74,6 +76,9 @@ export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }
   doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void; onImageError: () => void;
 }) {
   const tt = (key: MessageKey) => t(m, key, locale);
+  // S-07 2a (spec 3.3): a file not scanned clean is never shown, whatever a stale state says.
+  const notice = viewerNotice(doc);
+  if (notice) return <p data-viewer-notice className="text-sm text-muted-foreground">{tt(notice)}</p>;
   if (OFFICE_TYPES.includes(doc.version.contentType)) {
     return <p className="text-sm text-muted-foreground">{tt("documents.viewer.noPreview")}</p>;
   }
@@ -91,6 +96,18 @@ export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }
     return <img src={state.url} alt={doc.title} className="mx-auto max-h-[70vh] w-auto rounded-[var(--radius-ctl)]" onError={onImageError} />;
   }
   return <iframe src={state.url} title={doc.title} className="h-[70vh] w-full rounded-[var(--radius-ctl)] border border-[var(--line)]" />;
+}
+
+/** A version that cannot be downloaded says why: a dot AND the word (rule 3). */
+function VersionScan({ scan, locale }: { scan: DocumentView["versions"][number]["scan"]; locale: Locale }) {
+  const label = scanLabel(scan, locale);
+  if (!label) return null;
+  return (
+    <span data-version-scan={scan} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", label.tone === "crit" ? "bg-[var(--crit)]" : "bg-[var(--warn)]")} />
+      {label.text}
+    </span>
+  );
 }
 
 /**
@@ -114,11 +131,13 @@ export function DocumentVersionsList({ doc, locale, when, onDownload }: {
             <li key={v.id} data-document-version-row={v.id}
               className="flex items-center justify-between gap-2 border-t border-[var(--row-line)] py-1.5 text-sm first:border-t-0">
               <span className="tabular-nums">{tt("documents.versionLine", { n, when: when(v.addedOn) })}</span>
-              {v.id === doc.version.id ? (
+              {v.id === doc.version.id && v.scan === "clean" ? (
                 <span className="text-xs text-muted-foreground">{tt("documents.versionCurrent")}</span>
-              ) : (
+              ) : v.scan === "clean" ? (
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
                   aria-label={tt("documents.downloadVersion", { n })} onClick={() => onDownload(v.id)}>{tt("documents.download")}</Button>
+              ) : (
+                <VersionScan scan={v.scan} locale={locale} />
               )}
             </li>
           );
@@ -149,9 +168,10 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
   // The effect depends on these PRIMITIVES, not `doc` itself (review M3): a `doc` re-created with the
   // same fields on every render would otherwise re-run the effect, and re-mint a URL, on every render.
   const contentType = doc?.version.contentType ?? null;
+  const scan = doc?.version.scan ?? null;
   const fetchKey = fetchKeyFor(versionId, attempt);
   useEffect(() => {
-    if (!versionId || !contentType || OFFICE_TYPES.includes(contentType) || !fetchKey) return;
+    if (!versionId || !contentType || scan !== "clean" || OFFICE_TYPES.includes(contentType) || !fetchKey) return;
     let cancelled = false;
     void getDocumentUrlAction(accountId, versionId, "view")
       .then((r) => {
@@ -159,7 +179,7 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
       })
       .catch(() => { if (!cancelled) setSession((s) => ({ ...s, result: { key: fetchKey, value: { status: "error" } } })); });
     return () => { cancelled = true; };
-  }, [accountId, versionId, contentType, fetchKey]);
+  }, [accountId, versionId, contentType, scan, fetchKey]);
   const state: ViewerState = viewerStateFor(fetchKey, result);
   const mint = useCallback(() => setSession((s) => ({ ...s, attempt: s.attempt + 1 })), []);
   // M7: the image's onError applies the pure step (an event handler, never an effect).
@@ -184,9 +204,11 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
             </DialogHeader>
             <DocumentViewerBody doc={doc} state={state} locale={locale} onRetry={mint} onImageError={onImageError} />
             <DocumentVersionsList doc={doc} locale={locale} when={versionWhen} onDownload={(id) => onDownloadVersion(doc, id)} />
-            <div className="flex justify-end">
-              <Button type="button" className="min-h-11 md:min-h-8" onClick={() => onDownload(doc)}>{tt("documents.download")}</Button>
-            </div>
+            {doc.version.scan === "clean" ? (
+              <div className="flex justify-end">
+                <Button type="button" className="min-h-11 md:min-h-8" onClick={() => onDownload(doc)}>{tt("documents.download")}</Button>
+              </div>
+            ) : null}
           </>
         ) : null}
       </DialogContent>

@@ -13,8 +13,8 @@ const { m } = await import("@/lib/messages");
 const DOC = {
   id: "d1", title: "Lease", category: "contract" as const, expiresOn: null, ownersOnly: false, source: "upload" as const,
   addedBy: { you: true, name: null }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
-  version: { id: "v1", contentType: "application/pdf" as const, bytes: 1 },
-  versions: [{ id: "v1", contentType: "application/pdf" as const, bytes: 1, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" }], purging: false,
+  version: { id: "v1", contentType: "application/pdf" as const, bytes: 1, scan: "clean" as const, createdAt: "2026-10-01T00:00:00Z" },
+  versions: [{ id: "v1", contentType: "application/pdf" as const, bytes: 1, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", scan: "clean" as const }], purging: false,
 };
 const undoOf = () => (toast.success.mock.calls.at(-1)![1] as { action: { label: string; onClick: () => void } }).action;
 const flush = () => new Promise((r) => setTimeout(r, 0));

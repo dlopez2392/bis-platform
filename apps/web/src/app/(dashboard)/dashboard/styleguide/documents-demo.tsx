@@ -20,19 +20,26 @@ import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-u
  */
 const base: Omit<DocumentView, "id" | "title" | "category" | "createdAt" | "addedOn"> = {
   addedBy: { you: false, name: "Ana" }, deletedAt: null, ownersOnly: false, source: "upload", expiresOn: null,
-  version: { id: "sg-v", contentType: "application/pdf", bytes: 120_000 },
-  versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }], purging: false,
+  version: { id: "sg-v", contentType: "application/pdf", bytes: 120_000, scan: "clean", createdAt: "2026-10-10T15:00:00.000Z" },
+  versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", scan: "clean" }], purging: false,
 };
 const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
   today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "sg-c" }, capped: false,
   live: [
     { ...base, id: "sg-1", title: "Signed contract", category: "contract", createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", expiresOn: "2026-10-25",
-      versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }, { id: "sg-v0", contentType: "application/pdf", bytes: 98_000, createdAt: "2026-09-28T15:00:00.000Z", addedOn: "2026-09-28" }] },
+      versions: [{ id: "sg-v", contentType: "application/pdf", bytes: 120_000, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", scan: "clean" }, { id: "sg-v0", contentType: "application/pdf", bytes: 98_000, createdAt: "2026-09-28T15:00:00.000Z", addedOn: "2026-09-28", scan: "clean" }] },
     { ...base, id: "sg-2", title: "Roof, before", category: "photo", source: "camera", createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12",
-      addedBy: { you: true, name: null }, version: { id: "sg-v2", contentType: "image/jpeg", bytes: 800_000 },
-      versions: [{ id: "sg-v2", contentType: "image/jpeg", bytes: 800_000, createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12" }] },
+      addedBy: { you: true, name: null }, version: { id: "sg-v2", contentType: "image/jpeg", bytes: 800_000, scan: "clean", createdAt: "2026-10-13T02:30:00.000Z" },
+      versions: [{ id: "sg-v2", contentType: "image/jpeg", bytes: 800_000, createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12", scan: "clean" }] },
     { ...base, id: "sg-3", title: "Driver license", category: "id", createdAt: "2026-09-01T15:00:00.000Z", addedOn: "2026-09-01", ownersOnly: true,
       expiresOn: "2026-10-01", addedBy: { you: false, name: null } },
+    // S-07 2a: a Checking file and a removed-by-the-scan file, as a dot and a word (rule 3).
+    { ...base, id: "sg-6", title: "New estimate", category: "estimate", createdAt: "2026-10-13T14:59:00.000Z", addedOn: "2026-10-13",
+      version: { id: "sg-v6", contentType: "application/pdf", bytes: 50_000, scan: "pending", createdAt: "2026-10-13T14:59:00.000Z" },
+      versions: [{ id: "sg-v6", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:59:00.000Z", addedOn: "2026-10-13", scan: "pending" }] },
+    { ...base, id: "sg-7", title: "Bad upload", category: "other", createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13",
+      version: { id: "sg-v7", contentType: "application/pdf", bytes: 50_000, scan: "infected", createdAt: "2026-10-13T14:00:00.000Z" },
+      versions: [{ id: "sg-v7", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "infected" }] },
   ],
   trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" },
     // A Delete forever that stopped part-way: "Being deleted" as a dot and a word, no Restore; an Owner keeps Delete forever to finish it.

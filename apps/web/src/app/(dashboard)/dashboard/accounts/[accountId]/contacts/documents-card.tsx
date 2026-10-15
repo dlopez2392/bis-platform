@@ -16,6 +16,7 @@ import { t, plural } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { documentsLoadFrom, type DocumentsLoad, type DocumentView } from "@/lib/documents/documents-load";
+import { rowScan, scanLabel, nextPollMs, type RowScan } from "@/lib/documents/scan-state";
 import { dayDiff, expiryView, expiryText, purgeDaysLeft, purgeText } from "@/lib/documents/expiry";
 import { MAX_BATCH, defaultCategory, titleFromFileName, typeForFile } from "@/lib/documents/rules";
 import { browserDeps, browserVersionDeps, uploadOne, uploadVersion, type UploadBatch, type UploadPhase } from "@/lib/documents/upload-client";
@@ -101,9 +102,10 @@ export type RowMenuItem = { id: "edit" | "ownersOnly" | "newVersion" | "download
 export function rowMenuItems(doc: DocumentView, canManage: boolean): RowMenuItem[] {
   const items: RowMenuItem[] = [{ id: "edit", labelKey: "documents.edit" }];
   if (canManage) items.push({ id: "ownersOnly", labelKey: doc.ownersOnly ? "documents.makeTeam" : "documents.makeOwnersOnly" });
-  items.push(
-    { id: "newVersion", labelKey: "documents.newVersion" },
-    { id: "download", labelKey: "documents.download" }, { id: "trash", labelKey: "documents.trash" });
+  items.push({ id: "newVersion", labelKey: "documents.newVersion" });
+  // S-07 2a: a file not yet scanned clean has nothing to download (the server's gate refuses too).
+  if (doc.version.scan === "clean") items.push({ id: "download", labelKey: "documents.download" });
+  items.push({ id: "trash", labelKey: "documents.trash" });
   return items;
 }
 
@@ -145,6 +147,18 @@ function ExpiryLine({ expiresOn, today, locale }: { expiresOn: string | null; to
   );
 }
 
+/** Rule 3: a scan state is a dot AND the words (spec 3.5); a clean row draws nothing. */
+function ScanStatus({ scan, locale }: { scan: RowScan; locale: Locale }) {
+  const label = scanLabel(scan, locale);
+  if (!label || scan.kind === "ok") return null;
+  return (
+    <span data-document-scan={scan.kind} className="inline-flex items-center gap-1">
+      <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", label.tone === "crit" ? "bg-[var(--crit)]" : "bg-[var(--warn)]")} />
+      {label.text}
+    </span>
+  );
+}
+
 function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="contents">
@@ -154,8 +168,8 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function DocumentRow({ doc, today, canManage, locale, handlers, phase, onOpen, onNewVersion }: {
-  doc: DocumentView; today: string; canManage: boolean; locale: Locale;
+function DocumentRow({ doc, today, now, canManage, locale, handlers, phase, onOpen, onNewVersion }: {
+  doc: DocumentView; today: string; now: string; canManage: boolean; locale: Locale;
   handlers: DocumentHandlers; phase: UploadPhase | null; onOpen: (d: DocumentView) => void; onNewVersion: (d: DocumentView) => void;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, locale, params);
@@ -187,6 +201,7 @@ function DocumentRow({ doc, today, canManage, locale, handlers, phase, onOpen, o
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
             <span>{tt(`documents.category.${doc.category}` as MessageKey)}</span>
             <span aria-hidden="true">·</span>
+            <ScanStatus scan={rowScan(doc, now)} locale={locale} />
             <span>{sourceLine(doc, today, locale)}</span>
             <ExpiryLine expiresOn={doc.expiresOn} today={today} locale={locale} />
             {doc.versions.length > 1 ? (
@@ -324,7 +339,7 @@ export function DocumentsCardView(p: {
       ) : (
         <ul>
           {data.live.map((doc) => (
-            <DocumentRow key={doc.id} doc={doc} today={data.today} canManage={p.canManage} locale={p.locale} handlers={p.handlers}
+            <DocumentRow key={doc.id} doc={doc} today={data.today} now={data.now} canManage={p.canManage} locale={p.locale} handlers={p.handlers}
               phase={p.versionPhases[doc.id] ?? null} onOpen={p.onOpen} onNewVersion={p.onNewVersion} />
           ))}
         </ul>
@@ -399,6 +414,15 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   }, [route, nonce]);
   const load: DocumentsLoad = state.route === route ? state.load : { status: "loading" };
   const reload = () => setNonce((n) => n + 1);
+
+  // Spec 3.4/3.5: while any file is Checking, re-read on a timer, fast for its first two minutes, then
+  // slower; the timer's callback bumps the read, never the effect body (react-hooks/set-state-in-effect).
+  const pollMs = nextPollMs(load);
+  useEffect(() => {
+    if (pollMs === null) return;
+    const timer = setTimeout(() => setNonce((n) => n + 1), pollMs);
+    return () => clearTimeout(timer);
+  }, [pollMs]);
 
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
