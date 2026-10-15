@@ -1,7 +1,8 @@
-import { listPendingScans, oldestPendingScanAt, recordDocumentScan, recordHeartbeat } from "@bis/db";
+import { listPendingScans, oldestPendingScanAt, recordDocumentScan, recordHeartbeat, listRequestsMissingReceivedTask } from "@bis/db";
 import { scannerConfig, scannerHealth, SCAN_TIMEOUT_MS, SCANNER_HEARTBEAT_KEY, type ScannerHealth } from "@/lib/documents/scan-client";
 import { scanVersion, spendScanError, type ScanTarget } from "@/lib/documents/scan-version";
 import { SCAN_SLOW_MS } from "@/lib/documents/scan-state";
+import { openRequestTask } from "@/lib/document-requests/request-task";
 import type { Pass } from "../context";
 
 /**
@@ -41,10 +42,18 @@ import type { Pass } from "../context";
  * (60 + 60 + 60 + 45 + 60 = 285): the ~5 s overrun comes out of the 15 s left over and, past that, out
  * of the 60 s the test reserves for the unbudgeted passes. Plan review 6.
  * Every @bis/db export is dereferenced inside run(), never at module scope.
+ * The lost-To-do reconcile (Task 6b, S-07 2b, plan review I5) runs FIRST, before the not-configured
+ * early return: a request's clean customer file can predate a worker outage (or any crash between its
+ * verdict and openRequestTask), and that file is already sitting in storage whether or not the scanner
+ * is configured today. It does not touch the budgets above: it is bounded by COUNT, not time
+ * (REQUEST_TASK_RECONCILE_LIMIT, 20 rows), adding at most 20 × (two reads + one insert) sequential round
+ * trips on the service client — well inside the 75 s of spare the 2a review measured between the four
+ * budgeted passes' sum (285 s) and the route's 300 s maxDuration. No fifth budget constant for it.
  */
 export const DOCUMENT_SCAN_BUDGET_MS = 45_000;
 export const DOCUMENT_SCAN_BATCH = 50;
 export const SIGNATURES_MAX_AGE_MS = 3 * 86_400_000;
+export const REQUEST_TASK_RECONCILE_LIMIT = 20;
 
 export type PassOutcome = { failures: number; verdicts: number; unreached: number; breaker: boolean };
 const QUIET: PassOutcome = { failures: 0, verdicts: 0, unreached: 0, breaker: false };
@@ -67,14 +76,34 @@ export function scannerProblem(health: ScannerHealth, oldestPendingAt: string | 
   return problems.length > 0 ? problems.join("; ") : null;
 }
 
+type Counters = { scanned: number; clean: number; infected: number; unscannable: number; stillPending: number; unreached: number; failed: number; deferred: number; breaker: number; notConfigured: number; requestTasks: number };
+
+/** Both exits of run() call this: the pass must throw for `failed > 0` whether the reconcile alone set it (not-configured exit) or the scan/spend loops did (the normal exit). */
+function finish(c: Counters): Counters {
+  if (c.failed > 0) throw new Error(`documents scan: ${JSON.stringify(c)}`);
+  return c;
+}
+
 export const documentsScanPass: Pass = {
   key: "documentsScan",
   async run(ctx) {
-    const c = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0 };
+    const c: Counters = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0, requestTasks: 0 };
+    // Plan review I5 (S-07 2b): a clean customer file whose request has no "received" To-do (a crash
+    // between the verdict and openRequestTask, or a verdict that landed while the hook failed) gets it
+    // now. Bounded by count; idempotent through tasks_document_request_once (0080).
+    try {
+      for (const request of await listRequestsMissingReceivedTask(ctx.db, ctx.now, REQUEST_TASK_RECONCILE_LIMIT)) {
+        await openRequestTask(ctx.db, request.account_id, request, "received", ctx.now);
+        c.requestTasks++;
+      }
+    } catch (e) {
+      c.failed++;
+      console.error(`documents scan: the request To-do reconcile failed: ${String(e)}`);
+    }
     if (!scannerConfig()) {
       c.notConfigured = 1;
       await recordHeartbeat(ctx.db, SCANNER_HEARTBEAT_KEY, { ok: false, error: scannerProblem({ ok: false, reason: "not_configured" }, null, ctx.now)! });
-      return c;
+      return finish(c);
     }
     const startedAt = Date.now();
     const health = await scannerHealth();
@@ -96,7 +125,7 @@ export const documentsScanPass: Pass = {
           // this tick was never actually scanned by this pass.
           c.scanned++;
           const target: ScanTarget = { accountId: v.account_id, versionId: v.id, storagePath: v.storage_path, attempts: stamp.attempts };
-          const r = await scanVersion(ctx.db, target, undefined, { holdErrors: true });
+          const r = await scanVersion(ctx.db, target, undefined, { holdErrors: true, now: ctx.now });
           if (r === "clean") c.clean++;
           else if (r === "infected") c.infected++;
           else if (r === "unscannable") c.unscannable++;
@@ -133,7 +162,6 @@ export const documentsScanPass: Pass = {
     }
     const problem = scannerProblem(health, await oldestPendingScanAt(ctx.db), ctx.now, { failures, verdicts, unreached: c.unreached, breaker });
     await recordHeartbeat(ctx.db, SCANNER_HEARTBEAT_KEY, problem ? { ok: false, error: problem } : { ok: true });
-    if (c.failed > 0) throw new Error(`documents scan: ${JSON.stringify(c)}`);
-    return c;
+    return finish(c);
   },
 };

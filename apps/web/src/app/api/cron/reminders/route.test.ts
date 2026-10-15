@@ -33,6 +33,8 @@ vi.mock("@bis/db", async () => {
   // Registering a pass and NOT mocking its reads makes it `errored: 1` in every exact body below.
   listAbandonedUploads: async () => [],
   listPurgeableDocuments: async () => [],
+  // The scan pass's lost-To-do reconcile (S-07 2b, Task 6b), every tick: nothing missing here.
+  listRequestsMissingReceivedTask: async () => [],
   DOCUMENT_TRASH_DAYS: 30,
   DOCUMENT_BUCKET: "documents",
   // The two weekly-report passes read accounts and the agency row. Nothing is
@@ -319,7 +321,7 @@ const EMPTY_WEEKLY_CLIENT = { sent: 0, failed: 0, skippedNotMonday: 0, skippedAl
 const EMPTY_WEEKLY_AGENCY = { sent: 0, failed: 0, skippedNoRecipient: 1, skippedNotMonday: 0, skippedAlreadySent: 0, unresolvableTimezone: 0, unstamped: 0 };
 const EMPTY_SITE_TRAFFIC = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
 const EMPTY_DOCUMENTS_SWEEP = { abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 };
-const EMPTY_DOCUMENTS_SCAN = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1 };
+const EMPTY_DOCUMENTS_SCAN = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1, requestTasks: 0 };
 const EMPTY_SMS_REMINDERS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
 };
