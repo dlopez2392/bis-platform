@@ -19,9 +19,14 @@ export type DocumentRow = {
   current_version_id: string | null; created_by: string; created_at: string; updated_at: string;
   deleted_at: string | null; deleted_by: string | null;
 };
+export type ScanStatus = "pending" | "clean" | "infected" | "unscannable";
 export type DocumentVersionRow = {
   id: string; document_id: string; account_id: string; storage_path: string; bytes: number;
   content_type: DocumentContentType; original_name: string | null; status: "uploading" | "ready"; created_at: string;
+  /** 0079: only a clean version may be opened (signedDocumentReadUrl). */
+  scan_status: ScanStatus;
+  /** 0079: clamd's name for an infected or unscannable version; staff-only under RLS, never sent to a browser (removedReason reads it). */
+  scan_signature: string | null;
 };
 /** `versions`: every READY version, newest first (created_at, then id, descending); always includes `version`. */
 export type ListedDocument = DocumentRow & { version: DocumentVersionRow; versions: DocumentVersionRow[] };
@@ -32,7 +37,7 @@ export const MAX_DOCUMENTS_READ = 200;
 
 const DOC_COLS = "id, account_id, contact_id, client_group_id, title, category, expires_on, owners_only, source, "
   + "current_version_id, created_by, created_at, updated_at, deleted_at, deleted_by";
-const VERSION_COLS = "id, document_id, account_id, storage_path, bytes, content_type, original_name, status, created_at";
+const VERSION_COLS = "id, document_id, account_id, storage_path, bytes, content_type, original_name, status, created_at, scan_status, scan_signature";
 
 const recordColumn = (r: DocumentRecordRef) => (r.kind === "contact" ? "contact_id" : "client_group_id");
 /** The payload's record key: contactId or groupId, never both (documents_one_record). */
@@ -105,14 +110,14 @@ export async function getUploadingVersion(
   return data ? asVersion(data as DocumentVersionRow) : null;
 }
 
-/** Service client. scan_status is honestly 'skipped' for a staff upload (spec 3.2). */
+/** Service client. The scan state lives on each version (0079); documents.scan_status is retired (0080 drops it). */
 export async function createDocument(db: SupabaseClient, a: {
   accountId: string; record: DocumentRecordRef; title: string; category: DocumentCategory; expiresOn: string | null;
   ownersOnly: boolean; source: DocumentSource; createdBy: string;
 }): Promise<string> {
   const { data, error } = await db.from("documents").insert({
     account_id: a.accountId, [recordColumn(a.record)]: a.record.id, title: a.title, category: a.category,
-    expires_on: a.expiresOn, owners_only: a.ownersOnly, source: a.source, scan_status: "skipped", created_by: a.createdBy,
+    expires_on: a.expiresOn, owners_only: a.ownersOnly, source: a.source, created_by: a.createdBy,
   }).select("id").single();
   if (error) throw new Error(`createDocument failed: ${error.message}`);
   return (data as { id: string }).id;
@@ -511,6 +516,131 @@ export async function listDocumentVersionTimeline(
   for (const { data, error } of results) {
     if (error) throw new Error(`listDocumentVersionTimeline failed: ${error.message}`);
     out.push(...((data ?? []) as TimelineDocumentVersion[]));
+  }
+  return out;
+}
+
+export type ReadUrlOutcome = { status: "ok"; url: string } | { status: "pending" | "removed" | "not_ready" | "not_found" };
+
+/**
+ * THE ONE place a signed READ URL for a stored version is minted (spec 3.3; owner decision P3: every
+ * file waits until clean). Service client, after the caller's request-client proof. It re-reads the
+ * version ITSELF, by id and account, and refuses unless the version is ready and its scan is clean: a
+ * caller can never hand it a stale or forged state. apps/web/src/lib/documents/read-gate.test.ts pins
+ * that no other file mints a signed URL. `download` names the saved file (Content-Disposition); omitted,
+ * the URL is for viewing. THROWS on a read or storage error.
+ */
+export async function signedDocumentReadUrl(
+  db: SupabaseClient, accountId: string, versionId: string, o: { seconds: number; download?: string },
+): Promise<ReadUrlOutcome> {
+  const { data, error } = await db.from("document_versions").select("storage_path, status, scan_status")
+    .eq("account_id", accountId).eq("id", versionId).maybeSingle();
+  if (error) throw new Error(`signedDocumentReadUrl (read) failed: ${error.message}`);
+  const v = data as { storage_path: string; status: "uploading" | "ready"; scan_status: ScanStatus } | null;
+  if (!v) return { status: "not_found" };
+  if (v.status !== "ready") return { status: "not_ready" };
+  if (v.scan_status === "pending") return { status: "pending" };
+  if (v.scan_status !== "clean") return { status: "removed" };
+  const { data: signed, error: signError } = await db.storage.from(DOCUMENT_BUCKET)
+    .createSignedUrl(v.storage_path, o.seconds, o.download ? { download: o.download } : undefined);
+  if (signError || !signed) throw new Error(`signedDocumentReadUrl (sign) failed: ${signError?.message ?? "no data"}`);
+  return { status: "ok", url: signed.signedUrl };
+}
+
+/** Spec 3.1: the scanner's URL lives 120 seconds; the worker fetches it at once. */
+export const SCANNER_URL_SECONDS = 120;
+
+/**
+ * The scanner's OWN signed GET for one stored object (spec 3.3: a separate, server-only function).
+ * It does not check the scan state: it exists so the object CAN be scanned. Used only by
+ * apps/web/src/lib/documents/scan-version.ts (read-gate.test.ts pins that); never returned to a
+ * browser. Service client. THROWS on a storage error.
+ */
+export async function signedScannerUrl(db: SupabaseClient, storagePath: string): Promise<string> {
+  const { data, error } = await db.storage.from(DOCUMENT_BUCKET).createSignedUrl(storagePath, SCANNER_URL_SECONDS);
+  if (error || !data) throw new Error(`signedScannerUrl failed: ${error?.message ?? "no data"}`);
+  return data.signedUrl;
+}
+
+export type ScanVerdictInput = "clean" | "infected" | "unscannable" | "error" | "tried";
+export type RecordScanOutcome = { status: "ok"; attempts: number } | { status: "stale" };
+
+/**
+ * Service client: public.record_document_scan (0079), the one write of a verdict. A compare-and-set
+ * from pending on a READY version of the account; `error` adds an attempt and stays pending; `stale`
+ * when the version is no longer pending (another scan answered first) or is not this account's. The
+ * CALLER deletes an infected or unscannable object BEFORE recording it (scan-version.ts). After the
+ * write, document.virus_removed or document.unscannable (plan deviation 8), as the system, with the
+ * document and version ids only (no title: PR 1a deviation 3; no virus name: it stays on the row,
+ * staff-only). THROWS on an RPC error or an answer it does not know.
+ */
+export async function recordDocumentScan(db: SupabaseClient, a: {
+  accountId: string; versionId: string; verdict: ScanVerdictInput; signature?: string | null;
+}): Promise<RecordScanOutcome> {
+  const { data, error } = await db.rpc("record_document_scan", {
+    p_account_id: a.accountId, p_version_id: a.versionId, p_verdict: a.verdict, p_signature: a.signature ?? null,
+  });
+  if (error) throw new Error(`recordDocumentScan failed: ${error.message}`);
+  const r = data as { status: string; attempts?: number; document_id?: string };
+  if (r.status === "stale") return { status: "stale" };
+  if (r.status !== "ok" || typeof r.attempts !== "number" || typeof r.document_id !== "string") {
+    throw new Error(`recordDocumentScan: unexpected answer ${JSON.stringify(r)}`);
+  }
+  if (a.verdict === "infected" || a.verdict === "unscannable") {
+    await emitAfter(db, a.accountId, a.verdict === "infected" ? "document.virus_removed" : "document.unscannable", "documents-scan",
+      { documentId: r.document_id, versionId: a.versionId }, "system");
+  }
+  return { status: "ok", attempts: r.attempts };
+}
+
+export type PendingScan = { id: string; account_id: string; document_id: string; storage_path: string; scan_attempts: number; created_at: string; scan_tried_at: string | null };
+
+/**
+ * Service client (the retry pass): READY versions still pending, across accounts (0079's partial index):
+ * never tried first, then the least recently tried, then the oldest (re-review N2b).
+ */
+export async function listPendingScans(db: SupabaseClient, limit: number): Promise<PendingScan[]> {
+  const { data, error } = await db.from("document_versions")
+    .select("id, account_id, document_id, storage_path, scan_attempts, created_at, scan_tried_at")
+    .eq("status", "ready").eq("scan_status", "pending")
+    .order("scan_tried_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true }).order("id", { ascending: true }).limit(limit);
+  if (error) throw new Error(`listPendingScans failed: ${error.message}`);
+  return (data ?? []) as PendingScan[];
+}
+
+/** Service client (the heartbeat): the created_at of the oldest READY version still pending, or null (plan deviation 6). */
+export async function oldestPendingScanAt(db: SupabaseClient): Promise<string | null> {
+  // Its own read: listPendingScans orders by the last try, not by age (re-review N2b).
+  const { data, error } = await db.from("document_versions").select("created_at")
+    .eq("status", "ready").eq("scan_status", "pending").order("created_at", { ascending: true }).limit(1);
+  if (error) throw new Error(`oldestPendingScanAt failed: ${error.message}`);
+  return ((data ?? [])[0] as { created_at: string } | undefined)?.created_at ?? null;
+}
+
+export type TimelineDocumentScan = {
+  id: string; document_id: string; scan_status: "infected" | "unscannable"; scan_signature: string | null; scanned_at: string; title: string;
+  category: DocumentCategory; deleted_at: string | null; contact_id: string | null; client_group_id: string | null;
+};
+const SCAN_TIMELINE_COLS = "id, document_id, scan_status, scan_signature, scanned_at, title, category, deleted_at, contact_id, client_group_id";
+
+/**
+ * The timeline's removed-file rows (spec 3.5): 0079's view, one row per infected or unscannable
+ * version, at its verdict, on the caller's REQUEST client (security_invoker: RLS decides). Paged as
+ * listDocumentVersionTimeline is, on scanned_at and the version's own id; a group page also reads the
+ * group's own files. record.ts merges, sorts and slices every source together.
+ */
+export async function listDocumentScanTimeline(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], groupId: string | null, page: TimelinePageOpts,
+): Promise<TimelineDocumentScan[]> {
+  const base = () => db.from("document_scan_timeline").select(SCAN_TIMELINE_COLS).eq("account_id", accountId);
+  const reads = [withTimelinePage(forContacts(base(), "contact_id", who), "scanned_at", page)];
+  if (groupId) reads.push(withTimelinePage(base().eq("client_group_id", groupId), "scanned_at", page));
+  const results = await Promise.all(reads);
+  const out: TimelineDocumentScan[] = [];
+  for (const { data, error } of results) {
+    if (error) throw new Error(`listDocumentScanTimeline failed: ${error.message}`);
+    out.push(...((data ?? []) as TimelineDocumentScan[]));
   }
   return out;
 }

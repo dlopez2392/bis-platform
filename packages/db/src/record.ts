@@ -11,7 +11,7 @@ import { listContactMessages } from "./messaging";
 import { countGroupMembers, GROUP_ACTIVITY_CAP, type GroupPerson } from "./client-groups";
 import { forContacts, instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
 import type { AuthorKind } from "./provenance";
-import { listDocumentTimeline, listDocumentVersionTimeline, type TimelineDocument, type TimelineDocumentVersion } from "./documents";
+import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTimeline, type TimelineDocument, type TimelineDocumentVersion, type TimelineDocumentScan } from "./documents";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -295,7 +295,9 @@ export type TimelineEntry =
   /** S-07 (plan deviation 3): one row per listed document, read from `documents` so RLS decides. A group's own file has contactId "". */
   | { kind: "document"; id: string; at: string; contactId: string; document: TimelineDocument }
   /** S-07 1b (owner ruling R2): one row per NEW version of a file, read from 0078's view so RLS decides. `id` is the version's. */
-  | { kind: "documentVersion"; id: string; at: string; contactId: string; version: TimelineDocumentVersion };
+  | { kind: "documentVersion"; id: string; at: string; contactId: string; version: TimelineDocumentVersion }
+  /** S-07 2a (spec 3.5): one row per removed version (a virus, or it could not be checked), read from 0079's view so RLS decides. `id` is the version's; `at` its verdict. */
+  | { kind: "documentRemoved"; id: string; at: string; contactId: string; scan: TimelineDocumentScan };
 export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
@@ -366,17 +368,19 @@ export async function listTimelinePage(
       .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, contactId: booking.contact_id, booking }))),
     settle("calls", async () => (await listContactCalls(db, accountId, who, page.limit, { before }))
       .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, contactId: call.contact_id, call }))),
-    // S-07: one source, two kinds. A file's "added" row (from documents) and each NEW version's row
-    // (owner ruling R2, from 0078's view), both under the caller's RLS, both paged on (at, id); a failed
-    // read of either is the one "documents" failure.
+    // S-07: one source, three kinds. A file's "added" row (from documents), each NEW version's row
+    // (owner ruling R2, from 0078's view) and each REMOVED version's row (spec 3.5, from 0079's view),
+    // all under the caller's RLS, all paged on (at, id); a failed read of any is the one "documents" failure.
     settle("documents", async () => {
-      const [docs, versions] = await Promise.all([
+      const [docs, versions, removed] = await Promise.all([
         listDocumentTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentVersionTimeline(db, accountId, who, opts.groupId ?? null, page),
+        listDocumentScanTimeline(db, accountId, who, opts.groupId ?? null, page),
       ]);
       return [
         ...docs.map((d): TimelineEntry => ({ kind: "document", id: d.id, at: d.created_at, contactId: d.contact_id ?? "", document: d })),
         ...versions.map((v): TimelineEntry => ({ kind: "documentVersion", id: v.id, at: v.created_at, contactId: v.contact_id ?? "", version: v })),
+        ...removed.map((s): TimelineEntry => ({ kind: "documentRemoved", id: s.id, at: s.scanned_at, contactId: s.contact_id ?? "", scan: s })),
       ];
     }),
   ]);

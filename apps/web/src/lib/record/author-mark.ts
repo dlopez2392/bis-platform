@@ -50,6 +50,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     case "document": return { kind: "person", personId: entry.document.created_by };
     // S-07 1b: the person who uploaded the new version (document_versions.uploaded_by is NOT NULL).
     case "documentVersion": return { kind: "person", personId: entry.version.uploaded_by };
+    // S-07 2a: the scan removed it; nobody on the team did (DESIGN.md "Provenance": the automation mark).
+    case "documentRemoved": return { kind: "automation", personId: null };
   }
 }
 

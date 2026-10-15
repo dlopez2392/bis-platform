@@ -10,7 +10,9 @@ import {
   countContactDocuments, purgeContactDocuments, MAX_DOCUMENTS_READ,
   documentSpaceUsed, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, listDocumentVersionTimeline,
   DOCUMENT_PURGING_MARK,
+  signedDocumentReadUrl, signedScannerUrl, recordDocumentScan, listPendingScans, oldestPendingScanAt, listDocumentScanTimeline,
 } from "../documents";
+import { removedReason } from "../document-rules";
 
 /**
  * The document vault's data layer (spec sections 3 and 5), on the service client a server action
@@ -593,5 +595,170 @@ describe("Delete forever's writes (spec 4.4, 5.1; deviations 3 and 4)", () => {
       expect(left ?? []).toEqual([]);
       expect(await events(db, accountId, "document.purged")).toEqual([
         { actor_type: "user", actor_id: "user_owner", payload: { documentId: d.id, contactId: ana } }]);
+    }));
+});
+
+describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
+  /** A version's verdict as the service client records it after a scan, for the read cases. */
+  const verdict = (db: SupabaseClient, accountId: string, versionId: string, v: "clean" | "infected" | "unscannable") =>
+    recordDocumentScan(db, { accountId, versionId, verdict: v, signature: v === "infected" ? "Eicar-Test-Signature" : null });
+
+  it("the card's read carries each version's scan state; a new upload is pending (mutation: drop scan_status from VERSION_COLS -> undefined -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const list = await listRecordDocuments(db, accountId, { kind: "contact", id: ana });
+      expect(list.live[0]!.version.scan_status).toBe("pending");
+      expect(list.live[0]!.versions.map((v) => v.scan_status)).toEqual(["pending"]);
+      await verdict(db, accountId, d.versionId, "clean");
+      const again = await listRecordDocuments(db, accountId, { kind: "contact", id: ana });
+      expect(again.live[0]!.version.scan_status).toBe("clean");
+    }));
+
+  it("the read gate refuses every state but clean WITHOUT touching storage (the replica's gateway 404s any storage call, so a mint would throw) (mutation: drop the scan checks -> the pending case reaches storage and throws -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const pending = await readyDoc(db, accountId, ana, { title: "P" });
+      const infected = await readyDoc(db, accountId, ana, { title: "I" });
+      const unscannable = await readyDoc(db, accountId, ana, { title: "U" });
+      await verdict(db, accountId, infected.versionId, "infected");
+      await verdict(db, accountId, unscannable.versionId, "unscannable");
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Up", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const up = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (up.status !== "ok") throw new Error(up.status);
+      const ask = (versionId: string) => signedDocumentReadUrl(db, accountId, versionId, { seconds: 120 });
+      expect(await ask(pending.versionId)).toEqual({ status: "pending" });
+      expect(await ask(infected.versionId)).toEqual({ status: "removed" });
+      expect(await ask(unscannable.versionId)).toEqual({ status: "removed" });
+      expect(await ask(up.versionId)).toEqual({ status: "not_ready" });
+      expect(await ask("00000000-0000-4000-8000-000000000000")).toEqual({ status: "not_found" });
+    }));
+
+  it("the read gate reads the version ITSELF, scoped to the account: another account's clean version is not_found (mutation: drop .eq('account_id') -> it reaches storage and throws -> FAILS)", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (dbB, accountB) => {
+        const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
+        const theirs = await readyDoc(dbB, accountB, bea);
+        await verdict(dbB, accountB, theirs.versionId, "clean");
+        expect(await signedDocumentReadUrl(db, accountId, theirs.versionId, { seconds: 120 })).toEqual({ status: "not_found" });
+      })));
+
+  it("a verdict is a compare-and-set; a virus or an unscannable file is announced with the document and version ids only, as the system (mutations: put the title in the payload -> FAILS; emit as 'user' -> FAILS; emit document.virus_removed for every verdict -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const a = await readyDoc(db, accountId, ana, { title: "Lease" });
+      const b = await readyDoc(db, accountId, ana, { title: "Plan" });
+      const c = await readyDoc(db, accountId, ana, { title: "Ok" });
+      expect(await recordDocumentScan(db, { accountId, versionId: a.versionId, verdict: "error" })).toEqual({ status: "ok", attempts: 1 });
+      expect(await recordDocumentScan(db, { accountId, versionId: a.versionId, verdict: "infected", signature: "Eicar-Test-Signature" })).toEqual({ status: "ok", attempts: 2 });
+      expect(await recordDocumentScan(db, { accountId, versionId: a.versionId, verdict: "clean" })).toEqual({ status: "stale" });
+      await recordDocumentScan(db, { accountId, versionId: b.versionId, verdict: "unscannable" });
+      await recordDocumentScan(db, { accountId, versionId: c.versionId, verdict: "clean" });
+      expect(await events(db, accountId, "document.virus_removed")).toEqual([
+        { actor_type: "system", actor_id: "documents-scan", payload: { documentId: a.id, versionId: a.versionId } }]);
+      expect(await events(db, accountId, "document.unscannable")).toEqual([
+        { actor_type: "system", actor_id: "documents-scan", payload: { documentId: b.id, versionId: b.versionId } }]);
+    }));
+
+  it("the retry pass reads ready + pending versions oldest first, with their attempts; never an uploading one, never a scanned one; the oldest pending instant likewise (mutations: drop .eq('status','ready') -> FAILS; order descending -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const first = await readyDoc(db, accountId, ana, { title: "First" });
+      // A second never-tried version (scan_tried_at still null, same as `first`): only their created_at
+      // can order the two of them, so this is what actually pins "oldest first" against a descending mutation.
+      const untouched = await readyDoc(db, accountId, ana, { title: "Untouched" });
+      const second = await readyDoc(db, accountId, ana, { title: "Second" });
+      const done = await readyDoc(db, accountId, ana, { title: "Done" });
+      await verdict(db, accountId, done.versionId, "clean");
+      await recordDocumentScan(db, { accountId, versionId: second.versionId, verdict: "error" });
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Up", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const up = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (up.status !== "ok") throw new Error(up.status);
+      // Other accounts' rows may exist on a shared stack: judge only this account's.
+      const mine = (await listPendingScans(db, 1000)).filter((p) => p.account_id === accountId);
+      expect(mine.map((p) => [p.id, p.scan_attempts])).toEqual([
+        [first.versionId, 0], [untouched.versionId, 0], [second.versionId, 1],
+      ]);
+      expect(mine[0]!.storage_path).toBe(first.path);
+      const oldest = await oldestPendingScanAt(db);
+      expect(oldest).not.toBeNull();
+      expect(Date.parse(oldest!)).toBeLessThanOrEqual(Date.parse(mine[0]!.created_at));
+    }));
+
+  it("a version just TRIED goes behind every untried one, even an older one; the oldest-pending instant still reads by age (re-review N2b; mutations: drop the scan_tried_at order -> FAILS; read oldestPendingScanAt through the tried order -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const older = await readyDoc(db, accountId, ana, { title: "Older" });
+      const newer = await readyDoc(db, accountId, ana, { title: "Newer" });
+      expect(await recordDocumentScan(db, { accountId, versionId: older.versionId, verdict: "tried" })).toMatchObject({ status: "ok", attempts: 0 });
+      const mine = (await listPendingScans(db, 1000)).filter((p) => p.account_id === accountId);
+      expect(mine.map((p) => p.id)).toEqual([newer.versionId, older.versionId]);
+      expect(mine[1]!.scan_tried_at).not.toBeNull();
+      const oldest = await oldestPendingScanAt(db);
+      expect(Date.parse(oldest!)).toBeLessThanOrEqual(Date.parse(mine[1]!.created_at));
+    }));
+
+  it("oldestPendingScanAt's own query chain: ready + pending only, created_at ascending, never ordered by scan_tried_at (re-review N2b; mutations: drop .eq('status','ready') -> FAILS; order descending -> FAILS; read oldestPendingScanAt through the tried order -> FAILS)", async () => {
+    const calls: { method: string; args: unknown[] }[] = [];
+    const builder: Record<string, unknown> = {};
+    const record = (method: string) => (...args: unknown[]) => {
+      calls.push({ method, args });
+      return builder;
+    };
+    builder.select = record("select");
+    builder.eq = record("eq");
+    builder.order = record("order");
+    builder.limit = record("limit");
+    builder.then = (resolve: (v: { data: unknown; error: null }) => void) =>
+      resolve({ data: [{ created_at: "2026-01-01T00:00:00.000Z" }], error: null });
+    const from = vi.fn(() => builder);
+    const db = { from } as unknown as SupabaseClient;
+    const oldest = await oldestPendingScanAt(db);
+    expect(from).toHaveBeenCalledWith("document_versions");
+    const eqCalls = calls.filter((c) => c.method === "eq");
+    expect(eqCalls.map((c) => c.args)).toEqual([["status", "ready"], ["scan_status", "pending"]]);
+    const orderCalls = calls.filter((c) => c.method === "order");
+    expect(orderCalls).toEqual([{ method: "order", args: ["created_at", { ascending: true }] }]);
+    expect(oldest).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("the scanner's URL is a 120-second signed GET on the documents bucket for that one path (mutation: sign the account folder -> FAILS)", async () => {
+    const createSignedUrl = vi.fn(async (path: string, seconds: number) => ({ data: { signedUrl: `https://x.supabase.co/storage/v1/object/sign/documents/${path}?token=t&s=${seconds}` }, error: null }));
+    const from = vi.fn(() => ({ createSignedUrl }));
+    const db = { storage: { from } } as unknown as SupabaseClient;
+    const url = await signedScannerUrl(db, "a/b/c");
+    expect(from).toHaveBeenCalledWith("documents");
+    expect(createSignedUrl).toHaveBeenCalledWith("a/b/c", 120);
+    expect(url).toBe("https://x.supabase.co/storage/v1/object/sign/documents/a/b/c?token=t&s=120");
+  });
+
+  it("the removed-file timeline read: a contact's rows and a group's own (mutation: read the group's own rows without .eq('client_group_id') -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      if (g.status !== "ok") throw new Error(g.status);
+      const mine = await readyDoc(db, accountId, ana, { title: "Mine" });
+      const gid = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "Ours", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: gid, bytes: 10, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (r.status !== "ok") throw new Error(r.status);
+      expect(await markDocumentVersionReady(db, { accountId, documentId: gid, versionId: r.versionId, bytes: 10, sha256: HASH, actorId: ACTOR })).toBe(true);
+      await verdict(db, accountId, mine.versionId, "infected");
+      await recordDocumentScan(db, { accountId, versionId: r.versionId, verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
+      const contactOnly = await listDocumentScanTimeline(db, accountId, ana, null, { limit: 10 });
+      expect(contactOnly.map((x) => [x.id, x.scan_status, x.title])).toEqual([[mine.versionId, "infected", "Mine"]]);
+      const both = await listDocumentScanTimeline(db, accountId, ana, g.groupId, { limit: 10 });
+      expect(both.map((x) => x.id).sort()).toEqual([mine.versionId, r.versionId].sort());
+      const theirs = both.find((x) => x.id === r.versionId)!;
+      expect(theirs.scan_signature).toBe("Heuristics.Encrypted.PDF");
+      expect(removedReason(theirs.scan_status, theirs.scan_signature)).toBe("password");
+    }));
+
+  it("an unscannable version keeps its named cause on the read, and removedReason reads a password from it (owner ruling 2026-10-15; mutation: drop scan_signature from VERSION_COLS -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana, { title: "Locked" });
+      await recordDocumentScan(db, { accountId, versionId: d.versionId, verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
+      const v = (await listRecordDocuments(db, accountId, { kind: "contact", id: ana })).live[0]!.version;
+      expect([v.scan_status, v.scan_signature, removedReason(v.scan_status, v.scan_signature)]).toEqual(["unscannable", "Heuristics.Encrypted.PDF", "password"]);
     }));
 });

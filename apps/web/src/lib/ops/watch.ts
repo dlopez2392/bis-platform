@@ -90,6 +90,7 @@ export function describeKey(key: string): string {
     case "sms.inbound": return "incoming texts (Telnyx)";
     case "email.resend_webhook": return "email delivery reports (Resend)";
     case "stripe.webhook": return "billing events (Stripe)";
+    case "documents.scanner": return "virus scanning of uploaded files";
     default: return key;
   }
 }

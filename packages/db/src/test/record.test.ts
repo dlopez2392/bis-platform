@@ -11,7 +11,7 @@ import { ensureDefaultPipeline } from "../crm-config";
 import { createOpportunity } from "../opportunities";
 import { createForm, createSubmission, linkSubmissionContact } from "../forms";
 import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from "../client-groups";
-import { createDocument, reserveDocumentVersion, markDocumentVersionReady } from "../documents";
+import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
@@ -585,5 +585,21 @@ describe("the documents source (S-07, plan deviation 3)", () => {
       const p2 = await listTimelinePage(db, accountId, [ana], p1.older!, { limit: 1 });
       const p3 = await listTimelinePage(db, accountId, [ana], p2.older!, { limit: 1 });
       expect([p1, p2, p3].map((p) => p.items.map((i) => i.id))).toEqual([[v3], [v2], [id]]);
+    }));
+
+  it("a removed file is its own row at its verdict, under the same documents source (spec 3.5; mutation: drop the scan read from the documents settle -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Lease", category: "contract", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_t" });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 5, contentType: "application/pdf", originalName: null, uploadedBy: "user_t" });
+      if (r.status !== "ok") throw new Error(r.status);
+      if (!(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: 5, sha256: "c".repeat(64), actorId: "user_t" }))) throw new Error("not ready");
+      expect(await recordDocumentScan(db, { accountId, versionId: r.versionId, verdict: "infected", signature: "Eicar-Test-Signature" })).toMatchObject({ status: "ok" });
+      const page = await listTimelinePage(db, accountId, [ana]);
+      expect(page.failed).toEqual([]);
+      const removed = page.items.filter((i) => i.kind === "documentRemoved");
+      expect(removed.map((i) => i.id)).toEqual([r.versionId]);
+      const e = removed[0]!;
+      expect(e.kind === "documentRemoved" && [e.scan.title, e.scan.scan_status, e.contactId, e.at === e.scan.scanned_at]).toEqual(["Lease", "infected", ana, true]);
     }));
 });

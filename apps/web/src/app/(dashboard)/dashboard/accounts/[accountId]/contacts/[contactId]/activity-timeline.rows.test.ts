@@ -205,4 +205,17 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     expect(row).toContain(`>${m["timeline.documentVersion.es"].replace("{title}", "Signed lease")}<`);
     expect(row).toContain(`>${m["provenance.you.es"]}<`);
   });
+
+  it("a removed-file row renders as one: its verb, the automation mark and the crit word (S-07 2a; mutation: return null for the documentRemoved case -> FAILS)", () => {
+    const entries: TimelineEntry[] = [{ kind: "documentRemoved", id: "v9", at: AT, contactId: "c1", scan: { id: "v9", document_id: "d1",
+      scan_status: "infected", scan_signature: null, scanned_at: AT, title: "Lease", category: "contract", deleted_at: null, contact_id: "c1", client_group_id: null } }];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "es", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    const row = html.match(/<div data-timeline-item="documentRemoved"[\s\S]*?<\/li>/)?.[0] ?? "";
+    expect(row).toContain(`>${m["timeline.documentRemoved.es"].replace("{title}", "Lease")}<`);
+    expect(row).toContain(`>${m["provenance.automation.es"]}<`);
+    expect(row).toContain(`>${m["documents.status.virusRemoved.es"]}<`);
+  });
 });

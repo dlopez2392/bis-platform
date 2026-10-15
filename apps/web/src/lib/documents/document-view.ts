@@ -1,10 +1,14 @@
-import { documentSpaceUsed, DOCUMENT_PURGING_MARK, type ListedDocument, type SupabaseClient } from "@bis/db";
-import { DOCUMENT_QUOTA_BYTES } from "@bis/db/document-rules";
+import { documentSpaceUsed, DOCUMENT_PURGING_MARK, type ListedDocument, type ScanStatus, type SupabaseClient } from "@bis/db";
+import { DOCUMENT_QUOTA_BYTES, removedReason } from "@bis/db/document-rules";
 import { renderZone } from "@/lib/zone";
 import { dayKeyInZone } from "@/lib/booking/availability";
 import { loggableError } from "@/lib/loggable-error";
-import type { DocumentView } from "./documents-load";
+import type { DocumentView, ScanState } from "./documents-load";
 import type { DocumentsSpace } from "./space";
+
+/** Owner ruling 2026-10-15: unscannable BECAUSE of a password is its own view state; clamd's name never reaches the JSON. */
+const viewScan = (v: { scan_status: ScanStatus; scan_signature: string | null }): ScanState =>
+  removedReason(v.scan_status, v.scan_signature) === "password" ? "locked" : v.scan_status;
 
 /**
  * The card's clock: the account's zone and its today, read on the caller's own client. The same read,
@@ -26,14 +30,17 @@ export async function documentsClock(db: SupabaseClient, accountId: string, now:
  */
 export function documentView(d: ListedDocument, viewerId: string, names: Readonly<Record<string, string>>, zone: string): DocumentView {
   const you = d.created_by === viewerId;
+  // S-07 2a (plan deviation 1): what opens is the newest CLEAN version (d.versions is newest first);
+  // with none clean, the row describes the newest ready version and its state.
+  const shown = d.versions.find((v) => v.scan_status === "clean") ?? d.version;
   return {
     id: d.id, title: d.title, category: d.category, expiresOn: d.expires_on, ownersOnly: d.owners_only, source: d.source,
     addedBy: { you, name: you ? null : (Object.hasOwn(names, d.created_by) ? names[d.created_by]! : null) },
     createdAt: d.created_at, addedOn: dayKeyInZone(new Date(d.created_at), zone), deletedAt: d.deleted_at,
-    version: { id: d.version.id, contentType: d.version.content_type, bytes: d.version.bytes },
+    version: { id: shown.id, contentType: shown.content_type, bytes: shown.bytes, scan: viewScan(shown), createdAt: shown.created_at },
     purging: d.deleted_at !== null && d.deleted_by === DOCUMENT_PURGING_MARK,
     versions: d.versions.map((v) => ({
-      id: v.id, contentType: v.content_type, bytes: v.bytes, createdAt: v.created_at, addedOn: dayKeyInZone(new Date(v.created_at), zone),
+      id: v.id, contentType: v.content_type, bytes: v.bytes, createdAt: v.created_at, addedOn: dayKeyInZone(new Date(v.created_at), zone), scan: viewScan(v),
     })),
   };
 }

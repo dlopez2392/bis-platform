@@ -10,7 +10,9 @@ import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import { OFFICE_TYPES, isImageType } from "@/lib/documents/rules";
-import type { DocumentView } from "@/lib/documents/documents-load";
+import type { DocumentView, ScanState } from "@/lib/documents/documents-load";
+import { viewerNotice, scanLabel } from "@/lib/documents/scan-state";
+import { cn } from "@/lib/utils";
 import { getDocumentUrlAction } from "./documents-actions";
 
 /**
@@ -26,6 +28,27 @@ export type ViewerFetchResult = { key: string; value: Exclude<ViewerState, { sta
 /** The key one mint's answer is filed under: a Retry (an incremented attempt) always gets a fresh key. */
 export function fetchKeyFor(versionId: string | null, attempt: number): string | null {
   return versionId ? `${versionId}:${attempt}` : null;
+}
+
+/**
+ * P3's one gate: a file opens, downloads or is even asked for a URL only once its SHOWN version is
+ * clean. Pending, infected, unscannable and locked are all refused the same way (I2) — used by the
+ * fetch guard below, the dialog's Download, and rowMenuItems (documents-card.tsx), so none of the
+ * three can drift from the other two. Takes the scan state itself (a primitive), not the whole `doc`,
+ * so the viewer's effect can depend on it the same way it already depends on `versionId`/`contentType`
+ * (review M3: a `doc` re-created with the same fields every render must never retrigger the effect).
+ */
+export function canOpen(scan: ScanState | null): boolean {
+  return scan === "clean";
+}
+
+/**
+ * Whether the viewer's effect should mint a view URL at all (I2): never for a null/non-clean scan
+ * (canOpen), never for an office file (no preview to mint), never without a fetch key. Pure, so "never
+ * fetches for a non-clean state" has its own test independent of any effect harness.
+ */
+export function shouldFetchUrl(scan: ScanState | null, contentType: DocumentContentType | null, fetchKey: string | null): boolean {
+  return canOpen(scan) && contentType !== null && !OFFICE_TYPES.includes(contentType) && fetchKey !== null;
 }
 
 /**
@@ -74,6 +97,9 @@ export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }
   doc: DocumentView; state: ViewerState; locale: Locale; onRetry: () => void; onImageError: () => void;
 }) {
   const tt = (key: MessageKey) => t(m, key, locale);
+  // S-07 2a (spec 3.3): a file not scanned clean is never shown, whatever a stale state says.
+  const notice = viewerNotice(doc);
+  if (notice) return <p data-viewer-notice className="text-sm text-muted-foreground">{tt(notice)}</p>;
   if (OFFICE_TYPES.includes(doc.version.contentType)) {
     return <p className="text-sm text-muted-foreground">{tt("documents.viewer.noPreview")}</p>;
   }
@@ -91,6 +117,18 @@ export function DocumentViewerBody({ doc, state, locale, onRetry, onImageError }
     return <img src={state.url} alt={doc.title} className="mx-auto max-h-[70vh] w-auto rounded-[var(--radius-ctl)]" onError={onImageError} />;
   }
   return <iframe src={state.url} title={doc.title} className="h-[70vh] w-full rounded-[var(--radius-ctl)] border border-[var(--line)]" />;
+}
+
+/** A version that cannot be downloaded says why: a dot AND the word (rule 3). */
+function VersionScan({ scan, locale }: { scan: DocumentView["versions"][number]["scan"]; locale: Locale }) {
+  const label = scanLabel(scan, locale);
+  if (!label) return null;
+  return (
+    <span data-version-scan={scan} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", label.tone === "crit" ? "bg-[var(--crit)]" : "bg-[var(--warn)]")} />
+      {label.text}
+    </span>
+  );
 }
 
 /**
@@ -114,17 +152,35 @@ export function DocumentVersionsList({ doc, locale, when, onDownload }: {
             <li key={v.id} data-document-version-row={v.id}
               className="flex items-center justify-between gap-2 border-t border-[var(--row-line)] py-1.5 text-sm first:border-t-0">
               <span className="tabular-nums">{tt("documents.versionLine", { n, when: when(v.addedOn) })}</span>
-              {v.id === doc.version.id ? (
+              {v.id === doc.version.id && v.scan === "clean" ? (
                 <span className="text-xs text-muted-foreground">{tt("documents.versionCurrent")}</span>
-              ) : (
+              ) : v.scan === "clean" ? (
                 <Button type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
                   aria-label={tt("documents.downloadVersion", { n })} onClick={() => onDownload(v.id)}>{tt("documents.download")}</Button>
+              ) : (
+                <VersionScan scan={v.scan} locale={locale} />
               )}
             </li>
           );
         })}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The dialog's own Download (spec 4.3; I2): drawn only for a clean file, through the same `canOpen` gate
+ * as the effect's fetch guard and rowMenuItems (documents-card.tsx) — absent entirely for anything the
+ * server would refuse anyway, never a disabled button. Its own component (outside `DialogContent`, which
+ * needs a real DOM portal) so "draws no Download for each non-clean state" has a test this suite's
+ * node-only harness can actually run.
+ */
+export function DocumentViewerDownload({ doc, locale, onDownload }: { doc: DocumentView; locale: Locale; onDownload: () => void }) {
+  if (!canOpen(doc.version.scan)) return null;
+  return (
+    <div className="flex justify-end">
+      <Button type="button" className="min-h-11 md:min-h-8" onClick={onDownload}>{t(m, "documents.download", locale)}</Button>
+    </div>
   );
 }
 
@@ -149,9 +205,12 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
   // The effect depends on these PRIMITIVES, not `doc` itself (review M3): a `doc` re-created with the
   // same fields on every render would otherwise re-run the effect, and re-mint a URL, on every render.
   const contentType = doc?.version.contentType ?? null;
+  const scan = doc?.version.scan ?? null;
   const fetchKey = fetchKeyFor(versionId, attempt);
   useEffect(() => {
-    if (!versionId || !contentType || OFFICE_TYPES.includes(contentType) || !fetchKey) return;
+    // I2: the whole guard is one pure predicate (shouldFetchUrl), so "never fetches for a non-clean
+    // state" is provable without a DOM/effect harness this suite has no jsdom to run.
+    if (!versionId || !fetchKey || !shouldFetchUrl(scan, contentType, fetchKey)) return;
     let cancelled = false;
     void getDocumentUrlAction(accountId, versionId, "view")
       .then((r) => {
@@ -159,7 +218,7 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
       })
       .catch(() => { if (!cancelled) setSession((s) => ({ ...s, result: { key: fetchKey, value: { status: "error" } } })); });
     return () => { cancelled = true; };
-  }, [accountId, versionId, contentType, fetchKey]);
+  }, [accountId, versionId, contentType, scan, fetchKey]);
   const state: ViewerState = viewerStateFor(fetchKey, result);
   const mint = useCallback(() => setSession((s) => ({ ...s, attempt: s.attempt + 1 })), []);
   // M7: the image's onError applies the pure step (an event handler, never an effect).
@@ -184,9 +243,7 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
             </DialogHeader>
             <DocumentViewerBody doc={doc} state={state} locale={locale} onRetry={mint} onImageError={onImageError} />
             <DocumentVersionsList doc={doc} locale={locale} when={versionWhen} onDownload={(id) => onDownloadVersion(doc, id)} />
-            <div className="flex justify-end">
-              <Button type="button" className="min-h-11 md:min-h-8" onClick={() => onDownload(doc)}>{tt("documents.download")}</Button>
-            </div>
+            <DocumentViewerDownload doc={doc} locale={locale} onDownload={() => onDownload(doc)} />
           </>
         ) : null}
       </DialogContent>

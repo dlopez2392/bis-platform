@@ -6,7 +6,7 @@ import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
   reserveDocumentVersion, markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
-  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType,
+  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -14,6 +14,7 @@ import { loggableError } from "@/lib/loggable-error";
 import { validateInlineRule } from "@/lib/inline-rule";
 import { extensionAllowed, extensionForType, isDay, OFFICE_TYPES, purgeNameKey, shownSize } from "@/lib/documents/rules";
 import { checkDocumentBytes } from "@/lib/documents/content-check";
+import { scanVersion, type ScanResult } from "@/lib/documents/scan-version";
 
 /**
  * The document vault's actions (spec 5.1). Every one: requireAccountAccess, then a REQUEST-client
@@ -25,6 +26,7 @@ import { checkDocumentBytes } from "@/lib/documents/content-check";
  * Storage paths are the server's (0077's reserve_document_version mints them; the CHECK on
  * document_versions pins their shape), never the browser's. Nothing throws out of an action except
  * requireAccountAccess's redirect (this tree's convention).
+ * A signed read URL is minted only through signedDocumentReadUrl (spec 3.3), never here.
  */
 export type DocRecordArg = { kind: "contact" | "group"; id: string };
 export type DocFail = { ok: false; error: string; params?: Record<string, string | number> };
@@ -208,7 +210,7 @@ async function cleanUp(svc: SupabaseClient, accountId: string, documentId: strin
 /** The media type storage holds for the object: lowercased, any ";" parameter dropped. */
 const mediaType = (t: string): string => t.split(";")[0]!.trim().toLowerCase();
 
-export async function finishDocumentUploadAction(accountId: string, documentId: string, versionId: string): Promise<{ ok: true } | DocFail> {
+export async function finishDocumentUploadAction(accountId: string, documentId: string, versionId: string): Promise<{ ok: true; scan: ScanResult } | DocFail> {
   const access = await requireAccountAccess(accountId);
   if (!isUuid(documentId) || !isUuid(versionId)) return fail(REFUSED);
   const docId = documentId.toLowerCase();
@@ -270,7 +272,15 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
     // false: the database refused (size_mismatch, or the row is no longer uploading because another
     // finish made it ready). Nothing is removed here: the object may be that ready version's. A
     // reservation still uploading is the sweep's.
-    return ok ? { ok: true } : fail(REFUSED);
+    if (!ok) return fail(REFUSED);
+    // Spec 3.4: scanned at once, so a file normally reads "Checking" for a second or two only. A scan
+    // that fails never fails the upload: the file is stored, stays Checking, and the retry pass
+    // (passes/documents-scan.ts) scans it. A fresh version has spent no attempt.
+    // Re-review N2a: the finish NEVER spends an attempt (holdErrors): only the retry pass does, after the
+    // worker's self-test passes again in its own run.
+    const scan = await scanVersion(svc, { accountId, versionId: verId, storagePath: version.storage_path, attempts: 0 }, undefined, { holdErrors: true })
+      .catch((e: unknown): ScanResult => { log("finish: scan", accountId, e); return "pending"; });
+    return { ok: true, scan };
   } catch (e) {
     log("finish", accountId, e);
     return fail("documents.error.upload");
@@ -309,10 +319,14 @@ export async function getDocumentUrlAction(
     if (!doc) return fail("documents.error.fileNotFound");
     // Word and Excel are never rendered (spec 4.3): always a download, named after the title.
     const download = mode === "download" || OFFICE_TYPES.includes(version.content_type);
-    const { data, error } = await serviceDb().storage.from(DOCUMENT_BUCKET).createSignedUrl(
-      version.storage_path, URL_SECONDS, download ? { download: `${doc.title}.${extensionForType(version.content_type)}` } : undefined);
-    if (error || !data) throw new Error(`createSignedUrl: ${error?.message ?? "no data"}`);
-    return { ok: true, url: data.signedUrl, contentType: version.content_type };
+    // Spec 3.3: the ONE gate mints, on the service client, AFTER the request-client proof above; it
+    // re-reads the version and refuses anything not scanned clean (owner decision P3).
+    const r = await signedDocumentReadUrl(serviceDb(), accountId, version.id, {
+      seconds: URL_SECONDS, download: download ? `${doc.title}.${extensionForType(version.content_type)}` : undefined });
+    if (r.status === "pending") return fail("documents.error.scanning");
+    if (r.status === "removed") return fail("documents.error.removed");
+    if (r.status !== "ok") return fail("documents.error.fileNotFound");
+    return { ok: true, url: r.url, contentType: version.content_type };
   } catch (e) {
     log("url", accountId, e);
     return fail("documents.error.open");

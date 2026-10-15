@@ -14,7 +14,7 @@ const db = {
   getContact: vi.fn(), readGroup: vi.fn(), getDocument: vi.fn(), getDocumentVersion: vi.fn(), getUploadingVersion: vi.fn(),
   createDocument: vi.fn(), reserveDocumentVersion: vi.fn(), markDocumentVersionReady: vi.fn(), discardDocumentUpload: vi.fn(),
   updateDocumentField: vi.fn(), setDocumentOwnersOnly: vi.fn(), trashDocument: vi.fn(), restoreDocument: vi.fn(),
-  listDocumentVersionStates: vi.fn(), claimDocumentForPurge: vi.fn(), deletePurgedDocument: vi.fn(),
+  listDocumentVersionStates: vi.fn(), claimDocumentForPurge: vi.fn(), deletePurgedDocument: vi.fn(), signedDocumentReadUrl: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
 };
 vi.mock("@bis/db", async (importOriginal) => {
@@ -23,6 +23,8 @@ vi.mock("@bis/db", async (importOriginal) => {
     isDocumentCategory: real.isDocumentCategory, isDocumentContentType: real.isDocumentContentType,
     DOCUMENT_PURGING_MARK: real.DOCUMENT_PURGING_MARK };
 });
+const scanVersion = vi.fn();
+vi.mock("@/lib/documents/scan-version", () => ({ scanVersion: (...a: unknown[]) => scanVersion(...a) }));
 const A = await import("./documents-actions");
 
 const ACC = "44444444-4444-4444-8444-444444444444";
@@ -42,7 +44,7 @@ const input = (over: Partial<Parameters<typeof A.startDocumentUploadAction>[1]> 
   category: "contract", expiresOn: null, ownersOnly: false, source: "upload" as const, ...over,
 });
 const readyVersion = (contentType: string) => ({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: 1, status: "ready",
-  original_name: null, created_at: "x", content_type: contentType });
+  original_name: null, created_at: "x", content_type: contentType, scan_status: "clean" });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,6 +64,8 @@ beforeEach(() => {
   db.markDocumentVersionReady.mockResolvedValue(true);
   // The real discard is async: a bare vi.fn() would answer undefined, and cleanUp's .catch on it would throw.
   db.discardDocumentUpload.mockResolvedValue(undefined);
+  scanVersion.mockReset();
+  scanVersion.mockResolvedValue("clean");
 });
 
 describe("startDocumentUploadAction (spec 5.1)", () => {
@@ -109,7 +113,7 @@ describe("startDocumentUploadAction (spec 5.1)", () => {
 
 describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
   it("checks the real bytes against the reserved size and the stored type, hashes them, and marks the version ready (mutation: skip the size comparison -> FAILS on the next case)", async () => {
-    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true });
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "clean" });
     const call = db.markDocumentVersionReady.mock.calls[0]![1] as { bytes: number; sha256: string };
     expect(call.bytes).toBe(PDF.length);
     expect(call.sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -137,13 +141,13 @@ describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
   });
   it("the stored type is compared as a media type: case and parameters do not refuse a real PDF (mutation: compare blob.type raw -> FAILS)", async () => {
     storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "Application/PDF; charset=binary" }), error: null });
-    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true });
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "clean" });
   });
   it("the stored type's case is folded by the action itself, not only by Blob (mutation: drop the toLowerCase -> FAILS)", async () => {
     // A real Blob lowercases its own type, so the Blob case above cannot catch a missing toLowerCase.
     // A body whose type keeps its capitals can.
     storage.download.mockResolvedValue({ data: { type: "Application/PDF", arrayBuffer: async () => PDF.slice().buffer }, error: null });
-    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true });
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "clean" });
   });
   it("a storage removal that fails leaves the rows for the sweep (plan review I3; mutation: discard the rows anyway -> FAILS)", async () => {
     storage.download.mockResolvedValue({ data: new Blob([PDF, new Uint8Array(1)], { type: "application/pdf" }), error: null });
@@ -197,37 +201,88 @@ describe("getDocumentUrlAction (spec 5.1)", () => {
     db.getDocumentVersion.mockResolvedValue(null);
     expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
     expect(db.getDocumentVersion).toHaveBeenCalledWith(REQUEST, ACC, V);
-    expect(storage.createSignedUrl).not.toHaveBeenCalled();
+    expect(db.signedDocumentReadUrl).not.toHaveBeenCalled();
   });
   it("mints 120 seconds; Word is always a download named after the title (mutation: mint Word inline -> FAILS)", async () => {
-    db.getDocumentVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: 1, status: "ready", original_name: null, created_at: "x",
+    db.getDocumentVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: 1, status: "ready", original_name: null, created_at: "x", scan_status: "clean",
       content_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
-    storage.createSignedUrl.mockResolvedValue({ data: { signedUrl: "https://x/sign" }, error: null });
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
     expect(await A.getDocumentUrlAction(ACC, V, "view")).toMatchObject({ ok: true, url: "https://x/sign" });
-    expect(storage.createSignedUrl).toHaveBeenCalledWith("p", 120, { download: "Lease.docx" });
+    expect(db.signedDocumentReadUrl).toHaveBeenCalledWith(SERVICE, ACC, V, { seconds: 120, download: "Lease.docx" });
   });
   it("Excel is always a download too (mutation: OFFICE_TYPES without Excel -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(readyVersion("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
-    storage.createSignedUrl.mockResolvedValue({ data: { signedUrl: "https://x/sign" }, error: null });
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
     await A.getDocumentUrlAction(ACC, V, "view");
-    expect(storage.createSignedUrl).toHaveBeenCalledWith("p", 120, { download: "Lease.xlsx" });
+    expect(db.signedDocumentReadUrl).toHaveBeenCalledWith(SERVICE, ACC, V, { seconds: 120, download: "Lease.xlsx" });
   });
   it("a PDF to view opens inline, and the document is proven on the request client too (mutation: always download -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
-    storage.createSignedUrl.mockResolvedValue({ data: { signedUrl: "https://x/sign" }, error: null });
+    db.signedDocumentReadUrl.mockResolvedValue({ status: "ok", url: "https://x/sign" });
     expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: true, url: "https://x/sign", contentType: "application/pdf" });
-    expect(storage.createSignedUrl).toHaveBeenCalledWith("p", 120, undefined);
+    expect(db.signedDocumentReadUrl).toHaveBeenCalledWith(SERVICE, ACC, V, { seconds: 120, download: undefined });
     expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
   });
   it("a version whose document the reader cannot see is 'not found' and nothing is minted (mutation: skip the document read -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
     db.getDocument.mockResolvedValue(null);
     expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
-    expect(storage.createSignedUrl).not.toHaveBeenCalled();
+    expect(db.signedDocumentReadUrl).not.toHaveBeenCalled();
   });
   it("a version still uploading is never minted (mutation: drop the ready check -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue({ ...readyVersion("application/pdf"), status: "uploading" });
     expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
+    expect(db.signedDocumentReadUrl).not.toHaveBeenCalled();
+  });
+});
+
+describe("virus scanning in the actions (S-07 2a; spec 3.3, 3.4)", () => {
+  it("the finish scans ONCE, after the version is ready, with its own path and no attempts, and answers the scan's outcome (mutations: scan before markDocumentVersionReady -> the order FAILS; drop the scan -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.getDocument.mockResolvedValue(DOC);
+    db.getUploadingVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: `${ACC}/${D}/${V}`, bytes: PDF.length, content_type: "application/pdf", status: "uploading" });
+    storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "application/pdf" }), error: null });
+    db.markDocumentVersionReady.mockResolvedValue(true);
+    scanVersion.mockResolvedValue("infected");
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "infected" });
+    expect(scanVersion).toHaveBeenCalledTimes(1);
+    // Re-review N2a: the finish holds any countable error; only the pass spends (mutation: drop holdErrors -> FAILS).
+    expect(scanVersion).toHaveBeenCalledWith(SERVICE, { accountId: ACC, versionId: V, storagePath: `${ACC}/${D}/${V}`, attempts: 0 }, undefined, { holdErrors: true });
+    expect(db.markDocumentVersionReady.mock.invocationCallOrder[0]!).toBeLessThan(scanVersion.mock.invocationCallOrder[0]!);
+  });
+
+  it("a scan that throws never fails the upload: the file is stored and stays Checking (mutation: let the throw reach the catch -> documents.error.upload -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.getDocument.mockResolvedValue(DOC);
+    db.getUploadingVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: PDF.length, content_type: "application/pdf", status: "uploading" });
+    storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "application/pdf" }), error: null });
+    db.markDocumentVersionReady.mockResolvedValue(true);
+    scanVersion.mockRejectedValue(new Error("storage down"));
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "pending" });
+  });
+
+  it("a refused finish never scans (mutation: scan before checking mark's answer -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.getDocument.mockResolvedValue(DOC);
+    db.getUploadingVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: "p", bytes: PDF.length, content_type: "application/pdf", status: "uploading" });
+    storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "application/pdf" }), error: null });
+    db.markDocumentVersionReady.mockResolvedValue(false);
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(scanVersion).not.toHaveBeenCalled();
+  });
+
+  it("the URL goes through the one gate on the SERVICE client after the request-client proof, and says why it refused (mutations: answer fileNotFound for pending -> FAILS; mint without the gate -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
+    db.getDocument.mockResolvedValue(DOC);
+    db.signedDocumentReadUrl.mockResolvedValueOnce({ status: "pending" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.scanning" });
+    db.signedDocumentReadUrl.mockResolvedValueOnce({ status: "removed" });
+    expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.removed" });
+    db.signedDocumentReadUrl.mockResolvedValueOnce({ status: "not_found" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
+    expect(db.getDocumentVersion).toHaveBeenCalledWith(REQUEST, ACC, V);
+    expect(db.signedDocumentReadUrl.mock.calls.every((c) => c[0] === SERVICE)).toBe(true);
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
 });

@@ -10,15 +10,15 @@ vi.mock("./documents-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
 const view = (over: Record<string, unknown> = {}) => ({
   id: "d1", title: "Signed lease", category: "contract", expiresOn: null, ownersOnly: false, source: "upload",
   addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", deletedAt: null,
-  version: { id: "v1", contentType: "application/pdf", bytes: 1200 },
-  versions: [{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" }],
+  version: { id: "v1", contentType: "application/pdf", bytes: 1200, scan: "clean", createdAt: "2026-10-10T15:00:00.000Z" },
+  versions: [{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", scan: "clean" }],
   purging: false, ...over,
 });
 const ready = (live: unknown[], trashed: unknown[] = [], capped = false, space: { used: number; quota: number } | null = null): Load => ({ status: "ready", data: {
@@ -248,12 +248,12 @@ describe("the viewer's open file", () => {
 describe("versions, Delete forever and the space line on the card (PR 1b)", () => {
   const GIB = 1_073_741_824;
   const three = [
-    { id: "v3", contentType: "application/pdf", bytes: 30, createdAt: "2026-10-12T15:00:00.000Z", addedOn: "2026-10-12" },
-    { id: "v2", contentType: "application/pdf", bytes: 20, createdAt: "2026-10-11T15:00:00.000Z", addedOn: "2026-10-11" },
-    { id: "v1", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10" },
+    { id: "v3", contentType: "application/pdf", bytes: 30, createdAt: "2026-10-12T15:00:00.000Z", addedOn: "2026-10-12", scan: "clean" },
+    { id: "v2", contentType: "application/pdf", bytes: 20, createdAt: "2026-10-11T15:00:00.000Z", addedOn: "2026-10-11", scan: "clean" },
+    { id: "v1", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", scan: "clean" },
   ];
   it("'Version 3' on a row with three ready versions, nothing on a row with one, in both languages (mutation: show it from one version -> FAILS)", () => {
-    const multi = view({ version: { id: "v3", contentType: "application/pdf", bytes: 30 }, versions: three });
+    const multi = view({ version: { id: "v3", contentType: "application/pdf", bytes: 30, scan: "clean", createdAt: "2026-10-12T15:00:00.000Z" }, versions: three });
     const html = render(ready([multi, view({ id: "d2", title: "Roof" })]));
     expect(rowOf(html, "d1")).toContain("data-document-version");
     expect(renderedText(rowOf(html, "d1"))).toContain("Version 3");
@@ -337,5 +337,68 @@ describe("keepPurge: the Delete forever target outlives a re-read only while the
     expect(keepPurge("t1", ready([view({ id: "t1" })], []))).toBeNull();
     expect(keepPurge("t1", { status: "error" })).toBe("t1");
     expect(keepPurge(null, ready([view()], [trashed]))).toBeNull();
+  });
+});
+
+describe("virus scanning on the card (S-07 2a; spec 3.5; rule 3)", () => {
+  const pending = (createdAt: string) => view({ id: "dp", title: "Scan", version: { id: "vp", contentType: "application/pdf", bytes: 10, scan: "pending", createdAt },
+    versions: [{ id: "vp", contentType: "application/pdf", bytes: 10, createdAt, addedOn: "2026-10-13", scan: "pending" }] });
+  const removed = view({ id: "dx", title: "Bad", version: { id: "vx", contentType: "application/pdf", bytes: 10, scan: "infected", createdAt: "2026-10-13T14:00:00.000Z" },
+    versions: [{ id: "vx", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "infected" }] });
+
+  it("a Checking row is a warn dot AND the word, in Spanish too; after 15 minutes it adds the slow words; a clean row draws neither (mutations: drop the dot -> FAILS; drop the word -> FAILS)", () => {
+    const html = render(ready([view(), pending("2026-10-13T14:59:00.000Z"), { ...pending("2026-10-13T14:30:00.000Z"), id: "ds" }]), { locale: "es" });
+    const fresh = rowOf(html, "dp");
+    expect(fresh).toContain('data-document-scan="pending"');
+    expect(fresh).toContain("bg-[var(--warn)]");
+    expect(renderedText(fresh)).toContain(m["documents.status.scanning.es"]);
+    expect(renderedText(fresh)).not.toContain(m["documents.status.scanSlow.es"]);
+    expect(renderedText(rowOf(html, "ds"))).toContain(`${m["documents.status.scanning.es"]} · ${m["documents.status.scanSlow.es"]}`);
+    expect(rowOf(html, "d1")).not.toContain("data-document-scan");
+  });
+
+  it("a removed row is a crit dot and 'Removed: it had a virus', and its menu keeps Move to trash but has no Download (mutations: crit -> warn -> FAILS; keep Download -> FAILS)", () => {
+    const row = rowOf(render(ready([removed]), { locale: "es" }), "dx");
+    expect(row).toContain('data-document-scan="infected"');
+    expect(row).toContain("bg-[var(--crit)]");
+    expect(renderedText(row)).toContain(m["documents.status.virusRemoved.es"]);
+    expect(renderedText(rowOf(render(ready([removed])), "dx"))).toContain(m["documents.status.virusRemoved"]);
+    expect(rowMenuItems(removed as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
+    expect(rowMenuItems(pending("2026-10-13T14:59:00.000Z") as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "trash"]);
+    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "trash"]);
+  });
+
+  it("the card still has exactly ONE primary button with Checking and removed rows on it (rule 8; mutation: a primary 'Retry scan' -> FAILS)", () => {
+    const html = render(ready([view(), pending("2026-10-13T14:59:00.000Z"), removed]));
+    expect(html.match(/data-variant="default"/g) ?? []).toHaveLength(1);
+  });
+
+  it("a password-protected file's row says so as a crit dot and the owner's words, in both languages, never 'Couldn't check this file' (mutation: draw the generic word for locked -> FAILS)", () => {
+    const locked = view({ id: "dl", title: "Bank", version: { id: "vl", contentType: "application/pdf", bytes: 10, scan: "locked", createdAt: "2026-10-13T14:00:00.000Z" },
+      versions: [{ id: "vl", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "locked" }] });
+    for (const [locale, sfx] of [["en", ""], ["es", ".es"]] as const) {
+      const row = rowOf(render(ready([locked]), { locale }), "dl");
+      expect(row).toContain('data-document-scan="locked"');
+      expect(row).toContain("bg-[var(--crit)]");
+      expect(renderedText(row)).toContain(m[`documents.status.passwordRemoved${sfx}` as keyof typeof m]);
+      expect(renderedText(row)).not.toContain(m[`documents.status.unscannable${sfx}` as keyof typeof m]);
+    }
+    expect(rowMenuItems(locked as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
+  });
+});
+
+describe("pollTimerKey: the re-read timer's own key (review I1)", () => {
+  it("changes on every successive settle even when nextPollMs repeats the exact same number (a constant while the same version stays pending, or a failed read answering the same number again) (mutation: key = String(pollMs) alone, ignoring reads -> FAILS)", () => {
+    expect(pollTimerKey(5000, 0)).not.toBe(pollTimerKey(5000, 1));
+    expect(pollTimerKey(5000, 1)).not.toBe(pollTimerKey(5000, 2));
+    // The slow interval, after two minutes: still a constant across reads, still must change.
+    expect(pollTimerKey(30000, 7)).not.toBe(pollTimerKey(30000, 8));
+    // A failed read: reads still bumps (DocumentsCard's settle runs on the error branch too), so the
+    // key still changes even though nextPollMs would answer the very same 5000 again.
+    expect(pollTimerKey(5000, 4)).not.toBe(pollTimerKey(5000, 5));
+  });
+  it("answers null (no timer) once nothing is left to poll, whatever reads has reached (mutation: return a key for null -> FAILS)", () => {
+    expect(pollTimerKey(null, 0)).toBeNull();
+    expect(pollTimerKey(null, 9)).toBeNull();
   });
 });

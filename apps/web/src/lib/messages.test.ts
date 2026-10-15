@@ -263,3 +263,35 @@ describe("the document vault's copy, PR 1b (versions, Delete forever, space used
       "We can't find this record anymore. Reload the page.", "Ya no encontramos este registro. Vuelva a cargar la página."]);
   });
 });
+
+describe("the document vault's copy, PR 2a (virus scanning)", () => {
+  const WANT: Record<string, [string, string]> = {
+    "documents.status.scanning": ["Checking", "Revisando"],
+    "documents.status.scanSlow": ["Taking longer than usual", "Tarda más de lo normal"],
+    "documents.status.virusRemoved": ["Removed: it had a virus", "Quitado: tenía un virus"],
+    "documents.status.unscannable": ["Couldn't check this file", "No se pudo revisar este archivo"],
+    "documents.viewer.scanning": ["This file opens once it has been checked for viruses. That usually takes a few seconds.", "Este archivo se abre cuando termine la revisión de virus. Normalmente tarda unos segundos."],
+    "documents.viewer.virusRemoved": ["This file had a virus, so it was removed. Move it to the trash, or upload a new version.", "Este archivo tenía un virus, así que se quitó. Muévalo a la papelera o suba una versión nueva."],
+    "documents.viewer.unscannable": ["We couldn't check this file for viruses, so it was removed. Upload it again.", "No pudimos revisar este archivo, así que se quitó. Vuelva a subirlo."],
+    "documents.error.scanning": ["This file is still being checked. Try again in a moment.", "Este archivo todavía se está revisando. Intente de nuevo en un momento."],
+    "documents.error.removed": ["This file was removed and can't be opened.", "Este archivo se quitó y no se puede abrir."],
+    "timeline.documentRemoved": ["removed {title}: it had a virus", "quitó {title}: tenía un virus"],
+    "timeline.documentUnscannable": ["removed {title}: it couldn't be checked", "quitó {title}: no se pudo revisar"],
+    "documents.status.passwordRemoved": ["Password-protected: remove the password and upload it again", "Tiene contraseña: quítela y vuelva a subirlo"],
+    "documents.viewer.passwordRemoved": ["This file has a password, so we couldn't check it for viruses and it was removed. Remove the password and upload it again.", "Este archivo tiene contraseña, así que no pudimos revisarlo y se quitó. Quítele la contraseña y vuelva a subirlo."],
+    "timeline.documentPassword": ["removed {title}: it has a password", "quitó {title}: tiene contraseña"],
+  };
+  it("every new key is the plan's wording, in both languages (mutation: any word changed, or a tú form such as 'Mueve' -> FAILS)", () => {
+    for (const [k, [en, es]] of Object.entries(WANT)) {
+      expect([m[k as MessageKey], m[`${k}.es` as MessageKey]], k).toEqual([en, es]);
+    }
+  });
+  it("no new string names the machinery (mutation: 'The scanner is checking this file' -> FAILS)", () => {
+    for (const k of Object.keys(WANT)) {
+      for (const text of [m[k as MessageKey], m[`${k}.es` as MessageKey]]) {
+        expect(typeof text, k).toBe("string");
+        expect(/clamav|scanner|escáner|fly|supabase|signature|firma|storage/i.test(text ?? "x"), k).toBe(false);
+      }
+    }
+  });
+});

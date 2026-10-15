@@ -24,8 +24,12 @@ export default defineConfig({
     // scope. Blank reads as unset (`configuredOrigin` trims, then nulls an
     // empty string), so this pins the default rather than inventing one, and
     // the tests that DO exercise APP_ORIGIN set it themselves through
-    // `vi.stubEnv` or a literal env object.
-    env: { APP_ORIGIN: "" },
+    // `vi.stubEnv` or a literal env object. SCANNER_URL/SCANNER_SECRET
+    // likewise (S-07 2a): a developer's shell holding the real worker's
+    // values would otherwise turn the cron route's and the sentinel's
+    // not-configured counters into a live scan; `scannerConfig` trims and
+    // nulls a blank.
+    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "" },
   },
   resolve: {
     alias: {

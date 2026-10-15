@@ -97,5 +97,14 @@ describe("describeKey — every key a webhook route stamps has a plain-language 
   it.each(Object.keys(KEYS))("%s is described in words, not echoed (mutation: drop its case → FAILS)", (key) => {
     expect(describeKey(key)).not.toBe(key);
   });
+
+  it("names the scanner's heartbeat in plain words and alerts on its first failure, like a webhook (S-07 2a; mutation: drop the describeKey case -> the raw key reaches the email -> FAILS)", () => {
+    expect(describeKey("documents.scanner")).toBe("virus scanning of uploaded files");
+    // The email names it in plain words, not the raw key (plan review 12: isFailing alone already held for any non-pass key).
+    const at = new Date("2026-10-15T15:00:00Z");
+    const mail = composeOpsEmail(evaluate([{ key: "documents.scanner", lastOkAt: new Date(at.getTime() - 60_000), lastErrorAt: at, lastError: "worker unreachable", consecutiveFailures: 1, alertedAt: null }], at));
+    expect(mail?.body).toContain("- virus scanning of uploaded files");
+    expect(mail?.body).not.toContain("- documents.scanner");
+  });
 });
 

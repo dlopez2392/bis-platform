@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { TimelineDocument, TimelineDocumentVersion, TimelineEntry } from "@bis/db";
+import type { TimelineDocument, TimelineDocumentVersion, TimelineDocumentScan, TimelineEntry } from "@bis/db";
 import { m } from "@/lib/messages";
 import { timelineRows, timelineFailedText } from "./timeline-rows";
 import { makeTr, type Tr } from "./copy";
@@ -159,5 +159,38 @@ describe("a new version's row (owner ruling R2)", () => {
     const [row] = timelineRows([ver({ deleted_at: "2026-10-15T00:00:00.000Z" })], { zone: "America/Chicago", tr, author: author(tr) });
     expect(row!.verb).toBe(m["timeline.documentVersion.es"].replace("{title}", "Signed lease"));
     expect(row!.status).toEqual({ tone: "muted", word: m["documents.status.trashed.es"] });
+  });
+});
+
+describe("a removed file's row (spec 3.5)", () => {
+  const removed = (over: Partial<TimelineDocumentScan> = {}): TimelineEntry => ({
+    kind: "documentRemoved", id: "v9", at: "2026-10-15T15:00:00.000Z", contactId: "c1",
+    scan: { id: "v9", document_id: "d1", scan_status: "infected", scan_signature: null, scanned_at: "2026-10-15T15:00:00.000Z", title: "Lease",
+      category: "contract", deleted_at: null, contact_id: "c1", client_group_id: null, ...over },
+  });
+  const author = (tr: Tr) => ({ viewerId: "user_me", names: {}, personaName: null, tr });
+  it("reads 'Automation removed <title>: it had a virus', a crit dot and word, the category as detail (mutations: reuse timeline.documentVersion -> FAILS; tone 'muted' -> FAILS)", () => {
+    const tr = makeTr("en");
+    const [row] = timelineRows([removed()], { zone: "America/Chicago", tr, author: author(tr) });
+    expect([row!.verb, row!.detail, row!.mark, row!.status, row!.key]).toEqual([
+      "removed Lease: it had a virus", "Contract", { kind: "automation", label: "Automation" },
+      { tone: "crit", word: "Removed: it had a virus" }, "documentRemoved-v9"]);
+  });
+  it("in Spanish, and an unscannable file reads its own words (mutation: one verb for both states -> FAILS)", () => {
+    const tr = makeTr("es");
+    const [row] = timelineRows([removed({ scan_status: "unscannable" })], { zone: "America/Chicago", tr, author: author(tr) });
+    expect(row!.verb).toBe(m["timeline.documentUnscannable.es"].replace("{title}", "Lease"));
+    expect(row!.status).toEqual({ tone: "crit", word: m["documents.status.unscannable.es"] });
+    expect(row!.mark).toEqual({ kind: "automation", label: m["provenance.automation.es"] });
+  });
+  it("a password-protected file's row says so, in both languages, never the generic words (owner ruling 2026-10-15; mutation: ignore the cause -> the generic verb -> FAILS)", () => {
+    for (const locale of ["en", "es"] as const) {
+      const tr = makeTr(locale);
+      const [row] = timelineRows([removed({ scan_status: "unscannable", scan_signature: "Heuristics.Encrypted.PDF" })], { zone: "America/Chicago", tr, author: author(tr) });
+      const sfx = locale === "es" ? ".es" : "";
+      expect(row!.verb).toBe(m[`timeline.documentPassword${sfx}` as keyof typeof m].replace("{title}", "Lease"));
+      expect(row!.status).toEqual({ tone: "crit", word: m[`documents.status.passwordRemoved${sfx}` as keyof typeof m] });
+      expect(row!.verb).not.toBe(m[`timeline.documentUnscannable${sfx}` as keyof typeof m].replace("{title}", "Lease"));
+    }
   });
 });
