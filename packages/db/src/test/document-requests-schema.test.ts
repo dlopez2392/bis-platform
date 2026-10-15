@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
 import { withRollback, actAs } from "./db";
@@ -13,7 +14,10 @@ const RUN = Math.random().toString(36).slice(2, 10);
 const ORG = `org_drq_${RUN}`;
 const ORG_B = `org_drqb_${RUN}`;
 const SUB = { owner: `u_dr_owner_${RUN}`, tech: `u_dr_tech_${RUN}`, tech2: `u_dr_tech2_${RUN}`, ownerB: `u_dr_ownerb_${RUN}` } as const;
-const HASH = (n: number) => n.toString(16).padStart(64, "0");
+// Salted per run: document-requests.test.ts commits its own counter-built hashes (1, 2, ...) through
+// PostgREST while this file runs beside it, and a shared unpadded counter collided on the unique key.
+const SALT = randomBytes(8).toString("hex");
+const HASH = (n: number) => SALT + n.toString(16).padStart(48, "0");
 const ITEMS = JSON.stringify([{ key: "insurance", category: "insurance", note: null }, { key: "other", category: "other", note: "Pool permit" }]);
 
 async function attempt<T extends object = Record<string, unknown>>(c: Client, sql: string, args: unknown[] = []) {
@@ -93,6 +97,18 @@ describe("0080: documents.scan_status is gone; customer is a source (spec 3.2 as
         await expect(ins(source, by, reqId, key)).rejects.toMatchObject({ code: "23514", constraint: "documents_request_coherent" });
       }
       await expect(ins("fax", "user_seed", null, null)).rejects.toMatchObject({ code: "23514", constraint: "documents_source_check" });
+    }));
+
+  // listRequestsMissingReceivedTask (document-requests.ts) pages every account's customer files:
+  // source = $n (PostgREST binds 'customer'), deleted_at is null, created_at >= since, newest first by
+  // (created_at, id). source is a key column, not a predicate, so the generic plan can use the index.
+  it("documents_source_recent serves the reconcile's read: (source, created_at desc, id desc) where deleted_at is null (mutation: drop the index, its predicate, or move source into the predicate -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ def: string }>(
+        "select indexdef as def from pg_indexes where schemaname = 'public' and tablename = 'documents' and indexname = 'documents_source_recent'");
+      expect(rows.map((r) => r.def)).toEqual([
+        "CREATE INDEX documents_source_recent ON public.documents USING btree (source, created_at DESC, id DESC) WHERE (deleted_at IS NULL)",
+      ]);
     }));
 });
 
@@ -184,6 +200,22 @@ describe("0080: who reads a request (spec 4.1: members, under the record's visib
       await expect(attempt(c, "select public.start_document_request_upload($1, $2, 'insurance', 10, 'application/pdf', 'a.pdf', 'X')", [s.acct, req]))
         .rejects.toMatchObject({ code: "42501" });
     }));
+
+  it("the client role cannot write the day's start count: no UPDATE or INSERT on start_day or starts_today, and an Owner's reset is refused (mutation: grant update (start_day, starts_today) to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const req = await request(c, s.acct, { contact_id: s.ana });
+      // Read off the grant itself, as the table owner: with no UPDATE policy for authenticated, a granted
+      // column UPDATE would affect zero rows rather than raise, so the catalogue is the direct proof.
+      const { rows: privs } = await c.query<{ col: string; upd: boolean; ins: boolean }>(
+        `select col, has_column_privilege('authenticated', 'public.document_requests', col, 'UPDATE') as upd,
+                has_column_privilege('authenticated', 'public.document_requests', col, 'INSERT') as ins
+           from unnest(array['start_day', 'starts_today']) col order by col`);
+      expect(privs).toEqual([{ col: "start_day", upd: false, ins: false }, { col: "starts_today", upd: false, ins: false }]);
+      await actAs(c, { org_id: ORG, sub: SUB.owner });
+      await expect(attempt(c, "update document_requests set starts_today = 0, start_day = null where id = $1", [req]))
+        .rejects.toMatchObject({ code: "42501" });
+    }));
 });
 
 describe("0080: start_document_request_upload (spec 4.4)", () => {
@@ -220,14 +252,53 @@ describe("0080: start_document_request_upload (spec 4.4)", () => {
       expect(n!.n).toBe("0");
     }));
 
-  it("the 21st start of a UTC day is rate_limited; yesterday's starts do not count (mutation: count every start ever, or allow 21 -> FAILS)", () =>
+  // The day's limit counts STARTS on the request row (fix round 2): a refused finish discards its version
+  // and document (documents.ts discardDocumentUpload), and an over_quota start never made a row, so a
+  // count of surviving rows could be reset by the link holder.
+  it("the 21st start of a UTC day is rate_limited even after a refused finish discarded one start's rows (mutations: count surviving document_versions rows again -> FAILS; allow 21 -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const req = await request(c, s.acct, { contact_id: s.ana });
-      const first = await start(c, s.acct, req);
-      await c.query("update document_versions set created_at = date_trunc('day', now(), 'UTC') - interval '1 minute' where id = $1", [first.version_id]);
-      for (let i = 0; i < 20; i++) expect((await start(c, s.acct, req)).status).toBe("ok");
+      const started: Started[] = [];
+      for (let i = 0; i < 20; i++) {
+        const r = await start(c, s.acct, req);
+        expect([i, r.status]).toEqual([i, "ok"]);
+        started.push(r);
+      }
+      // Exactly what discardDocumentUpload does for a refused finish: the uploading version, then the
+      // document that never had a ready version.
+      const gone = started[7]!;
+      const v = await c.query("delete from document_versions where account_id = $1 and document_id = $2 and id = $3 and status = 'uploading'", [s.acct, gone.document_id, gone.version_id]);
+      const d = await c.query("delete from documents where account_id = $1 and id = $2 and current_version_id is null", [s.acct, gone.document_id]);
+      expect([v.rowCount, d.rowCount]).toEqual([1, 1]);
       expect((await start(c, s.acct, req)).status).toBe("rate_limited");
+    }));
+
+  it("an over_quota start counts toward the day: after 20 of them a start that would fit answers rate_limited (mutation: bump the count only after a successful reservation -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const req = await request(c, s.acct, { contact_id: s.ana });
+      const big = await one(c, "insert into documents (account_id, contact_id, title, category, source, created_by) values ($1,$2,'Big','other','upload','user_seed') returning id", [s.acct, s.ana]);
+      // 204 x 25 MiB leaves 20 MiB of the 5 GiB: a 25 MiB start is over_quota, a 10-byte one fits.
+      for (let i = 0; i < 204; i++) await c.query("select public.reserve_document_version($1, $2, 26214400, 'application/pdf', 'b.pdf', 'user_seed')", [s.acct, big]);
+      for (let i = 0; i < 20; i++) expect([i, (await start(c, s.acct, req, "insurance", 26_214_400)).status]).toEqual([i, "over_quota"]);
+      expect((await start(c, s.acct, req, "insurance", 10)).status).toBe("rate_limited");
+    }));
+
+  it("a count stored on an earlier UTC day starts over, and the day stored is the UTC day whatever the session's zone (mutations: drop the reset -> FAILS; take the day from now()::date -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const req = await request(c, s.acct, { contact_id: s.ana });
+      const day = async () => (await c.query<{ stored: boolean; n: number }>(
+        "select start_day = (now() at time zone 'UTC')::date as stored, starts_today as n from document_requests where id = $1", [req])).rows[0]!;
+      // At any instant one of UTC+14 and UTC-12 is on a different calendar day from UTC, so a day taken
+      // from the session's zone is caught by one of the two passes.
+      for (const zone of ["Etc/GMT-14", "Etc/GMT+12"]) {
+        await c.query(`set local timezone to '${zone}'`);
+        await c.query("update document_requests set start_day = (now() at time zone 'UTC')::date - 1, starts_today = 20 where id = $1", [req]);
+        expect([zone, (await start(c, s.acct, req)).status]).toEqual([zone, "ok"]);
+        expect([zone, await day()]).toEqual([zone, { stored: true, n: 1 }]);
+      }
     }));
 
   it("over quota answers over_quota and too large answers too_large, each leaving no document behind (mutation: keep the document on a refused reservation -> FAILS)", () =>

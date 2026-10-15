@@ -28,6 +28,7 @@
 --     drop column document_request_kind, drop column document_request_id;
 --   delete the document_request rows of automation_log, then re-add 0054's automation_log_source_check exactly;
 --   delete the customer documents (their objects first), then
+--   drop index public.documents_source_recent;
 --   alter table public.documents drop constraint documents_request_coherent,
 --     drop constraint documents_request_fkey, drop column request_item_key, drop column request_id;
 --   re-add 0077's documents_source_check exactly;
@@ -87,6 +88,12 @@ create table public.document_requests (
   -- The at-most-once send stamp (2b plan re-review R1): set just before a text or email is handed to the
   -- provider, cleared when that send did not go out; a held release skips a request that carries it.
   sent_at timestamptz,
+  -- The day's starts (spec 4.4): the UTC day of the last start and how many starts that day. Bumped by
+  -- start_document_request_upload under the request lock BEFORE anything else it writes, so a start that
+  -- is later refused (over_quota) or whose rows a refused finish discards still counts. Server-written:
+  -- the client role holds no write on this table.
+  start_day date,
+  starts_today integer not null default 0 constraint document_requests_starts_today_check check (starts_today >= 0),
   constraint document_requests_one_record check (num_nonnulls(contact_id, client_group_id) = 1),
   constraint document_requests_expiry check (expires_at = created_at + interval '7 days'),
   constraint document_requests_revoke_coherent check ((revoked_at is null) = (revoked_by is null)),
@@ -123,15 +130,25 @@ alter table public.documents add constraint documents_request_coherent check (
 alter table public.documents add constraint documents_request_fkey foreign key (account_id, request_id)
   references public.document_requests (account_id, id);
 create index documents_by_request on public.documents (account_id, request_id) where request_id is not null;
+-- The received-task reconcile (document-requests.ts listRequestsMissingReceivedTask) pages every account's
+-- live customer files newest first, by (created_at, id), on each scan-pass tick. source leads the key
+-- rather than sitting in the predicate: PostgREST binds 'customer' as a parameter, and a partial index on
+-- source = 'customer' is unusable by the prepared statement's generic plan (measured on the replica).
+create index documents_source_recent on public.documents (source, created_at desc, id desc)
+  where deleted_at is null;
 
--- 5. The one start: the request locked and re-proved open, today's starts counted (UTC day), the
---    document created on the REQUEST's record under the ITEM's category, then 0077's reservation.
---    A refused reservation removes the document it just made. service_role only.
+-- 5. The one start: the request locked and re-proved open, the start counted on the request row (UTC
+--    day; at most 20, spec 4.4), the document created on the REQUEST's record under the ITEM's category,
+--    then 0077's reservation. The count is bumped before the document and the reservation, and the
+--    function always returns normally, so an over_quota start counts too, and a refused finish that
+--    discards the rows cannot give a start back. A refused reservation removes the document it just
+--    made. service_role only.
 create function public.start_document_request_upload(
   p_account_id uuid, p_request_id uuid, p_item_key text, p_bytes bigint, p_content_type text,
   p_original_name text, p_title text)
 returns jsonb language plpgsql security invoker set search_path = '' as $$
-declare r public.document_requests%rowtype; v_item jsonb; v_today integer; v_doc uuid; v_res jsonb;
+declare r public.document_requests%rowtype; v_item jsonb; v_day date := (now() at time zone 'UTC')::date;
+        v_starts integer; v_doc uuid; v_res jsonb;
 begin
   if p_account_id is null or p_request_id is null or p_item_key is null or p_bytes is null
      or p_content_type is null or p_title is null then
@@ -148,12 +165,10 @@ begin
   if r.expires_at <= now() then return jsonb_build_object('status', 'expired'); end if;
   select e into v_item from jsonb_array_elements(r.items) e where e ->> 'key' = p_item_key;
   if v_item is null then return jsonb_build_object('status', 'no_item'); end if;
-  select count(*) into v_today
-    from public.document_versions v
-    join public.documents d on d.id = v.document_id and d.account_id = v.account_id
-   where d.account_id = p_account_id and d.request_id = p_request_id
-     and v.created_at >= date_trunc('day', now(), 'UTC');
-  if v_today >= 20 then return jsonb_build_object('status', 'rate_limited'); end if;
+  v_starts := case when r.start_day = v_day then r.starts_today else 0 end;
+  if v_starts >= 20 then return jsonb_build_object('status', 'rate_limited'); end if;
+  update public.document_requests set start_day = v_day, starts_today = v_starts + 1
+   where id = r.id and account_id = r.account_id;
   insert into public.documents (account_id, contact_id, client_group_id, title, category, source, created_by,
                                 owners_only, request_id, request_item_key)
   values (p_account_id, r.contact_id, r.client_group_id, p_title, v_item ->> 'category', 'customer',
