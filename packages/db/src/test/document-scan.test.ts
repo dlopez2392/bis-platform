@@ -27,7 +27,7 @@ async function seed(c: Client) {
   return { acct, other, ana, bea };
 }
 
-/** A document on a contact, as the table owner. NO scan_status: 0079's default must fill it (deviation 2). */
+/** A document on a contact, as the table owner. No scan_status column at all: 0080 dropped it. */
 async function doc(c: Client, acct: string, contact: string, o: { ownersOnly?: boolean; title?: string } = {}) {
   const { rows: [d] } = await c.query<{ id: string }>(
     `insert into documents (account_id, contact_id, title, category, source, created_by, owners_only)

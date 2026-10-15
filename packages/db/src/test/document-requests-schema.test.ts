@@ -162,10 +162,20 @@ describe("0080: who reads a request (spec 4.1: members, under the record's visib
       expect(rows.map((r) => r.who)).toEqual(want);
     }));
 
-  it("the client role can write nothing and cannot run the start function (mutation: grant insert or update to authenticated, or execute on the function -> FAILS)", () =>
+  it("the client role can write nothing and cannot run the start function; neither authenticated nor anon holds EXECUTE on it (mutation: grant insert or update to authenticated, or execute on the function to authenticated or anon -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const req = await request(c, s.acct, { contact_id: s.ana });
+      // Checked directly against the grant, as the table owner: the 42501 below could otherwise come
+      // from the function's own `for no key update` on document_requests (no UPDATE-shaped RLS policy
+      // exists for authenticated) rather than from a missing EXECUTE grant, and granting EXECUTE would
+      // then still read green. has_function_privilege proves the grant itself, independent of that.
+      const { rows: [priv] } = await c.query<{ auth_exec: boolean; anon_exec: boolean }>(
+        `select has_function_privilege('authenticated',
+            'public.start_document_request_upload(uuid,uuid,text,bigint,text,text,text)', 'execute') as auth_exec,
+          has_function_privilege('anon',
+            'public.start_document_request_upload(uuid,uuid,text,bigint,text,text,text)', 'execute') as anon_exec`);
+      expect(priv).toEqual({ auth_exec: false, anon_exec: false });
       await actAs(c, { org_id: ORG, sub: SUB.owner });
       await expect(attempt(c, "update document_requests set revoked_at = now(), revoked_by = 'x' where id = $1", [req])).rejects.toMatchObject({ code: "42501" });
       await expect(attempt(c,
@@ -284,22 +294,33 @@ describe("0080: the request completes on its last clean file (spec 4.5)", () => 
 });
 
 describe("0080: the request's work-queue To-do (spec 4.5; deviation 4)", () => {
-  it("one per request and kind; a client-role insert cannot set the links and an update cannot change them (mutations: drop the unique index, or either keep_task_links line -> FAILS)", () =>
+  it("one per request and kind, scoped to the request's own account; a client-role insert cannot set the links and an update cannot change them (mutations: drop the unique index, drop the account_id half of the FK, or either keep_task_links line -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const req = await request(c, s.acct, { contact_id: s.ana });
-      const task = (kind: string) => attempt<{ id: string }>(c,
-        "insert into tasks (account_id, contact_id, title, document_request_id, document_request_kind) values ($1,$2,'T',$3,$4) returning id", [s.acct, s.ana, req, kind]);
-      const t1 = (await task("received")).rows[0]!;
-      await task("storage_full");
-      await expect(task("received")).rejects.toMatchObject({ code: "23505", constraint: "tasks_document_request_once" });
+      const task = (reqId: string, kind: string) => attempt<{ id: string }>(c,
+        "insert into tasks (account_id, contact_id, title, document_request_id, document_request_kind) values ($1,$2,'T',$3,$4) returning id", [s.acct, s.ana, reqId, kind]);
+      const t1 = (await task(req, "received")).rows[0]!;
+      await task(req, "storage_full");
+      await expect(task(req, "received")).rejects.toMatchObject({ code: "23505", constraint: "tasks_document_request_once" });
       await expect(attempt(c, "insert into tasks (account_id, title, document_request_id) values ($1,'T',$2)", [s.acct, req]))
         .rejects.toMatchObject({ code: "23514", constraint: "tasks_document_request_coherent" });
-      await expect(task("lost")).rejects.toMatchObject({ code: "23514", constraint: "tasks_document_request_kind_check" });
+      await expect(task(req, "lost")).rejects.toMatchObject({ code: "23514", constraint: "tasks_document_request_kind_check" });
+      // A second, fresh request with no task yet (plan review minor 1 AND I1): req already holds both
+      // kinds (from t1 and the storage_full row above), so a probe against req would hit
+      // tasks_document_request_once first regardless of the thing actually under test. req2 lets the
+      // cross-account FK check fail on 23503 specifically, and lets a dropped guard line fail on the
+      // "mine" assertion below, never on the unique index.
+      const req2 = await request(c, s.acct, { contact_id: s.ana });
+      // Cross-account (plan review I1): the FK is on (account_id, document_request_id), so account B
+      // cannot link a task to account A's request even though the bare id exists.
+      await expect(attempt(c,
+        "insert into tasks (account_id, title, document_request_id, document_request_kind) values ($1,'T',$2,'received')",
+        [s.acctB, req2])).rejects.toMatchObject({ code: "23503", constraint: "tasks_document_request_fkey" });
       await actAs(c, { org_id: ORG, sub: SUB.owner });
       const { rows: [mine] } = await c.query<{ document_request_id: string | null; document_request_kind: string | null }>(
         "insert into tasks (account_id, contact_id, title, document_request_id, document_request_kind) values ($1,$2,'Forged',$3,'received') returning document_request_id, document_request_kind",
-        [s.acct, s.ana, req]);
+        [s.acct, s.ana, req2]);
       expect(mine).toEqual({ document_request_id: null, document_request_kind: null });
       const { rows: [kept] } = await c.query<{ document_request_kind: string }>(
         "update tasks set document_request_kind = 'storage_full', title = 'T2' where id = $1 returning document_request_kind", [t1.id]);

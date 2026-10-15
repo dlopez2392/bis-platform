@@ -24,6 +24,7 @@
 --   re-create 0074's app.keep_task_links() exactly;
 --   drop index public.tasks_document_request_once;
 --   alter table public.tasks drop constraint tasks_document_request_coherent,
+--     drop constraint tasks_document_request_fkey,
 --     drop column document_request_kind, drop column document_request_id;
 --   delete the document_request rows of automation_log, then re-add 0054's automation_log_source_check exactly;
 --   delete the customer documents (their objects first), then
@@ -175,6 +176,11 @@ grant execute on function public.start_document_request_upload(uuid, uuid, text,
 --    has a non-trashed document with a ready, clean version. The request row is locked first, so two
 --    verdicts landing together serialise and the second sees the first. Plain, not definer: it runs
 --    as the verdict's writer (service_role, 0079's record_document_scan).
+--    The trigger does not check revoked_at: a clean verdict for a request staff revoked, then
+--    un-revoked (revoked_at cleared by hand), still completes it once its items are answered - revoked
+--    only gates the START and the FINISH (deviation 13), never this completion check. Task 3's
+--    documentRequestState must therefore rank revoked above completed when both are set, so an app
+--    reader never shows a revoked request as done.
 create function app.document_request_on_clean() returns trigger
 language plpgsql set search_path = '' as $$
 declare v_req uuid; r public.document_requests%rowtype;
@@ -217,9 +223,12 @@ alter table public.automation_log add constraint automation_log_source_check
 --    neither set nor change the links (0074's guard, extended; create or replace keeps its ACL and
 --    the tasks_keep_links trigger).
 alter table public.tasks
-  add column document_request_id uuid references public.document_requests(id) on delete cascade,
+  add column document_request_id uuid,
   add column document_request_kind text
     constraint tasks_document_request_kind_check check (document_request_kind in ('received', 'storage_full'));
+alter table public.tasks add constraint tasks_document_request_fkey
+  foreign key (account_id, document_request_id) references public.document_requests (account_id, id)
+  on delete cascade;
 alter table public.tasks add constraint tasks_document_request_coherent
   check ((document_request_id is null) = (document_request_kind is null));
 create unique index tasks_document_request_once on public.tasks (document_request_id, document_request_kind)
