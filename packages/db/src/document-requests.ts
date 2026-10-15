@@ -270,7 +270,9 @@ export async function listRequestsMissingReceivedTask(
   const out: DocumentRequestRow[] = [];
   const seen = new Set<string>();
   let cursor: TimelineCursor | undefined;
-  for (let guard = 0; guard < 40 && out.length < limit; guard++) {
+  let guard = 0;
+  let windowExhausted = false;
+  for (; guard < 40 && out.length < limit; guard++) {
     const { data: files, error } = await withTimelinePage(
       db.from("documents")
         .select("id, request_id, created_at, versions:document_versions!document_versions_document_fkey!inner(id)")
@@ -280,7 +282,7 @@ export async function listRequestsMissingReceivedTask(
     );
     if (error) throw new Error(`listRequestsMissingReceivedTask (files) failed: ${error.message}`);
     const rows = (files ?? []) as { id: string; request_id: string; created_at: string }[];
-    if (rows.length === 0) break;
+    if (rows.length === 0) { windowExhausted = true; break; }
     const last = rows[rows.length - 1]!;
     cursor = { v: last.created_at, id: last.id };
     const ids = [...new Set(rows.map((d) => d.request_id))].filter((id) => !seen.has(id));
@@ -296,7 +298,14 @@ export async function listRequestsMissingReceivedTask(
       const hasTask = new Set(((tasks.data ?? []) as { document_request_id: string }[]).map((t) => t.document_request_id));
       out.push(...((reqs.data ?? []) as DocumentRequestRow[]).filter((r) => !hasTask.has(r.id) && recent(r)));
     }
-    if (rows.length < filesPage) break; // this page was short: the window is exhausted
+    if (rows.length < filesPage) { windowExhausted = true; break; } // this page was short: the window is exhausted
+  }
+  // The guard exists so a pathological backlog can't loop forever; when it is actually the reason the
+  // loop stopped (not a short/empty page, i.e. the window was NOT exhausted), older misses past this
+  // point are silently dropped from THIS call. Said once, by function name and page count only — no
+  // request or contact ids, matching this module's other console.error calls.
+  if (guard >= 40 && !windowExhausted) {
+    console.error(`listRequestsMissingReceivedTask: stopped after ${guard} file pages (guard cutoff); older misses may be dropped`);
   }
   // Newest first, across every page and batch (a later page's requests can sort ahead of an earlier
   // page's in `out` otherwise, since document_requests carries no ORDER BY of its own here).

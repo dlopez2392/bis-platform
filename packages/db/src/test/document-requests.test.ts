@@ -217,37 +217,48 @@ describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5
     }));
 });
 
-/** A clean customer file for ONE item, inserted directly (service client) rather than through the
- *  app's upload/finish/scan round trips, so the "101 missing requests" case does not need 101 * 4
- *  network calls. Every row still satisfies the real constraints (documents_request_coherent,
- *  document_versions_scan_coherent, the path-shape check): this is a faster PATH to the same end
- *  state `cleanFile` produces, not a different one. */
-async function fastCleanRequest(db: SupabaseClient, accountId: string, contactId: string, createdAt: string): Promise<string> {
-  const reqId = crypto.randomUUID();
-  const { error: reqErr } = await db.from("document_requests").insert({
-    id: reqId, account_id: accountId, contact_id: contactId,
+/**
+ * N clean customer files, one item each, inserted directly (service client) rather than through the
+ * app's upload/finish/scan round trips, so the "101 missing requests" case does not need 101 * 4
+ * network calls — and in exactly 3 bulk inserts (one per table) rather than ~3 per row (fix round 2,
+ * point 2), so 101 rows cost 3 round trips, not ~303. Every row still satisfies the real constraints
+ * (documents_request_coherent, document_versions_scan_coherent, the path-shape check).
+ *
+ * This is NOT the same end state `cleanFile` (via markDocumentVersionReady + recordDocumentScan)
+ * produces (fix round 2, point 3): `completed_at` is set by a trigger that fires on an UPDATE of
+ * document_versions.scan_status (0080), and these versions are born already `scan_status = 'clean'`
+ * rather than updated into it, so a request built this way never gets its `completed_at` stamped even
+ * when every item has a clean file. That is fine here — every test using this helper asks only
+ * "is this request missing a 'received' To-do", which reads `revoked_at` and `recent()` (itself keyed
+ * on `completed_at`/`expires_at`, not on whether the request is literally "complete"), never whether
+ * the request completed by the real trigger path.
+ */
+async function fastCleanRequests(db: SupabaseClient, accountId: string, contactId: string, createdAts: string[]): Promise<string[]> {
+  const reqIds = createdAts.map(() => crypto.randomUUID());
+  const docIds = createdAts.map(() => crypto.randomUUID());
+  const verIds = createdAts.map(() => crypto.randomUUID());
+  const { error: reqErr } = await db.from("document_requests").insert(createdAts.map((createdAt, i) => ({
+    id: reqIds[i], account_id: accountId, contact_id: contactId,
     items: [{ key: "insurance", category: "insurance", note: null }], language: "en", token_hash: HEX(n++), channel: "link",
     created_by: ACTOR, created_at: createdAt, expires_at: new Date(Date.parse(createdAt) + 7 * 86_400_000).toISOString(),
-  });
+  })));
   if (reqErr) throw reqErr;
-  const docId = crypto.randomUUID();
-  const verId = crypto.randomUUID();
-  const { error: docErr } = await db.from("documents").insert({
-    id: docId, account_id: accountId, contact_id: contactId, title: "Seguro", category: "insurance", source: "customer",
-    created_by: `customer:${reqId}`, request_id: reqId, request_item_key: "insurance", created_at: createdAt,
-  });
+  const { error: docErr } = await db.from("documents").insert(createdAts.map((createdAt, i) => ({
+    id: docIds[i], account_id: accountId, contact_id: contactId, title: "Seguro", category: "insurance", source: "customer",
+    created_by: `customer:${reqIds[i]}`, request_id: reqIds[i], request_item_key: "insurance", created_at: createdAt,
+  })));
   if (docErr) throw docErr;
-  const { error: verErr } = await db.from("document_versions").insert({
-    id: verId, account_id: accountId, document_id: docId, storage_path: `${accountId}/${docId}/${verId}`,
-    bytes: 10, content_type: "application/pdf", sha256: "a".repeat(64), uploaded_by: `customer:${reqId}`,
+  const { error: verErr } = await db.from("document_versions").insert(createdAts.map((createdAt, i) => ({
+    id: verIds[i], account_id: accountId, document_id: docIds[i], storage_path: `${accountId}/${docIds[i]}/${verIds[i]}`,
+    bytes: 10, content_type: "application/pdf", sha256: "a".repeat(64), uploaded_by: `customer:${reqIds[i]}`,
     status: "ready", scan_status: "clean", scanned_at: createdAt, created_at: createdAt,
-  });
+  })));
   if (verErr) throw verErr;
-  return reqId;
+  return reqIds;
 }
 
 describe("document-requests: the 'received' reconcile and the send stamp (plan review I5, re-review R1)", () => {
-  it("lists a request with a clean file and no task; not once the task exists; not revoked, pending, or completed/expired more than a day ago; expired 2h ago IS listed (mutations: drop the clean filter -> FAILS; drop .is('revoked_at', null) -> FAILS)", () =>
+  it("lists a request with a clean file and no task; not once the task exists; not revoked, pending, or completed/expired more than a day ago; expired 2h ago IS listed (mutations: drop the clean filter -> FAILS; drop .is('revoked_at', null) -> FAILS; drop the task subtraction -> FAILS; make the expired-24h branch open-only -> FAILS; drop the completed branch -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const now = new Date();
 
@@ -310,25 +321,43 @@ describe("document-requests: the 'received' reconcile and the send stamp (plan r
       expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r6.id);
     }));
 
-  it("with 101 missing requests the batch loop still answers the newest `limit`, newest first (mutation: drop the final sort -> FAILS)", () =>
+  it("a request with two clean files, paged one file at a time, is listed once (mutation: drop the cross-page 'seen' dedup -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const now = new Date();
-      const ids: string[] = [];
-      for (let i = 0; i < 101; i++) {
-        // Oldest first: index 0 is the oldest (furthest in the past), index 100 the newest.
-        const at = new Date(now.getTime() - (101 - i) * 1000).toISOString();
-        ids.push(await fastCleanRequest(db, accountId, ana, at));
-      }
+      const r = await made(db, accountId, ana); // ITEMS = insurance + other: two items, two files.
+      await cleanFile(db, accountId, r.id, "insurance");
+      await cleanFile(db, accountId, r.id, "other");
+      // filesPage: 1 forces the two files of the SAME request onto two separate file-pages; without
+      // the `seen` set, the second page reprocesses the same request id and pushes it a second time.
+      const out = await listRequestsMissingReceivedTask(db, now, 50, { filesPage: 1 });
+      expect(out.filter((x) => x.id === r.id)).toHaveLength(1);
+    }));
+
+  it("with 101 missing requests (built in 3 bulk inserts) the batch loop still answers newest-first, and the test account's own run stays contiguous (mutation: drop the final sort -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const now = new Date();
+      // Oldest first: index 0 is the oldest (furthest in the past), index 100 the newest.
+      const createdAts = Array.from({ length: 101 }, (_, i) => new Date(now.getTime() - (101 - i) * 1000).toISOString());
+      const ids = await fastCleanRequests(db, accountId, ana, createdAts);
       const out = await listRequestsMissingReceivedTask(db, now, 50);
-      expect(out).toHaveLength(50);
+      // listRequestsMissingReceivedTask reads EVERY account: a parallel test file's own committed,
+      // task-less request can legitimately take one of the 50 slots, so no exact global length or
+      // exact global rank-set is assertable here (fix round 2, point 1). What IS always true:
+      //
+      // 1) the whole answer, across every account, is sorted newest-first by created_at.
+      for (let i = 1; i < out.length; i++) {
+        expect(Date.parse(out[i]!.created_at)).toBeLessThanOrEqual(Date.parse(out[i - 1]!.created_at));
+      }
+      // 2) this test account's own 101 requests, wherever they land in `out`, form a contiguous
+      //    newest-first run (ranks 100, 99, … with no gap) — never an older sibling answered while a
+      //    newer one from the SAME account is missing.
       const rank = new Map(ids.map((id, i) => [id, i]));
-      const ranks = out.map((r) => rank.get(r.id)!);
-      expect(ranks.every((r) => r !== undefined)).toBe(true);
-      // Newest first: ranks are non-increasing, and the newest 50 (indices 51..100) are exactly what came back.
-      for (let i = 1; i < ranks.length; i++) expect(ranks[i]!).toBeLessThan(ranks[i - 1]!);
-      expect(new Set(ranks)).toEqual(new Set(Array.from({ length: 50 }, (_, i) => 100 - i)));
-    }), 20_000);
+      const mineRanks = out.filter((r) => rank.has(r.id)).map((r) => rank.get(r.id)!);
+      for (let i = 1; i < mineRanks.length; i++) expect(mineRanks[i]!).toBeLessThan(mineRanks[i - 1]!);
+      expect(mineRanks).toEqual(Array.from({ length: mineRanks.length }, (_, i) => 100 - i));
+    }));
 
   it("already-tasked requests do not starve an older, genuinely missing one out of a small file page (mutation: fetch one page only, never continue -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
@@ -346,7 +375,11 @@ describe("document-requests: the 'received' reconcile and the send stamp (plan r
       await ensureDocumentRequestTask(db, accountId, { requestId: rNew.id, kind: "received", contactId: ana, title: "x", dueAt: now.toISOString() }, "documents-request");
 
       const out = await listRequestsMissingReceivedTask(db, now, 50, { filesPage: 2 });
-      expect(out.map((r) => r.id)).toEqual([rOld.id]);
+      // listRequestsMissingReceivedTask reads EVERY account: a parallel test file's own committed,
+      // task-less request can legitimately appear in `out` too (fix round 2, point 1). Filtered to
+      // THIS test account's own rows, the answer must be exactly the one genuinely missing request.
+      const mine = out.filter((r) => r.account_id === accountId);
+      expect(mine.map((r) => r.id)).toEqual([rOld.id]);
     }));
 
   it("the at-most-once send stamp: claim, then a second claim is refused; a clear lets a later claim through (mutation: drop .is('sent_at', null) -> FAILS)", () =>
