@@ -285,7 +285,20 @@ export {
   DOCUMENT_TITLE_MAX, DOCUMENT_TRASH_DAYS, isDocumentCategory, isDocumentContentType,
   removedReason, PASSWORD_SIGNATURE_PREFIX,
   type DocumentCategory, type DocumentContentType, type DocumentSource, type RemovedReason,
+  // S-07 2b: customer upload links. See ./document-requests.ts.
+  STAFF_DOCUMENT_SOURCES, CUSTOMER_AUTHOR_PREFIX, isCustomerAuthor,
+  DOCUMENT_REQUEST_DAYS, DOCUMENT_REQUEST_DAILY_STARTS, DOCUMENT_REQUEST_MAX_ITEMS, DOCUMENT_REQUEST_NOTE_MAX,
+  cleanRequestItems, documentRequestState,
+  type DocumentRequestItem, type DocumentRequestChannel, type DocumentRequestState,
 } from "./document-rules";
+export {
+  createDocumentRequest, findDocumentRequestByTokenHash, getDocumentRequest, startDocumentRequestUpload,
+  getRequestDocument, listRequestFiles, listOpenDocumentRequests, revokeDocumentRequest, restoreDocumentRequest,
+  listDocumentRequestTimeline, documentRequestTarget, ensureDocumentRequestTask, getDocumentRequestForVersion,
+  listRequestsMissingReceivedTask, claimDocumentRequestSend, clearDocumentRequestSend,
+  type DocumentRequestRow, type RequestStartOutcome, type RequestDocument, type RequestFile,
+  type OpenDocumentRequest, type TimelineDocumentRequest, type DocumentRequestTarget,
+} from "./document-requests";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {

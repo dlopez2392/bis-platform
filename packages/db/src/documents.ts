@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit } from "./events";
+import { emit, type ActorType } from "./events";
 import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 import { DOCUMENT_BUCKET, type DocumentCategory, type DocumentContentType, type DocumentSource } from "./document-rules";
 
@@ -150,6 +150,9 @@ export async function reserveDocumentVersion(db: SupabaseClient, a: {
  */
 export async function markDocumentVersionReady(db: SupabaseClient, a: {
   accountId: string; documentId: string; versionId: string; bytes: number; sha256: string; actorId: string;
+  /** S-07 2b: a customer's upload is marked ready by the shared finish with actorType "system"; every
+   *  staff caller is unchanged, since the default is "user". */
+  actorType?: ActorType;
 }): Promise<boolean> {
   // public.mark_document_version_ready (0077): the version and the pointer move in ONE transaction.
   const { data, error } = await db.rpc("mark_document_version_ready", {
@@ -165,7 +168,8 @@ export async function markDocumentVersionReady(db: SupabaseClient, a: {
     const doc = await getDocument(db, a.accountId, a.documentId);
     if (doc) {
       await emit(db, a.accountId, r.first ? "document.added" : "document.version_added", a.actorId,
-        r.first ? { documentId: doc.id, ...recordPayload(doc) } : { documentId: doc.id, versionId: a.versionId, ...recordPayload(doc) });
+        r.first ? { documentId: doc.id, ...recordPayload(doc) } : { documentId: doc.id, versionId: a.versionId, ...recordPayload(doc) },
+        a.actorType ?? "user");
     }
   } catch (e) {
     console.error(`documents: account ${a.accountId}: ${r.first ? "document.added" : "document.version_added"} emit failed after the write committed: ${(e as Error).message}`);

@@ -123,6 +123,17 @@ describe("an upload's life (spec 5.1)", () => {
       await discardDocumentUpload(db, accountId, d.id, d.versionId);
       expect(await getDocument(db, accountId, d.id)).not.toBeNull();
     }));
+
+  it("a customer's ready version emits document.added as the system actor (mutation: drop actorType from emit -> actor_type 'user' -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const docId = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Seguro", category: "insurance", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: docId, bytes: 10, contentType: "application/pdf", originalName: "a.pdf", uploadedBy: ACTOR });
+      if (r.status !== "ok") throw new Error(r.status);
+      await markDocumentVersionReady(db, { accountId, documentId: docId, versionId: r.versionId, bytes: 10, sha256: "c".repeat(64), actorId: "customer:x", actorType: "system" });
+      const { data } = await db.from("events").select("actor_type, actor_id").eq("account_id", accountId).eq("type", "document.added").single();
+      expect(data).toEqual({ actor_type: "system", actor_id: "customer:x" });
+    }));
 });
 
 describe("edits, trash and restore are compare-and-set (spec 4.1, 4.4)", () => {

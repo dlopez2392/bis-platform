@@ -3,6 +3,7 @@ import type { Client } from "pg";
 import { withRollback, actAsMember } from "./db";
 import {
   DOCUMENT_QUOTA_BYTES, DOCUMENT_MAX_BYTES, DOCUMENT_CONTENT_TYPES, DOCUMENT_CATEGORIES, DOCUMENT_SOURCES, DOCUMENT_TITLE_MAX,
+  STAFF_DOCUMENT_SOURCES,
 } from "../document-rules";
 
 /**
@@ -104,11 +105,9 @@ describe("documents and document_versions: checks (spec sections 3.2, 3.3)", () 
       for (const category of DOCUMENT_CATEGORIES) await doc(c, s.acct, { contact_id: s.ana, category });
       await expect(doc(c, s.acct, { contact_id: s.ana, category: "receipt" }))
         .rejects.toMatchObject({ code: "23514", constraint: "documents_category_check" });
-      for (const source of ["upload", "camera"]) await doc(c, s.acct, { contact_id: s.ana, source });
+      for (const source of STAFF_DOCUMENT_SOURCES) await doc(c, s.acct, { contact_id: s.ana, source });
       const { rows: [src] } = await c.query<{ def: string }>("select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'documents_source_check'");
-      // Task 3 replaces this literal list with DOCUMENT_SOURCES (it adds customer to document-rules.ts) and re-runs the case.
-      const want = ["upload", "camera", "customer"];
-      expect(src!.def).toBe(`CHECK ((source = ANY (ARRAY[${want.map((x) => `'${x}'::text`).join(", ")}])))`);
+      expect(src!.def).toBe(`CHECK ((source = ANY (ARRAY[${DOCUMENT_SOURCES.map((x) => `'${x}'::text`).join(", ")}])))`);
       const { rows: [gone] } = await c.query<{ n: string }>(
         "select count(*)::text as n from information_schema.columns where table_schema='public' and table_name='documents' and column_name='scan_status'");
       expect(gone!.n).toBe("0");
