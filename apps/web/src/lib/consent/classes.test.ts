@@ -18,6 +18,8 @@ const SPEC_TABLE: Record<string, [string, string, string]> = {
   "automation.quote_followup": ["marketing", "marketing", "stop_line"],
   "voice.textback": ["informational", "automated", "stop_line"],
   "staff.composer_sms": ["staff_typed", "any", "none"],
+  // S-07 2b (plan deviation 11): a staff-chosen request, but its text is ours, so stops and quiet hours apply.
+  "staff.document_request_sms": ["informational", "automated", "stop_line"],
   "operator.alert_sms": ["operator", "any", "none"],
   "operator.alert_phone_code": ["operator", "any", "none"],
   // PR-2 (spec §4.1 item 2's last row; choice 18: any hour). No footer: each
@@ -28,9 +30,9 @@ const SPEC_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("SMS_KINDS — the spec's table, row for row", () => {
-  it("has exactly the spec's fourteen kinds — PR-1's eleven and PR-2's three consent replies — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the spec's fifteen kinds — PR-1's eleven, PR-2's three consent replies and S-07 2b's document request — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(SMS_KINDS).sort()).toEqual(Object.keys(SPEC_TABLE).sort());
-    expect(Object.keys(SMS_KINDS)).toHaveLength(14);
+    expect(Object.keys(SMS_KINDS)).toHaveLength(15);
   });
 
   it.each(Object.entries(SPEC_TABLE))("%s is %j — its own class, hours and footer, none borrowed from another row (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
@@ -77,6 +79,8 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   // Cancel dialog and sends by cancelling. Staff-typed like the composer: an
   // unsubscribe must not keep a customer from hearing their appointment is off.
   "staff.booking_cancel_notice": ["staff_typed", "any", "none"],
+  // S-07 2b (plan deviation 11): a staff-chosen request, but its email is ours, so an unsubscribe and the hours apply.
+  "staff.document_request_email": ["informational", "automated", "unsubscribe"],
   "operator.booking_alert": ["operator", "any", "none"],
   "operator.cancel_notice": ["operator", "any", "none"],
   "operator.move_notice": ["operator", "any", "none"],
@@ -91,9 +95,9 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-six send sites (E1, plus the operational floor's ops alert, F-048's cancel notice and its customer move's two emails) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-seven send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails and S-07 2b's document request) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(26);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(27);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
@@ -115,6 +119,7 @@ describe("emailReadsLedger — what an unsubscribe stops (decision 7)", () => {
     expect(reads).toEqual([
       "automation.followup", "automation.no_show_nudge", "automation.quote_followup", "automation.reactivation",
       "automation.referral_ask", "automation.reminder", "automation.review_request",
+      "staff.document_request_email",
     ]);
   });
 });

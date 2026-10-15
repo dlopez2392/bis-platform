@@ -20,6 +20,7 @@ export const SOURCE_TITLES: Record<AutomationLogSource, string> = {
   reactivation: m["automations.reactivation.title"],
   quote_followup: m["automations.quoteFollowup.title"],
   textback: m["activity.source.textback"],
+  document_request: m["activity.source.documentRequest"],
 };
 
 export const CHANNEL_WORDS: Record<AutomationLogChannel, string> = {

@@ -263,10 +263,10 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — all fourteen SMS kinds and all twenty-six email kinds, 36 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
+  it("the scan reaches every send path's kind — all fifteen SMS kinds and all twenty-seven email kinds, 38 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
-    expect(all).toHaveLength(36);
+    expect(all).toHaveLength(38);
     expect([...seen].sort()).toEqual(all);
   });
 });
@@ -773,6 +773,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "automation.no_show_nudge": [`${PASSES}/no-show-nudge.ts`],
     "staff.composer_email": [`${DASH}/conversations/actions.ts`],
     "staff.booking_cancel_notice": [`${DASH}/calendar/cancel-notice.ts`],
+    "staff.document_request_email": ["apps/web/src/lib/document-requests/deliver.ts"],
     "operator.booking_alert": ["apps/web/src/app/b/[publicId]/actions.ts"],
     "operator.cancel_notice": ["apps/web/src/app/b/[publicId]/cancel/[token]/actions.ts"],
     "operator.move_notice": ["apps/web/src/app/b/[publicId]/move/[token]/actions.ts"],
