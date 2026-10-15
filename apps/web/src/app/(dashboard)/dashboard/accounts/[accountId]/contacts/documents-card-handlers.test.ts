@@ -7,6 +7,10 @@ const actions = vi.hoisted(() => ({
   getDocumentUrlAction: vi.fn(), updateDocumentFieldAction: vi.fn(), undoDocumentFieldAction: vi.fn(), purgeDocumentAction: vi.fn(),
 }));
 vi.mock("./documents-actions", () => actions);
+const requestActions = vi.hoisted(() => ({
+  createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
+}));
+vi.mock("./document-requests-actions", () => requestActions);
 const { documentHandlers } = await import("./documents-card-handlers");
 const { m } = await import("@/lib/messages");
 
@@ -255,5 +259,173 @@ describe("Download of an older version (spec 4.3)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", () => {
+  const RECORD = { kind: "contact" as const, id: "c1" };
+  const ITEMS = [{ key: "insurance" as const, category: "insurance" as const, note: null }];
+  const URL = "https://app.example/d/tok";
+  const created = (delivery: unknown) => ({ ok: true, requestId: "r1", url: URL, delivery });
+  const withClipboard = async (writeText: ReturnType<typeof vi.fn> | null, run: () => Promise<unknown>) => {
+    vi.stubGlobal("navigator", writeText ? { clipboard: { writeText } } : {});
+    try { await run(); } finally { vi.unstubAllGlobals(); }
+  };
+  const handlers = (locale: "en" | "es" = "en") => {
+    const reload = vi.fn();
+    const reloadRequests = vi.fn();
+    return { reload, reloadRequests, h: documentHandlers({ accountId: "acc", locale, reload, reloadRequests }) };
+  };
+
+  it("a link answer copies the URL and says it works for 7 days; the requests list re-reads once, the files never (mutation: no clipboard write -> FAILS)", async () => {
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "link" }));
+    const writeText = vi.fn(async () => {});
+    const { h, reload, reloadRequests } = handlers();
+    await withClipboard(writeText, async () => {
+      expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "link" })).toBeNull();
+    });
+    expect(requestActions.createDocumentRequestAction).toHaveBeenCalledWith("acc", { record: RECORD, items: ITEMS, channel: "link" });
+    expect(writeText).toHaveBeenCalledWith(URL);
+    expect(toast.success).toHaveBeenCalledWith("Link copied. It works for 7 days.");
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("a refused clipboard puts the URL itself in a toast that stays (billing-card's pattern; mutation: a generic failure with no URL -> FAILS)", async () => {
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "link" }));
+    const writeText = vi.fn(async () => { throw new Error("denied"); });
+    const { h, reloadRequests } = handlers("es");
+    await withClipboard(writeText, () => h.askCustomer({ record: RECORD, items: ITEMS, channel: "link" }));
+    expect(toast.error).toHaveBeenCalledWith(m["documents.request.copyFailed.es"], { description: URL, duration: Infinity, closeButton: true });
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+    // No clipboard at all (a non-secure origin) is the same toast.
+    vi.clearAllMocks();
+    await withClipboard(null, () => h.askCustomer({ record: RECORD, items: ITEMS, channel: "link" }));
+    expect(toast.error).toHaveBeenCalledWith(m["documents.request.copyFailed.es"], { description: URL, duration: Infinity, closeButton: true });
+  });
+
+  it("sent by text and by email say which, in the reader's language; nothing is copied", async () => {
+    const writeText = vi.fn(async () => {});
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "sent" }));
+    const { h, reloadRequests } = handlers();
+    await withClipboard(writeText, async () => {
+      await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" });
+      await h.askCustomer({ record: RECORD, items: ITEMS, channel: "email" });
+    });
+    expect(toast.success.mock.calls).toEqual([["Request sent by text."], ["Request sent by email."]]);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(reloadRequests).toHaveBeenCalledTimes(2);
+    vi.clearAllMocks();
+    await handlers("es").h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" });
+    expect(toast.success).toHaveBeenCalledWith("Pedido enviado por mensaje de texto.");
+  });
+
+  it("held: the time it goes out, in the zone the answer names, never the browser's or UTC (mutation: drop timeZone -> FAILS)", async () => {
+    // ONE instant, two zones, two different times: dropping timeZone would read both in the machine's own
+    // zone and say the same time twice, whatever zone the machine is in (this one is in Chicago, where
+    // a single Chicago case passed with timeZone dropped). 13:00Z is 8:00 AM in Chicago (CDT), 6:00 AM in Los Angeles (PDT).
+    const until = "2026-10-15T13:00:00.000Z";
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "held", until, zone: "America/Chicago" }));
+    const { h, reloadRequests } = handlers();
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBeNull();
+    expect(toast.success.mock.calls[0]![0]).toMatch(/^Request saved\. It goes out at 8:00\sAM, after quiet hours\.$/);
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "held", until, zone: "America/Los_Angeles" }));
+    await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" });
+    expect(toast.success.mock.calls[1]![0]).toMatch(/^Request saved\. It goes out at 6:00\sAM, after quiet hours\.$/);
+    vi.clearAllMocks();
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "held", until, zone: "America/Chicago" }));
+    await handlers("es").h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" });
+    expect(toast.success.mock.calls[0]![0]).toMatch(/^Pedido guardado\. Sale a las 8:00\sa\.\s?m\., después del horario de descanso\.$/);
+  });
+
+  it("blocked: saved but not sent, with the reason's words; a failed delivery says it couldn't be delivered (mutation: show the raw reason key -> FAILS)", async () => {
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "blocked", reason: "documents.request.reason.textsStopped" }));
+    const { h, reloadRequests } = handlers();
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBeNull();
+    expect(toast.error).toHaveBeenCalledWith("Request saved, but not sent: they asked not to get texts. Copy the link instead.");
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "failed" }));
+    await h.askCustomer({ record: RECORD, items: ITEMS, channel: "email" });
+    expect(toast.error).toHaveBeenLastCalledWith("Request saved, but not sent: it couldn't be delivered. Copy the link instead.");
+    expect(reloadRequests).toHaveBeenCalledTimes(2);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("a refusal answers the action's key for the dialog to show, toasts nothing, and still re-reads the requests (fresh channels) once", async () => {
+    requestActions.createDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.request.textOff" });
+    const { h, reloadRequests } = handlers();
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBe("documents.request.textOff");
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+    requestActions.createDocumentRequestAction.mockRejectedValue(new Error("stale"));
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBe("documents.request.failed");
+  });
+
+  it("Revoke runs at once and offers Undo, whose action restores against the instant the revoke answered (rule 6; mutation: undo with new Date() -> FAILS)", async () => {
+    requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: true, revokedAt: "2026-10-15T15:00:00.123456+00:00" });
+    requestActions.undoRevokeDocumentRequestAction.mockResolvedValue({ ok: true });
+    const { h, reload, reloadRequests } = handlers();
+    await h.revokeRequest("r1");
+    expect(requestActions.revokeDocumentRequestAction).toHaveBeenCalledWith("acc", "r1");
+    expect(toast.success.mock.calls[0]![0]).toBe("Request revoked.");
+    expect(undoOf().label).toBe(m["common.undo"]);
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+    undoOf().onClick();
+    await flush();
+    expect(requestActions.undoRevokeDocumentRequestAction).toHaveBeenCalledWith("acc", "r1", "2026-10-15T15:00:00.123456+00:00");
+    expect(reloadRequests).toHaveBeenCalledTimes(2);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("a refused Revoke says why in the reader's language, offers no Undo, and re-reads the list (mutation: toast success before ok -> FAILS)", async () => {
+    requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
+    const { h, reloadRequests } = handlers("es");
+    await h.revokeRequest("r1");
+    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused.es"]);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("an Undo someone beat says so (mutation: swallow the undo error -> FAILS)", async () => {
+    requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: true, revokedAt: "t" });
+    requestActions.undoRevokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
+    const { h } = handlers();
+    await h.revokeRequest("r1");
+    undoOf().onClick();
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused"]);
+  });
+
+  it("a second Revoke while the first is in flight sends nothing (mutation: drop once() -> FAILS)", async () => {
+    let release!: (v: unknown) => void;
+    requestActions.revokeDocumentRequestAction.mockReturnValue(new Promise((r) => { release = r; }));
+    const { h } = handlers();
+    const first = h.revokeRequest("r1");
+    const second = h.revokeRequest("r1");
+    release({ ok: true, revokedAt: "t" });
+    await Promise.all([first, second]);
+    expect(requestActions.revokeDocumentRequestAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("Copy link mints the request's link and copies it (mutation: copy without asking the server -> FAILS)", async () => {
+    requestActions.documentRequestLinkAction.mockResolvedValue({ ok: true, url: URL });
+    const writeText = vi.fn(async () => {});
+    const { h } = handlers();
+    await withClipboard(writeText, () => h.copyRequestLink("r1"));
+    expect(requestActions.documentRequestLinkAction).toHaveBeenCalledWith("acc", "r1");
+    expect(writeText).toHaveBeenCalledWith(URL);
+    expect(toast.success).toHaveBeenCalledWith("Link copied. It works for 7 days.");
+  });
+
+  it("Copy link on a request that closed says why, copies nothing, and re-reads the list", async () => {
+    requestActions.documentRequestLinkAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
+    const writeText = vi.fn(async () => {});
+    const { h, reloadRequests } = handlers();
+    await withClipboard(writeText, () => h.copyRequestLink("r1"));
+    expect(writeText).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused"]);
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
   });
 });

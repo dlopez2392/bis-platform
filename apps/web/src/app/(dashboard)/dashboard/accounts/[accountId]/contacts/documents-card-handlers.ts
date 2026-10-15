@@ -3,10 +3,14 @@ import type { Locale } from "@/lib/i18n/locale";
 import { t } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
 import type { DocumentView } from "@/lib/documents/documents-load";
+import type { DocumentRequestItem } from "@bis/db/document-rules";
 import {
   trashDocumentAction, restoreDocumentAction, setOwnersOnlyAction, undoOwnersOnlyAction, getDocumentUrlAction,
   updateDocumentFieldAction, undoDocumentFieldAction, purgeDocumentAction, type DocumentUndo,
 } from "./documents-actions";
+import {
+  createDocumentRequestAction, documentRequestLinkAction, revokeDocumentRequestAction, undoRevokeDocumentRequestAction,
+} from "./document-requests-actions";
 
 /**
  * What the Documents card does on trash, restore, Owners only and Download (spec 4.4, rule 6: at
@@ -33,13 +37,24 @@ export type DocumentHandlers = {
   purge(doc: DocumentView, typed: string): Promise<boolean>;
   /** Something on the card changed: re-read it. */
   changed(): void;
+  /**
+   * "Ask the customer" (S-07 2b, spec 4.2): creates the request and says how it went (sent, held until
+   * after quiet hours, not sent and why, or the link copied). Answers null once a request exists, or the
+   * refusal's key for the dialog to show (nothing was created).
+   */
+  askCustomer(input: { record: { kind: "contact" | "group"; id: string }; items: DocumentRequestItem[]; channel: "text" | "email" | "link" }): Promise<MessageKey | null>;
+  /** Mints an open request's link again and copies it. */
+  copyRequestLink(id: string): Promise<void>;
+  /** At once, with an Undo (rule 6). */
+  revokeRequest(id: string): Promise<void>;
 };
 
 type Answer = { ok: true } | { ok: false; error: string; params?: Record<string, string | number> };
 const failed = { ok: false as const, error: "documents.error.failed" };
 
-export function documentHandlers({ accountId, locale, reload, inFlight = new Set<string>() }: {
-  accountId: string; locale: Locale; reload: () => void; inFlight?: Set<string>;
+export function documentHandlers({ accountId, locale, reload, reloadRequests = () => {}, inFlight = new Set<string>() }: {
+  /** `reloadRequests` re-reads the card's open requests, which load apart from its files (spec 6). */
+  accountId: string; locale: Locale; reload: () => void; reloadRequests?: () => void; inFlight?: Set<string>;
 }): DocumentHandlers {
   const tt = (key: string, params?: Record<string, string | number>) => t(m, key as MessageKey, locale, params);
   const say = (a: { error: string; params?: Record<string, string | number> }) => toast.error(tt(a.error, a.params));
@@ -52,12 +67,33 @@ export function documentHandlers({ accountId, locale, reload, inFlight = new Set
     try { return await run(); } finally { inFlight.delete(id); }
   }
 
-  /** A success toast whose Undo runs `undo` once per row at a time, re-reads on success and says why on failure. */
-  function offer(message: string, row: string, undo: () => Promise<Answer>) {
+  /** A success toast whose Undo runs `undo` once per row at a time, re-reads (`after`) on success and says why on failure. */
+  function offer(message: string, row: string, undo: () => Promise<Answer>, after: () => void = reload) {
     toast.success(message, { action: { label: tt("common.undo"), onClick: () => {
-      void once(row, () => undo().catch(() => failed)).then((u) => { if (!u) return; if (u.ok) reload(); else say(u); });
+      void once(row, () => undo().catch(() => failed)).then((u) => { if (!u) return; if (u.ok) after(); else say(u); });
     } } });
   }
+
+  /**
+   * billing-card.tsx's copyLink: with no clipboard (a non-secure origin) or a refused one, the URL itself
+   * goes in a toast that stays, so it can be copied by hand.
+   */
+  async function copyLink(url: string): Promise<void> {
+    const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
+    try {
+      if (!clipboard) throw new Error("no clipboard");
+      await clipboard.writeText(url);
+      toast.success(tt("documents.request.linkCopied"));
+    } catch {
+      toast.error(tt("documents.request.copyFailed"), { description: url, duration: Infinity, closeButton: true });
+    }
+  }
+
+  /** "8:00 AM" in the zone the answer names (the account's, or UTC when the ledger could not say). */
+  const heldTime = (until: string, zone: string) =>
+    new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", { hour: "numeric", minute: "2-digit", timeZone: zone }).format(new Date(until));
+  /** A request's row in the one-write-at-a-time lock, apart from any file's id. */
+  const requestRow = (id: string) => `request:${id}`;
 
   return {
     async trash(doc) {
@@ -129,5 +165,34 @@ export function documentHandlers({ accountId, locale, reload, inFlight = new Set
       return true;
     },
     changed: reload,
+    async askCustomer({ record, items, channel }) {
+      const r = await createDocumentRequestAction(accountId, { record, items, channel })
+        .catch(() => ({ ok: false as const, error: "documents.request.failed" }));
+      // Every answer re-reads the requests once: a new one is listed, and a refusal brings the channels up to date.
+      reloadRequests();
+      if (!r.ok) return r.error as MessageKey;
+      const d = r.delivery;
+      if (d.kind === "link") await copyLink(r.url);
+      else if (d.kind === "sent") toast.success(tt(channel === "email" ? "documents.request.sentEmail" : "documents.request.sentText"));
+      else if (d.kind === "held") toast.success(tt("documents.request.held", { time: heldTime(d.until, d.zone) }));
+      // The request stands either way; the card's list offers its Copy link.
+      else toast.error(tt("documents.request.notSent", { reason: tt(d.kind === "blocked" ? d.reason : "documents.request.reason.failed") }));
+      return null;
+    },
+    async copyRequestLink(id) {
+      const r = await once(requestRow(id), () => documentRequestLinkAction(accountId, id).catch(() => failed));
+      if (!r) return;
+      // Closed meanwhile (answered, expired, revoked elsewhere): say so and show the list as it is now.
+      if (!r.ok) { say(r); reloadRequests(); return; }
+      await copyLink(r.url);
+    },
+    async revokeRequest(id) {
+      const r = await once(requestRow(id), () => revokeDocumentRequestAction(accountId, id).catch(() => failed));
+      if (!r) return;
+      if (!r.ok) { say(r); reloadRequests(); return; }
+      reloadRequests();
+      // The Undo restores against the instant THIS revoke wrote, so a later revoke by someone else is never undone.
+      offer(tt("documents.requests.revoked"), requestRow(id), () => undoRevokeDocumentRequestAction(accountId, id, r.revokedAt), reloadRequests);
+    },
   };
 }
