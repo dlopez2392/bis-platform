@@ -274,14 +274,17 @@ export {
   countContactDocuments, purgeContactDocuments, type ContactPurge,
   documentSpaceUsed, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, listDocumentVersionTimeline,
   DOCUMENT_PURGING_MARK,
+  signedDocumentReadUrl, signedScannerUrl, recordDocumentScan, listPendingScans, oldestPendingScanAt, listDocumentScanTimeline, SCANNER_URL_SECONDS,
   type DocumentRecordRef, type DocumentRow, type DocumentVersionRow, type ListedDocument, type RecordDocuments, type ReserveOutcome,
   type DocumentField, type CasOutcome, type SweepVersion, type PurgeCandidate, type TimelineDocument,
   type DocumentVersionState, type TimelineDocumentVersion,
+  type ScanStatus, type ReadUrlOutcome, type ScanVerdictInput, type RecordScanOutcome, type PendingScan, type TimelineDocumentScan,
 } from "./documents";
 export {
   DOCUMENT_BUCKET, DOCUMENT_QUOTA_BYTES, DOCUMENT_MAX_BYTES, DOCUMENT_CONTENT_TYPES, DOCUMENT_CATEGORIES, DOCUMENT_SOURCES,
   DOCUMENT_TITLE_MAX, DOCUMENT_TRASH_DAYS, isDocumentCategory, isDocumentContentType,
-  type DocumentCategory, type DocumentContentType, type DocumentSource,
+  removedReason, PASSWORD_SIGNATURE_PREFIX,
+  type DocumentCategory, type DocumentContentType, type DocumentSource, type RemovedReason,
 } from "./document-rules";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.

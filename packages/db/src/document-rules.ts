@@ -32,3 +32,19 @@ export const isDocumentCategory = (v: unknown): v is DocumentCategory =>
   typeof v === "string" && (DOCUMENT_CATEGORIES as readonly string[]).includes(v);
 export const isDocumentContentType = (v: unknown): v is DocumentContentType =>
   typeof v === "string" && (DOCUMENT_CONTENT_TYPES as readonly string[]).includes(v);
+
+/**
+ * Why a removed version was removed, read from its scan state and clamd's name for it (0079's
+ * scan_signature). Owner ruling 2026-10-15 ("remove, and say why"): content clamd reports as
+ * Heuristics.Encrypted.* is password-protected, and the person is told so; every other unscannable
+ * cause (a limit, three clamd errors) is "unscannable". Pure and browser-safe: the card's read and 2b's
+ * customer page both call it, so the two can never word the reason differently. The signature itself
+ * never leaves the server.
+ */
+export type RemovedReason = "virus" | "password" | "unscannable";
+export const PASSWORD_SIGNATURE_PREFIX = "Heuristics.Encrypted.";
+export function removedReason(scanStatus: string, signature: string | null): RemovedReason | null {
+  if (scanStatus === "infected") return "virus";
+  if (scanStatus !== "unscannable") return null;
+  return signature?.startsWith(PASSWORD_SIGNATURE_PREFIX) ? "password" : "unscannable";
+}
