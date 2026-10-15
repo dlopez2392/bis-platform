@@ -16,7 +16,9 @@ import { withRollback } from "./db";
  * `public` always lands in `rlsOff`: that is deliberate, and it forces an
  * explicit, reviewed decision here rather than a silent read path around the
  * tables' policies. There is one: document_version_timeline (0078),
- * security_invoker, SELECT-only. The allow-list IS the client role's
+ * security_invoker, SELECT-only. 0079 adds the second, document_scan_timeline
+ * (security_invoker; removed-file timeline rows), reviewed in the S-07 2a plan.
+ * The allow-list IS the client role's
  * write surface, written out: changing it is a deliberate, reviewed edit.
  * Privileges are read with has_table_privilege / has_column_privilege, which
  * count a grant to PUBLIC as the role's own and see PG17's MAINTAIN.
@@ -110,7 +112,7 @@ describe("schema guard: every public table, view, materialized view and foreign 
       // 0078 (S-07 1b): the one view in public, security_invoker (the tables' RLS decides every row its caller
       // reads) and SELECT-only, reviewed in docs/superpowers/plans/2026-10-14-document-vault-pr1b.md deviation 6.
       // document-space-used.test.ts pins its security_invoker option and its grants.
-      expect((await writeSurface(c)).rlsOff).toEqual(["document_version_timeline"]);
+      expect((await writeSurface(c)).rlsOff).toEqual(["document_scan_timeline", "document_version_timeline"]);
     }));
 
   it("has no policy that applies to PUBLIC", () =>
