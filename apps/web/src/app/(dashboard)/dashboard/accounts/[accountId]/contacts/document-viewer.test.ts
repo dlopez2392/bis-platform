@@ -6,8 +6,8 @@ vi.mock("./documents-actions", () => ({ getDocumentUrlAction: vi.fn() }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const {
-  DocumentViewerBody, DocumentVersionsList, viewerStateFor, fetchKeyFor, imageErrorStep,
-  FIRST_SESSION, sessionAfterImageError, sessionOnOpenChange,
+  DocumentViewerBody, DocumentVersionsList, DocumentViewerDownload, viewerStateFor, fetchKeyFor, imageErrorStep,
+  FIRST_SESSION, sessionAfterImageError, sessionOnOpenChange, canOpen, shouldFetchUrl,
 } = await import("./document-viewer");
 
 const doc = (contentType: string) => ({
@@ -17,6 +17,11 @@ const doc = (contentType: string) => ({
   versions: [{ id: "v", contentType: contentType as never, bytes: 10, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", scan: "clean" as const }],
   purging: false,
 });
+/** The same document with every version's scan swapped to one state, Task 7's own view-shape rules. */
+const withScan = (scan: "clean" | "pending" | "infected" | "unscannable" | "locked") => {
+  const d = doc("application/pdf");
+  return { ...d, version: { ...d.version, scan, createdAt: "2026-10-13T14:59:00.000Z" }, versions: d.versions.map((v) => ({ ...v, scan })) };
+};
 const body = (contentType: string, state: Parameters<typeof DocumentViewerBody>[0]["state"]) =>
   renderToStaticMarkup(createElement(DocumentViewerBody, { doc: doc(contentType), state, locale: "en", onRetry: vi.fn(), onImageError: vi.fn() }));
 
@@ -161,10 +166,6 @@ describe("the Versions list (spec 4.3)", () => {
 });
 
 describe("the viewer and virus scanning (S-07 2a; spec 3.3, 3.5)", () => {
-  const withScan = (scan: "clean" | "pending" | "infected" | "unscannable" | "locked") => {
-    const d = doc("application/pdf");
-    return { ...d, version: { ...d.version, scan, createdAt: "2026-10-13T14:59:00.000Z" }, versions: d.versions.map((v) => ({ ...v, scan })) };
-  };
   it("a file that cannot be opened shows its sentence in both languages and never a frame or an image, whatever the state says (mutations: render the iframe for pending -> FAILS; one sentence for every state -> FAILS)", () => {
     const ready = { status: "ready" as const, url: "https://x/sign", contentType: "application/pdf" as const };
     for (const [scan, key] of [["pending", "documents.viewer.scanning"], ["infected", "documents.viewer.virusRemoved"], ["unscannable", "documents.viewer.unscannable"], ["locked", "documents.viewer.passwordRemoved"]] as const) {
@@ -189,5 +190,54 @@ describe("the viewer and virus scanning (S-07 2a; spec 3.3, 3.5)", () => {
     expect(rowFor("v3")).not.toContain("<button");
     expect(renderedText(rowFor(d.version.id))).toContain(m["documents.versionCurrent.es"]);
     expect(rowFor("v0")).toContain("<button");
+  });
+  it("Current never reads from a version that isn't clean, even when its id matches the shown version's (mutation: drop the scan check from the Current branch -> FAILS)", () => {
+    // A defensive pin (minor): documentView() always shows the newest CLEAN version, so this should never
+    // happen upstream — but the Versions list must not read "Current" off a stale/wrong scan regardless.
+    const stale = withScan("clean");
+    const html = renderToStaticMarkup(createElement(DocumentVersionsList, { doc: {
+      ...stale,
+      versions: [
+        { ...stale.versions[0]!, scan: "pending" as const },
+        { id: "v0", contentType: "application/pdf" as const, bytes: 8, createdAt: "2026-10-01T10:00:00.000Z", addedOn: "2026-10-01", scan: "clean" as const },
+      ],
+    } as never, locale: "en", when: () => "today", onDownload: vi.fn() }));
+    const rowFor = (id: string) => html.slice(html.indexOf(`data-document-version-row="${id}"`), html.indexOf("</li>", html.indexOf(`data-document-version-row="${id}"`)));
+    expect(renderedText(rowFor(stale.version.id))).not.toContain(m["documents.versionCurrent"]);
+    expect(rowFor(stale.version.id)).toContain('data-version-scan="pending"');
+  });
+});
+
+describe("canOpen: the one gate a clean file passes (review I2)", () => {
+  it("true only for a clean scan, false for every other state and for null (mutation: canOpen always true -> FAILS)", () => {
+    expect(canOpen("clean")).toBe(true);
+    for (const scan of ["pending", "infected", "unscannable", "locked", null] as const) expect(canOpen(scan), String(scan)).toBe(false);
+  });
+});
+
+describe("shouldFetchUrl: the viewer's effect never mints a URL for anything but a clean, previewable file (review I2)", () => {
+  const key = "v:0";
+  it("false for a null scan, and for every non-clean scan with an otherwise-valid content type and key (mutation: drop the canOpen check -> FAILS)", () => {
+    expect(shouldFetchUrl(null, "application/pdf", key)).toBe(false);
+    for (const scan of ["pending", "infected", "unscannable", "locked"] as const) {
+      expect(shouldFetchUrl(scan, "application/pdf", key), scan).toBe(false);
+    }
+  });
+  it("false for an office file even when clean (no preview to mint), and false without a fetch key (mutation: drop the office check -> FAILS)", () => {
+    expect(shouldFetchUrl("clean", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", key)).toBe(false);
+    expect(shouldFetchUrl("clean", "application/pdf", null)).toBe(false);
+  });
+  it("true for a clean, previewable file with a fetch key (mutation: always false -> FAILS)", () => {
+    expect(shouldFetchUrl("clean", "application/pdf", key)).toBe(true);
+    expect(shouldFetchUrl("clean", "image/jpeg", key)).toBe(true);
+  });
+});
+
+describe("DocumentViewerDownload: the dialog's own Download (review I2)", () => {
+  const render = (scan: "clean" | "pending" | "infected" | "unscannable" | "locked") =>
+    renderToStaticMarkup(createElement(DocumentViewerDownload, { doc: withScan(scan) as never, locale: "en", onDownload: vi.fn() }));
+  it("drawn only for a clean file; absent for every non-clean state (mutation: always draw it -> FAILS)", () => {
+    expect(render("clean")).toContain("Download");
+    for (const scan of ["pending", "infected", "unscannable", "locked"] as const) expect(render(scan), scan).toBe("");
   });
 });

@@ -40,6 +40,10 @@ const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
     { ...base, id: "sg-7", title: "Bad upload", category: "other", createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13",
       version: { id: "sg-v7", contentType: "application/pdf", bytes: 50_000, scan: "infected", createdAt: "2026-10-13T14:00:00.000Z" },
       versions: [{ id: "sg-v7", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "infected" }] },
+    // Owner ruling 2026-10-15: a password-protected file reads its own words, never the generic "couldn't check".
+    { ...base, id: "sg-8", title: "Bank statement", category: "other", createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13",
+      version: { id: "sg-v8", contentType: "application/pdf", bytes: 50_000, scan: "locked", createdAt: "2026-10-13T14:00:00.000Z" },
+      versions: [{ id: "sg-v8", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "locked" }] },
   ],
   trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" },
     // A Delete forever that stopped part-way: "Being deleted" as a dot and a word, no Restore; an Owner keeps Delete forever to finish it.

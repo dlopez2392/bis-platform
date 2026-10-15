@@ -24,7 +24,7 @@ import { spaceUsedText } from "@/lib/documents/space";
 import type { DocumentUndo } from "./documents-actions";
 import { documentHandlers, type DocumentHandlers, type FieldSave } from "./documents-card-handlers";
 import { DocumentUploadPanel, type PanelFile } from "./document-upload-panel";
-import { DocumentViewer } from "./document-viewer";
+import { DocumentViewer, canOpen } from "./document-viewer";
 import { DocumentPurgeDialog } from "./document-purge-dialog";
 
 export type { DocumentHandlers } from "./documents-card-handlers";
@@ -103,8 +103,9 @@ export function rowMenuItems(doc: DocumentView, canManage: boolean): RowMenuItem
   const items: RowMenuItem[] = [{ id: "edit", labelKey: "documents.edit" }];
   if (canManage) items.push({ id: "ownersOnly", labelKey: doc.ownersOnly ? "documents.makeTeam" : "documents.makeOwnersOnly" });
   items.push({ id: "newVersion", labelKey: "documents.newVersion" });
-  // S-07 2a: a file not yet scanned clean has nothing to download (the server's gate refuses too).
-  if (doc.version.scan === "clean") items.push({ id: "download", labelKey: "documents.download" });
+  // S-07 2a (I2): a file not yet scanned clean has nothing to download (the server's gate refuses too),
+  // via the one predicate the viewer's own Download and fetch guard share (canOpen, document-viewer.tsx).
+  if (canOpen(doc.version.scan)) items.push({ id: "download", labelKey: "documents.download" });
   items.push({ id: "trash", labelKey: "documents.trash" });
   return items;
 }
@@ -380,6 +381,18 @@ export function DocumentsCardView(p: {
   );
 }
 
+/**
+ * I1: the re-read timer's own key, so the effect re-arms on EVERY settle even when `nextPollMs` repeats
+ * the exact same number across successive reads (its value is a constant for as long as the same
+ * version stays pending, and a failed read answers the same number again too — an effect keyed on
+ * `pollMs` alone would schedule its ONE timer and never another). `reads` bumps on every settle in
+ * `DocumentsCard`, success or error, so the key always changes while polling should continue, and
+ * answers null (no timer) the moment nothing is left to poll.
+ */
+export function pollTimerKey(pollMs: number | null, reads: number): string | null {
+  return pollMs === null ? null : `${pollMs}:${reads}`;
+}
+
 let panelSeq = 0;
 
 /**
@@ -395,6 +408,10 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const route = documentsRouteFor(accountId, record);
   const [state, setState] = useState<{ route: string; load: DocumentsLoad }>({ route: "", load: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
+  // I1: bumped by `settle` on EVERY outcome, success or error, so the poll timer below can tell two
+  // reads apart even when nextPollMs answers the exact same number both times (its own value is a
+  // constant while the same version stays pending) — see pollTimerKey.
+  const [reads, setReads] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
   // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it.
   const [purgeId, setPurgeId] = useState<string | null>(null);
@@ -406,6 +423,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       // A file that left the list is forgotten, so an Undo or a Restore later never reopens the viewer by itself.
       setOpenId((id) => keepOpen(id, load));
       setPurgeId((id) => keepPurge(id, load));
+      setReads((r) => r + 1);
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
@@ -417,12 +435,17 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
 
   // Spec 3.4/3.5: while any file is Checking, re-read on a timer, fast for its first two minutes, then
   // slower; the timer's callback bumps the read, never the effect body (react-hooks/set-state-in-effect).
+  // I1: keyed on pollTimerKey(pollMs, reads), not pollMs alone — pollMs is a constant while the same
+  // version stays pending (or stays unreadable: a failed read answers the same number too), so an
+  // effect keyed on pollMs alone fires ONCE and never again; reads changes every settle and re-arms it.
   const pollMs = nextPollMs(load);
+  const pollKey = pollTimerKey(pollMs, reads);
   useEffect(() => {
     if (pollMs === null) return;
     const timer = setTimeout(() => setNonce((n) => n + 1), pollMs);
     return () => clearTimeout(timer);
-  }, [pollMs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pollKey already folds pollMs and reads together (see pollTimerKey); pollMs alone would under-trigger (I1).
+  }, [pollKey]);
 
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());

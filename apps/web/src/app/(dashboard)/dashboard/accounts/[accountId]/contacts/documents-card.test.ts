@@ -10,7 +10,7 @@ vi.mock("./documents-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -384,5 +384,21 @@ describe("virus scanning on the card (S-07 2a; spec 3.5; rule 3)", () => {
       expect(renderedText(row)).not.toContain(m[`documents.status.unscannable${sfx}` as keyof typeof m]);
     }
     expect(rowMenuItems(locked as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
+  });
+});
+
+describe("pollTimerKey: the re-read timer's own key (review I1)", () => {
+  it("changes on every successive settle even when nextPollMs repeats the exact same number (a constant while the same version stays pending, or a failed read answering the same number again) (mutation: key = String(pollMs) alone, ignoring reads -> FAILS)", () => {
+    expect(pollTimerKey(5000, 0)).not.toBe(pollTimerKey(5000, 1));
+    expect(pollTimerKey(5000, 1)).not.toBe(pollTimerKey(5000, 2));
+    // The slow interval, after two minutes: still a constant across reads, still must change.
+    expect(pollTimerKey(30000, 7)).not.toBe(pollTimerKey(30000, 8));
+    // A failed read: reads still bumps (DocumentsCard's settle runs on the error branch too), so the
+    // key still changes even though nextPollMs would answer the very same 5000 again.
+    expect(pollTimerKey(5000, 4)).not.toBe(pollTimerKey(5000, 5));
+  });
+  it("answers null (no timer) once nothing is left to poll, whatever reads has reached (mutation: return a key for null -> FAILS)", () => {
+    expect(pollTimerKey(null, 0)).toBeNull();
+    expect(pollTimerKey(null, 9)).toBeNull();
   });
 });
