@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
-import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
+import { forContacts, withTimelinePage, type TimelinePageOpts, type TimelineCursor } from "./timeline-cursor";
 import {
   DOCUMENT_REQUEST_DAYS, type DocumentContentType, type DocumentRequestChannel, type DocumentRequestItem,
 } from "./document-rules";
@@ -121,6 +121,11 @@ export async function listOpenDocumentRequests(db: SupabaseClient, accountId: st
   if (error) throw new Error(`listOpenDocumentRequests failed: ${error.message}`);
   const rows = (data ?? []) as DocumentRequestRow[];
   if (rows.length === 0) return [];
+  // `.eq("account_id", accountId)` here is defense-in-depth, not the only guard: `rows` already came
+  // from the account-scoped read above, and `documents_request_fkey` ties every document's account_id
+  // to its OWN request's account_id (0080), so a request_id from `rows` can only ever match documents
+  // already in this account. Confirmed empirically (plan review fix round): dropping this filter alone
+  // leaves every test in this file green.
   const { data: docs, error: docErr } = await db.from("documents")
     .select("request_id, request_item_key, versions:document_versions!document_versions_document_fkey(status, scan_status)")
     .eq("account_id", accountId).in("request_id", rows.map((r) => r.id)).is("deleted_at", null);
@@ -241,35 +246,61 @@ export async function getDocumentRequestForVersion(db: SupabaseClient, accountId
   return requestId ? getDocumentRequest(db, accountId, requestId) : null;
 }
 
-/** Re-review m1: requests that should have a "received" To-do and do not. Service client, every account. */
-export async function listRequestsMissingReceivedTask(db: SupabaseClient, now: Date, limit: number): Promise<DocumentRequestRow[]> {
-  // Re-review m1: read from the clean customer files' side, inside an 8-day window (a request lives 7
-  // days; one more for a verdict that lands late), then their requests in batches of 100.
+/**
+ * Re-review m1: requests that should have a "received" To-do and do not. Service client, every account.
+ *
+ * Reads the clean customer files' side, newest first, inside an 8-day window (a request lives 7 days;
+ * one more for a verdict that lands late), PAGING through that side (plan review fix round, point 4):
+ * each page's own requests are checked against the task table and filtered right there, so requests
+ * that already carry a "received" To-do are excluded from THAT page's count rather than merely from the
+ * final answer — a run of recent, already-handled requests can otherwise fill the whole page and starve
+ * an older, genuinely missing one out of view. `filesPage` is a test seam (default 500, matching the
+ * single-page read this replaces); production callers never set it.
+ */
+export async function listRequestsMissingReceivedTask(
+  db: SupabaseClient, now: Date, limit: number, opts: { filesPage?: number } = {},
+): Promise<DocumentRequestRow[]> {
+  const filesPage = opts.filesPage ?? 500;
   const since = new Date(now.getTime() - 8 * DAY_MS).toISOString();
-  const { data: files, error } = await db.from("documents")
-    .select("request_id, versions:document_versions!document_versions_document_fkey!inner(id)")
-    .eq("source", "customer").is("deleted_at", null).gte("created_at", since)
-    .eq("versions.status", "ready").eq("versions.scan_status", "clean")
-    .order("created_at", { ascending: false }).limit(500);
-  if (error) throw new Error(`listRequestsMissingReceivedTask (files) failed: ${error.message}`);
-  const ids = [...new Set(((files ?? []) as { request_id: string }[]).map((d) => d.request_id))];
   const dayAgo = now.getTime() - DAY_MS;
   // Open, or completed in the last 24 hours, or expired in the last 24 hours (deviation 13: a file
   // reserved before the expiry may finish after it).
   const recent = (r: DocumentRequestRow): boolean =>
     r.completed_at ? Date.parse(r.completed_at) > dayAgo : Date.parse(r.expires_at) > dayAgo;
   const out: DocumentRequestRow[] = [];
-  for (let i = 0; i < ids.length && out.length < limit; i += 100) {
-    const batch = ids.slice(i, i + 100);
-    const [reqs, tasks] = await Promise.all([
-      db.from("document_requests").select(REQUEST_COLS).in("id", batch).is("revoked_at", null),
-      db.from("tasks").select("document_request_id").eq("document_request_kind", "received").in("document_request_id", batch),
-    ]);
-    if (reqs.error) throw new Error(`listRequestsMissingReceivedTask (requests) failed: ${reqs.error.message}`);
-    if (tasks.error) throw new Error(`listRequestsMissingReceivedTask (tasks) failed: ${tasks.error.message}`);
-    const hasTask = new Set(((tasks.data ?? []) as { document_request_id: string }[]).map((t) => t.document_request_id));
-    out.push(...((reqs.data ?? []) as DocumentRequestRow[]).filter((r) => !hasTask.has(r.id) && recent(r)));
+  const seen = new Set<string>();
+  let cursor: TimelineCursor | undefined;
+  for (let guard = 0; guard < 40 && out.length < limit; guard++) {
+    const { data: files, error } = await withTimelinePage(
+      db.from("documents")
+        .select("id, request_id, created_at, versions:document_versions!document_versions_document_fkey!inner(id)")
+        .eq("source", "customer").is("deleted_at", null).gte("created_at", since)
+        .eq("versions.status", "ready").eq("versions.scan_status", "clean"),
+      "created_at", { before: cursor, limit: filesPage },
+    );
+    if (error) throw new Error(`listRequestsMissingReceivedTask (files) failed: ${error.message}`);
+    const rows = (files ?? []) as { id: string; request_id: string; created_at: string }[];
+    if (rows.length === 0) break;
+    const last = rows[rows.length - 1]!;
+    cursor = { v: last.created_at, id: last.id };
+    const ids = [...new Set(rows.map((d) => d.request_id))].filter((id) => !seen.has(id));
+    for (const id of ids) seen.add(id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = ids.slice(i, i + 100);
+      const [reqs, tasks] = await Promise.all([
+        db.from("document_requests").select(REQUEST_COLS).in("id", batch).is("revoked_at", null),
+        db.from("tasks").select("document_request_id").eq("document_request_kind", "received").in("document_request_id", batch),
+      ]);
+      if (reqs.error) throw new Error(`listRequestsMissingReceivedTask (requests) failed: ${reqs.error.message}`);
+      if (tasks.error) throw new Error(`listRequestsMissingReceivedTask (tasks) failed: ${tasks.error.message}`);
+      const hasTask = new Set(((tasks.data ?? []) as { document_request_id: string }[]).map((t) => t.document_request_id));
+      out.push(...((reqs.data ?? []) as DocumentRequestRow[]).filter((r) => !hasTask.has(r.id) && recent(r)));
+    }
+    if (rows.length < filesPage) break; // this page was short: the window is exhausted
   }
+  // Newest first, across every page and batch (a later page's requests can sort ahead of an earlier
+  // page's in `out` otherwise, since document_requests carries no ORDER BY of its own here).
+  out.sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
   return out.slice(0, limit);
 }
 

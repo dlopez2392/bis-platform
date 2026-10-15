@@ -50,12 +50,18 @@ export const isDocumentContentType = (v: unknown): v is DocumentContentType =>
 
 /**
  * 0080's app.document_request_items_ok, in TypeScript: the dialog's and the action's check. A note is
- * trimmed. 0071's app.tidy_text (the SQL side of the note check) treats U+0085 (NEL) as whitespace
- * (Unicode's White_Space property), but JS's String.prototype.trim() does not strip it — verified
- * directly against the replica (`app.tidy_text(chr(133) || 'x', 80)` answers false). A note trimmed
- * here could therefore still carry a leading or trailing NEL and pass this function while the SQL
- * check refuses the insert; it is refused here too, mirroring the SQL side exactly.
+ * trimmed. 0071's app.tidy_text (the SQL side of the note check) refuses an edge character from
+ * Postgres's `[:space:]` class that JS's String.prototype.trim() does not strip — checked directly
+ * against the replica for every Unicode space-like candidate plausible at an edge (NBSP, LS, PS, BOM,
+ * ideographic/ogham/narrow-NBSP/medium-math spaces, ZWSP, the Mongolian vowel separator, VT, FF, CR,
+ * and the C0/C1 control codes U+001C-U+001F and U+0085): `app.tidy_text` answers false (refuses) for
+ * U+001C-U+001F (the File/Group/Record/Unit separators) and U+0085 (NEL) at an edge, neither of which
+ * ECMA-262's WhiteSpace/LineTerminator productions strip, while every other candidate it refuses is
+ * ALSO stripped by `.trim()` first (so never reaches here). A note trimmed in the browser could
+ * therefore still carry one of those five codes at an edge and pass this function while the SQL check
+ * refuses the insert; refused here too, one regex, both edges.
  */
+const SQL_SPACE_JS_TRIM_KEEPS = /^[\u001C-\u001F\u0085]|[\u001C-\u001F\u0085]$/;
 export function cleanRequestItems(raw: unknown): DocumentRequestItem[] | null {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > DOCUMENT_REQUEST_MAX_ITEMS) return null;
   const out: DocumentRequestItem[] = [];
@@ -69,7 +75,7 @@ export function cleanRequestItems(raw: unknown): DocumentRequestItem[] | null {
       if (typeof note !== "string") return null;
       const t = note.trim();
       if (t.length < 1 || t.length > DOCUMENT_REQUEST_NOTE_MAX) return null;
-      if (t.startsWith("\u0085") || t.endsWith("\u0085")) return null;
+      if (SQL_SPACE_JS_TRIM_KEEPS.test(t)) return null;
       out.push({ key: category, category, note: t });
     } else {
       if (note !== null) return null;

@@ -8,6 +8,7 @@ import {
   createDocumentRequest, findDocumentRequestByTokenHash, getDocumentRequest, startDocumentRequestUpload, getRequestDocument,
   listRequestFiles, listOpenDocumentRequests, revokeDocumentRequest, restoreDocumentRequest, listDocumentRequestTimeline,
   documentRequestTarget, ensureDocumentRequestTask, getDocumentRequestForVersion,
+  listRequestsMissingReceivedTask, claimDocumentRequestSend, clearDocumentRequestSend,
 } from "../document-requests";
 import { cleanRequestItems, documentRequestState, isCustomerAuthor, DOCUMENT_SOURCES } from "../document-rules";
 
@@ -38,19 +39,27 @@ async function cleanFile(db: SupabaseClient, accountId: string, requestId: strin
 }
 
 describe("document-rules: the request's pure rules (spec 4.1)", () => {
-  it("cleanRequestItems keeps the SQL check's rules (mutations: allow 10 items; allow a note on insurance; allow a duplicate -> FAILS)", () => {
+  it("cleanRequestItems keeps the SQL check's rules (mutations: cap at 8 -> FAILS (the nine-item case); allow a note on insurance; allow a duplicate -> FAILS)", () => {
     expect(cleanRequestItems([{ key: "id", category: "id", note: null }, { key: "other", category: "other", note: "  Pool permit " }]))
       .toEqual([{ key: "id", category: "id", note: null }, { key: "other", category: "other", note: "Pool permit" }]);
     const nine = ["id", "contract", "estimate", "invoice", "photo", "permit", "insurance", "warranty", "other"]
       .map((k) => ({ key: k, category: k, note: k === "other" ? "x" : null }));
+    // mutation: cap at 8 -> FAILS (the nine-item case). Raising the cap to 10 instead cannot be
+    // observed through any content-based case: DOCUMENT_CATEGORIES has exactly 9 values, so a 10-item
+    // array built from valid categories always has a repeated key, and the distinctness check below
+    // (seen.has(category)) refuses it regardless of the length bound; verified directly (temporarily
+    // widening the bound to 10 left every case in this test green).
     expect(cleanRequestItems(nine)).toHaveLength(9);
     for (const bad of [[], [...nine, nine[0]], [{ key: "id", category: "id", note: "x" }], [{ key: "other", category: "other", note: "" }],
       [{ key: "other", category: "other", note: "x".repeat(81) }], [{ key: "id", category: "insurance", note: null }],
       [{ key: "id", category: "id", note: null }, { key: "id", category: "id", note: null }], "id", null,
-      // 0071's app.tidy_text treats U+0085 (NEL) as whitespace (Unicode's White_Space property), but
-      // JS's String.prototype.trim() does not strip it: a note trimmed in the browser could still carry
-      // one at an edge and pass here while the SQL check (document_request_items_ok) refuses the insert.
-      [{ key: "other", category: "other", note: "\u0085Pool permit" }], [{ key: "other", category: "other", note: "Pool permit\u0085" }]]) {
+      // 0071's app.tidy_text refuses an edge character from Postgres's [:space:] class that JS's
+      // String.prototype.trim() does not strip: U+001C-U+001F (the File/Group/Record/Unit separators)
+      // and U+0085 (NEL). A note trimmed in the browser could still carry one of these at an edge and
+      // pass here while the SQL check (document_request_items_ok) refuses the insert.
+      [{ key: "other", category: "other", note: "\u0085Pool permit" }], [{ key: "other", category: "other", note: "Pool permit\u0085" }],
+      [{ key: "other", category: "other", note: "\u001cPool permit" }], [{ key: "other", category: "other", note: "Pool permit\u001d" }],
+      [{ key: "other", category: "other", note: "\u001ePool permit" }], [{ key: "other", category: "other", note: "Pool permit\u001f" }]]) {
       expect(cleanRequestItems(bad), JSON.stringify(bad)).toBeNull();
     }
   });
@@ -94,6 +103,19 @@ describe("document-requests: create, find, start (spec 4.1, 4.4)", () => {
       expect(await getRequestDocument(db, accountId, b.id, s.documentId)).toBeNull();
       expect((await startDocumentRequestUpload(db, { accountId, requestId: a.id, itemKey: "warranty", bytes: 10, contentType: "application/pdf", originalName: null, title: "X" })).status).toBe("no_item");
     }));
+
+  it("getRequestDocument is scoped to the CALLER's account, not just the request and document ids (mutation: drop .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (dbB, accountB) =>
+      withTestAccount(async (db, accountId) => {
+        const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
+        const theirs = await made(dbB, accountB, bea);
+        const s = await startDocumentRequestUpload(dbB, { accountId: accountB, requestId: theirs.id, itemKey: "insurance", bytes: 10, contentType: "application/pdf", originalName: "b.pdf", title: "Seguro" });
+        if (s.status !== "ok") throw new Error(s.status);
+        // Real ids from a REAL other account: without the account filter this still finds the row,
+        // because request_id and document id are each globally unique and the caller's accountId is
+        // otherwise unused by the rest of the query.
+        expect(await getRequestDocument(db, accountId, theirs.id, s.documentId)).toBeNull();
+      })));
 });
 
 describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5)", () => {
@@ -113,6 +135,19 @@ describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5
       expect(await listOpenDocumentRequests(db, accountId, { kind: "contact", id: ana }, new Date())).toEqual([]);
       expect((await getDocumentRequest(db, accountId, r.id))?.completed_at).not.toBeNull();
     }));
+
+  it("listOpenDocumentRequests is scoped to the CALLER's account: a real other account's open request, under its own real contact id, is invisible (mutation: drop the outer .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (dbB, accountB) =>
+      withTestAccount(async (db, accountId) => {
+        const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
+        await made(dbB, accountB, bea);
+        expect(await listOpenDocumentRequests(dbB, accountB, { kind: "contact", id: bea }, new Date())).toHaveLength(1);
+        // Same real contact id, called with a DIFFERENT (but equally real) account: contact ids are a
+        // global PK, so only the outer .eq("account_id", accountId) on the document_requests read stops
+        // this from finding Bea's request. (The inner "file read" account filter this case was also
+        // asked to cover is provably redundant given it: see the report's note on this probe.)
+        expect(await listOpenDocumentRequests(db, accountId, { kind: "contact", id: bea }, new Date())).toEqual([]);
+      })));
 
   it("revoke is compare-and-set on an open request and its undo restores only that revoke (mutation: drop .is('revoked_at', null) -> a second revoke answers -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
@@ -179,5 +214,150 @@ describe("document-requests: what the card and the page read (spec 4.2, 4.3, 4.5
       if (staffVersion.status !== "ok") throw new Error(staffVersion.status);
       await markDocumentVersionReady(db, { accountId, documentId: staffDocId, versionId: staffVersion.versionId, bytes: 10, sha256: "c".repeat(64), actorId: ACTOR });
       expect(await getDocumentRequestForVersion(db, accountId, staffVersion.versionId)).toBeNull();
+    }));
+});
+
+/** A clean customer file for ONE item, inserted directly (service client) rather than through the
+ *  app's upload/finish/scan round trips, so the "101 missing requests" case does not need 101 * 4
+ *  network calls. Every row still satisfies the real constraints (documents_request_coherent,
+ *  document_versions_scan_coherent, the path-shape check): this is a faster PATH to the same end
+ *  state `cleanFile` produces, not a different one. */
+async function fastCleanRequest(db: SupabaseClient, accountId: string, contactId: string, createdAt: string): Promise<string> {
+  const reqId = crypto.randomUUID();
+  const { error: reqErr } = await db.from("document_requests").insert({
+    id: reqId, account_id: accountId, contact_id: contactId,
+    items: [{ key: "insurance", category: "insurance", note: null }], language: "en", token_hash: HEX(n++), channel: "link",
+    created_by: ACTOR, created_at: createdAt, expires_at: new Date(Date.parse(createdAt) + 7 * 86_400_000).toISOString(),
+  });
+  if (reqErr) throw reqErr;
+  const docId = crypto.randomUUID();
+  const verId = crypto.randomUUID();
+  const { error: docErr } = await db.from("documents").insert({
+    id: docId, account_id: accountId, contact_id: contactId, title: "Seguro", category: "insurance", source: "customer",
+    created_by: `customer:${reqId}`, request_id: reqId, request_item_key: "insurance", created_at: createdAt,
+  });
+  if (docErr) throw docErr;
+  const { error: verErr } = await db.from("document_versions").insert({
+    id: verId, account_id: accountId, document_id: docId, storage_path: `${accountId}/${docId}/${verId}`,
+    bytes: 10, content_type: "application/pdf", sha256: "a".repeat(64), uploaded_by: `customer:${reqId}`,
+    status: "ready", scan_status: "clean", scanned_at: createdAt, created_at: createdAt,
+  });
+  if (verErr) throw verErr;
+  return reqId;
+}
+
+describe("document-requests: the 'received' reconcile and the send stamp (plan review I5, re-review R1)", () => {
+  it("lists a request with a clean file and no task; not once the task exists; not revoked, pending, or completed/expired more than a day ago; expired 2h ago IS listed (mutations: drop the clean filter -> FAILS; drop .is('revoked_at', null) -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const now = new Date();
+
+      // 1) listed, then 2) not listed once the task exists.
+      const ana1 = (await createContact(db, accountId, { firstName: "Ana1" }, ACTOR)).id;
+      const r1 = await made(db, accountId, ana1);
+      await cleanFile(db, accountId, r1.id, "insurance");
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).toContain(r1.id);
+      await ensureDocumentRequestTask(db, accountId, { requestId: r1.id, kind: "received", contactId: ana1, title: "x", dueAt: now.toISOString() }, "documents-request");
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r1.id);
+
+      // 3) revoked: a clean file, no task, but withdrawn — never listed.
+      const ana2 = (await createContact(db, accountId, { firstName: "Ana2" }, ACTOR)).id;
+      const r2 = await made(db, accountId, ana2);
+      await cleanFile(db, accountId, r2.id, "insurance");
+      const revoked = await revokeDocumentRequest(db, accountId, r2.id, ACTOR, now);
+      expect(revoked).not.toBeNull();
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r2.id);
+
+      // 4) pending: the only customer file is not yet clean.
+      const ana3 = (await createContact(db, accountId, { firstName: "Ana3" }, ACTOR)).id;
+      const r3 = await made(db, accountId, ana3);
+      const pendingStart = await startDocumentRequestUpload(db, { accountId, requestId: r3.id, itemKey: "insurance", bytes: 10, contentType: "application/pdf", originalName: "p.pdf", title: "Seguro" });
+      if (pendingStart.status !== "ok") throw new Error(pendingStart.status);
+      await markDocumentVersionReady(db, { accountId, documentId: pendingStart.documentId, versionId: pendingStart.versionId, bytes: 10, sha256: "d".repeat(64), actorId: `customer:${r3.id}`, actorType: "system" });
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r3.id);
+
+      // 5) completed 2 days ago: not listed (recent() reads completed_at, not expires_at, once set).
+      const ana4 = (await createContact(db, accountId, { firstName: "Ana4" }, ACTOR)).id;
+      const r4 = await made(db, accountId, ana4);
+      await cleanFile(db, accountId, r4.id, "insurance");
+      await cleanFile(db, accountId, r4.id, "other");
+      expect((await getDocumentRequest(db, accountId, r4.id))?.completed_at).not.toBeNull();
+      const { error: setCompletedErr } = await db.from("document_requests")
+        .update({ completed_at: new Date(now.getTime() - 2 * 86_400_000).toISOString() }).eq("account_id", accountId).eq("id", r4.id);
+      if (setCompletedErr) throw setCompletedErr;
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r4.id);
+
+      // 6) expired 2 HOURS ago with a clean file IS listed (re-review m1, deviation 13); expired 2 DAYS
+      //    ago is not. `document_requests_expiry` forces expires_at = created_at + 7 days, so both
+      //    columns move together.
+      const ana5 = (await createContact(db, accountId, { firstName: "Ana5" }, ACTOR)).id;
+      const r5 = await made(db, accountId, ana5);
+      await cleanFile(db, accountId, r5.id, "insurance"); // only ONE of two items: stays uncompleted
+      const expires5 = new Date(now.getTime() - 2 * 3_600_000).toISOString();
+      const created5 = new Date(Date.parse(expires5) - 7 * 86_400_000).toISOString();
+      const { error: setExpired5Err } = await db.from("document_requests")
+        .update({ created_at: created5, expires_at: expires5 }).eq("account_id", accountId).eq("id", r5.id);
+      if (setExpired5Err) throw setExpired5Err;
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).toContain(r5.id);
+
+      const ana6 = (await createContact(db, accountId, { firstName: "Ana6" }, ACTOR)).id;
+      const r6 = await made(db, accountId, ana6);
+      await cleanFile(db, accountId, r6.id, "insurance");
+      const expires6 = new Date(now.getTime() - 2 * 86_400_000).toISOString();
+      const created6 = new Date(Date.parse(expires6) - 7 * 86_400_000).toISOString();
+      const { error: setExpired6Err } = await db.from("document_requests")
+        .update({ created_at: created6, expires_at: expires6 }).eq("account_id", accountId).eq("id", r6.id);
+      if (setExpired6Err) throw setExpired6Err;
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r6.id);
+    }));
+
+  it("with 101 missing requests the batch loop still answers the newest `limit`, newest first (mutation: drop the final sort -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const now = new Date();
+      const ids: string[] = [];
+      for (let i = 0; i < 101; i++) {
+        // Oldest first: index 0 is the oldest (furthest in the past), index 100 the newest.
+        const at = new Date(now.getTime() - (101 - i) * 1000).toISOString();
+        ids.push(await fastCleanRequest(db, accountId, ana, at));
+      }
+      const out = await listRequestsMissingReceivedTask(db, now, 50);
+      expect(out).toHaveLength(50);
+      const rank = new Map(ids.map((id, i) => [id, i]));
+      const ranks = out.map((r) => rank.get(r.id)!);
+      expect(ranks.every((r) => r !== undefined)).toBe(true);
+      // Newest first: ranks are non-increasing, and the newest 50 (indices 51..100) are exactly what came back.
+      for (let i = 1; i < ranks.length; i++) expect(ranks[i]!).toBeLessThan(ranks[i - 1]!);
+      expect(new Set(ranks)).toEqual(new Set(Array.from({ length: 50 }, (_, i) => 100 - i)));
+    }), 20_000);
+
+  it("already-tasked requests do not starve an older, genuinely missing one out of a small file page (mutation: fetch one page only, never continue -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const now = new Date();
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      // Oldest: missing (no task). Two newer ones: already tasked. A file page of 2 sees only the two
+      // newest (both tasked) unless the reconcile pages PAST them for the older miss.
+      const rOld = await made(db, accountId, ana);
+      await cleanFile(db, accountId, rOld.id, "insurance");
+      const rMid = await made(db, accountId, ana);
+      await cleanFile(db, accountId, rMid.id, "insurance");
+      await ensureDocumentRequestTask(db, accountId, { requestId: rMid.id, kind: "received", contactId: ana, title: "x", dueAt: now.toISOString() }, "documents-request");
+      const rNew = await made(db, accountId, ana);
+      await cleanFile(db, accountId, rNew.id, "insurance");
+      await ensureDocumentRequestTask(db, accountId, { requestId: rNew.id, kind: "received", contactId: ana, title: "x", dueAt: now.toISOString() }, "documents-request");
+
+      const out = await listRequestsMissingReceivedTask(db, now, 50, { filesPage: 2 });
+      expect(out.map((r) => r.id)).toEqual([rOld.id]);
+    }));
+
+  it("the at-most-once send stamp: claim, then a second claim is refused; a clear lets a later claim through (mutation: drop .is('sent_at', null) -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const r = await made(db, accountId, ana);
+      const now = new Date();
+      expect(await claimDocumentRequestSend(db, accountId, r.id, now)).toBe(true);
+      expect(await claimDocumentRequestSend(db, accountId, r.id, now)).toBe(false);
+      await clearDocumentRequestSend(db, accountId, r.id);
+      expect((await getDocumentRequest(db, accountId, r.id))?.sent_at).toBeNull();
+      expect(await claimDocumentRequestSend(db, accountId, r.id, now)).toBe(true);
     }));
 });
