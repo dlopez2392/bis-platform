@@ -300,11 +300,12 @@ export async function listRequestsMissingReceivedTask(
     }
     if (rows.length < filesPage) { windowExhausted = true; break; } // this page was short: the window is exhausted
   }
-  // The guard exists so a pathological backlog can't loop forever; when it is actually the reason the
-  // loop stopped (not a short/empty page, i.e. the window was NOT exhausted), older misses past this
-  // point are silently dropped from THIS call. Said once, by function name and page count only — no
-  // request or contact ids, matching this module's other console.error calls.
-  if (guard >= 40 && !windowExhausted) {
+  // The guard exists so a pathological backlog can't loop forever; it is only the reason older misses
+  // were dropped from THIS call when the loop stopped WITHOUT the window running out AND without
+  // already having found `limit` many (reaching the limit is a normal, complete answer, not a drop).
+  // Said once, by function name and page count only — no request or contact ids, matching
+  // documents.ts's own console.error calls (this module has none of its own yet to match instead).
+  if (guard >= 40 && !windowExhausted && out.length < limit) {
     console.error(`listRequestsMissingReceivedTask: stopped after ${guard} file pages (guard cutoff); older misses may be dropped`);
   }
   // Newest first, across every page and batch (a later page's requests can sort ahead of an earlier

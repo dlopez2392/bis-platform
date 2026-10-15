@@ -334,7 +334,7 @@ describe("document-requests: the 'received' reconcile and the send stamp (plan r
       expect(out.filter((x) => x.id === r.id)).toHaveLength(1);
     }));
 
-  it("with 101 missing requests (built in 3 bulk inserts) the batch loop still answers newest-first, and the test account's own run stays contiguous (mutation: drop the final sort -> FAILS)", () =>
+  it("with 101 missing requests (built in 3 bulk inserts) the batch loop still answers newest-first, and the test account's own run stays contiguous (mutations: drop the final sort -> FAILS; drop the .slice(0, limit) -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const now = new Date();
@@ -342,9 +342,13 @@ describe("document-requests: the 'received' reconcile and the send stamp (plan r
       const createdAts = Array.from({ length: 101 }, (_, i) => new Date(now.getTime() - (101 - i) * 1000).toISOString());
       const ids = await fastCleanRequests(db, accountId, ana, createdAts);
       const out = await listRequestsMissingReceivedTask(db, now, 50);
+      // This test's own 101 requests are all the missing ones it seeded, so the answer is always
+      // exactly `limit` (50) regardless of whatever other accounts' own rows also qualify (fix round
+      // 3, point 1: dropping the limit slice left the file green at 18/18 with no case catching it).
+      expect(out).toHaveLength(50);
       // listRequestsMissingReceivedTask reads EVERY account: a parallel test file's own committed,
-      // task-less request can legitimately take one of the 50 slots, so no exact global length or
-      // exact global rank-set is assertable here (fix round 2, point 1). What IS always true:
+      // task-less request can legitimately take one of those 50 slots, so no exact global rank-set
+      // is assertable here (fix round 2, point 1). What IS always true:
       //
       // 1) the whole answer, across every account, is sorted newest-first by created_at.
       for (let i = 1; i < out.length; i++) {
