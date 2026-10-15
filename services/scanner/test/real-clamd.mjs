@@ -43,8 +43,10 @@ const url = (name, origin = "http://127.0.0.1:8098") => `${origin}/storage/v1/ob
 const scan = async (name) => (await call("POST", "/scan", JSON.stringify({ url: url(name) }))).json();
 
 let health = null;
+// Wait for BOTH clamd (PING) and the self-test (the signature DB loaded enough to answer INSTREAM):
+// clamd can answer PING before freshclam's first load finishes, so stopping on clamd alone flakes CI.
 for (const deadline = Date.now() + 300_000; Date.now() < deadline; await new Promise((r) => setTimeout(r, 5000))) {
-  try { const r = await call("GET", "/health"); if (r.ok) { health = await r.json(); if (health.clamd) break; } } catch { /* not up yet */ }
+  try { const r = await call("GET", "/health"); if (r.ok) { health = await r.json(); if (health.clamd && health.selfTest) break; } } catch { /* not up yet */ }
 }
 assert.equal(health?.clamd, true, "clamd never answered PING (assumptions A5, A13, A14)");
 assert.ok(Date.now() - Date.parse(health.signaturesAt) < 7 * 86_400_000, `signatures dated ${health.signaturesAt} (A7)`);
