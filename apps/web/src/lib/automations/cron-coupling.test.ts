@@ -312,16 +312,17 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
 
   /**
    * Review M2: the test above checks ONE budgeted pass against the route's
-   * `maxDuration`. THREE passes carry a wall-clock budget today —
+   * `maxDuration`. FOUR passes carry a wall-clock budget today —
    * release-held (RELEASE_BUDGET_MS), the usage report
-   * (USAGE_REPORT_BUDGET_MS) and, since D-067, the weekly client report
-   * (WEEKLY_REPORT_BUDGET_MS) — and nothing coupled their SUM to the
-   * ceiling: three budgets could be raised independently, each passing
-   * its own neighbour's check, until together they left the other twelve
+   * (USAGE_REPORT_BUDGET_MS), since D-067, the weekly client report
+   * (WEEKLY_REPORT_BUDGET_MS), and, since S-07 2a, the document scan pass
+   * (DOCUMENT_SCAN_BUDGET_MS) — and nothing coupled their SUM to the
+   * ceiling: four budgets could be raised independently, each passing
+   * its own neighbour's check, until together they left the other thirteen
    * registered passes no room at all inside one tick. `MIN_HEADROOM_MS`
    * is one more 60 s budget's worth — the smallest margin that still
    * reads as "room for the rest", not a number tuned to pass today's
-   * three. Mutation: raise any one budget past the point this leaves
+   * four. Mutation: raise any one budget past the point this leaves
    * zero headroom → FAILS; comment out `maxDuration` or any budget
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).

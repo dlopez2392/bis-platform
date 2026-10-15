@@ -52,8 +52,11 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "not configured (SCANNER_URL or SCANNER_SECRET unset)" });
   });
 
-  it("scans every pending version oldest first with its own attempts, HOLDING clamd errors, counts each outcome, and beats ok (mutations: pass attempts 0 -> FAILS; scan without holdErrors -> FAILS)", async () => {
-    listPendingScans.mockResolvedValue([row("a"), row("b", 2), row("c")]);
+  it("scans every pending version oldest first with the TRIED stamp's own fresh attempts, HOLDING clamd errors, counts each outcome, and beats ok (mutations: pass attempts 0 -> FAILS; scan without holdErrors -> FAILS; read v.scan_attempts instead of the stamp's answer -> FAILS)", async () => {
+    // Review fix 5: the fresh attempts count comes from the tried stamp's own answer, not the
+    // (possibly stale) row read — "b" is mocked to answer 2 regardless of row("b", 2)'s own field.
+    recordDocumentScan.mockImplementation(async (_db: unknown, a: { versionId: string }) => ({ status: "ok", attempts: a.versionId === "b" ? 2 : 0 }));
+    listPendingScans.mockResolvedValue([row("a", 9), row("b", 9), row("c", 9)]);
     scanVersion.mockResolvedValueOnce("clean").mockResolvedValueOnce("unscannable").mockResolvedValueOnce("infected");
     expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 3, clean: 1, unscannable: 1, infected: 1 });
     expect(listPendingScans).toHaveBeenCalledWith(DB, DOCUMENT_SCAN_BATCH);
@@ -71,15 +74,16 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     expect(recordDocumentScan.mock.invocationCallOrder[1]!).toBeLessThan(scanVersion.mock.invocationCallOrder[1]!);
   });
 
-  it("a version another scan finished first (its stamp answers stale) is skipped, not scanned (mutation: scan anyway -> FAILS)", async () => {
+  it("a version another scan finished first (its stamp answers stale) is skipped, not scanned, and not COUNTED scanned either (review fix 5; mutation: scan anyway -> FAILS; count it before the stale check -> FAILS)", async () => {
     listPendingScans.mockResolvedValue([row("a")]);
     recordDocumentScan.mockResolvedValueOnce({ status: "stale" });
-    await documentsScanPass.run(ctx);
+    expect(await documentsScanPass.run(ctx)).toEqual(ZERO);
     expect(scanVersion).not.toHaveBeenCalled();
   });
 
   it("ONE pending file, ONE held error, and the self-test passes again after the loop: the error is spent (re-review N2a; mutation: never spend -> FAILS)", async () => {
-    listPendingScans.mockResolvedValue([row("b", 1)]);
+    recordDocumentScan.mockResolvedValueOnce({ status: "ok", attempts: 1 });
+    listPendingScans.mockResolvedValue([row("b", 9)]);
     scanVersion.mockResolvedValueOnce("held");
     expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 1, stillPending: 1 });
     expect(spendScanError).toHaveBeenCalledWith(DB, target("b", 1));
@@ -133,6 +137,35 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     scanVersion.mockImplementation(async () => { clock += DOCUMENT_SCAN_BUDGET_MS - SCAN_TIMEOUT_MS + 1; return "clean"; });
     expect(await documentsScanPass.run(ctx)).toMatchObject({ scanned: 1, deferred: 2 });
+  });
+
+  // Review fix 3: the spend loop had no budget check of its own. Two held errors; the first spend
+  // pushes elapsed time past DOCUMENT_SCAN_BUDGET_MS, so the second is never attempted this tick (it
+  // simply retries next tick, exactly like a deferred scan).
+  it("stops SPENDING held errors once the 45-second budget is used up; the rest are left pending, unspent, for the next tick (review fix 3; mutation: drop the spend-loop budget check -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([row("a"), row("b")]);
+    let clock = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    scanVersion.mockResolvedValue("held");
+    spendScanError.mockImplementation(async () => { clock += DOCUMENT_SCAN_BUDGET_MS + 1; return "pending"; });
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 2, stillPending: 1 });
+    expect(spendScanError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("documentsScan pass: the heartbeat reads the REAL oldestPendingScanAt and the REAL verdict mix each tick (review fix 1, 2)", () => {
+  it("a file waiting 16 minutes fails the heartbeat even with nothing listed this tick (review fix 1; mutation: hardcode null instead of awaiting oldestPendingScanAt -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([]);
+    oldestPendingScanAt.mockResolvedValue(new Date(NOW.getTime() - 16 * 60_000).toISOString());
+    expect(await documentsScanPass.run(ctx)).toEqual(ZERO);
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "a file has waited 16 minutes" });
+  });
+
+  it("one clean verdict alongside one unreached file still beats ok — 'could not be reached' names only a tick with NO successful verdict (review fix 2; mutation: drop the verdicts === 0 guard -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([row("a"), row("b")]);
+    scanVersion.mockResolvedValueOnce("clean").mockResolvedValueOnce("unreached");
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 2, clean: 1, unreached: 1 });
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: true });
   });
 });
 

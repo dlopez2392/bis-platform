@@ -26,12 +26,17 @@ import type { Pass } from "../context";
  * the heartbeat, so cron.pass.documentsScan fails too.
  * BUDGET (orchestrator ruling: SCAN_TIMEOUT_MS is Task 5's committed 30_000, not the plan's 25_000):
  * no scan STARTS after 15 s (DOCUMENT_SCAN_BUDGET_MS, 45 s, minus the 30 s scan timeout), the health call
- * included. Worst case, measured from the pass's start: the last scan started at 15 s ends by 45 s,
- * then its object delete and verdict, a second self-test (5 s at most) when an error was held, the held
- * errors' verdicts (at most one per scan started), the oldest-pending read and the heartbeat: a few seconds of round trips that no timeout bounds (supabase-
- * js sets none), so about 50 s, not 45. cron-coupling.test.ts asserts the budgets plus 60 s of headroom
- * fit the route's 300 s (60 + 60 + 60 + 45 + 60 = 285): the ~5 s overrun comes out of the 15 s left over
- * and, past that, out of the 60 s the test reserves for the unbudgeted passes. Plan review 6.
+ * included. The spend loop (review fix 3) carries the SAME DOCUMENT_SCAN_BUDGET_MS cutoff, checked
+ * before each spend rather than before each scan: at 45 s already-elapsed it still spends the FIRST
+ * held error (the check runs before the call, so one round trip beyond the budget is always allowed),
+ * then stops — bounding what used to be up to one round trip per scan started (as many as the batch)
+ * to exactly one. Worst case, measured from the pass's start: the last scan started at 15 s ends by
+ * 45 s, so the spend loop's own check already reads >= the budget and spends at most its first held
+ * error, then a second self-test (5 s at most) when an error was held, the oldest-pending read and the
+ * heartbeat: a few seconds of round trips that no timeout bounds (supabase-js sets none), so about 50 s,
+ * not 45. cron-coupling.test.ts asserts the budgets plus 60 s of headroom fit the route's 300 s
+ * (60 + 60 + 60 + 45 + 60 = 285): the ~5 s overrun comes out of the 15 s left over and, past that, out
+ * of the 60 s the test reserves for the unbudgeted passes. Plan review 6.
  * Every @bis/db export is dereferenced inside run(), never at module scope.
  */
 export const DOCUMENT_SCAN_BUDGET_MS = 45_000;
@@ -76,11 +81,18 @@ export const documentsScanPass: Pass = {
       for (const [i, v] of due.entries()) {
         // Stop STARTING a scan once one more could overrun the budget (release-held.ts's shape).
         if (Date.now() - startedAt > DOCUMENT_SCAN_BUDGET_MS - SCAN_TIMEOUT_MS) { c.deferred = due.length - i; break; }
-        c.scanned++;
-        const target: ScanTarget = { accountId: v.account_id, versionId: v.id, storagePath: v.storage_path, attempts: v.scan_attempts };
         try {
           // Stamp it tried first (re-review N2b): whatever happens next, it goes to the back of the line.
-          if ((await recordDocumentScan(ctx.db, { accountId: v.account_id, versionId: v.id, verdict: "tried" })).status === "stale") continue;
+          // Its answer also carries the FRESH attempts count (review fix 5): the list read above can be
+          // stale by the time the stamp lands — the finish action or a past tick's own scan can have
+          // recorded an error in between — so scanVersion's own attempts>=3 shortcut reads the number
+          // the stamp just confirmed, never the row's.
+          const stamp = await recordDocumentScan(ctx.db, { accountId: v.account_id, versionId: v.id, verdict: "tried" });
+          if (stamp.status === "stale") continue;
+          // Counted only past the stale skip (review fix 5): a version another scan already finished
+          // this tick was never actually scanned by this pass.
+          c.scanned++;
+          const target: ScanTarget = { accountId: v.account_id, versionId: v.id, storagePath: v.storage_path, attempts: stamp.attempts };
           const r = await scanVersion(ctx.db, target, undefined, { holdErrors: true });
           if (r === "clean") c.clean++;
           else if (r === "infected") c.infected++;
@@ -101,6 +113,11 @@ export const documentsScanPass: Pass = {
       c.breaker = 1;
     } else {
       for (const h of held) {
+        // Review fix 3: the spend loop had no budget check of its own — up to every scan this tick's
+        // worth of sequential round trips, past the scan loop's own cutoff. An unspent held error is
+        // simply NOT recorded; the version stays pending (its scan_tried_at stamp already moved it to
+        // the back of the line) and is picked up again next tick, exactly like a deferred scan.
+        if (Date.now() - startedAt > DOCUMENT_SCAN_BUDGET_MS) break;
         try {
           const r = await spendScanError(ctx.db, h);
           if (r === "pending") c.stillPending++;
