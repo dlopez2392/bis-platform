@@ -118,6 +118,40 @@ const SWEEP_REQUESTED = process.argv.some(
  */
 const USE_DEV_SERVER = process.env.E2E_DEV === "1";
 
+/**
+ * The document vault's scanner in every e2e run (S-07 2a; plan deviation 5): the REAL shim
+ * (services/scanner/src/server.mjs) in front of a FAKE clamd (services/scanner/test/fake-clamd.mjs,
+ * EICAR -> FOUND, anything else -> OK). Nothing here is in the app: a Vercel build never contains
+ * either process, and the Docker image copies src/ only. The shim allows exactly this run's storage
+ * origin (CI: the runner's local stack; a developer: bis-ci), signed by a fixed e2e literal that is
+ * not a secret.
+ */
+const E2E_SCANNER_SECRET = "bis_e2e_scanner_fixture_only";
+const FAKE_CLAMD_PORT = 3399;
+const SCANNER_PORT = 8399;
+const storageOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? fileEnv.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321").origin;
+const SCANNER_SERVERS = [
+  {
+    command: `node ../../services/scanner/test/fake-clamd.mjs ${FAKE_CLAMD_PORT}`,
+    port: FAKE_CLAMD_PORT,
+    reuseExistingServer: false,
+    timeout: 20_000,
+  },
+  {
+    command: "node ../../services/scanner/src/server.mjs",
+    url: `http://127.0.0.1:${SCANNER_PORT}/health`,
+    // /health is signed: an unsigned GET answers 401, which is "up" enough for the wait.
+    // Confirmed against the installed Playwright (1.62.0, node_modules/.pnpm/playwright-core@1.62.0/
+    // node_modules/playwright-core/lib/coreBundle.js, isURLAvailable): `statusCode >= 200 && statusCode
+    // < 404`, so 401 counts as available here. If a future Playwright version narrows that range, switch
+    // this entry to `port: SCANNER_PORT` (a TCP wait) instead.
+    ignoreHTTPSErrors: true,
+    env: { PORT: String(SCANNER_PORT), CLAMD_HOST: "127.0.0.1", CLAMD_PORT: String(FAKE_CLAMD_PORT), SCANNER_CLIENTS: `${E2E_SCANNER_SECRET}@${storageOrigin}` },
+    reuseExistingServer: false,
+    timeout: 20_000,
+  },
+];
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
@@ -198,27 +232,34 @@ export default defineConfig({
       dependencies: ["setup"],
     },
   ],
-  webServer: {
-    command: USE_DEV_SERVER ? "pnpm dev" : "pnpm build && pnpm start",
-    url: "http://localhost:3000",
-    env: {
-      // test-only; must never be set on a Vercel deployment. Gates
-      // `requestPseudoMode`'s `?locale=pseudo` override (lib/i18n/
-      // request-locale.ts) — the one e2e/i18n-overflow.spec.ts needs, and
-      // dead everywhere else. request-locale.test.ts's own "BIS_I18N_QA
-      // never reaches a Vercel deployment" block pins that vercel.json and
-      // next.config.ts never set it.
-      BIS_I18N_QA: "1",
+  webServer: [
+    ...SCANNER_SERVERS,
+    {
+      command: USE_DEV_SERVER ? "pnpm dev" : "pnpm build && pnpm start",
+      url: "http://localhost:3000",
+      env: {
+        // test-only; must never be set on a Vercel deployment. Gates
+        // `requestPseudoMode`'s `?locale=pseudo` override (lib/i18n/
+        // request-locale.ts) — the one e2e/i18n-overflow.spec.ts needs, and
+        // dead everywhere else. request-locale.test.ts's own "BIS_I18N_QA
+        // never reaches a Vercel deployment" block pins that vercel.json and
+        // next.config.ts never set it.
+        BIS_I18N_QA: "1",
+        // The document vault's scanner (S-07 2a): points the app at the real
+        // shim this config starts above, in front of the fake clamd.
+        SCANNER_URL: `http://127.0.0.1:${SCANNER_PORT}`,
+        SCANNER_SECRET: E2E_SCANNER_SECRET,
+      },
+      // On the build path this is FALSE on purpose. `reuseExistingServer` will
+      // happily adopt whatever is already listening on 3000 — including a dev
+      // server someone left running — which would silently put the flakiness
+      // back AND test different code than the build just produced. This project
+      // has already lost a run to a stray server being adopted. Failing with
+      // "port in use" is the better outcome; the dev path keeps reuse because
+      // that is the whole point of iterating against it.
+      reuseExistingServer: USE_DEV_SERVER,
+      // Room for the build itself, which the command now includes.
+      timeout: USE_DEV_SERVER ? 120_000 : 300_000,
     },
-    // On the build path this is FALSE on purpose. `reuseExistingServer` will
-    // happily adopt whatever is already listening on 3000 — including a dev
-    // server someone left running — which would silently put the flakiness
-    // back AND test different code than the build just produced. This project
-    // has already lost a run to a stray server being adopted. Failing with
-    // "port in use" is the better outcome; the dev path keeps reuse because
-    // that is the whole point of iterating against it.
-    reuseExistingServer: USE_DEV_SERVER,
-    // Room for the build itself, which the command now includes.
-    timeout: USE_DEV_SERVER ? 120_000 : 300_000,
-  },
+  ],
 });

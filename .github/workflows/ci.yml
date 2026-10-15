@@ -469,3 +469,40 @@ jobs:
         if: failure()
         timeout-minutes: 4
         run: bash .github/scripts/ci-stack-diagnostics.sh --failure
+
+  # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
+  # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers
+  # it: the orchestrator reads it green on the head SHA before every merge that touches services/
+  # (plan Task 14 step 7), and the REQUIRED e2e job runs the same shim (src/) in front of a fake clamd
+  # on every push, so a shim that cannot start or sign fails a required check anyway. A red run of THIS
+  # job is the real-clamd half (EICAR, limits, memory) and blocks a merge by that reading rule. It runs the
+  # shim's own tests against a fake clamd, then builds the real image and proves, against the REAL
+  # clamd, that EICAR is infected (raw and inside a DOCX), a clean PDF and a 25 MiB file are clean, and
+  # a refused request fetches nothing (services/scanner/test/real-clamd.mjs). The secret below is a
+  # fixed literal for this runner only. Memory after the scans is printed for assumption A1.
+  scanner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: The shim's tests (fake clamd)
+        run: node --test --test-timeout=60000 "services/scanner/test/*.test.mjs"
+      - name: Build the scanner image
+        run: docker build -t bis-scanner-ci services/scanner
+      - name: Start it beside the real clamd
+        run: docker run -d --name bis-scanner-ci --network host -e PORT=8080 -e "SCANNER_CLIENTS=ci_scanner_fixture_only@http://127.0.0.1:8098" bis-scanner-ci
+      - name: EICAR, a clean PDF and a 25 MiB file against the real clamd
+        env:
+          SCANNER_URL: http://127.0.0.1:8080
+          SCANNER_SECRET: ci_scanner_fixture_only
+        run: node services/scanner/test/real-clamd.mjs
+      - name: Memory and logs (assumption A1)
+        if: always()
+        run: |
+          docker stats --no-stream bis-scanner-ci || true
+          echo "peak memory (cgroup v2 memory.peak, bytes; A1, A15):"
+          docker exec bis-scanner-ci sh -c 'cat /sys/fs/cgroup/memory.peak 2>/dev/null || cat /sys/fs/cgroup/memory/memory.max_usage_in_bytes' || true
+          docker logs --tail 60 bis-scanner-ci || true
