@@ -122,4 +122,36 @@ describe("scanVersion (spec 3.2-3.4; owner decision P4: nothing infected is kept
     recordDocumentScan.mockResolvedValue({ status: "stale" });
     expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("stale");
   });
+
+  describe("review fix 2: signedScannerUrl throws when the object is already gone (infected removed, a crash before the verdict, attempts < 3) and createSignedUrl refuses a non-existent object", () => {
+    it("mint fails, the app's OWN list confirms the object gone: a countable 'missing', exactly like the worker's (held under holdErrors; never scanned since minting failed) (mutation: route it to 'unreached' instead -> FAILS)", async () => {
+      signedScannerUrl.mockRejectedValueOnce(new Error("signedScannerUrl failed: Object not found"));
+      expect(await scanVersion(DB, V, deps({ verdict: "clean" }), { holdErrors: true })).toBe("held");
+      expect(list).toHaveBeenCalledWith("acc/doc", { search: "ver", limit: 10 });
+      expect(calls).toEqual(["mint", "list"]);
+      expect(recordDocumentScan).not.toHaveBeenCalled();
+    });
+
+    it("mint fails, confirmedMissing spends it like any other countable error when not held (mutation: never count a mint failure -> the version throws every pass forever)", async () => {
+      signedScannerUrl.mockRejectedValueOnce(new Error("signedScannerUrl failed: Object not found"));
+      recordDocumentScan.mockResolvedValueOnce({ status: "ok", attempts: 1 });
+      expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("pending");
+      expect(calls).toEqual(["mint", "list", "record:error"]);
+    });
+
+    it("mint fails but the object IS still there (storage's refusal was something else, or a race): nothing counts, nothing is scanned (mutation: count it anyway -> FAILS)", async () => {
+      signedScannerUrl.mockRejectedValueOnce(new Error("signedScannerUrl failed: storage down"));
+      list.mockResolvedValueOnce({ data: [{ name: "ver" }], error: null });
+      expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("unreached");
+      expect(calls).toEqual(["mint", "list"]);
+      expect(recordDocumentScan).not.toHaveBeenCalled();
+    });
+
+    it("mint fails and the confirming list itself fails: cannot confirm, nothing counts (mutation: count it anyway -> FAILS)", async () => {
+      signedScannerUrl.mockRejectedValueOnce(new Error("signedScannerUrl failed: Object not found"));
+      list.mockResolvedValueOnce({ data: null, error: { message: "storage down" } });
+      expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("unreached");
+      expect(recordDocumentScan).not.toHaveBeenCalled();
+    });
+  });
 });

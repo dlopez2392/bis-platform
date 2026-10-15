@@ -8,7 +8,10 @@ import { requestScan, scannerConfig, type ScanVerdict } from "./scan-client";
  * kept: on a virus, on content clamd could not read (a limit or encryption, plan review C2), or on the
  * third counted error, the OBJECT is removed FIRST and only then is the verdict recorded, so a crash in
  * between leaves the version pending and the next pass finds it again (attempts already at three:
- * removed without another scan). A removal that fails THROWS and records nothing.
+ * removed without another scan; attempts below three: minting the scanner's URL now fails, because
+ * Supabase's own createSignedUrl refuses a non-existent object, and that failure is routed through
+ * the same "missing" confirmation as the worker's own cause below). This function THROWS on any
+ * storage or database error (a failed removal, a failed RPC, a failed event), not only a removal.
  * Owner ruling 2026-10-15: an unscannable verdict keeps clamd's named cause (Heuristics.Encrypted.* =
  * a password), so the note can say why.
  * Counting (plan review C1; final check R2, orchestrator ruling): only two causes may count against a
@@ -58,7 +61,20 @@ export async function spendScanError(db: SupabaseClient, v: ScanTarget): Promise
 export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanDeps = REAL, opts: ScanOptions = {}): Promise<ScanResult> {
   if (!deps.configured()) return "pending";
   if (v.attempts >= MAX_SCAN_ATTEMPTS) return removeThenRecord(db, v, "unscannable", null);
-  const verdict = await deps.scan(await signedScannerUrl(db, v.storagePath));
+  let objectUrl: string;
+  try {
+    objectUrl = await signedScannerUrl(db, v.storagePath);
+  } catch {
+    // Review fix 2: Supabase's own createSignedUrl refuses a non-existent object (an infected
+    // version already removed, or a crash between its removal and its verdict, attempts < 3). The
+    // app re-checks with its OWN storage list, exactly like a "missing" cause from the worker: held
+    // under holdErrors, spent by the pass only after its self-test; never counted when the object is
+    // still there or the check itself fails.
+    if (!(await confirmedMissing(db, v.storagePath))) return "unreached";
+    if (opts.holdErrors) return "held";
+    return spendScanError(db, v);
+  }
+  const verdict = await deps.scan(objectUrl);
   if (verdict.verdict === "clean") {
     const r = await recordDocumentScan(db, { accountId: v.accountId, versionId: v.versionId, verdict: "clean" });
     return r.status === "ok" ? "clean" : "stale";

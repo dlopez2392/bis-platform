@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { scannerConfig, scanSignature, requestScan, scannerHealth } from "./scan-client";
+import { scannerConfig, scanSignature, requestScan, scannerHealth, SCAN_TIMEOUT_MS, HEALTH_TIMEOUT_MS } from "./scan-client";
 
 const ENV = { SCANNER_URL: "https://bis-scanner.fly.dev", SCANNER_SECRET: "app-test-secret-0001" };
 const BODY = JSON.stringify({ url: "https://abc.supabase.co/storage/v1/object/sign/documents/a/b/c?token=t" });
@@ -52,6 +52,30 @@ describe("requestScan: one signed POST, never throws (spec 3.4)", () => {
     const never = vi.fn();
     expect(await requestScan(URL_, { env: {}, fetchImpl: never as unknown as typeof fetch })).toEqual({ verdict: "error", cause: "transport" });
     expect(never).not.toHaveBeenCalled();
+  });
+});
+
+describe("redirects are never followed (CRITICAL: a 302/307/308 from the scanner address would read the redirect target's own verdict as ours, and on 307/308 would re-send the signed storage URL plus both signing headers to that other host)", () => {
+  it("both /scan and /health are called with redirect:\"error\" and an AbortSignal, and the two timeouts are pinned (mutations: drop redirect -> FAILS; wrong constant -> FAILS)", async () => {
+    expect(SCAN_TIMEOUT_MS).toBe(30_000);
+    expect(HEALTH_TIMEOUT_MS).toBe(5_000);
+    const scanFetch = answer(200, { verdict: "clean" });
+    await requestScan(URL_, { env: ENV, fetchImpl: scanFetch });
+    const [, scanInit] = scanFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(scanInit.redirect).toBe("error");
+    expect(scanInit.signal instanceof AbortSignal).toBe(true);
+
+    const healthFetch = answer(200, { clamd: true, signaturesAt: "2026-10-15T08:27:02.000Z", selfTest: true });
+    await scannerHealth({ env: ENV, fetchImpl: healthFetch });
+    const [, healthInit] = healthFetch.mock.calls[0] as unknown as [string, RequestInit];
+    expect(healthInit.redirect).toBe("error");
+    expect(healthInit.signal instanceof AbortSignal).toBe(true);
+  });
+
+  it("a redirect (fetch throws, redirect mode 'error') never counts as clean: requestScan answers transport, scannerHealth answers unreachable (mutation: let the redirect follow -> the forged target's answer would be trusted)", async () => {
+    const redirected = vi.fn(async () => { throw new TypeError("fetch failed: unexpected redirect, redirect mode is set to error"); });
+    expect(await requestScan(URL_, { env: ENV, fetchImpl: redirected as unknown as typeof fetch })).toEqual({ verdict: "error", cause: "transport" });
+    expect(await scannerHealth({ env: ENV, fetchImpl: redirected as unknown as typeof fetch })).toEqual({ ok: false, reason: "unreachable" });
   });
 });
 

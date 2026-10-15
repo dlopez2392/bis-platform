@@ -17,6 +17,11 @@ import { createHmac } from "node:crypto";
  *
  * Orchestrator ruling (overrides the plan's 25_000): SCAN_TIMEOUT_MS is the worker's own 25s scan
  * budget plus network headroom, so it is 30_000.
+ * Both calls pass `redirect: "error"`: a 302/307/308 from the scanner's own address is NEVER
+ * followed. Following one would read a forged target's own `{"verdict":"clean"}` as ours, and on a
+ * 307/308 would re-send the signed storage URL and both signing headers to that other host. `fetch`
+ * rejects with a TypeError on a redirect in this mode, which the existing catch already maps to an
+ * unspent "transport" error (or, for `scannerHealth`, "unreachable").
  */
 export const SCAN_TIMEOUT_MS = 30_000;
 export const HEALTH_TIMEOUT_MS = 5_000;
@@ -53,7 +58,7 @@ export function scanSignature(secret: string, timestamp: number, method: "GET" |
 async function call(cfg: ScannerConfig, method: "GET" | "POST", path: string, body: string, d: ScanClientDeps, timeoutMs: number): Promise<Response> {
   const ts = (d.nowSeconds ?? (() => Math.floor(Date.now() / 1000)))();
   return (d.fetchImpl ?? fetch)(`${cfg.origin}${path}`, {
-    method, body: method === "POST" ? body : undefined, cache: "no-store", signal: AbortSignal.timeout(timeoutMs),
+    method, body: method === "POST" ? body : undefined, cache: "no-store", redirect: "error", signal: AbortSignal.timeout(timeoutMs),
     headers: { "content-type": "application/json", "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": scanSignature(cfg.secret, ts, method, path, body) },
   });
 }
