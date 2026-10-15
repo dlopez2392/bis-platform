@@ -54,14 +54,12 @@ const state = async (c: Client, versionId: string) =>
     "select scan_status, scan_attempts, scanned_at is not null as scanned, scan_signature from document_versions where id = $1", [versionId])).rows[0]!;
 
 describe("0079 columns: every version starts pending, part 1's included (spec 3.2)", () => {
-  it("a version inserted with no scan columns is pending, 0 attempts, unscanned; a document with no scan_status reads 'skipped' (mutations: default 'clean' -> FAILS; drop the documents default -> the insert FAILS 23502)", () =>
+  it("a version inserted with no scan columns is pending, 0 attempts, unscanned", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const d = await doc(c, s.acct, s.ana);
       const v = await version(c, s.acct, d);
       expect(await state(c, v)).toEqual({ scan_status: "pending", scan_attempts: 0, scanned: false, scan_signature: null });
-      const { rows: [row] } = await c.query<{ scan_status: string }>("select scan_status from documents where id = $1", [d]);
-      expect(row!.scan_status).toBe("skipped");
     }));
 
   it("the coherence check refuses a scanned pending row, a signature on a clean one, and a clean uploading one (mutation: drop any one clause of document_versions_scan_coherent -> FAILS)", () =>

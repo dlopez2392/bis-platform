@@ -39,8 +39,8 @@ async function seed(c: Client) {
   await c.query("insert into client_group_members (account_id, client_group_id, contact_id, is_primary) values ($1,$2,$3,true), ($1,$4,$5,true)",
     [acct, casaMine, mine, casaTheirs, theirs]);
   const d = (owner: { contact_id?: string; client_group_id?: string }, ownersOnly: boolean, title: string) =>
-    one(`insert into documents (account_id, contact_id, client_group_id, title, category, owners_only, source, scan_status, created_by)
-         values ($1,$2,$3,$4,'other',$5,'upload','skipped','user_seed') returning id`,
+    one(`insert into documents (account_id, contact_id, client_group_id, title, category, owners_only, source, created_by)
+         values ($1,$2,$3,$4,'other',$5,'upload','user_seed') returning id`,
       [acct, owner.contact_id ?? null, owner.client_group_id ?? null, title, ownersOnly]);
   const docs = {
     mine: await d({ contact_id: mine }, false, "mine"),

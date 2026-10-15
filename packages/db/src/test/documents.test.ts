@@ -62,7 +62,7 @@ describe("an upload's life (spec 5.1)", () => {
       // capped read returns only them, and the ready document falls off the card.
       const { error } = await db.from("documents").insert(Array.from({ length: MAX_DOCUMENTS_READ + 1 }, (_, n) => ({
         account_id: accountId, contact_id: ana, title: `Pending ${n}`, category: "other", source: "upload",
-        scan_status: "skipped", created_by: ACTOR,
+        created_by: ACTOR,
       })));
       if (error) throw error;
       const list = await listRecordDocuments(db, accountId, { kind: "contact", id: ana });
