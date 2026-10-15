@@ -38,6 +38,7 @@ Part 2 ships as three PRs, in this order; each leaves the vault working on its o
 - `GET /health` (same HMAC): clamd reachable, and the signature database's age.
 - The worker holds **no database or storage credential**: only `SCANNER_SECRET` and the allowed storage origins. A compromised host can scan URLs it is handed, nothing more.
 - One always-on machine; no auto-stop (clamd must stay warm). Production and Vercel Preview call the same worker: it holds no data, and Preview's storage origin (bis-ci) is on its allow-list.
+- *Amended 2026-10-15 (2a plan review):* the worker holds one secret PER CALLER, each bound to that caller's storage origin (`SCANNER_CLIENTS="<secret>@<origin> …"`), not one `SCANNER_SECRET`: a request signed with Preview's secret can only fetch bis-ci objects, so Preview never holds anything that reaches production. Each deployment keeps its own `SCANNER_URL` and `SCANNER_SECRET`. Errors name their stage (`clamd` or `transport`, §3.4). (Plan deviation 4; `docs/superpowers/plans/2026-10-15-document-vault-pr2a.md`.)
 - Sizing (~2 GB for clamd's signatures, ~$10–12/month) is an **assumption** the plan confirms against Fly's pricing and clamd's measured memory.
 
 ### 3.2 Data (migration 0079)
@@ -45,8 +46,11 @@ Part 2 ships as three PRs, in this order; each leaves the vault working on its o
 - `document_versions.scan_status text not null` in (`pending`, `clean`, `infected`, `unscannable`), default `pending`; `scan_attempts int not null default 0`; `scanned_at timestamptz`; `scan_signature text` (the virus name, staff-only through the existing RLS).
 - Part 1's rows are left `pending`, which makes the retry pass scan them (the catch-up).
 - `documents.scan_status` is **dropped**: it is per document and predates versions. The app's one writer (`documents.ts:115`, always `'skipped'`) goes with it.
+  - *Amended 2026-10-15 (2a plan review):* 0079 does NOT drop it: 0079 applies before the merge and the build running then still writes it on every upload. 0079 gives it a default and 2a's app stops writing it; **0080 drops it as its first statement.** (Plan deviation 2.)
 - `current_version_id` moves to a new version only when that version is `clean`. The existing trigger (0077 §5) gains that condition. A document is listed once it has any `ready` version.
+  - *Amended 2026-10-15 (2a plan review):* **superseded.** `current_version_id` keeps 0077's meaning (the newest ready version, which is what lists a file in seven places, `discardDocumentUpload` among them), and 0077's trigger and `mark_document_version_ready` are unchanged. What OPENS is the newest CLEAN ready version, derived in the card's read; the one mint function (§3.3) refuses anything not clean, so P3 holds without the pointer. (Plan deviation 1, accepted by the orchestrator 2026-10-15.)
 - An RPC (service role only) records a verdict: compare-and-set from `pending`; on `clean` it advances `current_version_id` when this version is newer than the current one; on `infected`/`unscannable` it leaves the pointer. The bytes are deleted by the app (storage first, then the verdict), so a crash never leaves an infected object marked anything but `pending`.
+  - *Amended 2026-10-15 (2a plan review):* the verdict function (`record_document_scan`, SECURITY INVOKER, service role only) moves NO pointer (this follows from the pointer keeping its meaning); `error` adds an attempt and stays `pending`. (Plan deviation 3.)
 
 ### 3.3 The single gate
 
@@ -56,6 +60,7 @@ Every signed READ URL for a version is minted by one function, which refuses unl
 
 - **At once:** the finish action (staff, and 2b's customer finish) calls the worker after the version becomes `ready`. Normally the verdict lands in a second or two and the row goes "Revisando" → "Listo".
 - **Retry pass:** a new pass on the existing reminders cron (`/api/cron/reminders`, pass registry) scans every `pending` version oldest first, within a time budget, incrementing `scan_attempts`. After 3 attempts that each end in `error`, the version becomes `unscannable` and is handled like an infected one (bytes deleted, note shown): fail closed.
+  - *Amended 2026-10-15 (2a plan review):* (1) The pass scans only while the worker's `/health` is good, so an outage never spends attempts (plan deviation 7). (2) **Only a clamd-stage error spends an attempt**: the worker's error answer names its stage, and only a well-formed 200 saying clamd itself failed on this stream counts; a 401/403 (a wrong binding), a network failure, a timeout, a redirect or a fetch failure leaves the version `pending` and spends nothing. (3) **The breaker:** the pass holds clamd errors during its run and spends them only if the worker reached at least one verdict in the same run; two or more failures with no verdict spend nothing and turn the heartbeat red. Without (2) and (3), a misconfigured binding would delete every pending file in about 30 minutes while `/health` stayed green. (4) Content clamd could not fully read (a scan limit, encryption) is reported by clamd (`AlertExceedsMax`, `AlertEncrypted*`) and treated as `unscannable`, never clean: a password-protected file is removed with "No se pudo revisar este archivo". (Plan deviations 15, 16; plan review C1, C2.)
 - **Heartbeat:** the pass records an `ops_heartbeats` row (0057) with the worker's `/health` answer. `/api/ops/health` goes red when the worker is unreachable, its signatures are older than 3 days, or any version has been `pending` for over 15 minutes.
 
 ### 3.5 What people see
@@ -64,6 +69,7 @@ Every signed READ URL for a version is minted by one function, which refuses unl
 - While a NEW version is pending, the previous clean version stays current and opens normally; the Versions list shows the new one as "Revisando".
 - **Infected:** the object is deleted; the version is marked; if no clean version is left, the row reads **"Quitado: tenía un virus"** (dot + word), with Move to trash available so staff can clear it. Timeline: "Se quitó *Lease*: tenía un virus" with the **automation** author mark; event `document.virus_removed` with `{ documentId, versionId }` (no file name, as part 1's deviation 3). The uploader sees the same row; there is no toast for a verdict that arrives after they leave.
 - **Unscannable:** the same, reading "No se pudo revisar este archivo".
+- *Amended 2026-10-15 (2a plan review):* (1) The timeline row follows the timeline's grammar, the automation mark first: "Automatización quitó *Lease*: tenía un virus" / "Automation removed Lease: it had a virus"; unscannable: "quitó *Lease*: no se pudo revisar" (plan deviation 10). (2) An unscannable file emits `document.unscannable` with the same payload `{ documentId, versionId }` (deviation 8). (3) There is no permanent "Listo" label: a clean file is the ordinary row, and the card re-reads while a file is "Revisando", so the word goes away by itself (deviation 11).
 - All copy in English and Spanish.
 
 ## 4. PR 2b: customer upload links
@@ -134,7 +140,7 @@ A required category is **met** for a customer by a document that is not in the t
 - **Worker** (`services/scanner/`, its own CI job): the shim's unit tests; against the real clamd image, the EICAR test string answers `infected` and a clean PDF answers `clean`; a bad HMAC and a disallowed URL are refused without a fetch.
 - **App:** the scan client mocked at its HTTP boundary. The gate refuses to mint for `pending`, `infected` and `unscannable`; current advances only on clean; the retry pass respects its budget and its 3-attempt rule; infected deletes storage before recording the verdict.
 - **`@bis/db` / replica:** RLS and grants for 0079–0081; the verdict RPC's compare-and-set; token isolation (a token never reaches another account's or another record's rows; expired, revoked and completed tokens refuse both routes; a token for record A cannot file onto record B).
-- **e2e:** CI has no scanner, so the e2e stack runs a **fake scanner** (a route answering by content: EICAR → infected, else clean) behind the same HMAC. Specs: Revisando → Listo; the infected path; a customer upload through `/d/[token]` end to end without Clerk; the checklist meter and a skip with Undo.
+- **e2e:** CI has no scanner, so the e2e stack runs a **fake scanner** (*Amended 2026-10-15 (2a plan review):* the REAL shim in front of a fake clamd, `services/scanner/test/fake-clamd.mjs`, both started by Playwright's `webServer`, not a route: nothing fake is in the app or the image, so it cannot reach production, and the shim's HMAC and allow-list run in every e2e run; plan deviation 5) answering by content: EICAR → infected, else clean, behind the same HMAC. Specs: Revisando → Listo; the infected path; a customer upload through `/d/[token]` end to end without Clerk; the checklist meter and a skip with Undo.
 - **Real scanner:** one manual EICAR upload on Preview before 2a merges (owner and orchestrator together).
 
 ## 8. Rollout
@@ -150,4 +156,5 @@ A required category is **met** for a customer by a document that is not in the t
 - **A1** clamd's resident memory with the current signature set fits a 2 GB Fly machine.
 - **A2** Fly's price for that machine is about $10–12 a month.
 - **A3** clamd's `INSTREAM` limit (`StreamMaxLength`) can be raised to 26 MB in the image's config.
+  - *Amended 2026-10-15 (2a plan review):* the check is that the WHOLE stream is read, not only accepted: a 25 MiB file whose last member is the EICAR string must answer infected (with `MaxFileSize` raised to 30M), beside a clean 25 MiB file answering clean.
 - **A4** Supabase's signed GET URLs for the `documents` bucket are fetchable from Fly's network with no IP allow-listing.

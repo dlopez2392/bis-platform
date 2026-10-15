@@ -8,9 +8,11 @@
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8 (`rpc`, `storage.createSignedUrl`, `storage.remove`); Next.js 16.3.6 App Router (server actions, route handlers, client components); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); Node 24 in CI, `node:test` for the shim; Docker (`clamav/clamav:1.4`, Alpine, `apk add nodejs`); Fly.io (`flyctl`, one always-on `shared-cpu-1x` 2 GB machine in `iad`); the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it).
 
+**Revision:** 2026-10-15, after the plan review of `4771f63a` (C1, C2, I1, I2, minors 2–15; orchestrator rulings on deviations 1 and 12). The spec carries matching "Amended 2026-10-15 (2a plan review)" notes.
+
 **Spec:** `docs/superpowers/specs/2026-10-15-document-vault-part2-design.md` (owner-approved 2026-10-15): §1 row 2a, §2 P1–P4, §3 entirely, and the 2a parts of §6, §7, §8, §9. Part 1's plans: `docs/superpowers/plans/2026-10-13-document-vault-pr1a.md`, `docs/superpowers/plans/2026-10-14-document-vault-pr1b.md` (the template). Base: `main` at `de3f3551` (#259, PR 1b merged; 0077 and 0078 applied to bis-ci and production, never re-apply) plus the spec commit `5d74ee58`. Every file:line below was read off this worktree at `5d74ee58`; anything not read is labelled **Assumption**.
 
-`<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s07-2a` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s07-2a`), branch `feat/s07-vault-2a`. `<SCRATCH>` = `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\f54a0255-9568-420c-ad87-a4d62d6b9a05\scratchpad` (Git Bash: `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/f54a0255-9568-420c-ad87-a4d62d6b9a05/scratchpad`); write it out literally in every command. `<KITSRC>` = `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl` (PR 1a's PostgREST build, JWT signer and gateway proxy; read 2026-10-15: `postgrest.exe`, `make-jwt.js`, `proxy.mjs` present). `…/contacts/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/`. `…/api/` = `apps/web/src/app/api/accounts/[accountId]/`.
+`<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s07-2a` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s07-2a`), branch `feat/s07-vault-2a`. `<SCRATCH>` = `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\f54a0255-9568-420c-ad87-a4d62d6b9a05\scratchpad` (Git Bash: `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/f54a0255-9568-420c-ad87-a4d62d6b9a05/scratchpad`); write it out literally in every command. `<KITSRC>` = `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl` (PR 1a's PostgREST build, JWT signer and gateway proxy; read 2026-10-15: `postgrest.exe`, `make-jwt.js`, `proxy.mjs` present). `<FLYCTL>` = `C:/Users/danlo/.fly/bin/flyctl.exe` (Git Bash: `/c/Users/danlo/.fly/bin/flyctl.exe`), flyctl v0.4.118, logged in to danlo's Fly org `personal` (card added). There is NO `fly` alias on this machine: every Fly command in this plan is `<FLYCTL> …`, written out as that full path when run. `…/contacts/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/`. `…/api/` = `apps/web/src/app/api/accounts/[accountId]/`.
 
 ## Global Constraints
 
@@ -20,7 +22,7 @@
   - **bis-crm:** `apps/web/src/lib/messages.ts` and one new `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `packages/db/src/documents.ts`, `packages/db/src/test/documents.test.ts`, `packages/db/src/index.ts` (the documents export block only); `apps/web/src/lib/documents/{scan-client,scan-version,scan-state,read-gate}.ts` and their tests (new); `…/contacts/documents-actions.ts` and its test; `apps/web/src/lib/documents/{documents-load,document-view}.ts`, `documents-load.test.ts`; `…/api/contacts/[contactId]/documents/route.test.ts`, `…/api/groups/[groupId]/documents/route.test.ts` (fixtures only); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (regenerated, never hand-edited); for the removed-file rows (Task 3b): `packages/db/src/record.ts`, `packages/db/src/test/record.test.ts`, `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` and their tests, `…/contacts/[contactId]/activity-timeline.tsx` and `activity-timeline.rows.test.ts`, `…/groups/[groupId]/group-timeline.tsx` and its test, `…/contacts/contact-drawer.tsx` (the `ROW_ICON` map only), `apps/web/src/lib/contacts/drawer-summary.ts` (`ROW_KINDS` only) and its test, and `…/api/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED` and its comment only).
   - **bis-automations:** `apps/web/src/lib/automations/passes/documents-scan.ts` (+ test, new), `apps/web/src/lib/automations/registry.ts`, `apps/web/src/lib/automations/caps.ts` (prose only), `apps/web/src/lib/automations/sentinel.test.ts`, `apps/web/src/lib/automations/cron-coupling.test.ts`, `apps/web/src/app/api/cron/reminders/route.test.ts`, `apps/web/src/lib/ops/watch.ts` (+ `watch.test.ts`), `apps/web/src/app/api/ops/health/route.ts` (+ test).
   - **bis-frontend:** `…/contacts/{documents-card.tsx,document-viewer.tsx}` and their tests, `…/contacts/{documents-card-handlers.test.ts,document-purge-dialog.test.ts}` (fixtures only), `apps/web/src/app/(dashboard)/dashboard/styleguide/{documents-demo.tsx,documents-demo.test.ts}`.
-  - **bis-platform:** everything under `services/scanner/` (new), `.github/workflows/ci.yml` (one new job, `scanner`), `apps/web/playwright.config.ts` (the `webServer` entry only), `.env.example` (one block), `docs/runbooks/scanner.md` (new).
+  - **bis-platform:** everything under `services/scanner/` (new), `.github/workflows/ci.yml` (one new job, `scanner`), `apps/web/playwright.config.ts` (the `webServer` entry only), `apps/web/vitest.config.ts` (`test.env` only), `.env.example` (one block), `docs/runbooks/scanner.md` (new).
   - **bis-e2e-qa:** `apps/web/e2e/documents-scan.spec.ts` (new).
   - **Orchestrator:** the ledger, the Fly app, its secrets and deploy, the Vercel env, the bis-ci and production applies of 0079, the parity check, the gates, the EICAR check on Preview, the PR, the merge, the roadmap tracker row. No `DESIGN.md` edit: its "Documents" paragraph does not name scanning, and rule 3 (dot + word) already governs the new states.
 - **Shared files, one task at a time.**
@@ -169,7 +171,7 @@ Paste both values in the report; stop if they differ.
 
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
-1. **`current_version_id` keeps 0077's meaning; what OPENS is the newest CLEAN ready version, derived in the read** (spec §3.2 bullets 4–5 said the pointer moves only on clean and the 0077 §5 trigger gains that condition). **Orchestrator to confirm.** The pointer is the file's "listed" marker, read as such in seven places: `listRecordDocuments` lists only `current_version_id is not null` (`packages/db/src/documents.ts:71`); the timeline's "added a file" row likewise (`:479`); `discardDocumentUpload` deletes a document whose pointer is null (`:181-182`), so a first upload that is ready but pending would be DELETED with its version by the next failed-upload clean-up or sweep (`documents-sweep.ts:168`); `startDocumentVersionUploadAction` refuses a file with no pointer (`documents-actions.ts:167`); `mark_document_version_ready` moves it and answers `first` from it (`0077:207-220`), and 0078's view relies on "the first ready version is the oldest", which that rule enforces (`0078:42-47`). Moving the pointer only on clean would unlist every pending upload (spec §3.5 wants it listed as "Revisando") and break those four writers. Holding P3 does not need the pointer: the ONE mint function re-reads the version and refuses unless it is clean (Task 3), and the card derives the openable version (`documentView`, Task 7): the newest ready version whose scan is clean, else the newest ready version with its state. Spec §3.5's behaviours all hold: a pending NEW version leaves the previous clean one opening normally, and the Versions list shows the new one as "Checking". Consequences: 0077's trigger and `mark_document_version_ready` are untouched; the verdict function moves no pointer (deviation 3); the database no longer promises "current is clean", the gate does.
+1. **`current_version_id` keeps 0077's meaning; what OPENS is the newest CLEAN ready version, derived in the read** (spec §3.2 bullets 4–5 said the pointer moves only on clean and the 0077 §5 trigger gains that condition). **ACCEPTED 2026-10-15** (orchestrator ruling; the spec's §3.2 is amended to match). The pointer is the file's "listed" marker, read as such in seven places: `listRecordDocuments` lists only `current_version_id is not null` (`packages/db/src/documents.ts:71`); the timeline's "added a file" row likewise (`:479`); `discardDocumentUpload` deletes a document whose pointer is null (`:181-182`), so a first upload that is ready but pending would be DELETED with its version by the next failed-upload clean-up or sweep (`documents-sweep.ts:168`); `startDocumentVersionUploadAction` refuses a file with no pointer (`documents-actions.ts:167`); `mark_document_version_ready` moves it and answers `first` from it (`0077:207-220`), and 0078's view relies on "the first ready version is the oldest", which that rule enforces (`0078:42-47`). Moving the pointer only on clean would unlist every pending upload (spec §3.5 wants it listed as "Revisando") and break those four writers. Holding P3 does not need the pointer: the ONE mint function re-reads the version and refuses unless it is clean (Task 3), and the card derives the openable version (`documentView`, Task 7): the newest ready version whose scan is clean, else the newest ready version with its state. Spec §3.5's behaviours all hold: a pending NEW version leaves the previous clean one opening normally, and the Versions list shows the new one as "Checking". Consequences: 0077's trigger and `mark_document_version_ready` are untouched; the verdict function moves no pointer (deviation 3); the database no longer promises "current is clean", the gate does.
 2. **`documents.scan_status` is not dropped by 0079; it gets `default 'skipped'` and the app stops writing it** (spec §3.2 bullet 3). 0079 applies to production BEFORE the merge (the additive rule, Task 14), and the build running then writes `scan_status: "skipped"` on every upload (`documents.ts:115`): dropping the column first would fail every upload until the deploy. The drop becomes 2b's 0080's first statement (named in "Not in this PR"; 2b's plan must carry it). Five db test files insert the column explicitly and stay green (`document-vault-schema.test.ts:45`, `document-vault-rls.test.ts:42`, `document-vault-reserve-lock.test.ts:29`, `document-space-used.test.ts:33`, `documents.test.ts:63`).
 3. **The verdict function is `SECURITY INVOKER`, executable by `service_role` only, and moves no pointer** (spec §3.2 bullet 5: "on clean it advances current_version_id"; deviation 1 removes the need). `record_heartbeat`'s shape (`0057:42-44`): service_role already holds UPDATE on `document_versions` (`0077:128`). It is a compare-and-set from `pending` on a READY version of that account; `error` adds an attempt and stays `pending`.
 4. **The worker's secrets are per caller, each bound to that caller's storage origin** (`SCANNER_CLIENTS="<secret>@<origin> …"`), not one `SCANNER_SECRET` (spec §3.1). Spec §3.1 has Production and Preview call one worker; with one shared secret, Preview (which must never hold a production credential, CLAUDE.md) could make the worker fetch production URLs. Bound secrets mean a Preview-signed request can only fetch bis-ci objects. The app side keeps the spec's names, `SCANNER_URL` and `SCANNER_SECRET`, one value per deployment.
@@ -180,15 +182,17 @@ Paste both values in the report; stop if they differ.
 9. **A removed version's bytes still count against the 5 GB quota and the space line until its file is purged** (spec silent). 0077's reserve and 0078's sum count every version row (`0077:181`, `0078:36`); changing them re-creates two functions the quota tests pin, for a rare case the trash (30 days) or Delete forever clears.
 10. **The removed-file row's words follow the timeline's grammar** ("{mark} {verb}", the automation mark leading): "Automation removed Lease: it had a virus" / "Automatización quitó Lease: tenía un virus" (spec §3.5 wrote the impersonal "Se quitó *Lease*: tenía un virus"). Unscannable: "removed Lease: it couldn't be checked" / "quitó Lease: no se pudo revisar".
 11. **No permanent "Listo" label.** A clean file is the ordinary row (spec §3.4 "Revisando → Listo"); the card re-reads every 5 seconds while a file is Checking, so the word goes away by itself.
-12. **The worker machine is 2 GB with `ConcurrentDatabaseReload no`** (spec P2 said ~2 GB). ClamAV's own Docker page says "2GB may be insufficient. Configure your containers to have 4GB of RAM" (docs.clamav.net, Installing/Docker, read 2026-10-15): a concurrent reload holds two signature sets at once. Turning it off halves the peak at the cost of a pause in scanning during each reload (scans then answer `error` and are retried). Assumption A1 measures it; if it fails, a 4 GB machine (about double the cost) is **orchestrator to confirm** with the owner.
+12. **The worker machine is 2 GB with `ConcurrentDatabaseReload no`** (spec P2 said ~2 GB). ClamAV's own Docker page says "2GB may be insufficient. Configure your containers to have 4GB of RAM" (docs.clamav.net, Installing/Docker, read 2026-10-15): a concurrent reload holds two signature sets at once. Turning it off halves the peak at the cost of a pause in scanning during each reload (scans then answer `error` and are retried). **ACCEPTED 2026-10-15** (orchestrator ruling): 2 GB with `ConcurrentDatabaseReload no`; 4 GB (about double the cost) only if Assumption A1 fails, and the orchestrator asks danlo before the cost changes.
 13. **Download is in the row menu only when the file has a clean version**, and the viewer draws no Download for an unchecked file (spec §3.5 "cannot be opened"); the server refuses anyway.
 14. **With no `SCANNER_URL`/`SCANNER_SECRET` (a developer's machine), the finish leaves the file Checking without spending an attempt**, and the pass records `documents.scanner` as failing "not configured". Fail closed: nothing opens unscanned.
+15. **Only a clamd-stage error spends an attempt, and the retry pass has a breaker** (plan review C1; spec §3.4 amended: it said every error counts). The worker's error answer names its stage: `clamd` (clamd read this stream and answered ERROR about it) or `transport` (the object could not be fetched, a redirect, a non-200, a timeout, clamd unreachable or silent). The app spends an attempt ONLY on a well-formed 200 `{verdict:"error",stage:"clamd"}`; a 401, a 403, a network failure or junk leaves the version pending and spends nothing (`scan-client.ts`, Task 5). Without this, a wrong `SCANNER_CLIENTS` binding answers 403 to every scan while `/health` stays green, and three ticks (about 30 minutes) would delete every pending file as unscannable. The pass also HOLDS clamd errors during its loop and spends them only if the worker reached at least one verdict in the same pass; two or more failures with no verdict spend nothing and turn `documents.scanner` red ("N scans failed and none succeeded; no attempts were spent"). The finish spends its one error at once (one attempt per upload at most). Accepted residual (plan review 8): the finish and the pass can scan the same fresh version at once; the first verdict recorded wins and the other answers `stale`; they can disagree only when one side meets a clamd error, which spends at most one attempt, so no removal can land under a clean verdict.
+16. **Content clamd could not fully read is "unscannable", never clean** (plan review C2; spec §3.4 amended). clamd's defaults answer `OK` for content skipped under a scan limit or that is encrypted. The image sets `AlertExceedsMax yes` and `AlertEncrypted`, `AlertEncryptedArchive`, `AlertEncryptedDoc yes` (names read off the 1.4 image, A13), and raises `MaxFileSize` to 30M so a 25 MiB upload is never skipped for size; the shim maps `Heuristics.Limits.Exceeded.*` and `Heuristics.Encrypted.*` to `unscannable` (removed at once, object first, "Couldn't check this file"), never `infected`. **Consequence for the orchestrator:** a password-protected PDF, Word or Excel file, or an encrypted ZIP inside a DOCX, will be removed with "Couldn't check this file". A PDF that is only owner-locked (no password to open) is not "encrypted" to a reader and is expected to scan normally; that is an assumption (A13) the Preview check tests with one such file.
 
 ## Assumptions (not verified by reading; each has a named check)
 
 - **A1** (spec §9) clamd's resident memory with the current signatures, `ConcurrentDatabaseReload no`, fits a 2 GB machine with headroom. Check: the CI `scanner` job prints `docker stats --no-stream` after its scans (Task 10); at rollout, Fly's machine metrics after the first freshclam reload (Task 14 step 5). Pass: under 1.6 GiB. Fail: deviation 12's fallback.
 - **A2** (spec §9) Fly's price for one always-on `shared-cpu-1x` 2 GB machine in `iad` is about $10–12 a month. Check: fly.io/docs/about/pricing at rollout (Task 14 step 1), the number written into the PR body.
-- **A3** (spec §9) `StreamMaxLength 26M` in `/etc/clamav/clamd.conf` lets a 25 MiB stream through. Check: the CI job's 25 MiB clean file answers `clean`, not `error` (Task 4's `real-clamd.mjs`).
+- **A3** (spec §9, amended) `StreamMaxLength 26M` and `MaxFileSize 30M` let a whole 25 MiB stream be READ, not only accepted. Check: the CI job's 25 MiB clean PDF answers `clean`, and a 25 MiB DOCX whose LAST member is the EICAR string answers `infected` (Task 4's `real-clamd.mjs`): a stream cut short or skipped past a limit could not find it.
 - **A4** (spec §9) Supabase's signed GET URLs for the private `documents` bucket are fetchable from Fly's network with no IP allow-listing. Check: Task 14 step 7 (the EICAR on Preview reaches a verdict) and step 9 (production's catch-up leaves nothing pending).
 - **A5** `clamav/clamav:1.4` keeps `clamd.conf` and `freshclam.conf` under `/etc/clamav/`, clamd listens on TCP 3310 (docs.clamav.net, read 2026-10-15: "clamd: 3310"), the image runs unprivileged as user `clamav` (its documented `--user clamav --entrypoint /init-unprivileged`), and `freshclam -d` and `clamd` daemonise with `Foreground no`. Check: Task 4 step 1 reads both conf files out of the image; the CI job's `/health` answers `clamd: true`.
 - **A6** Real clamd flags the EICAR string inside a stored (uncompressed) DOCX zip member, the file Task 14's Preview check uploads (a raw EICAR file is refused by the app's type check before any scan, `content-check.ts:42-54`). Check: the CI job's `eicar.docx` answers `infected`.
@@ -196,8 +200,10 @@ Paste both values in the report; stop if they differ.
 - **A8** Playwright's `webServer` takes an array, and an entry with `port` (no `url`) waits for a plain TCP listener (the fake clamd). Check: Task 10 step 6's `playwright test --list` loads the config; the orchestrator's e2e run starts all three.
 - **A9** Alpine's `nodejs` package in the 1.4 image is Node 20 or later (global `fetch`, `AbortSignal.timeout`, web streams as async iterables). Check: Task 4 step 1 prints `node --version` inside the built image.
 - **A10** PostgREST serves 0079's `security_invoker` view to a signed-in client exactly as 0078's (PR 1b's B6). Check: `record.test.ts`'s new case through PostgREST on the replica and in CI `verify`; Task 12 test 2 sees the row as the agency.
-- **A11** `fly.toml`'s `auto_stop_machines = "off"` and a top-level `[checks]` TCP check are accepted by current flyctl. Check: `fly config validate` in Task 14 step 3.
+- **A11** `fly.toml`'s `auto_stop_machines = "off"` and a top-level `[checks]` TCP check are accepted by current flyctl. Check: `<FLYCTL> config validate` in Task 14 step 3.
 - **A12** (carried, PR 1a A4) `storage.remove([path])` answers no error for a path already gone, so removing an infected object twice is harmless.
+- **A13** (plan review C2) clamd 1.4 knows `AlertExceedsMax`, `AlertEncrypted`, `AlertEncryptedArchive`, `AlertEncryptedDoc`, `MaxFileSize`, `MaxScanSize`, `TCPAddr` by these names, reports skipped or encrypted content as `Heuristics.Limits.Exceeded.*` / `Heuristics.Encrypted.*`, and an owner-locked (no open password) PDF is not reported as encrypted. Check: Task 4 step 1 reads every name off `clamconf` in the image (clamd refuses to start on an unknown directive, which the CI job's health wait would show); the shim's mapping is unit-tested against the fake; the Preview check (Task 14 step 9) uploads one owner-locked PDF and expects it to open.
+- **A14** (plan review 13) `freshclam --daemon` exits non-zero when its first update fails, which under `set -eu` would stop the machine; `start.sh` therefore lets it fail with a log line (the preloaded signatures stand and the heartbeat's age check covers staleness). Check: Task 4 step 7's local run and the CI job's `docker logs` show whether freshclam started; `<FLYCTL> logs` after the deploy.
 
 ## File Structure
 
@@ -218,7 +224,7 @@ Paste both values in the report; stop if they differ.
 | `docs/runbooks/scanner.md` | bis-platform | create, deploy, rotate, read health, roll back |
 | `apps/web/e2e/documents-scan.spec.ts` | bis-e2e-qa | Checking → normal, the virus path, the slow state, the gate |
 
-**Modified:** `packages/db/src/{documents,index,record}.ts`, `packages/db/src/test/{documents,record,schema-grants-guard}.test.ts`; `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` (+ tests); both timelines (+ tests); `…/contacts/contact-drawer.tsx`; `apps/web/src/lib/contacts/drawer-summary.ts` (+ test); `…/summary/route.reads.test.ts`; `apps/web/src/lib/messages.ts`, `messages.test.ts`; `…/contacts/documents-actions.ts` (+ test); `apps/web/src/lib/documents/{documents-load,document-view}.ts`, `documents-load.test.ts`; both documents route tests; `…/contacts/{documents-card.tsx,document-viewer.tsx}` (+ tests), the handlers and purge-dialog tests (fixtures); the styleguide demo (+ test); `apps/web/src/lib/automations/{registry.ts,sentinel.test.ts,cron-coupling.test.ts}`; `apps/web/src/app/api/cron/reminders/route.test.ts`; `apps/web/src/lib/ops/watch.ts` (+ test); `apps/web/src/app/api/ops/health/route.ts` (+ test); `.github/workflows/ci.yml`; `apps/web/playwright.config.ts`; `.env.example`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
+**Modified:** `packages/db/src/{documents,index,record}.ts`, `packages/db/src/test/{documents,record,schema-grants-guard}.test.ts`; `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` (+ tests); both timelines (+ tests); `…/contacts/contact-drawer.tsx`; `apps/web/src/lib/contacts/drawer-summary.ts` (+ test); `…/summary/route.reads.test.ts`; `apps/web/src/lib/messages.ts`, `messages.test.ts`; `…/contacts/documents-actions.ts` (+ test); `apps/web/src/lib/documents/{documents-load,document-view}.ts`, `documents-load.test.ts`; both documents route tests; `…/contacts/{documents-card.tsx,document-viewer.tsx}` (+ tests), the handlers and purge-dialog tests (fixtures); the styleguide demo (+ test); `apps/web/src/lib/automations/{registry.ts,sentinel.test.ts,cron-coupling.test.ts}`; `apps/web/src/app/api/cron/reminders/route.test.ts`; `apps/web/src/lib/ops/watch.ts` (+ test); `apps/web/src/app/api/ops/health/route.ts` (+ test); `.github/workflows/ci.yml`; `apps/web/playwright.config.ts`; `apps/web/vitest.config.ts`; `.env.example`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
 
 ## Task list, owners, order
 
@@ -235,7 +241,7 @@ Paste both values in the report; stop if they differ.
 | 7 | The card's read: scan state in the view and the parser, `scan-state.ts` | bis-crm | sonnet | 2, 3 | `lib/documents/{documents-load,document-view,scan-state}*`, both route tests |
 | 8 | The retry pass, the heartbeat, ops health, the watch label | bis-automations | **opus** | 3, 5, 7 | `passes/documents-scan*`, `registry.ts`, the three pinned automations tests, `lib/ops/watch*`, `api/ops/health/*` |
 | 9 | The card and the viewer: states, re-read, Download only when clean; `/styleguide` | bis-frontend | **opus** | 2, 7 | `…/contacts/{documents-card,document-viewer}*`, two fixture tests, `styleguide/documents-demo*` |
-| 10 | CI job, Playwright's fake scanner, `.env.example`, the runbook | bis-platform | sonnet | 4 | `ci.yml`, `playwright.config.ts`, `.env.example`, `docs/runbooks/scanner.md` |
+| 10 | CI job, Playwright's fake scanner, the unit suite's scanner pin, `.env.example`, the runbook | bis-platform | sonnet | 4 | `ci.yml`, `playwright.config.ts`, `vitest.config.ts`, `.env.example`, `docs/runbooks/scanner.md` |
 | 11 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 3b, 6, 7, 9 | `lib/i18n/*-baseline.json` |
 | 12 | The e2e spec | bis-e2e-qa | sonnet | 9, 10, 11 | `e2e/documents-scan.spec.ts` |
 | 13 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–12, 3b | none |
@@ -269,7 +275,7 @@ Disjointness: T3b (`record.ts`, `lib/record/*`, the timelines, the drawer's maps
   - `grep -n '"documentsSweep", "weeklyClientReport"' apps/web/src/lib/automations/sentinel.test.ts` → `280:`.
   - `ls <KITSRC>/postgrest.exe <KITSRC>/make-jwt.js <KITSRC>/proxy.mjs` → all three exist.
   - `docker version` answers (Task 4 builds the image locally; if Docker is absent on this machine, Task 4's step 7 moves to the CI job only, and the report says so).
-- [ ] **Step 3. Owner action, started now because it gates Task 14:** ask danlo to create the Fly.io account and add a card (spec §8). Nothing else waits on it until Task 14.
+- [x] **Step 3. DONE 2026-10-15:** danlo created the Fly.io account (org `personal`, card added); flyctl v0.4.118 is at `<FLYCTL>` and logged in. Confirm with `"/c/Users/danlo/.fly/bin/flyctl.exe" auth whoami` and `"/c/Users/danlo/.fly/bin/flyctl.exe" orgs list` (expect `personal`); no `fly` alias exists, so never type `fly …`.
 
 ---
 
@@ -1076,7 +1082,7 @@ export async function listDocumentScanTimeline(
 - Modify: `apps/web/src/lib/record/timeline-rows.ts` (after the `documentVersion` case, `:100-104`) and `timeline-rows.test.ts` (after `:163`)
 - Modify: `apps/web/src/lib/record/recent-rows.ts` (`:47`) and `recent-rows.test.ts` (after `:101`)
 - Modify: `…/contacts/[contactId]/activity-timeline.tsx` (`:186-187`) and `activity-timeline.rows.test.ts` (after `:207`)
-- Modify: `…/groups/[groupId]/group-timeline.tsx` (`:130-131`) and its test (the file `ls` shows beside it)
+- Modify: `…/groups/[groupId]/group-timeline.tsx` (`:130-131`) and `…/groups/[groupId]/group-timeline.test.ts` (its `documentVersion` render case is the model; `group-timeline.lang.test.ts` beside it is not touched)
 - Modify: `…/contacts/contact-drawer.tsx` (`ROW_ICON`, `:64-67`)
 - Modify: `apps/web/src/lib/contacts/drawer-summary.ts` (`ROW_KINDS`, `:52-55`) and `drawer-summary.test.ts` (after `:104`)
 - Modify: `…/api/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED`, `:50-58`)
@@ -1195,7 +1201,7 @@ describe("a removed file in the drawer's Recent (spec 3.5)", () => {
   });
 ```
 
-- [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/record src/lib/contacts/drawer-summary.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.rows.test.ts" "<the group timeline's test path>"` → the new cases fail (`tsc` also refuses the unknown kind: expected). `record.test.ts` on your replica behind PostgREST → its new case fails.
+- [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/record src/lib/contacts/drawer-summary.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.rows.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/groups/[groupId]/group-timeline.test.ts"` → the new cases fail (`tsc` also refuses the unknown kind: expected). `record.test.ts` on your replica behind PostgREST → its new case fails.
 
 - [ ] **Step 3: Implement.**
 
@@ -1281,7 +1287,7 @@ describe("a removed file in the drawer's Recent (spec 3.5)", () => {
 **Interfaces**
 - Produces (the wire contract Task 5's client speaks; change one side, change both):
   - Every request carries `x-bis-scan-timestamp` (Unix seconds) and `x-bis-scan-signature` = lowercase hex HMAC-SHA256, keyed by the caller's secret, over `` `${timestamp}.${METHOD}.${path}.${body}` `` (`body` is `""` for GET). Accepted within ±60 s. The fixed vector both sides pin: secret `test-secret`, timestamp `1760000000`, `POST /scan` with body `{"url":"https://abc.supabase.co/storage/v1/object/sign/documents/a/b/c?token=t"}` → `414f5bcfa4ebd5bb5e060b45bf091d4abfca66fd7bda2dfc2d8e752e64eaec01`; `GET /health` with body `""` → `9b16b5e0e7895ed3b63577ae46200cc556595994f9e89e9323a8bd08568a5996` (computed 2026-10-15 with `node:crypto`).
-  - `POST /scan` `{"url": "<signed GET>"}` → 200 `{"verdict":"clean"}` | `{"verdict":"infected","signature":"<name>"}` | `{"verdict":"error"}`; 401 bad or stale signature (nothing fetched); 403 a URL outside the caller's origin or not `/storage/v1/object/sign/documents/…?token=…` (nothing fetched); 400 bad JSON; 413 a body over 8 KiB; 404 any other route.
+  - `POST /scan` `{"url": "<signed GET>"}` → 200 `{"verdict":"clean"}` | `{"verdict":"infected","signature":"<name>"}` | `{"verdict":"unscannable","signature":"Heuristics.…"}` (a limit or encryption, plan review C2) | `{"verdict":"error","stage":"clamd"|"transport"}` (plan review C1: `clamd` only when clamd answered ERROR about this stream; anything else is `transport`); 401 bad or stale signature (nothing fetched); 403 a URL outside the caller's origin or not `/storage/v1/object/sign/documents/…?token=…` (nothing fetched); 400 bad JSON; 413 a body over 8 KiB; 404 any other route.
   - `GET /health` → 200 `{"clamd":true,"signaturesAt":"<ISO>"}` | `{"clamd":false}`; 401 as above.
   - Env: `SCANNER_CLIENTS` (`<secret>@<origin>` entries separated by commas or spaces; secret ≥ 16 characters; the process refuses to start without one), `PORT` (8080), `CLAMD_HOST` (127.0.0.1), `CLAMD_PORT` (3310).
   - `services/scanner/test/fake-clamd.mjs`: `startFakeClamd(port?: number): Promise<{ port: number; close(): Promise<void> }>`; run as `node services/scanner/test/fake-clamd.mjs <port>`.
@@ -1292,9 +1298,10 @@ describe("a removed file in the drawer's Recent (spec 3.5)", () => {
 ```bash
 docker pull clamav/clamav:1.4
 docker run --rm --entrypoint sh clamav/clamav:1.4 -c 'grep -nE "^(TCPSocket|TCPAddr|LocalSocket|StreamMaxLength|ConcurrentDatabaseReload|Foreground|User)" /etc/clamav/clamd.conf; grep -nE "^(Foreground|DatabaseOwner|Checks)" /etc/clamav/freshclam.conf; id clamav; ls -ld /var/lib/clamav /run/clamav /tmp; apk info nodejs 2>/dev/null | head -1'
+docker run --rm --entrypoint sh clamav/clamav:1.4 -c 'clamconf -n 2>/dev/null | grep -nE "^(AlertExceedsMax|AlertEncrypted|AlertEncryptedArchive|AlertEncryptedDoc|MaxFileSize|MaxScanSize|StreamMaxLength|TCPAddr|TCPSocket|ConcurrentDatabaseReload) "; clamconf 2>/dev/null | grep -nE "AlertExceedsMax|AlertEncrypted|MaxFileSize|TCPAddr" | head -20'
 ```
 
-Paste the output. Expected: a `TCPSocket 3310` line, a `clamav` user, both directories owned by `clamav`. If `TCPSocket` is absent, the Dockerfile below appends it the same way it appends `StreamMaxLength`; if the directories are owned by root, STOP and report (the image's own unprivileged entrypoint then needs reading). Without Docker, say so; the CI job is then the first proof.
+Paste the output. Expected: a `TCPSocket 3310` line, a `clamav` user, both directories owned by `clamav`, and `clamconf` naming every directive the Dockerfile sets (Assumption A13). A directive `clamconf` does not know: STOP and report its real name; do not guess (clamd refuses to start on an unknown one). If `TCPSocket` is absent, the Dockerfile below appends it the same way it appends `StreamMaxLength`; if the directories are owned by root, STOP and report (the image's own unprivileged entrypoint then needs reading). Without Docker, say so; the CI job is then the first proof.
 
 - [ ] **Step 2: Write the tests first.**
 
@@ -1373,7 +1380,9 @@ import { eicar } from "./eicar.mjs";
 
 /**
  * A stand-in for clamd's TCP protocol (zPING, zVERSION, zINSTREAM), answering by CONTENT: a stream
- * holding the EICAR string is FOUND, anything else is OK. For the shim's tests and the e2e stack
+ * holding the EICAR string is FOUND; one holding FAKE-CLAMD-ENCRYPTED is reported as clamd reports
+ * an encrypted document (Heuristics.Encrypted.PDF FOUND); one holding FAKE-CLAMD-ERROR gets clamd's
+ * own error line; anything else is OK. For the shim's tests and the e2e stack
  * (apps/web/playwright.config.ts starts it beside the real shim). NEVER in the image: the Dockerfile
  * copies src/ only and .dockerignore drops test/ (plan deviation 5).
  */
@@ -1385,6 +1394,12 @@ export const ctime = (d) => `${DAYS[d.getUTCDay()]} ${MONTHS[d.getUTCMonth()]} $
 
 export function startFakeClamd(port = 0, host = "127.0.0.1") {
   const needle = Buffer.from(eicar());
+  const answer = (all) => {
+    if (all.includes(needle)) return "stream: Eicar-Test-Signature FOUND\0";
+    if (all.includes(Buffer.from("FAKE-CLAMD-ENCRYPTED"))) return "stream: Heuristics.Encrypted.PDF FOUND\0";
+    if (all.includes(Buffer.from("FAKE-CLAMD-ERROR"))) return "INSTREAM size limit exceeded. ERROR\0";
+    return "stream: OK\0";
+  };
   const server = net.createServer((socket) => {
     let buf = Buffer.alloc(0);
     let cmd = null;
@@ -1404,7 +1419,7 @@ export function startFakeClamd(port = 0, host = "127.0.0.1") {
       while (buf.length >= 4) {
         const len = buf.readUInt32BE(0);
         if (len === 0) {
-          socket.end(Buffer.concat(chunks).includes(needle) ? "stream: Eicar-Test-Signature FOUND\0" : "stream: OK\0");
+          socket.end(answer(Buffer.concat(chunks)));
           buf = Buffer.alloc(0);
           return;
         }
@@ -1466,7 +1481,7 @@ import { parseClients } from "../src/config.mjs";
 
 const O = "https://abc.supabase.co";
 
-test("only a signed GET on the documents bucket, at the caller's own origin (mutations: drop the origin check -> FAILS; startsWith '/storage/v1/object/' -> FAILS)", () => {
+test("only a signed GET on the documents bucket, at the caller's own origin (mutations: drop the origin check -> FAILS; startsWith '/storage/v1/object/' -> FAILS; drop the encoded-slash refusal -> the %2F case FAILS)", () => {
   assert.equal(allowedObjectUrl(`${O}/storage/v1/object/sign/documents/acct/doc/ver?token=t`, O), true);
   for (const bad of [
     "https://evil.example/storage/v1/object/sign/documents/a?token=t",
@@ -1474,6 +1489,8 @@ test("only a signed GET on the documents bucket, at the caller's own origin (mut
     `${O}/storage/v1/object/public/documents/a?token=t`,
     `${O}/storage/v1/object/sign/documents/../../object/sign/logos/a?token=t`,
     `${O}/storage/v1/object/sign/documents/%2e%2e/%2e%2e/x?token=t`,
+    `${O}/storage/v1/object/sign/documents/a%2F..%2F..%2Flogos%2Fx?token=t`,
+    `${O}/storage/v1/object/sign/documents/a%5c..%5clogos?token=t`,
     "https://user:pw@abc.supabase.co/storage/v1/object/sign/documents/a?token=t",
     `${O}/storage/v1/object/sign/documents/a`,
     `${O}/storage/v1/object/sign/documents/?token=t`,
@@ -1505,21 +1522,40 @@ import { startFakeClamd } from "./fake-clamd.mjs";
 import { eicar, cleanPdf } from "./eicar.mjs";
 
 const SECRET = "server-test-secret-0001";
-let clamd, storage, scanner, base, origin, logs = [];
+let clamd, storage, elsewhere, scanner, base, origin, elsewhereOrigin;
+const logs = [];
 const hits = [];
+const elsewhereHits = [];
 const FILES = {
   "clean.pdf": cleanPdf(2048),
   "bad.pdf": Buffer.concat([Buffer.from("%PDF-1.4\n% "), Buffer.from(eicar()), Buffer.from("\n%%EOF\n")]),
-  "big.pdf": cleanPdf(5000),
+  "err.pdf": Buffer.concat([cleanPdf(100), Buffer.from("FAKE-CLAMD-ERROR")]),
+  "locked.pdf": Buffer.concat([cleanPdf(100), Buffer.from("FAKE-CLAMD-ENCRYPTED")]),
+  "big-declared.pdf": cleanPdf(5000),
+  "big-chunked.pdf": cleanPdf(5000),
 };
 const listen = (server) => new Promise((r) => server.listen(0, "127.0.0.1", () => r(server.address().port)));
 
 before(async () => {
   clamd = await startFakeClamd();
+  elsewhere = http.createServer((req, res) => { elsewhereHits.push(req.url); res.writeHead(200, { "content-length": "2048" }).end(cleanPdf(2048)); });
+  elsewhereOrigin = `http://127.0.0.1:${await listen(elsewhere)}`;
   storage = http.createServer((req, res) => {
     hits.push(req.url);
-    const f = FILES[new URL(req.url, "http://x").pathname.split("/").pop()];
+    const name = new URL(req.url, "http://x").pathname.split("/").pop();
+    if (name === "moved.pdf") {
+      res.writeHead(302, { location: `${elsewhereOrigin}/storage/v1/object/sign/documents/acct/doc/clean.pdf?token=t` }).end();
+      return;
+    }
+    const f = FILES[name];
     if (!f) { res.writeHead(404).end(); return; }
+    if (name === "big-chunked.pdf") {
+      // Plan review I1: NO content-length, so only the streaming byte counter can refuse it.
+      res.writeHead(200);
+      for (let at = 0; at < f.length; at += 1000) res.write(f.subarray(at, at + 1000));
+      res.end();
+      return;
+    }
     res.writeHead(200, { "content-length": String(f.length) }).end(f);
   });
   origin = `http://127.0.0.1:${await listen(storage)}`;
@@ -1529,7 +1565,7 @@ before(async () => {
   });
   base = `http://127.0.0.1:${await listen(scanner)}`;
 });
-after(async () => { scanner.close(); storage.close(); await clamd.close(); });
+after(async () => { scanner.close(); storage.close(); elsewhere.close(); await clamd.close(); });
 
 const call = (method, path, body = "", secret = SECRET, ts = Math.floor(Date.now() / 1000)) => fetch(`${base}${path}`, {
   method, body: method === "POST" ? body : undefined,
@@ -1543,8 +1579,23 @@ test("a clean file is clean, the EICAR file is infected with its name (mutations
   assert.deepEqual(await scan("bad.pdf"), { verdict: "infected", signature: "Eicar-Test-Signature" });
 });
 
-test("a file over the limit is an error, never clean (mutation: drop the byte count -> FAILS)", async () => {
-  assert.deepEqual(await scan("big.pdf"), { verdict: "error" });
+test("clamd's own ERROR about this stream is stage clamd; an encrypted document is unscannable, never clean or infected (plan review C1, C2; mutations: stage 'transport' for a clamd reply -> FAILS; drop the Heuristics mapping -> 'infected' -> FAILS)", async () => {
+  assert.deepEqual(await scan("err.pdf"), { verdict: "error", stage: "clamd" });
+  assert.deepEqual(await scan("locked.pdf"), { verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
+});
+
+test("a missing object is a transport error, never a clamd one, so it spends nothing (plan review C1; mutation: stage 'clamd' for a fetch failure -> FAILS)", async () => {
+  assert.deepEqual(await scan("nothing-here.pdf"), { verdict: "error", stage: "transport" });
+});
+
+test("a file over the limit is a transport error, never clean: refused by its declared length AND, served chunked with no length, by the streaming counter (plan review I1; mutation: drop the byte counter in clamd.mjs -> the chunked file reads clean -> FAILS)", async () => {
+  assert.deepEqual(await scan("big-declared.pdf"), { verdict: "error", stage: "transport" });
+  assert.deepEqual(await scan("big-chunked.pdf"), { verdict: "error", stage: "transport" });
+});
+
+test("a redirect is refused: a transport error, and the place it pointed to is never asked (plan review I2; mutation: redirect 'follow' -> clean, and a hit elsewhere -> FAILS)", async () => {
+  assert.deepEqual(await scan("moved.pdf"), { verdict: "error", stage: "transport" });
+  assert.equal(elsewhereHits.length, 0);
 });
 
 test("a bad signature is 401 and a foreign URL is 403, and NEITHER fetches anything (mutation: fetch before verifying -> the hit count moves -> FAILS)", async () => {
@@ -1556,15 +1607,19 @@ test("a bad signature is 401 and a foreign URL is 403, and NEITHER fetches anyth
   assert.equal(hits.length, before);
 });
 
-test("health: clamd reachable with its signature date (mutation: answer clamd:true without a PING -> the stopped case FAILS)", async () => {
+test("health: clamd reachable with its signature date; with clamd down, health says so and a scan is a TRANSPORT error (mutations: answer clamd:true without a PING -> FAILS; stage 'clamd' when clamd is unreachable -> FAILS)", async () => {
   const ok = await (await call("GET", "/health")).json();
   assert.equal(ok.clamd, true);
   assert.ok(Math.abs(Date.now() - Date.parse(ok.signaturesAt)) < 120_000, ok.signaturesAt);
   const down = createScanner({ clients: [{ secret: SECRET, origin }], clamd: { host: "127.0.0.1", port: 1 }, log: { log() {}, error() {} } });
   const port = await listen(down);
   const ts = Math.floor(Date.now() / 1000);
-  const r = await fetch(`http://127.0.0.1:${port}/health`, { headers: { "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": sign(SECRET, ts, "GET", "/health", "") } });
+  const signed = (method, path, body) => ({ "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": sign(SECRET, ts, method, path, body) });
+  const r = await fetch(`http://127.0.0.1:${port}/health`, { headers: signed("GET", "/health", "") });
   assert.deepEqual(await r.json(), { clamd: false });
+  const body = JSON.stringify({ url: objectUrl("clean.pdf") });
+  const s = await fetch(`http://127.0.0.1:${port}/scan`, { method: "POST", body, headers: signed("POST", "/scan", body) });
+  assert.deepEqual(await s.json(), { verdict: "error", stage: "transport" });
   down.close();
 });
 
@@ -1640,7 +1695,11 @@ export function allowedObjectUrl(raw, origin) {
   let u;
   try { u = new URL(raw); } catch { return false; }
   if (u.origin !== origin || u.username !== "" || u.password !== "") return false;
-  // The URL parser has already resolved "..", "%2e%2e" and friends, so a prefix check is exact.
+  // The URL parser resolves "..", "." and their %2e forms before this check, but it does NOT decode
+  // an encoded slash or backslash (%2F, %5C): a path carrying either could be decoded into another
+  // directory further along, so it is refused outright. Real object paths are account/document/version
+  // uuids and never contain one.
+  if (/%2f|%5c/i.test(u.pathname)) return false;
   if (!u.pathname.startsWith(OBJECT_PREFIX) || u.pathname.length === OBJECT_PREFIX.length) return false;
   return u.searchParams.has("token");
 }
@@ -1722,32 +1781,51 @@ export async function instream(clamd, body, { maxBytes, signal }) {
 ```js
 import { instream } from "./clamd.mjs";
 
-/** clamd's INSTREAM reply as a verdict: "stream: OK", "stream: <name> FOUND", anything else an error. */
+/**
+ * Plan review C1: WHERE an error came from decides whether it may cost the file one of its three
+ * attempts. "clamd": clamd read this stream and answered ERROR about it, the file's own failure, the
+ * only kind the app spends an attempt on. "transport": anything else (the object could not be
+ * fetched, a redirect, a non-200, a timeout, clamd unreachable or closing without a reply); the file
+ * is not at fault and nothing is spent, so a misconfigured caller or an unreachable storage can never
+ * walk every file to "unscannable".
+ * Plan review C2: with AlertExceedsMax and the AlertEncrypted* options on (Dockerfile), content clamd
+ * could not fully read is reported as a Heuristics.Limits.Exceeded.* or Heuristics.Encrypted.* FOUND:
+ * that is neither clean nor a virus, it is "unscannable".
+ */
+const LIMIT_OR_ENCRYPTED = /^Heuristics\.(Limits\.Exceeded|Encrypted)/;
+
 export function parseReply(reply) {
   const r = reply.trim();
   if (r === "stream: OK") return { verdict: "clean" };
   const found = /^stream: (.+) FOUND$/.exec(r);
-  if (found) return { verdict: "infected", signature: found[1].slice(0, 200) };
-  return { verdict: "error", reason: r.slice(0, 120) };
+  if (found) {
+    const name = found[1].slice(0, 200);
+    return LIMIT_OR_ENCRYPTED.test(name) ? { verdict: "unscannable", signature: name } : { verdict: "infected", signature: name };
+  }
+  return { verdict: "error", stage: "clamd", reason: r.slice(0, 120) };
 }
 
-/** Fetches ONE signed object and streams it to clamd. Never throws; every failure is an error verdict. Never logs the URL. */
+/** Fetches ONE signed object and streams it to clamd. Never throws; never logs the URL. */
 export async function scanUrl(url, { clamd, maxBytes, timeoutMs, fetchImpl = fetch }) {
   const signal = AbortSignal.timeout(timeoutMs);
+  const transport = (reason) => ({ verdict: "error", stage: "transport", reason });
   let res;
   try {
     res = await fetchImpl(url, { redirect: "error", signal });
   } catch {
-    return { verdict: "error", reason: "fetch failed" };
+    return transport("fetch failed");
   }
-  if (!res.ok || !res.body) return { verdict: "error", reason: `fetch answered ${res.status}` };
+  if (!res.ok || !res.body) return transport(`fetch answered ${res.status}`);
   const declared = Number(res.headers.get("content-length") ?? Number.NaN);
-  if (Number.isFinite(declared) && declared > maxBytes) return { verdict: "error", reason: "too large" };
+  if (Number.isFinite(declared) && declared > maxBytes) return transport("too large");
+  let reply;
   try {
-    return parseReply(await instream(clamd, res.body, { maxBytes, signal }));
+    reply = await instream(clamd, res.body, { maxBytes, signal });
   } catch (e) {
-    return { verdict: "error", reason: String(e?.message ?? e).slice(0, 120) };
+    return transport(String(e?.message ?? e).slice(0, 120));
   }
+  if (reply.trim() === "") return transport("clamd closed without a reply");
+  return parseReply(reply);
 }
 ```
 
@@ -1766,7 +1844,8 @@ import { scanUrl } from "./scan.mjs";
  * The document vault's scanner (docs/superpowers/specs/2026-10-15-document-vault-part2-design.md 3.1).
  * Two routes, both HMAC-signed: POST /scan { url } and GET /health. It writes nothing anywhere and
  * holds no database or storage credential; it can only scan a URL a caller hands it, from that
- * caller's own storage origin.
+ * caller's own storage origin. A scan answers clean, infected, unscannable (a limit or encryption,
+ * plan review C2) or error with its stage (clamd or transport, plan review C1).
  */
 export const MAX_BODY = 8192;
 export const MAX_BYTES = 26214400; // 25 MiB: document-rules.ts's DOCUMENT_MAX_BYTES
@@ -1789,6 +1868,13 @@ async function readBody(req, max) {
     parts.push(chunk);
   }
   return Buffer.concat(parts).toString("utf8");
+}
+
+/** The wire answer: never the reason text (it can name an internal error), only the verdict, a name, or the stage. */
+export function wireVerdict(v) {
+  if (v.verdict === "infected" || v.verdict === "unscannable") return { verdict: v.verdict, signature: v.signature };
+  if (v.verdict === "error") return { verdict: "error", stage: v.stage };
+  return { verdict: "clean" };
 }
 
 export function createScanner({ clients, clamd, maxBytes = MAX_BYTES, timeoutMs = SCAN_TIMEOUT_MS, now = () => Math.floor(Date.now() / 1000), fetchImpl = fetch, log = console }) {
@@ -1818,8 +1904,8 @@ export function createScanner({ clients, clamd, maxBytes = MAX_BYTES, timeoutMs 
       if (typeof url !== "string" || !allowedObjectUrl(url, client.origin)) return send(403);
       const started = Date.now();
       const v = await scanUrl(url, { clamd, maxBytes, timeoutMs, fetchImpl });
-      log.log(JSON.stringify({ scan: v.verdict, ms: Date.now() - started, ...(v.reason ? { reason: v.reason } : {}) }));
-      return send(200, v.verdict === "infected" ? { verdict: "infected", signature: v.signature } : { verdict: v.verdict });
+      log.log(JSON.stringify({ scan: v.verdict, ...(v.stage ? { stage: v.stage } : {}), ms: Date.now() - started, ...(v.reason ? { reason: v.reason } : {}) }));
+      return send(200, wireVerdict(v));
     } catch (e) {
       log.error(`scanner: ${String(e?.message ?? e).slice(0, 200)}`);
       return send(500);
@@ -1835,7 +1921,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 ```
 
-- [ ] **Step 5: Run green.** `node --test "services/scanner/test/*.test.mjs"` → `# fail 0`, and the `# pass` count equals the number of `test(` calls in the three files (9).
+- [ ] **Step 5: Run green.** `node --test "services/scanner/test/*.test.mjs"` → `# fail 0`, and the `# pass` count equals the number of `test(` calls in the three files (12). (The plan writer ran this exact code: 12 of 12 on Node 24.13, and the I1, I2, C1 and %2F mutations each turned one test red by name.)
 
 - [ ] **Step 6: The image and the deploy config.**
 
@@ -1846,14 +1932,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 # signatures preloaded, plus a dependency-free Node shim. clamd and freshclam run as daemons beside it.
 FROM clamav/clamav:1.4
 
-# StreamMaxLength: a 25 MiB upload must stream through INSTREAM (assumption A3).
-# ConcurrentDatabaseReload no: one signature set in memory during a reload, so 2 GB holds (deviation 12).
-# Foreground no: both daemonise, and start.sh runs the shim in the foreground.
+# Every directive this file owns is deleted first, then set once, so a value in the base image can never
+# survive beside ours. Each was read off the 1.4 image in plan Task 4 step 1 (assumption A13 until then).
+#   StreamMaxLength 26M: a 25 MiB upload streams through INSTREAM (A3).
+#   MaxFileSize 30M / MaxScanSize 100M: no 25 MiB upload, nor what it unpacks to, is skipped for size.
+#   AlertExceedsMax yes: content skipped under any limit is REPORTED (Heuristics.Limits.Exceeded.*), never
+#     a silent OK; the shim maps it to "unscannable" (plan review C2).
+#   AlertEncrypted / AlertEncryptedArchive / AlertEncryptedDoc yes: content clamd cannot read because it is
+#     encrypted is reported (Heuristics.Encrypted.*), never a silent OK; also "unscannable" (C2).
+#   ConcurrentDatabaseReload no: one signature set in memory during a reload, so 2 GB holds (deviation 12).
+#   TCPSocket 3310 / TCPAddr 127.0.0.1: clamd answers the shim on loopback only, never the machine's network.
+#   Foreground no: both daemonise, and start.sh runs the shim in the foreground.
 RUN apk add --no-cache nodejs \
- && sed -i -e '/^StreamMaxLength/d' -e '/^ConcurrentDatabaseReload/d' -e '/^Foreground/d' /etc/clamav/clamd.conf \
- && printf 'StreamMaxLength 26M\nConcurrentDatabaseReload no\nForeground no\n' >> /etc/clamav/clamd.conf \
- && sed -i -e '/^Foreground/d' /etc/clamav/freshclam.conf \
- && printf 'Foreground no\n' >> /etc/clamav/freshclam.conf \
+ && for d in StreamMaxLength MaxFileSize MaxScanSize AlertExceedsMax AlertEncrypted AlertEncryptedArchive AlertEncryptedDoc ConcurrentDatabaseReload TCPSocket TCPAddr Foreground; do \
+      sed -i -e "/^${d} /d" /etc/clamav/clamd.conf; \
+    done \
+ && printf '%s\n' 'StreamMaxLength 26M' 'MaxFileSize 30M' 'MaxScanSize 100M' 'AlertExceedsMax yes' 'AlertEncrypted yes' 'AlertEncryptedArchive yes' 'AlertEncryptedDoc yes' 'ConcurrentDatabaseReload no' 'TCPSocket 3310' 'TCPAddr 127.0.0.1' 'Foreground no' >> /etc/clamav/clamd.conf \
+ && sed -i -e '/^Foreground /d' /etc/clamav/freshclam.conf \
+ && printf '%s\n' 'Foreground no' >> /etc/clamav/freshclam.conf \
  && node --version
 
 COPY --chown=clamav:clamav src/ /app/src/
@@ -1879,8 +1975,12 @@ fly.toml
 #!/bin/sh
 # Signature updates and clamd as daemons, then the shim in the foreground: if the shim dies, the
 # machine restarts; if clamd dies, /health answers clamd:false and the app's heartbeat goes red.
+# freshclam is allowed to fail at start (a mirror refusing, a network blip): the image's preloaded
+# signatures stand, and if they grow old the heartbeat says "signatures N hours old" (assumption A14:
+# whether `freshclam --daemon` exits non-zero on a failed first update is read in plan Task 4 step 7
+# and the CI job's log). clamd is NOT allowed to fail: set -eu stops the machine, and Fly restarts it.
 set -eu
-freshclam --daemon
+freshclam --daemon || echo "start.sh: freshclam did not start; the image's signatures stand until it does"
 clamd
 exec node /app/src/server.mjs
 ```
@@ -1890,7 +1990,7 @@ exec node /app/src/server.mjs
 ```toml
 # The document vault's virus scanner (spec 2026-10-15 section 3.1; docs/runbooks/scanner.md).
 # One always-on machine: clamd must stay warm, so nothing stops it (P2). It holds no database or
-# storage credential: its one secret, SCANNER_CLIENTS, is set with `fly secrets set`, never here.
+# storage credential: its one secret, SCANNER_CLIENTS, is set with `<FLYCTL> secrets set`, never here.
 app = "bis-scanner"
 primary_region = "iad"
 
@@ -1923,7 +2023,7 @@ primary_region = "iad"
   memory = "2gb"
 ```
 
-The app name `bis-scanner` is a placeholder the orchestrator may change at `fly launch` (Fly app names are global); `SCANNER_URL` follows whatever it becomes.
+The app name `bis-scanner` is a placeholder the orchestrator may change at `<FLYCTL> launch` (Fly app names are global); `SCANNER_URL` follows whatever it becomes.
 
 `services/scanner/test/real-clamd.mjs` (the CI job runs it against the built image; also runnable locally after Step 7's `docker run`):
 
@@ -1931,18 +2031,27 @@ The app name `bis-scanner` is a placeholder the orchestrator may change at `fly 
 import http from "node:http";
 import assert from "node:assert/strict";
 import { sign } from "../src/hmac.mjs";
-import { eicar, eicarDocx, cleanPdf } from "./eicar.mjs";
+import { eicar, eicarDocx, cleanPdf, storedZip } from "./eicar.mjs";
 
 /**
- * The worker against the REAL clamd (spec 7): EICAR is infected, a clean PDF is clean, a 25 MiB file
- * streams (A3), the EICAR DOCX the Preview check uploads is infected (A6), the signature date reads
- * (A7), and a refused request fetches nothing. Serves its files itself, as storage would, on
- * 127.0.0.1:8098; the scanner must allow that origin (SCANNER_CLIENTS=<secret>@http://127.0.0.1:8098).
+ * The worker against the REAL clamd (spec 7): EICAR is infected; the EICAR DOCX the Preview check
+ * uploads is infected (A6); a clean 25 MiB PDF is clean; a 25 MiB file whose LAST member is EICAR is
+ * infected, which proves clamd read the whole stream under the configured limits rather than skipping
+ * past one (A3, plan review C2); the signature date reads (A7); a refused request fetches nothing.
+ * Serves its files itself, as storage would, on 127.0.0.1:8098; the scanner must allow that origin
+ * (SCANNER_CLIENTS=<secret>@http://127.0.0.1:8098).
  */
 const SCANNER = process.env.SCANNER_URL ?? "http://127.0.0.1:8080";
 const SECRET = process.env.SCANNER_SECRET;
 if (!SECRET) throw new Error("SCANNER_SECRET is required");
-const FILES = { "eicar.txt": Buffer.from(eicar()), "eicar.docx": eicarDocx(), "clean.pdf": cleanPdf(2048), "big.pdf": cleanPdf(25 * 1024 * 1024) };
+const MiB = 1024 * 1024;
+const tail = storedZip([
+  ["[Content_Types].xml", Buffer.from('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')],
+  ["word/filler.bin", Buffer.alloc(24 * MiB, 0x20)],
+  ["eicar.com", Buffer.from(eicar())],
+]);
+const FILES = { "eicar.txt": Buffer.from(eicar()), "eicar.docx": eicarDocx(), "clean.pdf": cleanPdf(2048), "big.pdf": cleanPdf(25 * MiB), "tail.docx": tail };
+assert.ok(tail.length <= 25 * MiB, `tail.docx is ${tail.length} bytes, over the 25 MiB the bucket allows`);
 let hits = 0;
 const storage = http.createServer((req, res) => {
   hits++;
@@ -1964,14 +2073,16 @@ let health = null;
 for (const deadline = Date.now() + 300_000; Date.now() < deadline; await new Promise((r) => setTimeout(r, 5000))) {
   try { const r = await call("GET", "/health"); if (r.ok) { health = await r.json(); if (health.clamd) break; } } catch { /* not up yet */ }
 }
-assert.equal(health?.clamd, true, "clamd never answered PING (assumption A5)");
+assert.equal(health?.clamd, true, "clamd never answered PING (assumptions A5, A13, A14)");
 assert.ok(Date.now() - Date.parse(health.signaturesAt) < 7 * 86_400_000, `signatures dated ${health.signaturesAt} (A7)`);
 const raw = await scan("eicar.txt");
 assert.equal(raw.verdict, "infected");
 assert.match(raw.signature, /eicar/i);
 assert.equal((await scan("eicar.docx")).verdict, "infected", "EICAR inside a stored DOCX member (A6)");
 assert.deepEqual(await scan("clean.pdf"), { verdict: "clean" });
-assert.deepEqual(await scan("big.pdf"), { verdict: "clean" }, "a 25 MiB stream (A3)");
+assert.deepEqual(await scan("big.pdf"), { verdict: "clean" }, "a clean 25 MiB stream (A3)");
+const tailVerdict = await scan("tail.docx");
+assert.equal(tailVerdict.verdict, "infected", `EICAR at the tail of a 25 MiB file (A3): ${JSON.stringify(tailVerdict)}`);
 const before = hits;
 assert.equal((await call("POST", "/scan", JSON.stringify({ url: url("eicar.txt", "http://127.0.0.2:8098") }))).status, 403);
 assert.equal((await call("POST", "/scan", JSON.stringify({ url: url("eicar.txt") }), null)).status, 401);
@@ -1990,9 +2101,9 @@ docker stats --no-stream bis-scanner-local
 docker stop bis-scanner-local
 ```
 
-Expected: the build prints `node --version` ≥ v20 (A9); `real-clamd.mjs` prints `{"ok":true,…}`; `docker stats` shows MEM USAGE (paste it: A1's first reading). Docker Desktop on Windows does not support `--network host` for Linux containers the same way; if the script cannot reach 8080, use `-p 8080:8080` and `SCANNER_CLIENTS=…@http://host.docker.internal:8098` with the script's origin changed to match, or leave this step to the CI job and say so.
+Expected: the build prints `node --version` ≥ v20 (A9); `real-clamd.mjs` prints `{"ok":true,…}`; `docker stats` shows MEM USAGE (paste it: A1's first reading); `docker logs bis-scanner-local` shows whether freshclam started or printed start.sh's line (A14). Docker Desktop on Windows does not support `--network host` for Linux containers the same way; if the script cannot reach 8080, use `-p 8080:8080` and `SCANNER_CLIENTS=…@http://host.docker.internal:8098` with the script's origin changed to match, or leave this step to the CI job and say so.
 
-- [ ] **Step 8: Probes, red BY NAME, restored:** (1) `sign` over `` `${timestamp}\n${method}…` `` → the vector test (and, after Task 5, the app's too); (2) drop `Math.abs(…) > MAX_SKEW_SECONDS` → the verify test; (3) in `allowedObjectUrl`, `startsWith("/storage/v1/object/")` → the allow test; (4) in the server, call `scanUrl` before `verify` → the "NEITHER fetches" test; (5) `parseReply` returns clean for everything → the infected test; (6) log `url` in the scan line → the token test.
+- [ ] **Step 8: Probes, red BY NAME, restored:** (1) `sign` over `` `${timestamp}\n${method}…` `` → the vector test (and, after Task 5, the app's too); (2) drop `Math.abs(…) > MAX_SKEW_SECONDS` → the verify test; (3) in `allowedObjectUrl`, `startsWith("/storage/v1/object/")` → the allow test; (4) in the server, call `scanUrl` before `verify` → the "NEITHER fetches" test; (5) `parseReply` returns clean for everything → the infected test; (6) log `url` in the scan line → the token test; (7) delete the `total > maxBytes` line in `clamd.mjs` → the chunked over-the-limit test (I1); (8) `redirect: "follow"` → the redirect test (I2); (9) `stage: "transport"` for clamd's own error line → the C1/C2 test; (10) drop the `%2f|%5c` refusal → the allow test; (11) drop the Heuristics mapping → the C1/C2 test (`infected`).
 
 - [ ] **Step 9: Commit.** `git add -- services/scanner` then `git commit -m "feat(scanner): the ClamAV worker, a signed two-route shim, its image, fly.toml and tests; a fake clamd for e2e (S-07 part 2a)" -- services/scanner`
 
@@ -2015,7 +2126,7 @@ Expected: the build prints `node --version` ≥ v20 (A9); `real-clamd.mjs` print
 export const SCAN_TIMEOUT_MS = 25_000;
 export const HEALTH_TIMEOUT_MS = 5_000;
 export const SCANNER_HEARTBEAT_KEY = "documents.scanner";
-export type ScanVerdict = { verdict: "clean" } | { verdict: "infected"; signature: string } | { verdict: "error" };
+export type ScanVerdict = { verdict: "clean" } | { verdict: "infected"; signature: string } | { verdict: "unscannable"; signature: string } | { verdict: "error"; spend: boolean };
 export type ScannerConfig = { origin: string; secret: string };
 export type ScannerHealth = { ok: true; signaturesAt: string } | { ok: false; reason: "not_configured" | "unreachable" | "clamd_down" | "bad_answer" };
 export type ScanClientDeps = { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch; nowSeconds?: () => number };
@@ -2026,9 +2137,11 @@ export async function scannerHealth(d?: ScanClientDeps): Promise<ScannerHealth>;
 // scan-version.ts
 export const MAX_SCAN_ATTEMPTS = 3;
 export type ScanTarget = { accountId: string; versionId: string; storagePath: string; attempts: number };
-export type ScanResult = "clean" | "infected" | "unscannable" | "pending" | "stale";
+export type ScanResult = "clean" | "infected" | "unscannable" | "pending" | "stale" | "unreached" | "held";
 export type ScanDeps = { configured: () => boolean; scan: (objectUrl: string) => Promise<ScanVerdict> };
-export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps?: ScanDeps): Promise<ScanResult>;  // throws only when an object could not be removed
+export type ScanOptions = { holdErrors?: boolean };
+export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps?: ScanDeps, opts?: ScanOptions): Promise<ScanResult>;  // throws only when an object could not be removed
+export async function spendScanError(db: SupabaseClient, v: ScanTarget): Promise<ScanResult>;  // the pass spends a held clamd error with it
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -2042,6 +2155,7 @@ import { scannerConfig, scanSignature, requestScan, scannerHealth } from "./scan
 const ENV = { SCANNER_URL: "https://bis-scanner.fly.dev", SCANNER_SECRET: "app-test-secret-0001" };
 const BODY = JSON.stringify({ url: "https://abc.supabase.co/storage/v1/object/sign/documents/a/b/c?token=t" });
 const answer = (status: number, body: unknown) => vi.fn(async () => new Response(typeof body === "string" ? body : JSON.stringify(body), { status }));
+const URL_ = "https://abc.supabase.co/storage/v1/object/sign/documents/x/y/z?token=t";
 
 describe("the wire contract (spec 3.1; plan Task 4)", () => {
   it("signs exactly as the worker verifies: the shared vector (mutation: a newline for '.' in the canonical string -> FAILS here AND in services/scanner/test/hmac.test.mjs)", () => {
@@ -2060,27 +2174,32 @@ describe("the wire contract (spec 3.1; plan Task 4)", () => {
 });
 
 describe("requestScan: one signed POST, never throws (spec 3.4)", () => {
-  it("posts the URL with a fresh timestamp and its signature, and maps the verdicts (mutations: sign with the path '/' -> FAILS; map infected to clean -> FAILS)", async () => {
+  it("posts the URL with a fresh timestamp and its signature, and maps clean, infected and unscannable (mutations: sign with the path '/' -> FAILS; map infected to clean -> FAILS; map unscannable to infected -> FAILS)", async () => {
     const fetchImpl = answer(200, { verdict: "infected", signature: "Eicar-Test-Signature" });
-    const url = "https://abc.supabase.co/storage/v1/object/sign/documents/x/y/z?token=t";
-    expect(await requestScan(url, { env: ENV, fetchImpl, nowSeconds: () => 1760000123 })).toEqual({ verdict: "infected", signature: "Eicar-Test-Signature" });
+    expect(await requestScan(URL_, { env: ENV, fetchImpl, nowSeconds: () => 1760000123 })).toEqual({ verdict: "infected", signature: "Eicar-Test-Signature" });
     const [target, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit & { headers: Record<string, string> }];
     expect(target).toBe("https://bis-scanner.fly.dev/scan");
     expect(init.method).toBe("POST");
-    expect(init.body).toBe(JSON.stringify({ url }));
+    expect(init.body).toBe(JSON.stringify({ url: URL_ }));
     expect(init.headers["x-bis-scan-timestamp"]).toBe("1760000123");
-    expect(init.headers["x-bis-scan-signature"]).toBe(scanSignature(ENV.SCANNER_SECRET, 1760000123, "POST", "/scan", JSON.stringify({ url })));
-    expect(await requestScan(url, { env: ENV, fetchImpl: answer(200, { verdict: "clean" }) })).toEqual({ verdict: "clean" });
+    expect(init.headers["x-bis-scan-signature"]).toBe(scanSignature(ENV.SCANNER_SECRET, 1760000123, "POST", "/scan", JSON.stringify({ url: URL_ })));
+    expect(await requestScan(URL_, { env: ENV, fetchImpl: answer(200, { verdict: "clean" }) })).toEqual({ verdict: "clean" });
+    expect(await requestScan(URL_, { env: ENV, fetchImpl: answer(200, { verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" }) }))
+      .toEqual({ verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
   });
 
-  it("every failure is an error verdict, never clean: a 401, a 500, junk, an infected answer with no name, a thrown fetch, no config (mutation: default to clean -> FAILS)", async () => {
-    const url = "https://abc.supabase.co/storage/v1/object/sign/documents/x/y/z?token=t";
-    for (const fetchImpl of [answer(401, ""), answer(500, ""), answer(200, "nope"), answer(200, { verdict: "infected" }), answer(200, { verdict: "maybe" }),
-      vi.fn(async () => { throw new Error("ECONNREFUSED"); })]) {
-      expect(await requestScan(url, { env: ENV, fetchImpl: fetchImpl as unknown as typeof fetch })).toEqual({ verdict: "error" });
+  it("ONLY a well-formed 200 naming clamd as the failing stage spends an attempt (plan review C1; mutations: spend on any error -> FAILS; spend on a 403 -> FAILS)", async () => {
+    expect(await requestScan(URL_, { env: ENV, fetchImpl: answer(200, { verdict: "error", stage: "clamd" }) })).toEqual({ verdict: "error", spend: true });
+    for (const fetchImpl of [
+      answer(200, { verdict: "error", stage: "transport" }), answer(200, { verdict: "error" }),
+      answer(401, ""), answer(403, { verdict: "error", stage: "clamd" }), answer(500, ""), answer(200, "nope"),
+      answer(200, { verdict: "infected" }), answer(200, { verdict: "maybe" }),
+      vi.fn(async () => { throw new Error("ECONNREFUSED"); }),
+    ]) {
+      expect(await requestScan(URL_, { env: ENV, fetchImpl: fetchImpl as unknown as typeof fetch })).toEqual({ verdict: "error", spend: false });
     }
     const never = vi.fn();
-    expect(await requestScan(url, { env: {}, fetchImpl: never as unknown as typeof fetch })).toEqual({ verdict: "error" });
+    expect(await requestScan(URL_, { env: {}, fetchImpl: never as unknown as typeof fetch })).toEqual({ verdict: "error", spend: false });
     expect(never).not.toHaveBeenCalled();
   });
 });
@@ -2111,12 +2230,12 @@ vi.mock("@bis/db", () => ({
   recordDocumentScan: (...a: unknown[]) => { calls.push(`record:${(a[1] as { verdict: string }).verdict}`); return recordDocumentScan(...a); },
   signedScannerUrl: (...a: unknown[]) => { calls.push("mint"); return signedScannerUrl(...a); },
 }));
-const { scanVersion, MAX_SCAN_ATTEMPTS } = await import("./scan-version");
+const { scanVersion, spendScanError, MAX_SCAN_ATTEMPTS } = await import("./scan-version");
 
 const remove = vi.fn();
 const DB = { storage: { from: vi.fn(() => ({ remove: (...a: unknown[]) => { calls.push("remove"); return remove(...a); } })) } } as never;
 const V = { accountId: "acc", versionId: "ver", storagePath: "acc/doc/ver", attempts: 0 };
-const deps = (verdict: { verdict: string; signature?: string } | null, configured = true) => ({
+const deps = (verdict: unknown, configured = true) => ({
   configured: () => configured,
   scan: vi.fn(async () => { calls.push("scan"); return verdict as never; }),
 });
@@ -2151,21 +2270,41 @@ describe("scanVersion (spec 3.2-3.4; owner decision P4: nothing infected is kept
     expect(recordDocumentScan).toHaveBeenCalledWith(DB, { accountId: "acc", versionId: "ver", verdict: "infected", signature: "Eicar-Test-Signature" });
   });
 
+  it("content clamd could not read is removed as unscannable at once, object first (plan review C2; mutation: treat it as clean -> FAILS)", async () => {
+    recordDocumentScan.mockResolvedValue({ status: "ok", attempts: 1 });
+    expect(await scanVersion(DB, V, deps({ verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" }))).toBe("unscannable");
+    expect(calls).toEqual(["mint", "scan", "remove", "record:unscannable"]);
+  });
+
   it("an object that will not go THROWS and records nothing, so the version stays pending for the next pass (mutation: record anyway -> FAILS)", async () => {
     remove.mockResolvedValue({ data: null, error: { message: "storage down" } });
     await expect(scanVersion(DB, V, deps({ verdict: "infected", signature: "X" }))).rejects.toThrow(/not removed/);
     expect(recordDocumentScan).not.toHaveBeenCalled();
   });
 
-  it("an error adds an attempt and stays Checking; the THIRD error removes the object and records unscannable (mutations: MAX 4 -> FAILS; skip the remove -> FAILS)", async () => {
+  it("an error that is NOT clamd's (a 403, a timeout, unreachable storage) spends nothing and writes nothing, even with attempts at two (plan review C1; mutation: spend it -> FAILS)", async () => {
+    expect(await scanVersion(DB, { ...V, attempts: 2 }, deps({ verdict: "error", spend: false }))).toBe("unreached");
+    expect(calls).toEqual(["mint", "scan"]);
+  });
+
+  it("a clamd error spends an attempt and stays Checking; the THIRD removes the object and records unscannable (mutations: MAX 4 -> FAILS; skip the remove -> FAILS)", async () => {
     recordDocumentScan.mockResolvedValueOnce({ status: "ok", attempts: 1 });
-    expect(await scanVersion(DB, V, deps({ verdict: "error" }))).toBe("pending");
+    expect(await scanVersion(DB, V, deps({ verdict: "error", spend: true }))).toBe("pending");
     expect(calls).toEqual(["mint", "scan", "record:error"]);
     calls.length = 0;
     recordDocumentScan.mockResolvedValueOnce({ status: "ok", attempts: MAX_SCAN_ATTEMPTS }).mockResolvedValueOnce({ status: "ok", attempts: MAX_SCAN_ATTEMPTS + 1 });
-    expect(await scanVersion(DB, { ...V, attempts: 2 }, deps({ verdict: "error" }))).toBe("unscannable");
+    expect(await scanVersion(DB, { ...V, attempts: 2 }, deps({ verdict: "error", spend: true }))).toBe("unscannable");
     expect(calls).toEqual(["mint", "scan", "record:error", "remove", "record:unscannable"]);
     expect(MAX_SCAN_ATTEMPTS).toBe(3);
+  });
+
+  it("holdErrors: a clamd error is HELD, nothing written, for the pass to spend or not (its breaker); spendScanError spends it later (mutation: write while holding -> FAILS)", async () => {
+    expect(await scanVersion(DB, V, deps({ verdict: "error", spend: true }), { holdErrors: true })).toBe("held");
+    expect(calls).toEqual(["mint", "scan"]);
+    calls.length = 0;
+    recordDocumentScan.mockResolvedValueOnce({ status: "ok", attempts: 1 });
+    expect(await spendScanError(DB, V)).toBe("pending");
+    expect(calls).toEqual(["record:error"]);
   });
 
   it("a version that already used its three attempts is given up WITHOUT another scan (a crash between the third error and its removal) (mutation: scan again -> FAILS)", async () => {
@@ -2197,18 +2336,26 @@ import { createHmac } from "node:crypto";
  * ONLY. Neither call ever throws: every failure is an error verdict or an unhealthy answer, so a down
  * worker leaves files Checking (owner decision P3), never open. SCANNER_URL must be https, except on
  * loopback for the e2e stack (apps/web/playwright.config.ts).
+ * Plan review C1: an error may cost the file an attempt (`spend: true`) ONLY when the worker answered a
+ * well-formed 200 saying clamd itself failed on this stream (stage "clamd"). A non-200 (401, 403: a
+ * misconfigured binding), a network failure, a timeout, a fetch failure or junk spends nothing.
  */
 export const SCAN_TIMEOUT_MS = 25_000;
 export const HEALTH_TIMEOUT_MS = 5_000;
 /** The heartbeat the retry pass writes and /api/ops/health reads (0057's ops_heartbeats; not a cron.pass key). */
 export const SCANNER_HEARTBEAT_KEY = "documents.scanner";
 
-export type ScanVerdict = { verdict: "clean" } | { verdict: "infected"; signature: string } | { verdict: "error" };
+export type ScanVerdict =
+  | { verdict: "clean" }
+  | { verdict: "infected"; signature: string }
+  | { verdict: "unscannable"; signature: string }
+  | { verdict: "error"; spend: boolean };
 export type ScannerConfig = { origin: string; secret: string };
 export type ScannerHealth = { ok: true; signaturesAt: string } | { ok: false; reason: "not_configured" | "unreachable" | "clamd_down" | "bad_answer" };
 export type ScanClientDeps = { env?: Record<string, string | undefined>; fetchImpl?: typeof fetch; nowSeconds?: () => number };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const NOT_SPENT: ScanVerdict = { verdict: "error", spend: false };
 
 export function scannerConfig(env: Record<string, string | undefined> = process.env): ScannerConfig | null {
   const raw = env.SCANNER_URL?.trim();
@@ -2233,21 +2380,22 @@ async function call(cfg: ScannerConfig, method: "GET" | "POST", path: string, bo
   });
 }
 
-/** Asks the worker to scan ONE signed object URL. Never throws; anything but a well-formed verdict is `error`. */
+/** Asks the worker to scan ONE signed object URL. Never throws; anything but a well-formed verdict is an unspent error. */
 export async function requestScan(objectUrl: string, d: ScanClientDeps = {}): Promise<ScanVerdict> {
   const cfg = scannerConfig(d.env ?? process.env);
-  if (!cfg) return { verdict: "error" };
+  if (!cfg) return NOT_SPENT;
   try {
     const res = await call(cfg, "POST", "/scan", JSON.stringify({ url: objectUrl }), d, SCAN_TIMEOUT_MS);
-    if (res.status !== 200) return { verdict: "error" };
+    if (res.status !== 200) return NOT_SPENT;
     const body: unknown = await res.json();
-    if (isObj(body) && body.verdict === "clean") return { verdict: "clean" };
-    if (isObj(body) && body.verdict === "infected" && typeof body.signature === "string" && body.signature.trim() !== "") {
-      return { verdict: "infected", signature: body.signature.trim().slice(0, 200) };
-    }
-    return { verdict: "error" };
+    if (!isObj(body)) return NOT_SPENT;
+    if (body.verdict === "clean") return { verdict: "clean" };
+    const name = typeof body.signature === "string" ? body.signature.trim().slice(0, 200) : "";
+    if ((body.verdict === "infected" || body.verdict === "unscannable") && name !== "") return { verdict: body.verdict, signature: name };
+    if (body.verdict === "error" && body.stage === "clamd") return { verdict: "error", spend: true };
+    return NOT_SPENT;
   } catch {
-    return { verdict: "error" };
+    return NOT_SPENT;
   }
 }
 
@@ -2279,16 +2427,25 @@ import { requestScan, scannerConfig, type ScanVerdict } from "./scan-client";
  * Scans ONE ready version and records what happened (spec 3.2-3.4). Called by the finish action at
  * once and by the retry pass for whatever is still pending; 2b's customer finish will call it too.
  * `db` is the caller's service client, after its own proof. Owner decision P4, nothing infected is
- * kept: on a virus, or on the third error in a row, the OBJECT is removed FIRST and only then is the
- * verdict recorded, so a crash in between leaves the version pending and the next pass finds it again
- * (attempts already at three: removed without another scan). A removal that fails THROWS and records
- * nothing. With no scanner configured (a developer's machine) the file stays Checking and no attempt
- * is spent (plan deviation 14).
+ * kept: on a virus, on content clamd could not read (a limit or encryption, plan review C2), or on the
+ * third clamd error, the OBJECT is removed FIRST and only then is the verdict recorded, so a crash in
+ * between leaves the version pending and the next pass finds it again (attempts already at three:
+ * removed without another scan). A removal that fails THROWS and records nothing.
+ * Plan review C1: only a clamd-stage error spends an attempt; any other failure answers "unreached"
+ * and writes nothing. The retry pass HOLDS clamd errors (`holdErrors`) and spends them only after it
+ * has seen the worker succeed on something (its breaker); the finish spends at once (one attempt at
+ * most per upload). With no scanner configured the file stays Checking (plan deviation 14).
+ * Accepted residual (plan review 8): the finish and the pass can scan the same fresh version at
+ * once. The first verdict recorded wins and the other answers "stale". Both read the same bytes, so
+ * they disagree only when one side meets a clamd error; that side then spends one attempt (or holds
+ * it), and a fresh version cannot reach its third attempt inside one race, so no removal can land
+ * under a clean verdict.
  */
 export const MAX_SCAN_ATTEMPTS = 3;
 export type ScanTarget = { accountId: string; versionId: string; storagePath: string; attempts: number };
-export type ScanResult = "clean" | "infected" | "unscannable" | "pending" | "stale";
+export type ScanResult = "clean" | "infected" | "unscannable" | "pending" | "stale" | "unreached" | "held";
 export type ScanDeps = { configured: () => boolean; scan: (objectUrl: string) => Promise<ScanVerdict> };
+export type ScanOptions = { holdErrors?: boolean };
 
 const REAL: ScanDeps = { configured: () => scannerConfig() !== null, scan: (u) => requestScan(u) };
 
@@ -2301,7 +2458,14 @@ async function removeThenRecord(
   return r.status === "ok" ? verdict : "stale";
 }
 
-export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanDeps = REAL): Promise<ScanResult> {
+/** Spends ONE attempt for a clamd-stage error; the third removes the object and records unscannable. */
+export async function spendScanError(db: SupabaseClient, v: ScanTarget): Promise<ScanResult> {
+  const r = await recordDocumentScan(db, { accountId: v.accountId, versionId: v.versionId, verdict: "error" });
+  if (r.status === "stale") return "stale";
+  return r.attempts >= MAX_SCAN_ATTEMPTS ? removeThenRecord(db, v, "unscannable", null) : "pending";
+}
+
+export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanDeps = REAL, opts: ScanOptions = {}): Promise<ScanResult> {
   if (!deps.configured()) return "pending";
   if (v.attempts >= MAX_SCAN_ATTEMPTS) return removeThenRecord(db, v, "unscannable", null);
   const verdict = await deps.scan(await signedScannerUrl(db, v.storagePath));
@@ -2310,15 +2474,16 @@ export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanD
     return r.status === "ok" ? "clean" : "stale";
   }
   if (verdict.verdict === "infected") return removeThenRecord(db, v, "infected", verdict.signature);
-  const r = await recordDocumentScan(db, { accountId: v.accountId, versionId: v.versionId, verdict: "error" });
-  if (r.status === "stale") return "stale";
-  return r.attempts >= MAX_SCAN_ATTEMPTS ? removeThenRecord(db, v, "unscannable", null) : "pending";
+  if (verdict.verdict === "unscannable") return removeThenRecord(db, v, "unscannable", null);
+  if (!verdict.spend) return "unreached";
+  if (opts.holdErrors) return "held";
+  return spendScanError(db, v);
 }
 ```
 
-- [ ] **Step 4: Run green.** Step 2's command → PASS, and the summary counts 5 + 7 tests. `pnpm --filter web exec eslint src/lib/documents/scan-client.ts src/lib/documents/scan-version.ts src/lib/documents/scan-client.test.ts src/lib/documents/scan-version.test.ts` → clean. `grep -c serviceDb apps/web/src/lib/documents/scan-*.ts` → 0 each.
+- [ ] **Step 4: Run green.** Step 2's command → PASS, and the summary counts 5 + 10 tests. `pnpm --filter web exec eslint src/lib/documents/scan-client.ts src/lib/documents/scan-version.ts src/lib/documents/scan-client.test.ts src/lib/documents/scan-version.test.ts` → clean. `grep -c serviceDb apps/web/src/lib/documents/scan-*.ts` → 0 each.
 
-- [ ] **Step 5: Probes, red BY NAME, restored:** (1) canonical string with `\n` → the vector case; (2) `u.protocol === "http:"` alone (no loopback rule) → the config case; (3) `return { verdict: "clean" }` in requestScan's catch → the failure case; (4) swap `remove` and `recordDocumentScan` in `removeThenRecord` → the infected order case; (5) `MAX_SCAN_ATTEMPTS = 4` → the third-error case; (6) in `scanVersion`, drop the `attempts >= MAX` early return → the given-up case; (7) drop `if (!deps.configured())` → the not-configured case.
+- [ ] **Step 5: Probes, red BY NAME, restored:** (1) canonical string with `\n` → the vector case; (2) `u.protocol === "http:"` alone (no loopback rule) → the config case; (3) `return { verdict: "clean" }` in requestScan's catch → the failure case; (4) swap `remove` and `recordDocumentScan` in `removeThenRecord` → the infected order case; (5) `MAX_SCAN_ATTEMPTS = 4` → the third-error case; (6) in `scanVersion`, drop the `attempts >= MAX` early return → the given-up case; (7) drop `if (!deps.configured())` → the not-configured case; (8) `if (!verdict.spend) return spendScanError(db, v)` → the not-clamd case (C1); (9) spend when `holdErrors` → the held case; (10) in the client, spend on any `verdict: "error"` → the clamd-only case (C1); (11) map `unscannable` to `infected` in the client → the mapping case.
 
 - [ ] **Step 6: Commit.** `git add -- apps/web/src/lib/documents/scan-client.ts apps/web/src/lib/documents/scan-client.test.ts apps/web/src/lib/documents/scan-version.ts apps/web/src/lib/documents/scan-version.test.ts` then `git commit -m "feat(documents): the signed scan client and the one-version scan, object first on a virus (S-07 part 2a)" -- <the same four paths>`
 
@@ -2434,8 +2599,8 @@ describe("the read gate (spec 3.3)", () => {
     expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(["packages/db/src/documents.ts", "apps/web/src/lib/documents/scan-version.ts"]));
   });
 
-  it("storage's createSignedUrl is called in exactly two places, both in documents.ts (mutation: mint in documents-actions.ts again -> FAILS)", () => {
-    const hits = files.flatMap((f) => (f.text.match(/\.createSignedUrl\(/g) ?? []).map(() => f.rel));
+  it("storage's signed-URL methods are named in exactly two places, both in documents.ts: a call, a createSignedUrls batch call or a destructured name all count (plan review 9; mutations: mint in documents-actions.ts again -> FAILS; `const { createSignedUrl } = svc.storage.from(b)` anywhere -> FAILS)", () => {
+    const hits = files.flatMap((f) => (f.text.match(/\bcreateSignedUrls?\b/g) ?? []).map(() => f.rel));
     expect(hits).toEqual(["packages/db/src/documents.ts", "packages/db/src/documents.ts"]);
   });
 
@@ -2497,7 +2662,7 @@ describe("the read gate (spec 3.3)", () => {
 
 **Files**
 - Modify: `apps/web/src/lib/documents/document-view.ts` (`documentView`, `:27-39`)
-- Modify: `apps/web/src/lib/documents/documents-load.ts` (types `:66-76`; `isVersionView` `:89-92`; `isView` `:99-111`)
+- Modify: `apps/web/src/lib/documents/documents-load.ts` (types `:13-29`; `isVersionView` `:36-39`; `isView` `:46-58`; read 2026-10-15)
 - Modify: `apps/web/src/lib/documents/documents-load.test.ts` (its fixture and two new cases)
 - Modify: both documents route tests (fixtures gain `scan_status` on every version row they build, and the expected views gain `scan`/`createdAt`)
 - Create: `apps/web/src/lib/documents/scan-state.ts`, `apps/web/src/lib/documents/scan-state.test.ts`
@@ -2583,19 +2748,20 @@ describe("the card's re-read while a file is Checking (spec 3.4: 'Revisando' -> 
 
   `documents-load.test.ts`: its `view` fixture's `version` gains `scan: "clean", createdAt: <its first version's createdAt>` and each `versions` entry gains `scan: "clean"`. Add two rows to its refusal table (`:30-37`): `["a version with an unknown scan state", res({ ...body, live: [{ ...view, versions: [{ ...view.versions[0], scan: "quarantined" }, view.versions[1]] }] })]` and `["a shown version with no scan state", res({ ...body, live: [{ ...view, version: { ...view.version, scan: undefined } }] })]`. (Mutation: drop `isScan` from either check → its row parses → FAILS.)
 
-  Each route test's document fixture gains `scan_status` on its `version` and `versions` rows; add one case to the contact route test:
+  Each route test's document fixture gains `scan_status` on its `version` and `versions` rows; add one case to the contact route test (`…/api/contacts/[contactId]/documents/route.test.ts`):
 
 ```ts
   it("shows the newest CLEAN version while a newer one is still Checking, and lists both with their states (plan deviation 1; mutation: show d.version, the newest ready -> FAILS)", async () => {
-    // A document whose current (newest ready) version v2 is pending and whose v1 is clean.
-    // Build it with this file's own fixture helper, setting version = v2 (scan_status "pending",
-    // created later) and versions = [v2, v1 (scan_status "clean")].
-    // Expect: body.live[0].version.id === v1's id, .scan === "clean";
-    //         body.live[0].versions.map(v => [v.id, v.scan]) equals [[v2, "pending"], [v1, "clean"]].
+    const v2 = { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "2026-10-01T00:00:00Z", scan_status: "pending" };
+    const v1 = { id: "v0", document_id: "d1", account_id: ACC, storage_path: "q", bytes: 800, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-09-20T15:00:00Z", scan_status: "clean" };
+    db.listRecordDocuments.mockResolvedValue({ live: [row({ version: v2, versions: [v2, v1] })], trashed: [], liveMore: false, trashedMore: false });
+    const body = await (await call()).json();
+    expect(body.live[0].version).toEqual({ id: "v0", contentType: "application/pdf", bytes: 800, scan: "clean", createdAt: "2026-09-20T15:00:00Z" });
+    expect(body.live[0].versions.map((v: { id: string; scan: string }) => [v.id, v.scan])).toEqual([["v1", "pending"], ["v0", "clean"]]);
   });
 ```
 
-  Write that case in full with the file's own helpers (read the test's top for its `listRecordDocuments` mock and fixture builder); the comment lines above are the assertion it must make, not code to paste.
+  (`row(over)` is the file's own builder, `route.test.ts:21-31`; its default `version` and `versions` rows gain `scan_status: "clean"` in this task, so every existing case keeps reading a clean file.)
 
 - [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/documents "src/app/api/accounts/[accountId]/contacts/[contactId]/documents" "src/app/api/accounts/[accountId]/groups/[groupId]/documents"` → the new cases fail.
 
@@ -2722,8 +2888,8 @@ export function viewerNotice(doc: DocumentView): MessageKey | null {
 - Modify: `apps/web/src/app/api/ops/health/route.ts` (`:37-50`) and `route.test.ts`
 
 **Interfaces**
-- Consumes: `listPendingScans`, `oldestPendingScanAt`, `recordHeartbeat` (`@bis/db`; the last at `packages/db/src/ops.ts:77-94`, never throws); `scannerConfig`, `scannerHealth`, `SCAN_TIMEOUT_MS`, `SCANNER_HEARTBEAT_KEY`, `ScannerHealth` (Task 5); `scanVersion` (Task 5); `SCAN_SLOW_MS` (Task 7).
-- Produces: `documentsScanPass` (key `documentsScan`), registered directly after `documentsSweepPass`; `DOCUMENT_SCAN_BUDGET_MS = 45_000`; `DOCUMENT_SCAN_BATCH = 50`; `SIGNATURES_MAX_AGE_MS = 3 * 86_400_000`; `scannerProblem(health, oldestPendingAt, now): string | null`. Counters: `{ scanned, clean, infected, unscannable, stillPending, failed, deferred, notConfigured }`. The health route's 503 body may name `"documents.scanner"`.
+- Consumes: `listPendingScans`, `oldestPendingScanAt`, `recordHeartbeat` (`@bis/db`; the last at `packages/db/src/ops.ts:77-94`, never throws); `scannerConfig`, `scannerHealth`, `SCAN_TIMEOUT_MS`, `SCANNER_HEARTBEAT_KEY`, `ScannerHealth` (Task 5); `scanVersion`, `spendScanError`, `ScanTarget` (Task 5); `SCAN_SLOW_MS` (Task 7).
+- Produces: `documentsScanPass` (key `documentsScan`), registered directly after `documentsSweepPass`; `DOCUMENT_SCAN_BUDGET_MS = 45_000`; `DOCUMENT_SCAN_BATCH = 50`; `SIGNATURES_MAX_AGE_MS = 3 * 86_400_000`; `scannerProblem(health, oldestPendingAt, now): string | null`. `scannerProblem(health, oldestPendingAt, now, pass?: { failures, verdicts, unreached, breaker })`. Counters: `{ scanned, clean, infected, unscannable, stillPending, unreached, failed, deferred, breaker, notConfigured }`. The breaker (deviation 15): two or more failures and no verdict in one pass spend nothing. Worst-case wall clock about 50 s against the declared 45 s, inside the coupling test's headroom (the pass's header comment states the arithmetic; plan review 6). The health route's 503 body may name `"documents.scanner"`.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -2746,7 +2912,10 @@ vi.mock("@/lib/documents/scan-client", () => ({
   scannerConfig: () => scannerConfig(), scannerHealth: () => scannerHealth(), SCAN_TIMEOUT_MS: 25_000, SCANNER_HEARTBEAT_KEY: "documents.scanner",
 }));
 const scanVersion = vi.fn();
-vi.mock("@/lib/documents/scan-version", () => ({ scanVersion: (...a: unknown[]) => scanVersion(...a) }));
+const spendScanError = vi.fn();
+vi.mock("@/lib/documents/scan-version", () => ({
+  scanVersion: (...a: unknown[]) => scanVersion(...a), spendScanError: (...a: unknown[]) => spendScanError(...a),
+}));
 
 const { documentsScanPass, scannerProblem, DOCUMENT_SCAN_BUDGET_MS, DOCUMENT_SCAN_BATCH } = await import("./documents-scan");
 
@@ -2754,41 +2923,66 @@ const NOW = new Date("2026-10-15T15:00:00.000Z");
 const DB = { tag: "service" } as never;
 const ctx = { db: DB, now: NOW, origin: "https://app.example.com" } as never;
 const row = (id: string, attempts = 0) => ({ id, account_id: "acc", document_id: "doc", storage_path: `acc/doc/${id}`, scan_attempts: attempts, created_at: "2026-10-15T14:59:00.000Z" });
+const target = (id: string, attempts = 0) => ({ accountId: "acc", versionId: id, storagePath: `acc/doc/${id}`, attempts });
 const FRESH = new Date(NOW.getTime() - 3_600_000).toISOString();
+const ZERO = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0 };
 
 beforeEach(() => {
-  for (const f of [listPendingScans, oldestPendingScanAt, recordHeartbeat, scannerConfig, scannerHealth, scanVersion]) f.mockReset();
+  for (const f of [listPendingScans, oldestPendingScanAt, recordHeartbeat, scannerConfig, scannerHealth, scanVersion, spendScanError]) f.mockReset();
   scannerConfig.mockReturnValue({ origin: "https://s", secret: "x" });
   scannerHealth.mockResolvedValue({ ok: true, signaturesAt: FRESH });
   oldestPendingScanAt.mockResolvedValue(null);
   listPendingScans.mockResolvedValue([]);
+  spendScanError.mockResolvedValue("pending");
 });
 afterEach(() => vi.restoreAllMocks());
 
 describe("documentsScan, the retry pass (spec 3.4)", () => {
   it("not configured: no read, one failing heartbeat, its own counter (mutation: list anyway -> FAILS)", async () => {
     scannerConfig.mockReturnValue(null);
-    expect(await documentsScanPass.run(ctx)).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, failed: 0, deferred: 0, notConfigured: 1 });
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, notConfigured: 1 });
     expect(listPendingScans).not.toHaveBeenCalled();
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "not configured (SCANNER_URL or SCANNER_SECRET unset)" });
   });
 
-  it("scans every pending version oldest first with its own attempts, counts each outcome, and beats ok (mutation: pass attempts 0 -> FAILS)", async () => {
+  it("scans every pending version oldest first with its own attempts, HOLDING clamd errors, counts each outcome, and beats ok (mutations: pass attempts 0 -> FAILS; scan without holdErrors -> FAILS)", async () => {
     listPendingScans.mockResolvedValue([row("a"), row("b", 2), row("c")]);
     scanVersion.mockResolvedValueOnce("clean").mockResolvedValueOnce("unscannable").mockResolvedValueOnce("infected");
-    expect(await documentsScanPass.run(ctx)).toMatchObject({ scanned: 3, clean: 1, unscannable: 1, infected: 1, failed: 0, deferred: 0 });
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 3, clean: 1, unscannable: 1, infected: 1 });
     expect(listPendingScans).toHaveBeenCalledWith(DB, DOCUMENT_SCAN_BATCH);
-    expect(scanVersion.mock.calls.map((c) => c[1])).toEqual([
-      { accountId: "acc", versionId: "a", storagePath: "acc/doc/a", attempts: 0 },
-      { accountId: "acc", versionId: "b", storagePath: "acc/doc/b", attempts: 2 },
-      { accountId: "acc", versionId: "c", storagePath: "acc/doc/c", attempts: 0 }]);
+    expect(scanVersion.mock.calls.map((c) => [c[1], c[3]])).toEqual([
+      [target("a"), { holdErrors: true }], [target("b", 2), { holdErrors: true }], [target("c"), { holdErrors: true }]]);
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: true });
+  });
+
+  it("a held clamd error is spent ONLY once the worker has reached a verdict on something in the same pass (mutation: never spend -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([row("a"), row("b", 1)]);
+    scanVersion.mockResolvedValueOnce("clean").mockResolvedValueOnce("held");
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 2, clean: 1, stillPending: 1 });
+    expect(spendScanError).toHaveBeenCalledWith(DB, target("b", 1));
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: true });
+  });
+
+  it("THE BREAKER: two or more failures and no verdict spend NOTHING and turn the heartbeat red (plan review C1; mutation: spend the held errors anyway -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([row("a", 2), row("b", 2), row("c", 2)]);
+    scanVersion.mockResolvedValueOnce("held").mockResolvedValueOnce("held").mockResolvedValueOnce("unreached");
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 3, unreached: 1, breaker: 1 });
+    expect(spendScanError).not.toHaveBeenCalled();
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "3 scans failed and none succeeded; no attempts were spent" });
+  });
+
+  it("a misconfigured binding (every scan a 403: 'unreached') spends nothing and is named even for one file (plan review C1; mutation: count unreached as a verdict -> FAILS)", async () => {
+    listPendingScans.mockResolvedValue([row("a", 2)]);
+    scanVersion.mockResolvedValueOnce("unreached");
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 1, unreached: 1 });
+    expect(spendScanError).not.toHaveBeenCalled();
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "1 file could not be reached" });
   });
 
   it("a worker that is down scans NOTHING, so an outage never spends a file's attempts (plan deviation 7; mutation: scan anyway -> FAILS)", async () => {
     scannerHealth.mockResolvedValue({ ok: false, reason: "unreachable" });
     listPendingScans.mockResolvedValue([row("a")]);
-    expect(await documentsScanPass.run(ctx)).toMatchObject({ scanned: 0 });
+    expect(await documentsScanPass.run(ctx)).toEqual(ZERO);
     expect(scanVersion).not.toHaveBeenCalled();
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "worker unreachable" });
   });
@@ -2825,17 +3019,20 @@ describe("scannerProblem: the heartbeat's words (spec 3.4; BIS staff read them i
 
   `cron-coupling.test.ts`: import `DOCUMENT_SCAN_BUDGET_MS` from `./passes/documents-scan`; the sum at `:333` becomes `RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS`; its title says "the four wall-clock budgets"; its comment adds "and, since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s): 285 s of 300". (Mutation: `DOCUMENT_SCAN_BUDGET_MS = 61_000` → FAILS.) `apps/web/src/lib/automations/caps.ts:116-125`'s prose counts "THREE passes" and "180 s": change it to "THREE passes carry a 60 s budget and, since S-07 2a, the document scan pass a 45 s one (passes/documents-scan.ts)" and "225 s against the route's 300 s `maxDuration`" (prose only; no constant in caps.ts changes).
 
-  `sentinel.test.ts:280`: insert `"documentsScan"` after `"documentsSweep"`; after `:263` add `expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, failed: 0, deferred: 0, notConfigured: 1 });` (the suite sets no `SCANNER_URL`). If the sentinel's `@bis/db` mock lacks `recordHeartbeat`, add `recordHeartbeat: async () => undefined`.
+  `sentinel.test.ts:280`: insert `"documentsScan"` after `"documentsSweep"`; after `:263` add `expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1 });` (the suite sets no `SCANNER_URL`). If the sentinel's `@bis/db` mock lacks `recordHeartbeat`, add `recordHeartbeat: async () => undefined`.
 
-  `route.test.ts` (cron): beside `:314`, `const EMPTY_DOCUMENTS_SCAN = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, failed: 0, deferred: 0, notConfigured: 1 };`; in every exact body, `documentsSweep: EMPTY_DOCUMENTS_SWEEP, documentsScan: EMPTY_DOCUMENTS_SCAN,`. In `beforeEach`, `delete process.env.SCANNER_URL; delete process.env.SCANNER_SECRET;` so a developer's shell cannot change the bodies. The factory already has `recordHeartbeat` (`:184`).
+  `route.test.ts` (cron): beside `:314`, `const EMPTY_DOCUMENTS_SCAN = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1 };`; in every exact body, `documentsSweep: EMPTY_DOCUMENTS_SWEEP, documentsScan: EMPTY_DOCUMENTS_SCAN,`.   (`apps/web/vitest.config.ts` pins `SCANNER_URL` and `SCANNER_SECRET` blank, Task 10 step 2b, so a developer's shell cannot change these bodies.) The factory already has `recordHeartbeat` (`:184`).
 
   `watch.test.ts`: add
 
 ```ts
   it("names the scanner's heartbeat in plain words and alerts on its first failure, like a webhook (S-07 2a; mutation: drop the describeKey case -> the raw key reaches the email -> FAILS)", () => {
     expect(describeKey("documents.scanner")).toBe("virus scanning of uploaded files");
+    // The email names it in plain words, not the raw key (plan review 12: isFailing alone already held for any non-pass key).
     const at = new Date("2026-10-15T15:00:00Z");
-    expect(isFailing({ key: "documents.scanner", lastOkAt: new Date(at.getTime() - 60_000), lastErrorAt: at, lastError: "worker unreachable", consecutiveFailures: 1, alertedAt: null })).toBe(true);
+    const mail = composeOpsEmail(evaluate([{ key: "documents.scanner", lastOkAt: new Date(at.getTime() - 60_000), lastErrorAt: at, lastError: "worker unreachable", consecutiveFailures: 1, alertedAt: null }], at));
+    expect(mail?.body).toContain("- virus scanning of uploaded files");
+    expect(mail?.body).not.toContain("- documents.scanner");
   });
 ```
 
@@ -2869,28 +3066,44 @@ describe("scannerProblem: the heartbeat's words (spec 3.4; BIS staff read them i
 ```ts
 import { listPendingScans, oldestPendingScanAt, recordHeartbeat } from "@bis/db";
 import { scannerConfig, scannerHealth, SCAN_TIMEOUT_MS, SCANNER_HEARTBEAT_KEY, type ScannerHealth } from "@/lib/documents/scan-client";
-import { scanVersion } from "@/lib/documents/scan-version";
+import { scanVersion, spendScanError, type ScanTarget } from "@/lib/documents/scan-version";
 import { SCAN_SLOW_MS } from "@/lib/documents/scan-state";
 import type { Pass } from "../context";
 
 /**
  * The document vault's virus scan, retried (spec 3.4). Not a recipe; it sends nothing. EVERY tick:
  * if the worker's /health is good, scan the ready versions still pending, oldest first (part 1's files
- * the first time: the catch-up), each through scanVersion (object first on a virus; unscannable after
- * the third error). A down worker scans nothing (plan deviation 7). Then ONE heartbeat,
- * documents.scanner (0057): failing while the worker is not configured or unreachable, clamd is down,
- * its signatures are over 3 days old, or a file has been pending over 15 minutes; the alert pass emails
- * on its first failure (lib/ops/watch.ts: not a cron.pass key) and /api/ops/health reports it. A
- * version whose scan threw (an object that would not delete) is counted and the pass THROWS after
- * the heartbeat, so cron.pass.documentsScan fails too. Every @bis/db export is dereferenced inside
- * run(), never at module scope (the cron route test's bare mock throws on a dereference).
+ * the first time: the catch-up), each through scanVersion (object first on a virus or unreadable
+ * content). A down worker scans nothing (plan deviation 7).
+ * THE BREAKER (plan review C1): clamd errors are HELD during the loop. Once it ends, if two or more
+ * scans failed (held clamd errors plus "unreached" ones) and none reached a verdict, nothing is
+ * spent: the fault is the worker's or the wiring's, not the files'. Otherwise each held error spends
+ * one attempt (the third removes the file as unscannable). A non-clamd failure ("unreached": a 403
+ * from a wrong binding, unreachable storage, a timeout) never spends, breaker or not.
+ * Then ONE heartbeat, documents.scanner (0057): failing while the worker is not configured or
+ * unreachable, clamd is down, its signatures are over 3 days old, the breaker tripped, a pass with no
+ * verdict could not reach a file, or a file has been pending over 15 minutes; the alert pass emails
+ * on its first failure (lib/ops/watch.ts: not a cron.pass key) and /api/ops/health reports it.
+ * A version whose scan threw (an object that would not delete) is counted and the pass THROWS after
+ * the heartbeat, so cron.pass.documentsScan fails too.
+ * BUDGET: no scan STARTS after 20 s (45 s budget minus one 25 s scan timeout), the health call
+ * included. Worst case, measured from the pass's start: the last scan started at 20 s ends by 45 s,
+ * then its object delete and verdict, the held errors' verdicts (at most one per scan started), the
+ * oldest-pending read and the heartbeat: a few seconds of round trips that no timeout bounds (supabase-
+ * js sets none), so about 50 s, not 45. cron-coupling.test.ts asserts the budgets plus 60 s of headroom
+ * fit the route's 300 s (60 + 60 + 60 + 45 + 60 = 285): the ~5 s overrun comes out of the 15 s left over
+ * and, past that, out of the 60 s the test reserves for the unbudgeted passes. Plan review 6.
+ * Every @bis/db export is dereferenced inside run(), never at module scope.
  */
 export const DOCUMENT_SCAN_BUDGET_MS = 45_000;
 export const DOCUMENT_SCAN_BATCH = 50;
 export const SIGNATURES_MAX_AGE_MS = 3 * 86_400_000;
 
+export type PassOutcome = { failures: number; verdicts: number; unreached: number; breaker: boolean };
+const QUIET: PassOutcome = { failures: 0, verdicts: 0, unreached: 0, breaker: false };
+
 /** The heartbeat's words: plain English for BIS staff, never a URL, a token or a file name. */
-export function scannerProblem(health: ScannerHealth, oldestPendingAt: string | null, now: Date): string | null {
+export function scannerProblem(health: ScannerHealth, oldestPendingAt: string | null, now: Date, pass: PassOutcome = QUIET): string | null {
   const problems: string[] = [];
   if (!health.ok) {
     problems.push(health.reason === "not_configured" ? "not configured (SCANNER_URL or SCANNER_SECRET unset)" : `worker ${health.reason.replace("_", " ")}`);
@@ -2898,6 +3111,8 @@ export function scannerProblem(health: ScannerHealth, oldestPendingAt: string | 
     const age = now.getTime() - Date.parse(health.signaturesAt);
     if (age > SIGNATURES_MAX_AGE_MS) problems.push(`signatures ${Math.floor(age / 3_600_000)} hours old`);
   }
+  if (pass.breaker) problems.push(`${pass.failures} scans failed and none succeeded; no attempts were spent`);
+  else if (pass.verdicts === 0 && pass.unreached > 0) problems.push(`${pass.unreached} file${pass.unreached === 1 ? "" : "s"} could not be reached`);
   if (oldestPendingAt) {
     const waited = now.getTime() - Date.parse(oldestPendingAt);
     if (waited > SCAN_SLOW_MS) problems.push(`a file has waited ${Math.floor(waited / 60_000)} minutes`);
@@ -2908,7 +3123,7 @@ export function scannerProblem(health: ScannerHealth, oldestPendingAt: string | 
 export const documentsScanPass: Pass = {
   key: "documentsScan",
   async run(ctx) {
-    const c = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, failed: 0, deferred: 0, notConfigured: 0 };
+    const c = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0 };
     if (!scannerConfig()) {
       c.notConfigured = 1;
       await recordHeartbeat(ctx.db, SCANNER_HEARTBEAT_KEY, { ok: false, error: scannerProblem({ ok: false, reason: "not_configured" }, null, ctx.now)! });
@@ -2916,25 +3131,45 @@ export const documentsScanPass: Pass = {
     }
     const startedAt = Date.now();
     const health = await scannerHealth();
+    const held: ScanTarget[] = [];
     if (health.ok) {
       const due = await listPendingScans(ctx.db, DOCUMENT_SCAN_BATCH);
       for (const [i, v] of due.entries()) {
         // Stop STARTING a scan once one more could overrun the budget (release-held.ts's shape).
         if (Date.now() - startedAt > DOCUMENT_SCAN_BUDGET_MS - SCAN_TIMEOUT_MS) { c.deferred = due.length - i; break; }
         c.scanned++;
+        const target: ScanTarget = { accountId: v.account_id, versionId: v.id, storagePath: v.storage_path, attempts: v.scan_attempts };
         try {
-          const r = await scanVersion(ctx.db, { accountId: v.account_id, versionId: v.id, storagePath: v.storage_path, attempts: v.scan_attempts });
+          const r = await scanVersion(ctx.db, target, undefined, { holdErrors: true });
           if (r === "clean") c.clean++;
           else if (r === "infected") c.infected++;
           else if (r === "unscannable") c.unscannable++;
-          else if (r === "pending") c.stillPending++;
+          else if (r === "unreached") c.unreached++;
+          else if (r === "held") held.push(target);
         } catch (e) {
           c.failed++;
           console.error(`documents scan: version ${v.id} (account ${v.account_id}): ${String(e)}`);
         }
       }
     }
-    const problem = scannerProblem(health, await oldestPendingScanAt(ctx.db), ctx.now);
+    const verdicts = c.clean + c.infected + c.unscannable;
+    const failures = held.length + c.unreached;
+    const breaker = failures >= 2 && verdicts === 0;
+    if (breaker) {
+      c.breaker = 1;
+    } else {
+      for (const h of held) {
+        try {
+          const r = await spendScanError(ctx.db, h);
+          if (r === "pending") c.stillPending++;
+          else if (r === "unscannable") c.unscannable++;
+        } catch (e) {
+          c.failed++;
+          console.error(`documents scan: version ${h.versionId} (account ${h.accountId}): ${String(e)}`);
+        }
+      }
+    }
+    const problem = scannerProblem(health, await oldestPendingScanAt(ctx.db), ctx.now, { failures, verdicts, unreached: c.unreached, breaker });
     await recordHeartbeat(ctx.db, SCANNER_HEARTBEAT_KEY, problem ? { ok: false, error: problem } : { ok: true });
     if (c.failed > 0) throw new Error(`documents scan: ${JSON.stringify(c)}`);
     return c;
@@ -2974,7 +3209,7 @@ export const documentsScanPass: Pass = {
 
 - [ ] **Step 4: Run green.** Step 2's command → PASS; the summary block's failed count is 0. `pnpm --filter web typecheck` → clean in this task's files. `grep -c serviceDb apps/web/src/lib/automations/passes/documents-scan.ts` → 0.
 
-- [ ] **Step 5: Probes, red BY NAME, restored:** (1) pass `attempts: 0` → the scan case; (2) scan when `!health.ok` → the outage case; (3) `throw` inside the loop's catch → the one-throws case; (4) drop the budget `if` → the budget case; (5) `SIGNATURES_MAX_AGE_MS = 4 * 86_400_000` → the words case; (6) remove `documentsScanPass` from `PASSES` → sentinel's order case and the cron bodies; (7) ignore `scannerFailing` in the health route → its new case.
+- [ ] **Step 5: Probes, red BY NAME, restored:** (1) pass `attempts: 0` → the scan case; (2) scan when `!health.ok` → the outage case; (3) `throw` inside the loop's catch → the one-throws case; (4) drop the budget `if` → the budget case; (4b) spend the held errors when the breaker trips → the breaker case (C1); (4c) never spend held errors → the spent-after-a-verdict case; (4d) count `unreached` as a verdict → the misconfigured-binding case; (5) `SIGNATURES_MAX_AGE_MS = 4 * 86_400_000` → the words case; (6) remove `documentsScanPass` from `PASSES` → sentinel's order case and the cron bodies; (7) ignore `scannerFailing` in the health route → its new case.
 
 - [ ] **Step 6: Commit.** `git add -- apps/web/src/lib/automations/passes/documents-scan.ts apps/web/src/lib/automations/passes/documents-scan.test.ts` then `git commit -m "feat(automations): the document scan retry pass with its 45 s budget and the documents.scanner heartbeat; ops health and the alert name it (S-07 part 2a)" -- <every file in this task's Files list>`
 
@@ -3019,10 +3254,11 @@ describe("virus scanning on the card (S-07 2a; spec 3.5; rule 3)", () => {
   });
 
   it("a removed row is a crit dot and 'Removed: it had a virus', and its menu keeps Move to trash but has no Download (mutations: crit -> warn -> FAILS; keep Download -> FAILS)", () => {
-    const row = rowOf(render(ready([removed])), "dx");
+    const row = rowOf(render(ready([removed]), { locale: "es" }), "dx");
     expect(row).toContain('data-document-scan="infected"');
     expect(row).toContain("bg-[var(--crit)]");
-    expect(renderedText(row)).toContain(m["documents.status.virusRemoved"]);
+    expect(renderedText(row)).toContain(m["documents.status.virusRemoved.es"]);
+    expect(renderedText(rowOf(render(ready([removed])), "dx"))).toContain(m["documents.status.virusRemoved"]);
     expect(rowMenuItems(removed as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
     expect(rowMenuItems(pending("2026-10-13T14:59:00.000Z") as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "trash"]);
     expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "trash"]);
@@ -3060,12 +3296,12 @@ describe("the viewer and virus scanning (S-07 2a; spec 3.3, 3.5)", () => {
       { ...d.versions[0]!, scan: "clean" as const },
       { id: "v0", contentType: "application/pdf" as const, bytes: 8, createdAt: "2026-10-01T10:00:00.000Z", addedOn: "2026-10-01", scan: "clean" as const },
     ] };
-    const html = renderToStaticMarkup(createElement(DocumentVersionsList, { doc: twoMore as never, locale: "en", when: () => "today", onDownload: vi.fn() }));
+    const html = renderToStaticMarkup(createElement(DocumentVersionsList, { doc: twoMore as never, locale: "es", when: () => "hoy", onDownload: vi.fn() }));
     const rowFor = (id: string) => html.slice(html.indexOf(`data-document-version-row="${id}"`), html.indexOf("</li>", html.indexOf(`data-document-version-row="${id}"`)));
     expect(rowFor("v3")).toContain('data-version-scan="pending"');
-    expect(renderedText(rowFor("v3"))).toContain(m["documents.status.scanning"]);
+    expect(renderedText(rowFor("v3"))).toContain(m["documents.status.scanning.es"]);
     expect(rowFor("v3")).not.toContain("<button");
-    expect(renderedText(rowFor(d.version.id))).toContain(m["documents.versionCurrent"]);
+    expect(renderedText(rowFor(d.version.id))).toContain(m["documents.versionCurrent.es"]);
     expect(rowFor("v0")).toContain("<button");
   });
 });
@@ -3197,6 +3433,7 @@ function VersionScan({ scan, locale }: { scan: DocumentView["versions"][number][
 - Modify: `.github/workflows/ci.yml` (one new job, `scanner`, after `e2e`)
 - Modify: `apps/web/playwright.config.ts` (the `webServer` entry, `:201-223`)
 - Modify: `.env.example` (one block after `OPS_HEALTH_SECRET=`, `:325`)
+- Modify: `apps/web/vitest.config.ts` (`test.env`, `:28`)
 - Create: `docs/runbooks/scanner.md`
 
 **Interfaces**
@@ -3207,7 +3444,11 @@ function VersionScan({ scan, locale }: { scan: DocumentView["versions"][number][
 
 ```yaml
   # The document vault's scanner (services/scanner; S-07 2a). NOT a required check: the ruleset on
-  # main requires verify and e2e only, and this job holds no secret and no Supabase value. It runs the
+  # main requires verify and e2e only, and this job holds no secret and no Supabase value. What covers
+  # it: the orchestrator reads it green on the head SHA before every merge that touches services/
+  # (plan Task 14 step 7), and the REQUIRED e2e job runs the same shim (src/) in front of a fake clamd
+  # on every push, so a shim that cannot start or sign fails a required check anyway. A red run of THIS
+  # job is the real-clamd half (EICAR, limits, memory) and blocks a merge by that reading rule. It runs the
   # shim's own tests against a fake clamd, then builds the real image and proves, against the REAL
   # clamd, that EICAR is infected (raw and inside a DOCX), a clean PDF and a 25 MiB file are clean, and
   # a refused request fetches nothing (services/scanner/test/real-clamd.mjs). The secret below is a
@@ -3276,6 +3517,8 @@ const SCANNER_SERVERS = [
 
   and make `webServer` an array: `webServer: [...SCANNER_SERVERS, { …the existing entry…, env: { BIS_I18N_QA: "1", SCANNER_URL: \`http://127.0.0.1:${SCANNER_PORT}\`, SCANNER_SECRET: E2E_SCANNER_SECRET } }]`. **Assumption A8:** Playwright treats any HTTP answer below 404 as up for a `url` entry; a 401 is NOT below 404 on every version. Read `node_modules/playwright/lib/plugins/webServerPlugin.js` (`isURLAvailable`): if a 401 does not count, use `port: SCANNER_PORT` for the shim entry instead of `url` (a TCP wait), and say which in the report. Then `pnpm --filter web exec playwright test --list` → the suite lists with no config error.
 
+- [ ] **Step 2b: Pin the scanner off for the unit suite** (plan review 7), as `APP_ORIGIN` is (`apps/web/vitest.config.ts:18-28`): `env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "" }`, and extend the comment above it with one sentence: "SCANNER_URL/SCANNER_SECRET likewise (S-07 2a): a developer's shell holding the real worker's values would otherwise turn the cron route's and the sentinel's not-configured counters into a live scan; `scannerConfig` trims and nulls a blank." Run `pnpm --filter web exec vitest run src/app/api/cron src/lib/automations/sentinel.test.ts` once with `SCANNER_URL=https://x SCANNER_SECRET=y` exported in the shell → still PASS (the pin wins).
+
 - [ ] **Step 3: `.env.example`.** After `OPS_HEALTH_SECRET=` (`:325`), add:
 
 ```
@@ -3292,15 +3535,15 @@ SCANNER_SECRET=
 
 - [ ] **Step 4: The runbook** `docs/runbooks/scanner.md`, these sections, each with its exact commands:
   1. **What it is.** One Fly machine (`iad`, `shared-cpu-1x`, 2 GB, always on): ClamAV + the shim. Holds `SCANNER_CLIENTS` only. Who calls it: Production and Preview (each its own secret, each bound to its own storage origin).
-  2. **Create** (once, with the owner's Fly account): `fly auth login`; from `services/scanner/`, `fly launch --no-deploy --copy-config --name <app>` (keep `fly.toml`); `fly config validate`; generate two secrets (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`, twice); `fly secrets set SCANNER_CLIENTS="<prodSecret>@https://tlbkbmlrfafquucsmsmm.supabase.co <previewSecret>@https://odnobiodsftffphuuosz.supabase.co"`; `fly deploy`; `fly status`.
+  2. **Create** (once, with the owner's Fly account): `<FLYCTL> auth login`; from `services/scanner/`, `<FLYCTL> launch --no-deploy --copy-config --name <app>` (keep `fly.toml`); `<FLYCTL> config validate`; generate two secrets (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`, twice); `<FLYCTL> secrets set SCANNER_CLIENTS="<prodSecret>@https://tlbkbmlrfafquucsmsmm.supabase.co <previewSecret>@https://odnobiodsftffphuuosz.supabase.co"`; `<FLYCTL> deploy`; `<FLYCTL> status`.
   3. **Read its health** without exposing a secret: a one-line `node` snippet that signs `GET /health` with `SCANNER_SECRET` read from the environment (the same canonical string as `services/scanner/src/hmac.mjs`), printing only the JSON answer.
   4. **Vercel:** `SCANNER_URL=https://<app>.fly.dev` in Production and Preview; `SCANNER_SECRET` = prodSecret in Production only, previewSecret in Preview only (`vercel env add`, never both values in one environment).
-  5. **Rotate** a caller: add the new entry to `SCANNER_CLIENTS` beside the old, `fly deploy` (or `fly secrets set` restarts it), change the Vercel value, redeploy, then remove the old entry.
-  6. **When it is red** (`/api/ops/health` names `documents.scanner`, or the alert email): the heartbeat's words say which (not configured; worker unreachable; clamd down; signatures N hours old; a file has waited N minutes). `fly logs`, `fly machine restart`, `fly ssh console -C "clamdscan --version"`. Files wait meanwhile; nothing opens unscanned.
-  7. **Memory** (A1): `fly machine status` / the metrics page after a freshclam reload; if it crosses 1.6 GiB, `fly scale memory 4096` (deviation 12: the owner decides the cost).
-  8. **Roll back:** the app side reverts with the PR; the machine can be stopped with `fly scale count 0` (files then wait); 0079's rollback is in its header.
+  5. **Rotate** a caller: add the new entry to `SCANNER_CLIENTS` beside the old, `<FLYCTL> deploy` (or `<FLYCTL> secrets set` restarts it), change the Vercel value, redeploy, then remove the old entry.
+  6. **When it is red** (`/api/ops/health` names `documents.scanner`, or the alert email): the heartbeat's words say which (not configured; worker unreachable; clamd down; signatures N hours old; a file has waited N minutes). `<FLYCTL> logs`, `<FLYCTL> machine restart`, `<FLYCTL> ssh console -C "clamdscan --version"`. Files wait meanwhile; nothing opens unscanned.
+  7. **Memory** (A1): `<FLYCTL> machine status` / the metrics page after a freshclam reload; if it crosses 1.6 GiB, `<FLYCTL> scale memory 4096` (deviation 12: the owner decides the cost).
+  8. **Roll back:** the app side reverts with the PR; the machine can be stopped with `<FLYCTL> scale count 0` (files then wait); 0079's rollback is in its header.
 
-- [ ] **Step 5: Commit.** `git add -- docs/runbooks/scanner.md` then `git commit -m "ci(scanner): a job that proves EICAR against the real clamd; e2e runs the shim with a fake clamd; env and runbook (S-07 part 2a)" -- .github/workflows/ci.yml apps/web/playwright.config.ts .env.example docs/runbooks/scanner.md`
+- [ ] **Step 5: Commit.** `git add -- docs/runbooks/scanner.md` then `git commit -m "ci(scanner): a job that proves EICAR against the real clamd; e2e runs the shim with a fake clamd; env and runbook (S-07 part 2a)" -- .github/workflows/ci.yml apps/web/playwright.config.ts apps/web/vitest.config.ts .env.example docs/runbooks/scanner.md`
 
 ---
 
@@ -3430,7 +3673,7 @@ test("1. a clean upload is scanned at once: an ordinary row, clean in the databa
   await page.keyboard.press("Escape");
 });
 
-test("2. a file with a virus is removed at once: the row says so as a dot and a word, the object is gone, one event with ids only, and a timeline row with the automation mark (mutations: record before removing -> the object survives -> FAILS; emit the title -> FAILS)", async ({ page }) => {
+test("2. a file with a virus is removed at once: the row says so as a dot and a word, the object is gone, one event with ids only, and a timeline row with the automation mark (mutations: skip the object removal in scanVersion -> the object survives -> FAILS; emit the title -> FAILS)", async ({ page }) => {
   await open(page);
   await upload(page, "Lease.pdf", Buffer.concat([pdf("bad"), Buffer.from(`\n% ${EICAR}\n`)]));
   const row = rowByTitle(page, "Lease");
@@ -3509,19 +3752,20 @@ test("3. Checking, then 'Taking longer than usual', then the ordinary row WITHOU
 
 Additive migration, so it applies before the merge. The worker must be up and the Vercel env set BEFORE the merge deploys, or every upload after the deploy waits until it is. Each step reads its own evidence; nothing is inferred from an earlier run.
 
-- [ ] **Step 1. Fly account and price (owner).** danlo has created the Fly.io account and added a card (Task 0 step 3). Read fly.io/docs/about/pricing for an always-on `shared-cpu-1x` with 2 GB in `iad`; write the monthly number in the ledger and the PR body (Assumption A2). If it is not about $10–12, tell the owner before Step 3.
+- [ ] **Step 1. Fly account and price.** DONE: danlo created the Fly.io account (org `personal`, card added) and `<FLYCTL>` is logged in (Task 0 step 3). Read fly.io/docs/about/pricing for an always-on `shared-cpu-1x` with 2 GB in `iad`; write the monthly number in the ledger and the PR body (Assumption A2). If it is not about $10–12, tell the owner before Step 3.
 - [ ] **Step 2. bis-ci** (as soon as Task 1's review approves, so the e2e job's migration check is green on the first push). `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/s07-vault-2a` → its log lists exactly `0079_document_scan.sql`; then `-f step=push`. Post-apply, read-only with `pnpm --filter @bis/db ci:sql`: `select column_name, column_default from information_schema.columns where table_schema='public' and table_name='document_versions' and column_name like 'scan%' order by 1` → four rows, `scan_status` defaulting to `'pending'::text`; `select has_function_privilege('service_role','public.record_document_scan(uuid,uuid,text,text)','EXECUTE'), has_function_privilege('authenticated','public.record_document_scan(uuid,uuid,text,text)','EXECUTE')` → `t | f`; `select reloptions from pg_class where oid = 'public.document_scan_timeline'::regclass` → `{security_invoker=true}`. From here on the `@bis/db` suites may run against bis-ci again.
-- [ ] **Step 3. The worker.** Follow `docs/runbooks/scanner.md` §2 from `<WT>/services/scanner`: `fly launch --no-deploy --copy-config --name <app>`, `fly config validate` (Assumption A11), generate the two caller secrets, `fly secrets set SCANNER_CLIENTS=…` (production's bound to `https://tlbkbmlrfafquucsmsmm.supabase.co`, Preview's to `https://odnobiodsftffphuuosz.supabase.co`), `fly deploy`, `fly status` → one machine, started. Never paste a secret into a log, the ledger or the PR.
+- [ ] **Step 3. The worker.** Follow `docs/runbooks/scanner.md` §2 from `<WT>/services/scanner`: `<FLYCTL> launch --no-deploy --copy-config --name <app>`, `<FLYCTL> config validate` (Assumption A11), generate the two caller secrets, `<FLYCTL> secrets set SCANNER_CLIENTS=…` (production's bound to `https://tlbkbmlrfafquucsmsmm.supabase.co`, Preview's to `https://odnobiodsftffphuuosz.supabase.co`), `<FLYCTL> deploy`, `<FLYCTL> status` → one machine, started. Never paste a secret into a log, the ledger or the PR.
 - [ ] **Step 4. Read `/health`** with the runbook's §3 snippet, once with each secret → `{"clamd":true,"signaturesAt":"…"}` within 3 days. A wrong secret answers 401 (check once, deliberately).
-- [ ] **Step 5. Memory (A1).** `fly machine status` and the Fly metrics page after the machine has run an hour (a freshclam check has happened): resident memory under 1.6 GiB. Over it: stop, and put deviation 12's 4 GB choice to the owner with A2's price.
+- [ ] **Step 4b. Prove production's binding BEFORE the merge (plan review C1).** The origin written after production's secret in `SCANNER_CLIENTS` must equal production's `NEXT_PUBLIC_SUPABASE_URL` origin exactly. Neither is a secret: read the Vercel Production value (`vercel env ls production` shows it is set; its value is the public `https://tlbkbmlrfafquucsmsmm.supabase.co`, also in any production page's network panel) and compare it, character for character, with the origin you typed in step 3 (keep the `SCANNER_CLIENTS` value you set in a scratch file under `<SCRATCH>`, delete it after this step; `<FLYCTL> secrets list` shows only a digest). Do the same for Preview against `https://odnobiodsftffphuuosz.supabase.co`. A mismatch is a 403 on every scan: files would wait (C1 spends nothing) and the heartbeat would say "could not be reached", but fix it before merging.
+- [ ] **Step 5. Memory (A1).** `<FLYCTL> machine status` and the Fly metrics page after the machine has run an hour (a freshclam check has happened): resident memory under 1.6 GiB. Over it: stop, and put deviation 12's 4 GB choice to the owner with A2's price.
 - [ ] **Step 6. Vercel env.** `SCANNER_URL=https://<app>.fly.dev` in Production and Preview; `SCANNER_SECRET` = the production caller's secret in Production ONLY, the Preview caller's in Preview ONLY (CLAUDE.md production isolation). Redeploy the branch's Preview so it picks them up.
-- [ ] **Step 7. Push and CI.** Push the branch; read `verify`, `e2e` and `scanner` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). `scanner`'s log carries A3, A5, A6, A7 and A1's CI reading; `e2e` runs `documents-scan.spec.ts` through the real shim and the fake clamd (A8, A10). A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
+- [ ] **Step 7. Push and CI.** Push the branch; read `verify`, `e2e` and `scanner` ON THE HEAD SHA (`scanner` is not a required check; this reading is what makes it one in practice, plan review 15) (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). `scanner`'s log carries A3, A5, A6, A7 and A1's CI reading; `e2e` runs `documents-scan.spec.ts` through the real shim and the fake clamd (A8, A10). A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
 - [ ] **Step 8. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first; a local e2e run uses bis-ci, which Step 2 gave 0079, and starts its own fake scanner). The `forms.spec` unread-badge flake is unrelated; never loosen it.
-- [ ] **Step 9. The real EICAR on Preview (spec 7, 8; owner and orchestrator together).** `node services/scanner/test/eicar.mjs <SCRATCH>/eicar.docx`. On the branch's Preview (bis-ci), as the agency, on a throwaway contact of the per-run-style test account (never Test Client One): upload `eicar.docx`. Expected within seconds: the row reads "Removed: it had a virus" with a red dot; `select scan_status, scan_signature from document_versions where id = '<the version>'` on bis-ci (read-only, `ci:sql`) → `infected | Eicar-Test-Signature`-like; the object is gone (the storage dashboard, or a service-role download answers not found). Then upload a clean PDF → it opens. This proves A4 (Fly reaches bis-ci's signed URLs) and A6 in the real path. Delete the throwaway contact and its files afterwards (Delete forever, then the contact).
-- [ ] **Step 10. Production.** Pre-flight, read-only through MCP `execute_sql` on `tlbkbmlrfafquucsmsmm`: `select count(*) from information_schema.columns where table_name='document_versions' and column_name='scan_status'` → 0; `select max(version) from supabase_migrations.schema_migrations` → the 0078 apply; `select count(*) from document_versions where status='ready'` → the catch-up's size (tell the owner how long: at most about 15 files a tick, so N files take N/15 quarter-hours). Then `apply_migration` with 0079's exact text, ONCE (Task 1 step 5 proved no backslash). Then Step 2's reads. Ledger line: `0079 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
+- [ ] **Step 9. The real EICAR on Preview (spec 7, 8; owner and orchestrator together).** `node services/scanner/test/eicar.mjs <SCRATCH>/eicar.docx`. On the branch's Preview (bis-ci), as the agency, on a throwaway contact of the per-run-style test account (never Test Client One): upload `eicar.docx`. Expected within seconds: the row reads "Removed: it had a virus" with a red dot; `select scan_status, scan_signature from document_versions where id = '<the version>'` on bis-ci (read-only, `ci:sql`) → `infected | Eicar-Test-Signature`-like; the object is gone (the storage dashboard, or a service-role download answers not found). Then upload a clean PDF → it opens; then an owner-locked PDF (no password to open) → it opens (A13; if it reads "Couldn't check this file", stop and tell the orchestrator: deviation 16's consequence is wider than stated). This proves A4 (Fly reaches bis-ci's signed URLs) and A6 in the real path. Delete the throwaway contact and its files afterwards (Delete forever, then the contact).
+- [ ] **Step 10. Production.** Pre-flight, read-only through MCP `execute_sql` on `tlbkbmlrfafquucsmsmm`: `select count(*) from information_schema.columns where table_name='document_versions' and column_name='scan_status'` → 0; `select max(version) from supabase_migrations.schema_migrations` → the 0078 apply; `select count(*) from document_versions where status='ready'` → the catch-up's size. Tell the owner how long, from the pass's real numbers (plan review 5): each 15-minute tick reads at most 50 pending versions (`DOCUMENT_SCAN_BATCH`) and starts no scan after 20 s (45 s budget minus one 25 s timeout); a small file scans in roughly 1 s, so about 20 a tick (80 an hour), fewer when files are large. N files take about N/20 ticks, never fewer than N/50. Then `apply_migration` with 0079's exact text, ONCE (Task 1 step 5 proved no backslash). Then Step 2's reads. Ledger line: `0079 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
 - [ ] **Step 11. Parity and the advisor.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both; the function, the view, the columns and their checks equal. MCP `get_advisors` (security): a finding about `document_scan_timeline` would be unexpected (it is `security_invoker`): stop and read it.
-- [ ] **Step 12. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green, `scanner` is green, and Task 13's findings are closed). The PR body names: deviations 1–14 (1 is "orchestrator to confirm" unless the owner already has), Assumptions A1–A12 and where each was proven, the pinned tests this PR changes, "Not in this PR" (0080 must drop `documents.scan_status` first), the Fly price and machine size, and the 0079 apply lines.
-- [ ] **Step 13. After the deploy.** The deploy reads READY on the merge SHA. Within 30 minutes: `select count(*) from document_versions where status='ready' and scan_status='pending'` on production falls tick by tick to 0 (the catch-up, spec §8); `select scan_status, count(*) from document_versions where status='ready' group by 1` → all clean (an infected part-1 file, if any, is now removed: tell the owner which account). `/api/ops/health` answers 200 once the catch-up is done (until then it may name `documents.scanner` for "a file has waited": expected, deviation 6). Ledger: the item 6 / F-005 tracker row stays `in_progress` (spec §8) with "part 2a (scanning) shipped #<n>".
+- [ ] **Step 12. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green, `scanner` is green, and Task 13's findings are closed). The PR body names: deviations 1–16 (1 and 12 ACCEPTED 2026-10-15 by the orchestrator), deviation 16's consequence for password-protected files, that bis-ci's part-1 files stay "Checking" on Preview because no cron runs there (plan review 14: Vercel runs crons on Production only; a new upload on Preview is scanned at its finish, an old one only if the orchestrator runs the pass by hand against Preview's deployment), Assumptions A1–A12 and where each was proven, the pinned tests this PR changes, "Not in this PR" (0080 must drop `documents.scan_status` first), the Fly price and machine size, and the 0079 apply lines.
+- [ ] **Step 13. After the deploy.** The deploy reads READY on the merge SHA. **Do not walk away until the FIRST production verdict has landed clean** (plan review C1): `select scan_status, scanned_at from document_versions where status='ready' order by scanned_at desc nulls last limit 5` on production (read-only, MCP `execute_sql`) shows a `clean` row with a `scanned_at` after the deploy, within one tick (15 minutes) of it; if instead the heartbeat names "could not be reached" or the breaker, production's binding is wrong (step 4b): fix `SCANNER_CLIENTS` at once (nothing was spent). Within 30 minutes: `select count(*) from document_versions where status='ready' and scan_status='pending'` on production falls tick by tick to 0 (the catch-up, spec §8); `select scan_status, count(*) from document_versions where status='ready' group by 1` → all clean (an infected part-1 file, if any, is now removed: tell the owner which account). `/api/ops/health` answers 200 once the catch-up is done (until then it may name `documents.scanner` for "a file has waited": expected, deviation 6). Ledger: the item 6 / F-005 tracker row stays `in_progress` (spec §8) with "part 2a (scanning) shipped #<n>".
 
 ---
 
@@ -3547,11 +3791,13 @@ Additive migration, so it applies before the merge. The worker must be up and th
 | §3.1 production and Preview call one worker | deviation 4; runbook §2, §4 |
 | §3.2 columns, defaults, part 1 left pending | Task 1 |
 | §3.2 `documents.scan_status` dropped | deviation 2: default now, drop in 0080 |
-| §3.2 pointer moves only on clean; trigger | deviation 1 (orchestrator to confirm) |
+| §3.2 pointer moves only on clean; trigger | deviation 1 (ACCEPTED 2026-10-15; spec amended) |
 | §3.2 verdict RPC, compare-and-set, storage first | Task 1, Task 3, Task 5; deviation 3 |
 | §3.3 one minting function; scanner's separate one | Task 3, Task 6 (`read-gate.test.ts`) |
 | §3.4 scan at the finish | Task 6 |
 | §3.4 retry pass, budget, 3 attempts, unscannable fail-closed | Tasks 5, 8 |
+| §3.4 (amended) only clamd-stage errors spend; the breaker | Task 4 (stage), Task 5 (`spend`, `holdErrors`, `spendScanError`), Task 8 (breaker); deviation 15 |
+| §3.4 (amended) skipped or encrypted content is unscannable, never clean | Task 4 (Dockerfile, `parseReply`, real-clamd tail EICAR), Task 5 (mapping); deviation 16 |
 | §3.4 heartbeat; ops health red on unreachable / stale signatures / pending > 15 min | Task 8 |
 | §3.5 "Revisando", "Tarda más de lo normal", never reads as lost | Tasks 2, 7, 9; Task 12 test 3; deviations 6, 11 |
 | §3.5 a pending NEW version leaves the clean one current | Task 7 (`documentView`), Task 9 (Versions list); deviation 1 |
@@ -3574,4 +3820,4 @@ Additive migration, so it applies before the merge. The worker must be up and th
 - **Vacuity pass:** every prescribed test names its mutation. Caught while writing: a messages case that asserted `toMatch(/^[^]*$/)` (true for any string; replaced by a type check); a byte-count control that MSYS's argument handling turned into a backspace (rebuilt from `String.fromCharCode`). The scan procedure's order tests read ONE call log shared by the storage and RPC fakes, so "object first" is an order assertion, not two independent `toHaveBeenCalled`s. The source-scan test has a positive control (it must find `documents.ts` and `scan-version.ts`), so an empty walk cannot pass it.
 - **Request-client proof:** the only new service-client paths are the finish's scan (after the finish's existing proof and `markDocumentVersionReady`) and the URL action's gate (after its existing request-client reads); the pass runs as the cron, on ids it read itself.
 - **Types across tasks:** `ScanStatus` (Task 3) → `DocumentVersionRow.scan_status` → `documentView` (Task 7) → `DocumentView.version.scan` / `ScanState` → `rowScan`, `scanLabel`, `viewerNotice`, `nextPollMs` (Task 7) → the card and viewer (Task 9). `ScanVerdict`, `ScannerHealth`, `SCANNER_HEARTBEAT_KEY` (Task 5) → the pass and the health route (Task 8). `ScanResult` (Task 5) → the finish's answer (Task 6). `TimelineDocumentScan` (Task 3) → the `documentRemoved` entry (Task 3b). `SCAN_SLOW_MS` is defined once (Task 7) and read by the pass (Task 8).
-- **Known soft spot, named:** Task 7's new route-test case is specified by its assertions, not pasted, because its fixture builder was not read; the implementer writes it with that file's own helpers.
+- **Revision of 2026-10-15 (plan review of 4771f63a):** C1, C2, I1, I2 and minors 2–15 applied; the revised shim was re-extracted from this plan and run: 12 of 12, and the I1 (byte counter), I2 (redirect), C1 (stage) and %2F mutations each turned one test red by name. Task 7's route-test case is now written out with the file's `row(over)` builder (`route.test.ts:21-31`, read).
