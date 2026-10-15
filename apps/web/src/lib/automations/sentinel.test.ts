@@ -261,6 +261,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.siteTraffic).toEqual(expect.objectContaining({ synced: 0, failed: 0 }));
     expect(results.siteTraffic).not.toHaveProperty("errored");
     expect(results.documentsSweep).toEqual({ abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 });
+    // S-07 2a: the suite sets no SCANNER_URL, so the pass reports its own not-configured counter.
+    expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1 });
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
@@ -277,7 +279,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
   });
 
   it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
   });
 
   /**

@@ -1,5 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import { listHeartbeats, serviceDb } from "@bis/db";
+import { SCANNER_HEARTBEAT_KEY } from "@/lib/documents/scan-client";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,11 @@ export const dynamic = "force-dynamic";
  *
  * 200 `{ ok: true }` when the database answers and the last completed tick
  * (`cron.tick`, written by the harness at the end of every run) is under
- * STALE_AFTER_MS old. 503 otherwise, naming only WHICH check failed: never an
+ * STALE_AFTER_MS old, and, since S-07 2a, whether the document scanner's
+ * heartbeat (documents.scanner, written by the documentsScan pass) last
+ * failed: a down worker, stale signatures, or a file waiting over 15
+ * minutes; a missing row is healthy, silence is the cron's to report. 503
+ * otherwise, naming only WHICH check failed: never an
  * error message, a timestamp or a heartbeat's text. A health endpoint is read
  * by a workflow log anyone with repo access can open, so it says as little as
  * it can and still be acted on.
@@ -35,17 +40,22 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   let tickAt: string | null = null;
+  let scannerFailing = false;
   try {
     const rows = await listHeartbeats(serviceDb());
     tickAt = rows.find((r) => r.key === "cron.tick")?.lastOkAt ?? null;
+    const scanner = rows.find((r) => r.key === SCANNER_HEARTBEAT_KEY);
+    scannerFailing = scanner !== undefined && scanner.lastErrorAt !== null
+      && (scanner.lastOkAt === null || Date.parse(scanner.lastErrorAt) > Date.parse(scanner.lastOkAt));
   } catch (e) {
     console.error(`ops health: database read failed: ${String(e)}`);
     return Response.json({ ok: false, failing: ["database"] }, { status: 503 });
   }
 
+  const failing: string[] = [];
   const age = tickAt ? Date.now() - Date.parse(tickAt) : Number.POSITIVE_INFINITY;
-  if (!(age < STALE_AFTER_MS)) {
-    return Response.json({ ok: false, failing: ["cron.tick"] }, { status: 503 });
-  }
+  if (!(age < STALE_AFTER_MS)) failing.push("cron.tick");
+  if (scannerFailing) failing.push(SCANNER_HEARTBEAT_KEY);
+  if (failing.length > 0) return Response.json({ ok: false, failing }, { status: 503 });
   return Response.json({ ok: true });
 }

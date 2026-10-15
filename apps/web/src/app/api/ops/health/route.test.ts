@@ -73,4 +73,21 @@ describe("GET /api/ops/health — operational-floor spec §1", () => {
     expect(body).toBe(JSON.stringify({ ok: false, failing: ["database"] }));
     expect(body).not.toContain("secretref");
   });
+
+  it("503 naming documents.scanner when its last error is newer than its last success; a recovered or absent scanner row is healthy (S-07 2a; mutation: ignore the scanner row -> FAILS)", async () => {
+    const tickRow = tick(60_000)[0]!;
+    const scanner = (okAgo: number | null, errAgo: number | null) => ({ key: "documents.scanner",
+      lastOkAt: okAgo === null ? null : new Date(NOW.getTime() - okAgo).toISOString(),
+      lastErrorAt: errAgo === null ? null : new Date(NOW.getTime() - errAgo).toISOString(), lastError: "x", consecutiveFailures: 1, alertedAt: null });
+    listHeartbeatsMock.mockResolvedValue([tickRow, scanner(10 * 60_000, 60_000)]);
+    let res = await GET(req("Bearer health-test-secret"));
+    expect([res.status, await res.json()]).toEqual([503, { ok: false, failing: ["documents.scanner"] }]);
+    listHeartbeatsMock.mockResolvedValue([tickRow, scanner(60_000, 10 * 60_000)]);
+    res = await GET(req("Bearer health-test-secret"));
+    expect(res.status).toBe(200);
+    listHeartbeatsMock.mockResolvedValue([tickRow, scanner(null, 60_000)]);
+    expect((await GET(req("Bearer health-test-secret"))).status).toBe(503);
+    listHeartbeatsMock.mockResolvedValue([{ ...tickRow, lastOkAt: new Date(NOW.getTime() - 46 * 60_000).toISOString() }, scanner(10 * 60_000, 60_000)]);
+    expect(await (await GET(req("Bearer health-test-secret"))).json()).toEqual({ ok: false, failing: ["cron.tick", "documents.scanner"] });
+  });
 });

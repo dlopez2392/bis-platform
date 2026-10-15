@@ -14,6 +14,7 @@ import { reminderDeadline } from "@/lib/booking/reminder-timing";
 import { nextOpening, expiresBeforeOpening } from "@/lib/consent/hours";
 import { SMS_RETRY_COOLDOWN_MS, USAGE_REPORT_BUDGET_MS, WEEKLY_REPORT_BUDGET_MS } from "./caps";
 import { RELEASE_BUDGET_MS } from "./passes/release-held";
+import { DOCUMENT_SCAN_BUDGET_MS } from "./passes/documents-scan";
 
 /**
  * The three-way coupling (schedule ↔ reminder window ↔ follow-up window) was
@@ -325,12 +326,14 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
    * export → FAILS (the `Number(...)` on `undefined` is `NaN`, and `NaN`
    * fails every comparison).
    */
-  it("the three wall-clock budgets, summed, still leave at least one more budget's worth of headroom inside maxDuration", () => {
+  it("the four wall-clock budgets, summed, still leave at least one more budget's worth of headroom inside maxDuration", () => {
+    // Since S-07 2a, the document scan pass (DOCUMENT_SCAN_BUDGET_MS, 45 s)
+    // joins the other three: 285 s of 300.
     const m = /^export const maxDuration = (\d+);$/m.exec(routeSource);
     expect(m).not.toBeNull();
     const maxDuration = Number(m![1]);
     const MIN_HEADROOM_MS = 60_000;
-    const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS;
+    const sumBudgetsMs = RELEASE_BUDGET_MS + USAGE_REPORT_BUDGET_MS + WEEKLY_REPORT_BUDGET_MS + DOCUMENT_SCAN_BUDGET_MS;
     expect(maxDuration * 1000).toBeGreaterThanOrEqual(sumBudgetsMs + MIN_HEADROOM_MS);
   });
 });
