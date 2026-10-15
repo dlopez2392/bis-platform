@@ -31,11 +31,19 @@ import type { DocRecordArg, DocFail } from "./documents-actions";
 const fail = (error: string): DocFail => ({ ok: false, error });
 const REFUSED = "documents.error.refused";
 const CREATE_FAILED = "documents.request.failed";
+/** Revoked, completed or expired (fix round 1): the request is still the caller's to see, just over. */
+const NOT_OPEN = "documents.request.notOpen";
+/** Copy link could not be built or read: the house "didn't go through" line, never "couldn't create". */
+const LINK_FAILED = "common.actionCrashed";
+/** Undo is offered by the revoke's own toast; past this, or for someone else's revoke, it is over (fix round 3). */
+const UNDO_WINDOW_MS = 10 * 60_000;
 const CHANNELS = new Set(["text", "email", "link"]);
 type Channel = "text" | "email" | "link";
 
-function log(where: string, accountId: string, e: unknown): void {
-  console.error(`document requests ${where} (account ${accountId}): ${loggableError(e)}`);
+/** Names the account and, for an existing request, its id: never the token or the link. */
+function log(where: string, accountId: string, e: unknown, requestId?: string): void {
+  const req = requestId === undefined ? "" : `, request ${isUuid(requestId) ? requestId.toLowerCase() : "(malformed)"}`;
+  console.error(`document requests ${where} (account ${accountId}${req}): ${loggableError(e)}`);
 }
 function recordOf(raw: unknown): DocumentRecordRef | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
@@ -106,12 +114,13 @@ export async function documentRequestLinkAction(accountId: string, requestId: st
   await requireAccountAccess(accountId);
   try {
     const request = await visibleRequest(accountId, requestId);
-    if (!request || documentRequestState(request, new Date()) !== "open") return fail(REFUSED);
+    if (!request) return fail(REFUSED);
+    if (documentRequestState(request, new Date()) !== "open") return fail(NOT_OPEN);
     const origin = originFrom(await headers());
-    return origin ? { ok: true, url: requestUrl(origin, request.id) } : fail(CREATE_FAILED);
+    return origin ? { ok: true, url: requestUrl(origin, request.id) } : fail(LINK_FAILED);
   } catch (e) {
-    log("link", accountId, e);
-    return fail(CREATE_FAILED);
+    log("link", accountId, e, requestId);
+    return fail(LINK_FAILED);
   }
 }
 
@@ -120,23 +129,36 @@ export async function revokeDocumentRequestAction(accountId: string, requestId: 
   try {
     const request = await visibleRequest(accountId, requestId);
     if (!request) return fail(REFUSED);
-    const r = await revokeDocumentRequest(serviceDb(), accountId, request.id, access.userId, new Date());
-    return r ? { ok: true, revokedAt: r.revokedAt } : fail(REFUSED);
+    const now = new Date();
+    if (documentRequestState(request, now) !== "open") return fail(NOT_OPEN);
+    // Compare-and-set on "still open": a request that closed since the read above answers null.
+    const r = await revokeDocumentRequest(serviceDb(), accountId, request.id, access.userId, now);
+    return r ? { ok: true, revokedAt: r.revokedAt } : fail(NOT_OPEN);
   } catch (e) {
-    log("revoke", accountId, e);
+    log("revoke", accountId, e, requestId);
     return fail("documents.error.failed");
   }
 }
 
+/**
+ * Undo (rule 6): only THIS caller's own revoke, the one its toast names (the same instant), within
+ * ten minutes, and only while the request would otherwise still be open. The proof read on the
+ * request client supplies revoked_by and revoked_at; restoreDocumentRequest's compare-and-set on
+ * that exact revoked_at is what makes the write race-safe.
+ */
 export async function undoRevokeDocumentRequestAction(accountId: string, requestId: string, revokedAt: string): Promise<{ ok: true } | DocFail> {
-  await requireAccountAccess(accountId);
-  if (typeof revokedAt !== "string" || !revokedAt) return fail(REFUSED);
+  const access = await requireAccountAccess(accountId);
+  if (typeof revokedAt !== "string" || Number.isNaN(Date.parse(revokedAt))) return fail(REFUSED);
   try {
     const request = await visibleRequest(accountId, requestId);
     if (!request) return fail(REFUSED);
-    return (await restoreDocumentRequest(serviceDb(), accountId, request.id, revokedAt)) ? { ok: true } : fail(REFUSED);
+    const now = Date.now();
+    const at = request.revoked_at ? Date.parse(request.revoked_at) : Number.NaN;
+    if (at !== Date.parse(revokedAt) || request.revoked_by !== access.userId || now - at > UNDO_WINDOW_MS
+      || request.completed_at || Date.parse(request.expires_at) <= now) return fail(NOT_OPEN);
+    return (await restoreDocumentRequest(serviceDb(), accountId, request.id, revokedAt)) ? { ok: true } : fail(NOT_OPEN);
   } catch (e) {
-    log("undo revoke", accountId, e);
+    log("undo revoke", accountId, e, requestId);
     return fail("documents.error.failed");
   }
 }

@@ -43,8 +43,10 @@ vi.mock("@bis/db", async (importOriginal) => {
 vi.mock("@/lib/document-requests/deliver", () => ({
   deliverDocumentRequest: wrap("deliverDocumentRequest"), requestChannels: wrap("requestChannels"),
 }));
-vi.mock("next/headers", () => ({ headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }) }));
+const hdrs: { value: Headers } = { value: new Headers() };
+vi.mock("next/headers", () => ({ headers: async () => hdrs.value }));
 const A = await import("./document-requests-actions");
+const { m } = await import("@/lib/messages");
 
 const SECRET = "bis_unit_document_link_fixture_only_000000000";
 const ORIGIN = "https://app.example.com";
@@ -62,6 +64,11 @@ const row = (over: Record<string, unknown> = {}) => ({
   channel: "text", created_by: "user_staff", created_at: "2026-10-14T12:00:00.000Z", expires_at: "2026-10-21T12:00:00.000Z",
   revoked_at: null, revoked_by: null, completed_at: null, sent_at: null, ...over,
 });
+/** No longer open, each its own way (documentRequestState's order: revoked, completed, expired). */
+const NOT_OPEN = [{ revoked_at: "2026-10-15T00:00:00Z", revoked_by: "user_staff" }, { completed_at: "2026-10-15T00:00:00Z" }, { expires_at: "2026-10-15T11:59:59.000Z" }];
+const REVOKED_AT = "2026-10-15T12:00:00.000Z";
+/** The row as the request client reads it right after this user's revoke at REVOKED_AT. */
+const revoked = (over: Record<string, unknown> = {}) => row({ revoked_at: REVOKED_AT, revoked_by: "user_staff", ...over });
 const create = (over: Partial<{ record: unknown; items: unknown; channel: unknown }> = {}) =>
   A.createDocumentRequestAction(ACC, { record: { kind: "contact", id: C }, items: ITEMS, channel: "link", ...over } as Parameters<typeof A.createDocumentRequestAction>[1]);
 const svcCalls = () => calls.filter((c) => c.endsWith(":service") || c === "serviceDb" || c === "ledgerDb");
@@ -73,13 +80,16 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   calls.length = 0;
+  hdrs.value = new Headers({ host: "app.example.com", "x-forwarded-proto": "https" });
   for (const f of Object.values(h)) f.mockReset();
+  requireAccountAccess.mockReset();
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   requireAccountAccess.mockResolvedValue(STAFF);
   h.getContact.mockResolvedValue({ id: C });
   h.readGroup.mockResolvedValue({ id: G, kind: "household", name: "Casa Ruiz", billingAddress: null });
   h.documentRequestTarget.mockResolvedValue(TARGET);
   h.requestChannels.mockResolvedValue({ text: true, email: true });
+  accountRead.mockReset();
   accountRead.mockResolvedValue({ data: { language: "en" }, error: null });
   h.createDocumentRequest.mockImplementation(async (...a: unknown[]) => row({ id: (a[1] as { id: string }).id }));
   h.deliverDocumentRequest.mockResolvedValue({ kind: "sent" });
@@ -222,16 +232,59 @@ describe("documentRequestLinkAction (Copy link)", () => {
     expect(h.getDocumentRequest).toHaveBeenCalledWith(REQUEST, ACC, R);
     expect(svcCalls()).toEqual([]);
   });
-  it("5b. a revoked, completed, expired, invisible or malformed request is refused (mutation: drop the state check -> FAILS)", async () => {
-    for (const over of [{ revoked_at: "2026-10-15T00:00:00Z" }, { completed_at: "2026-10-15T00:00:00Z" }, { expires_at: "2026-10-15T11:59:59.000Z" }]) {
+  it("5b. a revoked, completed or expired request answers 'no longer open' (fix round 1; mutations: drop the state check -> FAILS; return the old refused key -> FAILS)", async () => {
+    for (const over of NOT_OPEN) {
       h.getDocumentRequest.mockResolvedValueOnce(row(over));
-      expect(await A.documentRequestLinkAction(ACC, R), JSON.stringify(over)).toEqual({ ok: false, error: "documents.error.refused" });
+      expect(await A.documentRequestLinkAction(ACC, R), JSON.stringify(over)).toEqual({ ok: false, error: "documents.request.notOpen" });
     }
+  });
+  it("5c. an invisible or malformed request is refused, and a malformed id reads nothing (mutation: read any id -> FAILS)", async () => {
     h.getDocumentRequest.mockResolvedValueOnce(null);
     expect(await A.documentRequestLinkAction(ACC, R)).toEqual({ ok: false, error: "documents.error.refused" });
     h.getDocumentRequest.mockClear();
     expect(await A.documentRequestLinkAction(ACC, "nope")).toEqual({ ok: false, error: "documents.error.refused" });
     expect(h.getDocumentRequest).not.toHaveBeenCalled();
+  });
+  it("5d. no origin to build the link on answers the house 'didn't go through' line, never 'couldn't create the request' (fix round 1; mutation: return documents.request.failed -> FAILS)", async () => {
+    hdrs.value = new Headers();
+    expect(await A.documentRequestLinkAction(ACC, R)).toEqual({ ok: false, error: "common.actionCrashed" });
+  });
+  it("5e. a read that throws is the same line, logged with the account AND the request id, never the token or the link (fix round 4; mutation: log without the request id -> FAILS)", async () => {
+    h.getDocumentRequest.mockRejectedValueOnce(new Error("down"));
+    expect(await A.documentRequestLinkAction(ACC, R)).toEqual({ ok: false, error: "common.actionCrashed" });
+    const said = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(said).toContain(`account ${ACC}`);
+    expect(said).toContain(`request ${R}`);
+    expect(said).not.toContain(requestToken(R));
+    expect(said).not.toContain("/d/");
+  });
+});
+
+describe("the access guard comes first in every action (fix round 2)", () => {
+  const REDIRECT = new Error("NEXT_REDIRECT");
+  const cases: [string, () => Promise<unknown>][] = [
+    ["create", () => create({ channel: "text" })],
+    ["Copy link", () => A.documentRequestLinkAction(ACC, R)],
+    ["revoke", () => A.revokeDocumentRequestAction(ACC, R)],
+    ["Undo", () => A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)],
+  ];
+  for (const [name, run] of cases) {
+    it(`${name}: a rejected requireAccountAccess (a redirect) reads nothing (mutation: drop the guard -> FAILS)`, async () => {
+      requireAccountAccess.mockRejectedValue(REDIRECT);
+      await expect(run()).rejects.toBe(REDIRECT);
+      expect(requireAccountAccess).toHaveBeenCalledWith(ACC);
+      expect(calls).toEqual([]);
+      expect(accountRead).not.toHaveBeenCalled();
+    });
+  }
+});
+
+describe("the two new answers read in both languages (fix round 1)", () => {
+  it("'no longer open', and the house line Copy link answers when it cannot build the link (mutation: change either .es -> FAILS)", () => {
+    expect(m["documents.request.notOpen"]).toBe("This request is no longer open.");
+    expect(m["documents.request.notOpen.es"]).toBe("Este pedido ya no está abierto.");
+    expect(m["common.actionCrashed"]).toBe("That didn't go through — this page may be out of date. Reload it and try again.");
+    expect(m["common.actionCrashed.es"]).toBe("Eso no se completó: puede que esta página esté desactualizada. Recárgala e inténtalo de nuevo.");
   });
 });
 
@@ -242,30 +295,75 @@ describe("revokeDocumentRequestAction and its Undo (rule 6)", () => {
     expect(h.revokeDocumentRequest).toHaveBeenCalledWith(SERVICE, ACC, R, "user_staff", NOW);
     expect(calls.indexOf("getDocumentRequest:request")).toBeLessThan(calls.indexOf("revokeDocumentRequest:service"));
   });
-  it("6b. an invisible request touches nothing; a request no longer open (null) is refused (mutation: treat null as revoked -> FAILS)", async () => {
+  it("6b. an invisible request is refused and touches nothing (mutation: treat null as visible -> FAILS)", async () => {
     h.getDocumentRequest.mockResolvedValueOnce(null);
     expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.error.refused" });
     expect(svcCalls()).toEqual([]);
+  });
+  it("6b2. a revoked, completed or expired request answers 'no longer open' before any write; a revoke that lost the race (null) too (fix round 1; mutations: return the old refused key -> FAILS; drop the state check -> FAILS)", async () => {
+    for (const over of NOT_OPEN) {
+      h.getDocumentRequest.mockResolvedValueOnce(row(over));
+      expect(await A.revokeDocumentRequestAction(ACC, R), JSON.stringify(over)).toEqual({ ok: false, error: "documents.request.notOpen" });
+    }
+    expect(h.revokeDocumentRequest).not.toHaveBeenCalled();
     h.revokeDocumentRequest.mockResolvedValueOnce(null);
-    expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.request.notOpen" });
   });
   it("6c. Undo restores exactly the revoke it was given, after the same proof (mutation: undo with now -> FAILS)", async () => {
+    h.getDocumentRequest.mockResolvedValue(revoked());
     vi.setSystemTime(new Date("2026-10-15T12:00:07.000Z"));
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "2026-10-15T12:00:00.000Z")).toEqual({ ok: true });
-    expect(h.restoreDocumentRequest).toHaveBeenCalledWith(SERVICE, ACC, R, "2026-10-15T12:00:00.000Z");
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: true });
+    expect(h.restoreDocumentRequest).toHaveBeenCalledWith(SERVICE, ACC, R, REVOKED_AT);
     expect(calls.indexOf("getDocumentRequest:request")).toBeLessThan(calls.indexOf("restoreDocumentRequest:service"));
+  });
+  it("6c2. Undo that lost the race, of a request no longer revoked, of a DIFFERENT revoke, or of one since completed or expired answers 'no longer open' (fix round 1; mutation: return the old refused key -> FAILS)", async () => {
+    vi.setSystemTime(new Date("2026-10-15T12:00:07.000Z"));
+    h.getDocumentRequest.mockResolvedValue(revoked());
     h.restoreDocumentRequest.mockResolvedValueOnce(false);
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "2026-10-15T12:00:00.000Z")).toEqual({ ok: false, error: "documents.error.refused" });
-    h.getDocumentRequest.mockResolvedValueOnce(null);
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.request.notOpen" });
     h.restoreDocumentRequest.mockClear();
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "2026-10-15T12:00:00.000Z")).toEqual({ ok: false, error: "documents.error.refused" });
+    for (const over of [{ revoked_at: null, revoked_by: null }, { revoked_at: "2026-10-15T11:59:00.000Z" },
+      { completed_at: "2026-10-15T12:00:05.000Z" }, { expires_at: "2026-10-15T12:00:06.000Z" }]) {
+      h.getDocumentRequest.mockResolvedValueOnce(revoked(over));
+      expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT), JSON.stringify(over)).toEqual({ ok: false, error: "documents.request.notOpen" });
+    }
+    expect(h.restoreDocumentRequest).not.toHaveBeenCalled();
+  });
+  it("6e. Undo is the revoker's own: someone else's revoke answers 'no longer open' and restores nothing (fix round 3; mutation: drop the revoked_by check -> FAILS)", async () => {
+    vi.setSystemTime(new Date("2026-10-15T12:00:07.000Z"));
+    h.getDocumentRequest.mockResolvedValue(revoked({ revoked_by: "user_other" }));
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.request.notOpen" });
+    expect(h.restoreDocumentRequest).not.toHaveBeenCalled();
+  });
+  it("6f. Undo lives 10 minutes: 9:59 after the revoke restores, 10:01 answers 'no longer open' and restores nothing (fix round 3; mutation: drop the window -> FAILS)", async () => {
+    h.getDocumentRequest.mockResolvedValue(revoked());
+    vi.setSystemTime(new Date("2026-10-15T12:09:59.000Z"));
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: true });
+    h.restoreDocumentRequest.mockClear();
+    vi.setSystemTime(new Date("2026-10-15T12:10:01.000Z"));
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.request.notOpen" });
+    expect(h.restoreDocumentRequest).not.toHaveBeenCalled();
+  });
+  it("6g. an invisible request, or no revoke time, is refused and restores nothing (mutation: skip the proof -> FAILS)", async () => {
+    h.getDocumentRequest.mockResolvedValueOnce(null);
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.error.refused" });
     expect(await A.undoRevokeDocumentRequestAction(ACC, R, "")).toEqual({ ok: false, error: "documents.error.refused" });
     expect(h.restoreDocumentRequest).not.toHaveBeenCalled();
   });
-  it("6d. a write that throws is 'couldn't save', never a throw (mutation: let it throw -> FAILS)", async () => {
+  it("6d. a write that throws is 'couldn't save', never a throw, and the log names the account AND the request, never its link (fix round 4; mutations: let it throw -> FAILS; log without the request id -> FAILS)", async () => {
     h.revokeDocumentRequest.mockRejectedValueOnce(new Error("down"));
     expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.error.failed" });
+    const revokeSaid = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(revokeSaid).toContain(`account ${ACC}`);
+    expect(revokeSaid).toContain(`request ${R}`);
+    errSpy.mockClear();
+    vi.setSystemTime(new Date("2026-10-15T12:00:07.000Z"));
+    h.getDocumentRequest.mockResolvedValue(revoked());
     h.restoreDocumentRequest.mockRejectedValueOnce(new Error("down"));
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "2026-10-15T12:00:00.000Z")).toEqual({ ok: false, error: "documents.error.failed" });
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.error.failed" });
+    const undoSaid = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(undoSaid).toContain(`account ${ACC}`);
+    expect(undoSaid).toContain(`request ${R}`);
+    expect(revokeSaid + undoSaid).not.toContain(requestToken(R));
   });
 });

@@ -4066,6 +4066,8 @@ export const m = {
   "documents.request.notSent.es": "Pedido guardado, pero no se envió: {reason}. Copie el enlace en su lugar.",
   "documents.request.failed": "Couldn't create the request. Try again.",
   "documents.request.failed.es": "No se pudo crear el pedido. Intente de nuevo.",
+  "documents.request.notOpen": "This request is no longer open.",
+  "documents.request.notOpen.es": "Este pedido ya no está abierto.",
   "documents.request.reason.textsStopped": "they asked not to get texts",
   "documents.request.reason.textsStopped.es": "pidió no recibir mensajes de texto",
   "documents.request.reason.noPhone": "there's no number we can text",
