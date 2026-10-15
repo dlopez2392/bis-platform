@@ -86,6 +86,13 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     expect(openRequestTask).not.toHaveBeenCalled();
   });
 
+  it("a reconcile read that throws still THROWS on the not-configured exit, not just the configured one, and the not-configured heartbeat still goes out (review gap; mutation: bare 'return c' in the not-configured branch -> FAILS)", async () => {
+    scannerConfig.mockReturnValue(null);
+    listRequestsMissingReceivedTask.mockRejectedValue(new Error("db down"));
+    await expect(documentsScanPass.run(ctx)).rejects.toThrow(/"failed":1/);
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "not configured (SCANNER_URL or SCANNER_SECRET unset)" });
+  });
+
   it("scans every pending version oldest first with the TRIED stamp's own fresh attempts, HOLDING clamd errors, counts each outcome, and beats ok (mutations: pass attempts 0 -> FAILS; scan without holdErrors -> FAILS; read v.scan_attempts instead of the stamp's answer -> FAILS)", async () => {
     // Review fix 5: the fresh attempts count comes from the tried stamp's own answer, not the
     // (possibly stale) row read — "b" is mocked to answer 2 regardless of row("b", 2)'s own field.
