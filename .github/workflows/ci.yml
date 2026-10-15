@@ -485,9 +485,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      # No pnpm input, and package-manager-cache explicitly OFF: this job
+      # never runs pnpm (services/scanner is outside the pnpm workspace, and
+      # every command below is `node`, `docker build` or `docker run`).
+      # actions/setup-node@v5 defaults `package-manager-cache` to true and
+      # auto-detects pnpm from the repo root's "packageManager" field even
+      # with no `cache:` input named — which then fails
+      # "Unable to locate executable file: pnpm" because this job installs
+      # no pnpm (confirmed on 490eda13's run). verify and e2e DO use pnpm
+      # (pnpm/action-setup runs before their setup-node) and keep their
+      # `cache: pnpm`; this job needs neither pnpm nor its cache.
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
       - name: The shim's tests (fake clamd)
         run: node --test --test-timeout=60000 "services/scanner/test/*.test.mjs"
       - name: Build the scanner image
