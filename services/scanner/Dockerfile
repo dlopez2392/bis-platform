@@ -21,12 +21,19 @@ FROM clamav/clamav:1.4
 #   ConcurrentDatabaseReload no: one signature set in memory during a reload, so 2 GB holds (deviation 12).
 #   TCPSocket 3310 / TCPAddr 127.0.0.1: clamd answers the shim on loopback only, never the machine's network.
 #   Foreground no: both daemonise, and start.sh runs the shim in the foreground.
+#   LocalSocket / LocalSocketGroup / LocalSocketMode: DELETED, never re-set (N2, final fix round, found
+#     on the real Fly machine): the base image's clamd.conf still names a unix socket
+#     (`/tmp/clamd.sock`) alongside TCPSocket/TCPAddr. freshclam's NotifyClamd reads clamd.conf itself and
+#     tries that socket first — "WARNING: Clamd was NOT notified: Can't connect to clamd through
+#     /tmp/clamd.sock" on every successful update — so clamd never gets told to reload until its own
+#     600 s SelfCheck (not data-unsafe, just stale freshness in between). With no LocalSocket line at
+#     all, NotifyClamd falls back to clamd.conf's TCPSocket/TCPAddr, the one clamd actually serves.
 # freshclam.conf's own TestDatabases no (final whole-branch review N1): freshclam's default (yes) loads
 # every freshly-downloaded signature file into a SECOND in-memory database to self-check it before
 # replacing the live one, doubling the resident signature set for that moment — the same kind of spike
 # ConcurrentDatabaseReload no avoids on the clamd side, on the 2 GB worker (deviation 12).
 RUN apk add --no-cache nodejs \
- && for d in StreamMaxLength MaxFileSize MaxScanSize AlertExceedsMax AlertEncrypted AlertEncryptedArchive AlertEncryptedDoc ConcurrentDatabaseReload TCPSocket TCPAddr Foreground; do \
+ && for d in StreamMaxLength MaxFileSize MaxScanSize AlertExceedsMax AlertEncrypted AlertEncryptedArchive AlertEncryptedDoc ConcurrentDatabaseReload TCPSocket TCPAddr Foreground LocalSocket LocalSocketGroup LocalSocketMode; do \
       sed -i -e "/^${d} /d" /etc/clamav/clamd.conf; \
     done \
  && printf '%s\n' 'StreamMaxLength 100M' 'MaxFileSize 400M' 'MaxScanSize 1000M' 'AlertExceedsMax yes' 'AlertEncrypted yes' 'AlertEncryptedArchive yes' 'AlertEncryptedDoc yes' 'ConcurrentDatabaseReload no' 'TCPSocket 3310' 'TCPAddr 127.0.0.1' 'Foreground no' >> /etc/clamav/clamd.conf \

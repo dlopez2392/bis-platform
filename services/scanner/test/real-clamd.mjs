@@ -13,13 +13,15 @@ import { eicar, eicarDocx, cleanPdf, storedZip, xlsxExpanding } from "./eicar.mj
  * CLEAN, its scan time printed (A15) and the machine's peak memory read by the CI step after this one
  * (A1; re-review N1: no limit may delete an ordinary export); /health's self-test passes (N2a); the
  * signature date reads (A7); a refused request fetches nothing.
- * I1 (final whole-branch review): owner-only encryption (RC4/AES-128, AES-256 R6 — no password needed to
- * OPEN the file, only to edit or print it) must scan CLEAN, never Heuristics.Encrypted.*; a file that
- * needs a password to open must still answer unscannable with a Heuristics.Encrypted.* signature, so the
- * password path is proven alongside the owner-lock exception. The three fixtures are built by the CI
- * `scanner` job with qpdf (ENCRYPTED_FIXTURES_DIR names the directory it wrote them to); this file skips
- * the block when the env var is unset, so a local run with no qpdf/Docker still exercises everything
- * else.
+ * I1 (final whole-branch review, coordinator fix round): owner-only encryption (RC4-128, AES-128, AES-256
+ * R6 — no password needed to OPEN the file, only to edit or print it) must scan CLEAN, never
+ * Heuristics.Encrypted.*; a file that needs a password to open must still answer unscannable with a
+ * Heuristics.Encrypted.* signature, so the password path is proven alongside the owner-lock exception.
+ * The four fixtures are built by the CI `scanner` job with qpdf itself, from a qpdf-built base (not
+ * `cleanPdf` — qpdf refuses it as a damaged file) (ENCRYPTED_FIXTURES_DIR names the directory it wrote
+ * them to); this file skips the block when the env var is unset, so a local run with no qpdf/Docker
+ * still exercises everything else. Every fixture's verdict is printed, clean or not, so the CI log
+ * carries all four results even when one fails.
  * Serves its files itself, as storage would, on 127.0.0.1:8098; the scanner must allow that origin
  * (SCANNER_CLIENTS=<secret>@http://127.0.0.1:8098).
  */
@@ -35,17 +37,21 @@ const tail = storedZip([
 const FILES = { "eicar.txt": Buffer.from(eicar()), "eicar.docx": eicarDocx(), "clean.pdf": cleanPdf(2048), "big.pdf": cleanPdf(25 * MiB), "tail.docx": tail, "export.xlsx": xlsxExpanding(300 * MiB) };
 assert.ok(tail.length <= 25 * MiB, `tail.docx is ${tail.length} bytes, over the 25 MiB the bucket allows`);
 
-// I1: the three qpdf-built fixtures, if the CI job built them (ENCRYPTED_FIXTURES_DIR). Each is read
-// from disk (never generated here — qpdf is not a dependency of this repo) and added to the same
-// storage stub the rest of this file already serves.
+// I1: the four qpdf-built fixtures, if the CI job built them (ENCRYPTED_FIXTURES_DIR). Each is read from
+// disk (never generated here — qpdf is not a dependency of this repo) and added to the same storage stub
+// the rest of this file already serves. File names match their real cipher.
 const FIXTURES_DIR = process.env.ENCRYPTED_FIXTURES_DIR;
-const ENCRYPTED_NAMES = ["owner-aes128.pdf", "owner-aes256.pdf", "user-password.pdf"];
-const ENCRYPTED = FIXTURES_DIR ? ENCRYPTED_NAMES : null;
-if (ENCRYPTED) {
-  for (const name of ENCRYPTED) {
-    const p = join(FIXTURES_DIR, name);
+const ENCRYPTED_CASES = FIXTURES_DIR ? [
+  { file: "owner-aes128.pdf", desc: "owner-only AES-128", expect: "clean" },
+  { file: "owner-aes256.pdf", desc: "owner-only AES-256 (R6)", expect: "clean" },
+  { file: "owner-rc4-128.pdf", desc: "owner-only RC4-128", expect: "clean" },
+  { file: "user-password-aes256.pdf", desc: "a real user password, AES-256", expect: "unscannable" },
+] : null;
+if (ENCRYPTED_CASES) {
+  for (const c of ENCRYPTED_CASES) {
+    const p = join(FIXTURES_DIR, c.file);
     assert.ok(existsSync(p), `I1: ${p} was not built by the CI job's qpdf step`);
-    FILES[name] = readFileSync(p);
+    FILES[c.file] = readFileSync(p);
   }
 }
 let hits = 0;
@@ -91,14 +97,19 @@ assert.deepEqual(expanding, { verdict: "clean" }, `a 300 MiB-unpacking XLSX must
 // that plus 5 s of network headroom); the pass's start window is 15 s (45 s DOCUMENT_SCAN_BUDGET_MS
 // minus that 30 s SCAN_TIMEOUT_MS), not 20 s (M4, final whole-branch review).
 assert.ok(expandMs < 20_000, `the 300 MiB-unpacking XLSX took ${expandMs} ms: over the worker's 25 s scan timeout, with headroom (A15)`);
-if (ENCRYPTED) {
-  const owner128 = await scan("owner-aes128.pdf");
-  assert.deepEqual(owner128, { verdict: "clean" }, `I1: an owner-only RC4/AES-128 PDF (no password to OPEN it) must scan clean, not Heuristics.Encrypted.*: ${JSON.stringify(owner128)}`);
-  const owner256 = await scan("owner-aes256.pdf");
-  assert.deepEqual(owner256, { verdict: "clean" }, `I1: an owner-only AES-256 (R6) PDF (no password to OPEN it) must scan clean, not Heuristics.Encrypted.*: ${JSON.stringify(owner256)}`);
-  const userPw = await scan("user-password.pdf");
-  assert.equal(userPw.verdict, "unscannable", `I1: a PDF that needs a password to OPEN it must answer unscannable: ${JSON.stringify(userPw)}`);
-  assert.match(userPw.signature ?? "", /^Heuristics\.Encrypted\./, `I1: the user-password PDF's cause must name Heuristics.Encrypted.*, proving the password path still works: ${JSON.stringify(userPw)}`);
+if (ENCRYPTED_CASES) {
+  const i1Results = [];
+  for (const c of ENCRYPTED_CASES) {
+    const r = await scan(c.file);
+    i1Results.push({ file: c.file, desc: c.desc, verdict: r.verdict, signature: r.signature ?? null });
+    if (c.expect === "clean") {
+      assert.deepEqual(r, { verdict: "clean" }, `I1: ${c.desc} (${c.file}) must scan clean, not Heuristics.Encrypted.*: ${JSON.stringify(r)}`);
+    } else {
+      assert.equal(r.verdict, "unscannable", `I1: ${c.desc} (${c.file}) must answer unscannable: ${JSON.stringify(r)}`);
+      assert.match(r.signature ?? "", /^Heuristics\.Encrypted\./, `I1: ${c.desc} (${c.file})'s cause must name Heuristics.Encrypted.*, proving the password path still works: ${JSON.stringify(r)}`);
+    }
+  }
+  console.log(JSON.stringify({ i1: i1Results }));
 }
 const before = hits;
 assert.equal((await call("POST", "/scan", JSON.stringify({ url: url("eicar.txt", "http://127.0.0.2:8098") }))).status, 403);

@@ -27,15 +27,15 @@ import type { Pass } from "../context";
  * BUDGET (orchestrator ruling: SCAN_TIMEOUT_MS is Task 5's committed 30_000, not the plan's 25_000):
  * no scan STARTS after 15 s (DOCUMENT_SCAN_BUDGET_MS, 45 s, minus the 30 s scan timeout), the health call
  * included. The spend loop (review fix 3) carries the SAME DOCUMENT_SCAN_BUDGET_MS cutoff, checked
- * before each spend rather than before each scan: at 45 s already-elapsed it still spends the FIRST
- * held error (the check runs before the call, so one round trip beyond the budget is always allowed),
- * then stops — bounding what used to be up to one round trip per scan started (as many as the batch)
- * to exactly one. The check runs before EVERY spend, including the first: a scan loop that itself
- * ran long (a slow last scan), or the self-test re-check after it, can leave every held error from
- * this tick unspent, not only a later one; nothing is lost — an unspent error stays pending,
- * exactly like a deferred scan, and a later tick retries it. Worst case, measured from the pass's start: the last scan started at 15 s ends by
- * 45 s, so the spend loop's own check already reads >= the budget and spends at most its first held
- * error, then a second self-test (5 s at most) when an error was held, the oldest-pending read and the
+ * before EVERY spend, including the first (coordinator fix round): past 45 s already-elapsed, NOTHING
+ * is spent, not even one held error, because the check runs before each iteration of the loop, every
+ * time, not only after it. A scan loop that itself ran long (a slow last scan), or the self-test
+ * re-check that gates the spend loop (scannerHealth(), up to 5 s, runs BEFORE the spend loop's first
+ * check), can leave every held error from this tick unspent, not only a later one; nothing is lost
+ * — an unspent error stays pending, exactly like a deferred scan, and a later tick retries it.
+ * Worst case, measured from the pass's start: the last scan started at 15 s ends by 45 s, and the
+ * second self-test already runs before the spend loop's own check, so that check reads past the
+ * budget on its very first iteration and nothing is spent; the oldest-pending read and the
  * heartbeat: a few seconds of round trips that no timeout bounds (supabase-js sets none), so about 50 s,
  * not 45. cron-coupling.test.ts asserts the budgets plus 60 s of headroom fit the route's 300 s
  * (60 + 60 + 60 + 45 + 60 = 285): the ~5 s overrun comes out of the 15 s left over and, past that, out
