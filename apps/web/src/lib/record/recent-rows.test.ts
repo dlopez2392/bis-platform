@@ -101,11 +101,18 @@ describe("a new version in the drawer's Recent (owner ruling R2)", () => {
 });
 
 describe("a removed file in the drawer's Recent (spec 3.5)", () => {
+  const removed: TimelineEntry = { kind: "documentRemoved", id: "v9", at: AT, contactId: "c1", scan: {
+    id: "v9", document_id: "d1", scan_status: "infected", scan_signature: "Heuristics.Encrypted.PDF", scanned_at: AT, title: "Lease", category: "contract",
+    deleted_at: null, contact_id: "c1", client_group_id: null } };
   it("is its head only, its own kind, never an excerpt (mutation: map it to kind 'document' -> FAILS)", () => {
-    const removed: TimelineEntry = { kind: "documentRemoved", id: "v9", at: AT, contactId: "c1", scan: {
-      id: "v9", document_id: "d1", scan_status: "infected", scan_signature: null, scanned_at: AT, title: "Lease", category: "contract",
-      deleted_at: null, contact_id: "c1", client_group_id: null } };
     const [d] = view([removed]);
     expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["documentRemoved", "removed Lease: it had a virus", null]);
+  });
+  it("carries only the row's own words, never the version's raw scan data (mutation: spread the entry's scan onto the row -> FAILS)", () => {
+    const [d] = view([removed]);
+    expect(Object.keys(d!).sort()).toEqual(["dateTime", "detail", "excerpt", "key", "kind", "mark", "status", "time", "verb"]);
+    const json = JSON.stringify([d]);
+    expect(json).not.toContain("Heuristics.Encrypted.PDF");
+    expect(json).not.toContain("scan_status");
   });
 });

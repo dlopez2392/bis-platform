@@ -165,6 +165,22 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     const page = await listContactTimelinePage(fakeDb({}, { throwOn: all }).db, u(100), u(99));
     expect(page).toEqual({ items: [], older: null, failed: [...TIMELINE_SOURCES] });
   });
+
+  it("a refused read of the removed-file relation fails the documents source, not a swallowed empty (spec 3.5; mutation: .catch(() => []) on listDocumentScanTimeline -> FAILS)", async () => {
+    const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_scan_timeline"] });
+    const errors: string[] = [];
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
+    expect(page.failed).toEqual(["documents"]);
+    expect(errors).toEqual(["documents"]);
+  });
+
+  it("a refused read of the new-version relation fails the documents source too, not a swallowed empty (owner ruling R2; mutation: .catch(() => []) on listDocumentVersionTimeline -> FAILS)", async () => {
+    const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_version_timeline"] });
+    const errors: string[] = [];
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
+    expect(page.failed).toEqual(["documents"]);
+    expect(errors).toEqual(["documents"]);
+  });
 });
 
 describe("listPeopleNames over a fake client (spec §6, Names)", () => {
