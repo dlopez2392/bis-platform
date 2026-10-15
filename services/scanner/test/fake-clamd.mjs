@@ -26,7 +26,11 @@ export function startFakeClamd(port = 0, host = "127.0.0.1", { broken = false } 
     if (all.includes(Buffer.from("FAKE-CLAMD-ERROR"))) return "INSTREAM size limit exceeded. ERROR\0";
     return "stream: OK\0";
   };
+  // Every TCP connection counted, so a test can prove a refused file was never even handed to clamd
+  // (fix round item 2: a declared-length refusal must never open a stream).
+  let connections = 0;
   const server = net.createServer((socket) => {
+    connections++;
     let buf = Buffer.alloc(0);
     let cmd = null;
     const chunks = [];
@@ -57,6 +61,7 @@ export function startFakeClamd(port = 0, host = "127.0.0.1", { broken = false } 
   });
   return new Promise((resolve) => server.listen(port, host, () => resolve({
     port: server.address().port,
+    get connections() { return connections; },
     close: () => new Promise((r) => server.close(() => r())),
   })));
 }

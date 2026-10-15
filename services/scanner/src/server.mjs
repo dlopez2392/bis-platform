@@ -11,7 +11,7 @@ import { scanUrl, parseReply } from "./scan.mjs";
  * Two routes, both HMAC-signed: POST /scan { url } and GET /health. It writes nothing anywhere and
  * holds no database or storage credential; it can only scan a URL a caller hands it, from that
  * caller's own storage origin. A scan answers clean, infected, unscannable (a limit or encryption,
- * plan review C2) or error with its stage (clamd, file or transport, plan review C1 and re-review N3).
+ * plan review C2) or error with its stage (clamd, missing or transport, plan review C1 and re-review N3).
  * /health also runs a SELF-TEST (re-review N2a): a tiny fixed clean buffer streamed through INSTREAM
  * must answer OK. A clamd that answers PING but cannot scan (out of memory, a broken signature set)
  * fails it, and the app then spends no attempt on any file.

@@ -3,9 +3,8 @@
 FROM clamav/clamav:1.4
 
 # Every directive this file owns is deleted first, then set once, so a value in the base image can never
-# survive beside ours. Each name is read off the 1.4 image in plan Task 4 step 1 (assumption A13 until then:
-# Docker is not installed on this implementer's machine; the CI scanner job is the first proof of these
-# directive names and ownership against the real image).
+# survive beside ours. Each name is read off the 1.4 image in plan Task 4 step 1 (assumption A13 until the
+# CI scanner job proves these directive names and ownership against the real image).
 # NO LIMIT IS SET BELOW 1.4's OWN DEFAULT (plan re-review N1: 1.4's clamd.conf.sample gives MaxFileSize
 # 100M and MaxScanSize 400M; a limit applies to every member unpacked from an Office file, so lowering it
 # would delete ordinary exports). MaxRecursion and MaxFiles keep their defaults (not set here).

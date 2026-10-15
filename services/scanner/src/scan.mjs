@@ -22,7 +22,11 @@ export function parseReply(reply) {
     const name = found[1].slice(0, 200);
     return LIMIT_OR_ENCRYPTED.test(name) ? { verdict: "unscannable", signature: name } : { verdict: "infected", signature: name };
   }
-  return { verdict: "error", stage: "clamd", reason: r.slice(0, 120) };
+  // Only a reply ending in " ERROR" is clamd's own word about THIS stream (clamd(8): every error line
+  // clamd emits ends that way). Anything else unexpected or truncated (a connection-level garble, a
+  // short read) is not clamd speaking about the file, so it is never blamed on it: "transport".
+  if (r.endsWith(" ERROR")) return { verdict: "error", stage: "clamd", reason: r.slice(0, 120) };
+  return { verdict: "error", stage: "transport", reason: r.slice(0, 120) };
 }
 
 /** Storage's own "this object does not exist": a 404, or a 400 whose JSON body says 404 / not_found. */
@@ -47,9 +51,16 @@ export async function scanUrl(url, { clamd, maxBytes, timeoutMs, fetchImpl = fet
   } catch {
     return error("transport", "fetch failed");
   }
-  if (!res.ok || !res.body) return error((await saysMissing(res)) ? "missing" : "transport", `fetch answered ${res.status}`);
+  if (!res.ok || !res.body) {
+    const stage = (await saysMissing(res)) ? "missing" : "transport";
+    res.body?.cancel().catch(() => {}); // an unread body on a refusal still holds the connection open
+    return error(stage, `fetch answered ${res.status}`);
+  }
   const declared = Number(res.headers.get("content-length") ?? Number.NaN);
-  if (Number.isFinite(declared) && declared > maxBytes) return error("transport", "too large");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    res.body.cancel().catch(() => {}); // refused before a byte is streamed: never left dangling
+    return error("transport", "too large");
+  }
   let reply;
   try {
     reply = await instream(clamd, res.body, { maxBytes, signal });

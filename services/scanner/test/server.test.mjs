@@ -83,18 +83,20 @@ test("storage's own not-found (a 404, or its 400 saying 404 / not_found) is 'mis
   assert.deepEqual(await scan("bad400.pdf"), { verdict: "error", stage: "transport" });
 });
 
-test("a timeout is transport, never the file's: slow storage or a busy clamd can never count against a file (final check R2; mutation: stage 'missing' or 'clamd' on abort -> FAILS)", async () => {
+test("a timeout is transport, never the file's: slow storage or a busy clamd can never count against a file (final check R2; mutation: stage 'missing' or 'clamd' on abort -> FAILS)", async (t) => {
   const quick = createScanner({ clients: [{ secret: SECRET, origin }], clamd: { host: "127.0.0.1", port: clamd.port }, timeoutMs: 300, log: { log() {}, error() {} } });
+  t.after(() => quick.close()); // a failing assertion below must not leave this server listening (fix round item 1)
   const port = await listen(quick);
   const ts = Math.floor(Date.now() / 1000);
   const body = JSON.stringify({ url: objectUrl("slow.pdf") });
   const r = await fetch(`http://127.0.0.1:${port}/scan`, { method: "POST", body, headers: { "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": sign(SECRET, ts, "POST", "/scan", body) } });
   assert.deepEqual(await r.json(), { verdict: "error", stage: "transport" });
-  quick.close();
 });
 
-test("a file over the limit is an error that never counts, never clean: refused by its declared length AND, served chunked with no length, by the streaming counter (plan review I1; mutation: drop the byte counter in clamd.mjs -> the chunked file reads clean -> FAILS)", async () => {
+test("a file over the limit is an error that never counts, never clean: refused by its declared length BEFORE anything is streamed to clamd, AND, served chunked with no length, by the streaming counter (plan review I1, fix round item 2; mutation: drop the declared-length check -> clamd sees a connection for big-declared.pdf -> FAILS; mutation: drop the byte counter in clamd.mjs -> the chunked file reads clean -> FAILS)", async () => {
+  const before = clamd.connections;
   assert.deepEqual(await scan("big-declared.pdf"), { verdict: "error", stage: "transport" });
+  assert.equal(clamd.connections, before, "a file refused by its declared length must never be handed to clamd at all");
   assert.deepEqual(await scan("big-chunked.pdf"), { verdict: "error", stage: "transport" });
 });
 
@@ -112,12 +114,13 @@ test("a bad signature is 401 and a foreign URL is 403, and NEITHER fetches anyth
   assert.equal(hits.length, before);
 });
 
-test("health: clamd reachable with its signature date; with clamd down, health says so and a scan is a TRANSPORT error (mutations: answer clamd:true without a PING -> FAILS; stage 'clamd' when clamd is unreachable -> FAILS)", async () => {
+test("health: clamd reachable with its signature date; with clamd down, health says so and a scan is a TRANSPORT error (mutations: answer clamd:true without a PING -> FAILS; stage 'clamd' when clamd is unreachable -> FAILS)", async (t) => {
   const ok = await (await call("GET", "/health")).json();
   assert.equal(ok.clamd, true);
   assert.equal(ok.selfTest, true);
   assert.ok(Math.abs(Date.now() - Date.parse(ok.signaturesAt)) < 120_000, ok.signaturesAt);
   const down = createScanner({ clients: [{ secret: SECRET, origin }], clamd: { host: "127.0.0.1", port: 1 }, log: { log() {}, error() {} } });
+  t.after(() => down.close()); // a failing assertion below must not leave this server listening (fix round item 1)
   const port = await listen(down);
   const ts = Math.floor(Date.now() / 1000);
   const signed = (method, path, body) => ({ "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": sign(SECRET, ts, method, path, body) });
@@ -126,12 +129,13 @@ test("health: clamd reachable with its signature date; with clamd down, health s
   const body = JSON.stringify({ url: objectUrl("clean.pdf") });
   const s = await fetch(`http://127.0.0.1:${port}/scan`, { method: "POST", body, headers: signed("POST", "/scan", body) });
   assert.deepEqual(await s.json(), { verdict: "error", stage: "transport" });
-  down.close();
 });
 
-test("a clamd that answers PING but cannot scan FAILS its self-test, and every scan is stage clamd (re-review N2a; mutation: report selfTest:true without the INSTREAM -> FAILS)", async () => {
+test("a clamd that answers PING but cannot scan FAILS its self-test, and every scan is stage clamd (re-review N2a; mutation: report selfTest:true without the INSTREAM -> FAILS)", async (t) => {
   const sick = await startFakeClamd(0, "127.0.0.1", { broken: true });
+  t.after(() => sick.close()); // a failing assertion below must not leave this clamd listening (fix round item 1)
   const s2 = createScanner({ clients: [{ secret: SECRET, origin }], clamd: { host: "127.0.0.1", port: sick.port }, log: { log() {}, error() {} } });
+  t.after(() => s2.close());
   const port = await listen(s2);
   const ts = Math.floor(Date.now() / 1000);
   const signed = (method, path, body) => ({ "x-bis-scan-timestamp": String(ts), "x-bis-scan-signature": sign(SECRET, ts, method, path, body) });
@@ -140,8 +144,6 @@ test("a clamd that answers PING but cannot scan FAILS its self-test, and every s
   assert.equal(h.selfTest, false);
   const body = JSON.stringify({ url: objectUrl("clean.pdf") });
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/scan`, { method: "POST", body, headers: signed("POST", "/scan", body) })).json(), { verdict: "error", stage: "clamd" });
-  s2.close();
-  await sick.close();
 });
 
 test("other routes are 404, a body over 8 KiB is 413, and no log line ever carries the URL's token (mutation: log the url -> FAILS)", async () => {
