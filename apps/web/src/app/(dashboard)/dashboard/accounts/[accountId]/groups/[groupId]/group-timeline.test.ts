@@ -150,4 +150,15 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     expect(row).toContain(`>${m["provenance.you.es"]}<`);
     expect(row).not.toContain("data-timeline-subject");
   });
+
+  it("a removed-file row renders as one: its verb, the automation mark and, for the group's own file (contactId \"\"), no member link (S-07 2a; mutation: return null for the documentRemoved case -> FAILS)", () => {
+    const removedEntries = [{ kind: "documentRemoved", id: "v9", at: AT, contactId: "", scan: { id: "v9", document_id: "d1",
+      scan_status: "infected", scan_signature: null, scanned_at: AT, title: "Lease", category: "contract", deleted_at: null, contact_id: null, client_group_id: "g1" } }] as unknown as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(removedEntries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const row = rowHtml(render({ rows, tr }, "es"), "documentRemoved");
+    expect(row).toContain(`>${m["timeline.documentRemoved.es"].replace("{title}", "Lease")}<`);
+    expect(row).toContain(`>${m["provenance.automation.es"]}<`);
+    expect(row).not.toContain("data-timeline-subject");
+  });
 });

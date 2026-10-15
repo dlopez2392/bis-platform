@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -129,6 +129,9 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
     // S-07 1b: a new version of a file wears the file's paperclip.
     case "documentVersion":
       return <TimelineItem {...head} icon={Paperclip} />;
+    // S-07 2a: a removed file wears a shield (the row's own crit dot and word carry the state).
+    case "documentRemoved":
+      return <TimelineItem {...head} icon={ShieldAlert} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

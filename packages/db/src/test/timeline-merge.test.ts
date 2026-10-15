@@ -140,10 +140,12 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     expect(p.items[29]!.id).toBe(u(2));
     expect(p.older).toEqual({ v: p.items[29]!.at, id: u(2) });
     const paged = full.reads.filter((r) => r.table !== "conversations");
-    // S-07 1b (owner ruling R2): the documents source reads two relations, `documents` and 0078's
-    // document_version_timeline, so there is one read more than there are sources, each at limit + 1.
-    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 1).fill(TIMELINE_PAGE_SIZE + 1));
+    // S-07 1b (owner ruling R2) + S-07 2a (spec 3.5): the documents source reads three relations,
+    // `documents`, 0078's document_version_timeline and 0079's document_scan_timeline, so there are
+    // two reads more than there are sources, each at limit + 1.
+    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 2).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_version_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
+    expect(paged.filter((r) => r.table === "document_scan_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     const exact = await listContactTimelinePage(fakeDb({ notes: notes(30) }).db, u(100), u(99));
     expect(exact.items).toHaveLength(30);
     expect(exact.older).toBeNull();

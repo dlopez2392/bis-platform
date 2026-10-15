@@ -126,3 +126,13 @@ describe("a new version's author (owner ruling R2)", () => {
     expect(personIdsOf([ver])).toEqual(["user_bea"]);
   });
 });
+
+describe("a removed file's author (spec 3.5)", () => {
+  const removed: TimelineEntry = { kind: "documentRemoved", id: "v9", at: AT, contactId: "c1", scan: {
+    id: "v9", document_id: "d1", scan_status: "infected", scan_signature: null, scanned_at: AT, title: "Lease", category: "contract",
+    deleted_at: null, contact_id: "c1", client_group_id: null } };
+  it("is the automation, and asks the names read for nobody (mutation: a person mark with a null id -> FAILS)", () => {
+    expect(authorOf(removed)).toEqual({ kind: "automation", personId: null });
+    expect(personIdsOf([removed])).toEqual([]);
+  });
+});

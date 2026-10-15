@@ -45,6 +45,7 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     // S-07: the head already names the file; the drawer opens nothing of it here.
     case "document": return null;
     case "documentVersion": return null;
+    case "documentRemoved": return null;
   }
 }
 

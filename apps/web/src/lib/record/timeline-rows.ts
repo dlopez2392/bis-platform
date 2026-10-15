@@ -1,4 +1,5 @@
 import type { TimelineEntry, TimelineSource } from "@bis/db";
+import { removedReason } from "@bis/db/document-rules";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
@@ -102,6 +103,14 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       status: entry.version.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.version.category}`),
     };
+    // S-07 2a (spec 3.5): a removed file, its own words per state, the state as a crit dot and word (rule 3).
+    // Owner ruling 2026-10-15: a password-protected file says why; removedReason (@bis/db/document-rules) decides.
+    case "documentRemoved": {
+      const why = removedReason(entry.scan.scan_status, entry.scan.scan_signature);
+      const verb = why === "virus" ? "timeline.documentRemoved" : why === "password" ? "timeline.documentPassword" : "timeline.documentUnscannable";
+      const word = why === "virus" ? "documents.status.virusRemoved" : why === "password" ? "documents.status.passwordRemoved" : "documents.status.unscannable";
+      return { verb: tr.text(verb, { title: entry.scan.title }), status: { tone: "crit", word: tr.text(word) }, detail: tr.text(`documents.category.${entry.scan.category}`) };
+    }
   }
 }
 
