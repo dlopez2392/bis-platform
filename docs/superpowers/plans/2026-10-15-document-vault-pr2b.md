@@ -44,6 +44,7 @@
 - **Browser code imports the vault's rules from `@bis/db/document-rules`**, never the `@bis/db` barrel. `lib/document-requests/{customer-state,requests-load,customer-client}.ts` and `lib/documents/upload-core.ts` are browser-safe (no barrel import, no `node:` import); `token.ts`, `customer-upload.ts`, `request-task.ts`, `deliver.ts` are server-only.
 - **The `vi.mock` factory check.** A task that adds a NEW named import to a module adds that name to every mock factory that reaches the module: `grep -rln 'vi.mock("@bis/db"' apps/web/src | xargs grep -ln "<module basename>"`. In particular `scan-version.ts` gains an import of `request-task.ts` (Task 4), which imports `documentRequestTarget`, `ensureDocumentRequestTask` and `getDocumentRequestForVersion` from `@bis/db`: a test whose bare `@bis/db` factory drives the REAL `afterClean` through a clean verdict gains those three names (`documents-actions.test.ts` mocks `scan-version` whole, `:27`; `scan-version.test.ts` injects its own deps; `passes/documents-scan.test.ts` is read and run, not edited).
 - **Running tests.** Only the affected tests, by path: `pnpm --filter web exec vitest run "<path>" …`, `pnpm --filter web typecheck`, `pnpm --filter web exec eslint "<touched files>"`. `@bis/db` suites only on a replica (the kit below), judged by vitest's summary block (capture the exit code to a file with nothing after the command; the `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` trailer lies); in `packages/db` run vitest as `node node_modules/vitest/vitest.mjs run <files>` (2a ledger: there is no vitest shim there). **No `@bis/db` vitest may run against bis-ci until Task 14 step 2 has applied 0080 there** (0080 drops a column five suites used to insert and `documents.ts` reads the new columns). Never the gates (`pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`) and never Playwright: the orchestrator runs them, one at a time (memory "Agent test scope"). Never pass the folder `…/accounts/` to vitest (it holds `calls/[callId]/actions.test.ts`, a live test).
+- **A unit test that reaches `requestToken`** (directly, or through `requestUrl`, `deliver.ts` or the create action) sets the secret itself (re-review m2): `beforeEach(() => vi.stubEnv("DOCUMENT_LINK_SECRET", "bis_unit_document_link_fixture_only_000000000"))` and `afterEach(() => vi.unstubAllEnvs())`. Never a real value, never a shared setup file that would also hide a MISSING secret from `token.test.ts`'s own required-secret case (which deletes the variable inside its test). Tasks 5 (`token.test.ts` sets its own values per case), 6 (`deliver.test.ts`) and 7 (`document-requests-actions.test.ts`) apply it.
 - **Mutating e2e only on the per-run fixture account** (`readClientFixture()`, `apps/web/e2e/support.ts:103-110`), never `Test Client One`; every seeded row and stored object deleted in `afterAll`, each error checked, then re-read to confirm none is left.
 - **Nothing sends, nothing calls a real provider.** No test sends a real text or email: the SMS provider outside production is the fake (`lib/sms/index.ts`, `getSmsProvider`), and every delivery unit test injects its sender. No test calls the Fly worker; e2e uses 2a's fake clamd behind the real shim.
 - **No production credential anywhere.** `DOCUMENT_LINK_SECRET` (deviation 1) is REQUIRED (orchestrator ruling I10): a fresh random value of at least 32 bytes, DIFFERENT in Production and Preview, set by the orchestrator in Task 14; there is NO fallback to the service-role key (a link key derived from it would tie every customer link to a credential rotated for other reasons, and put production's key into the link's derivation). Tests and Playwright use the literal fixture `bis_e2e_document_link_fixture_only_0000000000` (Task 10), never a real value. Never read, print or parse an `.env` value with code that can throw (memory "Env secret reads"); `token.ts`'s error names the variable, never a value.
@@ -83,7 +84,7 @@ Paste both values in the report; stop if they differ.
 - `apps/web/src/lib/documents/documents-load.ts:56` and its test: the parser accepts `source: "customer"` (Task 4); every fixture is unchanged.
 - `packages/db/src/test/automations-b-schema.test.ts:168-187` (plan review I3): the catalogue case reads `automation_log_source_check`'s text whole; it gains `'document_request'::text` after `'textback'::text`, and its title "fourteen sources" becomes "fifteen sources (0054 added textback, 0080 document_request)" (Task 1).
 - `packages/db/src/test/document-vault-schema.test.ts:107-108` (plan review I3): today it inserts every `DOCUMENT_SOURCES` value and expects `customer` REFUSED; once `customer` is a source those two lines cannot hold (a bare customer row fails `documents_request_coherent`). They become a comparison of `documents_source_check`'s text with `DOCUMENT_SOURCES` (the same shape as the catalogue case above), and the inserts keep `STAFF_DOCUMENT_SOURCES` only (Task 1 writes the comparison against the literal list; Task 3 switches it to the imported constants and re-runs it).
-- `apps/web/src/lib/consent/classes.test.ts:31-32` (SMS kinds 14 → 15, `SPEC_TABLE` gains the SMS kind's row), its `EMAIL_TABLE` (gains the email kind's row; the email count 26 → 27 wherever the file states it), `:99-100` (the footer rule holds unchanged: an informational kind carries the unsubscribe footer), `:117-121` (`emailReadsLedger`'s list gains `"staff.document_request_email"`) (Task 6).
+- `apps/web/src/lib/consent/classes.test.ts:31-33` (SMS kinds 14 → 15; `SPEC_TABLE` at `:11` gains the SMS kind's row), `:59` `EMAIL_TABLE` (gains the email kind's row) and `:94-96` (the email count "twenty-six" 26 → 27), `:104-109` (the footer rule holds unchanged: an informational kind carries the unsubscribe footer), `:112-121` (`emailReadsLedger`'s list gains `"staff.document_request_email"`) (Task 6).
 - `apps/web/src/lib/consent/scans.test.ts:268`: "all fourteen SMS kinds and all twenty-six email kinds, 36 distinct" → fifteen, twenty-seven, **38** (Task 6). `SITES` (`:760`) is `Record<EmailKind, …>`: ONLY the email kind gains a row there; the SMS kind is reached by the scan at `:268` through `deliver.ts`'s literal.
 - `apps/web/src/app/api/cron/reminders/route.test.ts:322` (`EMPTY_DOCUMENTS_SCAN` gains `requestTasks: 0`) and `apps/web/src/lib/automations/sentinel.test.ts:263` (the pass's not-configured counters gain it) (Task 6b, plan review I5).
 - `apps/web/src/proxy.test.ts:21-26` gains `/d/sometoken` in the skip list and `:28-33` gains `/docs` and `/dashboard/d` in the run list; `:36`'s "only the four trees" becomes "only the five trees" (Task 10).
@@ -114,7 +115,7 @@ Paste both values in the report; stop if they differ.
 8. **The completion is a trigger; the work-queue item is opened by the app.** `completed_at` is set by `app.document_request_on_clean()`, an AFTER UPDATE trigger on `document_versions.scan_status` → `clean`, which locks the request row and checks every item; so the finish and the retry pass (`passes/documents-scan.ts`, bis-automations, not touched) both complete a request by construction. The "sent documents" To-do needs copy from `messages.ts` and the account's language, so `scanVersion` opens it after a clean verdict (`lib/documents/scan-version.ts`, one call to `openRequestTask`, best-effort and logged; both the finish and the pass call `scanVersion`). The crash window between the verdict and the To-do is CLOSED by a bounded reconcile in the existing `documentsScan` pass (orchestrator ruling I5, Task 6b): each tick it reads open requests and requests completed in the last 24 hours that have a ready, clean customer file and no `received` To-do, and opens it (idempotent through the unique index). `ensureDocumentRequestTask` emits `task.created` when it creates the row, as `ensureConsentTask` does (`activities.ts:141`), and answers `created: false` on the unique index's 23505.
 9. **"20 starts per request per UTC day" counts reserved versions of the request's files created since UTC midnight** (spec §4.4), inside `start_document_request_upload` under the request row's lock, so concurrent starts cannot pass 20. A failed PUT's reservation is NOT given back by the customer page (spec §4.4 names two routes, start and finish; no abandon route): it counts until the documents sweep removes it (3 hours, `documents-sweep.ts:21`), and counts against the quota until then, exactly like a staff reservation the sweep cleans.
 10. **The customer page re-reads itself while a file is Checking** with `router.refresh()` on a pure schedule (`nextCustomerPollMs`, 5 s for the first minute, then 15 s, stopping after 15 minutes), rather than a third public route. The server component re-derives every file's state from the database on each refresh (`listRequestFiles`).
-11. **Two new consent-gate kinds, both `informational`**: `staff.document_request_sms` (`hours: "automated"`, `footer: "stop_line"`) and `staff.document_request_email` (`hours: "automated"`, `footer: "unsubscribe"`) (spec §4.2: "consent holds and stops apply, quiet hours apply"). `staff.composer_sms` is `staff_typed` with `hours: "any"` (`classes.ts:41`), which would skip both. A send inside quiet hours is HELD (`writeHeld`, `hold-or-send.ts:267`) under the new `automation_log` source `document_request`, released by `releaseDocumentRequest` (Task 6) only while the request is still open; "What went out" (`activity/page.tsx`, reads `automation_log` only) shows every send, hold and refusal. The text also appears in the customer's conversation (a `messages` row written before the send, person mark, as the composer does, `conversations/actions.ts:220-232`); the email too (`createMessage(channel: "email")`, as `sendEmailAction` does).
+11. **Two new consent-gate kinds, both `informational`**: `staff.document_request_sms` (`hours: "automated"`, `footer: "stop_line"`) and `staff.document_request_email` (`hours: "automated"`, `footer: "unsubscribe"`) (spec §4.2: "consent holds and stops apply, quiet hours apply"). `staff.composer_sms` is `staff_typed` with `hours: "any"` (`classes.ts:41`), which would skip both. A send inside quiet hours is HELD (`writeHeld`, `hold-or-send.ts:267`) under the new `automation_log` source `document_request`, released by `releaseDocumentRequest` (Task 6) only while the request is still open; "What went out" (`activity/page.tsx`, reads `automation_log` only) shows every send, hold and refusal. The text also appears in the customer's conversation (a `messages` row written before the send, person mark, as the composer does, `conversations/actions.ts:220-232`); the email too (`createMessage(channel: "email")`, as `sendEmailAction` does). **At most once** (re-review R1): `release-held.ts:94-120` never writes the held row; only the releaser's own `sent` write dequeues it, and since a log write may now fail quietly (I4), a held request could otherwise be texted again on the next tick. So a request carries `sent_at`, claimed by compare-and-set inside the text's `prepare` (after the gate cleared it, before the provider) and before `sendEmail`, cleared when that send did not go out; the releaser writes the row `sent` and sends nothing for a request whose stamp is set. Residual, named: a crash between the claim and the provider call leaves a stamp on a request whose message never left; staff see no "sent" row in What went out and use Copy link.
 12. **Expired is computed, never written**: `expires_at <= now()` reads expired; no pass sweeps requests (spec: expiry is not a timeline row).
 13. **A finish for a version THIS request already reserved is accepted when the request has since COMPLETED or EXPIRED; only a REVOKED request refuses it** (orchestrator ruling I6; spec §4.5 amended). A customer who started two files a moment before the first one completed the request, or whose 25 MB upload outlasted the 7th day, has already been given a reservation and a signed URL by us; refusing their finish would strand the object until the sweep and tell them "not accepted" for a file the business asked for. The START still refuses on completed and expired (0080's function), so no NEW file can begin. Revoked means staff withdrew the link: the finish refuses, and the reservation is the sweep's.
 14. **The customer page's re-read follows each Checking file's own age** (server now minus that version's `created_at`; plan review I9), not the moment the page was opened: a reload, or a customer coming back an hour later, must not restart the fast schedule for a file that has been Checking for an hour.
@@ -127,7 +128,7 @@ Paste both values in the report; stop if they differ.
 - **A4** `listPhoneNumbersForAccount(db, accountId)` (`packages/db/src/voice.ts:847`) answers the account's numbers with `status` and `e164`, and a `live` one is the number customers call. Check: Task 5's test reads it through a fake shaped from that function's own select; Task 12's dead-end page shows the fixture account's live number when it has one, and the no-phone sentence when not.
 - **A5** The SMS composer's `prepare` callback and `deliverSms`'s re-read of the ledger behave for a non-`automation.*` kind exactly as for `voice.textback` (`lib/voice/textback.ts:249-300`). Check: Task 6's tests drive `decideSms`/`deliverSms` through the gate with the fake provider and an injected ledger, for a stopped number, a held number, quiet hours and a clean send.
 - **A6** The email gate's unsubscribe ledger applies to an `informational` kind (`emailReadsLedger`, `classes.ts`) and its footer marker is replaced for `footer: "unsubscribe"`. Check: Task 6's email test asserts an unsubscribed address is `blocked` and the sent HTML carries the unsubscribe row.
-- **A9** (plan review I10) On Preview, a text or email reaches a real phone or inbox only when the provider is real there; outside production the SMS provider is the fake unless `SMS_DEV_REDIRECT_TO` and `TELNYX_API_KEY` are both set (`lib/sms/index.ts`, `getSmsProvider`), and the email provider likewise. Check: Task 14 step 7 verifies a send by the contact's conversation row and the "What went out" row (status `sent`), never by "it arrived on the phone"; arrival is a bonus only if the orchestrator confirms the redirect is set.
+- **A9** (plan review I10) On Preview, a text or email reaches a real phone or inbox only when the provider is real there; outside production the SMS provider is the fake unless `SMS_DEV_REDIRECT_TO` and `TELNYX_API_KEY` are both set (`lib/sms/index.ts`, `getSmsProvider`), and the email provider likewise. Check: Task 14 step 7 verifies a send by the contact's conversation row and the "What went out" row (status `sent`), never by "it arrived on the phone"; arrival is a bonus only if the orchestrator confirms the redirect is set. If Text is not offered on Preview at all (bis-ci has no A2P-approved live number, so `requestChannels` answers `text: false` and the dialog shows only Email and Copy link), step 7(a) is skipped and Task 6's unit tests are the proof of the text path (re-review m4).
 - **A7** Playwright can drive a page with no Clerk session through `test.use({ storageState: { cookies: [], origins: [] } })` (`e2e/public-form-theme.spec.ts:64`) while the same spec's other tests use the signed-in state. Check: Task 12 splits the two into two `describe` blocks; the orchestrator's run.
 - (Not an assumption, read: `client_group_members.is_primary_contact` (0075:51) has a unique partial index, `client_group_members_one_primary_contact` (0075:52), so a group has at most one primary contact.)
 
@@ -171,7 +172,7 @@ Paste both values in the report; stop if they differ.
 | 4 | The shared finish; the browser upload core; the card's read accepts `customer`; `scanVersion` opens the To-do | bis-crm | **opus** | 2, 3 | `lib/documents/{finish-upload,upload-core,upload-client,scan-version,documents-load}*`, `lib/document-requests/request-task*`, `…/contacts/documents-actions.ts` |
 | 5 | The token, the public rule, the two public routes, the To-do | bis-crm | **opus** | 2, 3, 4 | `lib/document-requests/{token,customer-upload,customer-state}*`, `app/api/d/[token]/**` |
 | 6 | Delivery: two kinds, the email, the hold and release, "What went out" | bis-comms | **opus** | 2, 3, 5 | `lib/consent/{classes.ts,scans.test.ts}`, `lib/document-requests/deliver*`, `lib/email/templates/document-request*`, `automation-log.ts`, `log-titles.ts`, `release-held.ts` |
-| 6b | The lost-To-do reconcile in the scan pass | bis-automations | sonnet | 3, 4 | `passes/documents-scan*`, `sentinel.test.ts`, `api/cron/reminders/route.test.ts` |
+| 6b | The lost-To-do reconcile in the scan pass | bis-automations | sonnet | 3, 4, 6 | `passes/documents-scan*`, `sentinel.test.ts`, `api/cron/reminders/route.test.ts` |
 | 7 | Staff actions and the card's requests read | bis-crm | **opus** | 3, 5, 6 | `…/contacts/document-requests-actions*`, the two `document-requests` routes, `lib/document-requests/requests-load*`, the `ALLOWED` line |
 | 8 | The card: Ask the customer, the dialog, open requests, the customer's files; `/styleguide` | bis-frontend | **opus** | 2, 4, 7 | `…/contacts/{documents-card,documents-card-handlers,document-request-dialog,document-requests-list}*`, `styleguide/documents-demo*` |
 | 9 | The customer's page `/d/[token]` | bis-frontend | **opus** | 2, 4, 5 | `app/d/**`, `lib/document-requests/customer-client*` |
@@ -186,15 +187,15 @@ Wave A (three lanes):  T1 (bis-db-schema)          T2 (bis-crm)            T10 (
 Wave B:                T3 (bis-crm, after T1)
 Wave C (two lanes):    T3b (bis-crm, after T1-T3)  T4 (bis-crm 2nd instance, after T2, T3)
 Wave D:                T5 (bis-crm, after T4)
-Wave E (three lanes):  T6 (bis-comms, after T5)    T9 (bis-frontend, after T5)    T6b (bis-automations, after T3, T4)
-Wave F:                T7 (bis-crm, after T6)      (T9 may still be running)
+Wave E (two lanes):    T6 (bis-comms, after T5)    T9 (bis-frontend, after T5)
+Wave F (two lanes):    T7 (bis-crm, after T6)      T6b (bis-automations, after T6)      (T9 may still be running)
 Wave G:                T8 (bis-frontend, after T7)
 Wave H:                T11, then T12
 Checkpoint:            T13
 Rollout:               T14 (orchestrator, LAST)
 ```
 
-Disjointness: T3b (`record.ts`, `activities.ts`, `lib/record/*`, the timelines, the drawer maps, the reads tests) and T4 (`lib/documents/*`, `documents-actions.ts`) share no file. T6 (consent, the email template, `deliver.ts`, the log source, title and releaser) and T9 (`app/d/**`, `customer-client.ts`) share no file. T7 (`document-requests-actions*`, the two routes, `requests-load*`, one `ALLOWED` line) and T9 share no file. T6b touches only the scan pass and two automations tests. T10 touches only `proxy*`, `.env.example` and two env lines of `playwright.config.ts`. **0080 goes to bis-ci only AFTER Task 13 approves** (orchestrator ruling, as 2a did with 0079): a finding in the final review that changes 0080 must not need a second migration. Until then the e2e job's migration check is red on every push, expected and named in each CI reading. 0080 drops a column, but no deployed code names it: 2a's build stopped writing and reading `documents.scan_status` (`documents.ts:113-121`; `DOC_COLS` at `:38-39` has none), so 0080 may apply to production BEFORE the merge like every other migration; Task 14 step 4 re-proves that against the deployed `main` first.
+Disjointness: T3b (`record.ts`, `activities.ts`, `lib/record/*`, the timelines, the drawer maps, the reads tests) and T4 (`lib/documents/*`, `documents-actions.ts`) share no file. T6 (consent, the email template, `deliver.ts`, the log source, title and releaser) and T9 (`app/d/**`, `customer-client.ts`) share no file. T7 (`document-requests-actions*`, the two routes, `requests-load*`, one `ALLOWED` line) and T9 share no file. T6b runs in Wave F, AFTER T6 (re-review R2): both may edit `apps/web/src/app/api/cron/reminders/route.test.ts` (T6 only to add a missing name to its bare `@bis/db` factory, T6b for `EMPTY_DOCUMENTS_SCAN` and `listRequestsMissingReceivedTask`); T6b and T7 share no file. T10 touches only `proxy*`, `.env.example` and two env lines of `playwright.config.ts`. **0080 goes to bis-ci only AFTER Task 13 approves** (orchestrator ruling, as 2a did with 0079): a finding in the final review that changes 0080 must not need a second migration. Until then the e2e job's migration check is red on every push, expected and named in each CI reading. 0080 drops a column, but no deployed code names it: 2a's build stopped writing and reading `documents.scan_status` (`documents.ts:113-121`; `DOC_COLS` at `:38-39` has none), so 0080 may apply to production BEFORE the merge like every other migration; Task 14 step 4 re-proves that against the deployed `main` first.
 
 ---
 
@@ -232,7 +233,7 @@ Disjointness: T3b (`record.ts`, `activities.ts`, `lib/record/*`, the timelines, 
 - Consumes (SQL): `public.documents`, `public.document_versions` (0077, 0079); `public.reserve_document_version` (0077:166-191); `public.mark_document_version_ready` (0077:199-223); `public.record_document_scan` (0079); `app.is_agency()`, `app.current_account_id()`, `app.sees_all_customers()`, `app.my_contact_ids()`, `app.my_client_group_ids()` (0077:133-138); `app.tidy_text(text, int)` (`0071_places_and_equipment.sql:29`); `app.keep_task_links()` (0074:44-60); `automation_log_source_check` (0054:123-129).
 - Produces (SQL); every name below is read by a later task:
   - `documents.scan_status` gone. `documents_source_check`: `source in ('upload', 'camera', 'customer')`. `documents.request_id uuid`, `documents.request_item_key text`; `documents_request_coherent`: `(request_id is null) = (request_item_key is null)` and `(source = 'customer') = (request_id is not null)` and `(source <> 'customer' or created_by = 'customer:' || request_id::text)`; FK `documents_request_fkey (account_id, request_id) → document_requests (account_id, id)`; index `documents_by_request`.
-  - `public.document_requests`: `id uuid primary key` (NO default: the app mints it, deviation 1), `account_id`, `contact_id`, `client_group_id`, `items jsonb`, `language`, `token_hash`, `channel`, `created_by`, `created_at`, `expires_at`, `revoked_at`, `revoked_by`, `completed_at` (spec §4.1 exactly). RLS on; `authenticated` SELECT under `document_requests_member_read` + `document_requests_technician_scope`; `service_role` all.
+  - `public.document_requests`: `id uuid primary key` (NO default: the app mints it, deviation 1), `account_id`, `contact_id`, `client_group_id`, `items jsonb`, `language`, `token_hash`, `channel`, `created_by`, `created_at`, `expires_at`, `revoked_at`, `revoked_by`, `completed_at` (spec §4.1 exactly), plus `sent_at` (the at-most-once send stamp, re-review R1; null until a text or email is handed to the provider). RLS on; `authenticated` SELECT under `document_requests_member_read` + `document_requests_technician_scope`; `service_role` all.
   - `app.document_request_items_ok(jsonb) returns boolean` (immutable).
   - `public.start_document_request_upload(p_account_id uuid, p_request_id uuid, p_item_key text, p_bytes bigint, p_content_type text, p_original_name text, p_title text) returns jsonb`, SECURITY INVOKER, EXECUTE for `service_role` only. Answers `{"status":"ok","version_id","storage_path","used","document_id"}` or `{"status": "not_found" | "revoked" | "completed" | "expired" | "no_item" | "rate_limited" | "over_quota" | "too_large"}` (`over_quota` also carries `used`); raises `22004` on a null required argument.
   - `app.document_request_on_clean()` and trigger `document_versions_request_on_clean`.
@@ -391,6 +392,16 @@ describe("0080: document_requests checks (spec 4.1)", () => {
         .rejects.toMatchObject({ code: "23514", constraint: "document_requests_expiry" });
       await expect(attempt(c, "update document_requests set revoked_at = now() where account_id = $1", [s.acct]))
         .rejects.toMatchObject({ code: "23514", constraint: "document_requests_revoke_coherent" });
+    }));
+});
+
+describe("0080: the at-most-once send stamp (re-review R1)", () => {
+  it("sent_at exists, is nullable and starts null (mutation: drop the column or give it a default -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const req = await request(c, s.acct, { contact_id: s.ana });
+      const { rows: [r] } = await c.query<{ sent_at: string | null }>("select sent_at from document_requests where id = $1", [req]);
+      expect(r!.sent_at).toBeNull();
     }));
 });
 
@@ -658,6 +669,9 @@ create table public.document_requests (
   revoked_at timestamptz,
   revoked_by text,
   completed_at timestamptz,
+  -- The at-most-once send stamp (2b plan re-review R1): set just before a text or email is handed to the
+  -- provider, cleared when that send did not go out; a held release skips a request that carries it.
+  sent_at timestamptz,
   constraint document_requests_one_record check (num_nonnulls(contact_id, client_group_id) = 1),
   constraint document_requests_expiry check (expires_at = created_at + interval '7 days'),
   constraint document_requests_revoke_coherent check ((revoked_at is null) = (revoked_by is null)),
@@ -961,7 +975,7 @@ describe("the document vault's copy, PR 2b (customer upload links)", () => {
     "customerDocs.business": ["the business", "el negocio"],
     "customerDocs.poweredBy": ["Powered by BIS", "Con tecnología de BIS"],
     "customerDocs.error.title": ["Something went wrong on our side.", "Algo salió mal de nuestro lado."],
-    "customerDocs.error.body": ["Your files are safe. Please try again in a moment.", "Sus archivos están a salvo. Por favor intente de nuevo en un momento."],
+    "customerDocs.error.body": ["Please try again in a moment.", "Por favor intente de nuevo en un momento."],
     "customerDocs.error.retry": ["Try again", "Intentar de nuevo"],
   };
   it("every new key is the plan's wording, in both languages (mutation: any word changed, or a tú form such as 'Sube' -> FAILS)", () => {
@@ -1022,6 +1036,7 @@ describe("the document vault's copy, PR 2b (customer upload links)", () => {
   - `type DocumentRequestTarget = { name: string; contactId: string | null; language: string | null; phone: string | null; email: string | null; phoneCountryUnconfirmed: boolean | null }`; `documentRequestTarget(db, accountId, ref: { contact_id: string | null; client_group_id: string | null }): Promise<DocumentRequestTarget | null>` (a contact: itself; a group: its name, and its primary contact's id, language, phone and email, all null without one)
   - `ensureDocumentRequestTask(db, accountId, input: { requestId: string; kind: "received" | "storage_full"; contactId: string | null; title: string; dueAt: string }, actorId: string, actorType?: ActorType): Promise<{ id: string; created: boolean }>`
   - `getDocumentRequestForVersion(db, accountId, versionId): Promise<DocumentRequestRow | null>` (the request a version's file answers; null for a staff file).
+  - `claimDocumentRequestSend(db, accountId, requestId, now: Date): Promise<boolean>` (compare-and-set `sent_at` from null; true only for the caller that set it) and `clearDocumentRequestSend(db, accountId, requestId): Promise<void>` (re-review R1; service client).
   - `listRequestsMissingReceivedTask(db, now: Date, limit: number): Promise<DocumentRequestRow[]>` (plan review I5: not revoked; open, or completed in the last 24 hours; with a non-trashed customer file whose version is ready and clean; and no `received` To-do; newest first, at most `limit`; service client, every account).
   - `markDocumentVersionReady(db, a: { …; actorId: string; actorType?: ActorType })` (default `"user"`, unchanged for every staff caller).
 
@@ -1277,8 +1292,10 @@ export type DocumentRequestRow = {
   id: string; account_id: string; contact_id: string | null; client_group_id: string | null;
   items: DocumentRequestItem[]; language: "en" | "es"; channel: DocumentRequestChannel; created_by: string;
   created_at: string; expires_at: string; revoked_at: string | null; revoked_by: string | null; completed_at: string | null;
+  /** Re-review R1: set just before a send is handed to the provider; null when nothing went out. */
+  sent_at: string | null;
 };
-const REQUEST_COLS = "id, account_id, contact_id, client_group_id, items, language, channel, created_by, created_at, expires_at, revoked_at, revoked_by, completed_at";
+const REQUEST_COLS = "id, account_id, contact_id, client_group_id, items, language, channel, created_by, created_at, expires_at, revoked_at, revoked_by, completed_at, sent_at";
 const DAY_MS = 86_400_000;
 
 export async function createDocumentRequest(db: SupabaseClient, a: {
@@ -1505,30 +1522,52 @@ And the reconcile read (plan review I5):
 ```ts
 /** The scan pass's reconcile (plan review I5): requests that should have a "received" To-do and do not. Service client, every account. */
 export async function listRequestsMissingReceivedTask(db: SupabaseClient, now: Date, limit: number): Promise<DocumentRequestRow[]> {
-  const nowIso = now.toISOString();
-  const since = new Date(now.getTime() - DAY_MS).toISOString();
-  const { data, error } = await db.from("document_requests").select(REQUEST_COLS)
-    .is("revoked_at", null)
-    .or(`and(completed_at.is.null,expires_at.gt."${nowIso}"),completed_at.gt."${since}"`)
-    .order("created_at", { ascending: false }).limit(200);
-  if (error) throw new Error(`listRequestsMissingReceivedTask failed: ${error.message}`);
-  const rows = (data ?? []) as DocumentRequestRow[];
-  if (rows.length === 0) return [];
-  const ids = rows.map((r) => r.id);
-  const [tasks, files] = await Promise.all([
-    db.from("tasks").select("document_request_id").eq("document_request_kind", "received").in("document_request_id", ids),
-    db.from("documents").select("request_id, versions:document_versions!document_versions_document_fkey!inner(id)")
-      .in("request_id", ids).is("deleted_at", null).eq("versions.status", "ready").eq("versions.scan_status", "clean"),
-  ]);
-  if (tasks.error) throw new Error(`listRequestsMissingReceivedTask (tasks) failed: ${tasks.error.message}`);
-  if (files.error) throw new Error(`listRequestsMissingReceivedTask (files) failed: ${files.error.message}`);
-  const hasTask = new Set(((tasks.data ?? []) as { document_request_id: string }[]).map((t) => t.document_request_id));
-  const hasClean = new Set(((files.data ?? []) as { request_id: string }[]).map((d) => d.request_id));
-  return rows.filter((r) => hasClean.has(r.id) && !hasTask.has(r.id)).slice(0, limit);
+  // Re-review m1: read from the clean customer files' side, inside an 8-day window (a request lives 7
+  // days; one more for a verdict that lands late), then their requests in batches of 100.
+  const since = new Date(now.getTime() - 8 * DAY_MS).toISOString();
+  const { data: files, error } = await db.from("documents")
+    .select("request_id, versions:document_versions!document_versions_document_fkey!inner(id)")
+    .eq("source", "customer").is("deleted_at", null).gte("created_at", since)
+    .eq("versions.status", "ready").eq("versions.scan_status", "clean")
+    .order("created_at", { ascending: false }).limit(500);
+  if (error) throw new Error(`listRequestsMissingReceivedTask (files) failed: ${error.message}`);
+  const ids = [...new Set(((files ?? []) as { request_id: string }[]).map((d) => d.request_id))];
+  const dayAgo = now.getTime() - DAY_MS;
+  // Open, or completed in the last 24 hours, or expired in the last 24 hours (deviation 13: a file
+  // reserved before the expiry may finish after it).
+  const recent = (r: DocumentRequestRow): boolean =>
+    r.completed_at ? Date.parse(r.completed_at) > dayAgo : Date.parse(r.expires_at) > dayAgo;
+  const out: DocumentRequestRow[] = [];
+  for (let i = 0; i < ids.length && out.length < limit; i += 100) {
+    const batch = ids.slice(i, i + 100);
+    const [reqs, tasks] = await Promise.all([
+      db.from("document_requests").select(REQUEST_COLS).in("id", batch).is("revoked_at", null),
+      db.from("tasks").select("document_request_id").eq("document_request_kind", "received").in("document_request_id", batch),
+    ]);
+    if (reqs.error) throw new Error(`listRequestsMissingReceivedTask (requests) failed: ${reqs.error.message}`);
+    if (tasks.error) throw new Error(`listRequestsMissingReceivedTask (tasks) failed: ${tasks.error.message}`);
+    const hasTask = new Set(((tasks.data ?? []) as { document_request_id: string }[]).map((t) => t.document_request_id));
+    out.push(...((reqs.data ?? []) as DocumentRequestRow[]).filter((r) => !hasTask.has(r.id) && recent(r)));
+  }
+  return out.slice(0, limit);
+}
+
+/** Re-review R1: the at-most-once send stamp. True only for the caller that moved sent_at from null. */
+export async function claimDocumentRequestSend(db: SupabaseClient, accountId: string, requestId: string, now: Date): Promise<boolean> {
+  const { data, error } = await db.from("document_requests").update({ sent_at: now.toISOString() })
+    .eq("account_id", accountId).eq("id", requestId).is("sent_at", null).select("id");
+  if (error) throw new Error(`claimDocumentRequestSend failed: ${error.message}`);
+  return (data ?? []).length === 1;
+}
+
+/** Re-review R1: the send did not go out (blocked, deferred, failed): the stamp goes, so a later send may try. */
+export async function clearDocumentRequestSend(db: SupabaseClient, accountId: string, requestId: string): Promise<void> {
+  const { error } = await db.from("document_requests").update({ sent_at: null }).eq("account_id", accountId).eq("id", requestId);
+  if (error) throw new Error(`clearDocumentRequestSend failed: ${error.message}`);
 }
 ```
 
-with a case in Step 2: a request with a clean customer file and no To-do is listed; after `ensureDocumentRequestTask(…, kind: "received")` it is not; a revoked request with a clean file is not; a request whose only customer file is pending is not; a request completed 2 days ago is not (set `completed_at` back through the service client) (mutations: drop the `.is("revoked_at", null)`, the clean filter, or the task subtraction -> FAILS).
+with a case in Step 2: a request with a clean customer file and no To-do is listed; after `ensureDocumentRequestTask(…, kind: "received")` it is not; a revoked request with a clean file is not; a request whose only customer file is pending is not; a request completed 2 days ago is not (set `completed_at` back through the service client); a request EXPIRED 2 hours ago with a clean file IS listed and one expired 2 days ago is not (set `created_at` and `expires_at` back together; re-review m1, deviation 13); with 101 missing requests the batch loop still answers the newest `limit` (mutations: drop the `.is("revoked_at", null)`, the clean filter, the task subtraction, or the expired-24h branch -> FAILS). And the stamp: `claimDocumentRequestSend` answers true, then false for a second claim; after `clearDocumentRequestSend` a claim answers true again (mutation: drop `.is("sent_at", null)` -> the second claim answers true -> FAILS).
 
 (The embedded select `versions:document_versions!document_versions_document_fkey(…)` is the name 2a's e2e reads with, `e2e/documents-scan.spec.ts:46`. The `contact:contacts!inner(…)` embed relies on `client_group_members`' foreign key to `contacts`; if PostgREST answers PGRST201 (ambiguous), name the constraint as `contacts!client_group_members_contact_fkey` after reading `0069_client_groups.sql`, and say so.)
 
@@ -2244,7 +2283,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
 **Files**
 - Create: `apps/web/src/lib/document-requests/deliver.ts` (+ `deliver.test.ts`), `apps/web/src/lib/email/templates/document-request.ts` (+ `document-request.test.ts`)
-- Modify: `apps/web/src/lib/consent/classes.ts` (two kinds), `apps/web/src/lib/consent/classes.test.ts` (`:31-32` count 14 → 15 and `SPEC_TABLE`'s row; `EMAIL_TABLE`'s row and its count 26 → 27; `:117-121` `emailReadsLedger`'s list), `apps/web/src/lib/consent/scans.test.ts` (`:268` 36 → 38; `SITES` one row, the EMAIL kind only), `packages/db/src/automation-log.ts` (the source, after `"textback"`), `apps/web/src/lib/automations/log-titles.ts` (the title), `apps/web/src/lib/automations/passes/release-held.ts` (one import, one `RELEASERS` entry)
+- Modify: `apps/web/src/lib/consent/classes.ts` (two kinds), `apps/web/src/lib/consent/classes.test.ts` (`:31-33` count 14 → 15 and `SPEC_TABLE`'s row at `:11`; `EMAIL_TABLE`'s row at `:59` and `:94-96`'s count 26 → 27; `:112-121` `emailReadsLedger`'s list), `apps/web/src/lib/consent/scans.test.ts` (`:268` 36 → 38; `SITES` one row, the EMAIL kind only), `packages/db/src/automation-log.ts` (the source, after `"textback"`), `apps/web/src/lib/automations/log-titles.ts` (the title), `apps/web/src/lib/automations/passes/release-held.ts` (one import, one `RELEASERS` entry)
 
 **Interfaces**
 - Consumes: `sendSms` (`lib/consent/gate.ts:294`), `sendEmail` (`lib/consent/email-gate.ts:219`), `writeHeld`, `BLOCK_REASONS`, `EMAIL_BLOCK_REASONS`, `REASONS`, `logSkipped`, `subjectOf`, `type Releaser` (`lib/automations/hold-or-send.ts`), `recordAutomationLog` (`packages/db/src/automation-log.ts:67`), `ensureConversation`, `createMessage`, `updateMessageStatus` (`packages/db/src/messaging.ts:94, :133, :179`), `withTrailingLink` (`lib/automations/sms-link.ts:12`), `emailBrand` (`lib/email/templates/shell.ts:68`), `proseWithButton` (`lib/email/templates/prose-button.ts:11`), `getBranding`, `brandDisplayName`, `recipientLanguage`, `normalisePhone` (`packages/db/src/phone.ts:93`), `resolveSmsSender` (`lib/sms/sender.ts:30`, the function `softSmsGate` wraps at `lib/record/loaders.ts:166`), `smsRecipientState` (`lib/consent/recipient-state.ts:21`, `{ kind: "ok" | … }`); `documentRequestTarget`, `getDocumentRequest`, `documentRequestState` (Task 3); `requestUrl` (Task 5); `itemsSentence` (Task 5); keys `documentRequest.*`, `documents.request.reason.*`, `activity.source.documentRequest` (Task 2).
@@ -2261,7 +2300,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 
 - [ ] **Step 2: Failing tests.**
   - `document-request.test.ts` (the email): for `locale: "es"` the subject is `"Casa Verde necesita unos documentos"`, the text part contains `"Por favor envíenos: Seguro, Pool permit."` and the URL, the HTML contains the button label `"Subir documentos"` and the URL as an `href`, and NO English word from the English twins appears in the Spanish HTML (`renderedText`; check `"Upload documents"` and `"needs a few"` are absent) (mutation: an English button in the Spanish email -> FAILS; DESIGN.md "one message is in one language"); `locale: "en"` the mirror.
-  - `deliver.test.ts`: the gate and the database are faked at their module boundary (`vi.mock("@/lib/consent/gate")`, `vi.mock("@/lib/consent/email-gate")`, `vi.mock("@bis/db", importOriginal)` for `documentRequestTarget`, `getBranding`, `ensureConversation`, `createMessage`, `updateMessageStatus`, `recordAutomationLog`, `getDocumentRequest`; `vi.mock("@/lib/automations/hold-or-send", importOriginal)` spying `writeHeld`, `logSkipped`); one shared call log. Cases (each names its mutation):
+  - `deliver.test.ts` (its `beforeEach`/`afterEach` stub `DOCUMENT_LINK_SECRET` as Global Constraints say): the gate and the database are faked at their module boundary (`vi.mock("@/lib/consent/gate")`, `vi.mock("@/lib/consent/email-gate")`, `vi.mock("@bis/db", importOriginal)` for `documentRequestTarget`, `getBranding`, `ensureConversation`, `createMessage`, `updateMessageStatus`, `recordAutomationLog`, `getDocumentRequest`; `vi.mock("@/lib/automations/hold-or-send", importOriginal)` spying `writeHeld`, `logSkipped`); one shared call log. Cases (each names its mutation):
     1. Text, a Spanish request: `sendSms` receives `kind: "staff.document_request_sms"`, `to` the target's phone, `language: "es"`, `accountZone` the account's zone, and a body equal to `withTrailingLink("Casa Verde: por favor envíenos Seguro, Pool permit. Súbalos aquí:", "<origin>/d/<token>")` (mutation: the account's language -> FAILS; a staff_typed kind -> FAILS).
     2. Text sent: `prepare` wrote the conversation and the message row BEFORE the provider (order in the call log), the row's actor is the staff `actorId` with actor type `"user"` (person mark), the message is then `"sent"` with the provider id, `recordAutomationLog` gets `{ source: "document_request", channel: "sms", subjectKey: "document_request:<id>", status: "sent", contactId }`, usage is recorded when `billable`, and the answer is `{ kind: "sent" }`.
     3. Text deferred (quiet hours): `writeHeld` gets the subject with `payload: { channel: "text", actorId }`, the gate's `until` and `zone`; no message row is written; the answer is `{ kind: "held", until, zone }` (mutation: write the message row before the hold -> FAILS).
@@ -2272,8 +2311,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
     8. `releaseDocumentRequest`: a held row whose request is revoked, completed or expired → `logSkipped(…, REASONS.noLongerDue)` and `"skipped"`, no send (mutation: send a revoked request's link -> FAILS); an open one → `deliverDocumentRequest` with the payload's channel and actor and `ctx.origin`; `sent` → `"sent"`, `held` → `"held"`, `blocked` → `"skipped"`, `failed` → `"failed"`; a malformed subject key → `"skipped"`.
     9. `requestChannels`: text true only when `resolveSmsSender` answers `ok` (a read error counts as no), `normalisePhone(target.phone)` is not null, and `smsRecipientState` answers `{ kind: "ok" }` (mutations: drop any one of the three -> FAILS); email true when the target has a non-empty address; a `null` target → both false.
   - `scans.test.ts` (plan review I3): `SITES` (`:760`) is `Record<EmailKind, readonly string[]>`, so ONLY `"staff.document_request_email": ["apps/web/src/lib/document-requests/deliver.ts"]` is added there (the SMS kind would not type-check in it); the positive control at `:264-270` becomes "all fifteen SMS kinds and all twenty-seven email kinds, 38 distinct" with `toHaveLength(38)`; run both red first (the email kind with no `SITES` row, and 36, FAIL by name).
-  - `classes.test.ts` (plan review I3): `:31-32` "fourteen kinds" → fifteen and `toHaveLength(15)`, `SPEC_TABLE` gains `"staff.document_request_sms": ["informational", "automated", "stop_line"]`; `EMAIL_TABLE` gains `"staff.document_request_email": ["informational", "automated", "unsubscribe"]` and the email count 26 → 27 wherever the file states it; `:99-100`'s footer rule holds unchanged (the new email kind is neither operator nor staff_typed, so it must carry the footer: it does); `:117-121`'s `emailReadsLedger` list gains `"staff.document_request_email"` in sorted place. Red first: the new rows FAIL until Step 4.
+  - `classes.test.ts` (plan review I3): `:31-33` "fourteen kinds" → fifteen and `toHaveLength(15)`, `SPEC_TABLE` (`:11`) gains `"staff.document_request_sms": ["informational", "automated", "stop_line"]`; `EMAIL_TABLE` (`:59`) gains `"staff.document_request_email": ["informational", "automated", "unsubscribe"]`, and `:94-96`'s "twenty-six send sites" → twenty-seven with `toHaveLength(27)`; `:104-109`'s footer rule holds unchanged (the new email kind is neither operator nor staff_typed, so it must carry the footer: it does); `:112-121`'s `emailReadsLedger` list gains `"staff.document_request_email"` in sorted place. Red first: the new rows FAIL until Step 4.
     10. **After a successful send nothing turns the outcome into `failed`** (plan review I4): a sent text whose `updateMessageStatus` rejects AND whose `recordAutomationLog` rejects still answers `{ kind: "sent" }`, still records usage when billable, and logs both failures by request id; a sent email whose conversation-row write and log write both reject still answers `{ kind: "sent" }` (mutations: let either rejection reach the outer catch -> `failed` -> FAILS).
+    11. **At most once on release** (re-review R1): with a stateful fake `claimDocumentRequestSend`/`clearDocumentRequestSend`/`getDocumentRequest` (one in-memory request row) and `recordAutomationLog` REJECTING, a first `releaseDocumentRequest` of a held text row answers `"sent"` and calls `sendSms` once; a second release of the SAME row then calls `sendSms` ZERO more times and answers `"sent"` (mutation: drop the `request?.sent_at` check -> a second `sendSms` -> FAILS). Also: a blocked, deferred or failed text clears the stamp (the fake row's `sent_at` is null again; mutation: no clear -> FAILS); a lost claim in `prepare` sends nothing and answers `{ kind: "sent" }`; an email whose `sendEmail` rejects clears the stamp before the error reaches the outer catch.
 
 - [ ] **Step 3: Run them to see them fail.**
 
@@ -2301,6 +2341,7 @@ export function documentRequestEmail(a: { brand: EmailBrand; business: string; i
 ```ts
 import {
   documentRequestTarget, getDocumentRequest, documentRequestState, getBranding, brandDisplayName, normalisePhone,
+  claimDocumentRequestSend, clearDocumentRequestSend,
   ensureConversation, createMessage, updateMessageStatus, recordAutomationLog,
   type DocumentRequestRow, type DocumentRequestTarget, type SupabaseClient,
 } from "@bis/db";
@@ -2397,6 +2438,10 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
     return { kind: "blocked", reason: "documents.request.reason.noPhone" };
   }
   const contactId = target.contactId;
+  // Re-review R1: at most once. The stamp is claimed inside prepare, i.e. after the gate cleared the send
+  // and BEFORE the provider is called; a lost claim (another release sent it) sends nothing.
+  let claimed = false;
+  let lost = false;
   const body = withTrailingLink(t(m, "documentRequest.sms", request.language, { business: c.business, items: c.items }), c.url);
   const row: { messageId: string | null } = { messageId: null };
   const result = await sendSms(db, {
@@ -2404,10 +2449,17 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
     now, accountZone: c.zone,
   }, {
     prepare: async ({ body: sentBody }) => {
+      claimed = await claimDocumentRequestSend(db, accountId, request.id, now);
+      if (!claimed) { lost = true; throw new Error("this request's text already went out"); }
       const convo = await ensureConversation(db, accountId, contactId, actorId);
       row.messageId = (await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "outbound", body: sentBody }, actorId)).id;
     },
   });
+  if (lost) return { kind: "sent" };
+  if (claimed && result.kind !== "sent") {
+    await clearDocumentRequestSend(db, accountId, request.id)
+      .catch((e: unknown) => console.error(`document request ${request.id}: the send stamp was not cleared after a send that did not go out: ${loggableError(e)}`));
+  }
   if (result.kind === "deferred") {
     await writeHeld({ db }, subject, result.until, result.zone);
     return { kind: "held", until: result.until.toISOString(), zone: result.zone };
@@ -2449,11 +2501,17 @@ async function deliverEmail(db: SupabaseClient, c: Ctx & { branding: Awaited<Ret
     return { kind: "blocked", reason: "documents.request.reason.noEmail" };
   }
   const mail = documentRequestEmail({ brand: emailBrand(c.branding), business: c.business, items: c.items, url: c.url, locale: request.language });
+  // Re-review R1: at most once. The stamp is claimed BEFORE the email is handed to the gate; cleared below
+  // when it did not go out (or the gate threw).
+  if (!(await claimDocumentRequestSend(db, accountId, request.id, now))) return { kind: "sent" };
+  const unclaim = () => clearDocumentRequestSend(db, accountId, request.id)
+    .catch((e: unknown) => console.error(`document request ${request.id}: the send stamp was not cleared: ${loggableError(e)}`));
   const result = await sendEmail({
     accountId, kind: "staff.document_request_email", contactId: target.contactId, to, fromName: c.business,
     replyTo: c.branding.replyToEmail ?? undefined, subject: mail.subject, body: mail.text, html: mail.html,
     language: request.language, origin: c.origin, now, accountZone: c.zone,
-  }, { db });
+  }, { db }).catch(async (e: unknown) => { await unclaim(); throw e; });
+  if (result.kind !== "sent") await unclaim();
   if (result.kind === "deferred") {
     await writeHeld({ db }, subject, result.until, result.zone);
     return { kind: "held", until: result.until.toISOString(), zone: result.zone };
@@ -2510,6 +2568,14 @@ export const releaseDocumentRequest: Releaser = async (ctx, row) => {
     return "skipped";
   }
   const request = await getDocumentRequest(ctx.db, row.account_id, match[1]!);
+  // Re-review R1: release-held.ts never writes the held row itself; only this releaser's own "sent" write
+  // dequeues it. A request whose stamp is set already went out (the release that sent it could not write
+  // its row): write the row now and NEVER send again. A failed write here throws to release-held's catch
+  // (errored), and the next tick tries the write again; it still sends nothing.
+  if (request?.sent_at) {
+    await recordAutomationLog(ctx.db, { ...subjectOf(row), status: "sent" });
+    return "sent";
+  }
   if (!request || documentRequestState(request, ctx.now) !== "open") {
     await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
     return "skipped";
@@ -2528,7 +2594,7 @@ export const releaseDocumentRequest: Releaser = async (ctx, row) => {
 
 ## Task 6b: The lost-To-do reconcile in the scan pass (bis-automations)
 
-**Review:** sonnet. **Runs beside:** Tasks 6 and 9 (it touches only automations files).
+**Review:** sonnet. **Runs:** after Task 6 (both may edit the cron route test; re-review R2), beside Task 7.
 
 **Files**
 - Modify: `apps/web/src/lib/automations/passes/documents-scan.ts` (+ `documents-scan.test.ts`), `apps/web/src/lib/automations/sentinel.test.ts` (the pass's counters, `:263`), `apps/web/src/app/api/cron/reminders/route.test.ts` (`EMPTY_DOCUMENTS_SCAN`, `:322`)
@@ -2589,7 +2655,7 @@ export const releaseDocumentRequest: Releaser = async (ctx, row) => {
 - [ ] **Step 1: Read** `documents-actions.ts:1-80` (the tree's conventions: `fail`, `recordOf`, `recordVisible`, keys not text), `contacts/[contactId]/documents/route.ts` (the read shape above), `contacts/[contactId]/page.tsx:80-100` (`ledgerDb()` after the request-client proof), `in-account-service-reads.test.ts:30-160`, `lib/email/origin.ts:30-60`.
 
 - [ ] **Step 2: Failing tests.**
-  - `document-requests-actions.test.ts` (mocks: `@/lib/auth`, `@/lib/db` → a REQUEST client fake, `@bis/db` with `importOriginal` spying the request functions and `serviceDb`, `@/lib/document-requests/deliver`, `next/headers` → `{ headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }) }` or whatever `originFrom` reads):
+  - `document-requests-actions.test.ts` (`DOCUMENT_LINK_SECRET` stubbed in `beforeEach`/`afterEach`, Global Constraints; mocks: `@/lib/auth`, `@/lib/db` → a REQUEST client fake, `@bis/db` with `importOriginal` spying the request functions and `serviceDb`, `@/lib/document-requests/deliver`, `next/headers` → `{ headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" }) }` or whatever `originFrom` reads):
     1. Create: an invalid record, items that `cleanRequestItems` refuses, or a channel outside text/email/link → `fail("documents.error.refused")` with NO service call (mutation: skip `cleanRequestItems` -> FAILS).
     2. Create: the record is proven on the REQUEST client before anything on the service client (call-log order; mutation: service first -> FAILS); a record the request client cannot see → `fail("documents.error.notFound")`.
     3. Create: `createDocumentRequest` gets a fresh uuid `id`, `tokenHash === tokenHash(requestToken(id))`, `language` = `recipientLanguage(target.language, account.language)` (a Spanish contact on an English account → `"es"`; mutation: the account's -> FAILS), `channel`, `createdBy` = the user, and the answer's `url` = `requestUrl(origin, id)`; the database never receives the token itself (assert no argument of any call equals the token; mutation: store the token -> FAILS).
@@ -3034,7 +3100,7 @@ DOCUMENT_LINK_SECRET=
 - [ ] **Step 2: Write the spec.** `import { test, expect } from "./fixtures/test"` (never `@playwright/test`: `clerk-cookie-guard.test.ts`). `test.describe.configure({ mode: "serial", timeout: 150_000 })`. `STAMP = \`DocReq${Date.now()}\``. `beforeAll`: `readClientFixture()` (throw if missing) and one contact on the fixture account through `createContact(serviceDb(), accountId, { firstName: "Ana", lastName: STAMP }, ACTOR)` (refuse `existing`). The link is computed in the test with `requestToken(id)` imported from `apps/web/src/lib/document-requests/token.ts`; the runner and the app server share the fixture `DOCUMENT_LINK_SECRET` set in `playwright.config.ts` (Task 10), and test 1 ALSO compares it with the clipboard's text, so a mismatch fails loudly rather than silently. The tests:
   1. **Staff asks, by link.** On the contact's page (signed-in state): the Documents card's "Ask the customer" → the dialog → tick Insurance and Other, type "Pool permit" → choose Copy link → "Create link" (the one primary). Grant `clipboard-read`; the toast says "Link copied. It works for 7 days."; the clipboard holds `<baseURL>/d/<requestToken(id)>`, where `id` is read back from `document_requests` for this contact (service client; exactly one row, `channel = 'link'`, `items` as ticked, no `token` column exists to read). The card lists "Insurance · Waiting", "Pool permit · Waiting", "expires in 7 days". The contact's timeline shows "You asked for 2 documents" (or the fixture user's mark as the timeline words it).
   2. **The customer uploads, with no sign-in** (a NEW context with `storageState: { cookies: [], origins: [] }`): goto the link → the page shows the account's name in the heading and "Powered by BIS"; `html[lang]` is the request's language; no Clerk cookie is set (the cookie guard). Upload a small clean PDF on Insurance → "Uploading …" then "Received" (fake clamd: clean). Upload `bad.pdf` on Other, built exactly as 2a's fixture is (`Buffer.concat([pdf("bad"), Buffer.from("\n% " + EICAR + "\n")])`, `e2e/documents-scan.spec.ts:108`, with `EICAR` joined at run time from the two halves declared on separate lines as at `:27-29`; plan review I11) → "We couldn't accept this file" and "It had a virus." Upload a clean PDF on Other → "Received" → after the refresh the page reads "Thank you. <business> has everything it asked for." Then, service client: `document_requests.completed_at` is set; two `documents` rows with `source = 'customer'`, `created_by = 'customer:<id>'`, categories `insurance` and `other`, each with a clean version, and one removed (infected) version on a third; ONE `tasks` row with `document_request_id = <id>` and `document_request_kind = 'received'`. The staff page (first context, reloaded): the timeline shows "Customer sent …" rows; the work queue (`/dashboard/accounts/<id>/tasks`) lists "<name> sent documents · Review".
-  3. **Checking holds, then turns, with no reload** (the poll's only proof; 2a Task 9's carry; plan review I9: no reload anywhere before or during the wait). Seed everything BEFORE the customer's page is first opened, with the service client: a request for the contact (a fresh uuid, `token_hash = sha256(requestToken(id))`, TWO items `id` and `permit` so one file cannot complete it, channel `link`, `created_by` the fixture actor); `rpc("start_document_request_upload", …)` on `id`; `storage.from("documents").upload(storage_path, <a clean PDF>, { contentType: "application/pdf" })`; `rpc("mark_document_version_ready", { …, p_sha256: <its sha256> })`. No finish runs, so no scan runs: the version is ready and pending, and a few seconds old. The customer's FIRST `goto` of the link shows that item "Checking". Count the page's own re-reads with `page.on("request")` (requests to the page's URL after the first load). Wait 16 s: still "Checking", and at least 3 re-reads were seen (the schedule is 5 s while the file is under a minute old). Then `rpc("record_document_scan", { …, p_verdict: "clean" })`, and WITHOUT any reload expect "Received" within 20 s (mutations it catches: an effect keyed on `ms` alone fires once, so fewer than 3 re-reads and never "Received"; a schedule from the page-open time is not caught here, the unit test is its proof).
+  3. **Checking holds, then turns, with no reload** (the poll's only proof; 2a Task 9's carry; plan review I9: no reload anywhere before or during the wait). Seed everything BEFORE the customer's page is first opened, with the service client: a request for the contact (a fresh uuid, `token_hash = sha256(requestToken(id))`, TWO items `id` and `permit` so one file cannot complete it, channel `link`, `created_by` the fixture actor); `rpc("start_document_request_upload", …)` on `id`; `storage.from("documents").upload(storage_path, <a clean PDF>, { contentType: "application/pdf" })`; `rpc("mark_document_version_ready", { …, p_sha256: <its sha256> })`. No finish runs, so no scan runs: the version is ready and pending, and a few seconds old. The customer's FIRST `goto` of the link; ASSERT that item reads "Checking" first, and only then start the clock (re-review m3). Count the page's own re-reads with `page.on("request")` (requests to the page's URL after that assertion). Wait 18 s from the assertion: still "Checking", and at least 3 re-reads were seen (the schedule is 5 s while the file is under a minute old). Then `rpc("record_document_scan", { …, p_verdict: "clean" })`, and WITHOUT any reload expect "Received" within 20 s (mutations it catches: an effect keyed on `ms` alone fires once, so fewer than 3 re-reads and never "Received"; a schedule from the page-open time is not caught here, the unit test is its proof).
   4. **A revoked link is a dead end.** Staff: on the card, Revoke the request from test 3 (if not completed; else make one more) → toast "Request revoked." with Undo (do NOT press it); the row leaves the list. Customer: the link reads "This link is no longer active." and "Ask <business> for a new link."; a direct `POST /api/d/<token>/start` answers 410 `{ "error": "revoked" }`.
   `afterAll`: delete every storage object of the contact's documents, then `tasks` with `document_request_id` in the test's requests, the documents, the requests, the contact; check every `error`; re-read that no row and no object is left.
 - [ ] **Step 3:** `pnpm --filter web exec playwright test --list e2e/document-requests.spec.ts` lists four tests (listing does not run them). `pnpm --filter web exec eslint e2e/document-requests.spec.ts`. Commit, message "e2e: a customer upload link end to end without Clerk, the virus path, Checking turning Received without a reload, a revoked link (S-07 2b)".
@@ -3115,3 +3181,4 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 - **Types across tasks:** `DocumentRequestItem`, `DocumentRequestChannel`, `DocumentRequestState`, `cleanRequestItems`, `documentRequestState`, `isCustomerAuthor` (Task 3, document-rules) → Tasks 3b, 5, 7, 8; `DocumentRequestRow`, `OpenDocumentRequest`, `RequestFile`, `DocumentRequestTarget`, `RequestStartOutcome` (Task 3) → Tasks 4, 5, 6, 7; `finishStoredUpload`, `cleanUpUpload`, `openRequestTask`, `openReceivedTaskFor`, `prepareFile`/`xhrPut` in `upload-core.ts` (Task 4) → Tasks 5, 9; `requestToken`, `tokenHash`, `requestUrl`, `CustomerFileState`, `itemsSentence`, `nextCustomerPollMs`, `pollKey`, `customerPage` (Task 5) → Tasks 6, 7, 9, 12; `DeliverOutcome`, `deliverDocumentRequest`, `requestChannels` (Task 6) → Task 7; `DocumentRequestsResponse`, `OpenRequestView`, `documentRequestsLoadFrom`, `expiresInDays` (Task 7) → Task 8.
 - **Not executed:** nothing in this plan was run; the SQL and TypeScript are written against the files read at `3eb5b246` and are marked where a name must be confirmed by a read (the `automation_log` NOT NULL columns, `CreateContactInput`'s fields, PostgREST's embed names, `NewMessage`'s fields, `listPhoneNumbersForAccount`'s row, `recordUsageSafely`'s import). Each such read is a named step, not an assumption left open.
 - **Revision of 2026-10-15 (plan review of `9748f88d`):** I1 (the completion test now makes its decisive clean verdict while the other item holds only ready-pending and ready-infected files, plus a separate trashed-file case; probe (e) restated), I2 (`set local lock_timeout = '5s'` first), I3 (five more pinned tests named with their owners; `SITES` takes the email kind only), I4 (`logQuietly`; the post-send status write caught on its own; tests on the throw paths), I5 (Task 6b, the reconcile), I6 (deviation 13), I7 (`business` reaches the customer view; literal en+es tests), I8 (`loadPageSafe` and a bilingual `error.tsx`; three keys in Task 2), I9 (the schedule from each Checking file's server-computed age; the e2e seeds a pending file before the first visit and never reloads), I10 (the secret required, no fallback; Playwright's fixture; Task 0 step 4 and Task 14 step 1b; Assumption A9), I11 (the PDF+EICAR fixture), M1, M2, M6, M7, M11, M13 applied; M3, M4, M5, M8, M9, M10, M12 carried to Task 13 step 3(r). Re-read: not executed, as before.
+- **Second revision, 2026-10-15 (re-review of `b5803de1`):** R1 (the at-most-once `sent_at` stamp: 0080's column, Task 3's claim and clear, `deliver.ts` claims in the text's `prepare` and before `sendEmail` and clears on a send that did not go out, the releaser skips a stamped request; Task 6 case 11; deviation 11), R2 (Task 6b moved to Wave F after Task 6), m1 (the reconcile reads from the clean files' side in an 8-day window, batches of 100, expired-in-24h included), m2 (the unit-test secret stub, named in Global Constraints and applied in Tasks 6 and 7), m3 (the e2e clock starts after the first Checking), m4 (A9: no Text on Preview means the unit tests are the proof), m5 (no "Your files are safe"), m6 (the `classes.test.ts` citations re-read: `:11`, `:31-33`, `:59`, `:94-96`, `:104-109`, `:112-121`).
