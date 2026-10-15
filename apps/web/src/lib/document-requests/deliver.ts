@@ -55,9 +55,22 @@ const EMAIL_REASON: Record<string, MessageKey> = {
   suppressed: "documents.request.reason.bounced", no_address: "documents.request.reason.noEmail",
 };
 
-export async function deliverDocumentRequest(db: SupabaseClient, a: {
-  request: DocumentRequestRow; channel: "text" | "email"; actorId: string; origin: string; now: Date;
-}): Promise<DeliverOutcome> {
+type DeliverArgs = { request: DocumentRequestRow; channel: "text" | "email"; actorId: string; origin: string; now: Date };
+
+/**
+ * Where the at-most-once stamp stands while a delivery runs: `none` (never claimed, a lost claim, or
+ * cleared), `held` (claimed and not cleared), `unknown` (the claim itself threw: the update may have
+ * landed). Only a THROW while it is `none` is a failure before anything went out with no stamp held
+ * (orchestrator ruling I1). An unclear provider failure is an ANSWER, never a throw, so it never is.
+ */
+type Stamp = { state: "none" | "held" | "unknown" };
+
+type Attempt =
+  | { ok: true; outcome: DeliverOutcome }
+  | { ok: false; subject: LogSubject; retryable: boolean };
+
+/** One delivery, with every throw caught and classified; writes nothing for a throw (the callers decide). */
+async function attempt(db: SupabaseClient, a: DeliverArgs): Promise<Attempt> {
   const { request, channel, actorId, now } = a;
   const accountId = request.account_id;
   const lang = request.language;
@@ -65,6 +78,7 @@ export async function deliverDocumentRequest(db: SupabaseClient, a: {
     accountId, source: "document_request", channel: channel === "text" ? "sms" : "email",
     subjectKey: `document_request:${request.id}`, contactId: null, payload: { channel, actorId },
   };
+  const stamp: Stamp = { state: "none" };
   try {
     const target = await documentRequestTarget(db, accountId, request);
     subject.contactId = target?.contactId ?? null;
@@ -73,19 +87,26 @@ export async function deliverDocumentRequest(db: SupabaseClient, a: {
     const items = itemsSentence(request.items, lang);
     const url = requestUrl(a.origin, request.id);
     const zone = await readAccountTimezone(db, accountId);
-    const c: Ctx = { request, target, actorId, now, zone, subject, business, items, url };
-    if (channel === "text") return await deliverText(db, c);
-    return await deliverEmail(db, { ...c, branding, origin: a.origin });
+    const c: Ctx = { request, target, actorId, now, zone, subject, business, items, url, stamp };
+    const outcome = channel === "text" ? await deliverText(db, c) : await deliverEmail(db, { ...c, branding, origin: a.origin });
+    return { ok: true, outcome };
   } catch (e) {
-    console.error(`document request ${request.id}: delivery by ${channel} failed: ${loggableError(e)}`);
-    await logQuietly(db, request.id, { ...subject, status: "failed", reason: REASONS.failed });
-    return { kind: "failed" };
+    console.error(`document request ${request.id}: delivery by ${channel} failed (send stamp ${stamp.state}): ${loggableError(e)}`);
+    return { ok: false, subject, retryable: stamp.state === "none" };
   }
+}
+
+/** The direct (staff) path: every failure is answered `failed` and written so, as it always was. */
+export async function deliverDocumentRequest(db: SupabaseClient, a: DeliverArgs): Promise<DeliverOutcome> {
+  const r = await attempt(db, a);
+  if (r.ok) return r.outcome;
+  await logQuietly(db, a.request.id, { ...r.subject, status: "failed", reason: REASONS.failed });
+  return { kind: "failed" };
 }
 
 type Ctx = {
   request: DocumentRequestRow; target: DocumentRequestTarget | null; actorId: string; now: Date; zone: string | null;
-  subject: LogSubject; business: string; items: string; url: string;
+  subject: LogSubject; business: string; items: string; url: string; stamp: Stamp;
 };
 
 async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> {
@@ -107,7 +128,9 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
     now, accountZone: c.zone,
   }, {
     prepare: async ({ body: sentBody }) => {
+      c.stamp.state = "unknown";
       claimed = await claimDocumentRequestSend(db, accountId, request.id, now);
+      c.stamp.state = claimed ? "held" : "none";
       if (!claimed) { lost = true; throw new Error("this request's text already went out"); }
       const convo = await ensureConversation(db, accountId, contactId, actorId);
       row.messageId = (await createMessage(db, accountId, { conversationId: convo.id, channel: "sms", direction: "outbound", body: sentBody }, actorId)).id;
@@ -116,6 +139,7 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
   if (lost) return { kind: "sent" };
   if (claimed && result.kind !== "sent") {
     await clearDocumentRequestSend(db, accountId, request.id)
+      .then(() => { c.stamp.state = "none"; })
       .catch((e: unknown) => console.error(`document request ${request.id}: the send stamp was not cleared after a send that did not go out: ${loggableError(e)}`));
   }
   if (result.kind === "deferred") {
@@ -133,7 +157,10 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
     return { kind: "blocked", reason: SMS_REASON[result.reason] ?? "documents.request.reason.failed" };
   }
   if (result.kind === "failed") {
-    if (row.messageId) await updateMessageStatus(db, accountId, row.messageId, "failed", undefined, actorId).catch(() => undefined);
+    if (row.messageId) {
+      await updateMessageStatus(db, accountId, row.messageId, "failed", { error: result.error }, actorId)
+        .catch((e: unknown) => console.error(`document request ${request.id}: the text did not go out, and its failed status was not written: ${loggableError(e)}`));
+    }
     await logQuietly(db, request.id, { ...subject, status: "failed", reason: REASONS.failed });
     return { kind: "failed" };
   }
@@ -164,28 +191,39 @@ async function deliverEmail(db: SupabaseClient, c: Ctx & { branding: Awaited<Ret
   const { fromEmail } = await getSendingIdentity(db, accountId);
   // Re-review R1: at most once. The stamp is claimed BEFORE the email is handed to the gate; cleared below
   // when it did not go out (or the gate threw).
-  if (!(await claimDocumentRequestSend(db, accountId, request.id, now))) return { kind: "sent" };
+  c.stamp.state = "unknown";
+  const claimed = await claimDocumentRequestSend(db, accountId, request.id, now);
+  c.stamp.state = claimed ? "held" : "none";
+  if (!claimed) return { kind: "sent" };
   const result = await sendEmail({
     accountId, kind: "staff.document_request_email", contactId, to, fromName: c.business,
     fromAddress: fromEmail ?? undefined, replyTo: normalizeReplyTo(c.branding.replyToEmail),
     subject: mail.subject, body: mail.text, html: mail.html,
     language: request.language, origin: c.origin, now, accountZone: c.zone,
   }, { db }).catch(async (e: unknown) => {
-    // The thrown path never holds (the outer catch writes "failed"), so a failed clear here is only logged.
+    // The thrown path never holds. A clear that succeeds leaves no stamp, so a RELEASE may leave the row for the
+    // next tick (I1); a clear that fails leaves the stamp held, so every path writes the row "failed".
     await clearDocumentRequestSend(db, accountId, request.id)
+      .then(() => { c.stamp.state = "none"; })
       .catch((x: unknown) => console.error(`document request ${request.id}: the send stamp was not cleared: ${loggableError(x)}`));
     throw e;
   });
   if (result.kind !== "sent") {
     // Final fix (after re-review R1): the clear is AWAITED and NOT swallowed before any hold. A held row whose
     // request still carries sent_at would later be written "sent" by the releaser without a send. If the clear
-    // fails, nothing is held: the row is "failed" (staff can still Copy link).
+    // fails, nothing is held: an answer that would have held is "failed" instead (staff can still Copy link).
+    // A refusal or a failure holds nothing anyway, so it still reports what really happened (M2).
+    const wouldHold = result.kind === "deferred"
+      || (result.kind === "blocked" && (result.reason === "ledger_unavailable" || result.reason === "unsubscribe_unavailable"));
     try {
       await clearDocumentRequestSend(db, accountId, request.id);
+      c.stamp.state = "none";
     } catch (e) {
-      console.error(`document request ${request.id}: the email did not go out and its send stamp could not be cleared, so it is not held: ${loggableError(e)}`);
-      await logQuietly(db, request.id, { ...subject, status: "failed", reason: REASONS.failed });
-      return { kind: "failed" };
+      console.error(`document request ${request.id}: the email did not go out and its send stamp could not be cleared${wouldHold ? ", so it is not held" : ""}: ${loggableError(e)}`);
+      if (wouldHold) {
+        await logQuietly(db, request.id, { ...subject, status: "failed", reason: REASONS.failed });
+        return { kind: "failed" };
+      }
     }
   }
   if (result.kind === "deferred") {
@@ -257,6 +295,18 @@ export const releaseDocumentRequest: Releaser = async (ctx, row) => {
     await logSkipped(ctx, subjectOf(row), REASONS.noLongerDue);
     return "skipped";
   }
-  const out = await deliverDocumentRequest(ctx.db, { request, channel, actorId, origin: ctx.origin, now: ctx.now });
+  const r = await attempt(ctx.db, { request, channel, actorId, origin: ctx.origin, now: ctx.now });
+  if (!r.ok) {
+    // Orchestrator ruling I1 (textback.ts's 2026-09-27 rule): nothing went out and no stamp is held (a read, the
+    // link key, a gate throw, a re-hold that could not be written), so the row is NOT written. THROWING is
+    // release-held.ts's own contract for that: its per-row catch counts the row `errored` and writes nothing, so
+    // the row keeps its past held_until and is examined next tick, as every other releaser's outage does
+    // (holdOrSend rethrows). The 7-day expiry bounds it: the state check above then writes "No longer due".
+    // The message names the request id only; the cause was logged by attempt() through loggableError.
+    if (r.retryable) throw new Error(`document request ${request.id}: nothing went out; left held for the next tick`);
+    await logQuietly(ctx.db, request.id, { ...r.subject, status: "failed", reason: REASONS.failed });
+    return "failed";
+  }
+  const out = r.outcome;
   return out.kind === "sent" ? "sent" : out.kind === "held" ? "held" : out.kind === "blocked" ? "skipped" : "failed";
 };

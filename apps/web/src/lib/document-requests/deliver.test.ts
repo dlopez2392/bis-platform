@@ -282,10 +282,34 @@ describe("deliverDocumentRequest by text", () => {
     h.smsAnswer.value = { kind: "failed", stage: "provider", error: "500", carrierBlocked: false };
     const out = await deliver();
     expect(out).toEqual({ kind: "failed" });
-    expect(h.updateMessageStatus).toHaveBeenCalledWith(db, ACCT, "msg-1", "failed", undefined, ACTOR);
+    // M3: the provider's error on the row, as the composer's failed write carries it.
+    expect(h.updateMessageStatus).toHaveBeenCalledWith(db, ACCT, "msg-1", "failed", { error: "500" }, ACTOR);
     expect(h.store.sentAt).toBeNull();
     expect(h.calls).toContain("clear");
     expect(logged()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
+  });
+
+  it("M3. a failed-status write that rejects is logged by request id and still answers failed (mutation: swallow it silently -> FAILS)", async () => {
+    h.smsAnswer.value = { kind: "failed", stage: "provider", error: "500", carrierBlocked: false };
+    h.updateMessageStatus.mockRejectedValue(new Error("status down"));
+    expect(await deliver()).toEqual({ kind: "failed" });
+    const lines = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => l.includes(REQ_ID) && l.includes("failed status was not written"))).toHaveLength(1);
+  });
+
+  it("I1. the direct (staff) path is unchanged: a branding read error, a gate throw or a re-hold that cannot be written answers failed and writes the failed row (mutation: rethrow on the direct path -> FAILS)", async () => {
+    h.getBranding.mockRejectedValueOnce(new Error("branding down"));
+    expect(await deliver()).toEqual({ kind: "failed" });
+    h.sendSms.mockRejectedValueOnce(new Error("gate down"));
+    expect(await deliver()).toEqual({ kind: "failed" });
+    h.smsAnswer.value = { kind: "deferred", until: new Date("2026-10-16T13:00:00.000Z"), zone: ZONE };
+    h.writeHeld.mockRejectedValueOnce(new Error("hold down"));
+    expect(await deliver()).toEqual({ kind: "failed" });
+    expect(logged()).toEqual([
+      expect.objectContaining({ status: "failed", reason: REASONS.failed }),
+      expect.objectContaining({ status: "failed", reason: REASONS.failed }),
+      expect.objectContaining({ status: "failed", reason: REASONS.failed }),
+    ]);
   });
 
   it("10. after a successful send nothing turns it into failed: the status write AND the log write both reject, the answer is still sent, usage is still recorded, and both failures are logged by request id (plan review I4; mutation: let either rejection reach the outer catch -> FAILS)", async () => {
@@ -424,6 +448,20 @@ describe("deliverDocumentRequest by email", () => {
     expect(logged()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
   });
 
+  it.each([
+    ["stopped", EMAIL_BLOCK_REASONS.stopped, "documents.request.reason.emailStopped"],
+    ["suppressed", EMAIL_BLOCK_REASONS.suppressed, "documents.request.reason.bounced"],
+    ["no_address", EMAIL_BLOCK_REASONS.no_address, "documents.request.reason.noEmail"],
+  ] as const)("M2. blocked %s while the stamp cannot be cleared still reports the real refusal, never failed (nothing would be held anyway; mutation: take the fail-instead-of-hold branch for every non-sent answer -> FAILS)", async (reason, logReason, key) => {
+    h.emailAnswer.value = { kind: "blocked", reason };
+    h.clearDocumentRequestSend.mockRejectedValue(new Error("clear down"));
+    expect(await deliverEmail()).toEqual({ kind: "blocked", reason: key });
+    expect(logged()).toEqual([expect.objectContaining({ status: "skipped", reason: logReason })]);
+    expect(h.writeHeld).not.toHaveBeenCalled();
+    const lines = errSpy.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => l.includes(REQ_ID) && l.includes("send stamp could not be cleared"))).toHaveLength(1);
+  });
+
   it("11. a lost claim (another release already sent it) sends nothing and answers sent", async () => {
     h.store.sentAt = "2026-10-15T14:59:00.000Z";
     expect(await deliverEmail()).toEqual({ kind: "sent" });
@@ -520,7 +558,7 @@ describe("releaseDocumentRequest", () => {
     expect(h.sendSms).not.toHaveBeenCalled();
   });
 
-  it("11. at most once: a release whose What-went-out write is lost answers sent; the NEXT release of the same row sends NOTHING and writes the row (mutation: drop the sent_at check -> a second text -> FAILS)", async () => {
+  it("11. at most once: a release whose What-went-out write is lost answers sent; the NEXT release of the same row sends NOTHING and writes the row (mutation: drop the sent_at check -> the second release's claim is lost, so it sends nothing but never writes the row either, and the held row never leaves the queue -> FAILS)", async () => {
     h.recordAutomationLog.mockRejectedValue(new Error("log down"));
     expect(await releaseDocumentRequest(ctx, heldRow())).toBe("sent");
     expect(h.sendSms).toHaveBeenCalledTimes(1);
@@ -529,6 +567,84 @@ describe("releaseDocumentRequest", () => {
     expect(await releaseDocumentRequest(ctx, heldRow())).toBe("sent");
     expect(h.sendSms).toHaveBeenCalledTimes(1);
     expect(logged()).toEqual([expect.objectContaining({ status: "sent", subjectKey: `document_request:${REQ_ID}` })]);
+  });
+
+  /**
+   * Orchestrator ruling I1 (textback.ts's 2026-09-27 rule): on a RELEASE, a failure before anything went out
+   * and while no stamp is held leaves the held row for the next tick. The releaser THROWS, so release-held
+   * counts it errored and writes nothing (release-held.ts's per-row catch); the row keeps its past
+   * held_until and is examined again next tick, until the 7-day expiry makes it "No longer due".
+   */
+  const releaseRejectsUnwritten = async (row = heldRow()) => {
+    const err = await releaseDocumentRequest(ctx, row).then(() => null, (e: unknown) => e as Error);
+    expect(err, "the releaser must throw so release-held leaves the row").toBeInstanceOf(Error);
+    expect(err!.message).toContain(REQ_ID);
+    // Under the test's secret, whatever the case did to the env (the link-key case empties it).
+    const prev = process.env.DOCUMENT_LINK_SECRET ?? "";
+    vi.stubEnv("DOCUMENT_LINK_SECRET", SECRET);
+    const token = requestToken(REQ_ID);
+    vi.stubEnv("DOCUMENT_LINK_SECRET", prev);
+    expect(err!.message).not.toContain(token);
+    expect(logged(), "no row written: the held row stays in the queue").toEqual([]);
+    expect(h.logSkipped).not.toHaveBeenCalled();
+    expect(h.store.sentAt).toBeNull();
+  };
+
+  it("I1. a release whose branding read rejects ONCE leaves the row unwritten, and the next release sends (mutation: write it failed as the direct path does -> FAILS)", async () => {
+    h.getBranding.mockRejectedValueOnce(new Error("branding down"));
+    await releaseRejectsUnwritten();
+    expect(h.sendSms).not.toHaveBeenCalled();
+    expect(await releaseDocumentRequest(ctx, heldRow())).toBe("sent");
+    expect(h.calls.filter((c) => c === "provider:sms")).toHaveLength(1);
+    expect(logged()).toEqual([expect.objectContaining({ status: "sent" })]);
+  });
+
+  it.each([
+    ["the target read", () => h.documentRequestTarget.mockRejectedValueOnce(new Error("target down")), heldRow()],
+    ["the zone read", () => h.readAccountTimezone.mockRejectedValueOnce(new Error("zone down")), heldRow()],
+    ["the link key", () => vi.stubEnv("DOCUMENT_LINK_SECRET", ""), heldRow()],
+    ["the sender read inside the gate (a gate throw)", () => h.sendSms.mockRejectedValueOnce(new Error("resolveSmsSender failed")), heldRow()],
+    ["the sending-identity read (email)", () => h.getSendingIdentity.mockRejectedValueOnce(new Error("identity down")), heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } })],
+  ])("I1. on release, a failure in %s leaves the row unwritten (mutation: write it failed -> FAILS)", async (_label, arrange, row) => {
+    arrange();
+    await releaseRejectsUnwritten(row);
+  });
+
+  it.each([
+    ["a text", heldRow()],
+    ["an email", heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } })],
+  ])("I1. on release, %s whose re-hold writeHeld rejects leaves the row for the next tick (mutation: write it failed -> FAILS)", async (_label, row) => {
+    h.smsAnswer.value = { kind: "deferred", until: new Date("2026-10-16T13:00:00.000Z"), zone: ZONE };
+    h.emailAnswer.value = { kind: "deferred", until: new Date("2026-10-16T13:00:00.000Z"), zone: ZONE };
+    h.writeHeld.mockRejectedValueOnce(new Error("hold down"));
+    await releaseRejectsUnwritten(row);
+  });
+
+  it("I1. on release, an email gate throw whose stamp clear SUCCEEDED leaves the row (nothing went out, no stamp)", async () => {
+    h.sendEmail.mockRejectedValueOnce(new Error("gate threw"));
+    await releaseRejectsUnwritten(heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } }));
+  });
+
+  it("I1. on release, an email gate throw whose stamp clear FAILED is failed: a stamp is still held, so a retry would be written sent unsent (mutation: retry it -> FAILS)", async () => {
+    h.sendEmail.mockRejectedValueOnce(new Error("gate threw"));
+    h.clearDocumentRequestSend.mockRejectedValue(new Error("clear down"));
+    expect(await releaseDocumentRequest(ctx, heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } }))).toBe("failed");
+    expect(logged()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
+  });
+
+  it("I1. on release, an email claim that THROWS is failed: whether the stamp was written is unknown", async () => {
+    h.claimDocumentRequestSend.mockRejectedValueOnce(new Error("claim down"));
+    expect(await releaseDocumentRequest(ctx, heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } }))).toBe("failed");
+    expect(logged()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
+  });
+
+  it("I1. on release, a post-claim provider failure is still failed and leaves the queue: an unclear provider failure is never retried (mutation: leave it for the next tick -> FAILS)", async () => {
+    h.smsAnswer.value = { kind: "failed", stage: "provider", error: "timeout", carrierBlocked: false };
+    expect(await releaseDocumentRequest(ctx, heldRow())).toBe("failed");
+    expect(logged()).toEqual([expect.objectContaining({ status: "failed", reason: REASONS.failed })]);
+    h.emailAnswer.value = { kind: "failed", stage: "provider", error: "timeout" };
+    expect(await releaseDocumentRequest(ctx, heldRow({ channel: "email", payload: { channel: "email", actorId: ACTOR } }))).toBe("failed");
+    expect(logged()).toHaveLength(2);
   });
 
   it("11. while the write keeps failing, the next release throws to release-held's catch (errored) and STILL sends nothing", async () => {
