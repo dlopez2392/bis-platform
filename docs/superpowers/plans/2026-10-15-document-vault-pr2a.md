@@ -8,7 +8,7 @@
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8 (`rpc`, `storage.createSignedUrl`, `storage.remove`); Next.js 16.3.6 App Router (server actions, route handlers, client components); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); Node 24 in CI, `node:test` for the shim; Docker (`clamav/clamav:1.4`, Alpine, `apk add nodejs`); Fly.io (`flyctl`, one always-on `shared-cpu-1x` 2 GB machine in `iad`); the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it).
 
-**Revision:** 2026-10-15, after the plan review of `4771f63a` (C1, C2, I1, I2, minors 2–15; orchestrator rulings on deviations 1 and 12). The spec carries matching "Amended 2026-10-15 (2a plan review)" notes.
+**Revision:** 2026-10-15, after the plan review of `4771f63a` (C1, C2, I1, I2, minors 2–15; orchestrator rulings on deviations 1 and 12). The spec carries matching "Amended 2026-10-15 (2a plan review)" notes. **Owner ruling 2026-10-15, password-protected files: REMOVE, AND SAY WHY** (applied in a third revision): a file clamd reports as `Heuristics.Encrypted.*` is removed exactly like any unscannable file, but its note names the reason ("Tiene contraseña: quítela y vuelva a subirlo"); every other unscannable cause keeps the generic "No se pudo revisar este archivo". The reason lives in DATA (the version's `scan_signature`, read through one shared helper), so 2b's customer page can say it too.
 
 **Spec:** `docs/superpowers/specs/2026-10-15-document-vault-part2-design.md` (owner-approved 2026-10-15): §1 row 2a, §2 P1–P4, §3 entirely, and the 2a parts of §6, §7, §8, §9. Part 1's plans: `docs/superpowers/plans/2026-10-13-document-vault-pr1a.md`, `docs/superpowers/plans/2026-10-14-document-vault-pr1b.md` (the template). Base: `main` at `de3f3551` (#259, PR 1b merged; 0077 and 0078 applied to bis-ci and production, never re-apply) plus the spec commit `5d74ee58`. Every file:line below was read off this worktree at `5d74ee58`; anything not read is labelled **Assumption**.
 
@@ -186,7 +186,7 @@ Paste both values in the report; stop if they differ.
 13. **Download is in the row menu only when the file has a clean version**, and the viewer draws no Download for an unchecked file (spec §3.5 "cannot be opened"); the server refuses anyway.
 14. **With no `SCANNER_URL`/`SCANNER_SECRET` (a developer's machine), the finish leaves the file Checking without spending an attempt**, and the pass records `documents.scanner` as failing "not configured". Fail closed: nothing opens unscanned.
 15. **Only a clamd-stage error spends an attempt, and the retry pass has a breaker** (plan review C1; spec §3.4 amended: it said every error counts). The worker's error answer names its stage: `clamd` (clamd read this stream and answered ERROR about it) or `transport` (the object could not be fetched, a redirect, a non-200, a timeout, clamd unreachable or silent). The app spends an attempt ONLY on a well-formed 200 `{verdict:"error",stage:"clamd"}`; a 401, a 403, a network failure or junk leaves the version pending and spends nothing (`scan-client.ts`, Task 5). Without this, a wrong `SCANNER_CLIENTS` binding answers 403 to every scan while `/health` stays green, and three ticks (about 30 minutes) would delete every pending file as unscannable. The pass also HOLDS clamd errors during its loop and spends them only if the worker reached at least one verdict in the same pass; two or more failures with no verdict spend nothing and turn `documents.scanner` red ("N scans failed and none succeeded; no attempts were spent"). The finish spends its one error at once (one attempt per upload at most). Accepted residual (plan review 8): the finish and the pass can scan the same fresh version at once; the first verdict recorded wins and the other answers `stale`; they can disagree only when one side meets a clamd error, which spends at most one attempt, so no removal can land under a clean verdict.
-16. **Content clamd could not fully read is "unscannable", never clean** (plan review C2; spec §3.4 amended). clamd's defaults answer `OK` for content skipped under a scan limit or that is encrypted. The image sets `AlertExceedsMax yes` and `AlertEncrypted`, `AlertEncryptedArchive`, `AlertEncryptedDoc yes` (names read off the 1.4 image, A13), and raises `MaxFileSize` to 30M so a 25 MiB upload is never skipped for size; the shim maps `Heuristics.Limits.Exceeded.*` and `Heuristics.Encrypted.*` to `unscannable` (removed at once, object first, "Couldn't check this file"), never `infected`. **Consequence for the orchestrator:** a password-protected PDF, Word or Excel file, or an encrypted ZIP inside a DOCX, will be removed with "Couldn't check this file". A PDF that is only owner-locked (no password to open) is not "encrypted" to a reader and is expected to scan normally; that is an assumption (A13) the Preview check tests with one such file.
+16. **Content clamd could not fully read is "unscannable", never clean** (plan review C2; spec §3.4 amended). clamd's defaults answer `OK` for content skipped under a scan limit or that is encrypted. The image sets `AlertExceedsMax yes` and `AlertEncrypted`, `AlertEncryptedArchive`, `AlertEncryptedDoc yes` (names read off the 1.4 image, A13), and raises `MaxFileSize` to 30M so a 25 MiB upload is never skipped for size; the shim maps `Heuristics.Limits.Exceeded.*` and `Heuristics.Encrypted.*` to `unscannable` (removed at once, object first, "Couldn't check this file"), never `infected`. **Owner ruling 2026-10-15 (remove, and say why):** a password-protected PDF, Word or Excel file, or an encrypted ZIP inside a DOCX, is removed exactly as any unscannable file, and its note names the reason: "Password-protected: remove the password and upload it again" / "Tiene contraseña: quítela y vuelva a subirlo". The reason is DATA, not card logic: 0079 keeps clamd's name on an unscannable version too (`scan_signature`, already staff-only under RLS), and ONE pure helper, `removedReason` in `@bis/db/document-rules` (browser-safe, so 2b's public page can use it), reads `Heuristics.Encrypted.*` as `"password"`. Why not a `scan_reason` column: the signature IS the reason in clamd's own words, the column already exists for infected versions, and a second column would be a second copy that could disagree with it; widening one CHECK and one CASE in a migration not yet applied anywhere is smaller. The view never sends the signature to a browser: `documentView` maps it to the scan state `"locked"` and drops it. A PDF that is only owner-locked (no password to open) is not "encrypted" to a reader and is expected to scan normally; that is an assumption (A13) the Preview check tests with one such file.
 
 ## Assumptions (not verified by reading; each has a named check)
 
@@ -292,11 +292,11 @@ Disjointness: T3b (`record.ts`, `lib/record/*`, the timelines, the drawer's maps
 **Interfaces**
 - Consumes (SQL): `public.document_versions`, `public.documents` (0077); `app.is_agency()`, `app.current_account_id()`; the `documents` RLS policies (`0077:133-145`); test helpers `withRollback`, `actAs`, `actAsMember` (`packages/db/src/test/db.ts:4-42`).
 - Produces (SQL):
-  - `document_versions.scan_status text not null default 'pending'` in (`pending`, `clean`, `infected`, `unscannable`); `scan_attempts integer not null default 0` (≥ 0); `scanned_at timestamptz`; `scan_signature text` (1–200 chars when set). Constraint `document_versions_scan_coherent`: `scanned_at` is null exactly while pending; a signature only on `infected`; an `uploading` version is always `pending`.
+  - `document_versions.scan_status text not null default 'pending'` in (`pending`, `clean`, `infected`, `unscannable`); `scan_attempts integer not null default 0` (≥ 0); `scanned_at timestamptz`; `scan_signature text` (1–200 chars when set). Constraint `document_versions_scan_coherent`: `scanned_at` is null exactly while pending; a signature only on `infected` or `unscannable` (owner ruling 2026-10-15: an unscannable version keeps clamd's named cause); an `uploading` version is always `pending`.
   - Index `document_versions_scan_pending on (created_at) where status = 'ready' and scan_status = 'pending'`.
   - `documents.scan_status` default `'skipped'` (deviation 2).
   - `public.record_document_scan(p_account_id uuid, p_version_id uuid, p_verdict text, p_signature text) returns jsonb`, `SECURITY INVOKER`, `search_path = ''`, EXECUTE for `service_role` only. Answers `{"status":"ok","attempts":<int>,"document_id":"<uuid>"}` or `{"status":"stale"}`; raises `22004` on a null required argument or an infected verdict with no signature, `22023` on an unknown verdict.
-  - `public.document_scan_timeline` (view, `security_invoker = true`): `id` (the version's), `document_id`, `account_id`, `scan_status`, `scanned_at`, `title`, `category`, `contact_id`, `client_group_id`, `deleted_at`; one row per READY version whose scan is `infected` or `unscannable`; SELECT for `authenticated` and `service_role`.
+  - `public.document_scan_timeline` (view, `security_invoker = true`): `id` (the version's), `document_id`, `account_id`, `scan_status`, `scanned_at`, `scan_signature`, `title`, `category`, `contact_id`, `client_group_id`, `deleted_at`; one row per READY version whose scan is `infected` or `unscannable`; SELECT for `authenticated` and `service_role`.
 
 - [ ] **Step 1: Write the kit and build your replica.** Write both kit scripts exactly as "The replica kit" gives them (`chmod +x`). Then:
 
@@ -426,6 +426,18 @@ describe("record_document_scan: a compare-and-set from pending (spec 3.2 bullet 
       expect(await state(c, b)).toEqual({ scan_status: "unscannable", scan_attempts: 1, scanned: true, scan_signature: null });
     }));
 
+  it("an unscannable verdict keeps clamd's named cause (a password) and none when it names none (owner ruling 2026-10-15; mutation: keep the old 'infected only' CASE -> the cause is lost -> FAILS; drop the nullif -> an empty cause trips the length check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const d = await doc(c, s.acct, s.ana);
+      const locked = await version(c, s.acct, d);
+      const blank = await version(c, s.acct, d);
+      await record(c, s.acct, locked, "unscannable", " Heuristics.Encrypted.PDF ");
+      await record(c, s.acct, blank, "unscannable", "  ");
+      expect(await state(c, locked)).toEqual({ scan_status: "unscannable", scan_attempts: 1, scanned: true, scan_signature: "Heuristics.Encrypted.PDF" });
+      expect((await state(c, blank)).scan_signature).toBeNull();
+    }));
+
   it("never an uploading version, never another account's (mutations: drop `status = 'ready'` -> FAILS; drop the account filter -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -531,7 +543,7 @@ cd /c/Users/danlo/bis-platform/.claude/worktrees/s07-2a
 SUPABASE_DB_URL=postgresql://postgres@localhost:55560/post pnpm --filter @bis/db exec vitest run src/test/document-scan.test.ts > "/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/f54a0255-9568-420c-ad87-a4d62d6b9a05/scratchpad/s07c-t1-impl/red.log" 2>&1; echo $? > "/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/f54a0255-9568-420c-ad87-a4d62d6b9a05/scratchpad/s07c-t1-impl/red.exit"
 ```
 
-Expected: the summary block shows 12 failed. (If the db suite's harness reads a different variable for its pg connection, use the one `packages/db/src/test/db.ts` reads; the kit's `env-run.sh` names it.)
+Expected: the summary block shows 13 failed. (If the db suite's harness reads a different variable for its pg connection, use the one `packages/db/src/test/db.ts` reads; the kit's `env-run.sh` names it.)
 
 - [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0079_document_scan.sql`:
 
@@ -590,13 +602,13 @@ alter table public.document_versions
 
 alter table public.document_versions add constraint document_versions_scan_coherent check (
   (scan_status = 'pending') = (scanned_at is null)
-  and (scan_signature is null or scan_status = 'infected')
+  and (scan_signature is null or scan_status in ('infected', 'unscannable'))
   and (status = 'ready' or scan_status = 'pending'));
 
 comment on column public.document_versions.scan_status is
   'Virus scan (0079): pending until a verdict, then clean, infected or unscannable. Only a clean version may be opened (the mint function in packages/db/src/documents.ts). An infected or unscannable version has had its object deleted.';
 comment on column public.document_versions.scan_signature is
-  'The virus name for an infected version (0079). Staff-only through the documents RLS; never in an event payload.';
+  'clamd''s name for an infected version, or for an unscannable one when clamd named its cause (Heuristics.Encrypted.* = password-protected; owner ruling 2026-10-15) (0079). Staff-only through the documents RLS; never in an event payload or a browser.';
 
 alter table public.documents alter column scan_status set default 'skipped';
 comment on column public.documents.scan_status is
@@ -624,7 +636,9 @@ begin
      set scan_attempts = v.scan_attempts + 1,
          scan_status = case when p_verdict = 'error' then 'pending' else p_verdict end,
          scanned_at = case when p_verdict = 'error' then null else now() end,
-         scan_signature = case when p_verdict = 'infected' then left(btrim(p_signature), 200) else null end
+         scan_signature = case when p_verdict = 'infected' then left(btrim(p_signature), 200)
+                               when p_verdict = 'unscannable' then nullif(left(btrim(coalesce(p_signature, '')), 200), '')
+                               else null end
    where v.id = p_version_id and v.account_id = p_account_id and v.status = 'ready' and v.scan_status = 'pending'
   returning v.scan_attempts, v.document_id into v_attempts, v_document;
   if not found then return jsonb_build_object('status', 'stale'); end if;
@@ -636,7 +650,7 @@ grant execute on function public.record_document_scan(uuid, uuid, text, text) to
 
 -- 4. The removed-file timeline rows (spec 3.5): the automation removed a file, at its verdict.
 create view public.document_scan_timeline with (security_invoker = true) as
-  select v.id, v.document_id, v.account_id, v.scan_status, v.scanned_at,
+  select v.id, v.document_id, v.account_id, v.scan_status, v.scanned_at, v.scan_signature,
          d.title, d.category, d.contact_id, d.client_group_id, d.deleted_at
     from public.document_versions v
     join public.documents d on d.id = v.document_id and d.account_id = v.account_id
@@ -658,7 +672,7 @@ node -e 'const fs=require("fs");const chk=(b)=>[...b].filter(x=>x>127||x===92).l
 
 Expected: `0079 bad bytes: 0` and `control (expect 3): 3` (the control holds one backslash byte and the two bytes of é, so the counter is proven to see both kinds). Any nonzero first number: fix the file.
 
-- [ ] **Step 6: Rebuild and run green.** Re-run Step 1's `replica.sh` (now `post = pre + 0079`), then Step 3's command → the summary block shows 12 passed.
+- [ ] **Step 6: Rebuild and run green.** Re-run Step 1's `replica.sh` (now `post = pre + 0079`), then Step 3's command → the summary block shows 13 passed.
 
 - [ ] **Step 7: The guard.** In `packages/db/src/test/schema-grants-guard.test.ts:113` change `toEqual(["document_version_timeline"])` to `toEqual(["document_scan_timeline", "document_version_timeline"])`, and extend the comment at `:16-18` with one sentence: "0079 adds the second, document_scan_timeline (security_invoker; removed-file timeline rows), reviewed in the S-07 2a plan." Run `schema-grants-guard.test.ts`, `document-vault-schema.test.ts`, `document-vault-rls.test.ts`, `document-vault-reserve-lock.test.ts` and `document-space-used.test.ts` on `post` → all pass (deviation 2: their explicit `scan_status` inserts stand).
 
@@ -692,6 +706,11 @@ Expected: `0079 bad bytes: 0` and `control (expect 3): 3` (the control holds one
 | `documents.error.removed` | This file was removed and can't be opened. | Este archivo se quitó y no se puede abrir. |
 | `timeline.documentRemoved` | removed {title}: it had a virus | quitó {title}: tenía un virus |
 | `timeline.documentUnscannable` | removed {title}: it couldn't be checked | quitó {title}: no se pudo revisar |
+| `documents.status.passwordRemoved` | Password-protected: remove the password and upload it again | Tiene contraseña: quítela y vuelva a subirlo |
+| `documents.viewer.passwordRemoved` | This file has a password, so we couldn't check it for viruses and it was removed. Remove the password and upload it again. | Este archivo tiene contraseña, así que no pudimos revisarlo y se quitó. Quítele la contraseña y vuelva a subirlo. |
+| `timeline.documentPassword` | removed {title}: it has a password | quitó {title}: tiene contraseña |
+
+The three password keys are the owner's ruling of 2026-10-15 ("remove, and say why"), in usted; the generic unscannable keys stay for every other cause.
 
 The two timeline verbs follow `timeline.documentVersion`'s voice (`messages.ts:3990-3991`): third person after the mark (deviation 10). No key names a vendor or the word "scanner".
 
@@ -711,6 +730,9 @@ describe("the document vault's copy, PR 2a (virus scanning)", () => {
     "documents.error.removed": ["This file was removed and can't be opened.", "Este archivo se quitó y no se puede abrir."],
     "timeline.documentRemoved": ["removed {title}: it had a virus", "quitó {title}: tenía un virus"],
     "timeline.documentUnscannable": ["removed {title}: it couldn't be checked", "quitó {title}: no se pudo revisar"],
+    "documents.status.passwordRemoved": ["Password-protected: remove the password and upload it again", "Tiene contraseña: quítela y vuelva a subirlo"],
+    "documents.viewer.passwordRemoved": ["This file has a password, so we couldn't check it for viruses and it was removed. Remove the password and upload it again.", "Este archivo tiene contraseña, así que no pudimos revisarlo y se quitó. Quítele la contraseña y vuelva a subirlo."],
+    "timeline.documentPassword": ["removed {title}: it has a password", "quitó {title}: tiene contraseña"],
   };
   it("every new key is the plan's wording, in both languages (mutation: any word changed, or a tú form such as 'Mueve' -> FAILS)", () => {
     for (const [k, [en, es]] of Object.entries(WANT)) {
@@ -758,6 +780,13 @@ describe("the document vault's copy, PR 2a (virus scanning)", () => {
   "timeline.documentRemoved.es": "quitó {title}: tenía un virus",
   "timeline.documentUnscannable": "removed {title}: it couldn't be checked",
   "timeline.documentUnscannable.es": "quitó {title}: no se pudo revisar",
+  // Owner ruling 2026-10-15: a password-protected file is removed AND the note says why.
+  "documents.status.passwordRemoved": "Password-protected: remove the password and upload it again",
+  "documents.status.passwordRemoved.es": "Tiene contraseña: quítela y vuelva a subirlo",
+  "documents.viewer.passwordRemoved": "This file has a password, so we couldn't check it for viruses and it was removed. Remove the password and upload it again.",
+  "documents.viewer.passwordRemoved.es": "Este archivo tiene contraseña, así que no pudimos revisarlo y se quitó. Quítele la contraseña y vuelva a subirlo.",
+  "timeline.documentPassword": "removed {title}: it has a password",
+  "timeline.documentPassword.es": "quitó {title}: tiene contraseña",
 ```
 
 - [ ] **Step 4: Run.** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/i18n/ratchet.test.ts` → the new describe PASSES; the ratchet's twin check passes (its baseline count may fail ONLY on the new keys until Task 11; say so). `pnpm --filter web typecheck` → clean.
@@ -774,7 +803,8 @@ describe("the document vault's copy, PR 2a (virus scanning)", () => {
 
 **Files**
 - Modify: `packages/db/src/documents.ts` (types and `VERSION_COLS` at `:22-35`; `createDocument` at `:108-119`; new functions appended after `listDocumentVersionTimeline`, `:503-516`)
-- Modify: `packages/db/src/index.ts` (the documents export block, `:270-280`)
+- Modify: `packages/db/src/index.ts` (the documents export block, `:270-280`, and the document-rules block below it)
+- Modify: `packages/db/src/document-rules.ts` (one helper, Step 4b; owner ruling 2026-10-15)
 - Modify: `packages/db/src/test/documents.test.ts` (import list `:6-13`; one new `describe` at the end)
 
 **Interfaces**
@@ -1063,6 +1093,41 @@ export async function listDocumentScanTimeline(
 
   (d) `packages/db/src/index.ts`: add to the documents block (`:270-280`) `signedDocumentReadUrl, signedScannerUrl, recordDocumentScan, listPendingScans, oldestPendingScanAt, listDocumentScanTimeline, SCANNER_URL_SECONDS,` and the types `type ScanStatus, type ReadUrlOutcome, type ScanVerdictInput, type RecordScanOutcome, type PendingScan, type TimelineDocumentScan`.
 
+- [ ] **Step 4b (owner ruling 2026-10-15): the removed file's REASON, in data.** Also modify `packages/db/src/document-rules.ts` (this task's, the browser-safe subpath 2b's public page will import):
+
+```ts
+/**
+ * Why a removed version was removed, read from its scan state and clamd's name for it (0079's
+ * scan_signature). Owner ruling 2026-10-15 ("remove, and say why"): content clamd reports as
+ * Heuristics.Encrypted.* is password-protected, and the person is told so; every other unscannable
+ * cause (a limit, three clamd errors) is "unscannable". Pure and browser-safe: the card's read and 2b's
+ * customer page both call it, so the two can never word the reason differently. The signature itself
+ * never leaves the server.
+ */
+export type RemovedReason = "virus" | "password" | "unscannable";
+export const PASSWORD_SIGNATURE_PREFIX = "Heuristics.Encrypted.";
+export function removedReason(scanStatus: string, signature: string | null): RemovedReason | null {
+  if (scanStatus === "infected") return "virus";
+  if (scanStatus !== "unscannable") return null;
+  return signature?.startsWith(PASSWORD_SIGNATURE_PREFIX) ? "password" : "unscannable";
+}
+```
+
+  `VERSION_COLS` also gains `scan_signature` and `DocumentVersionRow` gains `scan_signature: string | null` (read on the request client under the documents RLS, staff-only; Task 7 maps it away before anything reaches a browser). `TimelineDocumentScan` gains `scan_signature: string | null` and `SCAN_TIMELINE_COLS` gains `scan_signature` (0079's view carries it). Export `removedReason`, `PASSWORD_SIGNATURE_PREFIX`, `type RemovedReason` from `./document-rules` in `index.ts`'s document-rules block. Add to the new describe in `documents.test.ts`:
+
+```ts
+  it("an unscannable version keeps its named cause on the read, and removedReason reads a password from it (owner ruling 2026-10-15; mutation: drop scan_signature from VERSION_COLS -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana, { title: "Locked" });
+      await recordDocumentScan(db, { accountId, versionId: d.versionId, verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
+      const v = (await listRecordDocuments(db, accountId, { kind: "contact", id: ana })).live[0]!.version;
+      expect([v.scan_status, v.scan_signature, removedReason(v.scan_status, v.scan_signature)]).toEqual(["unscannable", "Heuristics.Encrypted.PDF", "password"]);
+    }));
+```
+
+  (import `removedReason` from `../document-rules`.) The helper's own cases live in Task 7's `scan-state.test.ts` (a pure test needs no database): infected → virus; unscannable with `Heuristics.Encrypted.PDF`, `Heuristics.Encrypted.Zip` → password; unscannable with `Heuristics.Limits.Exceeded.MaxFileSize` or null → unscannable; clean and pending → null.
+
 - [ ] **Step 5: Run green.** The Step 3 command → every case in `documents.test.ts` passes (summary block: 0 failed). `pnpm --filter @bis/db typecheck` → clean. Every EXISTING `documents.test.ts` case still passes: the "listed" rule did not change (deviation 1). `pnpm --filter web typecheck` will now show errors only where a `DocumentVersionRow` literal lacks `scan_status` in web tests: list them in the report; Tasks 7 and 9 fix their own files.
 
 - [ ] **Step 6: Probes, red BY NAME, restored:** (1) drop `, scan_status` from `VERSION_COLS` → the card-read case; (2) in `signedDocumentReadUrl` delete the two scan `if`s → the gate case throws on storage (the gateway's 404); (3) drop `.eq("account_id", accountId)` from the gate's read → the cross-account case; (4) emit `"document.virus_removed"` for every verdict → the verdict case; (5) `ascending: false` on `created_at` in `listPendingScans` → the pass case; (6) `createSignedUrl(storagePath.split("/")[0]!, …)` → the scanner-URL case.
@@ -1200,6 +1265,34 @@ describe("a removed file in the drawer's Recent (spec 3.5)", () => {
     expect(row).toContain(`>${m["documents.status.virusRemoved.es"]}<`);
   });
 ```
+
+  **Owner ruling 2026-10-15 (password-protected files):** add to `timeline-rows.test.ts`'s new describe
+
+```ts
+  it("a password-protected file's row says so, in both languages, never the generic words (owner ruling 2026-10-15; mutation: ignore the cause -> the generic verb -> FAILS)", () => {
+    for (const locale of ["en", "es"] as const) {
+      const tr = makeTr(locale);
+      const [row] = timelineRows([removed({ scan_status: "unscannable", scan_signature: "Heuristics.Encrypted.PDF" })], { zone: "America/Chicago", tr, author: author(tr) });
+      const sfx = locale === "es" ? ".es" : "";
+      expect(row!.verb).toBe(m[`timeline.documentPassword${sfx}` as keyof typeof m].replace("{title}", "Lease"));
+      expect(row!.status).toEqual({ tone: "crit", word: m[`documents.status.passwordRemoved${sfx}` as keyof typeof m] });
+      expect(row!.verb).not.toBe(m[`timeline.documentUnscannable${sfx}` as keyof typeof m].replace("{title}", "Lease"));
+    }
+  });
+```
+
+  (every `TimelineDocumentScan` fixture in this task's tests gains `scan_signature: null`), and implement the row through the shared helper:
+
+```ts
+    case "documentRemoved": {
+      const why = removedReason(entry.scan.scan_status, entry.scan.scan_signature);
+      const verb = why === "virus" ? "timeline.documentRemoved" : why === "password" ? "timeline.documentPassword" : "timeline.documentUnscannable";
+      const word = why === "virus" ? "documents.status.virusRemoved" : why === "password" ? "documents.status.passwordRemoved" : "documents.status.unscannable";
+      return { verb: tr.text(verb, { title: entry.scan.title }), status: { tone: "crit", word: tr.text(word) }, detail: tr.text(`documents.category.${entry.scan.category}`) };
+    }
+```
+
+  (`removedReason` from `@bis/db/document-rules`; this replaces Step 3's `virus` boolean version.)
 
 - [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/record src/lib/contacts/drawer-summary.test.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/activity-timeline.rows.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/groups/[groupId]/group-timeline.test.ts"` → the new cases fail (`tsc` also refuses the unknown kind: expected). `record.test.ts` on your replica behind PostgREST → its new case fails.
 
@@ -2274,6 +2367,8 @@ describe("scanVersion (spec 3.2-3.4; owner decision P4: nothing infected is kept
     recordDocumentScan.mockResolvedValue({ status: "ok", attempts: 1 });
     expect(await scanVersion(DB, V, deps({ verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" }))).toBe("unscannable");
     expect(calls).toEqual(["mint", "scan", "remove", "record:unscannable"]);
+    // Owner ruling 2026-10-15: the cause is KEPT, so the note can say "it has a password" (mutation: pass null -> FAILS).
+    expect(recordDocumentScan).toHaveBeenCalledWith(DB, { accountId: "acc", versionId: "ver", verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
   });
 
   it("an object that will not go THROWS and records nothing, so the version stays pending for the next pass (mutation: record anyway -> FAILS)", async () => {
@@ -2474,7 +2569,8 @@ export async function scanVersion(db: SupabaseClient, v: ScanTarget, deps: ScanD
     return r.status === "ok" ? "clean" : "stale";
   }
   if (verdict.verdict === "infected") return removeThenRecord(db, v, "infected", verdict.signature);
-  if (verdict.verdict === "unscannable") return removeThenRecord(db, v, "unscannable", null);
+  // Owner ruling 2026-10-15: keep clamd's named cause (Heuristics.Encrypted.* = a password) so the note can say why.
+  if (verdict.verdict === "unscannable") return removeThenRecord(db, v, "unscannable", verdict.signature);
   if (!verdict.spend) return "unreached";
   if (opts.holdErrors) return "held";
   return spendScanError(db, v);
@@ -2762,6 +2858,50 @@ describe("the card's re-read while a file is Checking (spec 3.4: 'Revisando' -> 
 ```
 
   (`row(over)` is the file's own builder, `route.test.ts:21-31`; its default `version` and `versions` rows gain `scan_status: "clean"` in this task, so every existing case keeps reading a clean file.)
+
+  **Owner ruling 2026-10-15 (password-protected files): a fifth VIEW state, `"locked"`.** The database keeps four states; the card's view adds `"locked"` = unscannable BECAUSE of a password, derived once in `documentView` with `removedReason` (Task 3 Step 4b), and the signature never reaches the JSON. So: `ScanState` in `documents-load.ts` is `"pending" | "clean" | "infected" | "unscannable" | "locked"` and `isScan` accepts `"locked"`; `documentView` maps each version with
+
+```ts
+const viewScan = (v: { scan_status: ScanStatus; scan_signature: string | null }): ScanState =>
+  removedReason(v.scan_status, v.scan_signature) === "password" ? "locked" : v.scan_status;
+```
+
+  (for `version.scan` and every `versions[].scan`); `scan-state.ts`'s `RowScan` gains `{ kind: "locked" }` (`rowScan` returns `{ kind: v.scan }` for it as for the other removed states), `WORD.locked = "documents.status.passwordRemoved"` (tone crit), and `viewerNotice` answers `"documents.viewer.passwordRemoved"` for it. Tests, each red if the reason collapses into the generic note:
+
+```ts
+// scan-state.test.ts
+describe("a password-protected file says why (owner ruling 2026-10-15)", () => {
+  it("removedReason: a password only from Heuristics.Encrypted.*, the generic cause otherwise (mutation: every unscannable is 'password' -> FAILS; none is -> FAILS)", () => {
+    expect([removedReason("infected", "Eicar-Test-Signature"), removedReason("unscannable", "Heuristics.Encrypted.PDF"), removedReason("unscannable", "Heuristics.Encrypted.Zip"),
+      removedReason("unscannable", "Heuristics.Limits.Exceeded.MaxFileSize"), removedReason("unscannable", null), removedReason("clean", null), removedReason("pending", null)])
+      .toEqual(["virus", "password", "password", "unscannable", "unscannable", null, null]);
+  });
+  it("the row and the viewer name the password in both languages, never the generic words (mutation: WORD.locked = the unscannable key -> FAILS)", () => {
+    for (const [locale, sfx] of [["en", ""], ["es", ".es"]] as const) {
+      expect(scanLabel({ kind: "locked" }, locale)).toEqual({ tone: "crit", text: m[`documents.status.passwordRemoved${sfx}` as keyof typeof m] });
+      expect(scanLabel({ kind: "locked" }, locale)!.text).not.toBe(m[`documents.status.unscannable${sfx}` as keyof typeof m]);
+    }
+    expect(viewerNotice(doc("locked"))).toBe("documents.viewer.passwordRemoved");
+    expect(viewerNotice(doc("unscannable"))).toBe("documents.viewer.unscannable");
+  });
+});
+```
+
+```ts
+// …/api/contacts/[contactId]/documents/route.test.ts
+  it("a password-protected file reads 'locked', a limit 'unscannable', and clamd's name never reaches the JSON (owner ruling 2026-10-15; mutation: send scan_status through unmapped -> FAILS; send the signature -> FAILS)", async () => {
+    const locked = { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-10-01T00:00:00Z", scan_status: "unscannable", scan_signature: "Heuristics.Encrypted.PDF" };
+    const limit = { ...locked, id: "v9", scan_signature: "Heuristics.Limits.Exceeded.MaxFileSize" };
+    db.listRecordDocuments.mockResolvedValue({ live: [row({ version: locked, versions: [locked] }), row({ id: "d2", version: limit, versions: [limit] })], trashed: [], liveMore: false, trashedMore: false });
+    const res = await call();
+    const text = await res.text();
+    expect(text).not.toContain("Heuristics");
+    const body = JSON.parse(text) as { live: { version: { scan: string } }[] };
+    expect(body.live.map((d) => d.version.scan)).toEqual(["locked", "unscannable"]);
+  });
+```
+
+  (`documents-load.test.ts`'s refusal table keeps refusing an unknown state; add one row proving `"locked"` PARSES: a body whose `version.scan` and `versions[0].scan` are `"locked"` loads `status: "ready"`. Every `DocumentVersionRow` fixture in this task's files gains `scan_signature: null`.)
 
 - [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run src/lib/documents "src/app/api/accounts/[accountId]/contacts/[contactId]/documents" "src/app/api/accounts/[accountId]/groups/[groupId]/documents"` → the new cases fail.
 
@@ -3307,6 +3447,25 @@ describe("the viewer and virus scanning (S-07 2a; spec 3.3, 3.5)", () => {
 });
 ```
 
+  **Owner ruling 2026-10-15 (password-protected files):** add to `documents-card.test.ts`'s new describe
+
+```ts
+  it("a password-protected file's row says so as a crit dot and the owner's words, in both languages, never 'Couldn't check this file' (mutation: draw the generic word for locked -> FAILS)", () => {
+    const locked = view({ id: "dl", title: "Bank", version: { id: "vl", contentType: "application/pdf", bytes: 10, scan: "locked", createdAt: "2026-10-13T14:00:00.000Z" },
+      versions: [{ id: "vl", contentType: "application/pdf", bytes: 10, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "locked" }] });
+    for (const [locale, sfx] of [["en", ""], ["es", ".es"]] as const) {
+      const row = rowOf(render(ready([locked]), { locale }), "dl");
+      expect(row).toContain('data-document-scan="locked"');
+      expect(row).toContain("bg-[var(--crit)]");
+      expect(renderedText(row)).toContain(m[`documents.status.passwordRemoved${sfx}` as keyof typeof m]);
+      expect(renderedText(row)).not.toContain(m[`documents.status.unscannable${sfx}` as keyof typeof m]);
+    }
+    expect(rowMenuItems(locked as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
+  });
+```
+
+  and to `document-viewer.test.ts`'s loop, the pair `["locked", "documents.viewer.passwordRemoved"]` (the viewer's `withScan` type gains `"locked"`). No component change is needed beyond Task 7's types: `ScanStatus` and `VersionScan` draw whatever `scanLabel` answers. The demo adds one locked row beside its removed one.
+
   `documents-demo.test.ts`: add a case asserting the demo renders one Checking row and one removed row (their words via `renderedText`, both languages if the demo has a Spanish toggle; else English) and still no server action (its existing inert-handler case stays).
 
 - [ ] **Step 2: Run red.** `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card.test.ts" "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-viewer.test.ts" "src/app/(dashboard)/dashboard/styleguide/documents-demo.test.ts"` → the new cases fail.
@@ -3797,6 +3956,7 @@ Additive migration, so it applies before the merge. The worker must be up and th
 | §3.4 scan at the finish | Task 6 |
 | §3.4 retry pass, budget, 3 attempts, unscannable fail-closed | Tasks 5, 8 |
 | §3.4 (amended) only clamd-stage errors spend; the breaker | Task 4 (stage), Task 5 (`spend`, `holdErrors`, `spendScanError`), Task 8 (breaker); deviation 15 |
+| Owner ruling 2026-10-15: a password-protected file is removed AND its note says why; the reason is data for 2b too | Task 1 (0079 keeps the cause), Task 2 (three keys), Task 3 Step 4b (`removedReason`), Task 3b (row words), Task 5 (cause passed on), Task 7 (`locked` view state), Task 9 (card, viewer) |
 | §3.4 (amended) skipped or encrypted content is unscannable, never clean | Task 4 (Dockerfile, `parseReply`, real-clamd tail EICAR), Task 5 (mapping); deviation 16 |
 | §3.4 heartbeat; ops health red on unreachable / stale signatures / pending > 15 min | Task 8 |
 | §3.5 "Revisando", "Tarda más de lo normal", never reads as lost | Tasks 2, 7, 9; Task 12 test 3; deviations 6, 11 |
