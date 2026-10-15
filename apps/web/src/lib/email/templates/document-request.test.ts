@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { documentRequestEmail } from "./document-request";
+import { documentRequestEmail, requestCopy } from "./document-request";
+import { m, type MessageKey } from "@/lib/messages";
+import { segmentsFor } from "@/lib/sms/segments";
+import { withOptOut } from "@/lib/sms/opt-out";
 import { renderedText } from "@/lib/rendered-text";
 import type { EmailBrand } from "./shell";
 
@@ -36,6 +39,43 @@ describe("documentRequestEmail (spec 4.2): one language end to end, the client's
     expect(visible).not.toContain("Subir documentos");
     expect(visible).not.toContain("necesita unos");
     expect(visible).not.toContain("Por favor");
+  });
+
+  it.each([
+    ["en", "We need a few documents from you", "Please send us: Insurance."],
+    ["es", "Le pedimos unos documentos", "Por favor envíenos: Seguro."],
+  ] as const)("no brand name (%s): the subject is its own whole sentence, never 'the business'/'el negocio' filled in (fix round 2; mutation: always use the {business} key -> FAILS)", (locale, subject, body) => {
+    const mail = documentRequestEmail({ brand: { ...brand, name: "" }, business: "", items: locale === "es" ? "Seguro" : "Insurance", url: URL, locale });
+    expect(mail.subject).toBe(subject);
+    expect(mail.text).toContain(body);
+  });
+
+  it("EVERY documentRequest key that names {business} has a no-name sentence in both languages, and with no name it renders no '{', no 'a el'/'de el' and no lower-case opening (a key added later without one -> FAILS here)", () => {
+    const named = (Object.keys(m) as MessageKey[]).filter((k) => k.startsWith("documentRequest.") && !k.endsWith(".es")
+      && (m[k].includes("{business}") || (m[`${k}.es` as MessageKey] ?? "").includes("{business}")));
+    expect(named.sort()).toEqual(["documentRequest.email.subject", "documentRequest.sms"]);
+    for (const k of named) {
+      for (const locale of ["en", "es"] as const) {
+        const s = requestCopy(locale, null)(k, { items: "Seguro" });
+        expect(s, `${k} (${locale})`).not.toContain("{");
+        expect(s, `${k} (${locale})`).not.toMatch(/\b(a|de) el\b/);
+        expect(s, `${k} (${locale})`).not.toMatch(/^(the|el) /i);
+        expect(s, `${k} (${locale})`).not.toMatch(/^\p{Ll}/u);
+        expect(s, `${k} (${locale})`).not.toMatch(/business|negocio/i);
+      }
+    }
+  });
+
+  it("the Spanish no-name text keeps to GSM-7 with its opt-out line, as every Spanish text default does (mutation: write 'aquí' into it -> FAILS)", () => {
+    const text = requestCopy("es", null)("documentRequest.sms", { items: "Seguro, Contrato" });
+    expect(segmentsFor(withOptOut(text, "es")).encoding).toBe("gsm7");
+  });
+
+  it("with a brand name, requestCopy fills the {business} sentence; a blank name counts as none", () => {
+    expect(requestCopy("es", "Casa Verde")("documentRequest.email.subject")).toBe("Casa Verde necesita unos documentos");
+    expect(requestCopy("en", null)("documentRequest.email.button")).toBe("Upload documents");
+    const blank = documentRequestEmail({ brand: { ...brand, name: "" }, business: "   ", items: "Seguro", url: URL, locale: "es" });
+    expect(blank.subject).toBe("Le pedimos unos documentos");
   });
 
   it("wears the client's brand: the shell's brand name in the html and the button in the brand's accent (DESIGN.md rule 9)", () => {

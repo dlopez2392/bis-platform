@@ -15,10 +15,9 @@ import {
 import { withTrailingLink } from "@/lib/automations/sms-link";
 import { recordUsageSafely } from "@/lib/billing/usage";
 import { emailBrand } from "@/lib/email/templates/shell";
-import { documentRequestEmail } from "@/lib/email/templates/document-request";
+import { documentRequestEmail, requestCopy } from "@/lib/email/templates/document-request";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
-import { m, type MessageKey } from "@/lib/messages";
-import { t } from "@/lib/i18n/t";
+import type { MessageKey } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
 import { requestUrl } from "./token";
 import { itemsSentence } from "./customer-state";
@@ -83,7 +82,9 @@ async function attempt(db: SupabaseClient, a: DeliverArgs): Promise<Attempt> {
     const target = await documentRequestTarget(db, accountId, request);
     subject.contactId = target?.contactId ?? null;
     const branding = await getBranding(db, accountId);
-    const business = brandDisplayName(branding) || t(m, "customerDocs.business", lang);
+    // The brand name, or "" when the account has none: the copy picks a no-name sentence then (fix round 2), and
+    // the From name is what every other customer email sends (emailBrand's name), never "the business".
+    const business = brandDisplayName(branding);
     const items = itemsSentence(request.items, lang);
     const url = requestUrl(a.origin, request.id);
     const zone = await readAccountTimezone(db, accountId);
@@ -121,7 +122,7 @@ async function deliverText(db: SupabaseClient, c: Ctx): Promise<DeliverOutcome> 
   // and BEFORE the provider is called; a lost claim (another release sent it) sends nothing.
   let claimed = false;
   let lost = false;
-  const body = withTrailingLink(t(m, "documentRequest.sms", request.language, { business: c.business, items: c.items }), c.url);
+  const body = withTrailingLink(requestCopy(request.language, c.business)("documentRequest.sms", { items: c.items }), c.url);
   const row: { messageId: string | null } = { messageId: null };
   const result = await sendSms(db, {
     accountId, kind: "staff.document_request_sms", to: target.phone, body, contactId, language: request.language,

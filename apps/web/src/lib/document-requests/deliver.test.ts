@@ -325,6 +325,31 @@ describe("deliverDocumentRequest by text", () => {
   });
 });
 
+describe("no brand name (fix round 2): whole sentences, never 'the business'/'el negocio' filled in", () => {
+  const noName: Branding = { ...branding, brandName: null };
+  it.each([
+    ["es", `Le pedimos Seguro, Pool permit. Puede subirlos en este enlace:`],
+    ["en", `Please send us Insurance, Pool permit. Upload them here:`],
+  ] as const)("the text in %s is the no-name sentence with the link on the end (mutation: always use the {business} key -> FAILS)", async (language, lead) => {
+    h.getBranding.mockResolvedValue(noName);
+    await deliver({ request: request({ language }) });
+    const [, req] = h.sendSms.mock.calls[0] as [SupabaseClient, SmsRequest];
+    expect(req.body).toBe(`${lead} ${url()}`);
+  });
+
+  it.each([
+    ["es", "Le pedimos unos documentos"],
+    ["en", "We need a few documents from you"],
+  ] as const)("the email in %s: the no-name subject, and the From name is the brand display name every other customer email sends (blank), never 'the business'/'el negocio' (mutation: fall back to customerDocs.business -> FAILS)", async (language, subject) => {
+    h.getBranding.mockResolvedValue(noName);
+    await deliver({ channel: "email", request: request({ channel: "email", language }) });
+    const [req] = h.sendEmail.mock.calls[0] as [EmailRequest];
+    expect(req.subject).toBe(subject);
+    expect(req.fromName).toBe("");
+    expect(`${req.subject} ${req.body} ${req.html}`).not.toMatch(/the business|el negocio/i);
+  });
+});
+
 describe("deliverDocumentRequest by email", () => {
   const until = new Date("2026-10-16T13:00:00.000Z");
   const deliverEmail = (over: Partial<DocumentRequestRow> = {}) => deliver({ channel: "email", request: request({ channel: "email", ...over }) });

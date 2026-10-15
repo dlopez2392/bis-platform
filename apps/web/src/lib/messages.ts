@@ -4108,8 +4108,14 @@ export const m = {
   "documents.addedByCustomer.es": "Enviado por el cliente · {when}",
   "documentRequest.sms": "{business}: please send us {items}. Upload them here:",
   "documentRequest.sms.es": "{business}: por favor envíenos {items}. Súbalos aquí:",
+  // S-07 2b fix round 2: an account with no brand name gets a whole sentence, never "the business" filled in.
+  // The Spanish keeps to GSM-7 (no í/á/ó/ú), as every Spanish text default does (spanish-sms-gsm.test.ts).
+  "documentRequest.smsNoName": "Please send us {items}. Upload them here:",
+  "documentRequest.smsNoName.es": "Le pedimos {items}. Puede subirlos en este enlace:",
   "documentRequest.email.subject": "{business} needs a few documents",
   "documentRequest.email.subject.es": "{business} necesita unos documentos",
+  "documentRequest.email.subjectNoName": "We need a few documents from you",
+  "documentRequest.email.subjectNoName.es": "Le pedimos unos documentos",
   "documentRequest.email.body": "Please send us: {items}. The link works for 7 days, and you don't need an account.",
   "documentRequest.email.body.es": "Por favor envíenos: {items}. El enlace funciona por 7 días y no necesita una cuenta.",
   "documentRequest.email.button": "Upload documents",
