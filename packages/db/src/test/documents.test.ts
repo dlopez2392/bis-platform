@@ -698,6 +698,28 @@ describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
       expect(Date.parse(oldest!)).toBeLessThanOrEqual(Date.parse(mine[1]!.created_at));
     }));
 
+  it("oldestPendingScanAt's own query chain: created_at ascending, never ordered by scan_tried_at (re-review N2b; mutation: read oldestPendingScanAt through the tried order -> FAILS)", async () => {
+    const calls: { method: string; args: unknown[] }[] = [];
+    const builder: Record<string, unknown> = {};
+    const record = (method: string) => (...args: unknown[]) => {
+      calls.push({ method, args });
+      return builder;
+    };
+    builder.select = record("select");
+    builder.eq = record("eq");
+    builder.order = record("order");
+    builder.limit = record("limit");
+    builder.then = (resolve: (v: { data: unknown; error: null }) => void) =>
+      resolve({ data: [{ created_at: "2026-01-01T00:00:00.000Z" }], error: null });
+    const from = vi.fn(() => builder);
+    const db = { from } as unknown as SupabaseClient;
+    const oldest = await oldestPendingScanAt(db);
+    expect(from).toHaveBeenCalledWith("document_versions");
+    const orderCalls = calls.filter((c) => c.method === "order");
+    expect(orderCalls).toEqual([{ method: "order", args: ["created_at", { ascending: true }] }]);
+    expect(oldest).toBe("2026-01-01T00:00:00.000Z");
+  });
+
   it("the scanner's URL is a 120-second signed GET on the documents bucket for that one path (mutation: sign the account folder -> FAILS)", async () => {
     const createSignedUrl = vi.fn(async (path: string, seconds: number) => ({ data: { signedUrl: `https://x.supabase.co/storage/v1/object/sign/documents/${path}?token=t&s=${seconds}` }, error: null }));
     const from = vi.fn(() => ({ createSignedUrl }));
@@ -719,11 +741,14 @@ describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
       if (r.status !== "ok") throw new Error(r.status);
       expect(await markDocumentVersionReady(db, { accountId, documentId: gid, versionId: r.versionId, bytes: 10, sha256: HASH, actorId: ACTOR })).toBe(true);
       await verdict(db, accountId, mine.versionId, "infected");
-      await verdict(db, accountId, r.versionId, "unscannable");
+      await recordDocumentScan(db, { accountId, versionId: r.versionId, verdict: "unscannable", signature: "Heuristics.Encrypted.PDF" });
       const contactOnly = await listDocumentScanTimeline(db, accountId, ana, null, { limit: 10 });
       expect(contactOnly.map((x) => [x.id, x.scan_status, x.title])).toEqual([[mine.versionId, "infected", "Mine"]]);
       const both = await listDocumentScanTimeline(db, accountId, ana, g.groupId, { limit: 10 });
       expect(both.map((x) => x.id).sort()).toEqual([mine.versionId, r.versionId].sort());
+      const theirs = both.find((x) => x.id === r.versionId)!;
+      expect(theirs.scan_signature).toBe("Heuristics.Encrypted.PDF");
+      expect(removedReason(theirs.scan_status, theirs.scan_signature)).toBe("password");
     }));
 
   it("an unscannable version keeps its named cause on the read, and removedReason reads a password from it (owner ruling 2026-10-15; mutation: drop scan_signature from VERSION_COLS -> FAILS)", () =>
