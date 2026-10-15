@@ -29,6 +29,7 @@ vi.mock("@/lib/document-requests/request-task", () => ({ openRequestTask: (...a:
 
 const { customerStart, customerFinish, customerPage, resolveToken } = await import("./customer-upload");
 const { requestToken, tokenHash } = await import("./token");
+const { nextCustomerPollMs } = await import("./customer-state");
 const { m } = await import("@/lib/messages");
 
 const SECRET = "customer-upload-test-secret-000000032";
@@ -57,7 +58,7 @@ type Query = { table: string; ops: Op[] };
 type Answer = { data: unknown; error: { message: string } | null };
 type World = {
   request: DocumentRequestRow | null; requestDocument: unknown; files: unknown[]; version: unknown;
-  account: Answer; phones: unknown[]; rpc: Answer; upload: Answer;
+  account: Answer; phones: unknown[]; phonesError: string | null; rpc: Answer; upload: Answer;
 };
 
 let queries: Query[];
@@ -77,7 +78,7 @@ function answer(q: Query): Answer {
       return String(q.ops.find((o) => o[0] === "select")?.[1]).includes("versions:") ? ok(world.files) : ok(world.requestDocument);
     case "document_versions": return ok(world.version);
     case "accounts": return world.account;
-    case "phone_numbers": return ok(world.phones);
+    case "phone_numbers": return world.phonesError ? { data: null, error: { message: world.phonesError } } : ok(world.phones);
     default: throw new Error(`unexpected table ${q.table}`);
   }
 }
@@ -121,6 +122,7 @@ beforeEach(() => {
     account: ok({ brand_name: "Techos Río", brand_logo_path: `${ACC}/logo.png`, brand_color: "#0F766E" }),
     phones: [{ id: "p0", account_id: ACC, e164: "+18005550000", telnyx_id: null, status: "provisioned" },
       { id: "p1", account_id: ACC, e164: "+19565550123", telnyx_id: "t", status: "live" }],
+    phonesError: null,
     rpc: ok({ status: "ok", document_id: D, version_id: V, storage_path: PATH }),
     upload: ok({ signedUrl: "https://proj.supabase.co/storage/v1/object/upload/sign/documents/x?token=up", token: "up", path: PATH }),
   };
@@ -477,5 +479,52 @@ describe("10. customerPage: the page's whole read", () => {
       expect(page.items.map((i) => i.files)).toEqual([[], []]);
     }
     expect(db.listRequestFiles).not.toHaveBeenCalled();
+  });
+});
+
+describe("fix round: the token is proven BEFORE the body is read", () => {
+  it("an unknown token with a null body answers 404, not 400, on both routes; a revoked one 410 (mutation: validate the body above resolveToken -> FAILS)", async () => {
+    const stranger = requestToken(OTHER_ID);
+    expect(await customerStart(fakeDb(), stranger, null, NOW)).toEqual({ status: 404, body: { error: "not_found" } });
+    expect(await customerFinish(fakeDb(), stranger, null, NOW)).toEqual({ status: 404, body: { error: "not_found" } });
+    expect(await customerStart(fakeDb(), "short", null, NOW)).toEqual({ status: 404, body: { error: "not_found" } });
+    expect(await customerFinish(fakeDb(), "short", "not an object", NOW)).toEqual({ status: 404, body: { error: "not_found" } });
+    world.request = REVOKED;
+    expect(await customerStart(fakeDb(), TOKEN, null, NOW)).toEqual({ status: 410, body: { error: "revoked" } });
+    expect(await customerFinish(fakeDb(), TOKEN, null, NOW)).toEqual({ status: 410, body: { error: "revoked" } });
+  });
+});
+
+describe("fix round: a phone read that fails is logged by request id, never the token, and still answers no phone", () => {
+  it("over_quota: 409 without a phone, and one log line naming the request (mutation: no log -> FAILS)", async () => {
+    world.rpc = ok({ status: "over_quota" });
+    world.phonesError = "phone_numbers timeout";
+    expect(await customerStart(fakeDb(), TOKEN, START_BODY, NOW)).toEqual({ status: 409, body: { error: "over_quota" } });
+    const lines = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(lines).toContain(`document request ${REQ_ID}`);
+    expect(lines).toContain("phone_numbers timeout");
+    expect(lines).not.toContain(TOKEN);
+  });
+
+  it("the page: phone null, logged by request id (mutation: no log -> FAILS)", async () => {
+    world.phonesError = "phone_numbers timeout";
+    expect((await customerPage(fakeDb(), TOKEN, NOW)).phone).toBeNull();
+    const lines = errorSpy.mock.calls.flat().map(String).join("\n");
+    expect(lines).toContain(`document request ${REQ_ID}`);
+    expect(lines).toContain("phone_numbers timeout");
+    expect(lines).not.toContain(TOKEN);
+  });
+});
+
+describe("fix round: an unparseable version time never keeps the page polling", () => {
+  it("a Checking file whose created_at does not parse reads a non-finite age, and the poll stops (mutations: remove the state guard -> FAILS; invent age 0 for it -> FAILS)", async () => {
+    world.files = [{ id: "d1", request_item_key: "insurance", created_at: "2026-03-01T11:50:00.000Z", versions: [
+      { id: "v1", status: "ready", scan_status: "pending", scan_signature: null, created_at: "not a time" }] }];
+    const page = await customerPage(fakeDb(), TOKEN, NOW);
+    const files = page.items[0]!.files;
+    expect(files).toHaveLength(1);
+    expect(files[0]!.state).toBe("checking");
+    expect(Number.isFinite(files[0]!.ageMs)).toBe(false);
+    expect(nextCustomerPollMs(files)).toBeNull();
   });
 });

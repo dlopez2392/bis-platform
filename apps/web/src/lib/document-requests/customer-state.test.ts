@@ -71,6 +71,13 @@ describe("nextCustomerPollMs: re-read while a file is Checking, by the YOUNGEST 
     expect(nextCustomerPollMs([{ state: "checking", ageMs: 15 * 60_000 + 1 }])).toBeNull();
   });
 
+  it("a non-finite age (an unparseable time) never keeps the page polling: fail closed (fix round; mutation: remove the guard -> FAILS)", () => {
+    expect(nextCustomerPollMs([{ state: "checking", ageMs: NaN }])).toBeNull();
+    expect(nextCustomerPollMs([{ state: "checking", ageMs: Infinity }])).toBeNull();
+    // A file whose age IS known still decides on its own.
+    expect(nextCustomerPollMs([{ state: "checking", ageMs: NaN }, { state: "checking", ageMs: 2_000 }])).toBe(5_000);
+  });
+
   it("nothing Checking, nothing to wait for (mutation: keep polling with nothing checking -> FAILS)", () => {
     expect(nextCustomerPollMs([{ state: "received", ageMs: 0 }])).toBeNull();
     expect(nextCustomerPollMs([{ state: "virus", ageMs: 0 }, { state: "password", ageMs: 0 }, { state: "unscannable", ageMs: 0 }])).toBeNull();

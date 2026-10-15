@@ -35,7 +35,8 @@ export type CustomerFile = { state: CustomerFileState; ageMs: number };
  * minute, then every 15 s, and not after 15 minutes. One signature everywhere (plan review M6).
  */
 export function nextCustomerPollMs(files: readonly CustomerFile[]): number | null {
-  const ages = files.filter((f) => f.state === "checking").map((f) => f.ageMs);
+  // Fail closed (fix round): a non-finite age (an unparseable time) never keeps the page polling.
+  const ages = files.filter((f) => f.state === "checking" && Number.isFinite(f.ageMs)).map((f) => f.ageMs);
   if (ages.length === 0) return null;
   const youngest = Math.min(...ages);
   if (youngest > GIVE_UP_MS) return null;

@@ -37,12 +37,14 @@ export async function resolveToken(db: SupabaseClient, token: string, now: Date)
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** The business's first LIVE number, as a person reads it; null when it has none or the read fails (decorative). */
-async function livePhone(db: SupabaseClient, accountId: string): Promise<string | null> {
+/** The business's first LIVE number, as a person reads it; null when it has none or the read fails (decorative,
+ *  logged by request id like the branding read, never the token). */
+async function livePhone(db: SupabaseClient, request: DocumentRequestRow): Promise<string | null> {
   try {
-    const live = (await listPhoneNumbersForAccount(db, accountId)).find((p) => p.status === "live");
+    const live = (await listPhoneNumbersForAccount(db, request.account_id)).find((p) => p.status === "live");
     return live ? formatPhone(live.e164) : null;
-  } catch {
+  } catch (e) {
+    console.error(`document request ${request.id}: phone number unreadable: ${loggableError(e)}`);
     return null;
   }
 }
@@ -69,7 +71,7 @@ export async function customerStart(db: SupabaseClient, token: string, body: unk
     });
     if (s.status === "over_quota") {
       await openRequestTask(db, request.account_id, request, "storage_full", now);
-      const phone = await livePhone(db, request.account_id);
+      const phone = await livePhone(db, request);
       return answer(409, phone ? { error: "over_quota", phone } : { error: "over_quota" });
     }
     if (s.status === "rate_limited") return refuse(429, "rate_limited");
@@ -156,7 +158,7 @@ export async function customerPage(db: SupabaseClient, token: string, now: Date)
     console.error(`document request ${request.id}: branding unreadable: ${loggableError(e)}`);
   }
   const business = (branding && brandDisplayName(branding)) || t(m, "customerDocs.business", request.language);
-  const phone = await livePhone(db, request.account_id);
+  const phone = await livePhone(db, request);
   const files = r.kind === "open" ? await listRequestFiles(db, request.account_id, request.id) : [];
   return {
     state: r.kind, language: request.language, business, branding, phone,
@@ -165,7 +167,9 @@ export async function customerPage(db: SupabaseClient, token: string, now: Date)
       key: i.key, label: itemLabel(i, request.language),
       files: files.filter((f) => f.itemKey === i.key).flatMap((f): CustomerFile[] => {
         const state = customerFileState(f);
-        return state ? [{ state, ageMs: Math.max(0, now.getTime() - Date.parse(f.createdAt)) }] : [];
+        // An unparseable created_at stays non-finite (NaN), never an invented age: nextCustomerPollMs stops on it.
+        const age = now.getTime() - Date.parse(f.createdAt);
+        return state ? [{ state, ageMs: Number.isFinite(age) ? Math.max(0, age) : age }] : [];
       }),
     })),
   };
