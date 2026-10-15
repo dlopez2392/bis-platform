@@ -82,6 +82,8 @@ Every signed READ URL for a version is minted by one function, which refuses unl
 
 The token: 32 random bytes, base64url, present only in the URL. The database keeps its sha256; nothing logs it.
 
+*Amended 2026-10-15 (2b plan review):* (1) The token is DERIVED, not random: HMAC-SHA256 of the request id under `DOCUMENT_LINK_SECRET`, 32 bytes, base64url, so staff can Copy link on an open request again and a held text can be released without storing the link (orchestrator ruling; plan deviation 1). (2) `DOCUMENT_LINK_SECRET` is REQUIRED: a fresh random value of at least 32 bytes, different in Production and Preview, with no fallback to any other key; rotating it ends every open link. (3) Said precisely: no database column of ours holds the token (only its sha256) and our code never logs it; the link does travel in the text or email we send (so in that text's stored message row and in the provider's copy), and Vercel's request logs record the path `/d/<token>` of each visit. (Plan `docs/superpowers/plans/2026-10-15-document-vault-pr2b.md`, deviation 1, review M1 and I10.)
+
 ### 4.2 Staff side
 
 - **Pedir al cliente** on the Documents card (contact and group pages) opens a dialog: tick categories (plus "Otro" with a note), then choose Text / Email / Copy link (P6).
@@ -106,6 +108,8 @@ The token: 32 random bytes, base64url, present only in the URL. The database kee
 
 - A clean file answers its item. When every item is answered, `completed_at` is set and the link stops working.
 - Staff news: a timeline row per file ("Ana subió *Seguro*", customer mark). Staff work: ONE work-queue item per request, opened on its first clean file ("Ana mandó documentos · Revisar"), closed by staff.
+
+*Amended 2026-10-15 (2b plan review):* (1) A file the customer had ALREADY started (its upload reserved and its link signed) still finishes after the request completes or expires; only a revoked request refuses it. The start refuses new files once a request is completed or expired. (2) The work-queue item cannot be lost: if opening it fails after a clean verdict, the scan pass opens it on a later run (a bounded check for open or just-completed requests with a clean customer file and no item). (Plan deviations 8 and 13; orchestrator rulings I5, I6.)
 
 ## 5. PR 2c: the "7 de 9" checklist
 
