@@ -162,3 +162,17 @@ describe("GroupTimeline (S-03 part 2b, spec §8.8)", () => {
     expect(row).not.toContain("data-timeline-subject");
   });
 });
+
+describe("a document-request row on the group page (S-07 2b)", () => {
+  it("renders as one: its verb, the asker's mark, the Send icon and, for the group's own request (contactId \"\"), no member link (mutations: return null for the documentRequest case, or wear the Paperclip -> FAILS)", () => {
+    const entries = [{ kind: "documentRequest", id: "r1", at: AT, contactId: "", request: { id: "r1", items: [{ key: "insurance", category: "insurance", note: null }],
+      channel: "link", created_by: "user_me", created_at: AT, contact_id: null, client_group_id: "g1" } }] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const row = rowHtml(render({ rows, tr }, "es"), "documentRequest");
+    expect(row).toContain(`>${m["timeline.documentRequestOne.es"]}<`);
+    expect(row).toContain(`>${m["provenance.you.es"]}<`);
+    expect(row).toContain("lucide-send");
+    expect(row).not.toContain("data-timeline-subject");
+  });
+});

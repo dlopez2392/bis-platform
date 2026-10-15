@@ -12,6 +12,7 @@ import { createOpportunity } from "../opportunities";
 import { createForm, createSubmission, linkSubmissionContact } from "../forms";
 import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
+import { createDocumentRequest } from "../document-requests";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
@@ -601,5 +602,21 @@ describe("the documents source (S-07, plan deviation 3)", () => {
       expect(removed.map((i) => i.id)).toEqual([r.versionId]);
       const e = removed[0]!;
       expect(e.kind === "documentRemoved" && [e.scan.title, e.scan.scan_status, e.contactId, e.at === e.scan.scanned_at]).toEqual(["Lease", "infected", ana, true]);
+    }));
+});
+
+describe("the documents source's request rows (S-07 2b, plan deviation 6)", () => {
+  it("a contact with one request reads a documentRequest entry at the request's created_at, carrying its items (mutation: drop the fourth read -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const items = [{ key: "insurance" as const, category: "insurance" as const, note: null }, { key: "other" as const, category: "other" as const, note: "Pool permit" }];
+      const req = await createDocumentRequest(db, { id: crypto.randomUUID(), accountId, record: { kind: "contact", id: ana }, items, language: "en",
+        tokenHash: crypto.randomUUID().replace(/-/g, "").repeat(2), channel: "text", createdBy: "user_asker", now: new Date() });
+      const page = await listTimelinePage(db, accountId, [ana]);
+      expect(page.failed).toEqual([]);
+      const rows = page.items.filter((i) => i.kind === "documentRequest");
+      expect(rows.map((i) => i.id)).toEqual([req.id]);
+      const e = rows[0]!;
+      expect(e.kind === "documentRequest" && [e.at, e.contactId, e.request.items, e.request.created_by]).toEqual([req.created_at, ana, items, "user_asker"]);
     }));
 });

@@ -140,10 +140,11 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     expect(p.items[29]!.id).toBe(u(2));
     expect(p.older).toEqual({ v: p.items[29]!.at, id: u(2) });
     const paged = full.reads.filter((r) => r.table !== "conversations");
-    // S-07 1b (owner ruling R2) + S-07 2a (spec 3.5): the documents source reads three relations,
-    // `documents`, 0078's document_version_timeline and 0079's document_scan_timeline, so there are
-    // two reads more than there are sources, each at limit + 1.
-    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 2).fill(TIMELINE_PAGE_SIZE + 1));
+    // S-07 1b (owner ruling R2) + S-07 2a (spec 3.5) + S-07 2b (plan deviation 6): the documents source
+    // reads four relations, `documents`, 0078's document_version_timeline, 0079's document_scan_timeline
+    // and 0080's document_requests, so there are three reads more than there are sources, each at limit + 1.
+    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 3).fill(TIMELINE_PAGE_SIZE + 1));
+    expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_version_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_scan_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     const exact = await listContactTimelinePage(fakeDb({ notes: notes(30) }).db, u(100), u(99));
@@ -168,6 +169,14 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
 
   it("a refused read of the removed-file relation fails the documents source, not a swallowed empty (spec 3.5; mutation: .catch(() => []) on listDocumentScanTimeline -> FAILS)", async () => {
     const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_scan_timeline"] });
+    const errors: string[] = [];
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
+    expect(page.failed).toEqual(["documents"]);
+    expect(errors).toEqual(["documents"]);
+  });
+
+  it("a refused read of the request relation fails the documents source too, not a swallowed empty (S-07 2b; mutation: .catch(() => []) on listDocumentRequestTimeline -> FAILS)", async () => {
+    const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_requests"] });
     const errors: string[] = [];
     const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
     expect(page.failed).toEqual(["documents"]);
