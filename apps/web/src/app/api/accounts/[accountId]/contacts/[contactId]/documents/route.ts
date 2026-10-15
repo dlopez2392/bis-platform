@@ -5,7 +5,7 @@ import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
 import type { DocumentsResponse } from "@/lib/documents/documents-load";
-import { documentView, documentsClock } from "@/lib/documents/document-view";
+import { documentView, documentsClock, documentsSpace } from "@/lib/documents/document-view";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +23,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   const db = await dbForRequest(); // RLS-scoped: NEVER serviceDb here
   try {
     if (!(await getContact(db, accountId, contactId))) return NextResponse.json({}, { status: 404 });
-    const [docs, { today, zone }] = await Promise.all([listRecordDocuments(db, accountId, { kind: "contact", id: contactId }), documentsClock(db, accountId)]);
+    const [docs, { today, zone }, space] = await Promise.all([
+      listRecordDocuments(db, accountId, { kind: "contact", id: contactId }), documentsClock(db, accountId), documentsSpace(db, accountId)]);
     const all = [...docs.live, ...docs.trashed];
     const names = await listPeopleNames(db, [...new Set(all.map((d) => d.created_by))]).catch((e: unknown) => {
       console.error(`documents read names (account ${accountId}): ${loggableError(e)}`);
@@ -34,6 +35,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
       live: docs.live.map((d) => documentView(d, access.userId, names, zone)),
       trashed: docs.trashed.map((d) => documentView(d, access.userId, names, zone)),
       capped: docs.liveMore || docs.trashedMore,
+      space,
     };
     return NextResponse.json(body);
   } catch (e) {

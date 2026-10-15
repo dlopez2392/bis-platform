@@ -14,12 +14,14 @@ const db = {
   getContact: vi.fn(), readGroup: vi.fn(), getDocument: vi.fn(), getDocumentVersion: vi.fn(), getUploadingVersion: vi.fn(),
   createDocument: vi.fn(), reserveDocumentVersion: vi.fn(), markDocumentVersionReady: vi.fn(), discardDocumentUpload: vi.fn(),
   updateDocumentField: vi.fn(), setDocumentOwnersOnly: vi.fn(), trashDocument: vi.fn(), restoreDocument: vi.fn(),
+  listDocumentVersionStates: vi.fn(), claimDocumentForPurge: vi.fn(), deletePurgedDocument: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
 };
 vi.mock("@bis/db", async (importOriginal) => {
   const real = await importOriginal<typeof import("@bis/db")>();
   return { ...db, DOCUMENT_BUCKET: real.DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES: real.DOCUMENT_MAX_BYTES,
-    isDocumentCategory: real.isDocumentCategory, isDocumentContentType: real.isDocumentContentType };
+    isDocumentCategory: real.isDocumentCategory, isDocumentContentType: real.isDocumentContentType,
+    DOCUMENT_PURGING_MARK: real.DOCUMENT_PURGING_MARK };
 });
 const A = await import("./documents-actions");
 
@@ -50,6 +52,9 @@ beforeEach(() => {
   db.createDocument.mockResolvedValue(D);
   db.reserveDocumentVersion.mockResolvedValue({ status: "ok", versionId: V, storagePath: `${ACC}/${D}/${V}` });
   storage.createSignedUploadUrl.mockResolvedValue({ data: { signedUrl: "https://x/upload?token=t", token: "t", path: "p" }, error: null });
+  // clearAllMocks keeps a queued mockResolvedValueOnce: a case that stops early (or a mutation) would
+  // hand its unread answer to the NEXT case's proof read. reset drops the queue.
+  db.getDocument.mockReset();
   db.getDocument.mockResolvedValue(DOC);
   db.getUploadingVersion.mockResolvedValue({ id: V, document_id: D, account_id: ACC, storage_path: `${ACC}/${D}/${V}`, bytes: PDF.length, content_type: "application/pdf", original_name: "Lease.pdf", status: "uploading", created_at: "x" });
   storage.download.mockResolvedValue({ data: new Blob([PDF], { type: "application/pdf" }), error: null });
@@ -190,7 +195,7 @@ describe("abandonDocumentUploadAction (spec 5.1)", () => {
 describe("getDocumentUrlAction (spec 5.1)", () => {
   it("a version the reader cannot see is 'not found' (opening is not changing; RLS read on the request client) and nothing is minted (mutation: read the version on the service client, or answer refused -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(null);
-    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.notFound" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
     expect(db.getDocumentVersion).toHaveBeenCalledWith(REQUEST, ACC, V);
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
@@ -217,13 +222,201 @@ describe("getDocumentUrlAction (spec 5.1)", () => {
   it("a version whose document the reader cannot see is 'not found' and nothing is minted (mutation: skip the document read -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue(readyVersion("application/pdf"));
     db.getDocument.mockResolvedValue(null);
-    expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.notFound" });
+    expect(await A.getDocumentUrlAction(ACC, V, "download")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
   });
   it("a version still uploading is never minted (mutation: drop the ready check -> FAILS)", async () => {
     db.getDocumentVersion.mockResolvedValue({ ...readyVersion("application/pdf"), status: "uploading" });
-    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.notFound" });
+    expect(await A.getDocumentUrlAction(ACC, V, "view")).toEqual({ ok: false, error: "documents.error.fileNotFound" });
     expect(storage.createSignedUrl).not.toHaveBeenCalled();
+  });
+});
+
+const LISTED = { ...DOC, current_version_id: "55555555-5555-4555-8555-555555555555" };
+const TRASHED = { ...LISTED, deleted_at: "2026-10-13T15:00:00.123456+00:00", deleted_by: "user_owner" };
+const vInput = (over: Partial<Parameters<typeof A.startDocumentVersionUploadAction>[2]> = {}) =>
+  ({ name: "Lease v2.pdf", size: 1300, contentType: "application/pdf", ...over });
+
+describe("startDocumentVersionUploadAction (spec 3.3, 4.1: Upload new version)", () => {
+  beforeEach(() => { db.getDocument.mockResolvedValue(LISTED); });
+  it("proves the document on the REQUEST client, then reserves a version of THAT document on the service client, and answers the signed URL (mutation: skip getDocument -> FAILS)", async () => {
+    expect(await A.startDocumentVersionUploadAction(ACC, D.toUpperCase(), vInput()))
+      .toEqual({ ok: true, documentId: D, versionId: V, uploadUrl: "https://x/upload?token=t" });
+    expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
+    expect(db.getDocument.mock.invocationCallOrder[0]!).toBeLessThan(db.reserveDocumentVersion.mock.invocationCallOrder[0]!);
+    expect(db.reserveDocumentVersion).toHaveBeenCalledWith(SERVICE, {
+      accountId: ACC, documentId: D, bytes: 1300, contentType: "application/pdf", originalName: "Lease v2.pdf", uploadedBy: "user_owner" });
+    expect(db.createDocument).not.toHaveBeenCalled();
+    expect(storage.createSignedUploadUrl).toHaveBeenCalledWith(`${ACC}/${D}/${V}`);
+  });
+  it("an id with hex letters, sent uppercased, is lowercased for the proof read, the reservation and the answer (review I1: D has no letters; mutation: use the raw input id -> FAILS)", async () => {
+    const HEX = "abcdef12-3456-4789-8abc-def012345678";
+    db.reserveDocumentVersion.mockResolvedValue({ status: "ok", versionId: V, storagePath: `${ACC}/${HEX}/${V}` });
+    expect(await A.startDocumentVersionUploadAction(ACC, HEX.toUpperCase(), vInput()))
+      .toEqual({ ok: true, documentId: HEX, versionId: V, uploadUrl: "https://x/upload?token=t" });
+    expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, HEX);
+    expect(db.reserveDocumentVersion.mock.calls[0]![1]).toMatchObject({ documentId: HEX });
+    expect(storage.createSignedUploadUrl).toHaveBeenCalledWith(`${ACC}/${HEX}/${V}`);
+  });
+  it("a file the caller cannot see, or one never listed, is refused and nothing is reserved (mutations: treat null as visible; drop the current-version check -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(null);
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.refused" });
+    db.getDocument.mockResolvedValueOnce(DOC);   // current_version_id null: its first upload is still in flight
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(db.reserveDocumentVersion).not.toHaveBeenCalled();
+  });
+  it("a document with no READY current version gets no new version: the first ready version is the oldest only because the app refuses here (0078 comment; mutation: drop the current-version check -> FAILS)", async () => {
+    // current_version_id is non-null only on a ready version (0077's documents_current_is_ready trigger),
+    // so null is exactly "no ready version yet". Visible, live, and nothing else wrong with it.
+    db.getDocument.mockResolvedValue({ ...LISTED, current_version_id: null });
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(db.reserveDocumentVersion).not.toHaveBeenCalled();
+    expect(storage.createSignedUploadUrl).not.toHaveBeenCalled();
+  });
+  it("a file in the trash gets no new version (plan deviation 2; mutation: drop the trash check -> FAILS)", async () => {
+    db.getDocument.mockResolvedValue(TRASHED);
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.trashed" });
+    expect(db.reserveDocumentVersion).not.toHaveBeenCalled();
+  });
+  it("too large and a disallowed type are refused before any read (mutation: read first -> FAILS on the call count)", async () => {
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput({ size: 26_214_401 })))
+      .toEqual({ ok: false, error: "documents.error.tooLarge", params: { size: "25.1 MB" } });
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput({ name: "x.exe" }))).toEqual({ ok: false, error: "documents.error.badType" });
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput({ contentType: "image/svg+xml" }))).toEqual({ ok: false, error: "documents.error.badType" });
+    expect(db.getDocument).not.toHaveBeenCalled();
+  });
+  it("quota full answers the quota sentence and never discards anything: the file and its versions stay (mutation: discard(…, null) on a refusal -> FAILS)", async () => {
+    db.reserveDocumentVersion.mockResolvedValue({ status: "over_quota" });
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.quota" });
+    expect(db.discardDocumentUpload).not.toHaveBeenCalled();
+  });
+  it("no signed URL: the new reservation goes, by its own version id, and the answer is the upload failure (mutation: discard with null -> FAILS)", async () => {
+    storage.createSignedUploadUrl.mockResolvedValue({ data: null, error: { message: "down" } });
+    expect(await A.startDocumentVersionUploadAction(ACC, D, vInput())).toEqual({ ok: false, error: "documents.error.upload" });
+    expect(db.discardDocumentUpload).toHaveBeenCalledWith(SERVICE, ACC, D, V);
+  });
+});
+
+describe("finishDocumentUploadAction refuses a file that went to the trash mid-upload (plan deviation 2)", () => {
+  it("removes the object first, then the reservation, answers 'in the trash', and never marks it ready (mutation: drop the trash check -> FAILS)", async () => {
+    db.getDocument.mockResolvedValue(TRASHED);
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: false, error: "documents.error.trashed" });
+    expect(storage.remove).toHaveBeenCalledWith([`${ACC}/${D}/${V}`]);
+    expect(db.discardDocumentUpload).toHaveBeenCalledWith(SERVICE, ACC, D, V);
+    expect(storage.remove.mock.invocationCallOrder[0]!).toBeLessThan(db.discardDocumentUpload.mock.invocationCallOrder[0]!);
+    expect(storage.download).not.toHaveBeenCalled();
+    expect(db.markDocumentVersionReady).not.toHaveBeenCalled();
+  });
+});
+
+describe("purgeDocumentAction: Delete forever by the typed name (spec 4.4, 5.1; deviations 3, 4, 5, 8)", () => {
+  const CLAIMED = "2026-10-14T09:00:00.5+00:00";
+  beforeEach(() => {
+    db.getDocument.mockResolvedValue(TRASHED);
+    db.listDocumentVersionStates.mockResolvedValue([
+      { storage_path: `${ACC}/${D}/v1`, status: "ready" }, { storage_path: `${ACC}/${D}/v2`, status: "ready" }]);
+    db.claimDocumentForPurge.mockResolvedValue(CLAIMED);
+    db.deletePurgedDocument.mockResolvedValue(true);
+  });
+  it("proves the file on the REQUEST client, then claims, removes EVERY version's object, then deletes the row, in that order (mutations: delete before remove; remove only the current path -> FAILS)", async () => {
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
+    expect(db.listDocumentVersionStates).toHaveBeenCalledWith(SERVICE, ACC, D);
+    expect(db.claimDocumentForPurge).toHaveBeenCalledWith(SERVICE, ACC, D, TRASHED.deleted_at);
+    expect(storage.remove).toHaveBeenCalledWith([`${ACC}/${D}/v1`, `${ACC}/${D}/v2`]);
+    expect(db.deletePurgedDocument).toHaveBeenCalledWith(SERVICE, ACC, TRASHED, CLAIMED, "user_owner");
+    const order = [db.getDocument, db.claimDocumentForPurge, storage.remove, db.deletePurgedDocument].map((f) => f.mock.invocationCallOrder[0]!);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+  it("the typed name must match exactly: case and edge spaces count (deviation 8; mutation: compare trimmed or lowercased -> FAILS)", async () => {
+    for (const typed of ["lease", "Lease ", " Lease", "LEASE", ""]) {
+      expect(await A.purgeDocumentAction(ACC, D, typed), typed).toEqual({ ok: false, error: "documents.purge.mismatch" });
+    }
+    expect(db.listDocumentVersionStates).not.toHaveBeenCalled();
+    expect(db.claimDocumentForPurge).not.toHaveBeenCalled();
+  });
+  it("the visible form of the name confirms: a run of spaces, a non-breaking space, a decomposed accent; another letter refuses (Task 7 review I2; mutation: compare raw strings -> FAILS)", async () => {
+    for (const [title, typed] of [["Lease  2026", "Lease 2026"], ["Lease\u00a02026", "Lease 2026"], ["Pen\u0303a", "Pe\u00f1a"]] as const) {
+      db.getDocument.mockResolvedValue({ ...TRASHED, title });
+      expect(await A.purgeDocumentAction(ACC, D, typed), JSON.stringify(title)).toEqual({ ok: true });
+    }
+    db.getDocument.mockResolvedValue({ ...TRASHED, title: "Pen\u0303a" });
+    expect(await A.purgeDocumentAction(ACC, D, "Pena")).toEqual({ ok: false, error: "documents.purge.mismatch" });
+  });
+  it("only a file in the trash, and only one the caller can see (mutations: drop the trashed check; treat null as visible -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(LISTED);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.refused" });
+    db.getDocument.mockResolvedValueOnce(null);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.purgeDocumentAction(ACC, "not-a-uuid", "Lease")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(db.claimDocumentForPurge).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+  it("a version still uploading refuses the purge before anything changes (deviation 3; mutation: drop the in-flight check -> FAILS)", async () => {
+    db.listDocumentVersionStates.mockResolvedValue([
+      { storage_path: `${ACC}/${D}/v1`, status: "ready" }, { storage_path: `${ACC}/${D}/v2`, status: "uploading" }]);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purgeUploading" });
+    expect(db.claimDocumentForPurge).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+  it("a lost claim (someone restored or changed it first) removes nothing (deviation 4; mutation: ignore a null claim -> FAILS)", async () => {
+    db.claimDocumentForPurge.mockResolvedValue(null);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purgeChanged" });
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(db.deletePurgedDocument).not.toHaveBeenCalled();
+  });
+  it("storage refusing the removal keeps the row: nothing is deleted, and the answer says try again (mutation: delete the row anyway -> FAILS)", async () => {
+    storage.remove.mockResolvedValue({ data: null, error: { message: "down" } });
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purge" });
+    expect(db.deletePurgedDocument).not.toHaveBeenCalled();
+  });
+  it("a row that moved after its objects went is a failure, never a success (mutation: ignore deletePurgedDocument's false -> FAILS)", async () => {
+    db.deletePurgedDocument.mockResolvedValue(false);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purge" });
+  });
+  it("a concurrent Delete forever that finished the file first is success, not 'changed' or 'try again': the file is gone, as asked (review; mutation: answer the delete's false without re-reading -> FAILS)", async () => {
+    // The other purge re-claimed from our marker, removed the same objects and deleted the row:
+    // our delete matches nothing, and the service re-read finds no row.
+    db.getDocument.mockResolvedValueOnce(TRASHED).mockResolvedValueOnce(null);
+    db.deletePurgedDocument.mockResolvedValue(false);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
+  });
+  it("a claim lost because a concurrent Delete forever already deleted the row is success too (review; mutation: answer a null claim without re-reading -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(TRASHED).mockResolvedValueOnce(null);
+    db.claimDocumentForPurge.mockResolvedValue(null);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(db.deletePurgedDocument).not.toHaveBeenCalled();
+  });
+  it("a lost claim whose row another Delete forever is mid-way through (the purging marker) is success: the file is being deleted (review M1; mutation: treat only a missing row as gone -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(TRASHED)
+      .mockResolvedValueOnce({ ...TRASHED, deleted_at: "2026-10-14T09:00:01+00:00", deleted_by: "documents:purging" });
+    db.claimDocumentForPurge.mockResolvedValue(null);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+  it("a delete that matched nothing because another Delete forever re-claimed the row (the purging marker) is success (review M1; mutation: treat only a missing row as gone -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(TRASHED)
+      .mockResolvedValueOnce({ ...TRASHED, deleted_at: "2026-10-14T09:00:01+00:00", deleted_by: "documents:purging" });
+    db.deletePurgedDocument.mockResolvedValue(false);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
+    expect(db.getDocument.mock.calls[1]).toEqual([SERVICE, ACC, D]);
+  });
+  it("Staff (and a Technician) are refused before anything is read: Delete forever is an Owner's and the agency's (owner ruling R1, deviation 5; mutation: drop the canManage check -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(STAFF);
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purgeRole" });
+    requireAccountAccess.mockResolvedValue({ userId: "user_tech", isAgency: false, role: "technician", canManage: false });
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: false, error: "documents.error.purgeRole" });
+    expect(db.getDocument).not.toHaveBeenCalled();
+    expect(db.claimDocumentForPurge).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+  it("the agency is allowed (canManage true without an account role) (mutation: require role === 'owner' -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue({ userId: "user_agency", isAgency: true, role: null, canManage: true });
+    expect(await A.purgeDocumentAction(ACC, D, "Lease")).toEqual({ ok: true });
   });
 });
 
@@ -318,6 +511,8 @@ describe("nothing throws out of an action (the tree's convention)", () => {
     ["undo owners only", () => A.undoOwnersOnlyAction(ACC, D, false, true), "documents.error.failed"],
     ["trash", () => A.trashDocumentAction(ACC, D), "documents.error.failed"],
     ["restore", () => A.restoreDocumentAction(ACC, D, "2026-10-13T15:00:00Z"), "documents.error.failed"],
+    ["start version", () => A.startDocumentVersionUploadAction(ACC, D, { name: "a.pdf", size: 10, contentType: "application/pdf" }), "documents.error.upload"],
+    ["purge", () => A.purgeDocumentAction(ACC, D, "Lease"), "documents.error.purge"],
   ] as const)("%s: a failed request-client read answers its key (mutation: drop that action's try/catch -> FAILS)", async (_l, run, error) => {
     db.getContact.mockRejectedValue(new Error("db down"));
     db.getDocument.mockRejectedValue(new Error("db down"));

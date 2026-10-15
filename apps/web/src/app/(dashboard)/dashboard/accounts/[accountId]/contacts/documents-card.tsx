@@ -18,11 +18,13 @@ import { cn } from "@/lib/utils";
 import { documentsLoadFrom, type DocumentsLoad, type DocumentView } from "@/lib/documents/documents-load";
 import { dayDiff, expiryView, expiryText, purgeDaysLeft, purgeText } from "@/lib/documents/expiry";
 import { MAX_BATCH, defaultCategory, titleFromFileName, typeForFile } from "@/lib/documents/rules";
-import { browserDeps, uploadOne, type UploadBatch } from "@/lib/documents/upload-client";
-import { updateDocumentFieldAction, undoDocumentFieldAction, type DocumentUndo } from "./documents-actions";
-import { documentHandlers, type DocumentHandlers } from "./documents-card-handlers";
+import { browserDeps, browserVersionDeps, uploadOne, uploadVersion, type UploadBatch, type UploadPhase } from "@/lib/documents/upload-client";
+import { spaceUsedText } from "@/lib/documents/space";
+import type { DocumentUndo } from "./documents-actions";
+import { documentHandlers, type DocumentHandlers, type FieldSave } from "./documents-card-handlers";
 import { DocumentUploadPanel, type PanelFile } from "./document-upload-panel";
 import { DocumentViewer } from "./document-viewer";
+import { DocumentPurgeDialog } from "./document-purge-dialog";
 
 export type { DocumentHandlers } from "./documents-card-handlers";
 
@@ -82,15 +84,45 @@ export function keepOpen(openId: string | null, load: DocumentsLoad): string | n
 }
 
 /**
+ * Delete forever's target survives a re-read only while that read still lists it in the TRASH (final
+ * review 1): purged, restored or gone elsewhere, it is forgotten, so a later re-trash of the same file
+ * never reopens the dialog by itself. A failed read keeps it, as keepOpen does.
+ */
+export function keepPurge(purgeId: string | null, load: DocumentsLoad): string | null {
+  if (!purgeId || load.status !== "ready") return purgeId;
+  return load.data.trashed.some((d) => d.id === purgeId) ? purgeId : null;
+}
+
+/**
  * The row menu (spec 4.1), as data: the component maps it one to one, and the test reads it (the menu's
  * content renders in a portal only while open). Owners only is the Owner's and the agency's.
  */
-export type RowMenuItem = { id: "edit" | "ownersOnly" | "download" | "trash"; labelKey: MessageKey };
+export type RowMenuItem = { id: "edit" | "ownersOnly" | "newVersion" | "download" | "trash"; labelKey: MessageKey };
 export function rowMenuItems(doc: DocumentView, canManage: boolean): RowMenuItem[] {
   const items: RowMenuItem[] = [{ id: "edit", labelKey: "documents.edit" }];
   if (canManage) items.push({ id: "ownersOnly", labelKey: doc.ownersOnly ? "documents.makeTeam" : "documents.makeOwnersOnly" });
-  items.push({ id: "download", labelKey: "documents.download" }, { id: "trash", labelKey: "documents.trash" });
+  items.push(
+    { id: "newVersion", labelKey: "documents.newVersion" },
+    { id: "download", labelKey: "documents.download" }, { id: "trash", labelKey: "documents.trash" });
   return items;
+}
+
+/** A row's inline-edit callbacks, through the handlers (PR 1a review M6): the card never calls an edit action itself. */
+export function rowSavers(doc: DocumentView, handlers: Pick<DocumentHandlers, "saveField" | "undoField">): {
+  save: (field: DocumentUndo["field"]) => (value: string) => Promise<FieldSave>;
+  undoWith: (payload: unknown) => Promise<{ ok: true } | { ok: false; error: string }>;
+} {
+  return {
+    save: (field) => (value) => handlers.saveField(doc, field, value),
+    undoWith: (payload) => handlers.undoField(payload),
+  };
+}
+
+/** What the card says when a new version's journey ends: its success, or the refusal in the reader's words. Nothing mid-way. */
+export function versionToast(end: UploadPhase, title: string, locale: Locale): { ok: boolean; text: string } | null {
+  if (end.kind === "done") return { ok: true, text: t(m, "documents.versionAdded", locale, { title }) };
+  if (end.kind === "failed") return { ok: false, text: t(m, end.error as MessageKey, locale, end.params) };
+  return null;
 }
 
 const focusRing = "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50";
@@ -122,33 +154,23 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function DocumentRow({ accountId, doc, today, canManage, locale, handlers, onOpen }: {
-  accountId: string; doc: DocumentView; today: string; canManage: boolean; locale: Locale;
-  handlers: DocumentHandlers; onOpen: (d: DocumentView) => void;
+function DocumentRow({ doc, today, canManage, locale, handlers, phase, onOpen, onNewVersion }: {
+  doc: DocumentView; today: string; canManage: boolean; locale: Locale;
+  handlers: DocumentHandlers; phase: UploadPhase | null; onOpen: (d: DocumentView) => void; onNewVersion: (d: DocumentView) => void;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, locale, params);
   const [editing, setEditing] = useState(false);
   // Every inline edit saves at once with an Undo (rule 6); the Undo is the server's own compare-and-set.
-  const save = (field: DocumentUndo["field"]) => async (value: string) => {
-    const r = await updateDocumentFieldAction(accountId, doc.id, field, value)
-      .catch((): { ok: false; error: string; params?: Params } => ({ ok: false, error: "documents.error.failed" }));
-    if (!r.ok) return { ok: false as const, error: tt(r.error as MessageKey, r.params) };
-    handlers.changed();
-    return { ok: true as const, undoPayload: r.undoPayload, shown: r.shown };
-  };
-  const undoWith = async (payload: unknown) => {
-    const r = await undoDocumentFieldAction(accountId, payload)
-      .catch((): { ok: false; error: string; params?: Params } => ({ ok: false, error: "documents.error.failed" }));
-    if (!r.ok) return { ok: false as const, error: tt(r.error as MessageKey, r.params) };
-    handlers.changed();
-    return { ok: true as const };
-  };
+  const { save, undoWith } = rowSavers(doc, handlers);
   const choose = (item: RowMenuItem) => {
     if (item.id === "edit") setEditing((e) => !e);
     else if (item.id === "ownersOnly") void handlers.setOwnersOnly(doc, !doc.ownersOnly);
+    else if (item.id === "newVersion") onNewVersion(doc);
     else if (item.id === "download") void handlers.download(doc);
     else void handlers.trash(doc);
   };
+  const progress = phase?.kind === "uploading" ? tt("documents.progress.uploading", { percent: phase.percent })
+    : phase?.kind === "checking" ? tt("documents.progress.checking") : null;
   return (
     <li data-document-row={doc.id}
       className={cn("relative rounded-[var(--radius-ctl)] hover:bg-[var(--surface-3)] motion-safe:transition-colors motion-safe:duration-150", rowLine)}>
@@ -167,11 +189,15 @@ function DocumentRow({ accountId, doc, today, canManage, locale, handlers, onOpe
             <span aria-hidden="true">·</span>
             <span>{sourceLine(doc, today, locale)}</span>
             <ExpiryLine expiresOn={doc.expiresOn} today={today} locale={locale} />
+            {doc.versions.length > 1 ? (
+              <span data-document-version className="tabular-nums">{tt("documents.version", { n: doc.versions.length })}</span>
+            ) : null}
             {doc.ownersOnly ? (
               <span data-owners-only className="inline-flex items-center gap-1">
                 <Lock aria-hidden="true" className="size-3" />{tt("documents.ownersOnly")}
               </span>
             ) : null}
+            {progress ? <span data-version-progress aria-live="polite" className="tabular-nums">{progress}</span> : null}
           </span>
         </button>
         <DropdownMenu>
@@ -238,6 +264,7 @@ export function DocumentsCardView(p: {
   accountId: string; load: DocumentsLoad; canManage: boolean; emptyText: string; locale: Locale; handlers: DocumentHandlers;
   onRetry: () => void; onFiles: (files: File[], source: "upload" | "camera") => void; onOpen: (doc: DocumentView) => void;
   panel: ReactNode | null;
+  versionPhases: Readonly<Record<string, UploadPhase>>; onNewVersion: (doc: DocumentView) => void; onPurge: (doc: DocumentView) => void;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, p.locale, params);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -259,6 +286,7 @@ export function DocumentsCardView(p: {
     );
   }
   const { data } = p.load;
+  const spaceText = spaceUsedText(data.space, p.locale);
   const hasFiles = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
   return (
     <div data-documents-card
@@ -273,9 +301,12 @@ export function DocumentsCardView(p: {
         if (files.length > 0) p.onFiles(files, "upload");
       }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {plural(m, "documents.count", data.live.length, p.locale, { count: data.live.length })}
-        </span>
+        <div className="flex min-w-0 flex-col">
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {plural(m, "documents.count", data.live.length, p.locale, { count: data.live.length })}
+          </span>
+          {spaceText ? <span data-space-used className="text-xs text-muted-foreground tabular-nums">{spaceText}</span> : null}
+        </div>
         {p.panel ? null : (
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="ghost" data-take-photo
@@ -293,8 +324,8 @@ export function DocumentsCardView(p: {
       ) : (
         <ul>
           {data.live.map((doc) => (
-            <DocumentRow key={doc.id} accountId={p.accountId} doc={doc} today={data.today} canManage={p.canManage}
-              locale={p.locale} handlers={p.handlers} onOpen={p.onOpen} />
+            <DocumentRow key={doc.id} doc={doc} today={data.today} canManage={p.canManage} locale={p.locale} handlers={p.handlers}
+              phase={p.versionPhases[doc.id] ?? null} onOpen={p.onOpen} onNewVersion={p.onNewVersion} />
           ))}
         </ul>
       )}
@@ -311,8 +342,20 @@ export function DocumentsCardView(p: {
                   <span lang="" className="block truncate text-card-foreground">{doc.title}</span>
                   <span className="text-xs text-muted-foreground">{purgeText(purgeDaysLeft(doc.deletedAt ?? data.now, data.now), p.locale)}</span>
                 </span>
-                <Button type="button" variant="ghost" size="sm" data-document-restore className={control}
-                  onClick={() => void p.handlers.restore(doc)}>{tt("documents.restore")}</Button>
+                {/* Review m1: a Delete forever that began and did not finish can never be restored (deviation 4): the state, as a dot and a word (rule 3). */}
+                {doc.purging ? (
+                  <span data-document-purging className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                    <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-[var(--warn)]" />{tt("documents.status.purging")}
+                  </span>
+                ) : (
+                  <Button type="button" variant="ghost" size="sm" data-document-restore className={control}
+                    onClick={() => void p.handlers.restore(doc)}>{tt("documents.restore")}</Button>
+                )}
+                {/* An Owner or the agency only (owner ruling R1; the server refuses anyone else too); it also finishes a purge that stopped part-way. */}
+                {p.canManage ? (
+                  <Button type="button" variant="ghost" size="sm" data-document-purge className={control}
+                    onClick={() => p.onPurge(doc)}>{tt("documents.deleteForever")}</Button>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -338,6 +381,8 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const [state, setState] = useState<{ route: string; load: DocumentsLoad }>({ route: "", load: { status: "loading" } });
   const [nonce, setNonce] = useState(0);
   const [openId, setOpenId] = useState<string | null>(null);
+  // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it.
+  const [purgeId, setPurgeId] = useState<string | null>(null);
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
@@ -345,6 +390,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       setState((s) => (load.status === "error" && s.route === route && s.load.status === "ready" ? s : { route, load }));
       // A file that left the list is forgotten, so an Undo or a Restore later never reopens the viewer by itself.
       setOpenId((id) => keepOpen(id, load));
+      setPurgeId((id) => keepPurge(id, load));
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
@@ -409,6 +455,40 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
     if (f && (await runOne(f))) settle(new Set([key]));
   });
 
+  // "Upload new version" (spec 4.1): the row menu opens ONE hidden single-file input; the chosen file goes
+  // up under the card's one upload lock (a batch, a Retry and a new version never overlap), its progress on
+  // its own row, and the card says how it ended.
+  const versionInput = useRef<HTMLInputElement>(null);
+  const versionTarget = useRef<DocumentView | null>(null);
+  const [versionPhases, setVersionPhases] = useState<Record<string, UploadPhase>>({});
+  const setVersionPhase = (id: string, phase: UploadPhase | null) => setVersionPhases((ps) => {
+    const next = { ...ps };
+    if (phase) next[id] = phase; else delete next[id];
+    return next;
+  });
+  const onNewVersion = (doc: DocumentView) => {
+    const refused = dropRefusal(lock.held, 1);
+    if (refused) { toast.error(t(m, refused, locale)); return; }
+    versionTarget.current = doc;
+    versionInput.current?.click();
+  };
+  const onVersionFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    const doc = versionTarget.current;
+    versionTarget.current = null;
+    if (!file || !doc) return;
+    // Review M10: a batch or a Retry may have taken the lock between the menu click and the file choice; say so.
+    void locked(async () => {
+      const end = await uploadVersion(accountId, doc.id, file, browserVersionDeps(), (ph) => setVersionPhase(doc.id, ph));
+      setVersionPhase(doc.id, null);
+      if (end.kind === "done") reload();
+      const said = versionToast(end, doc.title, locale);
+      if (said?.ok) toast.success(said.text);
+      else if (said) toast.error(said.text);
+    }).then((ran) => { if (ran === null) toast.error(t(m, "documents.error.busy", locale)); });
+  };
+
   const panel = files.length > 0 ? (
     <DocumentUploadPanel files={files} ownersOnly={ownersOnly} expiresOn={expiresOn} canChooseOwnersOnly={canManage} busy={busy} locale={locale}
       onCategory={(k, c) => setFiles((fs) => fs.map((f) => (f.key === k ? { ...f, category: c } : f)))}
@@ -421,14 +501,20 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const ready = load.status === "ready" ? load.data : null;
   const open = ready && openId ? ready.live.find((d) => d.id === openId) ?? null : null;
   const openExpiry = open && ready ? expiryView(open.expiresOn, ready.today) : null;
+  const purgeTarget = ready && purgeId ? ready.trashed.find((d) => d.id === purgeId) ?? null : null;
   return (
     <>
       <DocumentsCardView accountId={accountId} load={load} canManage={canManage} emptyText={emptyText} locale={locale} handlers={handlers}
         onRetry={() => { setState({ route: "", load: { status: "loading" } }); reload(); }}
-        onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel} />
+        onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel}
+        versionPhases={versionPhases} onNewVersion={onNewVersion} onPurge={(d) => setPurgeId(d.id)} />
+      <input ref={versionInput} type="file" accept={ACCEPT} hidden data-version-input onChange={onVersionFile} />
       <DocumentViewer accountId={accountId} doc={open} locale={locale} onClose={() => setOpenId(null)}
         onDownload={(d) => void handlers.download(d)}
+        onDownloadVersion={(d, versionId) => void handlers.download(d, versionId)}
+        versionWhen={(day) => (ready ? addedWhen(day, ready.today, locale) : "")}
         header={{ source: open && ready ? sourceLine(open, ready.today, locale) : "", expiry: openExpiry ? expiryText(openExpiry, locale) : null }} />
+      <DocumentPurgeDialog doc={purgeTarget} locale={locale} onClose={() => setPurgeId(null)} onConfirm={(d, typed) => handlers.purge(d, typed)} />
     </>
   );
 }

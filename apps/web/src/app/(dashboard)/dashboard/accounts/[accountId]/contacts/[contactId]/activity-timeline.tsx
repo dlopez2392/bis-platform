@@ -182,6 +182,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // S-07: a file added to the record; FileText is the form submission's, so a file wears the paperclip.
     case "document":
       return <TimelineItem {...head} icon={Paperclip} />;
+    // S-07 1b: a new version of a file wears the file's paperclip.
+    case "documentVersion":
+      return <TimelineItem {...head} icon={Paperclip} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

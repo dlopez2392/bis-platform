@@ -52,7 +52,10 @@ const { GET } = await import("./route");
 // timeline rows include file rows like any timeline row, so the timeline reads `documents`
 // (one bounded read, under RLS, which decides whether an Owners-only file shows). Still no
 // Documents card in the drawer; that lives on the full record only.
-const MEASURED = 23; // measured 2026-10-13: 23 reads (+1 prefs), the 23rd is request:documents; was 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
+// Raised 23 -> 24 on 2026-10-14 by S-07 part 1b (owner ruling R2): a new version of a file is its
+// own timeline row, read from 0078's view document_version_timeline (security_invoker, so the same
+// RLS decides), inside the same documents source.
+const MEASURED = 24; // measured 2026-10-14: 24 reads (+1 prefs), the 24th is request:document_version_timeline; 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
 
 describe("reads per drawer open (S-03 part 3 §5: measured, not assumed)", () => {
   it("the contact read first, the ledger only after it, and no more reads than measured (mutation: re-add the unpaged listContactMessages read -> FAILS)", async () => {

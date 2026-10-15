@@ -89,3 +89,13 @@ describe("a document in the drawer's Recent (S-07, plan deviation 3)", () => {
     expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["document", "added a file: Signed lease", null]);
   });
 });
+
+describe("a new version in the drawer's Recent (owner ruling R2)", () => {
+  it("is its head only, its own kind, never an excerpt (mutation: map it to kind 'document' -> FAILS)", () => {
+    const ver: TimelineEntry = { kind: "documentVersion", id: "v2", at: AT, contactId: "c1", version: {
+      id: "v2", document_id: "d1", title: "Signed lease", category: "contract", uploaded_by: "user_ana", created_at: AT,
+      deleted_at: null, contact_id: "c1", client_group_id: null } };
+    const [d] = view([ver]);
+    expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["documentVersion", "uploaded a new version of Signed lease", null]);
+  });
+});

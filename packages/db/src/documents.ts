@@ -23,7 +23,8 @@ export type DocumentVersionRow = {
   id: string; document_id: string; account_id: string; storage_path: string; bytes: number;
   content_type: DocumentContentType; original_name: string | null; status: "uploading" | "ready"; created_at: string;
 };
-export type ListedDocument = DocumentRow & { version: DocumentVersionRow };
+/** `versions`: every READY version, newest first (created_at, then id, descending); always includes `version`. */
+export type ListedDocument = DocumentRow & { version: DocumentVersionRow; versions: DocumentVersionRow[] };
 export type RecordDocuments = { live: ListedDocument[]; trashed: ListedDocument[]; liveMore: boolean; trashedMore: boolean };
 
 /** Plan deviation 9: the card reads at most this many live and this many trashed documents. */
@@ -51,19 +52,29 @@ async function emitAfter(
   }
 }
 
+/** Newest first by upload time, then id; the current version is always among them (spec 4.3's Versions list). */
+function readyVersionsOf(current: DocumentVersionRow, all: readonly DocumentVersionRow[]): DocumentVersionRow[] {
+  const ready = all.filter((v) => v.status === "ready").map(asVersion)
+    .sort((a, b) => (a.created_at === b.created_at ? (a.id < b.id ? 1 : -1) : a.created_at < b.created_at ? 1 : -1));
+  return ready.some((v) => v.id === current.id) ? ready : [asVersion(current), ...ready];
+}
+
 /** The card's read: live documents newest first, trashed ones by when they were trashed. Listed only once a version is ready. */
 export async function listRecordDocuments(db: SupabaseClient, accountId: string, record: DocumentRecordRef): Promise<RecordDocuments> {
   const read = async (trashed: boolean) => {
     // One chain, the trash filter as an operator (`not.is` / `is`): a ternary over two builders, or a
-    // reassigned `let q`, is too deep for tsc to check (TS2589).
-    const { data, error } = await db.from("documents").select(`${DOC_COLS}, version:document_versions!documents_current_version_fkey(${VERSION_COLS})`)
+    // reassigned `let q`, is too deep for tsc to check (TS2589). Two embeds of document_versions, each
+    // named by its constraint (plan Assumption B1): the current version, and every version (the
+    // one-to-many key), filtered to ready ones here so an upload in flight never shows.
+    const { data, error } = await db.from("documents")
+      .select(`${DOC_COLS}, version:document_versions!documents_current_version_fkey(${VERSION_COLS}), versions:document_versions!document_versions_document_fkey(${VERSION_COLS})`)
       .eq("account_id", accountId).eq(recordColumn(record), record.id).not("current_version_id", "is", null)
       .filter("deleted_at", trashed ? "not.is" : "is", null)
       .order(trashed ? "deleted_at" : "created_at", { ascending: false })
       .order("id", { ascending: false }).limit(MAX_DOCUMENTS_READ + 1);
     if (error) throw new Error(`listRecordDocuments failed: ${error.message}`);
-    return ((data ?? []) as unknown as (DocumentRow & { version: DocumentVersionRow | null })[])
-      .flatMap((r) => (r.version ? [{ ...r, version: asVersion(r.version) }] : []));
+    return ((data ?? []) as unknown as (DocumentRow & { version: DocumentVersionRow | null; versions: DocumentVersionRow[] | null })[])
+      .flatMap((r) => (r.version ? [{ ...r, version: asVersion(r.version), versions: readyVersionsOf(r.version, r.versions ?? []) }] : []));
   };
   const [live, trashed] = await Promise.all([read(false), read(true)]);
   return {
@@ -129,7 +140,8 @@ export async function reserveDocumentVersion(db: SupabaseClient, a: {
  * this document becomes ready, and only at the size it reserved (0077 answers `size_mismatch`
  * otherwise, before any write): every answer but `ok` is false, so a refused finish never reads as
  * ready, and the caller removes the object and the reservation. The document's current version moves
- * to it; document.added is emitted for a document's FIRST ready version only.
+ * to it; document.added is emitted for a document's FIRST ready version, document.version_added for
+ * every later one (owner ruling R2).
  */
 export async function markDocumentVersionReady(db: SupabaseClient, a: {
   accountId: string; documentId: string; versionId: string; bytes: number; sha256: string; actorId: string;
@@ -141,15 +153,17 @@ export async function markDocumentVersionReady(db: SupabaseClient, a: {
   if (error) throw new Error(`markDocumentVersionReady failed: ${error.message}`);
   const r = data as { status: string; first?: boolean };
   if (r.status !== "ok") return false;
-  if (r.first) {
-    // Best-effort, read included: the version IS ready and current, so a failed read for the event's
-    // record ids is logged, never answered as a failed upload (the caller would remove a listed file).
-    try {
-      const doc = await getDocument(db, a.accountId, a.documentId);
-      if (doc) await emit(db, a.accountId, "document.added", a.actorId, { documentId: doc.id, ...recordPayload(doc) });
-    } catch (e) {
-      console.error(`documents: account ${a.accountId}: document.added emit failed after the write committed: ${(e as Error).message}`);
+  // Best-effort, read included: the version IS ready and current, so a failed read for the event's
+  // record ids is logged, never answered as a failed upload. The first version is document.added; a
+  // later one is document.version_added (owner ruling R2). No title, no category (PR 1a deviation 3).
+  try {
+    const doc = await getDocument(db, a.accountId, a.documentId);
+    if (doc) {
+      await emit(db, a.accountId, r.first ? "document.added" : "document.version_added", a.actorId,
+        r.first ? { documentId: doc.id, ...recordPayload(doc) } : { documentId: doc.id, versionId: a.versionId, ...recordPayload(doc) });
     }
+  } catch (e) {
+    console.error(`documents: account ${a.accountId}: ${r.first ? "document.added" : "document.version_added"} emit failed after the write committed: ${(e as Error).message}`);
   }
   return true;
 }
@@ -217,19 +231,106 @@ export async function trashDocument(
   return { status: "trashed", deletedAt: row.deleted_at };
 }
 
-/** Service client. Restores only while deleted_at still equals the instant the caller saw. */
+/**
+ * Service client. Restores only while deleted_at still equals the instant the caller saw. Never a row
+ * Delete forever has claimed (plan deviation 4): its objects may already be gone. (`deleted_by` is
+ * never null on a trashed row, documents_trash_coherent, so the `neq` cannot drop a real restore.)
+ */
 export async function restoreDocument(
   db: SupabaseClient, accountId: string, documentId: string, expectedDeletedAt: string, actorId: string,
 ): Promise<CasOutcome> {
   const { data, error } = await db.from("documents")
     .update({ deleted_at: null, deleted_by: null, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", documentId).eq("deleted_at", expectedDeletedAt)
+    .neq("deleted_by", DOCUMENT_PURGING_MARK)
     .select("id, contact_id, client_group_id, category");
   if (error) throw new Error(`restoreDocument failed: ${error.message}`);
   const row = (data ?? [])[0] as { id: string; contact_id: string | null; client_group_id: string | null; category: string } | undefined;
   if (!row) return "changed";
   await emitAfter(db, accountId, "document.restored", actorId, { documentId: row.id, ...recordPayload(row) });
   return "updated";
+}
+
+/**
+ * The space-used line (spec 4.2 item 4; 0078): the ACCOUNT's bytes, every version ready or uploading,
+ * trashed documents included, which is exactly what reserve_document_version holds against the quota.
+ * Any member's REQUEST client (0078 is SECURITY DEFINER and refuses a caller outside the account).
+ * A bigint may arrive as a number or a numeric string (plan Assumption B2). THROWS on an error and on
+ * anything that is not a non-negative safe integer: a null is a failure, never zero.
+ */
+export async function documentSpaceUsed(db: SupabaseClient, accountId: string): Promise<number> {
+  const { data, error } = await db.rpc("document_space_used", { p_account_id: accountId });
+  if (error) throw new Error(`documentSpaceUsed failed: ${error.message}`);
+  const n = typeof data === "number" ? data : typeof data === "string" && /^\d+$/.test(data) ? Number(data) : Number.NaN;
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error(`documentSpaceUsed: unexpected answer ${JSON.stringify(data)}`);
+  return n;
+}
+
+export type DocumentVersionState = { storage_path: string; status: "uploading" | "ready" };
+
+const VERSION_STATES_PAGE = 500;
+
+/**
+ * Service client, AFTER the request-client proof: EVERY version of ONE document, for Delete forever's
+ * object list and its in-flight check. Paged (review M5's re-review): PostgREST caps one read at
+ * max_rows (1000) silently, so a `.limit(1001)` never sees a 1001st row and a purge would delete rows
+ * whose objects it never removed. Pages of 500 on the primary key, a stable total order, until a short
+ * page (purgeContactDocuments' shape); 500 sits under the cap, so a full page is never mistaken for the last.
+ */
+export async function listDocumentVersionStates(db: SupabaseClient, accountId: string, documentId: string): Promise<DocumentVersionState[]> {
+  const rows: DocumentVersionState[] = [];
+  for (let from = 0; ; from += VERSION_STATES_PAGE) {
+    const { data, error } = await db.from("document_versions").select("storage_path, status")
+      .eq("account_id", accountId).eq("document_id", documentId)
+      .order("id").range(from, from + VERSION_STATES_PAGE - 1);
+    if (error) throw new Error(`listDocumentVersionStates failed: ${error.message}`);
+    const page = (data ?? []) as DocumentVersionState[];
+    rows.push(...page);
+    if (page.length < VERSION_STATES_PAGE) return rows;
+  }
+}
+
+/** `deleted_by` of a row Delete forever has claimed (plan deviation 4): restoreDocument never restores it. */
+export const DOCUMENT_PURGING_MARK = "documents:purging";
+
+/**
+ * Service client: Delete forever's claim (plan deviation 4). Re-stamps deleted_at and marks deleted_by
+ * with DOCUMENT_PURGING_MARK ONLY while deleted_at still equals the instant the caller's proof read,
+ * so a Restore or a trash toast's Undo carrying that old instant (restoreDocument compares it) changes
+ * nothing while the objects are being removed, and one carrying the new instant meets the marker. The new
+ * instant is at least a millisecond later than the old one, so the two can never be equal. Answers the
+ * stored new instant exactly as PostgREST returned it, or null when the file is no longer that trashed file.
+ */
+export async function claimDocumentForPurge(
+  db: SupabaseClient, accountId: string, documentId: string, expectedDeletedAt: string,
+): Promise<string | null> {
+  const prior = Date.parse(expectedDeletedAt);
+  const stamp = new Date(Math.max(Date.now(), Number.isNaN(prior) ? 0 : prior + 1)).toISOString();
+  const { data, error } = await db.from("documents")
+    .update({ deleted_at: stamp, deleted_by: DOCUMENT_PURGING_MARK, updated_at: stamp })
+    .eq("account_id", accountId).eq("id", documentId).eq("deleted_at", expectedDeletedAt)
+    .select("deleted_at");
+  if (error) throw new Error(`claimDocumentForPurge failed: ${error.message}`);
+  const row = (data ?? [])[0] as { deleted_at: string } | undefined;
+  return row ? row.deleted_at : null;
+}
+
+/**
+ * Service client, AFTER every object of the document is gone: the claimed row (its versions cascade),
+ * then document.purged with actor `user` (spec 3.6: a person's purge). False when the row is no longer
+ * the claimed one; nothing is emitted then. The payload carries the document and its record only.
+ */
+export async function deletePurgedDocument(
+  db: SupabaseClient, accountId: string, doc: { id: string; contact_id: string | null; client_group_id: string | null },
+  claimedAt: string, actorId: string,
+): Promise<boolean> {
+  // The actor is the event's (deleted_by holds the marker since the claim).
+  const { data, error } = await db.from("documents").delete()
+    .eq("account_id", accountId).eq("id", doc.id).eq("deleted_at", claimedAt).select("id");
+  if (error) throw new Error(`deletePurgedDocument failed: ${error.message}`);
+  if ((data ?? []).length === 0) return false;
+  await emitAfter(db, accountId, "document.purged", actorId, { documentId: doc.id, ...recordPayload(doc) });
+  return true;
 }
 
 export type SweepVersion = { id: string; account_id: string; document_id: string; storage_path: string };
@@ -383,6 +484,33 @@ export async function listDocumentTimeline(
   for (const { data, error } of results) {
     if (error) throw new Error(`listDocumentTimeline failed: ${error.message}`);
     out.push(...((data ?? []) as TimelineDocument[]));
+  }
+  return out;
+}
+
+export type TimelineDocumentVersion = {
+  id: string; document_id: string; title: string; category: DocumentCategory; uploaded_by: string;
+  created_at: string; deleted_at: string | null; contact_id: string | null; client_group_id: string | null;
+};
+const VERSION_TIMELINE_COLS = "id, document_id, title, category, uploaded_by, created_at, deleted_at, contact_id, client_group_id";
+
+/**
+ * The timeline's new-version rows (owner ruling R2; plan deviation 6): 0078's view, one row per ready
+ * version after a document's first, on the caller's REQUEST client (security_invoker: RLS decides).
+ * Paged exactly as listDocumentTimeline, on the version's created_at and its own id. A group page
+ * also reads the group's own files; record.ts merges, sorts and slices every source together.
+ */
+export async function listDocumentVersionTimeline(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], groupId: string | null, page: TimelinePageOpts,
+): Promise<TimelineDocumentVersion[]> {
+  const base = () => db.from("document_version_timeline").select(VERSION_TIMELINE_COLS).eq("account_id", accountId);
+  const reads = [withTimelinePage(forContacts(base(), "contact_id", who), "created_at", page)];
+  if (groupId) reads.push(withTimelinePage(base().eq("client_group_id", groupId), "created_at", page));
+  const results = await Promise.all(reads);
+  const out: TimelineDocumentVersion[] = [];
+  for (const { data, error } of results) {
+    if (error) throw new Error(`listDocumentVersionTimeline failed: ${error.message}`);
+    out.push(...((data ?? []) as TimelineDocumentVersion[]));
   }
   return out;
 }

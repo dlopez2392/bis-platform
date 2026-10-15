@@ -116,3 +116,13 @@ describe("a document row's author (S-07, plan deviation 3)", () => {
     expect(personIdsOf([doc])).toEqual(["user_ana"]);
   });
 });
+
+describe("a new version's author (owner ruling R2)", () => {
+  const ver: TimelineEntry = { kind: "documentVersion", id: "v2", at: AT, contactId: "c1", version: {
+    id: "v2", document_id: "d1", title: "Signed lease", category: "contract", uploaded_by: "user_bea", created_at: AT,
+    deleted_at: null, contact_id: "c1", client_group_id: null } };
+  it("is the person who uploaded it, and the names read asks for them (mutation: the document's creator, or unnamed() -> FAILS)", () => {
+    expect(authorOf(ver)).toEqual({ kind: "person", personId: "user_bea" });
+    expect(personIdsOf([ver])).toEqual(["user_bea"]);
+  });
+});

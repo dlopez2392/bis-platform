@@ -96,6 +96,12 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       status: entry.document.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.document.category}`),
     };
+    // S-07 1b (owner ruling R2): a new version, the same trash status and category detail as its file.
+    case "documentVersion": return {
+      verb: tr.text("timeline.documentVersion", { title: entry.version.title }),
+      status: entry.version.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
+      detail: tr.text(`documents.category.${entry.version.category}`),
+    };
   }
 }
 

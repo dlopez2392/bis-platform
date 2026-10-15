@@ -8,6 +8,8 @@ import {
   getDocument, updateDocumentField, setDocumentOwnersOnly, trashDocument, restoreDocument, listAbandonedUploads,
   listPurgeableDocuments, purgeDocumentRow, deleteAbandonedVersion, listDocumentTimeline,
   countContactDocuments, purgeContactDocuments, MAX_DOCUMENTS_READ,
+  documentSpaceUsed, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, listDocumentVersionTimeline,
+  DOCUMENT_PURGING_MARK,
 } from "../documents";
 
 /**
@@ -433,4 +435,163 @@ describe("a customer's files go with them (deviation 2)", () => {
     const fake = { from: () => chain } as unknown as SupabaseClient;
     await expect(countContactDocuments(fake, "acc", ["c1"])).rejects.toThrow(/null/);
   });
+});
+
+/** A second version of `id`, reserved and made ready at BYTES, as the new-version start and finish do. */
+async function newVersion(db: SupabaseClient, accountId: string, id: string) {
+  const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: BYTES, contentType: "application/pdf", originalName: "v.pdf", uploadedBy: ACTOR });
+  if (r.status !== "ok") throw new Error(`reserve: ${r.status}`);
+  expect(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: BYTES, sha256: HASH, actorId: ACTOR })).toBe(true);
+  return r;
+}
+
+describe("versions in the card's read (spec 3.3, 4.1, 4.3)", () => {
+  it("every ready version, newest first, the current one first; one still uploading is never listed; the new version emits document.version_added (mutations: drop the ready filter -> FAILS; sort oldest first -> FAILS; emit nothing for a later version -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const v2 = await newVersion(db, accountId, d.id);
+      const pending = await reserveDocumentVersion(db, { accountId, documentId: d.id, bytes: BYTES, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (pending.status !== "ok") throw new Error(pending.status);
+      const [listed] = (await listRecordDocuments(db, accountId, { kind: "contact", id: ana })).live;
+      expect(listed!.version.id).toBe(v2.versionId);
+      expect(listed!.versions.map((v) => [v.id, v.status])).toEqual([[v2.versionId, "ready"], [d.versionId, "ready"]]);
+      // A PR 1a pin, not a 1b probe: a later version never emits a second document.added.
+      expect(await events(db, accountId, "document.added")).toHaveLength(1);
+      // 1b (owner ruling R2): it emits document.version_added, as the person, with no title or category.
+      expect(await events(db, accountId, "document.version_added")).toEqual([
+        { actor_type: "user", actor_id: ACTOR, payload: { documentId: d.id, versionId: v2.versionId, contactId: ana } }]);
+    }));
+
+  it("a file with one version lists exactly that one (mutation: answer [] when only the current is ready -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const [listed] = (await listRecordDocuments(db, accountId, { kind: "contact", id: ana })).live;
+      expect(listed!.versions.map((v) => v.id)).toEqual([d.versionId]);
+      expect(listed!.versions[0]!.bytes).toBe(BYTES);
+    }));
+});
+
+describe("the new-version timeline read (0078's view; owner ruling R2)", () => {
+  it("a contact's new versions, never a file's first, newest first; a group page adds the group's own (mutations: read documents instead of the view -> FAILS; drop the group read -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      if (g.status !== "ok") throw new Error(g.status);
+      const mine = await readyDoc(db, accountId, ana, { title: "Mine" });
+      const v2 = await newVersion(db, accountId, mine.id);
+      await readyDoc(db, accountId, ana, { title: "Only one" });
+      const theirsId = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "Ours", category: "other", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const r1 = await reserveDocumentVersion(db, { accountId, documentId: theirsId, bytes: BYTES, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (r1.status !== "ok") throw new Error(r1.status);
+      await markDocumentVersionReady(db, { accountId, documentId: theirsId, versionId: r1.versionId, bytes: BYTES, sha256: HASH, actorId: ACTOR });
+      const ours2 = await newVersion(db, accountId, theirsId);
+      const page = { limit: 31 };
+      const contactRows = await listDocumentVersionTimeline(db, accountId, ana, null, page);
+      expect(contactRows.map((x) => [x.id, x.document_id, x.title, x.uploaded_by])).toEqual([[v2.versionId, mine.id, "Mine", ACTOR]]);
+      const groupRows = await listDocumentVersionTimeline(db, accountId, [ana], g.groupId, page);
+      expect(groupRows.map((x) => x.id).sort()).toEqual([v2.versionId, ours2.versionId].sort());
+    }));
+});
+
+describe("the space-used read (0078; spec 4.2 item 4)", () => {
+  const fake = (answer: { data: unknown; error: { message: string } | null }) => {
+    const calls: unknown[][] = [];
+    const client = { rpc: async (...a: unknown[]) => { calls.push(a); return answer; } } as unknown as SupabaseClient;
+    return { client, calls };
+  };
+  it("calls document_space_used with the account and answers its number; a numeric string is read as a number (mutation: rpc another name -> FAILS)", async () => {
+    const f = fake({ data: 4_402_341_479, error: null });
+    expect(await documentSpaceUsed(f.client, "acc-1")).toBe(4_402_341_479);
+    expect(f.calls).toEqual([["document_space_used", { p_account_id: "acc-1" }]]);
+    expect(await documentSpaceUsed(fake({ data: "725", error: null }).client, "acc-1")).toBe(725);
+  });
+  it("a null, a non-integer or an error throws, never reads as zero (mutation: `Number(data ?? 0)` -> FAILS on the null case)", async () => {
+    await expect(documentSpaceUsed(fake({ data: null, error: null }).client, "a")).rejects.toThrow(/unexpected answer/);
+    await expect(documentSpaceUsed(fake({ data: "x", error: null }).client, "a")).rejects.toThrow(/unexpected answer/);
+    await expect(documentSpaceUsed(fake({ data: -1, error: null }).client, "a")).rejects.toThrow(/unexpected answer/);
+    await expect(documentSpaceUsed(fake({ data: null, error: { message: "42501" } }).client, "a")).rejects.toThrow(/documentSpaceUsed failed: 42501/);
+  });
+});
+
+describe("Delete forever's writes (spec 4.4, 5.1; deviations 3 and 4)", () => {
+  it("the version states are this document's, every version, its status included (mutation: drop the document filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const other = await readyDoc(db, accountId, ana, { title: "Other" });
+      const pending = await reserveDocumentVersion(db, { accountId, documentId: d.id, bytes: BYTES, contentType: "application/pdf", originalName: null, uploadedBy: ACTOR });
+      if (pending.status !== "ok") throw new Error(pending.status);
+      const states = await listDocumentVersionStates(db, accountId, d.id);
+      expect(states.map((s) => [s.storage_path, s.status]).sort()).toEqual([[d.path, "ready"], [pending.storagePath, "uploading"]].sort());
+      expect(states.map((s) => s.storage_path)).not.toContain(other.path);
+    }));
+
+  it("answers EVERY version past PostgREST's 1000-row cap, so the purge's object list is never cut short (review M5 and its re-review; mutation: read only the first page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      // 1001 more, inserted directly (the reserve rpc would take a round trip each): 1002 in all, past
+      // max_rows = 1000 (config.toml, the kit, hosted), which caps a single read silently.
+      const extra = Array.from({ length: 1001 }, () => {
+        const id = crypto.randomUUID();
+        return { id, document_id: d.id, account_id: accountId, storage_path: `${accountId}/${d.id}/${id}`, bytes: 1,
+          content_type: "application/pdf", uploaded_by: ACTOR, status: "uploading" };
+      });
+      const { error } = await db.from("document_versions").insert(extra);
+      if (error) throw error;
+      const states = await listDocumentVersionStates(db, accountId, d.id);
+      expect(states).toHaveLength(1002);
+      expect(states.map((s) => s.storage_path).sort()).toEqual([d.path, ...extra.map((v) => v.storage_path)].sort());
+    }));
+
+  it("the claim re-stamps deleted_at and marks the row only while it still holds the instant the proof read; no Restore, old instant or new, brings it back (mutations: claim without .eq('deleted_at', expected) -> FAILS on the wrong-instant case; claim without changing deleted_at -> FAILS on the new instant equalling the old (and on the delete case's stale call); drop restoreDocument's marker filter -> FAILS on the new-instant restore)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const t = await trashDocument(db, accountId, d.id, ACTOR);
+      if (t.status !== "trashed") throw new Error(t.status);
+      expect(await claimDocumentForPurge(db, accountId, d.id, "2020-01-01T00:00:00+00:00")).toBeNull();
+      expect((await getDocument(db, accountId, d.id))!.deleted_at).toBe(t.deletedAt);
+      const claimed = await claimDocumentForPurge(db, accountId, d.id, t.deletedAt);
+      expect(claimed).not.toBeNull();
+      expect(claimed).not.toBe(t.deletedAt);
+      expect(await restoreDocument(db, accountId, d.id, t.deletedAt, ACTOR)).toBe("changed");
+      // Review M1 (a): a Restore that read AFTER the claim carries the new instant; the marker refuses it.
+      expect(await restoreDocument(db, accountId, d.id, claimed!, ACTOR)).toBe("changed");
+      const after = (await getDocument(db, accountId, d.id))!;
+      expect([after.deleted_at, after.deleted_by]).toEqual([claimed, DOCUMENT_PURGING_MARK]);
+      // A purge that failed part-way is finished by another claim on the row's current instant.
+      expect(await claimDocumentForPurge(db, accountId, d.id, claimed!)).not.toBeNull();
+    }));
+
+  it("a live document is never claimed (mutation: drop .eq('deleted_at', expectedDeletedAt) in the claim -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana);
+      const doc = (await getDocument(db, accountId, d.id))!;
+      expect(await claimDocumentForPurge(db, accountId, d.id, doc.created_at)).toBeNull();
+      expect((await getDocument(db, accountId, d.id))!.deleted_at).toBeNull();
+    }));
+
+  it("the delete takes the claimed row and every version, then one document.purged as the person, with no title (mutations: emit as system -> FAILS; a title in the payload -> FAILS; delete without the claimed instant -> FAILS on the stale case)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const d = await readyDoc(db, accountId, ana, { title: "Secret plan" });
+      await newVersion(db, accountId, d.id);
+      const t = await trashDocument(db, accountId, d.id, ACTOR);
+      if (t.status !== "trashed") throw new Error(t.status);
+      const claimed = (await claimDocumentForPurge(db, accountId, d.id, t.deletedAt))!;
+      const row = (await getDocument(db, accountId, d.id))!;
+      expect(await deletePurgedDocument(db, accountId, row, t.deletedAt, "user_owner")).toBe(false);   // stale instant
+      expect(await getDocument(db, accountId, d.id)).not.toBeNull();
+      expect(await deletePurgedDocument(db, accountId, row, claimed, "user_owner")).toBe(true);
+      expect(await getDocument(db, accountId, d.id)).toBeNull();
+      const { data: left, error } = await db.from("document_versions").select("id").eq("document_id", d.id);
+      if (error) throw error;
+      expect(left ?? []).toEqual([]);
+      expect(await events(db, accountId, "document.purged")).toEqual([
+        { actor_type: "user", actor_id: "user_owner", payload: { documentId: d.id, contactId: ana } }]);
+    }));
 });

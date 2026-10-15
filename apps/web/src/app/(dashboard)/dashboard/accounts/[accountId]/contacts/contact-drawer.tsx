@@ -63,7 +63,7 @@ export const FIELDS: { field: Exclude<EditableField, "source" | "company_name">;
 
 const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   note: StickyNote, task: Square, deal: DollarSign, submission: FileText, message: MessageSquare, booking: CalendarCheck, call: Phone,
-  document: Paperclip,
+  document: Paperclip, documentVersion: Paperclip,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";

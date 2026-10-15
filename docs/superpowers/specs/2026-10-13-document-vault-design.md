@@ -88,6 +88,7 @@ Columns: `id`, `document_id → documents on delete cascade`, `account_id`, `sto
 - The guard uses `coalesce(..., false)`, so a NULL never fails open (memory: plpgsql NULL guard).
 - **No INSERT, UPDATE or DELETE grants for `authenticated`.** Every write goes through server actions using `serviceDb`, after `requireAccountAccess` plus an RLS read with `userDb` that proves the person can see the record (the 0053 server-only-writes pattern).
 - Changing `owners_only` is allowed for Owners and agency only. Staff and Technicians can edit the other fields of files they can see.
+- **Delete forever is for Owners and agency only** (owner ruling 2026-10-14, the same rule as Owners only). Staff and Technicians see a trashed file and can Restore it, but are offered no Delete forever, and the server refuses them. The 30-day automatic purge (section 5.4) is unchanged.
 
 ### 3.5 Quota
 A function `public.reserve_document_version(p_account_id, p_document_id, p_bytes, …)` is `SECURITY DEFINER` and executable by `service_role` only. It:
@@ -99,9 +100,11 @@ A function `public.reserve_document_version(p_account_id, p_document_id, p_bytes
 A version becomes ready only at the size it reserved: `mark_document_version_ready` answers `size_mismatch` for any other size before it writes anything, so the stored size can never grow past what the quota checked (amended 2026-10-13 after task review). Two simultaneous uploads therefore cannot both slip under the limit. The constant lives in one place, and the app reads it from the same module that tests pin.
 
 ### 3.6 Timeline
-Adding, trashing, restoring and purging each record an event through `emit` (`packages/db/src/events.ts`): `document.added`, `document.trashed`, `document.restored`, `document.purged`. The payload carries the document id and the record it is filed on, and no title or category (an Owners-only file's name must not reach Staff through the events every member may read). A person's action is `actor_type 'user'`, and the daily job's purge is `'system'`.
+Adding, adding a new version, trashing, restoring and purging each record an event through `emit` (`packages/db/src/events.ts`): `document.added`, `document.version_added` (amended 2026-10-14, owner ruling; its payload also carries the version id), `document.trashed`, `document.restored`, `document.purged`. The payload carries the document id and the record it is filed on, and no title or category (an Owners-only file's name must not reach Staff through the events every member may read). A person's action is `actor_type 'user'`, and the daily job's purge is `'system'`.
 
 The record timeline does NOT read these events (amended 2026-10-13, plan deviation 3): its file row is read from the `documents` table on the request client, under RLS, so Technician scope and Owners only decide what each reader sees. One row per document, "{who} added a file: {title}" (or "took a photo: {title}") at its creation, with the person mark from who created it (DESIGN.md provenance: a row with no mark is a defect) and the status "In the trash" (a dot and the word) while it is trashed; a purged file leaves the timeline. The plan wires this source into the contact and group timeline readers.
+
+A new version also has its own row (owner ruling 2026-10-14): "{who} uploaded a new version of {title}" ("{quién} subió una nueva versión de {título}") at the version's upload time, with the person mark of who uploaded it and the same "In the trash" status. It is read under RLS from every ready version after a document's first (the first is the "added a file" row), so the same Technician and Owners-only fences decide who sees it; it belongs to the timeline's existing documents source.
 
 ## 4. What people see
 
@@ -167,7 +170,7 @@ Every action returns `{ ok: true, … } | { ok: false, message }`, with bilingua
   2. reads its real size and its first bytes (§5.2) and computes its sha256; the real size must equal the size reserved in step 4 of the start action, and the stored content type must equal the declared one, or a client that understated its size would slip past the quota (amended 2026-10-13 after plan review)
   3. if any check fails, deletes the object, deletes the version row, and deletes a document that never had a ready version, then returns the reason
   4. otherwise marks the version `ready`, moves `current_version_id`, and emits `document.added` (only for a document's first version)
-- **Edit, trash, restore and purge actions** follow §3.4's rules. Purge removes every version's object, then the rows, then emits.
+- **Edit, trash, restore and purge actions** follow §3.4's rules. Purge (amended 2026-10-14, PR 1b plan): an Owner or agency only; refused while any version of the file is still uploading; it first claims the row (a compare-and-set re-stamp of `deleted_at` that also marks it as being purged, which Restore refuses), then removes every version's object, then the rows, then emits.
 - **`getDocumentUrl(versionId)`** reads the version through `userDb` (RLS decides) and only then mints a 120-second signed URL with the service role. Word and Excel are always minted with `download` (attachment).
 
 ### 5.2 Content check
@@ -227,10 +230,10 @@ It also follows the existing cron-coupling test rules.
 
 ## 7. Rollout and PRs
 
-- **One migration (0077) and two PRs:**
+- **Two migrations and two PRs** (amended 2026-10-14: 1b adds 0078, the account's space-used read and the new-version timeline view):
   - **1a:** 0077, upload (including camera), list, viewer, inline edits, Owners only, trash with Undo and Restore, the clean-up job, deleting a customer's files with the customer (owner ruling 2026-10-13), and the teardown's storage leg (moved from 1b on 2026-10-13: the demo tenant is rebuilt through it every week in production)
-  - **1b:** new versions and the Versions list, Delete forever with the typed name, and the space-used line
-- **The migration:** bis-ci first (`ci-project-setup.yml`), then production through MCP `apply_migration` once, then a parity check (runbook `ci-supabase-project.md`). Never re-apply.
+  - **1b:** 0078, new versions (with their timeline row) and the Versions list, Delete forever with the typed name (Owners and agency), and the space-used line
+- **Each migration:** bis-ci first (`ci-project-setup.yml`), then production through MCP `apply_migration` once, then a parity check (runbook `ci-supabase-project.md`). Never re-apply.
 - **CSP:** if the app's content-security policy restricts `img-src`, `frame-src` or `connect-src`, the plan adds the Supabase storage origin for the viewer and the upload PUT. The plan reads `next.config.ts` and the middleware first.
 - **The tracker:** item 6 becomes `in_progress` on the first merge. It is `done` only after parts 2 and 3.
 
