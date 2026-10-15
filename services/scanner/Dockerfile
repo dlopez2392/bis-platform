@@ -1,0 +1,40 @@
+# The document vault's virus scanner (spec 2026-10-15 section 3.1): the official ClamAV image, its
+# signatures preloaded, plus a dependency-free Node shim. clamd and freshclam run as daemons beside it.
+FROM clamav/clamav:1.4
+
+# Every directive this file owns is deleted first, then set once, so a value in the base image can never
+# survive beside ours. Each name is read off the 1.4 image in plan Task 4 step 1 (assumption A13 until then:
+# Docker is not installed on this implementer's machine; the CI scanner job is the first proof of these
+# directive names and ownership against the real image).
+# NO LIMIT IS SET BELOW 1.4's OWN DEFAULT (plan re-review N1: 1.4's clamd.conf.sample gives MaxFileSize
+# 100M and MaxScanSize 400M; a limit applies to every member unpacked from an Office file, so lowering it
+# would delete ordinary exports). MaxRecursion and MaxFiles keep their defaults (not set here).
+#   StreamMaxLength 100M: at least 1.4's default; the shim itself refuses past 25 MiB, so this never binds.
+#   MaxFileSize 400M / MaxScanSize 1000M: a 25 MiB Office upload whose XML unpacks to hundreds of MB still
+#     scans in full (the CI job proves a 300 MiB expansion is clean and reports its time and peak memory,
+#     A1, A15). ORCHESTRATOR RULING 2026-10-15: anything that expands past these is treated as a
+#     decompression bomb: unscannable, removed, the generic note (accepted residual, deviation 16).
+#   AlertExceedsMax yes: content skipped under any limit is REPORTED (Heuristics.Limits.Exceeded.*), never
+#     a silent OK; the shim maps it to "unscannable" (plan review C2).
+#   AlertEncrypted / AlertEncryptedArchive / AlertEncryptedDoc yes: content clamd cannot read because it is
+#     encrypted is reported (Heuristics.Encrypted.*), never a silent OK; "unscannable", and the note says
+#     the file has a password (owner ruling 2026-10-15).
+#   ConcurrentDatabaseReload no: one signature set in memory during a reload, so 2 GB holds (deviation 12).
+#   TCPSocket 3310 / TCPAddr 127.0.0.1: clamd answers the shim on loopback only, never the machine's network.
+#   Foreground no: both daemonise, and start.sh runs the shim in the foreground.
+RUN apk add --no-cache nodejs \
+ && for d in StreamMaxLength MaxFileSize MaxScanSize AlertExceedsMax AlertEncrypted AlertEncryptedArchive AlertEncryptedDoc ConcurrentDatabaseReload TCPSocket TCPAddr Foreground; do \
+      sed -i -e "/^${d} /d" /etc/clamav/clamd.conf; \
+    done \
+ && printf '%s\n' 'StreamMaxLength 100M' 'MaxFileSize 400M' 'MaxScanSize 1000M' 'AlertExceedsMax yes' 'AlertEncrypted yes' 'AlertEncryptedArchive yes' 'AlertEncryptedDoc yes' 'ConcurrentDatabaseReload no' 'TCPSocket 3310' 'TCPAddr 127.0.0.1' 'Foreground no' >> /etc/clamav/clamd.conf \
+ && sed -i -e '/^Foreground /d' /etc/clamav/freshclam.conf \
+ && printf '%s\n' 'Foreground no' >> /etc/clamav/freshclam.conf \
+ && node --version
+
+COPY --chown=clamav:clamav src/ /app/src/
+COPY --chown=clamav:clamav start.sh /app/start.sh
+RUN chmod 0755 /app/start.sh
+
+USER clamav
+EXPOSE 8080
+ENTRYPOINT ["/app/start.sh"]
