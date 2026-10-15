@@ -22,10 +22,10 @@ const row = (over: Record<string, unknown> = {}) => ({
   id: "d1", account_id: ACC, contact_id: C, client_group_id: null, title: "Lease", category: "contract", expires_on: null,
   owners_only: false, source: "camera", current_version_id: "v1", created_by: "user_ana", created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z", deleted_at: null, deleted_by: null,
-  version: { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "x" },
+  version: { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "x", scan_status: "clean", scan_signature: null },
   versions: [
-    { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "2026-10-01T00:00:00Z" },
-    { id: "v0", document_id: "d1", account_id: ACC, storage_path: "q", bytes: 800, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-09-20T15:00:00Z" },
+    { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "2026-10-01T00:00:00Z", scan_status: "clean", scan_signature: null },
+    { id: "v0", document_id: "d1", account_id: ACC, storage_path: "q", bytes: 800, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-09-20T15:00:00Z", scan_status: "clean", scan_signature: null },
   ],
   ...over,
 });
@@ -53,10 +53,10 @@ describe("the Documents card's read for a contact", () => {
     expect(body.live[0]).toEqual({
       id: "d1", title: "Lease", category: "contract", expiresOn: null, ownersOnly: false, source: "camera",
       addedBy: { you: false, name: "Ana" }, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", deletedAt: null,
-      version: { id: "v1", contentType: "image/jpeg", bytes: 1200 },
+      version: { id: "v1", contentType: "image/jpeg", bytes: 1200, scan: "clean", createdAt: "2026-10-01T00:00:00Z" },
       versions: [
-        { id: "v1", contentType: "image/jpeg", bytes: 1200, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30" },
-        { id: "v0", contentType: "application/pdf", bytes: 800, createdAt: "2026-09-20T15:00:00Z", addedOn: "2026-09-20" },
+        { id: "v1", contentType: "image/jpeg", bytes: 1200, createdAt: "2026-10-01T00:00:00Z", addedOn: "2026-09-30", scan: "clean" },
+        { id: "v0", contentType: "application/pdf", bytes: 800, createdAt: "2026-09-20T15:00:00Z", addedOn: "2026-09-20", scan: "clean" },
       ],
       purging: false,
     });
@@ -116,5 +116,23 @@ describe("the Documents card's read for a contact", () => {
     const res = await call();
     expect(res.status).toBe(200);
     expect((await res.json()).space).toBeNull();
+  });
+  it("shows the newest CLEAN version while a newer one is still Checking, and lists both with their states (plan deviation 1; mutation: show d.version, the newest ready -> FAILS)", async () => {
+    const v2 = { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "image/jpeg", original_name: "x.jpg", status: "ready", created_at: "2026-10-01T00:00:00Z", scan_status: "pending" };
+    const v1 = { id: "v0", document_id: "d1", account_id: ACC, storage_path: "q", bytes: 800, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-09-20T15:00:00Z", scan_status: "clean" };
+    db.listRecordDocuments.mockResolvedValue({ live: [row({ version: v2, versions: [v2, v1] })], trashed: [], liveMore: false, trashedMore: false });
+    const body = await (await call()).json();
+    expect(body.live[0].version).toEqual({ id: "v0", contentType: "application/pdf", bytes: 800, scan: "clean", createdAt: "2026-09-20T15:00:00Z" });
+    expect(body.live[0].versions.map((v: { id: string; scan: string }) => [v.id, v.scan])).toEqual([["v1", "pending"], ["v0", "clean"]]);
+  });
+  it("a password-protected file reads 'locked', a limit 'unscannable', and clamd's name never reaches the JSON (owner ruling 2026-10-15; mutation: send scan_status through unmapped -> FAILS; send the signature -> FAILS)", async () => {
+    const locked = { id: "v1", document_id: "d1", account_id: ACC, storage_path: "p", bytes: 1200, content_type: "application/pdf", original_name: "x.pdf", status: "ready", created_at: "2026-10-01T00:00:00Z", scan_status: "unscannable", scan_signature: "Heuristics.Encrypted.PDF" };
+    const limit = { ...locked, id: "v9", scan_signature: "Heuristics.Limits.Exceeded.MaxFileSize" };
+    db.listRecordDocuments.mockResolvedValue({ live: [row({ version: locked, versions: [locked] }), row({ id: "d2", version: limit, versions: [limit] })], trashed: [], liveMore: false, trashedMore: false });
+    const res = await call();
+    const text = await res.text();
+    expect(text).not.toContain("Heuristics");
+    const body = JSON.parse(text) as { live: { version: { scan: string } }[] };
+    expect(body.live.map((d) => d.version.scan)).toEqual(["locked", "unscannable"]);
   });
 });

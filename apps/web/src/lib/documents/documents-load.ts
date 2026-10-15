@@ -10,12 +10,18 @@ import type { DocumentsSpace } from "./space";
  * so a server newer than this tab's bundle gets "Couldn't load documents." instead of a row that throws.
  * The author's Clerk id never travels: the route sends `addedBy` already resolved.
  */
-export type DocumentVersionView = { id: string; contentType: DocumentContentType; bytes: number; createdAt: string; addedOn: string };
+/** The database's four scan states plus the view-only "locked" (a password-protected file; S-07 2a). */
+export type ScanState = "pending" | "clean" | "infected" | "unscannable" | "locked";
+const isScan = (v: unknown): v is ScanState =>
+  v === "pending" || v === "clean" || v === "infected" || v === "unscannable" || v === "locked";
+
+export type DocumentVersionView = { id: string; contentType: DocumentContentType; bytes: number; createdAt: string; addedOn: string; scan: ScanState };
 export type DocumentView = {
   id: string; title: string; category: DocumentCategory; expiresOn: string | null; ownersOnly: boolean; source: DocumentSource;
   /** `addedOn`: the day it was added, YYYY-MM-DD in the ACCOUNT's zone (the route's), for "yesterday" against `today`. */
   addedBy: { you: boolean; name: string | null }; createdAt: string; addedOn: string; deletedAt: string | null;
-  version: { id: string; contentType: DocumentContentType; bytes: number };
+  /** The newest CLEAN ready version; when none is clean, the newest ready version with its state (S-07 2a, plan deviation 1). */
+  version: { id: string; contentType: DocumentContentType; bytes: number; scan: ScanState; createdAt: string };
   /** Every READY version, newest first; always includes `version` (spec 4.3). */
   versions: DocumentVersionView[];
   /** A Delete forever began and did not finish (deviation 4): never restorable. */
@@ -35,7 +41,7 @@ const instant = (v: unknown) => str(v) && !Number.isNaN(Date.parse(v));
 
 function isVersionView(v: unknown): boolean {
   return isObj(v) && str(v.id) && isDocumentContentType(v.contentType) && typeof v.bytes === "number" && v.bytes > 0
-    && instant(v.createdAt) && isDay(v.addedOn);
+    && instant(v.createdAt) && isDay(v.addedOn) && isScan(v.scan);
 }
 
 function isSpace(v: unknown): boolean {
@@ -52,6 +58,7 @@ function isView(v: unknown, trashed: boolean): boolean {
     && instant(v.createdAt) && isDay(v.addedOn) && (trashed ? instant(v.deletedAt) : v.deletedAt === null)
     && str(v.version.id) && isDocumentContentType(v.version.contentType)
     && typeof v.version.bytes === "number" && v.version.bytes > 0
+    && isScan(v.version.scan) && instant(v.version.createdAt)
     && typeof v.purging === "boolean" && (trashed || v.purging === false)
     && Array.isArray(v.versions) && v.versions.length > 0 && v.versions.every(isVersionView)
     && v.versions.some((x) => isObj(x) && x.id === (v.version as Obj).id);
