@@ -78,9 +78,11 @@ describe("0079 columns: every version starts pending, part 1's included (spec 3.
         await expect(attempt(c, sql, [id])).rejects.toMatchObject({ code: "23514", constraint: "document_versions_scan_coherent" });
       }
       // scanned_at is set too so this probe trips ONLY the enum check: 'quarantined' alone also
-      // breaks document_versions_scan_coherent's pending<=>scanned_at clause, and constraint
-      // evaluation order across CHECK constraints is unspecified by Postgres (confirmed empirically
-      // against this migration: the bare update raises scan_coherent, not scan_status_check).
+      // breaks document_versions_scan_coherent's pending<=>scanned_at clause, and Postgres (9.5+)
+      // fires multiple violated CHECK constraints in alphabetical order by name, so
+      // "document_versions_scan_coherent" (c) sorts before "document_versions_scan_status_check" (s)
+      // and would raise first (confirmed empirically against this migration: the bare update, with
+      // scanned_at left null, raises scan_coherent, not scan_status_check).
       await expect(attempt(c, "update document_versions set scan_status = 'quarantined', scanned_at = now() where id = $1", [ready]))
         .rejects.toMatchObject({ code: "23514", constraint: "document_versions_scan_status_check" });
     }));
@@ -131,6 +133,21 @@ describe("record_document_scan: a compare-and-set from pending (spec 3.2 bullet 
       expect((await state(c, blank)).scan_signature).toBeNull();
     }));
 
+  it("never moves documents.current_version_id (dev 1; deviation 1: only the mint function in packages/db/src/documents.ts decides what opens; mutation: on a clean verdict also `update documents set current_version_id = p_version_id where id = v_document` -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const d = await doc(c, s.acct, s.ana);
+      const older = await version(c, s.acct, d);
+      const newer = await version(c, s.acct, d);
+      await c.query("update documents set current_version_id = $1 where id = $2", [newer, d]);
+      await record(c, s.acct, older, "clean");
+      const current = async () =>
+        (await c.query<{ current_version_id: string }>("select current_version_id from documents where id = $1", [d])).rows[0]!.current_version_id;
+      expect(await current()).toBe(newer);
+      await record(c, s.acct, newer, "infected", "Eicar-Test-Signature");
+      expect(await current()).toBe(newer);
+    }));
+
   it("'tried' stamps scan_tried_at and nothing else; a non-pending version is stale (re-review N2b; mutations: count 'tried' as an attempt -> FAILS; stamp a scanned version -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -143,15 +160,23 @@ describe("record_document_scan: a compare-and-set from pending (spec 3.2 bullet 
       expect(await record(c, s.acct, v, "tried")).toEqual({ status: "stale" });
     }));
 
-  it("never an uploading version, never another account's (mutations: drop `status = 'ready'` -> FAILS; drop the account filter -> FAILS)", () =>
+  it("never an uploading version, never another account's (mutations: drop `status = 'ready'` -> FAILS; drop the account filter -> FAILS; the 'tried' pass obeys the same two filters, each pinned separately: drop `v.account_id = p_account_id` or `v.status = 'ready'` from its own update -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const d = await doc(c, s.acct, s.ana);
       const uploading = await version(c, s.acct, d, false);
       expect(await record(c, s.acct, uploading, "clean")).toEqual({ status: "stale" });
+      expect(await record(c, s.acct, uploading, "tried")).toEqual({ status: "stale" });
+      const { rows: [uploadingTried] } = await c.query<{ tried: boolean }>(
+        "select scan_tried_at is not null as tried from document_versions where id = $1", [uploading]);
+      expect(uploadingTried!.tried).toBe(false);
       const theirs = await version(c, s.other, await doc(c, s.other, s.bea));
       expect(await record(c, s.acct, theirs, "clean")).toEqual({ status: "stale" });
       expect((await state(c, theirs)).scan_status).toBe("pending");
+      expect(await record(c, s.acct, theirs, "tried")).toEqual({ status: "stale" });
+      const { rows: [theirsTried] } = await c.query<{ tried: boolean }>(
+        "select scan_tried_at is not null as tried from document_versions where id = $1", [theirs]);
+      expect(theirsTried!.tried).toBe(false);
     }));
 
   it("refuses nulls (22004), an infected verdict with no signature (22004) and an unknown verdict (22023) (mutation: drop the signature guard -> FAILS)", () =>

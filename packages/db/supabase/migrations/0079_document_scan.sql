@@ -59,7 +59,7 @@ alter table public.document_versions add constraint document_versions_scan_coher
 comment on column public.document_versions.scan_status is
   'Virus scan (0079): pending until a verdict, then clean, infected or unscannable. Only a clean version may be opened (the mint function in packages/db/src/documents.ts). An infected or unscannable version has had its object deleted.';
 comment on column public.document_versions.scan_signature is
-  'clamd''s name for an infected version, or for an unscannable one when clamd named its cause (Heuristics.Encrypted.* = password-protected; owner ruling 2026-10-15) (0079). Staff-only through the documents RLS; never in an event payload or a browser.';
+  'clamd''s name for an infected version, or for an unscannable one when clamd named its cause (Heuristics.Encrypted.* = password-protected; owner ruling 2026-10-15) (0079). The app never shows it or puts it in an event payload.';
 
 alter table public.documents alter column scan_status set default 'skipped';
 comment on column public.documents.scan_status is
