@@ -305,7 +305,7 @@ describe("the cron schedule and the query windows are coupled — enforced, not 
     // At LEAST double: 61s (one second of headroom) would still pass a
     // ">" check but leaves nothing for the passes that run after the release
     // pass in the same tick. No count in the prose: `PASSES` grows by a line
-    // per recipe (it is thirteen entries today, and was nine when this
+    // per recipe (it is seventeen entries today, and was nine when this
     // sentence was written), and a number written down here rots silently.
     expect(maxDuration).toBeGreaterThanOrEqual((RELEASE_BUDGET_MS / 1000) * 2);
   });

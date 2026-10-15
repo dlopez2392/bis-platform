@@ -44,6 +44,11 @@ const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
     { ...base, id: "sg-8", title: "Bank statement", category: "other", createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13",
       version: { id: "sg-v8", contentType: "application/pdf", bytes: 50_000, scan: "locked", createdAt: "2026-10-13T14:00:00.000Z" },
       versions: [{ id: "sg-v8", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13", scan: "locked" }] },
+    // Final whole-branch review item 7: the generic "Couldn't check this file" (not a password — a scan
+    // limit, a crash, anything else unscannable carries the same words, spec 3.4).
+    { ...base, id: "sg-9", title: "Scanned plans", category: "other", createdAt: "2026-10-13T13:00:00.000Z", addedOn: "2026-10-13",
+      version: { id: "sg-v9", contentType: "application/pdf", bytes: 50_000, scan: "unscannable", createdAt: "2026-10-13T13:00:00.000Z" },
+      versions: [{ id: "sg-v9", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T13:00:00.000Z", addedOn: "2026-10-13", scan: "unscannable" }] },
   ],
   trashed: [{ ...base, id: "sg-4", title: "Old estimate", category: "estimate", createdAt: "2026-08-01T15:00:00.000Z", addedOn: "2026-08-01", deletedAt: "2026-10-10T15:00:00.000Z" },
     // A Delete forever that stopped part-way: "Being deleted" as a dot and a word, no Restore; an Owner keeps Delete forever to finish it.

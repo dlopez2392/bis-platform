@@ -503,12 +503,28 @@ jobs:
         run: node --test --test-timeout=60000 "services/scanner/test/*.test.mjs"
       - name: Build the scanner image
         run: docker build -t bis-scanner-ci services/scanner
+      # I1 (final whole-branch review): owner-locked PDFs (no password needed to OPEN them, only to edit
+      # or print) must scan clean, never Heuristics.Encrypted.*; a real user-password PDF must still
+      # answer unscannable with that signature, proving the password path still works. qpdf builds all
+      # three from one clean PDF in a throwaway alpine container — qpdf is not a dependency of the
+      # scanner image itself, only of this proof.
+      - name: Build owner-locked and user-locked PDF fixtures (qpdf, I1)
+        run: |
+          node services/scanner/test/build-encrypted-fixtures.mjs tmp/encrypted-fixtures
+          docker run --rm -v "$PWD/tmp/encrypted-fixtures:/w" alpine:3 sh -c "
+            set -e
+            apk add --no-cache qpdf
+            qpdf --encrypt '' owner-only-128 128 -- /w/in.pdf /w/owner-aes128.pdf
+            qpdf --encrypt '' owner-only-256 256 -- /w/in.pdf /w/owner-aes256.pdf
+            qpdf --encrypt open-me owner-pw 128 -- /w/in.pdf /w/user-password.pdf
+          "
       - name: Start it beside the real clamd
         run: docker run -d --name bis-scanner-ci --network host -e PORT=8080 -e "SCANNER_CLIENTS=ci_scanner_fixture_only@http://127.0.0.1:8098" bis-scanner-ci
       - name: EICAR, a clean PDF and a 25 MiB file against the real clamd
         env:
           SCANNER_URL: http://127.0.0.1:8080
           SCANNER_SECRET: ci_scanner_fixture_only
+          ENCRYPTED_FIXTURES_DIR: tmp/encrypted-fixtures
         run: node services/scanner/test/real-clamd.mjs
       - name: Memory and logs (assumption A1)
         if: always()

@@ -34,21 +34,24 @@ describe("styleguide: the Documents card in every state (DoD: /styleguide gains 
     const es = html.slice(html.indexOf('lang="es"'));
     const esText = renderedText(es.slice(0, es.indexOf("data-documents-card", es.indexOf("data-documents-card") + 1)));
     expect(esText).toContain(m["documents.ownersOnly.es"]);
-    expect(esText).toContain(m["documents.count.es"].replace("{count}", "6"));
+    expect(esText).toContain(m["documents.count.es"].replace("{count}", "7"));
     expect(esText).toContain(m["documents.trashList.es"].replace("{count}", "2"));
   });
 
-  it("shows one Checking row, one removed row and one password-protected row, in both languages (S-07 2a; mutation: drop a scan state -> FAILS)", () => {
+  it("shows one Checking row, one removed row, one password-protected row and one generic couldn't-check row, in both languages (S-07 2a; final review item 7; mutation: drop a scan state -> FAILS)", () => {
     expect(html.match(/data-document-scan="pending"/g)).toHaveLength(3);
     expect(html.match(/data-document-scan="infected"/g)).toHaveLength(3);
     expect(html.match(/data-document-scan="locked"/g)).toHaveLength(3);
+    expect(html.match(/data-document-scan="unscannable"/g)).toHaveLength(3);
     expect(text).toContain(m["documents.status.scanning"]);
     expect(text).toContain(m["documents.status.virusRemoved"]);
     expect(text).toContain(m["documents.status.passwordRemoved"]);
+    expect(text).toContain(m["documents.status.unscannable"]);
     const es = renderedText(html.slice(html.indexOf('lang="es"')));
     expect(es).toContain(m["documents.status.scanning.es"]);
     expect(es).toContain(m["documents.status.virusRemoved.es"]);
     expect(es).toContain(m["documents.status.passwordRemoved.es"]);
+    expect(es).toContain(m["documents.status.unscannable.es"]);
   });
 
   it("shows every rule-3 mark the card has: a near expiry, a past one, Owners only and the trash (mutation: drop the expiring file -> FAILS)", () => {

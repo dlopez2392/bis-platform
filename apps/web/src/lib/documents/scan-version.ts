@@ -39,7 +39,14 @@ async function removeThenRecord(
   const { error } = await db.storage.from(DOCUMENT_BUCKET).remove([v.storagePath]);
   if (error) throw new Error(`scan: version ${v.versionId}'s object was not removed, so it stays pending for the next pass: ${error.message}`);
   const r = await recordDocumentScan(db, { accountId: v.accountId, versionId: v.versionId, verdict, signature });
-  return r.status === "ok" ? verdict : "stale";
+  if (r.status === "stale") {
+    // M5 (final review): the object is ALREADY GONE by the time another scan's verdict wins the race —
+    // a removal under a clean verdict would be invisible otherwise. Name the version id only, never a
+    // storage path, URL or token.
+    console.error(`scan: version ${v.versionId}'s object was removed, but recordDocumentScan answered stale (another verdict already won)`);
+    return "stale";
+  }
+  return verdict;
 }
 
 /** Final check R2: the object is CONFIRMED gone only when a list of its own folder answers without error and without it. */

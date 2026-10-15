@@ -1,5 +1,7 @@
 import http from "node:http";
 import assert from "node:assert/strict";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import { sign } from "../src/hmac.mjs";
 import { eicar, eicarDocx, cleanPdf, storedZip, xlsxExpanding } from "./eicar.mjs";
 
@@ -11,6 +13,13 @@ import { eicar, eicarDocx, cleanPdf, storedZip, xlsxExpanding } from "./eicar.mj
  * CLEAN, its scan time printed (A15) and the machine's peak memory read by the CI step after this one
  * (A1; re-review N1: no limit may delete an ordinary export); /health's self-test passes (N2a); the
  * signature date reads (A7); a refused request fetches nothing.
+ * I1 (final whole-branch review): owner-only encryption (RC4/AES-128, AES-256 R6 — no password needed to
+ * OPEN the file, only to edit or print it) must scan CLEAN, never Heuristics.Encrypted.*; a file that
+ * needs a password to open must still answer unscannable with a Heuristics.Encrypted.* signature, so the
+ * password path is proven alongside the owner-lock exception. The three fixtures are built by the CI
+ * `scanner` job with qpdf (ENCRYPTED_FIXTURES_DIR names the directory it wrote them to); this file skips
+ * the block when the env var is unset, so a local run with no qpdf/Docker still exercises everything
+ * else.
  * Serves its files itself, as storage would, on 127.0.0.1:8098; the scanner must allow that origin
  * (SCANNER_CLIENTS=<secret>@http://127.0.0.1:8098).
  */
@@ -25,6 +34,20 @@ const tail = storedZip([
 ]);
 const FILES = { "eicar.txt": Buffer.from(eicar()), "eicar.docx": eicarDocx(), "clean.pdf": cleanPdf(2048), "big.pdf": cleanPdf(25 * MiB), "tail.docx": tail, "export.xlsx": xlsxExpanding(300 * MiB) };
 assert.ok(tail.length <= 25 * MiB, `tail.docx is ${tail.length} bytes, over the 25 MiB the bucket allows`);
+
+// I1: the three qpdf-built fixtures, if the CI job built them (ENCRYPTED_FIXTURES_DIR). Each is read
+// from disk (never generated here — qpdf is not a dependency of this repo) and added to the same
+// storage stub the rest of this file already serves.
+const FIXTURES_DIR = process.env.ENCRYPTED_FIXTURES_DIR;
+const ENCRYPTED_NAMES = ["owner-aes128.pdf", "owner-aes256.pdf", "user-password.pdf"];
+const ENCRYPTED = FIXTURES_DIR ? ENCRYPTED_NAMES : null;
+if (ENCRYPTED) {
+  for (const name of ENCRYPTED) {
+    const p = join(FIXTURES_DIR, name);
+    assert.ok(existsSync(p), `I1: ${p} was not built by the CI job's qpdf step`);
+    FILES[name] = readFileSync(p);
+  }
+}
 let hits = 0;
 const storage = http.createServer((req, res) => {
   hits++;
@@ -64,7 +87,19 @@ const expanding = await scan("export.xlsx");
 const expandMs = Date.now() - started;
 console.log(JSON.stringify({ a15: { xlsxUnpacked: "300 MiB", scanMs: expandMs } }));
 assert.deepEqual(expanding, { verdict: "clean" }, `a 300 MiB-unpacking XLSX must be clean, not limited or timed out (re-review N1, A15): ${JSON.stringify(expanding)} after ${expandMs} ms`);
-assert.ok(expandMs < 20_000, `the 300 MiB-unpacking XLSX took ${expandMs} ms: over the pass's 20 s start window (A15)`);
+// The bound that matters is the worker's own 25 s scan timeout (scan-client.ts's SCAN_TIMEOUT_MS is
+// that plus 5 s of network headroom); the pass's start window is 15 s (45 s DOCUMENT_SCAN_BUDGET_MS
+// minus that 30 s SCAN_TIMEOUT_MS), not 20 s (M4, final whole-branch review).
+assert.ok(expandMs < 20_000, `the 300 MiB-unpacking XLSX took ${expandMs} ms: over the worker's 25 s scan timeout, with headroom (A15)`);
+if (ENCRYPTED) {
+  const owner128 = await scan("owner-aes128.pdf");
+  assert.deepEqual(owner128, { verdict: "clean" }, `I1: an owner-only RC4/AES-128 PDF (no password to OPEN it) must scan clean, not Heuristics.Encrypted.*: ${JSON.stringify(owner128)}`);
+  const owner256 = await scan("owner-aes256.pdf");
+  assert.deepEqual(owner256, { verdict: "clean" }, `I1: an owner-only AES-256 (R6) PDF (no password to OPEN it) must scan clean, not Heuristics.Encrypted.*: ${JSON.stringify(owner256)}`);
+  const userPw = await scan("user-password.pdf");
+  assert.equal(userPw.verdict, "unscannable", `I1: a PDF that needs a password to OPEN it must answer unscannable: ${JSON.stringify(userPw)}`);
+  assert.match(userPw.signature ?? "", /^Heuristics\.Encrypted\./, `I1: the user-password PDF's cause must name Heuristics.Encrypted.*, proving the password path still works: ${JSON.stringify(userPw)}`);
+}
 const before = hits;
 assert.equal((await call("POST", "/scan", JSON.stringify({ url: url("eicar.txt", "http://127.0.0.2:8098") }))).status, 403);
 assert.equal((await call("POST", "/scan", JSON.stringify({ url: url("eicar.txt") }), null)).status, 401);

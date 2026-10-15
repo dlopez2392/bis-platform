@@ -698,7 +698,7 @@ describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
       expect(Date.parse(oldest!)).toBeLessThanOrEqual(Date.parse(mine[1]!.created_at));
     }));
 
-  it("oldestPendingScanAt's own query chain: created_at ascending, never ordered by scan_tried_at (re-review N2b; mutation: read oldestPendingScanAt through the tried order -> FAILS)", async () => {
+  it("oldestPendingScanAt's own query chain: ready + pending only, created_at ascending, never ordered by scan_tried_at (re-review N2b; mutations: drop .eq('status','ready') -> FAILS; order descending -> FAILS; read oldestPendingScanAt through the tried order -> FAILS)", async () => {
     const calls: { method: string; args: unknown[] }[] = [];
     const builder: Record<string, unknown> = {};
     const record = (method: string) => (...args: unknown[]) => {
@@ -715,6 +715,8 @@ describe("virus scanning's reads and writes (S-07 2a; spec 3.2-3.4)", () => {
     const db = { from } as unknown as SupabaseClient;
     const oldest = await oldestPendingScanAt(db);
     expect(from).toHaveBeenCalledWith("document_versions");
+    const eqCalls = calls.filter((c) => c.method === "eq");
+    expect(eqCalls.map((c) => c.args)).toEqual([["status", "ready"], ["scan_status", "pending"]]);
     const orderCalls = calls.filter((c) => c.method === "order");
     expect(orderCalls).toEqual([{ method: "order", args: ["created_at", { ascending: true }] }]);
     expect(oldest).toBe("2026-01-01T00:00:00.000Z");

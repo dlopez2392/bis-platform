@@ -21,13 +21,17 @@ FROM clamav/clamav:1.4
 #   ConcurrentDatabaseReload no: one signature set in memory during a reload, so 2 GB holds (deviation 12).
 #   TCPSocket 3310 / TCPAddr 127.0.0.1: clamd answers the shim on loopback only, never the machine's network.
 #   Foreground no: both daemonise, and start.sh runs the shim in the foreground.
+# freshclam.conf's own TestDatabases no (final whole-branch review N1): freshclam's default (yes) loads
+# every freshly-downloaded signature file into a SECOND in-memory database to self-check it before
+# replacing the live one, doubling the resident signature set for that moment — the same kind of spike
+# ConcurrentDatabaseReload no avoids on the clamd side, on the 2 GB worker (deviation 12).
 RUN apk add --no-cache nodejs \
  && for d in StreamMaxLength MaxFileSize MaxScanSize AlertExceedsMax AlertEncrypted AlertEncryptedArchive AlertEncryptedDoc ConcurrentDatabaseReload TCPSocket TCPAddr Foreground; do \
       sed -i -e "/^${d} /d" /etc/clamav/clamd.conf; \
     done \
  && printf '%s\n' 'StreamMaxLength 100M' 'MaxFileSize 400M' 'MaxScanSize 1000M' 'AlertExceedsMax yes' 'AlertEncrypted yes' 'AlertEncryptedArchive yes' 'AlertEncryptedDoc yes' 'ConcurrentDatabaseReload no' 'TCPSocket 3310' 'TCPAddr 127.0.0.1' 'Foreground no' >> /etc/clamav/clamd.conf \
- && sed -i -e '/^Foreground /d' /etc/clamav/freshclam.conf \
- && printf '%s\n' 'Foreground no' >> /etc/clamav/freshclam.conf \
+ && sed -i -e '/^Foreground /d' -e '/^TestDatabases /d' /etc/clamav/freshclam.conf \
+ && printf '%s\n' 'Foreground no' 'TestDatabases no' >> /etc/clamav/freshclam.conf \
  && node --version
 
 COPY --chown=clamav:clamav src/ /app/src/

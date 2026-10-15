@@ -52,8 +52,7 @@ const files = TREES.flatMap((t) => sources(join(ROOT, t))).map((p) => ({ rel: re
  * a prose mention can never satisfy this, by construction rather than by a stripping step that could miss
  * one shape.
  */
-function countMatches(text: string, re: RegExp, scriptKind: ts.ScriptKind): number {
-  const sf = ts.createSourceFile("source.tsx", text, ts.ScriptTarget.Latest, true, scriptKind);
+function countMatchesInTree(sf: ts.SourceFile, re: RegExp): number {
   let count = 0;
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node) || ts.isStringLiteralLike(node)) {
@@ -64,26 +63,36 @@ function countMatches(text: string, re: RegExp, scriptKind: ts.ScriptKind): numb
   visit(sf);
   return count;
 }
+/** Ad hoc text (the walker's own tests below): parses once, on the spot — these snippets are tiny. */
+function countMatches(text: string, re: RegExp, scriptKind: ts.ScriptKind): number {
+  return countMatchesInTree(ts.createSourceFile("source.tsx", text, ts.ScriptTarget.Latest, true, scriptKind), re);
+}
 const kindOf = (rel: string): ts.ScriptKind => (rel.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
 /** `createSignedUrl`, a call to the batch form `createSignedUrls`, or either name reached by a bracket string or a destructured binding. */
 const MINT_RE = /^createSignedUrls?$/;
 const SCANNER_RE = /^signedScannerUrl$/;
+/**
+ * The whole tree, parsed EXACTLY ONCE at module scope (M2 fix, final review): re-parsing every file on
+ * every `hits()` call made each test that walks the real tree reparse ~780 files, close to vitest's 5 s
+ * default on this machine and over it on a slower one. The AST is shared; only the (cheap) walk repeats.
+ */
+const parsed = files.map((f) => ({ rel: f.rel, sf: ts.createSourceFile(f.rel, f.text, ts.ScriptTarget.Latest, true, kindOf(f.rel)) }));
 /** Every real occurrence of `re` across the whole tree, as that file's path once per hit (order: TREES, then file order within each). */
-const hits = (re: RegExp): string[] => files.flatMap((f) => Array.from({ length: countMatches(f.text, re, kindOf(f.rel)) }, () => f.rel));
+const hits = (re: RegExp): string[] => parsed.flatMap((f) => Array.from({ length: countMatchesInTree(f.sf, re) }, () => f.rel));
 
 describe("the read gate (spec 3.3)", () => {
   it("scans a real tree (positive control: it finds documents.ts and this module's own sibling)", () => {
     expect(files.map((f) => f.rel)).toEqual(expect.arrayContaining(["packages/db/src/documents.ts", "apps/web/src/lib/documents/scan-version.ts"]));
-  });
+  }, 30_000);
 
   it("storage's signed-URL methods are named in exactly two places, both in documents.ts: a call, a createSignedUrls batch call or a destructured name all count (plan review 9; mutations: mint in documents-actions.ts again -> FAILS; `const { createSignedUrl } = svc.storage.from(b)` anywhere -> FAILS)", () => {
     expect(hits(MINT_RE)).toEqual(["packages/db/src/documents.ts", "packages/db/src/documents.ts"]);
-  });
+  }, 30_000);
 
   it("the scanner's URL is asked for only by the scan procedure (mutation: call signedScannerUrl from an action or a route -> FAILS)", () => {
-    const users = files.filter((f) => countMatches(f.text, SCANNER_RE, kindOf(f.rel)) > 0 && !f.rel.startsWith("packages/db/src/"));
+    const users = parsed.filter((f) => countMatchesInTree(f.sf, SCANNER_RE) > 0 && !f.rel.startsWith("packages/db/src/"));
     expect(users.map((f) => f.rel)).toEqual(["apps/web/src/lib/documents/scan-version.ts"]);
-  });
+  }, 30_000);
 });
 
 describe("the walker itself (I1 follow-up): a real mint is never blinded by an adjacent literal", () => {

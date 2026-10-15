@@ -123,6 +123,16 @@ describe("scanVersion (spec 3.2-3.4; owner decision P4: nothing infected is kept
     expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("stale");
   });
 
+  it("M5: removeThenRecord's 'stale' answer comes back AFTER the object is already gone — log an error naming the version id, never a URL or token (mutation: drop the log -> FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    recordDocumentScan.mockResolvedValue({ status: "stale" });
+    expect(await scanVersion(DB, V, deps({ verdict: "infected", signature: "Eicar-Test-Signature" }))).toBe("stale");
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("ver"));
+    const logged = errorSpy.mock.calls.map((c) => String(c[0])).join(" ");
+    expect(logged).not.toMatch(/https?:\/\/|token=/);
+    errorSpy.mockRestore();
+  });
+
   describe("review fix 2: signedScannerUrl throws when the object is already gone (infected removed, a crash before the verdict, attempts < 3) and createSignedUrl refuses a non-existent object", () => {
     it("mint fails, the app's OWN list confirms the object gone: a countable 'missing', exactly like the worker's (held under holdErrors; never scanned since minting failed) (mutation: route it to 'unreached' instead -> FAILS)", async () => {
       signedScannerUrl.mockRejectedValueOnce(new Error("signedScannerUrl failed: Object not found"));
