@@ -24,7 +24,7 @@ The requests-poll PR is **#262, MERGED** (branch `feat/s07-requests-poll`, head 
 - 2c's e2e is a NEW file (`apps/web/e2e/document-requirements.spec.ts`); it never edits `document-requests.spec.ts`.
 - 2c's container edits must keep every pin in `documents-card-structure.test.ts` green: the requests settle, the timer effect and the `onVisible` effect are not edited (the checklist's own effect is a NEW `useEffect`, declared AFTER the `onVisible` effect, so the structure test's `onVisible` slice still ends at its own `}, [requestsRoute]);`). Task 7 adds its own pins to that file (I5).
 
-**Dependency, stated outright: Task 7 (the card) merges `origin/main` (which now holds `c9b099a8`) into `<WT>` as its first step** (never a rebase in a shared tree). Task 9 (e2e) and Task 8 (baselines) follow Task 7. Tasks 1–6 touch none of the poll PR's four files; since #262 has merged, nothing waits on it any more, but Task 7 still verifies the merged base before it edits.
+**Dependency, stated outright: the ORCHESTRATOR merges `origin/main` (which holds `c9b099a8`) into `<WT>` ONCE, in Task 0 step 1b, before any lane starts** (never a rebase in a shared tree; plan re-review N3). Every task then starts on that base. Task 9 (e2e) and Task 8 (baselines) follow Task 7. Task 7 still verifies the merged base (step 0) before it edits.
 
 ## Owner decisions (RULED 2026-10-16, tiles)
 
@@ -47,7 +47,7 @@ The spec left these open, or the code made the spec's words impossible as writte
 
 ## Global Constraints
 
-- **NEVER `git stash`, `git reset`, `git checkout --`, `--amend`, or any history rewrite** in the shared worktree. Another agent's uncommitted work lives in the same tree. To undo your own edit, edit it back. To see committed text, `git show HEAD:<path>`. Never `rm -rf` anything under `<WT>` (memory "No rm -rf on worktrees"); scratch directories under `<SCRATCH>` are yours to delete. Commit with `git commit -m "…" -- <every path>`, never `-A` or `.`. Merge `origin/main` when told to (Task 7 step 0); never rebase.
+- **NEVER `git stash`, `git reset`, `git checkout --`, `--amend`, or any history rewrite** in the shared worktree. Another agent's uncommitted work lives in the same tree. To undo your own edit, edit it back. To see committed text, `git show HEAD:<path>`. Never `rm -rf` anything under `<WT>` (memory "No rm -rf on worktrees"); scratch directories under `<SCRATCH>` are yours to delete. Commit with `git commit -m "…" -- <every path>`, never `-A` or `.`. Only the orchestrator merges `origin/main`, once, in Task 0 step 1b; no implementer merges, and nobody rebases.
 - **Ownership (tag on every task; no task edits a file its owner does not own).**
   - **bis-db-schema:** `packages/db/supabase/migrations/0081_document_requirements.sql` (new), `packages/db/src/test/document-requirements-schema.test.ts` (new), `<SCRATCH>/s07e-kit/*` (Task 1). Writes the migration and proves it on a replica; never applies it.
   - **bis-crm:** `apps/web/src/lib/messages.ts` and one new `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `packages/db/src/{document-requirements,document-rules,index}.ts` and `packages/db/src/test/document-requirements.test.ts` (Task 3); `packages/db/src/record.ts`, `packages/db/src/test/{record,timeline-merge}.test.ts`, `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` and tests, both timelines and their row tests, `…/contacts/contact-drawer.tsx` (`ROW_ICON` only), `apps/web/src/lib/contacts/drawer-summary.ts` (`ROW_KINDS` only) and test, `…/api/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED` and its comment only) (Task 4); `…/api/contacts/[contactId]/document-requirements/route.ts` (+ test), `apps/web/src/lib/documents/requirements-load.ts` (+ test), `…/contacts/document-requirements-actions.ts` (+ test), `…/settings/document-requirements-actions.ts` (+ test), two `ALLOWED` lines in `…/accounts/[accountId]/in-account-service-reads.test.ts` (Task 5); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 8, regenerated, never hand-edited).
@@ -57,7 +57,7 @@ The spec left these open, or the code made the spec's words impossible as writte
 - **Shared files, one task at a time.**
   - `apps/web/src/lib/messages.ts`: **Task 2 only**. Every key in this plan is listed in Task 2. A later task that finds a key missing STOPS and reports it; the orchestrator re-opens Task 2. A `.es` twin goes on the line directly under its English key.
   - `packages/db/src/{document-requirements,document-rules,index}.ts`: **Task 3 only**. `packages/db/src/record.ts` and `lib/record/*`: **Task 4 only**.
-  - `…/contacts/documents-card.tsx` and its test: **Task 7 only** (#262 has merged; Task 7 merges `origin/main` first). `…/contacts/documents-card-structure.test.ts` (#262's): Task 7 APPENDS one `describe` and edits nothing in it.
+  - `…/contacts/documents-card.tsx` and its test: **Task 7 only** (#262 has merged; Task 0 step 1b brought it into `<WT>`). `…/contacts/documents-card-structure.test.ts` (#262's): Task 7 APPENDS one `describe` and edits nothing in it.
   - `…/accounts/[accountId]/in-account-service-reads.test.ts`: **Task 5 only** (two lines).
   - `apps/web/src/lib/palette/registry.ts`: **Task 6 only** (one line, appended; "add a line, never reorder").
   - `apps/web/src/lib/i18n/*-baseline.json`: **Task 8 only**, after every copy-bearing task has committed.
@@ -196,7 +196,7 @@ Wave B:                T3 (bis-crm, after T1)
 Wave C (two lanes):    T4 (bis-crm, after T1-T3)     T5 (bis-crm 2nd instance, after T2, T3)
 Wave D:                T6 (bis-frontend, after T5)
 -- the poll PR (#262) has MERGED (c9b099a8): no gate is left --
-Wave E:                T7 (bis-frontend, after T5; step 0 merges origin/main into <WT>; may run beside T6)
+Wave E:                T7 (bis-frontend, after T5; may run beside T6; the base already holds #262, Task 0 step 1b)
 Wave F:                T8, then T9
 Checkpoint:            T10
 Rollout:               T11 (orchestrator, LAST)
@@ -208,7 +208,8 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the timelines, `contact-drawer.ts
 
 ## Task 0: Confirm the base; the owner rules D1–D12 (orchestrator)
 
-- [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `6bf592f9 Staff ask a customer for documents …`. `git fetch origin && git log --oneline origin/main -1`. `main` is at `c9b099a8` (#262, the poll PR) or later. Tasks 1–6 may start on `6bf592f9`; Task 7 merges `origin/main` itself. If `main` moved past `c9b099a8`, read what moved it before dispatching anything.
+- [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `6bf592f9 Staff ask a customer for documents …`. `git fetch origin && git log --oneline origin/main -1`. `main` is at `c9b099a8` (#262, the poll PR) or later. If `main` moved past `c9b099a8`, read what moved it before merging.
+- [ ] **Step 1b. The one merge (orchestrator; N3).** Before ANY lane starts: `git merge origin/main` in `<WT>` (never rebase). Expected: a clean merge (this branch holds only the plan and the spec, and #262 touched neither). Then `git log --oneline -3` shows the merge on top of `c9b099a8`; `ls "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-structure.test.ts"` exists. Every task starts from this base; no implementer merges.
 - [ ] **Step 2.** Confirm, and stop if any line differs:
   - `ls packages/db/supabase/migrations | tail -1` → `0080_document_requests.sql`; `git log --all --oneline -- 'packages/db/supabase/migrations/0081*'` → nothing.
   - `grep -n "requireAgencyOnlyAccountAccess(accountId)" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx"` → `62:` (D6's premise).
@@ -236,7 +237,7 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the timelines, `contact-drawer.ts
 - Consumes (SQL): `public.accounts`, `public.contacts (account_id, id)`, `public.client_group_members` (0069:59-75), `public.documents`, `public.document_versions` (0077, 0079: `status`, `scan_status`), `public.reserve_document_version`, `public.mark_document_version_ready` (0077), `public.record_document_scan` (0079, `(account, version, verdict, signature)`); `app.is_agency()`, `app.current_account_id()`, `app.sees_all_customers(uuid)`, `app.my_contact_ids()` (0068:75-97).
 - Produces (SQL); every name below is read by a later task:
   - `accounts.required_document_categories text[] not null default '{}'`, constraint `accounts_required_document_categories_check` through `app.required_document_categories_ok(text[]) returns boolean` (immutable): one-dimensional, no NULL element, each one of the EIGHT requirable keys (D8: `id, contract, estimate, invoice, photo, permit, insurance, warranty`), no duplicate. Order is the writer's; the app writes the vault's order.
-  - `public.document_requirement_skips`: `id uuid primary key default gen_random_uuid()`, `account_id`, `contact_id`, `category` (the eight), `skipped_by text`, `created_at timestamptz`, `unskipped_at timestamptz`, `unskipped_by text`. Constraints: `document_requirement_skips_category_check`, `document_requirement_skips_skipped_by_check` (non-blank), `document_requirement_skips_unskip_coherent` (`(unskipped_at is null) = (unskipped_by is null)`), `document_requirement_skips_unskip_after` (`unskipped_at is null or unskipped_at > created_at`), FK `document_requirement_skips_contact_fkey (account_id, contact_id) → contacts (account_id, id) on delete cascade`; unique partial index `document_requirement_skips_active (account_id, contact_id, category) where unskipped_at is null`; index `document_requirement_skips_by_contact (account_id, contact_id)`. RLS on; `authenticated` SELECT under `document_requirement_skips_member_read` + restrictive `document_requirement_skips_technician_scope`; `service_role` all.
+  - `public.document_requirement_skips`: `id uuid primary key default gen_random_uuid()`, `account_id`, `contact_id`, `category` (the eight), `skipped_by text`, `created_at timestamptz`, `unskipped_at timestamptz`, `unskipped_by text`. Constraints: `document_requirement_skips_category_check`, `document_requirement_skips_skipped_by_check` (non-blank), `document_requirement_skips_unskipped_by_check` (null, or non-blank, matching `skipped_by`'s rule; N5), `document_requirement_skips_unskip_coherent` (`(unskipped_at is null) = (unskipped_by is null)`), `document_requirement_skips_unskip_after` (`unskipped_at is null or unskipped_at > created_at`), FK `document_requirement_skips_contact_fkey (account_id, contact_id) → contacts (account_id, id) on delete cascade`; unique partial index `document_requirement_skips_active (account_id, contact_id, category) where unskipped_at is null`; index `document_requirement_skips_by_contact (account_id, contact_id)`. RLS on; `authenticated` SELECT under `document_requirement_skips_member_read` + restrictive `document_requirement_skips_technician_scope`; `service_role` all.
   - `public.document_requirements(p_account_id uuid, p_contact_id uuid, p_today date) returns table (category text, state text)`, SECURITY DEFINER, stable, EXECUTE for `authenticated` only. `state` ∈ `met | checking | expired | missing | skipped`. Rows in the account's stored order; none when the list is empty. Raises `22004` on a null argument and `42501` when the caller is outside the account or cannot see the contact. The account guard is the ONLY thing that refuses an Owner of an account whose client access is OFF (`app.current_account_id()` requires `client_access_enabled`, `0008_client_access.sql:13-18`, while `app.account_role` does not, `0066:52-60`), so Task 1 tests exactly that case (I2).
   - `public.unskip_document_requirement(p_account_id uuid, p_skip_id uuid, p_actor text) returns timestamptz`, SECURITY INVOKER, EXECUTE for `service_role` only (M6): stamps `unskipped_at = now()`, `unskipped_by = p_actor` on that account's row while it is still active, and answers the stored instant, or NULL when nothing changed. Raises `22004` on a null argument. (The skip's own `created_at` is the column default, `now()`, so both instants are the database's.)
 
@@ -378,7 +379,7 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
       await skip(c, s.acct, s.bo, "insurance");
     }));
 
-  it("an un-skip names who and comes after the skip; Other and unknown keys are refused; a blank skipped_by is refused; another account's contact is refused (mutations: drop unskip_coherent, unskip_after, the category check, skipped_by_check, or the composite FK -> FAILS)", () =>
+  it("an un-skip names who and comes after the skip; Other and unknown keys are refused; a blank skipped_by is refused; another account's contact is refused (mutations: drop unskip_coherent, unskip_after, the category check, skipped_by_check, unskipped_by_check, or the composite FK -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const id = (await skip(c, s.acct, s.ana, "permit")).rows[0]!.id;
@@ -386,6 +387,9 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
         .rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_unskip_coherent" });
       await expect(attempt(c, "update document_requirement_skips set unskipped_at = created_at, unskipped_by = 'x' where id = $1", [id]))
         .rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_unskip_after" });
+      // N5: a blank un-skipper is refused like a blank skipper.
+      await expect(attempt(c, "update document_requirement_skips set unskipped_at = created_at + interval '1 second', unskipped_by = '  ' where id = $1", [id]))
+        .rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_unskipped_by_check" });
       await expect(skip(c, s.acct, s.ana, "other")).rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_category_check" });
       // M1: a VALID category with a blank author, so only skipped_by_check can refuse it.
       await expect(skip(c, s.acct, s.ana, "id", "  ")).rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_skipped_by_check" });
@@ -608,7 +612,7 @@ create table public.document_requirement_skips (
   skipped_by text not null constraint document_requirement_skips_skipped_by_check check (btrim(skipped_by) <> ''),
   created_at timestamptz not null default now(),
   unskipped_at timestamptz,
-  unskipped_by text,
+  unskipped_by text constraint document_requirement_skips_unskipped_by_check check (unskipped_by is null or btrim(unskipped_by) <> ''),
   constraint document_requirement_skips_unskip_coherent check ((unskipped_at is null) = (unskipped_by is null)),
   constraint document_requirement_skips_unskip_after check (unskipped_at is null or unskipped_at > created_at),
   constraint document_requirement_skips_contact_fkey foreign key (account_id, contact_id)
@@ -698,7 +702,7 @@ grant execute on function public.document_requirements(uuid, uuid, date) to auth
 --    (another account's row, or already un-skipped). Plain (invoker), service_role only: the action has
 --    already proved the row on the request client.
 create function public.unskip_document_requirement(p_account_id uuid, p_skip_id uuid, p_actor text)
-returns timestamptz language plpgsql security invoker set search_path = '' as $
+returns timestamptz language plpgsql security invoker set search_path = '' as $$
 declare v_at timestamptz;
 begin
   if p_account_id is null or p_skip_id is null or p_actor is null then
@@ -709,7 +713,7 @@ begin
    where id = p_skip_id and account_id = p_account_id and unskipped_at is null
   returning unskipped_at into v_at;
   return v_at;
-end $;
+end $$;
 revoke all on function public.unskip_document_requirement(uuid, uuid, text) from public, anon, authenticated, service_role;
 grant execute on function public.unskip_document_requirement(uuid, uuid, text) to service_role;
 ```
@@ -728,10 +732,11 @@ const ctl=Buffer.from("a"+String.fromCharCode(92)+"b");let c=0;for(const x of ct
 console.log(JSON.stringify({nonAscii:bad,backslash:bs,control:c}));'
 ```
 Expected `{"nonAscii":0,"backslash":0,"control":1}`. Paste it and `md5sum packages/db/supabase/migrations/0081_document_requirements.sql`.
+  Then the dollar-quote check (plan re-review N1: a lone `$` where `$$` was meant fails on apply with `syntax error at or near "$"`): `grep -n '\$' packages/db/supabase/migrations/0081_document_requirements.sql | grep -v '\$\$'` prints NOTHING (the file has no `$1`-style parameter; every `$` is half of a `$$` pair), and `grep -o '\$\$' packages/db/supabase/migrations/0081_document_requirements.sql | wc -l` prints `6` (three functions, two each). Paste both outputs.
 
 - [ ] **Step 7: Run on the replica, post = pre + 0081.** `bash "$S/s07e-kit/replica.sh" 55600 "$S/s07e-t1-impl"` → `post = pre + 0081`. On `post`: `document-requirements-schema.test.ts`, `schema-grants-guard.test.ts`, `weekly-report-grants.test.ts`, `alert-phone-grants.test.ts`, `document-vault-schema.test.ts`, `document-vault-rls.test.ts`. Expected: all PASS; the three guards unchanged. Paste the summary blocks.
 
-- [ ] **Step 8: Mutation probes, each by name** (a `create or replace`, `alter` or `drop` on the replica's `post`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `app.required_document_categories_ok` with `'other'` in its list → the list case FAILS on `{other}`; (b) without the `count(distinct …)` clause → FAILS on `{id,id}`; (c) `drop index document_requirement_skips_active` → the one-active case FAILS; (d) `drop policy document_requirement_skips_technician_scope` → the `tech` row FAILS; (d2) `member_read` re-created `using (true)` → the `ownerB` row FAILS (I1: both must fail on the skips-only select); (e) the function with `h.expires_on > p_today` → the every-state case FAILS on `insurance`; (f) without the `client_group_id in (…)` branch → FAILS on `permit`; (g) without `and d.deleted_at is null` → FAILS on `contract`; (h) without `and v.scan_status = 'clean'` in `cl` → FAILS on `contract` or `warranty`; (i) `alter function public.document_requirements(uuid, uuid, date) security invoker` → the D7 case FAILS; (j) the contact guard removed → the fences case FAILS on `bo` for `tech`; (k) the ACCOUNT guard removed → the fences case FAILS on `ownerOff` (I2; and say in the report that `ownerB` stays refused by the contact guard, which is why ownerOff exists); (l) `unskip_document_requirement` without `and unskipped_at is null` → its case FAILS on the second call; (m) its execute granted to `authenticated` → its case FAILS. Paste each failing assertion line.
+- [ ] **Step 8: Mutation probes, each by name** (a `create or replace`, `alter` or `drop` on the replica's `post`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `app.required_document_categories_ok` with `'other'` in its list → the list case FAILS on `{other}`; (b) without the `count(distinct …)` clause → FAILS on `{id,id}`; (c) `drop index document_requirement_skips_active` → the one-active case FAILS; (d) `drop policy document_requirement_skips_technician_scope` → the `tech` row FAILS; (d2) `member_read` re-created `using (true)` → the `ownerB` row FAILS (I1: both must fail on the skips-only select); (e) the function with `h.expires_on > p_today` → the every-state case FAILS on `insurance`; (f) without the `client_group_id in (…)` branch → FAILS on `permit`; (g) without `and d.deleted_at is null` → FAILS on `contract`; (h) without `and v.scan_status = 'clean'` in `cl` → FAILS on `contract` or `warranty`; (i) `alter function public.document_requirements(uuid, uuid, date) security invoker` → the D7 case FAILS; (j) the contact guard removed → the fences case FAILS on `bo` for `tech`; (k) the ACCOUNT guard removed → the fences case FAILS on `ownerOff` (I2; and say in the report that `ownerB` stays refused by the contact guard, which is why ownerOff exists); (l) `unskip_document_requirement` without `and unskipped_at is null` → its case FAILS on the second call; (m) its execute granted to `authenticated` → its case FAILS; (n) `drop constraint document_requirement_skips_unskipped_by_check` → the un-skip case FAILS on the blank un-skipper (N5). Paste each failing assertion line.
 
 - [ ] **Step 9: Commit.**
 
@@ -1452,7 +1457,7 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
 
 ## Task 7: The checklist on the Documents card, the meter in its top row; the contact page's prop; `/styleguide` (bis-frontend)
 
-**Review:** opus. **Runs:** after Tasks 2 and 5. The poll PR (#262) has merged (`c9b099a8`); Step 0 merges `origin/main` first.
+**Review:** opus. **Runs:** after Tasks 2 and 5, on the base Task 0 step 1b merged (it holds #262, `c9b099a8`).
 
 **Files**
 - Create: `…/contacts/document-checklist.tsx` (+ `document-checklist.test.ts`), `…/contacts/document-checklist-handlers.ts` (+ `document-checklist-handlers.test.ts`)
@@ -1467,7 +1472,7 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
   - `DocumentsCard` gains an optional prop `checklist?: { canSkip: boolean }` (the contact page passes it; the group page does not, D3). `DocumentsCardView` gains an optional `checklist?: ChecklistSlot` with `ChecklistSlot = Omit<Parameters<typeof DocumentChecklist>[0], "locale" | "panelOpen" | "onUpload">` (the View supplies those three itself), and `onFiles` gains an optional third argument `category?: RequirableCategory | null`.
   - A pure `panelFiles(chosen: File[], preset: DocumentCategory | null, locale: Locale): PanelFile[]` exported from `documents-card.tsx` (the container's mapping, so the preset is tested without a DOM).
 
-- [ ] **Step 0: The base.** `git fetch origin && git log --oneline origin/main -3` shows `c9b099a8 The Documents card notices a customer's upload without a refresh …` (#262) or later. `git merge origin/main` in `<WT>` (never rebase; Tasks 1–6 touched none of #262's four files, so any conflict is a STOP and a report). Then, before editing anything:
+- [ ] **Step 0: The base (verify only; the orchestrator merged it in Task 0 step 1b, N3).** `git log --oneline` in `<WT>` contains `c9b099a8` (#262). If it does not, STOP and report: do not merge yourself. Then, before editing anything:
   - `grep -n "useRouter\|requestsChanged\|setNonce((n) => n + 1); router.refresh();\|const onVisible = () =>" "…/contacts/documents-card.tsx"`: the router, the "a file arrived" path and the `onVisible` effect are there (Assumption A5);
   - `ls "…/contacts/documents-card-structure.test.ts"` exists, and `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-structure.test.ts"` PASSES on the merged base, unedited (paste its summary line).
   If any of these fails, STOP.
@@ -1502,7 +1507,13 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
 ```ts
 describe("the checklist re-reads only when a files read changed what it depends on (S-07 2c; plan review I5, M3)", () => {
   /** The FILES settle: from its declaration to its fetch. */
-  const filesSettle = body.slice(body.indexOf("const settle = (load: DocumentsLoad) =>"), body.indexOf("fetch(route, { cache: \"no-store\" })"));
+  const settleFrom = body.indexOf("const settle = (load: DocumentsLoad) =>");
+  const settleTo = body.indexOf("fetch(route, { cache: \"no-store\" })");
+  const filesSettle = settleFrom >= 0 && settleTo > settleFrom ? body.slice(settleFrom, settleTo) : "";
+  it("both anchors of the files settle are found (N2: a missing anchor must fail, never slice the wrong text)", () => {
+    expect(settleFrom).toBeGreaterThanOrEqual(0);
+    expect(settleTo).toBeGreaterThan(settleFrom);
+  });
   const GUARDED = "if (hasChecklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);";
 
   it("the files settle bumps the checklist's read ONLY inside the shouldReloadRequirements guard (mutations: bump it on every settle, or drop the guard -> FAILS)", () => {
@@ -1519,8 +1530,13 @@ describe("the checklist re-reads only when a files read changed what it depends 
   });
 
   it("the checklist has no timer of its own (mutation: a setTimeout or setInterval in its effect -> FAILS)", () => {
-    const effect = body.slice(body.indexOf("const settleRequirements = (next: RequirementsLoad) =>"), body.indexOf("}, [requirementsRoute, requirementsNonce]);"));
-    expect(effect.length).toBeGreaterThan(0);
+    // N2: both anchors must be FOUND before slicing; a missing one (-1) would slice the wrong text and pass.
+    const from = body.indexOf("const settleRequirements = (next: RequirementsLoad) =>");
+    const to = body.indexOf("}, [requirementsRoute, requirementsNonce]);");
+    expect(from).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThan(from);
+    const effect = body.slice(from, to);
     expect(effect).not.toMatch(/setTimeout|setInterval/);
   });
 });
@@ -1631,7 +1647,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 ## Self-review notes (the writer's own pass, 2026-10-16)
 
 - **Spec coverage:** every §5 bullet maps to a task above. Four places where the spec's words changed, each RULED by the owner on 2026-10-16 and each carried into the spec as an "Amended 2026-10-16" line: §5.2 eight categories, not nine (D8); §5.4 the count in the card's own top row, not the server-rendered title (D9); §5.2 and §8 the agency edits the list for now, so P7's Owner half and §8's "until an Owner opts in" are not yet met for client Owners (D6); §5.1 the skips table's shape (deviation 1), because §5.4 needs both moves on the timeline.
-- **The poll PR (#262, merged as `c9b099a8`; branch head `8a6e7f7e`):** Tasks 1–6 touch none of its four files (`documents-card.tsx`, `documents-card.test.ts`, `documents-card-structure.test.ts`, `document-requests.spec.ts`); Task 7 runs the structure test on the merged base first, edits none of its pinned lines, and appends its own `describe`; Task 7 merges `origin/main` first and STOPS if the poll PR's router or "file arrived" path is not there; the checklist adds no timer and feeds nothing back into the requests tick.
+- **The poll PR (#262, merged as `c9b099a8`; branch head `8a6e7f7e`):** Tasks 1–6 touch none of its four files (`documents-card.tsx`, `documents-card.test.ts`, `documents-card-structure.test.ts`, `document-requests.spec.ts`); Task 7 runs the structure test on the merged base first, edits none of its pinned lines, and appends its own `describe`; Task 0 step 1b merges `origin/main` once, and Task 7 step 0 STOPS if #262's router or "file arrived" path is not there; the checklist adds no timer and feeds nothing back into the requests tick.
 - **Vacuity pass:** every prescribed test names its mutation; the order-sensitive ones (each action's proof-then-write) assert ONE shared call log; every copy assertion uses `renderedText` and literal Spanish; the checklist's "re-read once per change" has no DOM proof in vitest, so it is pinned at the source by the structure `describe` Task 7 appends to #262's `documents-card-structure.test.ts` (I5); the e2e request count that could not fail is gone.
 - **Types across tasks:** `REQUIRABLE_DOCUMENT_CATEGORIES`, `RequirableCategory`, `RequirementState`, `cleanRequiredCategories`, `requirementsMeter`, `DOCUMENT_REQUIREMENT_UNDO_MS` (Task 3, document-rules) → Tasks 5, 6, 7; `DocumentRequirement`, `DocumentSkipRow`, `TimelineDocumentSkip`, the ten functions (Task 3) → Tasks 4, 5; `RequirementsLoad`, `RequirementsResponse`, `ChecklistView`, `checklistView`, `shouldReloadRequirements`, `keepRequirements`, `requirementsRouteFor`, `requirementsLoadFrom` (Task 5) → Task 7; the four skip actions (Task 5) → Task 7's handlers; `setRequiredDocumentCategoriesAction` (Task 5) → Task 6.
 - **Not executed:** nothing in this plan was run; the SQL and TypeScript are written against the files read at `6bf592f9` (and #262 at its branch head `8a6e7f7e`, merged as `c9b099a8`) and are marked where a name must be confirmed by a read (`record_document_scan`'s argument order, the package typecheck script, `timeline-rows.ts`' `detail` type, the kit's env names). Each such read is a named step, not an assumption left open.
