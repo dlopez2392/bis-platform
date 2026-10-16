@@ -44,25 +44,36 @@ export async function setInboundSettings(db: SupabaseClient, accountId: string, 
 /**
  * The thread's token, made on first need (the conversation too). A compare-and-set on
  * `reply_token is null`, so two senders racing both end with the one stored token.
+ *
+ * A REVOKED token is never handed out again (owner ruling 2026-10-16): new mail must never advertise
+ * a dead reply address, so a revoked token is rotated — a fresh token written and
+ * `reply_token_revoked_at` cleared, race-safe the same way (compare-and-set on the exact revoked
+ * token this caller saw, so only one of several concurrent rotators wins and the rest just re-read).
  */
 export async function ensureReplyToken(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string, make: () => string = newReplyToken,
 ): Promise<{ conversationId: string; token: string }> {
   const { id: conversationId } = await ensureConversation(db, accountId, contactId, actorId, "system");
   const read = async () => {
-    const { data, error } = await db.from("conversations").select("reply_token")
+    const { data, error } = await db.from("conversations").select("reply_token, reply_token_revoked_at")
       .eq("account_id", accountId).eq("id", conversationId).single();
     if (error) throw new Error(`ensureReplyToken read failed: ${error.message}`);
-    return (data as { reply_token: string | null }).reply_token;
+    const r = data as { reply_token: string | null; reply_token_revoked_at: string | null };
+    return { token: r.reply_token, revoked: r.reply_token_revoked_at !== null };
   };
   const existing = await read();
-  if (existing) return { conversationId, token: existing };
-  const { error } = await db.from("conversations").update({ reply_token: make() })
-    .eq("account_id", accountId).eq("id", conversationId).is("reply_token", null);
+  if (existing.token && !existing.revoked) return { conversationId, token: existing.token };
+
+  const cas = existing.token === null
+    ? db.from("conversations").update({ reply_token: make() })
+        .eq("account_id", accountId).eq("id", conversationId).is("reply_token", null)
+    : db.from("conversations").update({ reply_token: make(), reply_token_revoked_at: null })
+        .eq("account_id", accountId).eq("id", conversationId).eq("reply_token", existing.token);
+  const { error } = await cas;
   if (error) throw new Error(`ensureReplyToken write failed: ${error.message}`);
   const stored = await read();
-  if (!stored) throw new Error("ensureReplyToken: no token after the write");
-  return { conversationId, token: stored };
+  if (!stored.token) throw new Error("ensureReplyToken: no token after the write");
+  return { conversationId, token: stored.token };
 }
 
 export type ReplyThread = { conversationId: string; accountId: string; contactId: string; revoked: boolean; inboundDomain: string | null };
@@ -108,13 +119,23 @@ export async function recordInboundEmail(db: SupabaseClient, row: NewInboundEmai
   const { data, error } = await db.from("inbound_emails").insert({
     account_id: row.accountId, conversation_id: row.conversationId, provider_email_id: row.providerEmailId,
     from_email: row.fromEmail, from_name: row.fromName, to_email: row.toEmail, subject: row.subject,
-    text: row.text.slice(0, 100000), auth: row.auth, attachment_count: row.attachmentCount, status: row.status, hold_reason: row.holdReason,
-    decided_by: row.decidedBy, decided_at: row.decidedBy ? new Date().toISOString() : null, received_at: row.receivedAt,
+    // Truncated by CODE POINT, not UTF-16 code unit: a plain `.slice` can split a surrogate pair (an
+    // astral emoji, say) in two, leaving a lone surrogate that PostgREST/Postgres reject outright
+    // ("Empty or invalid json") — the reply is then lost on every retry, not merely over-truncated.
+    text: Array.from(row.text).slice(0, 100000).join(""),
+    auth: row.auth, attachment_count: row.attachmentCount, status: row.status, hold_reason: row.holdReason,
+    decided_by: row.decidedBy, decided_at: row.decidedBy !== null ? new Date().toISOString() : null, received_at: row.receivedAt,
   }).select(COLS).single();
   if (!error && data) return { row: toRow(data as Raw), created: true };
   if (error?.code !== "23505") throw new Error(`recordInboundEmail failed: ${error?.message}`);
-  const { data: again, error: e2 } = await db.from("inbound_emails").select(COLS).eq("provider_email_id", row.providerEmailId).single();
-  if (e2 || !again) throw new Error(`recordInboundEmail re-read failed: ${e2?.message}`);
+  // provider_email_id is unique ACROSS every account, not just this one — a 23505 proves some row
+  // already holds this id, never which account it belongs to. Re-read scoped to THIS account: a row
+  // under a different account is never a duplicate of this one, so answer it as a hard failure rather
+  // than handing account B account A's row back as its own "duplicate, created false".
+  const { data: again, error: e2 } = await db.from("inbound_emails").select(COLS)
+    .eq("account_id", row.accountId).eq("provider_email_id", row.providerEmailId).maybeSingle();
+  if (e2) throw new Error(`recordInboundEmail re-read failed: ${e2.message}`);
+  if (!again) throw new Error(`recordInboundEmail: provider_email_id ${row.providerEmailId} collided outside account ${row.accountId}`);
   return { row: toRow(again as Raw), created: false };
 }
 
@@ -140,7 +161,7 @@ export async function decideInboundEmail(
   const { data, error } = await db.from("inbound_emails").update({
     status: to.status,
     ...(to.messageId !== undefined ? { message_id: to.messageId } : {}),
-    decided_by: to.decidedBy, decided_at: to.decidedBy ? new Date().toISOString() : null,
+    decided_by: to.decidedBy, decided_at: to.decidedBy !== null ? new Date().toISOString() : null,
   }).eq("account_id", accountId).eq("id", id).eq("status", from).select("id");
   if (error) throw new Error(`decideInboundEmail failed: ${error.message}`);
   return (data?.length ?? 0) > 0;

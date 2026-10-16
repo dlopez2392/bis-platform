@@ -3,6 +3,8 @@ import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { createMessage, listMessages } from "../messaging";
+import { createAccount } from "../accounts";
+import { deleteAccountCascade } from "../account-teardown";
 import {
   BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
   ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage,
@@ -41,12 +43,52 @@ describe("reply tokens", () => {
     });
   });
 
+  it("twelve concurrent callers on a fresh contact end with exactly one token, one conversation, one conversation.created event (mutation: drop the .is('reply_token', null) race guard → more than one distinct token, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Concurrent", email: "concurrent@example.com" }, ACTOR);
+      const results = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          ensureReplyToken(db, accountId, contactId, ACTOR, () => `${String(i).padStart(2, "0")}${"c".repeat(22)}`)),
+      );
+      const distinctTokens = new Set(results.map((r) => r.token));
+      const distinctConversations = new Set(results.map((r) => r.conversationId));
+      expect(distinctTokens.size).toBe(1);
+      expect(distinctConversations.size).toBe(1);
+      const { data } = await db.from("events").select("id")
+        .eq("account_id", accountId).eq("type", "conversation.created");
+      expect(data).toHaveLength(1);
+    });
+  });
+
   it("a revoked token reads as revoked (mutation: drop the revoked mapping → revoked false, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana2@example.com" }, ACTOR);
       const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
       await db.from("conversations").update({ reply_token_revoked_at: new Date().toISOString() }).eq("id", t.conversationId);
       expect((await findReplyThread(db, t.token))?.revoked).toBe(true);
+    });
+  });
+
+  it("a revoked token is ROTATED, never handed out again: ensureReplyToken writes a fresh token and clears revoked_at (mutation: hand back the revoked token unchanged → the old token still matches, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Rot", email: "rot@example.com" }, ACTOR);
+      const first = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      await db.from("conversations").update({ reply_token_revoked_at: new Date().toISOString() }).eq("id", first.conversationId);
+      expect((await findReplyThread(db, first.token))?.revoked).toBe(true);
+
+      const second = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      expect(second.conversationId).toBe(first.conversationId);
+      expect(second.token).not.toBe(first.token);
+      // The old (revoked) token no longer resolves to the thread at all — new mail must never
+      // advertise a dead reply address.
+      expect(await findReplyThread(db, first.token)).toBeNull();
+      const thread = await findReplyThread(db, second.token);
+      expect(thread?.revoked).toBe(false);
+      expect(thread?.conversationId).toBe(first.conversationId);
+
+      // Calling again answers the SAME (now live) token, not a third rotation.
+      const third = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      expect(third.token).toBe(second.token);
     });
   });
 });
@@ -123,24 +165,132 @@ describe("inbound rows", () => {
   });
 });
 
+describe("decided_at is keyed on decidedBy !== null, not on truthiness", () => {
+  it("recordInboundEmail: an empty-string decidedBy (falsy, but not null) still gets a decided_at, honoring inbound_emails_decided_coherent (mutation: `row.decidedBy ? ... : null` → decided_at null while decided_by is '' → the CHECK constraint rejects the insert, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Empty", email: "empty@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const { row: stored } = await recordInboundEmail(db, row(accountId, t.conversationId, { decidedBy: "", status: "filed", holdReason: null }));
+      expect(stored.decidedBy).toBe("");
+      expect(stored.decidedAt).not.toBeNull();
+    });
+  });
+
+  it("decideInboundEmail: an empty-string decidedBy still gets a decided_at (mutation: `to.decidedBy ? ... : null` → decided_at null while decided_by is '', FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Empty2", email: "empty2@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const { row: held } = await recordInboundEmail(db, row(accountId, t.conversationId));
+      await decideInboundEmail(db, accountId, held.id, "held", { status: "dismissed", decidedBy: "" });
+      const after = await getInboundEmail(db, accountId, held.id);
+      expect(after?.decidedBy).toBe("");
+      expect(after?.decidedAt).not.toBeNull();
+    });
+  });
+});
+
+describe("recordInboundEmail's duplicate re-read is account-scoped", () => {
+  it("a second record of the same provider id answers the stored row only when it is THIS account's row (mutation: drop the account scope from the re-read → account B is handed account A's row, FAILS)", async () => {
+    await withTestAccount(async (dbA, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const providerEmailId = `re_${RUN}_${Math.random().toString(36).slice(2, 8)}`;
+        const { id: contactA } = await createContact(dbA, accountA, { firstName: "A", email: "a@example.com" }, ACTOR);
+        const tA = await ensureReplyToken(dbA, accountA, contactA, ACTOR);
+        const a = await recordInboundEmail(dbA, row(accountA, tA.conversationId, { providerEmailId }));
+        expect(a.created).toBe(true);
+
+        const { id: contactB } = await createContact(dbB, accountB, { firstName: "B", email: "b@example.com" }, ACTOR);
+        const tB = await ensureReplyToken(dbB, accountB, contactB, ACTOR);
+        // The INSERT for account B with the SAME provider_email_id (globally unique) hits 23505 against
+        // account A's row — account B must never be handed account A's row as its own "duplicate".
+        await expect(recordInboundEmail(dbB, row(accountB, tB.conversationId, { providerEmailId })))
+          .rejects.toThrow(/recordInboundEmail/);
+      });
+    });
+  });
+
+  it("a genuine retry within the SAME account still answers the stored row, created false", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Retry", email: "retry@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const r = row(accountId, t.conversationId);
+      const first = await recordInboundEmail(db, r);
+      const second = await recordInboundEmail(db, { ...r, text: "different body" });
+      expect(second.created).toBe(false);
+      expect(second.row.id).toBe(first.row.id);
+      expect(second.row.text).toBe(first.row.text);
+    });
+  });
+});
+
+describe("recordInboundEmail's text truncation", () => {
+  it("truncates by code point, never splitting a surrogate pair: a body with an astral emoji just past the limit records successfully with exactly 100000 code points stored (mutation: slice by UTF-16 code unit → lone surrogate → PostgREST rejects the row, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Astral", email: "astral@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const text = "a".repeat(99999) + "\u{1F600}" + "tail";
+      const { row: stored } = await recordInboundEmail(db, row(accountId, t.conversationId, { text }));
+      expect(Array.from(stored.text)).toHaveLength(100000);
+      expect(stored.text).toBe("a".repeat(99999) + "\u{1F600}");
+    });
+  });
+});
+
 describe("matchSender", () => {
-  it("matches the thread's contact, then a member of their household or business, by email_key; never a stranger or a non-member (mutation: drop the group branch → Luis is null, FAILS; match every contact in the account → Pat matches, FAILS)", async () => {
+  it("matches the thread's contact, then a member of their household or business, by email_key; never a stranger, a non-member, a member of a DIFFERENT household, a removed member, or a same-email contact in ANOTHER account (mutation: drop the group branch → Luis is null, FAILS; match every contact in the account → Pat matches, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana", email: "Ana.Ruiz+shop@Example.com" }, ACTOR)).id;
       const luis = (await createContact(db, accountId, { firstName: "Luis", lastName: "Ruiz", email: "luis@example.com" }, ACTOR)).id;
-      await createContact(db, accountId, { firstName: "Pat", email: "pat@example.com" }, ACTOR);
-      const { data: g } = await db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Ruiz" }).select("id").single();
+      const pat = (await createContact(db, accountId, { firstName: "Pat", email: "pat@example.com" }, ACTOR)).id;
+      const gone = (await createContact(db, accountId, { firstName: "Gone", email: "gone@example.com" }, ACTOR)).id;
+
+      const g = await db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Ruiz" }).select("id").single();
+      expect(g.error).toBeNull();
       // PostgREST's bulk insert fills a key missing from one object in the batch with NULL, not the
       // column default, when another object in the same batch sets it — is_primary must be explicit
       // on both rows, or Luis's row violates client_group_members' NOT NULL (found running this test).
-      await db.from("client_group_members").insert([
-        { account_id: accountId, client_group_id: g!.id, contact_id: ana, is_primary: true },
-        { account_id: accountId, client_group_id: g!.id, contact_id: luis, is_primary: false },
-      ]);
+      const mem = await db.from("client_group_members").insert([
+        { account_id: accountId, client_group_id: g.data!.id, contact_id: ana, is_primary: true },
+        { account_id: accountId, client_group_id: g.data!.id, contact_id: luis, is_primary: false },
+        { account_id: accountId, client_group_id: g.data!.id, contact_id: gone, is_primary: false },
+      ]).select("id");
+      expect(mem.error).toBeNull();
+
+      // Pat's OWN household, which Ana is not in — proves the match is scoped to Ana's groups, not
+      // "any group in the account" (the brief's prescribed mutation for this does not fail: it still
+      // scopes to client_group_members rows, and a non-member like Pat-outside-any-group has none
+      // regardless; a second household that Ana is NOT a member of is what actually exercises the
+      // account-wide-match risk).
+      const g2 = await db.from("client_groups").insert({ account_id: accountId, kind: "household", name: "Casa Pat" }).select("id").single();
+      expect(g2.error).toBeNull();
+      const mem2 = await db.from("client_group_members").insert({ account_id: accountId, client_group_id: g2.data!.id, contact_id: pat, is_primary: true }).select("id");
+      expect(mem2.error).toBeNull();
+
+      // A removed member: was in Ana's household, then the row was deleted.
+      const del = await db.from("client_group_members").delete().eq("account_id", accountId).eq("contact_id", gone);
+      expect(del.error).toBeNull();
+
       expect(await matchSender(db, accountId, ana, "ana.ruiz@example.com")).toEqual({ contactId: ana, firstName: "Ana", lastName: null, viaGroup: false });
       expect(await matchSender(db, accountId, ana, "LUIS@example.com")).toEqual({ contactId: luis, firstName: "Luis", lastName: "Ruiz", viaGroup: true });
+      // Pat is in a DIFFERENT household from Ana's — never a match off Ana's thread.
       expect(await matchSender(db, accountId, ana, "pat@example.com")).toBeNull();
+      // A removed member reads as gone, not as still-in-the-household.
+      expect(await matchSender(db, accountId, ana, "gone@example.com")).toBeNull();
       expect(await matchSender(db, accountId, ana, "stranger@example.com")).toBeNull();
+
+      // A contact with the SAME email, in ANOTHER account entirely (even the SAME address Luis uses),
+      // is never a cross-account match: the match asked of Ana's thread still resolves to THIS
+      // account's Luis, never the other account's same-email contact.
+      const otherOrg = `org_test_${Math.random().toString(36).slice(2, 10)}`;
+      const other = await createAccount(db, { clerkOrgId: otherOrg, name: "Other Co", actorId: ACTOR });
+      try {
+        const otherLuis = (await createContact(db, other.id, { firstName: "LuisElsewhere", email: "luis@example.com" }, ACTOR)).id;
+        expect(otherLuis).not.toBe(luis);
+        expect(await matchSender(db, accountId, ana, "LUIS@example.com")).toEqual({ contactId: luis, firstName: "Luis", lastName: "Ruiz", viaGroup: true });
+        expect(await matchSender(db, other.id, ana, "LUIS@example.com")).toBeNull();
+      } finally {
+        await deleteAccountCascade(db, other.id, "matchSender-test");
+      }
     });
   });
 });
