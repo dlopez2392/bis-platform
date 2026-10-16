@@ -14,6 +14,10 @@ export const INBOUND_MODES: readonly InboundMode[] = ["off", "bis", "own_domain"
 export const BIS_REPLY_DOMAIN = "reply.bis-rgv.com";
 /** Twin of 0082's conversations_reply_token_check. */
 export const REPLY_TOKEN_PATTERN = /^[0-9a-f]{24}$/;
+/** Fix round 3 item 3 (S-06 part 1): the one stable marker a caller matches to tell
+ *  `recordInboundEmail`'s cross-account race apart from every other failure — never the surrounding
+ *  prose, which is free to change. */
+export const INBOUND_EMAIL_COLLISION = "INBOUND_EMAIL_COLLISION";
 
 export type InboundSettings = { mode: InboundMode; domain: string | null };
 
@@ -150,7 +154,7 @@ export async function recordInboundEmail(db: SupabaseClient, row: NewInboundEmai
   const { data: again, error: e2 } = await db.from("inbound_emails").select(COLS)
     .eq("account_id", row.accountId).eq("provider_email_id", row.providerEmailId).maybeSingle();
   if (e2) throw new Error(`recordInboundEmail re-read failed: ${e2.message}`);
-  if (!again) throw new Error(`recordInboundEmail: provider_email_id ${row.providerEmailId} collided outside account ${row.accountId}`);
+  if (!again) throw new Error(`recordInboundEmail: ${INBOUND_EMAIL_COLLISION} (provider_email_id ${row.providerEmailId} outside account ${row.accountId})`);
   return { row: toRow(again as Raw), created: false };
 }
 

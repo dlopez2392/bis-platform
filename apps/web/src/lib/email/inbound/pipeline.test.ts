@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({
   findReplyThread: vi.fn(), matchSender: vi.fn(), recordInboundEmail: vi.fn(),
   findInboundEmailByProviderId: vi.fn(), getConversationSummary: vi.fn(),
+  INBOUND_EMAIL_COLLISION: "INBOUND_EMAIL_COLLISION",
 }));
 vi.mock("@bis/db", () => db);
 const file = vi.hoisted(() => ({ fileInboundEmail: vi.fn() }));
 vi.mock("./file", () => file);
 import { handleReceivedEmail, type PipelineDeps } from "./pipeline";
+import { INBOUND_EMAIL_COLLISION } from "@bis/db";
 
 const T = "0123456789abcdef01234567";
 const SES_OK = "Authentication-Results: amazonses.com; spf=pass; dkim=pass header.i=@gmail.com; dmarc=pass header.from=gmail.com;\r\nX-SES-Spam-Verdict: PASS\r\nX-SES-Virus-Verdict: PASS";
@@ -23,7 +25,7 @@ const forward = vi.fn();
 const log = vi.fn();
 
 beforeEach(() => {
-  for (const f of [...Object.values(db), ...Object.values(file), fetchEmail, forward, log]) f.mockReset();
+  for (const f of [...Object.values(db), ...Object.values(file), fetchEmail, forward, log]) if (typeof f === "function" && "mockReset" in f) f.mockReset();
   deps = { db: {} as never, fetchEmail, now: () => new Date("2026-10-16T10:00:05Z"), forward, log };
   fetchEmail.mockResolvedValue(EMAIL());
   db.findReplyThread.mockResolvedValue(THREAD);
@@ -234,8 +236,27 @@ describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
     });
 
     it("recordInboundEmail's own cross-account throw (a race between this call's lookup and its insert) is 200 dropped, never a 503 retry loop (mutation: treat every recordInboundEmail throw as 503 → FAILS)", async () => {
-      db.recordInboundEmail.mockRejectedValue(new Error("recordInboundEmail: provider_email_id re_1 collided outside account acc"));
+      db.recordInboundEmail.mockRejectedValue(new Error(`recordInboundEmail: ${INBOUND_EMAIL_COLLISION} (provider_email_id re_1 outside account acc)`));
       expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+    });
+
+    it("fix round 3 item 3: the collision catch is narrowed to the recordInboundEmail call only — a matchSender error containing the marker's phrase (coincidence, not the real throw) is still a plain 503, never dropped (mutation: widen the catch to the whole try block → FAILS)", async () => {
+      db.matchSender.mockRejectedValue(new Error(`matchSender timed out, mentions ${INBOUND_EMAIL_COLLISION} only in passing`));
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "write_failed" });
+      expect(db.recordInboundEmail).not.toHaveBeenCalled();
+    });
+
+    it("fix round 3 item 2: a same-account existing row's contact comes from ITS OWN conversation, never the thread this delivery's recipient resolves to (mutation: use the newly resolved thread's contactId → FAILS)", async () => {
+      const row = { ...FOREIGN_ROW, accountId: "acc", conversationId: "other_conv_same_account", messageId: null };
+      db.findInboundEmailByProviderId.mockResolvedValue(row);
+      db.getConversationSummary.mockImplementation(async (_db: unknown, _accountId: string, conversationId: string) =>
+        (conversationId === "other_conv_same_account"
+          ? { id: conversationId, contactId: "luis", contactFirstName: "Luis", contactLastName: "Ruiz", lastMessageAt: null, lastMessagePreview: null, unreadCount: 0, contactLanguage: null }
+          : { id: conversationId, contactId: "ana", contactFirstName: "Ana", contactLastName: "Ruiz", lastMessageAt: null, lastMessagePreview: null, unreadCount: 0, contactLanguage: null }));
+      file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(file.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: "luis" }));
+      expect(forward).toHaveBeenCalledWith(expect.objectContaining({ contactId: "luis" }));
     });
 
     it("the lookup failing outright is still a 503 (Resend retries), distinct from a genuine collision (mutation: swallow the lookup's own error too → FAILS)", async () => {

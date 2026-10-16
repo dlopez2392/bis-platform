@@ -77,7 +77,7 @@ export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
 // S-06 part 1: inbound email (0082).
 export {
-  INBOUND_MODES, BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
+  INBOUND_MODES, BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, INBOUND_EMAIL_COLLISION, newReplyToken, getInboundSettings, setInboundSettings,
   ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, findInboundEmailByProviderId, setInboundMessage, decideInboundEmail,
   unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
   type InboundMode, type InboundSettings, type ReplyThread, type InboundStatus, type HoldReason, type InboundAuthRecord,

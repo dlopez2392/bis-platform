@@ -100,6 +100,25 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     });
   });
 
+  it("fix round 3 item 1: two CONCURRENT deliveries of the same unlinked row (Resend retrying while the first run is still in flight, not a crash-then-retry) both raise unread, but only the compare-and-set WINNER reports created — the loser's own write landed zero rows (mutation: return created: true unconditionally → FAILS)", async () => {
+    // Both calls see the message already there (no createMessage race to model) and both reach the
+    // commit write — exactly what real concurrent deliveries of an already-inserted, still-unlinked
+    // row do. setInboundMessage answers in CALL order: whichever of the two genuinely interleaved
+    // calls reaches it first wins (true); the other's compare-and-set matches zero rows (false).
+    db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+    db.setInboundMessage.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const row = { ...ROW, text: "See you then" };
+    const [a, b] = await Promise.all([
+      fileInboundEmail({ db: DB, now: () => new Date() }, input({ row })),
+      fileInboundEmail({ db: DB, now: () => new Date() }, input({ row })),
+    ]);
+    expect(db.setInboundMessage).toHaveBeenCalledTimes(2);
+    expect(db.incrementUnreadCount).toHaveBeenCalledTimes(2); // both raised — the accepted cost
+    expect([a.created, b.created].sort()).toEqual([false, true]); // exactly one winner
+    expect(a.messageId).toBe("msg_1");
+    expect(b.messageId).toBe("msg_1"); // one message, never two
+  });
+
   it("an unclear stop writes nothing to the ledger and marks the message 'maybe'; a plain reply 'none'; the thread's own contact carries no sender (mutation: record unclear stops → FAILS)", async () => {
     await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "Please remove me" }, sender: { contactId: "ana", firstName: "Ana", lastName: null, viaGroup: false } }));
     expect(stop.recordInboundStop).not.toHaveBeenCalled();

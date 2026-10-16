@@ -1,6 +1,6 @@
 import {
   findReplyThread, matchSender, recordInboundEmail, findInboundEmailByProviderId, getConversationSummary,
-  type InboundEmailRow, type SenderMatch, type SupabaseClient,
+  INBOUND_EMAIL_COLLISION, type InboundEmailRow, type SenderMatch, type SupabaseClient,
 } from "@bis/db";
 import type { ReceivedEmailFetcher } from "@/lib/email/receiving";
 import { BIS_REPLY_DOMAIN, bareAddress, displayName, domainOf, parseReplyAddress } from "./address";
@@ -61,6 +61,16 @@ async function resumeExisting(
   }
 }
 
+/** Fix round 3 item 2: an existing row's own conversation decides its contact — NEVER the thread the
+ *  recipient resolves to on THIS delivery, which (same account, different reply address — a
+ *  household's own thread, say) can legitimately be a different conversation than the one this exact
+ *  Resend id was already filed under. */
+async function contactIdForRow(deps: PipelineDeps, row: InboundEmailRow): Promise<string> {
+  const summary = await getConversationSummary(deps.db, row.accountId, row.conversationId);
+  if (!summary) throw new Error("no conversation");
+  return summary.contactId;
+}
+
 export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?: unknown }): Promise<PipelineOutcome> {
   const emailId = typeof data.email_id === "string" && data.email_id ? data.email_id : null;
   if (!emailId) { deps.log("inbound email: event with no email id, dropped"); return { status: 200, result: "dropped" }; }
@@ -116,9 +126,7 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     if (existingRow && existingRow.status === "filed") {
       let contactId: string;
       try {
-        const summary = await getConversationSummary(deps.db, existingRow.accountId, existingRow.conversationId);
-        if (!summary) throw new Error("no conversation");
-        contactId = summary.contactId;
+        contactId = await contactIdForRow(deps, existingRow);
       } catch {
         deps.log("inbound email: resuming an orphaned row failed; 503 so Resend retries");
         return { status: 503, result: "write_failed" };
@@ -141,7 +149,17 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
       deps.log("inbound email: dropped (provider id already recorded under a different account)");
       return { status: 200, result: "dropped" };
     }
-    return await resumeExisting(deps, existingRow, thread.contactId);
+    // Fix round 3 item 2: the existing row's OWN conversation, never the thread this delivery's
+    // recipient happens to resolve to — same account, but possibly a different household member's
+    // thread than the one this exact Resend id was already filed under.
+    let contactId: string;
+    try {
+      contactId = await contactIdForRow(deps, existingRow);
+    } catch {
+      deps.log("inbound email: resuming an already-recorded row failed; 503 so Resend retries");
+      return { status: 503, result: "write_failed" };
+    }
+    return await resumeExisting(deps, existingRow, contactId);
   }
 
   let row: InboundEmailRow;
@@ -157,28 +175,35 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     const match = fromEmail ? await matchSender(deps.db, thread.accountId, thread.contactId, fromEmail) : null;
     const filed = authenticated && match !== null;
     const text = newText(email.text ?? (email.html ? htmlToText(email.html) : ""));
-
-    const recorded = await recordInboundEmail(deps.db, {
-      accountId: thread.accountId, conversationId: thread.conversationId, providerEmailId: email.id,
-      fromEmail: fromEmail ?? (email.from ?? "").slice(0, 320), fromName: displayName(email.from), toEmail,
-      subject: email.subject, text, auth: authRecord(verdict), attachmentCount: email.attachmentCount,
-      status: filed ? "filed" : "held", holdReason: filed ? null : (authenticated ? "not_on_record" : "unverified"),
-      decidedBy: filed ? ACTOR.id : null, receivedAt: receivedAtOf(email.receivedAt, deps.now),
-    });
-    row = recorded.row;
-    rowCreated = recorded.created;
-    // Carried past this try/catch for step 5/7 below, which needs `match` only when this call is
-    // the one that just inserted the row (the retry path re-reads it itself).
+    // Carried past the narrower try/catch below for step 5/7, which needs `match` only when this
+    // call is the one that just inserted the row (the retry path re-reads it itself).
     firstRunMatch = match;
-  } catch (e) {
-    // Fix round 2 item 1: a race between this call's own lookup above (which found nothing) and its
-    // insert below (which collided with a row another process just wrote under a DIFFERENT account)
-    // is the same "already claimed elsewhere" case as the lookup catching it up front — 200 dropped,
-    // never a 503 Resend would retry forever on a collision that can never resolve itself.
-    if (e instanceof Error && e.message.includes("collided outside account")) {
-      deps.log("inbound email: dropped (provider id recorded under a different account during a race)");
-      return { status: 200, result: "dropped" };
+
+    try {
+      const recorded = await recordInboundEmail(deps.db, {
+        accountId: thread.accountId, conversationId: thread.conversationId, providerEmailId: email.id,
+        fromEmail: fromEmail ?? (email.from ?? "").slice(0, 320), fromName: displayName(email.from), toEmail,
+        subject: email.subject, text, auth: authRecord(verdict), attachmentCount: email.attachmentCount,
+        status: filed ? "filed" : "held", holdReason: filed ? null : (authenticated ? "not_on_record" : "unverified"),
+        decidedBy: filed ? ACTOR.id : null, receivedAt: receivedAtOf(email.receivedAt, deps.now),
+      });
+      row = recorded.row;
+      rowCreated = recorded.created;
+    } catch (e) {
+      // Fix round 3 item 3: narrowed to THIS call only (never a sender-check failure above, which
+      // must still fall through to the generic 503 below), and matched on the stable marker
+      // `@bis/db` itself exports for exactly this error — never the surrounding prose. Fix round 2
+      // item 1: a race between this call's own lookup earlier (which found nothing) and this insert
+      // (which collided with a row another process just wrote under a DIFFERENT account) is the same
+      // "already claimed elsewhere" case the lookup catches up front — 200 dropped, never a 503
+      // Resend would retry forever on a collision that can never resolve itself.
+      if (e instanceof Error && e.message.includes(INBOUND_EMAIL_COLLISION)) {
+        deps.log("inbound email: dropped (provider id recorded under a different account during a race)");
+        return { status: 200, result: "dropped" };
+      }
+      throw e;
     }
+  } catch {
     deps.log("inbound email: recording the inbound row failed; 503 so Resend retries");
     return { status: 503, result: "write_failed" };
   }

@@ -12,12 +12,18 @@ import { recordInboundStop } from "@/lib/consent/email-staff-actions";
  * read at the TOP of this call, before any write this call makes), never by whether THIS call itself
  * inserted the message. A retry after a mid-flight crash (the message got written but the row never
  * got linked to it, or linking itself failed) passes in the SAME row, still unlinked — so unread is
- * raised again and the caller is told to forward again, with `setInboundMessage` run LAST as the one
- * commit marker. Raising unread twice across two attempts is an accepted cost (one crash, one extra
- * badge increment) against the alternative of losing it or the forward silently; never ignored, but
- * its own boolean is a diagnostic only, not a second gate — gating on it instead would stop the retry
- * from ever re-raising unread/forward once the LINK has committed but a later step (incrementing
- * unread) is what actually failed, which would lose the forward forever.
+ * raised again, with `setInboundMessage` run LAST as the one commit marker. Raising unread twice
+ * across two attempts is an accepted cost (one crash, one extra badge increment) against the
+ * alternative of losing it silently.
+ *
+ * Fix round 3 item 1: the RETURNED `created` — which the caller (pipeline.ts) uses to decide whether
+ * IT forwards — is decided by `setInboundMessage`'s own boolean, not by having reached this far. Two
+ * concurrent deliveries of the same unlinked row (Resend retrying while the first run is still in
+ * flight, not a crash-then-retry) both raise unread and both reach the commit write, but the
+ * database's compare-and-set (`.is("message_id", null)`) lets only ONE of them actually flip the
+ * link — that one, and only that one, reports `created: true` and is the one the caller forwards for.
+ * The loser's write is a no-op (`linked: false`), logged as the diagnostic it is, but no longer
+ * reported as a completion: the winner's own call already owns the forward.
  */
 export type MessageConsent = { kind: "stopped"; eventId: string } | { kind: "maybe"; phrase: string } | { kind: "none" };
 export type FileDeps = { db: SupabaseClient; now: () => Date };
@@ -63,12 +69,13 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
     }, i.actor.id, i.actor.type));
   }
   if (i.raiseUnread) await incrementUnreadCount(db, row.accountId, row.conversationId);
-  // The commit marker, LAST. Its boolean is read (never ignored) as a diagnostic of a genuine race —
-  // another process linking the same row between this call's read and this write — but is not a
-  // second gate: notYetLinked above already decided unread/forward are owed this call.
+  // The commit marker, LAST. Its boolean now DECIDES `created` (fix round 3 item 1): a concurrent
+  // run that lost the compare-and-set race did no useful commit here, however far it got, and must
+  // not be reported as the completion the caller forwards for — that belongs to whichever run's
+  // write actually landed.
   const linked = await setInboundMessage(db, row.accountId, row.id, messageId);
   if (!linked) {
     console.error(`fileInboundEmail: row ${row.id} was linked by another process between read and write`);
   }
-  return { messageId, created: true, consent };
+  return { messageId, created: linked, consent };
 }
