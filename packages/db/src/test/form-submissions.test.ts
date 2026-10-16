@@ -190,6 +190,11 @@ describe("form submissions", () => {
     withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Lead" }, "form", "system");
       const convo = await ensureConversation(db, accountId, contactId, "form", "system");
+      // S-06 part 1, fix round 3: listConversations lists a conversation that holds at least one
+      // message — a bare ensureConversation row, as this test otherwise leaves it, is never listed.
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "form", direction: "inbound", body: "quote?",
+      }, "form", "system");
 
       await Promise.all(Array.from({ length: 5 }, () =>
         incrementUnreadCount(db, accountId, convo.id)));

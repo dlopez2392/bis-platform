@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
-import { createMessage, listMessages } from "../messaging";
+import { createMessage, listMessages, listConversations } from "../messaging";
 import { createAccount } from "../accounts";
 import { deleteAccountCascade } from "../account-teardown";
 import {
@@ -153,7 +153,7 @@ describe("inbound rows", () => {
     });
   });
 
-  it("decides with a compare-and-set on the status; sets the message only once (mutation: drop .eq('status', from) → the second decide answers true, FAILS)", async () => {
+  it("decides with a compare-and-set on the status; sets the message only once; File→Unfile on an otherwise-empty thread un-lists it and resets its last_message_at (mutation: drop .eq('status', from) → the second decide answers true, FAILS; mutation: unfileInboundEmail skips its last_message_at reset → the empty thread stays listed with a stale last_message_at, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana4@example.com" }, ACTOR);
       const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
@@ -167,6 +167,13 @@ describe("inbound rows", () => {
       expect(await unfileInboundEmail(db, accountId, held.id, msg)).toBe(true);
       expect((await getInboundEmail(db, accountId, held.id))?.status).toBe("held");
       expect(await listMessages(db, accountId, t.conversationId)).toEqual([]);
+      // Fix round 3: File→Unfile deletes the thread's only message. The owner's rule is "list a
+      // conversation that holds at least one message," and this thread, right now, holds none — it
+      // must not appear in the inbox, and its own last_message_at (a stale pointer at the now-deleted
+      // message's time) must be reset, not left dangling.
+      expect((await listConversations(db, accountId)).map((c) => c.id)).not.toContain(t.conversationId);
+      const { data: resetConv } = await db.from("conversations").select("last_message_at").eq("id", t.conversationId).single();
+      expect((resetConv as { last_message_at: string | null }).last_message_at).toBeNull();
       const { row: filed } = await recordInboundEmail(db, row(accountId, t.conversationId, { status: "filed", holdReason: null, decidedBy: "email-inbound" }));
       const { id: msg2 } = await createMessage(db, accountId, { conversationId: t.conversationId, channel: "email", direction: "inbound", body: "y" }, ACTOR);
       expect(await setInboundMessage(db, accountId, filed.id, msg2)).toBe(true);

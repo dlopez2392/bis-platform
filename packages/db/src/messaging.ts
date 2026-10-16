@@ -165,11 +165,14 @@ export async function createMessage(
     actorType);
 
   // The touch is best-effort and deliberately non-fatal. The message is real
-  // and visible either way (row + event both exist above); if this update
-  // fails, only the inbox's sort order and preview go stale, and that
-  // self-heals on the conversation's next message. Throwing here would be
-  // worse: the caller would mark a message "failed" that was actually
-  // written successfully.
+  // and visible either way (row + event both exist above) — listConversations
+  // lists this thread regardless, because its own filter is message
+  // EXISTENCE (fix round 3), not this column. If this update fails, only the
+  // inbox's SORT ORDER goes stale (the thread sorts to the bottom, nulls
+  // last, until its next message repairs it); the preview is unaffected too,
+  // since fetchConversationPreview reads `messages` directly and never this
+  // column. Throwing here would be worse: the caller would mark a message
+  // "failed" that was actually written successfully.
   const { error: touchErr } = await db.from("conversations")
     .update({ last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", input.conversationId);
@@ -618,19 +621,26 @@ export async function listConversations(
   // filter apply to the conversation row itself (Mine/Unassigned, spec §8).
   const embed = opts.assignee ? "contacts!inner(first_name, last_name, language, assigned_to)" : "contacts(first_name, last_name, language)";
   let q = db.from("conversations")
-    .select(`id, contact_id, last_message_at, unread_count, ${embed}`)
+    // S-06 part 1, fix round 3: the owner's rule is "list a conversation that holds at least one
+    // message" — EXISTENCE, not `last_message_at is not null`. That column is only a proxy, and it is
+    // wrong on two paths: createMessage's own conversation touch is deliberately best-effort (a
+    // failed touch leaves last_message_at null on a thread that genuinely HAS a message), and
+    // unfileInboundEmail's Undo deletes a message without resetting it (a reset was added there, but
+    // relying on that alone here would mean trusting every message-deleting caller to keep it
+    // honest, forever). `messages!inner(id)` makes the join itself an EXISTS filter — true existence,
+    // never stale — and `.limit(1, { referencedTable: "messages" })` below caps the embedded array at
+    // one id so a chatty thread's full history is never fetched just to prove it has ONE message.
+    .select(`id, contact_id, last_message_at, unread_count, messages!inner(id), ${embed}`)
     .eq("account_id", accountId)
-    // S-06 part 1: once Replies is on, ensureReplyToken alone creates a customer's conversation (to
-    // hold the reply token) before any message exists — nothing to show, and not something anyone
-    // did, so the inbox list excludes a conversation that has never carried a message. Every row the
-    // list can still show already has a non-null last_message_at (set on the conversation's first
-    // createMessage touch), so this also makes the cursor's own `v === null` branch below permanently
-    // unreachable in practice; left in place as a harmless no-op rather than removed, since a row
-    // this filter excludes can never reach it.
-    .not("last_message_at", "is", null)
+    // last_message_at remains the ORDER key (nulls last) — a thread kept by the exists filter above
+    // despite a failed touch (so this column is null) still sorts; it just sorts to the bottom until
+    // its next message repairs it, same self-healing promise createMessage's own comment makes. The
+    // cursor's `v === null` OR-branch below is therefore reachable again (not dead code): a thread can
+    // have messages yet a null last_message_at.
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
-    .limit(limit);
+    .limit(limit)
+    .limit(1, { referencedTable: "messages" });
   q = withAssigneeOn(q, opts.assignee, "contacts.assigned_to");
 
   if (opts.before) {

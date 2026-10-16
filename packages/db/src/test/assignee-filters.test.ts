@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { serviceDb } from "../service";
 import { listContacts, countContacts, createContact, updateContact, flagMatchesOf } from "../contacts";
-import { listConversations } from "../messaging";
+import { listConversations, createMessage } from "../messaging";
 import { listAccountWork } from "../work-queue";
 import { addTask } from "../activities";
 
@@ -96,6 +96,12 @@ describe("assignee filters (F-085 part 1, spec §8)", () => {
       const { data: otherConvo, error: e2 } = await db.from("conversations")
         .insert({ account_id: accountId, contact_id: otherContact.id }).select("id").single();
       if (e2) throw e2;
+      // S-06 part 1, fix round 3: listConversations lists a conversation that holds at least one
+      // message, not merely one that exists — a bare row (as both of these are, by this test's own
+      // raw insert) is never listed. Each needs one message so this test still exercises the assignee
+      // filter it is actually about, not the (separately pinned) existence rule.
+      await createMessage(db, accountId, { conversationId: mineConvo!.id, channel: "email", direction: "outbound", body: "hi" }, "user_test");
+      await createMessage(db, accountId, { conversationId: otherConvo!.id, channel: "email", direction: "outbound", body: "hi" }, "user_test");
 
       const mine = await listConversations(db, accountId, { assignee: { who: "mine", userId: a } });
       expect(mine.map((r) => r.id)).toEqual([mineConvo!.id]);

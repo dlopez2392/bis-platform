@@ -41,6 +41,12 @@ export async function setInboundSettings(db: SupabaseClient, accountId: string, 
   await emit(db, accountId, "account.inbound_replies_updated", actorId, { mode: s.mode, domain: s.domain });
 }
 
+/** Bounded: a revoke landing between this function's own write and its final read-back (another
+ *  actor revoking the token this call just won) is vanishingly rare, but an unbounded retry loop
+ *  would be a real hang if it somehow kept happening — 3 rounds, then throw rather than loop forever
+ *  or hand back a token this function itself knows is already dead. */
+const ENSURE_REPLY_TOKEN_MAX_ROUNDS = 3;
+
 /**
  * The thread's token, made on first need (the conversation too). A compare-and-set on
  * `reply_token is null`, so two senders racing both end with the one stored token.
@@ -50,12 +56,6 @@ export async function setInboundSettings(db: SupabaseClient, accountId: string, 
  * `reply_token_revoked_at` cleared, race-safe the same way (compare-and-set on the exact revoked
  * token this caller saw, so only one of several concurrent rotators wins and the rest just re-read).
  */
-/** Bounded: a revoke landing between this function's own write and its final read-back (another
- *  actor revoking the token this call just won) is vanishingly rare, but an unbounded retry loop
- *  would be a real hang if it somehow kept happening — 3 rounds, then throw rather than loop forever
- *  or hand back a token this function itself knows is already dead. */
-const ENSURE_REPLY_TOKEN_MAX_ROUNDS = 3;
-
 export async function ensureReplyToken(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string, make: () => string = newReplyToken,
 ): Promise<{ conversationId: string; token: string }> {
@@ -83,8 +83,11 @@ export async function ensureReplyToken(
     if (!current.token) throw new Error("ensureReplyToken: no token after the write");
     // current.revoked here means someone revoked the winning token between our write and this read
     // (or between another rotator's write and OUR read) — loop once more rather than hand back a
-    // token this call already knows is dead.
+    // token this call already knows is dead. The loop's own top-of-body check (above) covers rounds
+    // 0..MAX-2; the check below covers the LAST round's read too — without it, a token that turned
+    // live on exactly this final read was thrown away instead of returned (budget-2 case).
   }
+  if (current.token && !current.revoked) return { conversationId, token: current.token };
   throw new Error(`ensureReplyToken: still revoked after ${ENSURE_REPLY_TOKEN_MAX_ROUNDS} rounds`);
 }
 
@@ -183,7 +186,48 @@ export async function decideInboundEmail(
 export async function unfileInboundEmail(db: SupabaseClient, accountId: string, id: string, messageId: string): Promise<boolean> {
   const { data, error } = await db.rpc("unfile_inbound_email", { p_account_id: accountId, p_id: id, p_message_id: messageId });
   if (error) throw new Error(`unfileInboundEmail failed: ${error.message}`);
-  return data === true;
+  if (data !== true) return false;
+
+  // The RPC deletes the message but has no reason to know about the conversation's own
+  // last_message_at — it is left pointing at a message that no longer exists (fix round 3): a thread
+  // this leaves with NO message would otherwise still carry a stale last_message_at (and
+  // listConversations's own message-existence filter already keeps it off the list regardless; this
+  // is about PREVIEW/SORT honesty for every thread, not just the now-empty ones). Reset to the newest
+  // REMAINING message's created_at, or null if none remain, compare-and-set like discardQueuedNotice
+  // (booking.ts ~576-597): a message landing on this thread between the RPC and this read must never
+  // be overwritten backwards. Best-effort and logged, not thrown — the Undo itself already succeeded
+  // (the row is back to held and the message is gone), and a stale sort/preview self-heals on the
+  // thread's next message.
+  const { data: inboundRow, error: rowErr } = await db.from("inbound_emails").select("conversation_id")
+    .eq("account_id", accountId).eq("id", id).maybeSingle();
+  if (rowErr || !inboundRow) {
+    console.error(`unfileInboundEmail: conversation sort time not reset (row read failed): ${rowErr?.message ?? "row missing"}`);
+    return true;
+  }
+  const conversationId = (inboundRow as { conversation_id: string }).conversation_id;
+  const { data: conv, error: convErr } = await db.from("conversations").select("last_message_at")
+    .eq("account_id", accountId).eq("id", conversationId).maybeSingle();
+  if (convErr || !conv) {
+    console.error(`unfileInboundEmail: conversation ${conversationId} sort time not reset: ${convErr?.message ?? "conversation missing"}`);
+    return true;
+  }
+  const seen = (conv as { last_message_at: string | null }).last_message_at;
+  const { data: newest, error: newestErr } = await db.from("messages").select("created_at")
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false }).limit(1);
+  if (newestErr) {
+    console.error(`unfileInboundEmail: conversation ${conversationId} sort time not reset: ${newestErr.message}`);
+    return true;
+  }
+  let resetQ = db.from("conversations")
+    .update({ last_message_at: ((newest ?? []) as { created_at: string }[])[0]?.created_at ?? null })
+    .eq("account_id", accountId).eq("id", conversationId);
+  resetQ = seen === null ? resetQ.is("last_message_at", null) : resetQ.eq("last_message_at", seen);
+  const { error: resetErr } = await resetQ;
+  if (resetErr) {
+    console.error(`unfileInboundEmail: conversation ${conversationId} sort time not reset: ${resetErr.message}`);
+  }
+  return true;
 }
 
 export type HeldInboundEmail = InboundEmailRow & { contactId: string; contactFirstName: string | null; contactLastName: string | null };

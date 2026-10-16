@@ -768,9 +768,10 @@ describe("messaging", () => {
   // S-06 part 1: once Replies is on, every automatic email creates the customer's conversation (to
   // hold the reply token) without writing any message — ensureConversation alone, as inbound-email.ts's
   // ensureReplyToken already does. Such a thread must never appear in the inbox list: it has nothing
-  // to show, and it is not something anyone did. `last_message_at` is null until a real message lands,
-  // so filtering on it is the same test the list's own ordering already treats nulls as "last".
-  it("a conversation with no messages is never listed; the same conversation IS listed once a message lands (mutation: drop the last_message_at-not-null filter → the empty conversation is listed, FAILS)", () =>
+  // to show, and it is not something anyone did. Filtered on message EXISTENCE (`messages!inner(id)`,
+  // fix round 3) rather than `last_message_at is not null` — see that filter's own comment for why
+  // the column alone is not a safe proxy.
+  it("a conversation with no messages is never listed; the same conversation IS listed once a message lands (mutation: drop the messages!inner existence filter → the empty conversation is listed, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id: emptyContactId } = await createContact(db, accountId, { firstName: "Empty" }, "user_test");
       const empty = await ensureConversation(db, accountId, emptyContactId, "user_test");
@@ -798,6 +799,34 @@ describe("messaging", () => {
         before = { v: last.lastMessageAt, id: last.id };
       }
       expect(seen).toEqual([real.id]);
+    }));
+
+  // S-06 part 1, fix round 3: `last_message_at is not null` is only a PROXY for "this conversation
+  // has a message," and it is wrong on this path — createMessage's own conversation touch (after the
+  // message row and its event both already exist) is deliberately best-effort and non-fatal; if THAT
+  // write fails, the thread genuinely has a message, yet last_message_at stays null. The rule the
+  // owner actually wants is "lists a conversation that holds at least one message," so the filter
+  // must test message EXISTENCE, not this one column.
+  it("a conversation with a real message but a null last_message_at (a failed best-effort touch) is still listed, and its unread count still counts consistently with the sidebar's sum (mutation: filter on last_message_at not null instead of message existence → excluded here even though it has a message, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "StaleTouch" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "inbound", body: "hi",
+      }, "customer", "system");
+      await incrementUnreadCount(db, accountId, convo.id);
+
+      // Simulate the touch's own documented failure mode directly: the message and its event both
+      // already exist (createMessage's job is done), but the conversation's own last_message_at never
+      // got set.
+      const { error: nullErr } = await db.from("conversations").update({ last_message_at: null }).eq("id", convo.id);
+      expect(nullErr, `forcing the null failed: ${nullErr?.message}`).toBeNull();
+
+      const convos = await listConversations(db, accountId);
+      const row = convos.find((c) => c.id === convo.id);
+      expect(row).toBeDefined();
+      expect(row!.unreadCount).toBe(1);
+      expect(await sumUnreadCount(db, accountId)).toBe(1);
     }));
 
   // MEASURED, not guessed: ~4s alone on an idle machine (one bulk insert of
@@ -857,11 +886,11 @@ describe("messaging", () => {
 
   // S-06 part 1 (superseding the prior fix at this spot, which paged a never-messaged conversation
   // onto a LATER page rather than losing it; now it is excluded on EVERY page by design — see the
-  // `.not("last_message_at", "is", null)` filter's comment in listConversations). A conversation that
-  // has never been messaged (`ensureConversation` alone, no `createMessage` — the 'note' tab, say, a
-  // race between the two, or a reply token made before any mail arrives) has a NULL last_message_at
-  // and nothing to show; it must never surface, on page 1 or any page after it.
-  it("a conversation with no messages is excluded from every page, not merely pushed to a later one (mutation: drop the last_message_at-not-null filter → it reappears on page 2, FAILS)", () =>
+  // `messages!inner(id)` existence filter's comment in listConversations, fix round 3). A conversation
+  // that has never been messaged (`ensureConversation` alone, no `createMessage` — the 'note' tab,
+  // say, a race between the two, or a reply token made before any mail arrives) has nothing to show;
+  // it must never surface, on page 1 or any page after it.
+  it("a conversation with no messages is excluded from every page, not merely pushed to a later one (mutation: drop the messages!inner existence filter → it reappears on page 2, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id: withMsgContact } = await createContact(db, accountId, { firstName: "Messaged" }, "user_test");
       const withMsg = await ensureConversation(db, accountId, withMsgContact, "user_test");
