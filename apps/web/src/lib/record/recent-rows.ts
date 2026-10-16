@@ -48,6 +48,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "documentRemoved": return null;
     // S-07 2b: the head already names how many; the items are the row's detail.
     case "documentRequest": return null;
+    // S-07 2c: a skip or an un-skip is its head only; the category is already in it.
+    case "documentSkip": case "documentUnskip": return null;
   }
 }
 

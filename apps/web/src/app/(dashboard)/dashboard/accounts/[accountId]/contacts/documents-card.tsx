@@ -11,7 +11,9 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useLocale } from "@/components/locale-provider";
-import { DOCUMENT_CATEGORIES, DOCUMENT_TITLE_MAX, type DocumentCategory, type DocumentRequestItem } from "@bis/db/document-rules";
+import {
+  DOCUMENT_CATEGORIES, DOCUMENT_TITLE_MAX, type DocumentCategory, type DocumentRequestItem, type RequirableCategory,
+} from "@bis/db/document-rules";
 import type { Locale } from "@/lib/i18n/locale";
 import { t, plural } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
@@ -32,6 +34,11 @@ import { DocumentRequestsList } from "./document-requests-list";
 import {
   documentRequestsLoadFrom, documentRequestsRouteFor, type DocumentRequestsLoad,
 } from "@/lib/document-requests/requests-load";
+import {
+  keepRequirements, requirementsLoadFrom, requirementsRouteFor, shouldReloadRequirements, type RequirementsLoad,
+} from "@/lib/documents/requirements-load";
+import { DocumentChecklist, RequirementsMeter } from "./document-checklist";
+import { checklistHandlers } from "./document-checklist-handlers";
 
 export type { DocumentHandlers } from "./documents-card-handlers";
 
@@ -39,6 +46,9 @@ export type { DocumentHandlers } from "./documents-card-handlers";
 export type RequestsSlot = {
   load: DocumentRequestsLoad; onAsk: () => void; onRetry: () => void; onCopy: (id: string) => void; onRevoke: (id: string) => void;
 };
+
+/** The card's required documents (S-07 2c, spec 5.4): the checklist's own read and what its rows do; the View supplies the rest. */
+export type ChecklistSlot = Omit<Parameters<typeof DocumentChecklist>[0], "locale" | "panelOpen" | "onUpload">;
 
 type DocRecord = { kind: "contact" | "group"; id: string };
 type Params = Record<string, string | number>;
@@ -298,19 +308,26 @@ function DocumentsSkeleton() {
  */
 export function DocumentsCardView(p: {
   accountId: string; load: DocumentsLoad; canManage: boolean; emptyText: string; locale: Locale; handlers: DocumentHandlers;
-  onRetry: () => void; onFiles: (files: File[], source: "upload" | "camera") => void; onOpen: (doc: DocumentView) => void;
+  onRetry: () => void; onFiles: (files: File[], source: "upload" | "camera", category?: RequirableCategory | null) => void; onOpen: (doc: DocumentView) => void;
   panel: ReactNode | null;
   versionPhases: Readonly<Record<string, UploadPhase>>; onNewVersion: (doc: DocumentView) => void; onPurge: (doc: DocumentView) => void;
   requests: RequestsSlot;
+  /** S-07 2c: a customer's card only (a household's passes none, D3). */
+  checklist?: ChecklistSlot;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, p.locale, params);
   const uploadRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const pick = (source: "upload" | "camera") => (e: React.ChangeEvent<HTMLInputElement>) => {
+  // S-07 2c: a checklist row's Upload files the chosen files under its category; the header's Upload, a drop and
+  // the camera take each type's default. Set just before the input opens, read once by pick, then cleared.
+  const preset = useRef<RequirableCategory | null>(null);
+  const pick = (source: "upload" | "camera", e: React.ChangeEvent<HTMLInputElement>) => {
     const files = [...(e.target.files ?? [])];
     e.target.value = "";
-    if (files.length > 0) p.onFiles(files, source);
+    const category = source === "upload" ? preset.current : null;
+    preset.current = null;
+    if (files.length > 0) p.onFiles(files, source, category);
   };
   if (p.load.status === "loading") return <div data-documents-card><DocumentsSkeleton /></div>;
   if (p.load.status === "error") {
@@ -335,7 +352,7 @@ export function DocumentsCardView(p: {
         e.preventDefault();
         setDragging(false);
         const files = [...e.dataTransfer.files];
-        if (files.length > 0) p.onFiles(files, "upload");
+        if (files.length > 0) p.onFiles(files, "upload", null);
       }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex min-w-0 flex-col">
@@ -343,6 +360,8 @@ export function DocumentsCardView(p: {
             {plural(m, "documents.count", data.live.length, p.locale, { count: data.live.length })}
           </span>
           {spaceText ? <span data-space-used className="text-xs text-muted-foreground tabular-nums">{spaceText}</span> : null}
+          {/* D9: "Required 2 of 3" is the top row's, beside the count; the checklist below draws no count. */}
+          {p.checklist ? <RequirementsMeter locale={p.locale} load={p.checklist.load} /> : null}
         </div>
         {p.panel ? null : (
           <div className="flex flex-wrap gap-2">
@@ -354,12 +373,17 @@ export function DocumentsCardView(p: {
             <Button type="button" variant="ghost" data-take-photo
               className={cn("hidden max-md:inline-flex pointer-coarse:inline-flex", control)}
               onClick={() => cameraRef.current?.click()}>{tt("documents.takePhoto")}</Button>
-            <Button type="button" className={control} onClick={() => uploadRef.current?.click()}>{tt("documents.upload")}</Button>
+            <Button type="button" className={control} onClick={() => { preset.current = null; uploadRef.current?.click(); }}>{tt("documents.upload")}</Button>
           </div>
         )}
-        <input ref={uploadRef} type="file" multiple accept={ACCEPT} hidden onChange={pick("upload")} />
-        <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={pick("camera")} />
+        <input ref={uploadRef} type="file" multiple accept={ACCEPT} hidden onChange={(e) => pick("upload", e)} />
+        <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => pick("camera", e)} />
       </div>
+      {/* I6: while the upload panel is open, its Upload is the one primary and no row offers Upload or Ask. */}
+      {p.checklist ? (
+        <DocumentChecklist locale={p.locale} {...p.checklist} panelOpen={p.panel !== null}
+          onUpload={(c) => { preset.current = c; uploadRef.current?.click(); }} />
+      ) : null}
       {p.panel}
       {data.live.length === 0 ? (
         p.panel ? null : <p className="text-sm text-muted-foreground">{p.emptyText}</p>
@@ -494,13 +518,31 @@ const tabHiddenOnServer = () => false;
 let panelSeq = 0;
 
 /**
+ * The upload panel's files for a pick or a drop: each titled from its name, and filed under the checklist
+ * row's category when the pick came from a gap's Upload (S-07 2c), otherwise under its type's default
+ * (a photo for an image, Other for the rest). The person can still change each one in the panel.
+ */
+export function panelFiles(chosen: File[], preset: DocumentCategory | null, locale: Locale): PanelFile[] {
+  return chosen.map((file) => {
+    const type = typeForFile(file.name, file.type);
+    const category: DocumentCategory = preset ?? (type ? defaultCategory(type) : "other");
+    return { key: `f${++panelSeq}`, file, title: titleFromFileName(file.name) ?? t(m, "documents.untitled", locale), category, phase: null };
+  });
+}
+
+/**
  * The container (the Properties card's shape, places-card.tsx): reads its own route, holds the upload
  * panel's state and the viewer. A re-read after a change that fails keeps what the card already shows;
  * only a first read, or a Retry (which goes back to the skeleton first), shows the error state.
  */
-export function DocumentsCard({ accountId, record, canManage, emptyText, name = "" }: {
+export function DocumentsCard({ accountId, record, canManage, emptyText, name = "", checklist }: {
   /** `name`: who "Ask the customer" asks, for its dialog's title; with none, the title is the action's own words. */
   accountId: string; record: DocRecord; canManage: boolean; emptyText: string; name?: string;
+  /**
+   * S-07 2c: the customer's required documents. The contact page passes it (canSkip: the whole account's
+   * view, D1); a household's page does not (D3).
+   */
+  checklist?: { canSkip: boolean };
 }) {
   const locale = useLocale();
   // A plain string, stable by value even when the caller hands `record` a fresh object each render.
@@ -532,6 +574,16 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   const lastReadyFiles = useRef<DocumentsLoad | null>(null);
   const shownRequests = useRef<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
 
+  // S-07 2c: the required documents are a third read of their own (its route, its error, its Retry), and
+  // have NO timer: they re-read when this card skips or un-skips, and once when a files read changed
+  // something they depend on (shouldReloadRequirements, in the files settle below). M3: the effects use
+  // these two plain values, never the `checklist` object a page re-creates on every render.
+  const hasChecklist = checklist !== undefined && record.kind === "contact";
+  const canSkip = checklist?.canSkip === true;
+  const requirementsRoute = hasChecklist && record.kind === "contact" ? requirementsRouteFor(accountId, record.id) : null;
+  const [requirementsState, setRequirementsState] = useState<{ route: string; load: RequirementsLoad }>({ route: "", load: { kind: "loading" } });
+  const [requirementsNonce, setRequirementsNonce] = useState(0);
+
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
@@ -544,13 +596,15 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
       // Review I2: a customer's file turning clean answers its request item; re-read the list once.
       const requests: DocumentRequestsLoad = shownRequests.current.route === requestsRoute ? shownRequests.current.load : { kind: "loading" };
       if (shouldReloadRequests(lastReadyFiles.current, load, requests)) setRequestsNonce((n) => n + 1);
+      // S-07 2c: a file added, gone, re-filed, re-dated or newly clean, or the account's day turning, re-reads the checklist once.
+      if (hasChecklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);
       if (load.status === "ready") lastReadyFiles.current = load;
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
       .then(settle, () => settle({ status: "error" }));
     return () => { stale = true; };
-  }, [route, requestsRoute, nonce]);
+  }, [route, requestsRoute, nonce, hasChecklist]);
   const load: DocumentsLoad = state.route === route ? state.load : { status: "loading" };
   const reload = () => setNonce((n) => n + 1);
 
@@ -620,15 +674,37 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [requestsRoute]);
 
+  // S-07 2c: the checklist's own read. A failed re-read keeps what it shows (keepRequirements); only a first
+  // read, or its Retry, shows its error. Nothing on screen changes for a re-read until it lands (rule 7).
+  useEffect(() => {
+    if (requirementsRoute === null) return;
+    let stale = false;
+    const settleRequirements = (next: RequirementsLoad) => {
+      if (stale) return;
+      setRequirementsState((s) => keepRequirements(s, requirementsRoute, next));
+    };
+    fetch(requirementsRoute, { cache: "no-store" })
+      .then(requirementsLoadFrom)
+      .then(settleRequirements, () => settleRequirements({ kind: "error" }));
+    return () => { stale = true; };
+  }, [requirementsRoute, requirementsNonce]);
+  const requirementsLoad: RequirementsLoad = requirementsRoute !== null && requirementsState.route === requirementsRoute
+    ? requirementsState.load : { kind: "loading" };
+
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
   const handlers = documentHandlers({ accountId, locale, reload, reloadRequests, inFlight });
+  const checklistActs = checklistHandlers({
+    accountId, contactId: record.id, locale, reload: () => setRequirementsNonce((n) => n + 1), refresh: () => router.refresh(), inFlight,
+  });
 
   // "Ask the customer": the dialog closes once a request exists, and stays open with the refusal's words otherwise.
   const [askOpen, setAskOpen] = useState(false);
   const [askBusy, setAskBusy] = useState(false);
   const [askError, setAskError] = useState<MessageKey | null>(null);
-  const openAsk = () => { setAskError(null); setAskOpen(true); };
+  // D2: Ask from a checklist gap opens the dialog with just that item ticked; the header's Ask, with none.
+  const [askItems, setAskItems] = useState<RequirableCategory[]>([]);
+  const openAsk = (items: RequirableCategory[] = []) => { setAskItems(items); setAskError(null); setAskOpen(true); };
   const onAskSubmit = (items: DocumentRequestItem[], channel: RequestChannel) => {
     setAskBusy(true);
     setAskError(null);
@@ -649,7 +725,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   const [lock] = useState(() => ({ held: false }));
 
   const closePanel = () => { setFiles([]); setOwnersOnly(false); setExpiresOn(""); };
-  const onFiles = (chosen: File[], from: "upload" | "camera") => {
+  const onFiles = (chosen: File[], from: "upload" | "camera", category?: RequirableCategory | null) => {
     // A batch on its way is never replaced by a second drop; the person is told to wait.
     const refused = dropRefusal(lock.held, chosen.length);
     if (refused) { toast.error(t(m, refused, locale)); return; }
@@ -657,11 +733,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
     setOwnersOnly(false);
     setExpiresOn("");
     setSource(from);
-    setFiles(chosen.map((file) => {
-      const type = typeForFile(file.name, file.type);
-      const category: DocumentCategory = type ? defaultCategory(type) : "other";
-      return { key: `f${++panelSeq}`, file, title: titleFromFileName(file.name) ?? t(m, "documents.untitled", locale), category, phase: null };
-    }));
+    setFiles(panelFiles(chosen, category ?? null, locale));
   };
   const setPhase = (key: string, phase: PanelFile["phase"]) => setFiles((fs) => fs.map((f) => (f.key === key ? { ...f, phase } : f)));
   const batch = (): UploadBatch => ({ record, ownersOnly: canManage && ownersOnly, expiresOn: expiresOn || null, source });
@@ -745,11 +817,16 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
         onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel}
         versionPhases={versionPhases} onNewVersion={onNewVersion} onPurge={(d) => setPurgeId(d.id)}
         requests={{
-          load: requestsLoad, onAsk: openAsk,
+          load: requestsLoad, onAsk: () => openAsk(),
           onRetry: () => { setRequestsState({ route: "", load: { kind: "loading" } }); reloadRequests(); },
           onCopy: (id) => void handlers.copyRequestLink(id), onRevoke: (id) => void handlers.revokeRequest(id),
-        }} />
-      <DocumentRequestDialog open={askOpen} locale={locale} name={name}
+        }}
+        checklist={hasChecklist ? {
+          load: requirementsLoad, canSkip, canAsk: requestsLoad.kind === "ready",
+          onAsk: (c) => openAsk([c]), onSkip: (c) => void checklistActs.skip(c), onUnskip: (c) => void checklistActs.unskip(c),
+          onRetry: () => { setRequirementsState({ route: "", load: { kind: "loading" } }); setRequirementsNonce((n) => n + 1); },
+        } : undefined} />
+      <DocumentRequestDialog open={askOpen} locale={locale} name={name} initialItems={askItems}
         channels={requestsLoad.kind === "ready" ? requestsLoad.data.channels : { text: false, email: false }}
         busy={askBusy} error={askError} onSubmit={onAskSubmit} onClose={() => setAskOpen(false)} />
       <input ref={versionInput} type="file" accept={ACCEPT} hidden data-version-input onChange={onVersionFile} />

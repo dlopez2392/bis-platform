@@ -93,6 +93,9 @@ const ALLOWED: Record<string, Reason> = {
   // readGroup / getDocumentRequest under 0080's RLS); the target and the channels on offer are read there too,
   // ledgerDb for the consent state only after that proof, and only then the service client's writes.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requests-actions.ts": "proven-target",
+  // The required-documents checklist (S-07 2c): every skip write follows a request-client read of the contact,
+  // the account's list and the skip row (0081's RLS), and a role check; the Undo is the actor's own.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requirements-actions.ts": "proven-target",
   // The Groups card: every service write follows a request-client read of its contact, membership or group;
   // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
@@ -104,6 +107,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",
+  // The required-documents list (S-07 2c): an Owner or the agency only (canManage), one account column.
+  "app/(dashboard)/dashboard/accounts/[accountId]/settings/document-requirements-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/setup/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/shell-actions.ts": "technician-filtered",

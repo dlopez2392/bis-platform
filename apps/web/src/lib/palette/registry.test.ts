@@ -116,6 +116,16 @@ describe("buildPaletteEntries", () => {
     expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#website`);
   });
 
+  it("registers the required documents settings section (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const entry = entries.find((e) => e.id === "settings:required-documents");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#required-documents`);
+    expect(entry?.group).toBe("settings");
+    expect(entry?.agencyOnly).toBe(true);
+    expect(filterEntries(entries, "checklist").some((e) => e.id === "settings:required-documents")).toBe(true);
+    expect(filterEntries(entries, "documentos").some((e) => e.id === "settings:required-documents")).toBe(true);
+  });
+
   // Staff and roles (Task 8): a client Owner gets a direct `nav:team` entry;
   // a client Staff does not. Not a SETTINGS_SECTIONS anchor — see
   // registry.ts's own comment on why — so this is checked by id/href, not
@@ -217,6 +227,7 @@ describe("buildPaletteEntries", () => {
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/sending-address-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/weekly-report-card.tsx",
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/required-documents-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card.tsx",
       "../../components/alert-phone-card.tsx",

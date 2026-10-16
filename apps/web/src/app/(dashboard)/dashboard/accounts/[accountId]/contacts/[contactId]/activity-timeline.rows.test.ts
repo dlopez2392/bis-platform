@@ -234,3 +234,23 @@ describe("a document-request row (S-07 2b)", () => {
     expect(row).toContain("lucide-send");
   });
 });
+
+describe("a required-document skip and un-skip (S-07 2c)", () => {
+  it("each renders as one: its verb, the person's mark and the ListChecks icon (mutations: return null for either case, or wear the Paperclip -> FAILS)", () => {
+    const skip = { id: "k1", category: "insurance", contact_id: "c1", skipped_by: "user_me", created_at: AT, unskipped_by: "user_me", unskipped_at: AT };
+    const entries = [
+      { kind: "documentSkip", id: "k1", at: AT, contactId: "c1", skip },
+      { kind: "documentUnskip", id: "k1", at: AT, contactId: "c1", skip },
+    ] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "es", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    for (const [kind, verb] of [["documentSkip", "marcó que Seguro no hace falta"], ["documentUnskip", "marcó que Seguro hace falta otra vez"]] as const) {
+      const row = html.match(new RegExp(`<div data-timeline-item="${kind}"[\\s\\S]*?</li>`))?.[0] ?? "";
+      expect(row).toContain(`>${verb}<`);
+      expect(row).toContain(`>${m["provenance.you.es"]}<`);
+      expect(row).toContain("lucide-list-checks");
+    }
+  });
+});

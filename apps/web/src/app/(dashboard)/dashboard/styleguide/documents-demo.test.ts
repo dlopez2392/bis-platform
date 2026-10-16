@@ -11,6 +11,9 @@ vi.mock("../accounts/[accountId]/contacts/documents-actions", () => ({
 vi.mock("../accounts/[accountId]/contacts/document-requests-actions", () => ({
   createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
 }));
+vi.mock("../accounts/[accountId]/contacts/document-requirements-actions", () => ({
+  skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn(),
+}));
 const requestActions = await import("../accounts/[accountId]/contacts/document-requests-actions");
 const { DocumentsDemo, demoHandlers } = await import("./documents-demo");
 const actions = await import("../accounts/[accountId]/contacts/documents-actions");
@@ -126,5 +129,31 @@ describe("styleguide: Ask the customer (S-07 2b)", () => {
   it("a customer's file reads 'Sent by the customer' on the loaded cards, in both languages", () => {
     expect(text).toContain("Sent by the customer ·");
     expect(renderedText(html.slice(html.indexOf('lang="es"')))).toContain("Enviado por el cliente ·");
+  });
+});
+
+describe("styleguide: the required documents (S-07 2c)", () => {
+  const html = renderToStaticMarkup(createElement(DocumentsDemo));
+
+  it("five standalone states (English partial, Spanish partial, complete with a skipped item, loading, error) and one card with the meter in its top row (mutation: drop a state -> FAILS)", () => {
+    expect(html.match(/data-document-checklist(?=[\s>=])/g)).toHaveLength(6);
+    expect(html.match(/data-requirements-meter/g)).toHaveLength(1);
+    for (const state of ["loading", "error"]) expect(html).toContain(`data-document-checklist="true" data-state="${state}"`);
+    const text = renderedText(html).replace(/\s+/g, " ");
+    expect(text).toContain("Missing: Insurance");
+    expect(text).toContain("Expired: ID");
+    expect(text).toContain("Checking: Warranty");
+    expect(text).toContain("Falta: Seguro");
+    expect(text).toContain(m["documents.checklist.loadFailed"]);
+  });
+
+  it("every button inside a checklist block is ghost (rule 8; mutation: a checklist Upload as default -> FAILS)", () => {
+    // Every checklist button carries data-checklist-action; the error block adds its Retry.
+    const tags = html.match(/<button[^>]*data-checklist-action[^>]*>/g) ?? [];
+    for (const tag of tags) expect(tag).toContain('data-variant="ghost"');
+    const error = html.slice(html.indexOf('data-state="error"'));
+    expect(/<button[^>]*>/.exec(error)![0]).toContain('data-variant="ghost"');
+    const buttons = tags.length;
+    expect(buttons).toBeGreaterThan(0);
   });
 });

@@ -153,3 +153,12 @@ describe("customer upload links' marks (S-07 2b)", () => {
     expect(authorOf(task)).toEqual({ kind: "automation", personId: null });
   });
 });
+
+describe("required-documents skip marks (S-07 2c)", () => {
+  it("a skip carries the person who skipped, an un-skip the person who un-skipped (mutations: one personId for both; the automation mark -> FAILS)", () => {
+    const skip = { id: "k1", category: "insurance", contact_id: "c1", skipped_by: "u_ana", created_at: AT, unskipped_by: "u_bo", unskipped_at: AT };
+    const a = { kind: "documentSkip", id: "k1", at: AT, contactId: "c1", skip } as TimelineEntry;
+    const b = { kind: "documentUnskip", id: "k1", at: AT, contactId: "c1", skip } as TimelineEntry;
+    expect([authorOf(a), authorOf(b)]).toEqual([{ kind: "person", personId: "u_ana" }, { kind: "person", personId: "u_bo" }]);
+  });
+});

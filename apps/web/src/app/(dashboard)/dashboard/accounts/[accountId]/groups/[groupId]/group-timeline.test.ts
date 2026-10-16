@@ -176,3 +176,23 @@ describe("a document-request row on the group page (S-07 2b)", () => {
     expect(row).not.toContain("data-timeline-subject");
   });
 });
+
+describe("a required-document skip and un-skip on the group page (S-07 2c)", () => {
+  it("each renders as one: its verb, the person's mark, the ListChecks icon and its member's link (mutations: return null for either case, or wear the Paperclip -> FAILS)", () => {
+    const skip = { id: "k1", category: "insurance", contact_id: "c-ana", skipped_by: "user_me", created_at: AT, unskipped_by: "user_me", unskipped_at: AT };
+    const entries = [
+      { kind: "documentSkip", id: "k1", at: AT, contactId: "c-ana", skip },
+      { kind: "documentUnskip", id: "k1", at: AT, contactId: "c-ana", skip },
+    ] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const html = render({ rows, tr }, "es");
+    for (const [kind, verb] of [["documentSkip", "marcó que Seguro no hace falta"], ["documentUnskip", "marcó que Seguro hace falta otra vez"]] as const) {
+      const row = rowHtml(html, kind);
+      expect(row).toContain(`>${verb}<`);
+      expect(row).toContain(`>${m["provenance.you.es"]}<`);
+      expect(row).toContain("lucide-list-checks");
+      expect(row).toContain("/dashboard/accounts/a1/contacts/c-ana");
+    }
+  });
+});

@@ -290,6 +290,9 @@ export {
   DOCUMENT_REQUEST_DAYS, DOCUMENT_REQUEST_DAILY_STARTS, DOCUMENT_REQUEST_MAX_ITEMS, DOCUMENT_REQUEST_NOTE_MAX,
   cleanRequestItems, documentRequestState,
   type DocumentRequestItem, type DocumentRequestChannel, type DocumentRequestState,
+  // S-07 2c: the required-documents checklist.
+  REQUIRABLE_DOCUMENT_CATEGORIES, isRequirableCategory, REQUIREMENT_STATES, isRequirementState, DOCUMENT_REQUIREMENT_UNDO_MS,
+  cleanRequiredCategories, requirementsMeter, type RequirableCategory, type RequirementState,
 } from "./document-rules";
 export {
   createDocumentRequest, findDocumentRequestByTokenHash, getDocumentRequest, startDocumentRequestUpload,
@@ -299,6 +302,12 @@ export {
   type DocumentRequestRow, type RequestStartOutcome, type RequestDocument, type RequestFile,
   type OpenDocumentRequest, type TimelineDocumentRequest, type DocumentRequestTarget,
 } from "./document-requests";
+// S-07 2c: the required-documents checklist. See ./document-requirements.ts.
+export {
+  listDocumentRequirements, getRequiredDocumentCategories, setRequiredDocumentCategories, getActiveDocumentSkip, getDocumentSkip,
+  skipDocumentRequirement, undoDocumentSkip, unskipDocumentRequirement, undoDocumentUnskip, listDocumentSkipTimeline,
+  type DocumentRequirement, type DocumentSkipRow, type TimelineDocumentSkip,
+} from "./document-requirements";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {

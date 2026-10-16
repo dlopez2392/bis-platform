@@ -60,7 +60,10 @@ const { GET } = await import("./route");
 // the same documents source.
 // Raised 25 -> 26 on 2026-10-15 by S-07 part 2b (plan deviation 6): a request for files is its own
 // timeline row, read from 0080's document_requests (under RLS), inside the same documents source.
-const MEASURED = 26; // measured 2026-10-15: 26 reads (+1 prefs), the 26th is request:document_requests (S-07 2b); 25 before S-07 2b, the 25th request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
+// Raised 26 -> 28 on 2026-10-16 by S-07 2c: a skip of a required document and its un-skip are each
+// a timeline row, read twice from 0081's document_requirement_skips (under RLS; a skip at created_at,
+// an un-skip at unskipped_at), inside the same documents source.
+const MEASURED = 28; // measured 2026-10-16: 28 reads (+1 prefs), the two added are request:document_requirement_skips twice (S-07 2c: a skip at created_at, an un-skip at unskipped_at; listed 21st and 22nd, beside request:document_requests, since the reads run concurrently); 26 before S-07 2c, the 26th request:document_requests; 25 before S-07 2b, the 25th request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
 
 describe("reads per drawer open (S-03 part 3 §5: measured, not assumed)", () => {
   it("the contact read first, the ledger only after it, and no more reads than measured (mutation: re-add the unpaged listContactMessages read -> FAILS)", async () => {

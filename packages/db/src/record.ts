@@ -13,6 +13,7 @@ import { forContacts, instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from
 import type { AuthorKind } from "./provenance";
 import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTimeline, type TimelineDocument, type TimelineDocumentVersion, type TimelineDocumentScan } from "./documents";
 import { listDocumentRequestTimeline, type TimelineDocumentRequest } from "./document-requests";
+import { listDocumentSkipTimeline, type TimelineDocumentSkip } from "./document-requirements";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -302,7 +303,11 @@ export type TimelineEntry =
   /** S-07 2a (spec 3.5): one row per removed version (a virus, or it could not be checked), read from 0079's view so RLS decides. `id` is the version's; `at` its verdict. */
   | { kind: "documentRemoved"; id: string; at: string; contactId: string; scan: TimelineDocumentScan }
   /** S-07 2b (plan deviation 6): one row per request, read from document_requests so RLS decides. `id` is the request's. */
-  | { kind: "documentRequest"; id: string; at: string; contactId: string; request: TimelineDocumentRequest };
+  | { kind: "documentRequest"; id: string; at: string; contactId: string; request: TimelineDocumentRequest }
+  /** S-07 2c (plan deviation 1): one row per skip, at its created_at, read from 0081's document_requirement_skips so RLS decides. `id` is the skip's. */
+  | { kind: "documentSkip"; id: string; at: string; contactId: string; skip: TimelineDocumentSkip }
+  /** S-07 2c: one row per un-skip, at its unskipped_at, from the same row. The kind keeps its key apart from the skip's. */
+  | { kind: "documentUnskip"; id: string; at: string; contactId: string; skip: TimelineDocumentSkip };
 export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
@@ -373,22 +378,27 @@ export async function listTimelinePage(
       .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, contactId: booking.contact_id, booking }))),
     settle("calls", async () => (await listContactCalls(db, accountId, who, page.limit, { before }))
       .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, contactId: call.contact_id, call }))),
-    // S-07: one source, four kinds. A file's "added" row (from documents), each NEW version's row
-    // (owner ruling R2, from 0078's view), each REMOVED version's row (spec 3.5, from 0079's view) and
-    // each request for files (S-07 2b, plan deviation 6, from 0080's document_requests), all under the
-    // caller's RLS, all paged on (at, id); a failed read of any is the one "documents" failure.
+    // S-07: one source, six kinds. A file's "added" row (from documents), each NEW version's row
+    // (owner ruling R2, from 0078's view), each REMOVED version's row (spec 3.5, from 0079's view),
+    // each request for files (S-07 2b, plan deviation 6, from 0080's document_requests), and each
+    // skip and un-skip of a required document (S-07 2c, from 0081's document_requirement_skips; no
+    // group branch, a skip is always a contact's), all under the caller's RLS, all paged on (at, id);
+    // a failed read of any is the one "documents" failure.
     settle("documents", async () => {
-      const [docs, versions, removed, requests] = await Promise.all([
+      const [docs, versions, removed, requests, skips] = await Promise.all([
         listDocumentTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentVersionTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentScanTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentRequestTimeline(db, accountId, who, opts.groupId ?? null, page),
+        listDocumentSkipTimeline(db, accountId, who, page),
       ]);
       return [
         ...docs.map((d): TimelineEntry => ({ kind: "document", id: d.id, at: d.created_at, contactId: d.contact_id ?? "", document: d })),
         ...versions.map((v): TimelineEntry => ({ kind: "documentVersion", id: v.id, at: v.created_at, contactId: v.contact_id ?? "", version: v })),
         ...removed.map((s): TimelineEntry => ({ kind: "documentRemoved", id: s.id, at: s.scanned_at, contactId: s.contact_id ?? "", scan: s })),
         ...requests.map((r): TimelineEntry => ({ kind: "documentRequest", id: r.id, at: r.created_at, contactId: r.contact_id ?? "", request: r })),
+        ...skips.skips.map((s): TimelineEntry => ({ kind: "documentSkip", id: s.id, at: s.created_at, contactId: s.contact_id, skip: s })),
+        ...skips.unskips.map((s): TimelineEntry => ({ kind: "documentUnskip", id: s.id, at: s.unskipped_at!, contactId: s.contact_id, skip: s })),
       ];
     }),
   ]);

@@ -46,6 +46,8 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
   { anchor: "branding", label: m["palette.settings.branding"], keywords: ["logo", "colors", "theme", "brand name"] },
   { anchor: "weekly-report", label: m["palette.settings.weeklyReport"], keywords: ["email report", "monday", "recipients"] },
   { anchor: "website", label: m["palette.settings.website"], keywords: ["analytics", "traffic", "vercel", "domain", "link site"] },
+  // S-07 2c: the required-documents list (settings/required-documents-card.tsx)
+  { anchor: "required-documents", label: m["palette.settings.requiredDocuments"], keywords: ["documents", "checklist", "required", "missing", "vault", "documentos", "requeridos"] },
 ];
 
 /** Extra search words per nav destination, keyed by the href SUFFIX so this

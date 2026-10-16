@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -191,6 +191,10 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // S-07 2b: a request for files wears the send arrow (the link went out to the customer).
     case "documentRequest":
       return <TimelineItem {...head} icon={Send} />;
+    // S-07 2c: a required document marked not needed, or needed again, wears the checklist's icon.
+    case "documentSkip":
+    case "documentUnskip":
+      return <TimelineItem {...head} icon={ListChecks} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

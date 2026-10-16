@@ -112,3 +112,35 @@ export function removedReason(scanStatus: string, signature: string | null): Rem
   if (scanStatus !== "unscannable") return null;
   return signature?.startsWith(PASSWORD_SIGNATURE_PREFIX) ? "password" : "unscannable";
 }
+
+/**
+ * S-07 2c: the "7 de 9" checklist. Every category but Other may be required (owner ruling D8): anything
+ * filed as Other would meet "Other". 0081's two CHECKs hold this exact list; document-requirements-schema.test.ts
+ * refuses 'other' there, and this module's test pins the list against DOCUMENT_CATEGORIES.
+ */
+export const REQUIRABLE_DOCUMENT_CATEGORIES = ["id", "contract", "estimate", "invoice", "photo", "permit", "insurance", "warranty"] as const;
+export type RequirableCategory = (typeof REQUIRABLE_DOCUMENT_CATEGORIES)[number];
+export const isRequirableCategory = (v: unknown): v is RequirableCategory =>
+  typeof v === "string" && (REQUIRABLE_DOCUMENT_CATEGORIES as readonly string[]).includes(v);
+/** 0081's document_requirements answers one of these per required category (precedence: skipped, met, checking, expired, missing). */
+export const REQUIREMENT_STATES = ["met", "checking", "expired", "missing", "skipped"] as const;
+export type RequirementState = (typeof REQUIREMENT_STATES)[number];
+export const isRequirementState = (v: unknown): v is RequirementState =>
+  typeof v === "string" && (REQUIREMENT_STATES as readonly string[]).includes(v);
+/** The undo window for a skip or an un-skip: the actor's own, this long after (rule 6; 2b's revoke window). */
+export const DOCUMENT_REQUIREMENT_UNDO_MS = 600_000;
+
+/** The account's list as 0081 accepts it, in the vault's order, duplicates dropped; null for anything else. */
+export function cleanRequiredCategories(raw: unknown): RequirableCategory[] | null {
+  if (!Array.isArray(raw)) return null;
+  // By index, not `every`: `every` skips a sparse array's holes, and a hole is not a category.
+  for (let i = 0; i < raw.length; i++) if (!isRequirableCategory(raw[i])) return null;
+  const picked = new Set<string>(raw);
+  return REQUIRABLE_DOCUMENT_CATEGORIES.filter((c) => picked.has(c));
+}
+
+/** "2 of 3" (spec 5.3): skipped items are left out of both numbers. */
+export function requirementsMeter(items: readonly { state: RequirementState }[]): { met: number; required: number } {
+  const counted = items.filter((i) => i.state !== "skipped");
+  return { met: counted.filter((i) => i.state === "met").length, required: counted.length };
+}

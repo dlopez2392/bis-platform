@@ -27,7 +27,10 @@ const fx = vi.hoisted(() => ({
       select: () => ({
         eq: () => ({
           maybeSingle: () => Promise.resolve({
-            data: { clerk_org_id: null, client_access_enabled: false, report_emails: [], alert_phone: null },
+            data: {
+              clerk_org_id: null, client_access_enabled: false, report_emails: [], alert_phone: null,
+              required_document_categories: ["insurance"],
+            },
             error: null,
           }),
         }),
@@ -81,6 +84,7 @@ vi.mock("./actions", () => ({
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
   confirmAlertPhoneVerificationAction: noop, setAccountLanguageAction: noop,
 }));
+vi.mock("./document-requirements-actions", () => ({ setRequiredDocumentCategoriesAction: noop }));
 vi.mock("../branding/actions", () => ({
   setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,
 }));
@@ -107,6 +111,7 @@ const { ClientAccessSkeleton } = await import("./client-access-panel");
 const { WebsiteSection } = await import("./website-section");
 const { LinkSiteSkeleton } = await import("../website/link-site-card");
 const { ApplyBlueprintDialog } = await import("./apply-blueprint-dialog");
+const { RequiredDocumentsCard } = await import("./required-documents-card");
 
 /** Depth-first search of the returned element tree for BrandingPanel's props. */
 function findPanelProps(node: ReactNode): Record<string, unknown> | null {
@@ -201,6 +206,16 @@ describe("settings page — the Billing card", () => {
  * mocks at the top make Clerk and Vercel answer never, so every test in this
  * file proves the first half: the page resolves without them.
  */
+describe("settings page — the Required documents card", () => {
+  it("mounts the Required documents card with the stored list, bound to THIS account (mutation: drop the mount, or pass [] -> FAILS)", async () => {
+    const all = await pageElements();
+    const el = all.find((e) => e.type === RequiredDocumentsCard);
+    expect(el, "RequiredDocumentsCard mounted").toBeTruthy();
+    expect(el!.props.required).toEqual(["insurance"]);
+    expect(typeof el!.props.action).toBe("function");
+  });
+});
+
 describe("settings page — third parties never hold the page", () => {
   it("mounts ClientAccessSection for THIS account's org and switch in its own Suspense, skeleton fallback (mutation: render it outside Suspense, or read Clerk in the page again → FAILS)", async () => {
     const boundary = boundaryAround(await pageElements(), ClientAccessSection);

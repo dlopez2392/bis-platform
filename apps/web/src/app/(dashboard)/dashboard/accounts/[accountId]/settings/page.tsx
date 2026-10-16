@@ -14,6 +14,9 @@ import { WebsiteSection } from "./website-section";
 import { LinkSiteSkeleton } from "../website/link-site-card";
 import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
+import { RequiredDocumentsCard } from "./required-documents-card";
+import { setRequiredDocumentCategoriesAction } from "./document-requirements-actions";
+import { cleanRequiredCategories } from "@bis/db/document-rules";
 import { BillingSection, BillingCardSkeleton } from "./billing-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { resolveSmsSender } from "@/lib/sms/sender";
@@ -77,7 +80,7 @@ export default async function CrmSettingsPage({
     // an in-account surface — worth the owner's judgment on whether clients
     // should see this at all.
     listBlueprints(serviceDb()),
-    db.from("accounts").select("client_access_enabled, report_emails, alert_phone, language").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("client_access_enabled, report_emails, alert_phone, language, required_document_categories").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`settings: account lookup failed: ${error.message}`);
         if (!data) throw new Error("settings: account not found");
@@ -106,6 +109,11 @@ export default async function CrmSettingsPage({
   const boundStartAlertPhoneVerification = startAlertPhoneVerificationAction.bind(null, accountId);
   const boundConfirmAlertPhoneVerification = confirmAlertPhoneVerificationAction.bind(null, accountId);
   const boundSetAccountLanguage = setAccountLanguageAction.bind(null, accountId);
+  const boundSetRequiredDocumentCategories = setRequiredDocumentCategoriesAction.bind(null, accountId);
+  const requiredDocumentCategories = cleanRequiredCategories(account.required_document_categories);
+  if (requiredDocumentCategories === null) {
+    console.error(`settings: account ${accountId} has an invalid required_document_categories value`);
+  }
   return (
     <>
       {from === "setup" ? <BackToSetup accountId={accountId} /> : null}
@@ -215,6 +223,10 @@ export default async function CrmSettingsPage({
         <WeeklyReportCard
           reportEmails={account.report_emails}
           action={boundSetReportEmails}
+        />
+        <RequiredDocumentsCard
+          required={requiredDocumentCategories ?? []}
+          action={boundSetRequiredDocumentCategories}
         />
         <AlertPhoneCard
           isAgency
