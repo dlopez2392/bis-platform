@@ -26,6 +26,9 @@ const dbMocks = vi.hoisted(() => ({
   // and the sender-check email (which falls back to the stubbed serviceDb()
   // below). Allowed by default.
   isAccountOutboundSuppressed: vi.fn(),
+  // Task 10: the Replies row's own reads and writes.
+  getInboundSettings: vi.fn(),
+  setInboundSettings: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({ tag: "serviceDb" }),
@@ -77,12 +80,24 @@ vi.mock("@/lib/email", () => ({
   getEmailProvider: () => ({ isFake: false, send: (...a: unknown[]) => emailSendMock(...a) }),
 }));
 
+// Task 10: the Replies row's server-side MX re-check, injected so no test
+// touches real DNS.
+const mxMock = vi.hoisted(() => ({ inboundMxReady: vi.fn() }));
+vi.mock("@/lib/email/inbound/mx-check", async (importOriginal) => ({
+  ...(await importOriginal<object>()), inboundMxReady: (domain: string) => mxMock.inboundMxReady(domain),
+}));
+
 import { m } from "@/lib/messages";
 import { SmsProviderError } from "@/lib/sms/types";
 import {
   setAlertPhoneAction, startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setFromEmailAction,
-  createFieldAction, setAccountLanguageAction,
+  createFieldAction, setAccountLanguageAction, setInboundModeAction, checkInboundDnsAction,
 } from "./actions";
+
+const ACCOUNT = "acct_1";
+const USER = "user_1";
+const SERVICE = { tag: "serviceDb" };
+const dbMock = dbMocks;
 
 const fd = (fields: Record<string, string>) => {
   const f = new FormData();
@@ -108,6 +123,9 @@ beforeEach(() => {
   resolveSmsSenderMock.mockReset().mockResolvedValue({
     ok: true, from: "+19565559999", ownedNumbers: ["+19565559999"],
   });
+  dbMocks.getInboundSettings.mockReset();
+  dbMocks.setInboundSettings.mockReset().mockResolvedValue(undefined);
+  mxMock.inboundMxReady.mockReset();
 });
 
 describe("setAlertPhoneAction — clearing needs no proof", () => {
@@ -497,5 +515,49 @@ describe("setAccountLanguageAction — one option list for the field and the act
     const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "actions.ts"), "utf8");
     expect(src).toContain("validateEnumValue(LANGUAGE_OPTIONS, value)");
     expect(src).not.toMatch(/value !== "en" && value !== "es"/);
+  });
+});
+
+describe("setInboundModeAction (agency only; spec 'Turning it on')", () => {
+  it("is agency-only: a refused access never writes (mutation: requireAccountAccess → FAILS)", async () => {
+    requireAgencyOnlyAccountAccessMock.mockRejectedValueOnce(new Error("forbidden"));
+    await expect(setInboundModeAction(ACCOUNT, { mode: "bis", domain: null })).rejects.toThrow(/forbidden/);
+    expect(dbMock.setInboundSettings).not.toHaveBeenCalled();
+  });
+
+  it("bis: writes and answers the previous settings for the Undo (mutation: answer the new settings → FAILS)", async () => {
+    dbMock.getInboundSettings.mockResolvedValue({ mode: "off", domain: null });
+    expect(await setInboundModeAction(ACCOUNT, { mode: "bis", domain: null })).toEqual({ ok: true, previous: { mode: "off", domain: null } });
+    expect(dbMock.setInboundSettings).toHaveBeenCalledWith(SERVICE, ACCOUNT, { mode: "bis", domain: null }, USER);
+  });
+
+  it("own_domain re-checks the MX on the server and refuses when it is not ready (mutation: trust the browser → FAILS)", async () => {
+    dbMock.getInboundSettings.mockResolvedValue({ mode: "off", domain: null });
+    mxMock.inboundMxReady.mockResolvedValue("missing");
+    expect(await setInboundModeAction(ACCOUNT, { mode: "own_domain", domain: "reply.rio.com" })).toEqual({ ok: false, error: "No MX record on reply.rio.com points at Resend yet. Add it, then check again." });
+    expect(dbMock.setInboundSettings).not.toHaveBeenCalled();
+  });
+
+  it("a bad domain is refused; a taken one answers domainTaken (mutation: map 23505 to the generic error → FAILS)", async () => {
+    dbMock.getInboundSettings.mockResolvedValue({ mode: "off", domain: null });
+    expect(await setInboundModeAction(ACCOUNT, { mode: "own_domain", domain: "reply.bis-rgv.com" })).toEqual({ ok: false, error: "Enter a domain like reply.example.com." });
+    mxMock.inboundMxReady.mockResolvedValue("ready");
+    dbMock.setInboundSettings.mockRejectedValueOnce(new Error("setInboundSettings failed: duplicate key value violates unique constraint \"accounts_inbound_domain_key\""));
+    expect(await setInboundModeAction(ACCOUNT, { mode: "own_domain", domain: "reply.rio.com" })).toEqual({ ok: false, error: "Another account already uses that domain." });
+  });
+
+  it("off keeps the stored domain, so turning own_domain back on needs no retyping (mutation: clear the domain → FAILS)", async () => {
+    dbMock.getInboundSettings.mockResolvedValue({ mode: "own_domain", domain: "reply.rio.com" });
+    await setInboundModeAction(ACCOUNT, { mode: "off", domain: null });
+    expect(dbMock.setInboundSettings).toHaveBeenCalledWith(SERVICE, ACCOUNT, { mode: "off", domain: "reply.rio.com" }, USER);
+  });
+});
+
+describe("checkInboundDnsAction", () => {
+  it("answers the three outcomes in words, agency-only (mutation: answer ok for missing → FAILS)", async () => {
+    mxMock.inboundMxReady.mockResolvedValueOnce("ready").mockResolvedValueOnce("missing").mockResolvedValueOnce("lookup_failed");
+    expect(await checkInboundDnsAction(ACCOUNT, "reply.rio.com")).toEqual({ ok: true });
+    expect(await checkInboundDnsAction(ACCOUNT, "reply.rio.com")).toEqual({ ok: false, error: "No MX record on reply.rio.com points at Resend yet. Add it, then check again." });
+    expect(await checkInboundDnsAction(ACCOUNT, "reply.rio.com")).toEqual({ ok: false, error: "We couldn't look up reply.rio.com. Check the spelling and try again." });
   });
 });
