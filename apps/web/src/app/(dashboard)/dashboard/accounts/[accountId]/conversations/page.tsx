@@ -135,36 +135,25 @@ export default async function ConversationsPage({
       ?? (await getConversationSummary(db, accountId, c)) ?? undefined)
     : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
+  // Fix round 1 (UI review, important #2), consolidated in fix round 2 (one visibility path,
+  // review item 3): the notice must reflect the stop's CURRENT state, not the filing-time
+  // snapshot `meta.consent` carries — a staff Undo, a later event, or the 7-day staff-Undo
+  // window (lib/consent/email-view.ts's REPLY_STOP_WINDOW_MS) may have moved past it since.
+  // Bounded to only the contacts a filed reply actually names something about (never "none"):
+  // the thread's own contact when a message with no sender carries one, or a household
+  // member's when a message's own `meta.sender` does.
+  //
   // Orchestrator ruling (Task 11, visibility): a Technician may not act for a household member
-  // they cannot see. Every distinct `meta.sender.contact_id` this thread's own messages carry,
-  // checked under the REQUEST client (0068's own RLS scope) — an id that comes back is visible
-  // to this viewer; one that does not (a Technician's own customers only) is withheld from the
-  // bubble's Undo/Stop-emails button, even though the status text itself still shows.
-  const senderIds = Array.from(new Set(
-    messages.flatMap((message) => {
-      const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
-      return senderId ? [senderId] : [];
-    }),
-  ));
-  let visibleSenderIds = new Set<string>();
-  if (senderIds.length > 0) {
-    const { data: visible, error: visibleError } = await db.from("contacts").select("id")
-      .eq("account_id", accountId).in("id", senderIds);
-    if (visibleError) {
-      console.error(`conversations: account ${accountId} sender-visibility read failed: ${visibleError.message}`);
-    } else {
-      visibleSenderIds = new Set((visible ?? []).map((row) => (row as { id: string }).id));
-    }
-  }
-  // Fix round 1 (UI review, important #2): the notice must reflect the stop's CURRENT state,
-  // not the filing-time snapshot `meta.consent` carries — a staff Undo, a later event, or the
-  // 7-day staff-Undo window (lib/consent/email-view.ts's REPLY_STOP_WINDOW_MS) may have moved
-  // past it since. Bounded to only the contacts a filed reply actually names something about
-  // (never "none"): the thread's own contact when a message with no sender carries one, or a
-  // household member's when a message's own `meta.sender` does. Each contact is proven on the
-  // REQUEST client (getContact, 0068's own RLS scope) before its ledger history is read at all;
-  // an error or a filtered-out contact leaves it OUT of `emailViews` — fail closed, same as
-  // `visibleSenderIds` above — never a thrown page.
+  // they cannot see. `getContact` on the REQUEST client (0068's own RLS scope) is both that
+  // proof AND the read the ledger history needs the contact's email for — one call answers
+  // both questions, so `visibleContactIds` is a BY-PRODUCT of the SAME call `emailViews` needs,
+  // never a second, separate "is this id visible" query (fix round 1 had one; nothing else used
+  // it, so it is gone). A contact `getContact` cannot see (hidden, or any read error — fail
+  // closed) answers `null`: `readEmailView` is never even attempted for it, and
+  // `visibleContactIds`/`emailViews` both end up without an entry — which is why a hidden
+  // sender's STOPPED notice disappears ENTIRELY below (there is no current view to match
+  // against, same as any other "no longer current" case), not merely its button. Stricter
+  // than the original ruling's "status still shows, button withheld" — decided and accepted.
   const now = new Date();
   const consentContactIds = Array.from(new Set(
     messages.flatMap((message) => {
@@ -175,13 +164,16 @@ export default async function ConversationsPage({
       return senderId ? [senderId] : active ? [active.contactId] : [];
     }),
   ));
+  const visibleContactIds = new Set<string>();
   const emailViews = new Map<string, EmailView>();
   if (consentContactIds.length > 0) {
     const ledger = ledgerDb();
     await Promise.all(consentContactIds.map(async (id) => {
       try {
         const contact = await getContact(db, accountId, id);
-        if (!contact?.email) return;
+        if (!contact) return;
+        visibleContactIds.add(id);
+        if (!contact.email) return;
         emailViews.set(id, await readEmailView(ledger, accountId, contact, now));
       } catch (e) {
         console.error(`conversations: account ${accountId} contact ${id} email-view read failed: ${loggableError(e)}`);
@@ -227,7 +219,7 @@ export default async function ConversationsPage({
               conversationId={active.id}
               contactId={active.contactId}
               locale={locale}
-              visibleSenderIds={visibleSenderIds}
+              visibleSenderIds={visibleContactIds}
               emailViews={emailViews}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,

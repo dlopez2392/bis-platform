@@ -50,9 +50,19 @@ export function MessageThread({
   locale: Locale;
   /** Orchestrator ruling (visibility): the set of this thread's own
    *  `meta.sender.contact_id`s the viewer can actually see — `page.tsx`'s
-   *  own request-client (RLS) read. A bubble with no `meta.sender` at all
-   *  is the thread's own contact, already proven visible by the page
-   *  itself before any message loaded, so it needs no entry here. */
+   *  own `getContact` read on the request client (0068's RLS), the SAME
+   *  call that builds `emailViews` below (fix round 2: one visibility
+   *  path, not a second query). A bubble with no `meta.sender` at all is
+   *  the thread's own contact, already proven visible by the page itself
+   *  before any message loaded, so it needs no entry here. Fix round 2
+   *  (stricter than the original ruling, decided and accepted): because a
+   *  hidden contact never gets an `emailViews` entry either (`page.tsx`
+   *  skips `readEmailView` once `getContact` answers null), a STOPPED
+   *  reply's whole notice disappears for a bubble this set excludes — not
+   *  merely its button — since `currentStopState` below has no view to
+   *  match against. Only the "maybe" chip still shows its own dot-and-word
+   *  regardless; this set, combined with `chipActionable`, withholds only
+   *  ITS button. */
   visibleSenderIds: ReadonlySet<string>;
   /** Fix round 1 (UI review, important #2): each involved contact's CURRENT
    *  email-consent state (`lib/consent/email-view.ts`'s `EmailView`), keyed

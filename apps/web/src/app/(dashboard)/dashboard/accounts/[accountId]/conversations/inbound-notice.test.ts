@@ -117,14 +117,17 @@ describe("InboundNotice reflects the stop's current state (fix round 1)", () => 
     expect(text).not.toContain("Only the customer can turn these emails back on");
   });
 
-  it("day 8 (past the 7-day window): keeps the word \"Stopped\", adds the expired sentence, no button (minor 6; mutation: drop \"Stopped...\" from the expired line → FAILS)", () => {
+  it("day 8 (past the 7-day window): keeps the word \"Stopped\", adds the expired sentence SEPARATED from it, no button (minor 6; fix round 2 minor #2: mutation: run the two sentences together with no separator → FAILS)", () => {
     const meta: InboundMeta = { attachmentCount: 0, sender: null, consent: { kind: "stopped", eventId: "ev_1" } };
     const en = html(meta, { stopIsCurrent: true, initiallyExpired: true });
     const es = html(meta, { stopIsCurrent: true, initiallyExpired: true }, "es");
-    expect(renderedText(en)).toContain("Stopped marketing emails · from their reply");
-    expect(renderedText(en)).toContain("Only the customer can turn these emails back on.");
-    expect(renderedText(es)).toContain("Se detuvieron los correos de promoción · por su respuesta");
-    expect(renderedText(es)).toContain("Solo el cliente puede volver a activar estos correos.");
+    // The two sentences are NEVER adjacent with just a space (that reads as one run-on
+    // sentence: "...from their reply Only the customer...") — a middle dot separates them,
+    // the same convention `conversations.reply.stopped` itself already uses internally.
+    expect(renderedText(en)).toContain("Stopped marketing emails · from their reply · Only the customer can turn these emails back on.");
+    expect(renderedText(en)).not.toContain("reply Only the customer");
+    expect(renderedText(es)).toContain("Se detuvieron los correos de promoción · por su respuesta · Solo el cliente puede volver a activar estos correos.");
+    expect(renderedText(es)).not.toContain("respuesta Solo el cliente");
     expect(en).not.toContain("<button");
   });
 

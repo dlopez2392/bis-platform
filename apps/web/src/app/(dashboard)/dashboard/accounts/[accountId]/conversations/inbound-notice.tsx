@@ -35,10 +35,17 @@ export function InboundNotice({
   contactId: string;
   locale: Locale;
   /** Orchestrator ruling (visibility): false when this bubble's own sender is a household
-   *  member NOT in the viewer's visible set (`message-thread.tsx`'s own RLS-backed read,
-   *  threaded down from `page.tsx`) — a Technician may not act for a customer they can't
-   *  see. The status (dot + word) still renders; only the button that would write for that
-   *  contact is withheld, same principle rule 3's dot-and-word already applies to status. */
+   *  member NOT in the viewer's visible set — `page.tsx`'s own `getContact` read on the
+   *  request client (0068's RLS), the SAME call that produces `stopIsCurrent`'s own
+   *  `EmailView` (fix round 2: one visibility path, not a second query), threaded down
+   *  through `message-thread.tsx`. For the "maybe" chip this withholds only its "Stop
+   *  emails" button — the chip's own dot-and-word always shows (rule 3), because it is
+   *  historical information this reply carried, not a live write. For a STOPPED reply,
+   *  `canAct` on its own never has to hide the status text: a contact this flag excludes
+   *  also never got an `EmailView` built for it (`page.tsx` skips `readEmailView` once
+   *  `getContact` answers null), so `stopIsCurrent` is already false and the WHOLE notice
+   *  is gone before `canAct` is even consulted — stricter than the original ruling
+   *  ("status still shows, button withheld"), decided and accepted in fix round 2. */
   canAct: boolean;
   /** Fix round 1 (UI review, important): true only when this message's OWN stop (its
    *  `consent.eventId`) is still the newest consent row for the address AND was recorded by
@@ -74,11 +81,14 @@ export function InboundNotice({
   // or a later event superseded it — renders nothing at all. Showing "Stopped..." (or its Undo)
   // for a row that is no longer true would be stale information, not merely a withheld button.
   if (consent.kind === "stopped" && stopIsCurrent && expired) {
+    // Minor 2 (fix round 2): two sentences, never run together with just a space — a middle
+    // dot separates them, the same convention `conversations.reply.stopped` itself already
+    // uses internally ("Stopped marketing emails · from their reply").
     status = (
       <p data-reply-stopped className="flex items-center gap-2">
         {dot}
         {t(m, "conversations.reply.stopped", locale)}
-        {" "}
+        {" · "}
         {t(m, "conversations.reply.stopExpired", locale)}
       </p>
     );
