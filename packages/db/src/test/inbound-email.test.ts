@@ -91,6 +91,31 @@ describe("reply tokens", () => {
       expect(third.token).toBe(second.token);
     });
   });
+
+  it("twelve concurrent callers rotating the SAME revoked token end with exactly one new token, matching the stored row, every attempt (mutation: drop the rotation's .eq('reply_token', existing.token) compare-and-set → more than one distinct token on at least one of five attempts, FAILS; the race is probabilistic — a single attempt can converge by luck even mutated, which is why this repeats the race five times on five fresh contacts rather than once)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const { id: contactId } = await createContact(db, accountId, { firstName: `ConcurrentRot${attempt}`, email: `concurrent-rot-${attempt}@example.com` }, ACTOR);
+        const first = await ensureReplyToken(db, accountId, contactId, ACTOR);
+        await db.from("conversations").update({ reply_token_revoked_at: new Date().toISOString() }).eq("id", first.conversationId);
+
+        const results = await Promise.all(
+          Array.from({ length: 12 }, (_, i) =>
+            ensureReplyToken(db, accountId, contactId, ACTOR, () => `${String(i).padStart(2, "0")}${attempt}${"d".repeat(21)}`)),
+        );
+        const distinctTokens = new Set(results.map((r) => r.token));
+        expect(distinctTokens.size).toBe(1);
+        const won = [...distinctTokens][0]!;
+        expect(won).not.toBe(first.token);
+
+        const { data } = await db.from("conversations").select("reply_token, reply_token_revoked_at")
+          .eq("id", first.conversationId).single();
+        expect(data!.reply_token).toBe(won);
+        expect(data!.reply_token_revoked_at).toBeNull();
+        expect(await findReplyThread(db, first.token)).toBeNull();
+      }
+    });
+  });
 });
 
 describe("the account's Replies mode", () => {

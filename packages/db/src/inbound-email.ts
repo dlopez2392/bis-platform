@@ -50,6 +50,12 @@ export async function setInboundSettings(db: SupabaseClient, accountId: string, 
  * `reply_token_revoked_at` cleared, race-safe the same way (compare-and-set on the exact revoked
  * token this caller saw, so only one of several concurrent rotators wins and the rest just re-read).
  */
+/** Bounded: a revoke landing between this function's own write and its final read-back (another
+ *  actor revoking the token this call just won) is vanishingly rare, but an unbounded retry loop
+ *  would be a real hang if it somehow kept happening — 3 rounds, then throw rather than loop forever
+ *  or hand back a token this function itself knows is already dead. */
+const ENSURE_REPLY_TOKEN_MAX_ROUNDS = 3;
+
 export async function ensureReplyToken(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string, make: () => string = newReplyToken,
 ): Promise<{ conversationId: string; token: string }> {
@@ -61,19 +67,25 @@ export async function ensureReplyToken(
     const r = data as { reply_token: string | null; reply_token_revoked_at: string | null };
     return { token: r.reply_token, revoked: r.reply_token_revoked_at !== null };
   };
-  const existing = await read();
-  if (existing.token && !existing.revoked) return { conversationId, token: existing.token };
 
-  const cas = existing.token === null
-    ? db.from("conversations").update({ reply_token: make() })
-        .eq("account_id", accountId).eq("id", conversationId).is("reply_token", null)
-    : db.from("conversations").update({ reply_token: make(), reply_token_revoked_at: null })
-        .eq("account_id", accountId).eq("id", conversationId).eq("reply_token", existing.token);
-  const { error } = await cas;
-  if (error) throw new Error(`ensureReplyToken write failed: ${error.message}`);
-  const stored = await read();
-  if (!stored.token) throw new Error("ensureReplyToken: no token after the write");
-  return { conversationId, token: stored.token };
+  let current = await read();
+  for (let round = 0; round < ENSURE_REPLY_TOKEN_MAX_ROUNDS; round++) {
+    if (current.token && !current.revoked) return { conversationId, token: current.token };
+
+    const cas = current.token === null
+      ? db.from("conversations").update({ reply_token: make() })
+          .eq("account_id", accountId).eq("id", conversationId).is("reply_token", null)
+      : db.from("conversations").update({ reply_token: make(), reply_token_revoked_at: null })
+          .eq("account_id", accountId).eq("id", conversationId).eq("reply_token", current.token);
+    const { error } = await cas;
+    if (error) throw new Error(`ensureReplyToken write failed: ${error.message}`);
+    current = await read();
+    if (!current.token) throw new Error("ensureReplyToken: no token after the write");
+    // current.revoked here means someone revoked the winning token between our write and this read
+    // (or between another rotator's write and OUR read) — loop once more rather than hand back a
+    // token this call already knows is dead.
+  }
+  throw new Error(`ensureReplyToken: still revoked after ${ENSURE_REPLY_TOKEN_MAX_ROUNDS} rounds`);
 }
 
 export type ReplyThread = { conversationId: string; accountId: string; contactId: string; revoked: boolean; inboundDomain: string | null };
