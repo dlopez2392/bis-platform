@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { FileText, Lock, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -450,6 +451,46 @@ export function keepRequests(
   return next.kind === "error" && shown.route === route && shown.load.kind === "ready" ? shown : { route, load: next };
 }
 
+/** Owner ruling 2026-10-16 (S-07 2b follow-up): while a request is open, the card checks it every 20 seconds. */
+export const REQUESTS_POLL_MS = 20_000;
+
+/**
+ * The open requests' own timer: 20 seconds while the requests read is ready, lists at least one open
+ * request, and the tab is visible; null (no timer) otherwise. A hidden tab asks nothing; a read still
+ * loading or failed has nothing to keep honest (a failed RE-read keeps the ready list, keepRequests, so
+ * the poll carries on through it).
+ */
+export function requestsPollMs(load: DocumentRequestsLoad, hidden: boolean): number | null {
+  if (hidden || load.kind !== "ready" || load.data.requests.length === 0) return null;
+  return REQUESTS_POLL_MS;
+}
+
+/**
+ * Did a customer's file arrive between two requests reads? Yes when a request listed before has left the
+ * open list (completed, revoked or expired) or one of its items' answered state moved. The clock (`now`,
+ * and the days-left words it drives), the channels and a NEW request are not a file arriving. Both reads
+ * must be ready: the first read, a failed tick and a Retry's skeleton are no change. The same read twice
+ * answers false, so the files' re-read and the router refresh this causes can never cause another.
+ */
+export function requestsChanged(prev: DocumentRequestsLoad, next: DocumentRequestsLoad): boolean {
+  if (prev.kind !== "ready" || next.kind !== "ready") return false;
+  const after = new Map(next.data.requests.map((r) => [r.id, r]));
+  return prev.data.requests.some((r) => {
+    const now = after.get(r.id);
+    if (!now) return true;
+    const answered = new Map(now.items.map((i) => [i.key, i.answered]));
+    return r.items.some((i) => answered.get(i.key) !== i.answered);
+  });
+}
+
+/** The tab's visibility, as an external store (no setState in an effect): the server, and a first paint, say visible. */
+function subscribeVisibility(onChange: () => void): () => void {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+const tabHidden = () => document.visibilityState === "hidden";
+const tabHiddenOnServer = () => false;
+
 let panelSeq = 0;
 
 /**
@@ -477,11 +518,15 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   // S-07 2b: the open requests are a second read of their own (its route, its error, its Retry). While the
   // files are loading or have failed, the card draws only that state, so neither the list nor "Ask the
   // customer" is drawn then; once the files are ready, a requests failure is the list's own sentence and
-  // never the files'. It re-reads when this card changes a request, and when a files read (the poll's
-  // included) changes a file a request can depend on (shouldReloadRequests); it has no timer of its own.
+  // never the files'. It re-reads when this card changes a request, when a files read (the poll's
+  // included) changes a file a request can depend on (shouldReloadRequests), and on its own 20-second
+  // timer while a request is open and the tab is visible (requestsPollMs, owner ruling 2026-10-16).
   const requestsRoute = documentRequestsRouteFor(accountId, record);
   const [requestsState, setRequestsState] = useState<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
   const [requestsNonce, setRequestsNonce] = useState(0);
+  // Bumped by the requests' settle on EVERY outcome, so their timer re-arms after each read (pollTimerKey, I1).
+  const [requestsReads, setRequestsReads] = useState(0);
+  const router = useRouter();
   // Written only in the reads' promise callbacks, read only there: the last READY files read, and the
   // requests the list last showed, so a files read can compare without an effect over render state.
   const lastReadyFiles = useRef<DocumentsLoad | null>(null);
@@ -530,15 +575,50 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
     const settle = (next: DocumentRequestsLoad) => {
       if (stale) return;
       setRequestsState((s) => keepRequests(s, requestsRoute, next));
+      const before: DocumentRequestsLoad = shownRequests.current.route === requestsRoute ? shownRequests.current.load : { kind: "loading" };
       shownRequests.current = keepRequests(shownRequests.current, requestsRoute, next);
+      setRequestsReads((r) => r + 1);
+      // A customer's file arrived (an item answered, a request completed or left the list): re-read the
+      // files once and refresh the server-rendered timeline and To-do once. The same read again answers
+      // false (requestsChanged), so neither the files' re-read nor the refresh can start another.
+      if (requestsChanged(before, shownRequests.current.load)) {
+        setNonce((n) => n + 1);
+        router.refresh();
+      }
     };
     fetch(requestsRoute, { cache: "no-store" })
       .then(documentRequestsLoadFrom)
       .then(settle, () => settle({ kind: "error" }));
     return () => { stale = true; };
-  }, [requestsRoute, requestsNonce]);
+  }, [requestsRoute, requestsNonce, router]);
   const requestsLoad: DocumentRequestsLoad = requestsState.route === requestsRoute ? requestsState.load : { kind: "loading" };
   const reloadRequests = () => setRequestsNonce((n) => n + 1);
+
+  // Owner ruling 2026-10-16: a customer uploads from another device, and the open card notices within 20
+  // seconds with no refresh. The tick re-reads the REQUESTS only (cheap); the settle above decides whether
+  // anything arrived. Keyed like the files' poll: pollTimerKey folds the ms and the reads counter, the
+  // timer's callback bumps the read, never the effect body. A hidden tab schedules nothing. Nothing on
+  // screen changes for a tick (rule 7): the list keeps what it shows until the new read lands.
+  const hidden = useSyncExternalStore(subscribeVisibility, tabHidden, tabHiddenOnServer);
+  const requestsMs = requestsPollMs(requestsLoad, hidden);
+  const requestsPollKey = pollTimerKey(requestsMs, requestsReads);
+  useEffect(() => {
+    if (requestsMs === null) return;
+    const timer = setTimeout(() => setRequestsNonce((n) => n + 1), requestsMs);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- requestsPollKey folds requestsMs and requestsReads together (see pollTimerKey).
+  }, [requestsPollKey]);
+  // Coming back to the tab re-reads at once (the timer re-arms by itself, `hidden` being part of its key),
+  // but only while a request is open: a card with nothing open asks nothing.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      const shown = shownRequests.current;
+      if (shown.route === requestsRoute && requestsPollMs(shown.load, false) !== null) setRequestsNonce((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [requestsRoute]);
 
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
