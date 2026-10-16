@@ -10,7 +10,10 @@
 -- Technician only their own customers' (0068), through the conversation.
 -- consent_events.method gains inbound_email (a clear stop in a reply, applied at once). A staff Undo of
 -- it is a resubscribed / staff_undo row, which 0055 allowed only over a staff stop: the function is
--- re-created with exactly that one line widened (plan G2).
+-- re-created with that line widened (plan G2), a new revoked/inbound_email guard branch beside
+-- staff/backfill_0049 so an emailed stop never lands over an existing stop (review round 1, Important
+-- 1), and the widened Undo line further requires an inbound_email stop to be within 7 days of now()
+-- before it can be lifted this way (owner ruling 2026-10-16; a staff stop keeps no window).
 -- unfile_inbound_email is the Undo of a manual "File": the row back to held and its message deleted,
 -- in one transaction.
 --
@@ -93,10 +96,14 @@ create table public.inbound_emails (
   constraint inbound_emails_held_has_reason check (status <> 'held' or hold_reason is not null),
   constraint inbound_emails_text_length check (char_length(text) <= 100000),
   constraint inbound_emails_attachment_count_check check (attachment_count >= 0),
-  constraint inbound_emails_decided_coherent check ((decided_by is null) = (decided_at is null))
+  constraint inbound_emails_decided_coherent check ((decided_by is null) = (decided_at is null)),
+  constraint inbound_emails_message_requires_filed check (status = 'filed' or message_id is null)
 );
 create index inbound_emails_held on public.inbound_emails (account_id, received_at desc) where status = 'held';
 create index inbound_emails_by_conversation on public.inbound_emails (account_id, conversation_id);
+-- M5 (review round 1): message_id's FK is ON DELETE SET NULL (the teardown order test proves it), and
+-- that action needs this index to avoid a sequential scan of inbound_emails on every messages delete.
+create index inbound_emails_by_message on public.inbound_emails (message_id) where message_id is not null;
 comment on table public.inbound_emails is
   'An inbound reply through Resend''s email.received webhook (0082). filed: on the thread, as a messages row. held: waiting in the inbox''s Needs a look (hold_reason not_on_record or unverified). dismissed: not a customer. Server-written only; members read their account''s rows, a Technician only through conversation_id (0068''s shape).';
 
@@ -141,6 +148,7 @@ declare
   v_prior_action text;
   v_prior_method text;
   v_prior_evidence jsonb;
+  v_prior_occurred_at timestamptz;
   v_dup uuid;
   v_ok boolean;
   v_id uuid;
@@ -177,8 +185,8 @@ begin
     end if;
   end if;
 
-  select e.id, e.action, e.method, e.evidence
-    into v_prior_id, v_prior_action, v_prior_method, v_prior_evidence
+  select e.id, e.action, e.method, e.evidence, e.occurred_at
+    into v_prior_id, v_prior_action, v_prior_method, v_prior_evidence, v_prior_occurred_at
     from public.consent_events e
    where e.account_id = p_account_id and e.channel = p_channel and e.address = p_address
      and e.action in ('revoked', 'held', 'hold_released', 'resubscribed')
@@ -217,10 +225,20 @@ begin
     v_ok := v_ok and (v_prior_action is null or v_prior_action in ('hold_released', 'resubscribed'));
   elsif p_action = 'revoked' and p_method = 'free_text' then
     v_ok := v_ok and v_prior_action = 'held';
+  elsif p_action = 'revoked' and p_method = 'inbound_email' then
+    -- Important 1 (review round 1): mirrors the staff/backfill_0049 branches above. Without this, a
+    -- guard of 'none' or 'unless_customer_stopped' (neither of which names inbound_email) would let an
+    -- emailed stop land OVER an existing unsubscribe_link or email_complaint stop, and the widened
+    -- staff Undo above would then lift both at once, not just the emailed one.
+    v_ok := v_ok and (v_prior_action is null or v_prior_action in ('hold_released', 'resubscribed'));
   elsif p_action = 'resubscribed' and p_method = 'staff' then
     v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'free_text', 'backfill_0049');
   elsif p_action = 'resubscribed' and p_method = 'staff_undo' then
-    v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'inbound_email');
+    -- Owner ruling 2026-10-16: a staff Undo of an emailed stop works only within 7 days of that stop
+    -- (the window names ONLY inbound_email; a staff-made stop keeps no window, as before). After 7
+    -- days only the customer's own resubscribe lifts it.
+    v_ok := v_ok and v_prior_action = 'revoked' and v_prior_method in ('staff', 'inbound_email')
+      and (v_prior_method <> 'inbound_email' or v_prior_occurred_at > pg_catalog.clock_timestamp() - interval '7 days');
   elsif p_action = 'resubscribed' and p_method not in ('start_keyword', 'unsubscribe_page') then
     -- m1 (review, B2; review R1-N10 already named this gap): a resubscribed
     -- row is written for exactly four methods - start_keyword (a customer's
