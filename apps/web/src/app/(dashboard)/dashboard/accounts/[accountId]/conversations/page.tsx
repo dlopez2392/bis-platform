@@ -71,7 +71,7 @@ async function HeldEmailPane({
     }));
   } catch (e) {
     console.error(`conversations: account ${accountId} held list read failed: ${loggableError(e)}`);
-    return <p className="p-4 text-sm text-muted-foreground">{t(m, "conversations.held.loadFailed", locale)}</p>;
+    return <p lang={locale} className="p-4 text-sm text-muted-foreground">{t(m, "conversations.held.loadFailed", locale)}</p>;
   }
   return <HeldEmailList accountId={accountId} items={items} locale={locale} timezone={timezone} />;
 }
@@ -152,6 +152,7 @@ export default async function ConversationsPage({
     <Link
       data-held-filter
       href={heldFilterHref}
+      lang={locale}
       aria-current={heldView ? "page" : undefined}
       className={cn(
         "rounded-full px-3 py-1 text-sm whitespace-nowrap transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -171,7 +172,7 @@ export default async function ConversationsPage({
       title={m["nav.conversations"]}
       filters={assign.canAssign || showHeldFilter ? (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {assign.canAssign ? <WhoFilter base={base} current={assign.who} showMine={assign.showMine} params={{}} /> : null}
+          {assign.canAssign ? <WhoFilter base={base} current={heldView ? null : assign.who} showMine={assign.showMine} params={{}} /> : null}
           {showHeldFilter ? heldFilterPill : null}
         </div>
       ) : undefined}

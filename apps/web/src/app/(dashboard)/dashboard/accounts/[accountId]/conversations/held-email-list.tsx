@@ -16,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { runGuarded } from "@/lib/ui/guarded-run";
 import { runHeldAction, runUndoHeldEmail } from "./held-email-handlers";
 import { fileHeldEmailAction, dismissHeldEmailAction, undoHeldEmailAction } from "./inbound-actions";
+import { searchHeldContacts, type HeldSearchState, type SearchHitLite } from "./held-email-search";
+import { HeldSearchResults } from "./held-search-results";
 
 /** S-06 part 1, Task 12: the inbox's "Needs a look" filter — held emails
  *  Task 3 could not match to a customer with confidence (not on the
@@ -34,8 +36,6 @@ export type HeldItemView = {
   suggestion: { contactId: string; name: string };
 };
 
-type SearchHitLite = { id: string; label: string };
-
 const REASON_KEY: Record<HeldItemView["reason"], MessageKey> = {
   not_on_record: "conversations.held.reason.notOnRecord",
   unverified: "conversations.held.reason.unverified",
@@ -45,7 +45,7 @@ const SEARCH_MIN = 2;
 const SEARCH_DEBOUNCE_MS = 250;
 
 function HeldEmailRow({
-  accountId, item, locale, timezone, onHide, onShow, onUndone,
+  accountId, item, locale, timezone, onHide, onShow, onUndone, registerRef,
 }: {
   accountId: string;
   item: HeldItemView;
@@ -57,13 +57,17 @@ function HeldEmailRow({
   /** Puts the row back — only on a thrown action or a `failed` answer. */
   onShow: () => void;
   onUndone: () => void;
+  /** The list's own focus bookkeeping (coordinator minor): where keyboard
+   *  focus lands once this row is gone. */
+  registerRef: (el: HTMLElement | null) => void;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const busy = useRef(false);
   const [choosing, setChoosing] = useState(false);
   const [query, setQuery] = useState("");
-  const [search, setSearch] = useState<{ query: string; hits: SearchHitLite[] } | null>(null);
+  const [search, setSearch] = useState<HeldSearchState>({ status: "idle" });
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     // Too short to search: the render below already withholds `search` for
@@ -73,19 +77,24 @@ function HeldEmailRow({
     if (!choosing || query.trim().length < SEARCH_MIN) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
-        .then(async (res) => {
-          if (!res.ok) { setSearch({ query, hits: [] }); return; }
-          const payload = (await res.json()) as { contacts?: SearchHitLite[] };
-          setSearch({ query, hits: payload.contacts ?? [] });
-        })
+      searchHeldContacts(accountId, query, locale, controller.signal)
+        .then((outcome) => setSearch(outcome))
         .catch((error: unknown) => {
+          // An abort is this component cancelling itself (a newer keystroke
+          // superseded it), not a search failure — reporting it would flash
+          // the error line on every keystroke.
           if (error instanceof DOMException && error.name === "AbortError") return;
-          setSearch({ query, hits: [] });
+          setSearch({ status: "error" });
         });
     }, SEARCH_DEBOUNCE_MS);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [choosing, query, accountId]);
+  }, [choosing, query, accountId, locale]);
+
+  // Coordinator minor: Choose a record opens with the search box already
+  // focused, so a keyboard user does not have to Tab to it separately.
+  useEffect(() => {
+    if (choosing) searchInputRef.current?.focus();
+  }, [choosing]);
 
   function runFile(contactId: string | null, name: string) {
     onHide();
@@ -110,14 +119,23 @@ function HeldEmailRow({
   }
 
   const dot = <span data-dot aria-hidden className="size-2 rounded-full bg-[var(--warn)]" />;
-  const shownHits = search?.query === query ? search.hits : [];
+  // The sender's own address, beside their name (lessons: never the name
+  // alone) — but when there IS no name, the name slot already shows the
+  // address, so a second, identical span would just repeat it.
+  const showAddressSeparately = item.fromName !== null;
 
   return (
-    <article data-held-item={item.id} lang={locale} className={cn("flex flex-col gap-2 px-3 py-3", LIST_ROW)}>
+    <article
+      data-held-item={item.id}
+      lang={locale}
+      tabIndex={-1}
+      ref={registerRef}
+      className={cn("flex flex-col gap-2 px-3 py-3 outline-none", LIST_ROW)}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="flex min-w-0 flex-wrap items-baseline gap-1.5">
           <span className="font-medium text-foreground">{item.fromName ?? item.fromEmail}</span>
-          <span className="truncate text-xs text-muted-foreground">{item.fromEmail}</span>
+          {showAddressSeparately ? <span className="truncate text-xs text-muted-foreground">{item.fromEmail}</span> : null}
         </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {formatDateTimeInZone(item.receivedAt, timezone, locale)}
@@ -159,6 +177,7 @@ function HeldEmailRow({
             {t(m, "conversations.held.searchLabel", locale)}
           </label>
           <Input
+            ref={searchInputRef}
             id={`held-search-${item.id}`}
             className="min-h-11 md:min-h-8"
             placeholder={t(m, "conversations.held.searchLabel", locale)}
@@ -166,21 +185,12 @@ function HeldEmailRow({
             onChange={(e) => setQuery(e.target.value)}
           />
           {query.trim().length >= SEARCH_MIN ? (
-            search?.query === query && shownHits.length === 0 ? (
-              <p className="text-xs text-muted-foreground">{t(m, "conversations.held.searchEmpty", locale)}</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {shownHits.map((hit) => (
-                  <Button
-                    key={hit.id} type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
-                    disabled={pending}
-                    onClick={() => runFile(hit.id, hit.label)}
-                  >
-                    {hit.label}
-                  </Button>
-                ))}
-              </div>
-            )
+            <HeldSearchResults
+              state={search.status !== "idle" ? search : { status: "idle" }}
+              pending={pending}
+              locale={locale}
+              onPick={(hit: SearchHitLite) => runFile(hit.id, hit.label)}
+            />
           ) : null}
         </div>
       ) : null}
@@ -198,6 +208,31 @@ export function HeldEmailList({
 }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const visible = items.filter((i) => !hidden.has(i.id));
+  const rowRefs = useRef(new Map<string, HTMLElement | null>());
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Coordinator minor: after an action removes a row, focus moves to the
+  // NEXT remaining item (or the previous one, if the removed row was last),
+  // falling back to the list's own container when nothing is left — never
+  // left stranded on a now-unmounted button.
+  const pendingFocusRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const target = pendingFocusRef.current;
+    if (!target) return;
+    pendingFocusRef.current = null;
+    if (target === "__container__") { containerRef.current?.focus(); return; }
+    rowRefs.current.get(target)?.focus();
+  }, [hidden]);
+
+  function hide(id: string) {
+    const idx = visible.findIndex((i) => i.id === id);
+    const next = visible[idx + 1] ?? visible[idx - 1];
+    pendingFocusRef.current = next ? next.id : "__container__";
+    setHidden((s) => { const n = new Set(s); n.add(id); return n; });
+  }
+  function show(id: string) {
+    setHidden((s) => { const n = new Set(s); n.delete(id); return n; });
+  }
 
   if (visible.length === 0) {
     return (
@@ -205,12 +240,13 @@ export function HeldEmailList({
         icon={Inbox}
         title={t(m, "conversations.held.title", locale)}
         body={t(m, "conversations.held.empty", locale)}
+        lang={locale}
       />
     );
   }
 
   return (
-    <ListPanel as="div" className="flex flex-col">
+    <ListPanel as="div" className="flex flex-col" ref={containerRef} tabIndex={-1}>
       {visible.map((item) => (
         <HeldEmailRow
           key={item.id}
@@ -218,9 +254,10 @@ export function HeldEmailList({
           item={item}
           locale={locale}
           timezone={timezone}
-          onHide={() => setHidden((s) => { const n = new Set(s); n.add(item.id); return n; })}
-          onShow={() => setHidden((s) => { const n = new Set(s); n.delete(item.id); return n; })}
-          onUndone={() => setHidden((s) => { const n = new Set(s); n.delete(item.id); return n; })}
+          onHide={() => hide(item.id)}
+          onShow={() => show(item.id)}
+          onUndone={() => show(item.id)}
+          registerRef={(el) => rowRefs.current.set(item.id, el)}
         />
       ))}
     </ListPanel>

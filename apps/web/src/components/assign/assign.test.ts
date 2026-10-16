@@ -328,6 +328,11 @@ describe("WhoFilter: All · Mine · Unassigned (spec §9)", () => {
     expect(renderedText(marked[0]!).trim()).toBe(m["assign.filter.mine"]);
   });
 
+  it("current: null marks NONE of them — the page is showing something else entirely (coordinator round 1, Task 12; mutation: default null to 'all' -> FAILS)", () => {
+    const html = render({ current: null });
+    expect(links(html).some((a) => a.includes('aria-current="page"'))).toBe(false);
+  });
+
   it("each href keeps the search and sort, sets who, and never carries before (mutation: carry the cursor -> FAILS)", () => {
     const [all, mine, unassigned] = links(render()).map(hrefOf);
     const qs = (href: string) => new URLSearchParams(href.split("?")[1] ?? "");

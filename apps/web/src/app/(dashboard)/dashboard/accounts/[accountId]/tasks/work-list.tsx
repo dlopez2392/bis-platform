@@ -478,6 +478,7 @@ export function WorkList({
     <Link
       data-held-emails-row
       href={heldEmails.href}
+      lang={heldEmails.locale}
       className={cn("flex items-center gap-2 px-3 py-2.5 text-sm", LIST_ROW, "hover:bg-[var(--surface-3)]")}
     >
       <Inbox className="size-4 shrink-0 text-muted-foreground" aria-hidden />

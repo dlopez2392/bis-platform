@@ -75,21 +75,28 @@ describe("runUndoHeldEmail", () => {
     expect(t.error).toHaveBeenCalledWith("That didn't go through — this page may be out of date. Reload it and try again.");
   });
 
-  it("ok with a stop that could not be reversed (expired) toasts BOTH undone AND the expired explanation (fix round 1; mutation: drop the second toast -> FAILS)", async () => {
+  it("ok with ANY stopNotReversed value toasts undone AND the dedicated undoneStopped line, in English (coordinator round 1; mutation: fall back to held.failed -> FAILS)", async () => {
     const t = toast();
     const onUndone = vi.fn();
     const result: HeldUndoResult = { ok: true, stopNotReversed: m["contact.email.replyExpiredExplain"] };
     await runUndoHeldEmail(async () => result, t, "en", onUndone);
     expect(t.success).toHaveBeenCalledWith("Back in Needs a look.");
-    expect(t.error).toHaveBeenCalledWith("Only the customer can turn these emails back on.");
+    expect(t.error).toHaveBeenCalledWith(m["conversations.held.undoneStopped"]);
     expect(onUndone).toHaveBeenCalledTimes(1);
   });
 
-  it("an unrecognized stopNotReversed string falls back to the generic held.failed toast, in Spanish too (mutation: show the raw English server string -> FAILS)", async () => {
+  it("the SAME undoneStopped line fires for a DIFFERENT stopNotReversed string too — the value's content is never matched, only its presence (mutation: match on the exact string -> FAILS)", async () => {
+    const t = toast();
+    const result: HeldUndoResult = { ok: true, stopNotReversed: m["contact.email.noEmail"] };
+    await runUndoHeldEmail(async () => result, t, "en", vi.fn());
+    expect(t.error).toHaveBeenCalledWith(m["conversations.held.undoneStopped"]);
+  });
+
+  it("the undoneStopped line is Spanish under locale es (mutation: an English string in the es render -> FAILS)", async () => {
     const t = toast();
     const result: HeldUndoResult = { ok: true, stopNotReversed: m["contact.email.noEmail"] };
     await runUndoHeldEmail(async () => result, t, "es", vi.fn());
-    expect(t.error).toHaveBeenCalledWith("No se guardó. Inténtelo de nuevo.");
+    expect(t.error).toHaveBeenCalledWith(m["conversations.held.undoneStopped.es"]);
   });
 
   it("ok with no stopNotReversed never fires the second toast", async () => {

@@ -29,9 +29,23 @@ describe("HeldEmailList (spec 'Needs a look')", () => {
     expect(renderedText(en)).toContain("Not on this customer's record");
     expect(renderedText(en)).toContain("Couldn't confirm who sent it");
     expect(renderedText(en)).toContain("A reply to an email sent to Ana Ruiz");
-    expect(renderedText(en)).toContain("File on Ana Ruiz");
     expect(renderedText(en)).toContain("Choose a record");
     expect(renderedText(en)).toContain("Not a customer");
+  });
+
+  it("the primary button's own TEXT is exactly 'File on <name>' (coordinator minor; mutation: pass only the count, not the string -> FAILS)", () => {
+    const en = html([ITEM], "en");
+    const primary = en.match(/<button[^>]*data-variant="default"[^>]*>([\s\S]*?)<\/button>/)!;
+    expect(renderedText(primary[1]!).trim()).toBe("File on Ana Ruiz");
+  });
+
+  it("a sender with no display name shows the address ONCE, never twice (coordinator minor; mutation: render fromEmail in both slots -> FAILS)", () => {
+    const en = html([{ ...ITEM, fromName: null }], "en");
+    expect(en.match(/luis@example\.com/g)).toHaveLength(1);
+  });
+
+  it("every item carries lang for its own render locale (coordinator round 1, item 4; mutation: drop lang -> FAILS)", () => {
+    expect(html([ITEM], "es")).toMatch(/data-held-item="ie_1" lang="es"/);
   });
 
   it("Spanish (mutation: an English string in the es render → FAILS)", () => {
@@ -42,5 +56,9 @@ describe("HeldEmailList (spec 'Needs a look')", () => {
   it("empty: the one sentence that sells it (rule 5; mutation: render nothing → FAILS)", () => {
     expect(renderedText(html([], "en"))).toContain("Emails we couldn't match to a customer wait here for you to file.");
     expect(renderedText(html([], "es"))).toContain("Aquí esperan los correos que no pudimos vincular con un cliente, para que usted los archive.");
+  });
+
+  it("the empty state carries lang for its own render locale (coordinator round 1, item 4; mutation: drop lang -> FAILS)", () => {
+    expect(html([], "es")).toMatch(/lang="es"/);
   });
 });

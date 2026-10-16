@@ -55,19 +55,6 @@ export async function runHeldAction(
   onRestore();
 }
 
-/** `stopNotReversed` (fix round 1) is one of a small, known set of English
- *  strings `emailContextFor`/`undoInboundStop` already answer in — the SAME
- *  defensive match `inbound-notice-handlers.ts`'s own `localizedError` uses
- *  for a server error string reaching a toast: the one case with a real
- *  bilingual twin (the 7-day window) gets it; anything else reads as the
- *  held queue's own generic "didn't save", same as every other untranslated
- *  server string that lands here. */
-function localizedStopNotReversed(raw: string, locale: Locale): string {
-  return raw === m["contact.email.replyExpiredExplain"]
-    ? t(m, "conversations.reply.stopExpired", locale)
-    : t(m, "conversations.held.failed", locale);
-}
-
 /** The Undo toast's own action (`unfileInboundEmail`/held-again) and the
  *  thrown case for IT, same shape as above but with no row to restore —
  *  the row is already gone from this list either way; `onUndone` only
@@ -75,8 +62,11 @@ function localizedStopNotReversed(raw: string, locale: Locale): string {
  *  Fix round 1: a successful Undo can still carry `stopNotReversed` — the
  *  email came back to Needs a look, but the customer's own emailed stop
  *  (which Undo also tries to reverse) could not be, because it had already
- *  expired or changed. Reported as a SECOND, separate info toast: the main
- *  one still says the Undo itself worked, because it did. */
+ *  expired or changed since. Coordinator round 1 (2026-10-16): its VALUE
+ *  (one of a few English server strings) is never matched or shown —
+ *  `conversations.held.undoneStopped` covers every reason the same way,
+ *  reported as a SECOND, separate info toast, because the main one still
+ *  has to say the Undo itself worked — it did. */
 export async function runUndoHeldEmail(
   run: () => Promise<HeldUndoResult>,
   toast: HeldToast,
@@ -92,7 +82,7 @@ export async function runUndoHeldEmail(
   }
   if (result.ok) {
     toast.success(t(m, "conversations.held.undone", locale));
-    if (result.stopNotReversed) toast.error(localizedStopNotReversed(result.stopNotReversed, locale));
+    if (result.stopNotReversed) toast.error(t(m, "conversations.held.undoneStopped", locale));
     onUndone();
     return;
   }

@@ -121,6 +121,8 @@ describe("ConversationsPage — Task 12: the 'Needs a look' filter and its list"
     const link = els.find((e) => (e.props as Record<string, unknown>)["data-held-filter"] !== undefined);
     expect(link).toBeTruthy();
     expect(link!.props.children).toBe("Needs a look · 2");
+    // Coordinator round 1, item 4: the pill carries lang for its own render locale.
+    expect(link!.props.lang).toBe("en");
 
     const boundary = els.find((e) => e.type === Suspense)!;
     const child = boundary.props.children as ReactElement<Record<string, unknown>>;
@@ -155,6 +157,8 @@ describe("ConversationsPage — Task 12: the 'Needs a look' filter and its list"
     const { renderToStaticMarkup } = await import("react-dom/server");
     const childHtml = renderToStaticMarkup(resolved);
     expect(renderedText(childHtml)).toContain(m["conversations.held.loadFailed"]);
+    // Coordinator round 1, item 4: the loadFailed line carries lang too.
+    expect(childHtml).toMatch(/lang="en"/);
   });
 });
 

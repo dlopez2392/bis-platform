@@ -29,6 +29,12 @@ describe("the To do row (spec 'Needs a look')", () => {
     expect(renderedText(render(3, "es"))).toContain("3 correos por revisar");
   });
 
+  it("carries lang for its own render locale, Spanish included (coordinator round 1, item 4; mutation: drop lang → FAILS)", () => {
+    const render = (locale: "en" | "es") => renderToStaticMarkup(createElement(WorkList, { ...EMPTY_PROPS, heldEmails: { count: 3, href: "x", locale } }));
+    expect(render("en")).toMatch(/data-held-emails-row[^>]*lang="en"/);
+    expect(render("es")).toMatch(/data-held-emails-row[^>]*lang="es"/);
+  });
+
   it("N = 0 or unknown: no row (mutation: render at 0 → FAILS)", () => {
     expect(renderToStaticMarkup(createElement(WorkList, { ...EMPTY_PROPS, heldEmails: { count: 0, href: "x", locale: "en" } }))).not.toContain("data-held-emails-row");
     expect(renderToStaticMarkup(createElement(WorkList, EMPTY_PROPS))).not.toContain("data-held-emails-row");
