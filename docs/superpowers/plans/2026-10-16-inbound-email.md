@@ -33,7 +33,7 @@
 | # | What the spec says / omits | What the code says | This plan does |
 |---|---|---|---|
 | G1 | "Bad svix signature → 401" (Inbound step 1; Failure table) | The route answers **400** (`apps/web/src/app/api/webhooks/resend/route.ts`, "invalid signature", status 400) and `route.test.ts:37-44` pins 400 for every event | Keeps **400** (one route, one answer; Resend retries neither). If the owner wants 401, Task 8 changes the line and the existing test together. **Accepted 2026-10-16.** |
-| G2 | "Undo appends a reversing staff event" | 0055's `append_consent_event` allows `resubscribed / staff_undo` ONLY over `revoked / staff` (`0055_consent_writes.sql:196-197`), so an Undo of an `inbound_email` stop would be **refused** | 0082 replaces the function with that one line widened to `in ('staff', 'inbound_email')`; Task 1 proves only that line changed. **Accepted 2026-10-16.** |
+| G2 | "Undo appends a reversing staff event" | 0055's `append_consent_event` allows `resubscribed / staff_undo` ONLY over `revoked / staff` (`0055_consent_writes.sql:196-197`), so an Undo of an `inbound_email` stop would be **refused** | 0082 replaces the function with that one line widened to `in ('staff', 'inbound_email')`; Task 1 proves only that line changed. **Accepted 2026-10-16.** **Amended after the Task 1 review (023a2e1f):** the Undo line is widened AND windowed to 7 days for `inbound_email` (owner ruling 2026-10-16), plus an `inbound_email`-only-while-allowed branch, so the database itself refuses an emailed stop over an existing stop. |
 | G3 | (silent) | An Undo that writes `resubscribed` would ALSO lift an older customer stop (an unsubscribe link from last week) under it | The emailed stop is written with guard `if_allowed`: an address that is already stopped gets no new row and no notice, so its Undo can only ever return the address to where it was. **Accepted 2026-10-16.** |
 | G4 | "Clear stop" vs "Unclear" over the texts' matcher, split undefined | `classifyInbound` (`lib/consent/inbound.ts:57-69`): a keyword is a stop, a phrase is a HOLD that asks staff | Clear = a stop KEYWORD (`matchKeyword`, `keywords.ts:46`) other than CANCEL/CANCELAR (`CANCEL_WORDS`, `:31`: a reply "Cancel" to a reminder means the appointment); Unclear = a phrase (`matchPhrase`) or CANCEL/CANCELAR. Tried on the whole new text, then on its first non-blank line (a phone's "Sent from my iPhone" signature would otherwise hide "STOP"). **Accepted 2026-10-16.** |
 | G5 | "read ONLY the topmost `Authentication-Results`" | The received-email API's `headers` is a `Record` (above) | The raw message's header block (A1); none → `unverified`. **Accepted 2026-10-16.** |
@@ -1607,6 +1607,8 @@ export function newText(text: string): string {
 
 ## Task 5: The email stop classifier; the stop's Undo; the Email row's "how" (bis-comms)
 
+> **Execution note (2026-10-16, owner ruling after the Task 1 review):** the staff Undo of an emailed stop works only within **7 days** of the stop (`occurred_at`); after that 0082 answers `refused`. The Email row must not offer Undo for an `inbound_email` stop older than 7 days and shows the Task 2 key for "only the customer can turn emails back on" instead (key names in `.superpowers/sdd/task-2-report.md`, "Addition 1"). `undoInboundStop` treats `refused` past the window as that state, not an error.
+
 **Review:** opus. **After:** Tasks 2, 3.
 
 **Files**
@@ -2853,6 +2855,7 @@ export async function checkInboundDnsAction(accountId: string, raw: string): Pro
 ---
 
 ## Task 11: The thread: member name, attachments, the stop notice with Undo, the chip (bis-comms actions, then bis-frontend)
+> **Execution note (2026-10-16, owner ruling after the Task 1 review):** the thread's stop notice shows Undo only while the stop is under **7 days** old (`occurred_at`); after that it shows the Task 2 key for "only the customer can turn these emails back on" (key names in `.superpowers/sdd/task-2-report.md`, "Addition 1") and no button.
 
 **Review:** opus. **After:** Tasks 2, 3, 5.
 
