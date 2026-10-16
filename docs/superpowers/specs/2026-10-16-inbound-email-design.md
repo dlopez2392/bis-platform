@@ -103,7 +103,7 @@ A new `email.received` branch in the Resend webhook:
    - the sender's `email_key` matches the thread's contact or a member of any household or
      business group that contact belongs to (`client_group_members`);
    - the message passes authentication, read from the `amazonses.com`
-     `Authentication-Results` header only (Amended 2026-10-16, owner ruling G5: read from the raw message's header block, because the API's headers are a map that cannot keep two headers or their order; no raw message means unverified): `dmarc=pass`, or (`dmarc=none`, the From
+     `Authentication-Results` header only (Amended 2026-10-16, owner ruling G5: read from the raw message's header block, because the API's headers are a map that cannot keep two headers or their order; no raw message means unverified): `dmarc=pass` with its `header.from` equal to the From domain (amended 2026-10-16 after the Task 4 review: an unbound DMARC pass let a display name carry a customer's address), or (`dmarc=none`, the From
      domain publishes no policy) `spf=pass` and `dkim=pass` with `header.i`/`header.d`
      on the From domain; and both SES verdicts are `PASS`.
    Otherwise held, with a reason: `not_on_record` (authenticated, but the sender is not
