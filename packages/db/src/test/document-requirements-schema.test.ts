@@ -59,7 +59,7 @@ const setList = (c: Client, acct: string, list: string) =>
 
 type FileOpts = {
   contact_id?: string | null; client_group_id?: string | null; category: string; expires_on?: string | null;
-  verdict?: "clean" | "pending" | "infected" | "uploading"; trashed?: boolean; owners_only?: boolean;
+  verdict?: "clean" | "pending" | "infected" | "unscannable" | "uploading"; trashed?: boolean; owners_only?: boolean;
 };
 /** A document with ONE version, taken as far as `verdict` says, through 0077/0079's own functions. */
 async function file(c: Client, acct: string, o: FileOpts): Promise<string> {
@@ -97,7 +97,7 @@ describe("0081: the account's required list (spec 5.1; D8)", () => {
       expect(await states(c, s.acct, s.ana)).toEqual([]);
     }));
 
-  it("accepts the eight requirable keys in any order; refuses Other, an unknown key, a duplicate, a NULL element and a 2-D array (mutations: drop any clause of app.required_document_categories_ok, or add 'other' -> FAILS)", () =>
+  it("accepts the eight requirable keys in any order; refuses Other, an unknown key, a duplicate, a NULL element and a 2-D array (mutations: add 'other' to app.required_document_categories_ok, drop its count(distinct) clause, or drop its array_ndims clause -> FAILS; its NULL-element clause is a belt behind <@, which already refuses a NULL element, so dropping it alone cannot fail here)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await setList(c, s.acct, "{insurance,id,contract,estimate,invoice,photo,permit,warranty}");
@@ -147,13 +147,14 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
   // I1: the skips table ALONE. A join to contacts would let contacts' own RLS do the fencing, and the case
   // stayed green in review with technician_scope dropped AND member_read set to true.
   it.each([
-    ["owner", ["ana", "bo"]], ["staff", ["ana", "bo"]], ["tech", ["ana"]], ["ownerB", []],
-  ] as const)("%s reads the skips of %j (mutations: drop the technician_scope policy -> tech reads Bo's -> FAILS; member_read using (true) -> ownerB reads both -> FAILS)", (who, want) =>
+    ["owner", ["ana", "bo"]], ["staff", ["ana", "bo"]], ["tech", ["ana"]], ["ownerB", []], ["agency", ["ana", "bo"]],
+  ] as const)("%s reads the skips of %j (mutations: drop the technician_scope policy -> tech reads Bo's -> FAILS; member_read using (true) -> ownerB reads both -> FAILS; drop app.is_agency() from member_read, or drop the agency branch of technician_scope -> the agency reads none -> FAILS)", (who, want) =>
     withRollback(async (c) => {
       const s = await seed(c);
       await skip(c, s.acct, s.ana, "permit");
       await skip(c, s.acct, s.bo, "permit");
-      await actAs(c, { org_id: who === "ownerB" ? ORG_B : ORG, sub: SUB[who] });
+      // M10's agency path, as the fences case acts it: no org in the token.
+      await actAs(c, who === "agency" ? { app_role: "agency_admin", sub: AGENCY_SUB } : { org_id: who === "ownerB" ? ORG_B : ORG, sub: SUB[who] });
       const { rows } = await c.query<{ contact_id: string }>("select k.contact_id from document_requirement_skips k");
       const ids: Record<string, string> = { ana: s.ana, bo: s.bo };
       expect(rows.map((r) => r.contact_id).sort()).toEqual(want.map((k) => ids[k]!).sort());
@@ -192,13 +193,14 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
 });
 
 describe("0081: document_requirements, what counts (spec 5.3; D4, D7, D10; deviations 3-5)", () => {
-  it("every state, in the account's own order: a group's file meets its member's requirement; a trashed, an infected and an uploading file meet nothing; expiry on TODAY still counts (mutations: '>' for '>=', drop the group branch, drop deleted_at, drop scan_status = 'clean', drop the skip check -> FAILS)", () =>
+  it("every state: a group's file meets its member's requirement; a trashed, an infected, an unscannable and an uploading file meet nothing; expiry on TODAY still counts (mutations: '>' for '>=', drop the group branch, drop deleted_at, drop scan_status = 'clean', accept 'unscannable' as clean, drop the skip check -> FAILS; the rows are compared in the stored order, but dropping order by req.ord does not fail it: the plan keeps req's order without it)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await setList(c, s.acct, "{id,contract,photo,permit,insurance,warranty}");
       await file(c, s.acct, { contact_id: s.ana, category: "id", expires_on: YESTERDAY });
       await file(c, s.acct, { contact_id: s.ana, category: "contract", trashed: true });
       await file(c, s.acct, { contact_id: s.ana, category: "contract", verdict: "infected" });
+      await file(c, s.acct, { contact_id: s.ana, category: "contract", verdict: "unscannable" });
       await file(c, s.acct, { contact_id: s.ana, category: "contract", verdict: "uploading" });
       await file(c, s.acct, { contact_id: s.ana, category: "photo" });
       await skip(c, s.acct, s.ana, "photo");
