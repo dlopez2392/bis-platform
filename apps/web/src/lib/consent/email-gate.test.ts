@@ -490,6 +490,12 @@ describe("sendEmail: the Reply-To when Replies is on (S-06 part 1, spec 'Outboun
     await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV });
     expect(sent().replyTo).toBe(`r-${TOKEN}@reply.bis-rgv.com`);
     expect(db.ensureReplyToken).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT, CONTACT, "email-gate");
+    // Proven on a path where the token genuinely WAS made and used (unlike
+    // the rejected-token case below, where no real token value ever exists
+    // to leak) — this is the one assertion in the file capable of catching a
+    // stray debug log of the resolved token (mutation: log it in
+    // customerReplyTo right after ensureReplyToken resolves → FAILS).
+    expect(vi.mocked(console.error).mock.calls.flat().map(String).join(" ")).not.toContain(TOKEN);
   });
 
   it("mode own_domain: the account's domain (mutation: always the BIS domain → FAILS)", async () => {
@@ -508,19 +514,32 @@ describe("sendEmail: the Reply-To when Replies is on (S-06 part 1, spec 'Outboun
     expect(db.ensureReplyToken).not.toHaveBeenCalled();
   });
 
-  it("a failed mode read or token write sends with the caller's replyTo and logs, never blocks (G10; mutation: return blocked → FAILS)", async () => {
+  it("a failed token write sends with the caller's replyTo and logs, never blocks (G10; mutation: return blocked → FAILS)", async () => {
     db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
     db.ensureReplyToken.mockRejectedValue(new Error("down"));
     expect(await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV })).toEqual({ kind: "sent", providerMessageId: "re_1" });
     expect(sent().replyTo).toBe("owner@rio.com");
     expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/reply address/);
-    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).not.toContain(TOKEN);
+  });
+
+  it("a failed mode read ALSO sends with the caller's replyTo and logs, never blocks, and makes no token (G10; mutation: move the mode read above the try → FAILS)", async () => {
+    db.getInboundSettings.mockRejectedValue(new Error("down"));
+    expect(await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV })).toEqual({ kind: "sent", providerMessageId: "re_1" });
+    expect(sent().replyTo).toBe("owner@rio.com");
+    expect(db.ensureReplyToken).not.toHaveBeenCalled();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/reply address/);
   });
 
   it("a blocked send never makes a token (mutation: resolve the Reply-To first → ensureReplyToken called for a stopped address, FAILS)", async () => {
     db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
     db.readConsentState.mockResolvedValue({ state: "stopped", since: "x", method: "staff", eventId: "e" });
     expect((await sendEmail(base(), { db: CLIENT, env: ENV })).kind).toBe("blocked");
+    expect(db.ensureReplyToken).not.toHaveBeenCalled();
+  });
+
+  it("a deferred send (outside automated hours) makes no token either (mutation: resolve the Reply-To before the hours check → ensureReplyToken called for a deferred send, FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
+    expect((await sendEmail(base({ now: NIGHT }), { db: CLIENT, env: ENV })).kind).toBe("deferred");
     expect(db.ensureReplyToken).not.toHaveBeenCalled();
   });
 });

@@ -335,9 +335,6 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     }
   }
 
-  const replyTo = await customerReplyTo(req, deps);
-  const out: EmailRequest = replyTo === req.replyTo ? req : { ...req, replyTo };
-
   let provider: EmailProvider;
   try {
     provider = getEmailProvider(env);
@@ -345,14 +342,21 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     return { kind: "failed", stage: "provider_unavailable", error: e instanceof Error ? e.message : String(e) };
   }
 
-  let input: SendEmailInput;
+  // The reply-token/conversation write (customerReplyTo) comes AFTER both the
+  // provider build and the unsubscribe-link check: a send blocked
+  // `unsubscribe_unavailable`, or failed `provider_unavailable`, makes no
+  // conversation or token for a message that was never going to go out.
+  let links: Links | null = null;
   if (spec.footer === "unsubscribe") {
-    const links = unsubscribeLinks(req, address, now, env);
-    if (links === "unavailable") return { kind: "blocked", reason: "unsubscribe_unavailable" };
-    input = withFooter(out, links, postal);
-  } else {
-    input = withoutFooter(out);
+    const l = unsubscribeLinks(req, address, now, env);
+    if (l === "unavailable") return { kind: "blocked", reason: "unsubscribe_unavailable" };
+    links = l;
   }
+
+  const replyTo = await customerReplyTo(req, deps);
+  const out: EmailRequest = replyTo === req.replyTo ? req : { ...req, replyTo };
+
+  const input: SendEmailInput = spec.footer === "unsubscribe" ? withFooter(out, links, postal) : withoutFooter(out);
 
   try {
     const { providerMessageId } = await provider.send(input);
