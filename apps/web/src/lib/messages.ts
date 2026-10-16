@@ -4678,12 +4678,20 @@ export const m = {
   "conversations.reply.maybeStop.es": "Quizás quiere dejar de recibirlos",
   "conversations.reply.stopDone": "Emails stopped.",
   "conversations.reply.stopDone.es": "Correos detenidos.",
+  // Addition 1 (owner ruling, danlo 2026-10-16): staff can Undo this stop only
+  // within 7 days; past that, only the customer can turn emails back on.
+  "conversations.reply.stopExpired": "Only the customer can turn these emails back on.",
+  "conversations.reply.stopExpired.es": "Solo el cliente puede volver a activar estos correos.",
   "work.heldEmails": "{count} emails need a look",
   "work.heldEmails.es": "{count} correos por revisar",
   "work.heldEmailsOne": "1 email needs a look",
   "work.heldEmailsOne.es": "1 correo por revisar",
   "contact.email.how.reply": "they asked in a reply",
   "contact.email.how.reply.es": "lo pidió en una respuesta",
+  // Addition 1 (owner ruling, danlo 2026-10-16): the Email row's own explain
+  // line once the automatic reply-stop is past the 7-day Undo window.
+  "contact.email.replyExpiredExplain": "Stopped by their reply more than 7 days ago. Only the customer can turn emails back on.",
+  "contact.email.replyExpiredExplain.es": "Se detuvo por su respuesta hace más de 7 días. Solo el cliente puede volver a activar los correos.",
   "settings.replies.label": "Replies",
   "settings.replies.label.es": "Respuestas",
   "settings.replies.off": "Off",
