@@ -46,6 +46,9 @@ describe("messaging", () => {
       expect(first.created).toBe(true);
       expect(second.created).toBe(false);
 
+      // S-06 part 1: listConversations excludes a thread with no message at all (below), so this one
+      // needs a message to prove the SAME conversation row, not a second one.
+      await createMessage(db, accountId, { conversationId: first.id, channel: "email", direction: "outbound", body: "hi" }, "user_test");
       const convos = await listConversations(db, accountId);
       expect(convos).toHaveLength(1);
     }));
@@ -762,6 +765,41 @@ describe("messaging", () => {
       expect([...seen].sort()).toEqual([...ids].sort()); // no skips
     }));
 
+  // S-06 part 1: once Replies is on, every automatic email creates the customer's conversation (to
+  // hold the reply token) without writing any message — ensureConversation alone, as inbound-email.ts's
+  // ensureReplyToken already does. Such a thread must never appear in the inbox list: it has nothing
+  // to show, and it is not something anyone did. `last_message_at` is null until a real message lands,
+  // so filtering on it is the same test the list's own ordering already treats nulls as "last".
+  it("a conversation with no messages is never listed; the same conversation IS listed once a message lands (mutation: drop the last_message_at-not-null filter → the empty conversation is listed, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: emptyContactId } = await createContact(db, accountId, { firstName: "Empty" }, "user_test");
+      const empty = await ensureConversation(db, accountId, emptyContactId, "user_test");
+
+      const { id: realContactId } = await createContact(db, accountId, { firstName: "Real" }, "user_test");
+      const real = await ensureConversation(db, accountId, realContactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: real.id, channel: "email", direction: "outbound", body: "hello",
+      }, "user_test");
+
+      const convos = await listConversations(db, accountId);
+      const ids = convos.map((c) => c.id);
+      expect(ids).toContain(real.id);
+      expect(ids).not.toContain(empty.id);
+
+      // Paging must still land on the one real conversation and terminate — an empty thread must
+      // never surface on a later page either.
+      const seen: string[] = [];
+      let before: { v: string | null; id: string } | undefined;
+      for (let page = 0; page < 5; page++) {
+        const rows = await listConversations(db, accountId, { limit: 1, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { v: last.lastMessageAt, id: last.id };
+      }
+      expect(seen).toEqual([real.id]);
+    }));
+
   // MEASURED, not guessed: ~4s alone on an idle machine (one bulk insert of
   // 1005 rows, one network round trip). The heaviest test in this file
   // besides listFailedOutboundSms's own; covered by the package's
@@ -817,14 +855,13 @@ describe("messaging", () => {
       expect(quietSummary!.lastMessagePreview).toBe("quiet's only message");
     }), 20_000);
 
-  // Review fix (messaging.ts:602). A conversation that has never been
-  // messaged (`ensureConversation` alone, no `createMessage` — the 'note'
-  // tab, say, or a race between the two) has a NULL last_message_at. SQL's
-  // `<` and `=` are never true against NULL, so once a cursor's `v` is a
-  // real timestamp, the two normal OR-branches can never match a null row
-  // at all — the explicit `,last_message_at.is.null` branch is what keeps
-  // it reachable on a LATER page rather than silently dropping it forever.
-  it("pages a conversation with no messages yet (null last_message_at) onto a later page, never dropping it (mutation: remove the `is.null` OR branch → FAILS)", () =>
+  // S-06 part 1 (superseding the prior fix at this spot, which paged a never-messaged conversation
+  // onto a LATER page rather than losing it; now it is excluded on EVERY page by design — see the
+  // `.not("last_message_at", "is", null)` filter's comment in listConversations). A conversation that
+  // has never been messaged (`ensureConversation` alone, no `createMessage` — the 'note' tab, say, a
+  // race between the two, or a reply token made before any mail arrives) has a NULL last_message_at
+  // and nothing to show; it must never surface, on page 1 or any page after it.
+  it("a conversation with no messages is excluded from every page, not merely pushed to a later one (mutation: drop the last_message_at-not-null filter → it reappears on page 2, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id: withMsgContact } = await createContact(db, accountId, { firstName: "Messaged" }, "user_test");
       const withMsg = await ensureConversation(db, accountId, withMsgContact, "user_test");
@@ -835,19 +872,14 @@ describe("messaging", () => {
       const { id: noMsgContact } = await createContact(db, accountId, { firstName: "Never messaged" }, "user_test");
       const noMsg = await ensureConversation(db, accountId, noMsgContact, "user_test");
 
-      // Page 1, limit 1: the messaged conversation sorts first (non-null
-      // last_message_at outranks null in this ordering), so it alone fills
-      // the page and hands back a cursor whose `v` is a REAL timestamp —
-      // exactly the branch that must still reach the null row next.
       const page1 = await listConversations(db, accountId, { limit: 1 });
       expect(page1).toHaveLength(1);
       expect(page1[0]!.id).toBe(withMsg.id);
 
       const page2 = await listConversations(
         db, accountId, { limit: 1, before: { v: page1[0]!.lastMessageAt, id: page1[0]!.id } });
-      expect(page2).toHaveLength(1);
-      expect(page2[0]!.id).toBe(noMsg.id);
-      expect(page2[0]!.lastMessageAt).toBeNull();
+      expect(page2).toHaveLength(0);
+      expect(page2.map((r) => r.id)).not.toContain(noMsg.id);
     }));
 
   // D-019's deep-link escape hatch: a link naming a conversation id has no

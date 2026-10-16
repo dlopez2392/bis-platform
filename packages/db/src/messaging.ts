@@ -620,6 +620,14 @@ export async function listConversations(
   let q = db.from("conversations")
     .select(`id, contact_id, last_message_at, unread_count, ${embed}`)
     .eq("account_id", accountId)
+    // S-06 part 1: once Replies is on, ensureReplyToken alone creates a customer's conversation (to
+    // hold the reply token) before any message exists — nothing to show, and not something anyone
+    // did, so the inbox list excludes a conversation that has never carried a message. Every row the
+    // list can still show already has a non-null last_message_at (set on the conversation's first
+    // createMessage touch), so this also makes the cursor's own `v === null` branch below permanently
+    // unreachable in practice; left in place as a harmless no-op rather than removed, since a row
+    // this filter excludes can never reach it.
+    .not("last_message_at", "is", null)
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(limit);
