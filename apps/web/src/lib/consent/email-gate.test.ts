@@ -7,6 +7,7 @@ const SERVICE_CLIENT = { service: true } as never;
 const db = vi.hoisted(() => ({
   readConsentState: vi.fn(), readAccountTimezone: vi.fn(), getMailingAddress: vi.fn(),
   readEmailSuppression: vi.fn(), serviceDb: vi.fn(), isAccountOutboundSuppressed: vi.fn(),
+  getInboundSettings: vi.fn(), ensureReplyToken: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const factory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
@@ -45,6 +46,8 @@ beforeEach(() => {
   db.readEmailSuppression.mockResolvedValue(null);
   db.serviceDb.mockReturnValue(SERVICE_CLIENT);
   db.isAccountOutboundSuppressed.mockResolvedValue(false);
+  db.getInboundSettings.mockResolvedValue({ mode: "off", domain: null });
+  db.ensureReplyToken.mockResolvedValue({ conversationId: "conv_1", token: "0123456789abcdef01234567" });
   factory.getEmailProvider.mockReturnValue(provider());
   send.mockResolvedValue({ providerMessageId: "re_1" });
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -470,5 +473,54 @@ describe("the two operator paths that take a provider are handed operatorMailer 
   it("the billing link sends as operator.billing_link (mutation: getEmailProvider() back → FAILS)", () => {
     expect(read("app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts"))
       .toMatch(/email: operatorMailer\("operator\.billing_link", accountId\)/);
+  });
+});
+
+describe("sendEmail: the Reply-To when Replies is on (S-06 part 1, spec 'Outbound')", () => {
+  const TOKEN = "0123456789abcdef01234567";
+
+  it("mode off: the caller's replyTo goes as it was, and no token is made (mutation: make the token always → ensureReplyToken called, FAILS)", async () => {
+    await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV });
+    expect(sent().replyTo).toBe("owner@rio.com");
+    expect(db.ensureReplyToken).not.toHaveBeenCalled();
+  });
+
+  it("mode bis: a customer kind carries r-<token>@reply.bis-rgv.com, made on the SERVICE client for THIS contact (mutation: pass req's db → CLIENT, FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
+    await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV });
+    expect(sent().replyTo).toBe(`r-${TOKEN}@reply.bis-rgv.com`);
+    expect(db.ensureReplyToken).toHaveBeenCalledWith(SERVICE_CLIENT, ACCOUNT, CONTACT, "email-gate");
+  });
+
+  it("mode own_domain: the account's domain (mutation: always the BIS domain → FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "own_domain", domain: "reply.rio.com" });
+    await sendEmail(base({ kind: "staff.composer_email" }), { db: CLIENT, env: ENV });
+    expect(sent().replyTo).toBe(`r-${TOKEN}@reply.rio.com`);
+  });
+
+  it("operator mail and a send with no contact are untouched (mutation: drop the class check → the lead alert gets a token, FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
+    await sendEmail(base({ kind: "operator.lead_alert", replyTo: "lead@x.com" }), { env: ENV });
+    expect(sent().replyTo).toBe("lead@x.com");
+    send.mockClear();
+    await sendEmail(base({ contactId: null, replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV });
+    expect(sent().replyTo).toBe("owner@rio.com");
+    expect(db.ensureReplyToken).not.toHaveBeenCalled();
+  });
+
+  it("a failed mode read or token write sends with the caller's replyTo and logs, never blocks (G10; mutation: return blocked → FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
+    db.ensureReplyToken.mockRejectedValue(new Error("down"));
+    expect(await sendEmail(base({ replyTo: "owner@rio.com" }), { db: CLIENT, env: ENV })).toEqual({ kind: "sent", providerMessageId: "re_1" });
+    expect(sent().replyTo).toBe("owner@rio.com");
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toMatch(/reply address/);
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).not.toContain(TOKEN);
+  });
+
+  it("a blocked send never makes a token (mutation: resolve the Reply-To first → ensureReplyToken called for a stopped address, FAILS)", async () => {
+    db.getInboundSettings.mockResolvedValue({ mode: "bis", domain: null });
+    db.readConsentState.mockResolvedValue({ state: "stopped", since: "x", method: "staff", eventId: "e" });
+    expect((await sendEmail(base(), { db: CLIENT, env: ENV })).kind).toBe("blocked");
+    expect(db.ensureReplyToken).not.toHaveBeenCalled();
   });
 });
