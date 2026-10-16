@@ -101,12 +101,13 @@ The token: 32 random bytes, base64url, present only in the URL. The database kee
 ### 4.4 The upload path
 
 - The same three steps as staff uploads (part 1 V6): two public routes, `POST /api/d/[token]/start` and `/finish`. Each re-proves the token (hash lookup, not expired, not revoked, not completed), then every query carries an explicit `account_id` and record filter (study §3.4, "every public link follows one rule").
-- Limits: 25 MB per file; 20 starts per request per UTC day (counted from `document_versions` joined to the request); the account's 5 GB quota (over quota: the customer is asked to call, and staff get a work-queue item).
+- Limits: 25 MB per file; 20 starts per request per UTC day (*amended 2026-10-16, 2b review:* counted on the request row itself, `start_day` + `starts_today`, bumped under the start function's lock before the quota reservation, so a refused finish that deletes its rows, or an over-quota attempt, still counts; counting surviving `document_versions` let a link holder reset the limit); the account's 5 GB quota (over quota: the customer is asked to call, and staff get a work-queue item).
 - The file is filed under its item's category, `owners_only = false`, source `customer`, linked to the request item, and scanned (2a).
 
 ### 4.5 When files arrive
 
 - A clean file answers its item. When every item is answered, `completed_at` is set and the link stops working.
+  - *Amended 2026-10-16 (owner rulings on the 2b final review):* (a) a clean version that STAFF upload onto a customer's requested document also answers its item (the business already has it; the link closes instead of asking again). (b) A customer file whose clean verdict arrives after the request was revoked still opens the "sent documents · Review" To-do: the file is real and filed on the record, so both the scan hook and the lost-To-do reconcile include revoked requests.
 - Staff news: a timeline row per file ("Ana subió *Seguro*", customer mark). Staff work: ONE work-queue item per request, opened on its first clean file ("Ana mandó documentos · Revisar"), closed by staff.
 
 *Amended 2026-10-15 (2b plan review):* (1) A file the customer had ALREADY started (its upload reserved and its link signed) still finishes after the request completes or expires; only a revoked request refuses it. The start refuses new files once a request is completed or expired. (2) The work-queue item cannot be lost: if opening it fails after a clean verdict, the scan pass opens it on a later run (a bounded check for open or just-completed requests with a clean customer file and no item). (Plan deviations 8 and 13; orchestrator rulings I5, I6.)
