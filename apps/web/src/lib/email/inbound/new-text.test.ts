@@ -22,6 +22,21 @@ describe("newText: the reply without its quoted history (spec Inbound step 5)", 
     expect(newText("I got a quote from: Bob's.\nCan you beat it?")).toBe("I got a quote from: Bob's.\nCan you beat it?");
     expect(newText("> only a quote")).toBe("");
   });
+
+  // M5: the Outlook From:/De: block marker must look like an address line
+  // (an '@' or '<'), or ordinary prose that happens to start "De:"/"Para:"
+  // gets cut as if it were a quoted thread.
+  it("does not cut a 'De:'/'Para:' line with no address on it (mutation: drop the address-like check → FAILS)", () => {
+    expect(newText("De: mi jefe me dijo\nPara: mañana\nok")).toBe("De: mi jefe me dijo\nPara: mañana\nok");
+  });
+});
+
+describe("htmlToText (G11)", () => {
+  // M6: blockquote and table close tags must also end a block, or two
+  // adjacent block elements run together with no line break at all.
+  it("treats </blockquote> and </table> as block ends too (mutation: drop them from the block-end list → 'oldnew' runs together, FAILS)", () => {
+    expect(htmlToText("<blockquote>old</blockquote>new")).toBe("old\nnew");
+  });
 });
 
 describe("htmlToText (G11)", () => {

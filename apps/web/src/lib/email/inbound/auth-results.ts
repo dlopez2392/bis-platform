@@ -23,41 +23,87 @@ export function parseHeaderBlock(raw: string): HeaderList {
 }
 
 export type SesVerdict = {
-  found: boolean; spf: string | null; dmarc: string | null;
+  found: boolean; spf: string | null; dmarc: string | null; dmarcDomain: string | null;
   dkim: { result: string; domain: string | null }[]; spam: string | null; virus: string | null;
 };
 
 const first = (h: HeaderList, name: string) => h.find(([n]) => n === name)?.[1] ?? null;
 
+/**
+ * CRITICAL 2 (review, round 1): split the header's `;`-separated segments
+ * WITHOUT breaking inside a `"…"` quoted string or a `(…)` comment — RFC
+ * 8601's own grammar for this header. A sender controls `envelope-from=` and
+ * `helo=`, and an unquoted-split would let a quoted value's embedded `;`
+ * manufacture a fake extra segment (`envelope-from="a;dmarc=pass"@evil.com`)
+ * ahead of the real `dmarc=` result.
+ */
+function splitAuthResultsSegments(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inQuotes = false;
+  let cur = "";
+  for (const c of s) {
+    if (c === '"') { inQuotes = !inQuotes; cur += c; continue; }
+    if (!inQuotes && c === "(") { depth++; cur += c; continue; }
+    if (!inQuotes && c === ")") { depth = Math.max(0, depth - 1); cur += c; continue; }
+    if (!inQuotes && depth === 0 && c === ";") { parts.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
+}
+
 export function readSesVerdict(headers: HeaderList): SesVerdict {
   const spam = first(headers, "x-ses-spam-verdict")?.trim() ?? null;
   const virus = first(headers, "x-ses-virus-verdict")?.trim() ?? null;
   const ar = headers.find(([n, v]) => n === "authentication-results" && v.split(";")[0]!.trim().toLowerCase() === "amazonses.com")?.[1];
-  if (!ar) return { found: false, spf: null, dmarc: null, dkim: [], spam, virus };
+  if (!ar) return { found: false, spf: null, dmarc: null, dmarcDomain: null, dkim: [], spam, virus };
   let spf: string | null = null;
+  let spfSeen = 0;
   let dmarc: string | null = null;
+  let dmarcDomain: string | null = null;
+  let dmarcSeen = 0;
   const dkim: { result: string; domain: string | null }[] = [];
-  for (const part of ar.split(";").slice(1)) {
+  for (const part of splitAuthResultsSegments(ar).slice(1)) {
     const m = /^\s*(spf|dkim|dmarc)=([a-z]+)/i.exec(part);
     if (!m) continue;
     const method = m[1]!.toLowerCase();
     const result = m[2]!.toLowerCase();
-    if (method === "spf" && spf === null) spf = result;
-    else if (method === "dmarc" && dmarc === null) dmarc = result;
-    else if (method === "dkim") {
+    if (method === "spf") {
+      spfSeen++;
+      if (spf === null) spf = result;
+    } else if (method === "dmarc") {
+      dmarcSeen++;
+      if (dmarc === null) dmarc = result;
+      if (dmarcDomain === null) {
+        const from = /header\.from=([^\s;]+)/i.exec(part)?.[1];
+        if (from) dmarcDomain = from.toLowerCase();
+      }
+    } else if (method === "dkim") {
       const i = /header\.i=@?([^\s;]+)/i.exec(part)?.[1];
       const d = /header\.d=([^\s;]+)/i.exec(part)?.[1];
       const rawVal = (i ?? d ?? "").toLowerCase();
       dkim.push({ result, domain: rawVal ? (rawVal.includes("@") ? rawVal.slice(rawVal.lastIndexOf("@") + 1) : rawVal) : null });
     }
   }
-  return { found: true, spf, dmarc, dkim, spam, virus };
+  // CRITICAL 2: a repeated spf= or dmarc= inside ONE Authentication-Results
+  // header is itself the attack (a sender-stamped decoy ahead of the real
+  // result) — fail closed by nulling the field rather than trusting either
+  // occurrence. Multiple dkim= entries are normal (multiple signers) and
+  // stay an array.
+  if (spfSeen > 1) spf = null;
+  if (dmarcSeen > 1) { dmarc = null; dmarcDomain = null; }
+  return { found: true, spf, dmarc, dmarcDomain, dkim, spam, virus };
 }
 
 export function senderAuthenticated(v: SesVerdict, fromDomain: string | null): boolean {
   if (!v.found || !fromDomain) return false;
   if (v.spam !== "PASS" || v.virus !== "PASS") return false;
-  if (v.dmarc === "pass") return true;
+  // CRITICAL 1 (review, round 1): dmarc=pass alone names no domain — bind
+  // it to the From domain exactly, the same exact match G15 requires of
+  // DKIM's header.i/header.d, or a dmarc=pass stamped for a different
+  // domain authenticates an unrelated From.
+  if (v.dmarc === "pass" && v.dmarcDomain === fromDomain.toLowerCase()) return true;
   if (v.dmarc !== "none") return false;
   return v.spf === "pass" && v.dkim.some((k) => k.result === "pass" && k.domain === fromDomain.toLowerCase());
 }

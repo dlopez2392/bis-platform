@@ -5,7 +5,7 @@ export function htmlToText(html: string): string {
   return html
     .replace(/<(style|script)[\s\S]*?<\/\1>/gi, "")
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<\/(p|div|li|tr|h[1-6]|blockquote|table)>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&(amp|lt|gt|quot|#39|nbsp);/g, (e) => ENTITIES[e] ?? e)
     .split("\n").map((l) => l.trim()).filter((l, i, a) => l !== "" || (i > 0 && a[i - 1] !== "")).join("\n")
@@ -29,7 +29,10 @@ export function newText(text: string): string {
   const kept: string[] = [];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const outlookFrom = /^(From|De):\s.+$/.test(line) && /^(Sent|Enviado|Date|Fecha|To|Para|Subject|Asunto):/i.test(lines[i + 1] ?? "");
+    // M5: the marker line itself must look like an address line (carries an
+    // '@' or a '<'), or ordinary prose that happens to start "De:"/"Para:"
+    // (e.g. "De: mi jefe me dijo...") gets mistaken for a quoted thread.
+    const outlookFrom = /^(From|De):\s.+$/.test(line) && /[@<]/.test(line) && /^(Sent|Enviado|Date|Fecha|To|Para|Subject|Asunto):/i.test(lines[i + 1] ?? "");
     if (CUT.some((r) => r.test(line)) || outlookFrom) break;
     if (/^\s*>/.test(line)) continue;
     kept.push(line);

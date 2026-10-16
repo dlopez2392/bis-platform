@@ -35,4 +35,24 @@ describe("the reply address", () => {
     expect(displayName("ana@example.com")).toBeNull();
     expect(domainOf("ana@Mail.Example.com")).toBe("mail.example.com");
   });
+
+  // CRITICAL 1 (review, round 1): a quoted display name can itself contain an
+  // angle-addr, and an unquoted From can carry two. Either way there is more
+  // than one address-shaped token in the value, so bareAddress must refuse
+  // to guess and fail closed, rather than silently picking the first one
+  // (which let a forged From win the sender's identity).
+  it("refuses a From with more than one angle-addr, quoted or not (mutation: take the first angle-addr → the evil address wins, FAILS)", () => {
+    expect(bareAddress(`"<ana@customer.com>" <x@evil.com>`)).toBeNull();
+    expect(bareAddress(`Ana <ana@customer.com> <x@evil.com>`)).toBeNull();
+  });
+
+  it("refuses a From whose only angle-addr sits inside a quoted string (mutation: use the quoted address anyway → FAILS)", () => {
+    expect(bareAddress(`"<ana@evil.com>"`)).toBeNull();
+  });
+
+  // M4: a quoted fake address collapses displayName's result to a bare
+  // quote character with no letter in it — not a name.
+  it("displayName with no letter in the result is null, not a lone quote (mutation: drop the letter check → the quote mark is returned, FAILS)", () => {
+    expect(displayName(`"<ana@customer.com>" <x@evil.com>`)).toBeNull();
+  });
 });

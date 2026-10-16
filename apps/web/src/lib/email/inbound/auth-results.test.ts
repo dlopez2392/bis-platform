@@ -22,9 +22,9 @@ describe("parseHeaderBlock", () => {
 });
 
 describe("readSesVerdict: ONLY the topmost amazonses.com header (spec 'Rule from the spike')", () => {
-  it("reads spf, dkim with its domain, dmarc and both verdicts (mutation: read the LAST matching header → the forged bank.com dkim, FAILS)", () => {
+  it("reads spf, dkim with its domain, dmarc, dmarc's header.from and both verdicts (mutation: read the LAST matching header → the forged bank.com dkim, FAILS)", () => {
     const v = readSesVerdict(parseHeaderBlock(raw(SES, `${FORGED}\r\n`)));
-    expect(v).toEqual({ found: true, spf: "pass", dmarc: "pass", dkim: [{ result: "pass", domain: "gmail.com" }], spam: "PASS", virus: "PASS" });
+    expect(v).toEqual({ found: true, spf: "pass", dmarc: "pass", dmarcDomain: "gmail.com", dkim: [{ result: "pass", domain: "gmail.com" }], spam: "PASS", virus: "PASS" });
   });
 
   it("ignores an Authentication-Results from any other authserv-id, even above (mutation: take the first header of any id → mx.google.com's fail is read, FAILS)", () => {
@@ -34,20 +34,62 @@ describe("readSesVerdict: ONLY the topmost amazonses.com header (spec 'Rule from
   });
 
   it("no amazonses.com header reads as not found, every field null (mutation: default spf to 'pass' → FAILS)", () => {
-    expect(readSesVerdict(parseHeaderBlock(raw("X-Other: 1")))).toEqual({ found: false, spf: null, dmarc: null, dkim: [], spam: null, virus: null });
+    expect(readSesVerdict(parseHeaderBlock(raw("X-Other: 1")))).toEqual({ found: false, spf: null, dmarc: null, dmarcDomain: null, dkim: [], spam: null, virus: null });
   });
 
   it("reads header.d when there is no header.i", () => {
     const v = readSesVerdict(parseHeaderBlock(raw("Authentication-Results: amazonses.com; spf=pass; dkim=pass header.d=shop.example; dmarc=none")));
     expect(v.dkim).toEqual([{ result: "pass", domain: "shop.example" }]);
   });
+
+  // CRITICAL 2 (review, round 1): a sender-controlled quoted value
+  // (`envelope-from="a;dmarc=pass"@evil.com`) must not be split on its
+  // embedded `;` — that would manufacture a fake extra "dmarc=" token ahead
+  // of the real one. Here the real dmarc is "fail", so a naive split would
+  // read the injected "pass" first and authenticate a spoofed sender.
+  it("does not split a quoted value's embedded ';' into a fake extra token (mutation: split blindly on ';' → the injected 'dmarc=pass' is read, FAILS)", () => {
+    const injected = [
+      "Authentication-Results: amazonses.com;",
+      ' spf=fail (dummy) envelope-from="a;dmarc=pass"@evil.com; helo=mail.evil.com;',
+      " dkim=fail;",
+      " dmarc=fail header.from=customer.com;",
+    ].join("\r\n");
+    const v = readSesVerdict(parseHeaderBlock(raw(injected)));
+    expect(v.spf).toBe("fail");
+    expect(v.dmarc).toBe("fail");
+  });
+
+  // CRITICAL 2, second probe: an unquoted but out-of-place "dmarc=pass"
+  // ahead of the real "dmarc=fail" must not win by virtue of being first —
+  // a repeated method inside one Authentication-Results header is itself
+  // the attack, so it fails closed instead of trusting either occurrence.
+  it("fails closed (nulls the field) when spf or dmarc appears more than once in one header (mutation: keep the first occurrence → the fake 'dmarc=pass' wins, FAILS)", () => {
+    const duplicateDmarc = "Authentication-Results: amazonses.com; helo=x;dmarc=pass; dkim=fail; dmarc=fail";
+    const v1 = readSesVerdict(parseHeaderBlock(raw(duplicateDmarc)));
+    expect(v1.dmarc).toBeNull();
+
+    const duplicateSpf = "Authentication-Results: amazonses.com; spf=pass; spf=fail; dmarc=none";
+    const v2 = readSesVerdict(parseHeaderBlock(raw(duplicateSpf)));
+    expect(v2.spf).toBeNull();
+  });
 });
 
 describe("senderAuthenticated (spec Inbound step 4)", () => {
-  const v = (over: Partial<ReturnType<typeof readSesVerdict>>) => ({ found: true, spf: "pass", dmarc: "pass", dkim: [{ result: "pass", domain: "gmail.com" }], spam: "PASS", virus: "PASS", ...over });
+  const v = (over: Partial<ReturnType<typeof readSesVerdict>>) => ({ found: true, spf: "pass", dmarc: "pass", dmarcDomain: "gmail.com", dkim: [{ result: "pass", domain: "gmail.com" }], spam: "PASS", virus: "PASS", ...over });
 
   it("dmarc=pass with both verdicts PASS → true", () => {
     expect(senderAuthenticated(v({}), "gmail.com")).toBe(true);
+  });
+
+  // CRITICAL 1 (review, round 1): dmarc=pass alone proves the message
+  // aligned with SOME domain — it says nothing about which one without
+  // reading dmarc's own header.from and binding it to the From address,
+  // exactly as G15 already binds DKIM's header.i/header.d. Without this, a
+  // dmarc=pass stamped for evil.com would authenticate a From of
+  // customer.com.
+  it("dmarc=pass does not authenticate unless its header.from matches the From domain exactly (mutation: drop the dmarcDomain check → FAILS)", () => {
+    expect(senderAuthenticated(v({ dmarc: "pass", dmarcDomain: "evil.com" }), "customer.com")).toBe(false);
+    expect(senderAuthenticated(v({ dmarc: "pass", dmarcDomain: "gmail.com" }), "gmail.com")).toBe(true);
   });
 
   it("dmarc=none: true only with spf=pass AND a passing dkim ON the From domain (mutation: accept spf alone → FAILS; accept any dkim domain → FAILS)", () => {
