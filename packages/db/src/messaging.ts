@@ -632,6 +632,15 @@ export async function listConversations(
     // one id so a chatty thread's full history is never fetched just to prove it has ONE message.
     .select(`id, contact_id, last_message_at, unread_count, messages!inner(id), ${embed}`)
     .eq("account_id", accountId)
+    // Fix round 4 (reviewer measurement: 30,966 buffers / 12ms without this vs 495 / 0.7ms with it,
+    // production Postgres 17, no skip scan). Without an account_id filter ON THE EMBED ITSELF, the
+    // planner cannot use messages_thread's own leading column (account_id, conversation_id,
+    // created_at) to probe the exists-join per conversation — it has only `conversation_id` to go on
+    // and ends up scanning far more of the index than this account owns. `account_id` is already
+    // true of every row this embed could ever match (a conversation's messages are always its own
+    // account's), so this filter changes no ROW the query returns — only how cheaply the planner can
+    // find it.
+    .eq("messages.account_id", accountId)
     // last_message_at remains the ORDER key (nulls last) — a thread kept by the exists filter above
     // despite a failed touch (so this column is null) still sorts; it just sorts to the bottom until
     // its next message repairs it, same self-healing promise createMessage's own comment makes. The

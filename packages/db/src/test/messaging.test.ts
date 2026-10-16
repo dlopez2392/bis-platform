@@ -829,6 +829,30 @@ describe("messaging", () => {
       expect(await sumUnreadCount(db, accountId)).toBe(1);
     }));
 
+  // Fix round 4 (minor): pins the embed's own cap. `messages!inner(id)` is the exists-join; without
+  // `.limit(1, { referencedTable: "messages" })` PostgREST aggregates EVERY matching message's id
+  // into the embedded array, fetching a chatty thread's whole history just to prove it has at least
+  // one — this test builds the SAME select/filter/limit shape listConversations uses (not through
+  // the public API, which strips the embed before returning ConversationSummary, so this has to read
+  // the raw row to see it at all) and proves a three-message thread's embed still carries exactly one.
+  it("the messages!inner embed stays capped at one id even on a chatty thread (mutation: drop .limit(1, { referencedTable: 'messages' }) → the embed carries every message id, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Chatty" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "one" }, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "two" }, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "three" }, "user_test");
+
+      const { data, error } = await db.from("conversations")
+        .select("id, messages!inner(id)")
+        .eq("account_id", accountId).eq("id", convo.id)
+        .eq("messages.account_id", accountId)
+        .limit(1, { referencedTable: "messages" })
+        .single();
+      expect(error).toBeNull();
+      expect((data as unknown as { messages: { id: string }[] }).messages.length).toBeLessThanOrEqual(1);
+    }));
+
   // MEASURED, not guessed: ~4s alone on an idle machine (one bulk insert of
   // 1005 rows, one network round trip). The heaviest test in this file
   // besides listFailedOutboundSms's own; covered by the package's
