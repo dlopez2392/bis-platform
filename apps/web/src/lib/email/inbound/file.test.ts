@@ -44,11 +44,60 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     expect(db.createMessage).not.toHaveBeenCalled();
   });
 
-  it("a retried delivery finds its message by Resend's id: no second message, no unread (mutation: skip the find → createMessage twice, FAILS)", async () => {
-    db.findMessageByProviderId.mockResolvedValue({ id: "msg_0" });
-    expect((await fileInboundEmail({ db: DB, now: () => new Date() }, input())).created).toBe(false);
+  it("a fully duplicate delivery (the row's own messageId already set) answers from the row alone: no re-classification, no lookup, no write, no unread (fix round 1 item 3; mutation: ignore row.messageId and look it up anyway → FAILS)", async () => {
+    const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, messageId: "msg_0" } }));
+    expect(result).toEqual({ messageId: "msg_0", created: false, consent: { kind: "none" } });
+    expect(stop.recordInboundStop).not.toHaveBeenCalled();
+    expect(db.findMessageByProviderId).not.toHaveBeenCalled();
     expect(db.createMessage).not.toHaveBeenCalled();
     expect(db.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(db.setInboundMessage).not.toHaveBeenCalled();
+  });
+
+  describe("fix round 1 item 3: a retry after a mid-flight failure decides 'first completion' from row.messageId, never from whether THIS call inserted the message", () => {
+    it("setInboundMessage throws, then a retry with the SAME unlinked row finds the message already there and still raises unread and reports created (mutation: gate the retry's raise on this call's own insert → FAILS)", async () => {
+      // Attempt 1: message created, but the link write fails — propagates before any retry logic here.
+      db.setInboundMessage.mockRejectedValueOnce(new Error("link write failed"));
+      await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }))).rejects.toThrow(/link write failed/);
+      expect(db.createMessage).toHaveBeenCalledTimes(1);
+      expect(db.incrementUnreadCount).toHaveBeenCalledTimes(1);
+
+      // Retry: the SAME row (messageId still null — the DB write never committed), the message now
+      // found by provider id (it was really inserted on attempt 1).
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      db.setInboundMessage.mockResolvedValue(true);
+      const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
+      expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(db.createMessage).toHaveBeenCalledTimes(1); // never a second message
+      expect(db.incrementUnreadCount).toHaveBeenCalledTimes(2); // double raise on a crash is accepted
+      expect(db.setInboundMessage).toHaveBeenLastCalledWith(DB, "acc", "ie_1", "msg_1");
+    });
+
+    it("incrementUnreadCount itself throws, then a retry with the SAME unlinked row still commits the link and reports created (mutation: skip the retry's raise because the message already exists → FAILS)", async () => {
+      db.incrementUnreadCount.mockRejectedValueOnce(new Error("unread write failed"));
+      await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }))).rejects.toThrow(/unread write failed/);
+      expect(db.setInboundMessage).not.toHaveBeenCalled(); // never reached: unread threw first
+
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
+      expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(db.createMessage).toHaveBeenCalledTimes(1);
+      expect(db.setInboundMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("createMessage itself throws (its own emit failed after a real insert), then a retry finds the orphaned message and still completes once (mutation: treat the retry's find as a fresh insert → a second message, FAILS)", async () => {
+      db.createMessage.mockRejectedValueOnce(new Error("message.created emit failed"));
+      await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }))).rejects.toThrow(/emit failed/);
+      expect(db.incrementUnreadCount).not.toHaveBeenCalled();
+
+      // Retry: the orphaned insert is now found by provider id.
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
+      expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(db.createMessage).toHaveBeenCalledTimes(1); // the first (failed) attempt only
+      expect(db.incrementUnreadCount).toHaveBeenCalledTimes(1);
+      expect(db.setInboundMessage).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("an unclear stop writes nothing to the ledger and marks the message 'maybe'; a plain reply 'none'; the thread's own contact carries no sender (mutation: record unclear stops → FAILS)", async () => {

@@ -93,8 +93,8 @@ describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
     }
   });
 
-  it("the account's own domain is accepted for its own token (mutation: accept only the BIS domain → FAILS)", async () => {
-    fetchEmail.mockResolvedValue(EMAIL({ receivedFor: [`r-${T}@reply.rio.com`] }));
+  it("the account's own domain is accepted for its own token, with no BIS-domain address anywhere in the message to pass it by accident (mutation: accept only the BIS domain → FAILS)", async () => {
+    fetchEmail.mockResolvedValue(EMAIL({ receivedFor: [`r-${T}@reply.rio.com`], to: [] }));
     expect((await handleReceivedEmail(deps, { email_id: "re_1" })).result).toBe("filed");
   });
 
@@ -116,5 +116,51 @@ describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
     fetchEmail.mockResolvedValue(EMAIL({ text: null, html: "<p>Yes &amp; thanks</p>" }));
     await handleReceivedEmail(deps, { email_id: "re_1" });
     expect(db.recordInboundEmail.mock.calls[0]![1].text).toBe("Yes & thanks");
+  });
+
+  describe("fix round 1", () => {
+    it("item 2: a null From holds as unverified instead of throwing (mutation: email.from.slice without the ?? fallback → FAILS)", async () => {
+      fetchEmail.mockResolvedValue(EMAIL({ from: null as unknown as string }));
+      const outcome = await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(outcome).toEqual({ status: 200, result: "held" });
+      expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({ fromEmail: "", holdReason: "unverified" });
+    });
+
+    it("item 5/6b: received_for names the thread even when to carries the business's own plain address (mutation: use only [...email.to] → FAILS)", async () => {
+      fetchEmail.mockResolvedValue(EMAIL({ receivedFor: [`r-${T}@reply.bis-rgv.com`], to: ["hello@rio.example"] }));
+      expect((await handleReceivedEmail(deps, { email_id: "re_1" })).result).toBe("filed");
+      expect(db.recordInboundEmail.mock.calls[0]![1].toEmail).toBe(`r-${T}@reply.bis-rgv.com`);
+    });
+
+    it("item 5/6b: received_for and to name DIFFERENT threads — files on the envelope's thread, never to's (mutation: use only [...email.to] → FAILS)", async () => {
+      const T2 = "fedcba9876543210fedcba9";
+      const THREAD2 = { conversationId: "conv2", accountId: "acc2", contactId: "luis", revoked: false, inboundDomain: "reply.other.com" };
+      db.findReplyThread.mockImplementation(async (_db: unknown, token: string) => (token === T ? THREAD : THREAD2));
+      fetchEmail.mockResolvedValue(EMAIL({ receivedFor: [`r-${T}@reply.bis-rgv.com`], to: [`r-${T2}@reply.bis-rgv.com`] }));
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({ accountId: "acc", conversationId: "conv" });
+    });
+
+    it("item 6d: an unparseable receivedAt falls back to now() instead of throwing (mutation: drop the fallback → FAILS)", async () => {
+      fetchEmail.mockResolvedValue(EMAIL({ receivedAt: "not-a-date" }));
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(db.recordInboundEmail.mock.calls[0]![1].receivedAt).toBe("2026-10-16T10:00:05.000Z");
+    });
+
+    it("item 6g: a dropped delivery names the account when a thread was found and then rejected (revoked / wrong domain), never for an unknown or missing token (mutation: never include the account id → FAILS)", async () => {
+      db.findReplyThread.mockResolvedValue({ ...THREAD, revoked: true });
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(String(log.mock.calls[0]![0])).toContain("acc");
+      log.mockClear();
+      db.findReplyThread.mockResolvedValue(null);
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(String(log.mock.calls[0]![0])).not.toContain("account=");
+    });
+
+    it("item 6h: a retry that finally FILES (the row already existed, unfiled, from an earlier crash) reports filed, never duplicate (mutation: decide the result from the row's own created → FAILS)", async () => {
+      db.recordInboundEmail.mockResolvedValue({ row: { id: "ie_1", accountId: "acc", conversationId: "conv", status: "filed", holdReason: null, fromEmail: "ana@gmail.com", messageId: null }, created: false });
+      file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    });
   });
 });
