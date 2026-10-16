@@ -4,6 +4,9 @@ import { stampHeartbeat } from "@/lib/ops/stamp";
 import { COMPLAINT_ERROR_MARKER } from "@/lib/email/failure-reason";
 import { handleReceivedEmail } from "@/lib/email/inbound/pipeline";
 import { receivedEmailFetcher } from "@/lib/email/receiving";
+import { forwardToOwner } from "@/lib/email/inbound/forward";
+import { sendEmail } from "@/lib/consent/email-gate";
+import { configuredOrigin } from "@/lib/email/origin";
 
 const STATUS_BY_EVENT: Record<string, MessageStatus> = {
   "email.sent": "sent",
@@ -130,7 +133,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     const outcome = await handleReceivedEmail({
       db: serviceDb(), fetchEmail, now: () => new Date(),
-      forward: async () => {},   // Task 9 replaces this with forwardToOwner
+      forward: (f) => forwardToOwner({ db: serviceDb(), send: (r) => sendEmail(r, { db: serviceDb() }), origin: configuredOrigin(process.env) }, f),
       log: (line) => console.error(`resend webhook: ${line}`),
     }, (event.data ?? {}) as { email_id?: unknown });
     stampHeartbeat("email.inbound", outcome.status === 200 ? { ok: true } : { ok: false, error: outcome.result });

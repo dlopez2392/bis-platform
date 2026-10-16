@@ -20,6 +20,7 @@ vi.mock("@/lib/email/receiving", () => ({
   },
 }));
 vi.mock("@/lib/email/inbound/forward", () => ({ forwardToOwner: vi.fn() }));
+vi.mock("@/lib/consent/email-gate", () => ({ sendEmail: vi.fn() }));
 
 import { POST } from "./route";
 

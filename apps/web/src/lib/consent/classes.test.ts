@@ -92,12 +92,14 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "operator.billing_link": ["operator", "any", "none"],
   "operator.sender_check": ["operator", "any", "none"],
   "operator.ops_alert": ["operator", "any", "none"],
+  // S-06 part 1: the owner's copy of a customer's reply; operator mail, as the lead alert is.
+  "operator.reply_forward": ["operator", "any", "none"],
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-seven send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails and S-07 2b's document request) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-eight send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, and S-06's reply forward) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(27);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(28);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {
