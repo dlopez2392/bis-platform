@@ -129,8 +129,8 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "none" });
   });
 
-  it("from Needs a look: unread not raised, the person is the actor, an unverified sender's stop is still heard (staff vouched; mutation: raise unread always → FAILS)", async () => {
-    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ raiseUnread: false, sender: null, actor: { id: "user_1", type: "user" } }));
+  it("from Needs a look: unread not raised, the person is the actor, an unverified but MATCHED sender's stop is still heard (mutation: raise unread always → FAILS)", async () => {
+    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ raiseUnread: false, sender: { contactId: "ana", firstName: "Ana", lastName: null, viaGroup: false }, actor: { id: "user_1", type: "user" } }));
     expect(db.incrementUnreadCount).not.toHaveBeenCalled();
     expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ contactId: "ana" }));
     expect(db.createMessage.mock.calls[0]![3]).toBe("user_1");
@@ -158,11 +158,30 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
       expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ contactId: "ana", address: "ana+bis@example.com" }));
     });
 
-    it("a household member's stop is under THAT member's address; a manual File with no sender match is under the proven contact's (mutation: read the thread contact instead of the sender → FAILS)", async () => {
+    it("a household member's stop is under THAT member's address (mutation: read the thread contact instead of the sender → FAILS)", async () => {
       await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "someone-else@example.com" } }));
       expect(stop.recordInboundStop).toHaveBeenLastCalledWith(DB, expect.objectContaining({ contactId: "luis", address: "luis@example.com" }));
-      await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "someone-else@example.com" }, sender: null }));
-      expect(stop.recordInboundStop).toHaveBeenLastCalledWith(DB, expect.objectContaining({ contactId: "ana", address: "ana@example.com" }));
+    });
+  });
+
+  describe("orchestrator ruling: only a sender that MATCHED applies a clear stop", () => {
+    it("a manual File whose sender matched the target contact (verified or not) stops under that contact's ledger address (mutation: never stop on a manual File, i.e. gate on raiseUnread → FAILS)", async () => {
+      db.getContact.mockResolvedValue({ id: "ana", email: "Ana+Bis@example.com" });
+      const r = await fileInboundEmail({ db: DB, now: () => new Date() }, input({
+        raiseUnread: false, actor: { id: "user_1", type: "user" }, sender: { contactId: "ana", firstName: "Ana", lastName: null, viaGroup: false },
+      }));
+      expect(r.consent).toEqual({ kind: "stopped", eventId: "ev_1" });
+      expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ contactId: "ana", address: "ana+bis@example.com" }));
+    });
+
+    it("a manual File / Choose a record whose sender did NOT match (stranger) never stops the customer: the clear STOP is the 'maybe' chip, the ledger and the contact untouched (mutation: fall back to the target contact when sender is null → recordInboundStop called, FAILS)", async () => {
+      const r = await fileInboundEmail({ db: DB, now: () => new Date() }, input({
+        row: { ...ROW, fromEmail: "stranger@example.com" }, raiseUnread: false, actor: { id: "user_1", type: "user" }, sender: null,
+      }));
+      expect(r.consent).toEqual({ kind: "maybe", phrase: "STOP" });
+      expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "maybe", phrase: "STOP" });
+      expect(stop.recordInboundStop).not.toHaveBeenCalled();
+      expect(db.getContact).not.toHaveBeenCalled();
     });
 
     it("a matched contact with no usable email (or gone) never writes the ledger: the clear stop becomes the 'maybe' chip (mutation: fall back to the sender's From → recordInboundStop called, FAILS)", async () => {

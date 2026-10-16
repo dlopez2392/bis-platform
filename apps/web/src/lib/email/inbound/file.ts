@@ -47,7 +47,10 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
     return { messageId: row.messageId, created: false, consent: { kind: "none" } };
   }
 
-  const stopFor = i.sender?.contactId ?? i.contactId;
+  // Orchestrator ruling (final review): ONLY a sender that matched (the contact or a group member,
+  // matchSender non-null) applies a clear stop. A manual File / Choose a record of a sender that did not
+  // match the target (a stranger) never stops the customer automatically: the STOP is the "maybe" chip.
+  const stopFor = i.sender?.contactId ?? null;
   const cls = classifyEmailStop(row.text);
   // Review finding (Task 8) + Task 12 fix round 1 ruling (item 6): `row.fromEmail` can be the RAW,
   // unparseable From header text (set by pipeline.ts's own fallback when `bareAddress` failed on
@@ -64,11 +67,11 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
   // the pipeline, the request-client proof in the manual File). A contact with no usable email (or
   // gone) is the same "maybe" chip as an unparseable From: nothing is written against a guess.
   const bare = cls.kind === "clear" ? bareAddress(row.fromEmail) : null;
-  const address = cls.kind === "clear" && bare
+  const address = cls.kind === "clear" && bare && stopFor
     ? emailLedgerAddress((await getContact(db, row.accountId, stopFor))?.email ?? null)
     : null;
   let consent: MessageConsent = { kind: "none" };
-  if (cls.kind === "clear" && address) {
+  if (cls.kind === "clear" && address && stopFor) {
     const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address, providerEmailId: row.providerEmailId, phrase: cls.phrase });
     if (r.outcome === "stopped") consent = { kind: "stopped", eventId: r.eventId };
   } else if (cls.kind === "unclear" || cls.kind === "clear") {

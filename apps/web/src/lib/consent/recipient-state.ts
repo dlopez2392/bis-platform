@@ -2,7 +2,7 @@ import { readConsentState, readEmailSuppression, type SupabaseClient } from "@bi
 import { normalisePhone } from "@bis/db/phone";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { loggableError } from "@/lib/loggable-error";
-import { CUSTOMER_EMAIL_STOP_METHODS } from "./unsubscribe";
+import { CUSTOMER_CHOSEN_EMAIL_STOP_METHODS } from "./unsubscribe";
 import type { SmsRecipientState, EmailRecipientState } from "./composer-state";
 
 /**
@@ -65,7 +65,7 @@ export async function emailRecipientState(
       };
     }
     if (state.state === "allowed") return { kind: "ok" };
-    return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_EMAIL_STOP_METHODS.includes(state.method) };
+    return { kind: "stopped", since: state.since, byCustomer: CUSTOMER_CHOSEN_EMAIL_STOP_METHODS.includes(state.method) };
   } catch (e) {
     console.error(`composer: email consent state unreadable for account ${accountId}: ${loggableError(e)}`);
     return { kind: "unknown" };

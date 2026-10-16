@@ -73,6 +73,17 @@ describe("emailRecipientState — the email composer's read", () => {
     expect(await emailRecipientState(DB, "a1", { email: "ana@example.com" })).toMatchObject({ byCustomer: false });
   });
 
+  it("final review: a stop the customer EMAILED (inbound_email) is byCustomer, so the composer says they unsubscribed, in English and Spanish, never 'You stopped emails' (mutation: byCustomer from CUSTOMER_EMAIL_STOP_METHODS alone → FAILS)", async () => {
+    const { composerEmailNotice } = await import("./composer-state");
+    readConsentState.mockResolvedValueOnce({ state: "stopped", since: "2026-10-04T17:00:00Z", method: "inbound_email", eventId: "e3" });
+    const state = await emailRecipientState(DB, "a1", { email: "ana@example.com" });
+    expect(state).toEqual({ kind: "stopped", since: "2026-10-04T17:00:00Z", byCustomer: true });
+    expect(composerEmailNotice(state, "America/Chicago", "en"))
+      .toBe("They unsubscribed from your emails on Oct 4, 2026. Write only about something they asked you for.");
+    expect(composerEmailNotice(state, "America/Chicago", "es"))
+      .toBe("Se dio de baja de sus correos el 4 oct 2026. Escríbale solo sobre algo que le haya pedido.");
+  });
+
   it("no address is ok (the composer's own 'no email' line covers it); an unreadable ledger is unknown, never a throw (mutation: rethrow → the contact page errors, FAILS)", async () => {
     expect(await emailRecipientState(DB, "a1", { email: null })).toEqual({ kind: "ok" });
     readConsentState.mockRejectedValueOnce(new Error("down"));
