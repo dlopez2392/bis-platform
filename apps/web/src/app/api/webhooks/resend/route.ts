@@ -2,6 +2,8 @@ import { Webhook } from "svix";
 import { serviceDb, updateMessageStatusByProviderId, recordEmailSuppression, type MessageStatus } from "@bis/db";
 import { stampHeartbeat } from "@/lib/ops/stamp";
 import { COMPLAINT_ERROR_MARKER } from "@/lib/email/failure-reason";
+import { handleReceivedEmail } from "@/lib/email/inbound/pipeline";
+import { receivedEmailFetcher } from "@/lib/email/receiving";
 
 const STATUS_BY_EVENT: Record<string, MessageStatus> = {
   "email.sent": "sent",
@@ -115,6 +117,24 @@ export async function POST(request: Request): Promise<Response> {
     // Unverified payloads are never read. This is the security boundary.
     // Not stamped: a forgery is a stranger, not an outage (lib/ops/stamp.ts).
     return new Response("invalid signature", { status: 400 });
+  }
+
+  // S-06 part 1: a customer's reply (spec "Inbound"). Its own heartbeat key, its own answer.
+  if (event.type === "email.received") {
+    let fetchEmail;
+    try {
+      fetchEmail = receivedEmailFetcher();
+    } catch {
+      stampHeartbeat("email.inbound", { ok: false, error: "RESEND_API_KEY is not set" });
+      return new Response("not configured", { status: 503 });
+    }
+    const outcome = await handleReceivedEmail({
+      db: serviceDb(), fetchEmail, now: () => new Date(),
+      forward: async () => {},   // Task 9 replaces this with forwardToOwner
+      log: (line) => console.error(`resend webhook: ${line}`),
+    }, (event.data ?? {}) as { email_id?: unknown });
+    stampHeartbeat("email.inbound", outcome.status === 200 ? { ok: true } : { ok: false, error: outcome.result });
+    return new Response(outcome.result, { status: outcome.status });
   }
 
   const status = event.type ? STATUS_BY_EVENT[event.type] : undefined;

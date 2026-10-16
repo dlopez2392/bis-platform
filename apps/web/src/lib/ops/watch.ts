@@ -89,6 +89,7 @@ export function describeKey(key: string): string {
     case "voice.sip_webhook": return "Sofía answering calls (OpenAI)";
     case "sms.inbound": return "incoming texts (Telnyx)";
     case "email.resend_webhook": return "email delivery reports (Resend)";
+    case "email.inbound": return "customers' email replies (Resend)";
     case "stripe.webhook": return "billing events (Stripe)";
     case "documents.scanner": return "virus scanning of uploaded files";
     default: return key;

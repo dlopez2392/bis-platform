@@ -18,6 +18,7 @@ export type WebhookHeartbeatKey =
   | "voice.texml"
   | "voice.sip_webhook"
   | "email.resend_webhook"
+  | "email.inbound"
   | "sms.inbound"
   | "stripe.webhook";
 
