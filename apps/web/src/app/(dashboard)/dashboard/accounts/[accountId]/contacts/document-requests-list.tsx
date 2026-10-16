@@ -57,34 +57,47 @@ export function DocumentRequestsList({ locale, load, onRetry, onCopy, onRevoke }
     <section data-document-requests aria-labelledby={labelId} className="pt-1">
       <h3 id={labelId} className={LABEL}>{tt("documents.requests.label")}</h3>
       <ul>
-        {requests.map((r) => (
-          <li key={r.id} data-document-request={r.id} className={cn("flex flex-wrap items-start gap-x-2 gap-y-1 py-2", rowLine)}>
-            <div className="min-w-0 flex-1 space-y-0.5">
-              <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm text-card-foreground">
-                {r.items.map((i) => (
-                  <li key={i.key} data-request-item={i.key} className="inline-flex min-w-0 items-center gap-1.5">
-                    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", i.answered ? "bg-[var(--good)]" : "bg-[var(--warn)]")} />
-                    {i.category === "other" && i.note
-                      ? <span lang="">{i.note}</span>
-                      : <span>{tt(`documents.category.${i.category}` as MessageKey)}</span>}
-                    <span aria-hidden="true">·</span>
-                    <span className="text-muted-foreground">{tt(i.answered ? "documents.requests.received" : "documents.requests.waiting")}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="text-xs text-muted-foreground tabular-nums">{expiresText(r, now, locale)}</p>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              <Button type="button" size="sm" variant="ghost" data-request-copy className={control} onClick={() => onCopy(r.id)}>
-                {tt("documents.requests.copy")}
-              </Button>
-              <Button type="button" size="sm" variant="ghost" data-request-revoke className={control} onClick={() => onRevoke(r.id)}>
-                {tt("documents.requests.revoke")}
-              </Button>
-            </div>
-          </li>
-        ))}
+        {requests.map((r) => <RequestRow key={r.id} r={r} now={now} locale={locale} onCopy={onCopy} onRevoke={onRevoke} />)}
       </ul>
     </section>
+  );
+}
+
+/**
+ * One request. Its Copy link and Revoke are described by its own items list (review M8), so with two
+ * requests open a screen reader hears "Copy link, Insurance · Received, Pool permit · Waiting" for each,
+ * never two bare "Copy link"s.
+ */
+function RequestRow({ r, now, locale, onCopy, onRevoke }: {
+  r: OpenRequestView; now: string; locale: Locale; onCopy: (id: string) => void; onRevoke: (id: string) => void;
+}) {
+  const tt = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
+  const itemsId = useId();
+  return (
+    <li data-document-request={r.id} className={cn("flex flex-wrap items-start gap-x-2 gap-y-1 py-2", rowLine)}>
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <ul id={itemsId} className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm text-card-foreground">
+          {r.items.map((i) => (
+            <li key={i.key} data-request-item={i.key} className="inline-flex min-w-0 items-center gap-1.5">
+              <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", i.answered ? "bg-[var(--good)]" : "bg-[var(--warn)]")} />
+              {i.category === "other" && i.note
+                ? <span lang="">{i.note}</span>
+                : <span>{tt(`documents.category.${i.category}` as MessageKey)}</span>}
+              <span aria-hidden="true">·</span>
+              <span className="text-muted-foreground">{tt(i.answered ? "documents.requests.received" : "documents.requests.waiting")}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted-foreground tabular-nums">{expiresText(r, now, locale)}</p>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <Button type="button" size="sm" variant="ghost" data-request-copy aria-describedby={itemsId} className={control} onClick={() => onCopy(r.id)}>
+          {tt("documents.requests.copy")}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" data-request-revoke aria-describedby={itemsId} className={control} onClick={() => onRevoke(r.id)}>
+          {tt("documents.requests.revoke")}
+        </Button>
+      </div>
+    </li>
   );
 }

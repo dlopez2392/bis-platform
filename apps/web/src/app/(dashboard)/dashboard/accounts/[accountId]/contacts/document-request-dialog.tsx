@@ -28,6 +28,15 @@ export function seedChannel(channels: { text: boolean; email: boolean }): Reques
   return channels.text ? "text" : channels.email ? "email" : "link";
 }
 
+/**
+ * The channel the form shows as chosen: the person's choice while it is on offer (the link always is),
+ * else the seed. A re-read can take a channel away while the dialog is open; this never leaves a
+ * disabled radio checked.
+ */
+export function chosenChannel(channel: RequestChannel, channels: { text: boolean; email: boolean }): RequestChannel {
+  return channel === "link" || channels[channel] ? channel : seedChannel(channels);
+}
+
 /** Pure: what the form submits, in the vault's order whatever order the boxes were ticked, or the words for what is missing. */
 export function requestFromForm(s: { picked: ReadonlySet<DocumentCategory>; note: string }): { items: DocumentRequestItem[] } | { error: MessageKey } {
   const picked = DOCUMENT_CATEGORIES.filter((c) => s.picked.has(c));
@@ -63,8 +72,7 @@ export function DocumentRequestForm(p: DocumentRequestFormProps) {
   const [channel, setChannel] = useState<RequestChannel>(() => seedChannel(p.channels));
   const [localError, setLocalError] = useState<MessageKey | null>(null);
   const offered = (ch: RequestChannel) => ch === "link" || p.channels[ch];
-  // A re-read can take a channel away while the dialog is open: the choice falls back, never a disabled radio left checked.
-  const chosen = offered(channel) ? channel : seedChannel(p.channels);
+  const chosen = chosenChannel(channel, p.channels);
   const shown = localError ?? p.error;
   const toggle = (c: DocumentCategory, on: boolean) => {
     setLocalError(null);

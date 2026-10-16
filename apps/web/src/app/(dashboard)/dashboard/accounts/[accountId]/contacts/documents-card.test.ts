@@ -13,7 +13,8 @@ vi.mock("./document-requests-actions", () => ({
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
+  shouldReloadRequests, askAfter, keepRequests } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -461,5 +462,63 @@ describe("Ask the customer on the card (S-07 2b, spec 4.2)", () => {
     const es = render(ready([sent]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
     expect(renderedText(es)).toContain("Enviado por el cliente · hace 3 días");
     expect(sourceLine(sent as never, "2026-10-13", "en")).toBe("Sent by the customer · 3 days ago");
+  });
+});
+
+describe("shouldReloadRequests: the files' poll keeps the open requests honest (review I2)", () => {
+  const scanned = (id: string, scan: string, over: Record<string, unknown> = {}) =>
+    view({ id, source: "customer", version: { id: `v-${id}`, contentType: "application/pdf", bytes: 1, scan, createdAt: "2026-10-13T14:00:00.000Z" }, ...over });
+  const open = requestsReady([openRequest]);
+
+  it("a file's scan state changing while a request is open re-reads the requests (mutation: never reload -> FAILS)", () => {
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "clean")]), open)).toBe(true);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "infected")]), open)).toBe(true);
+  });
+
+  it("the same read again does not: a re-read the reload itself caused can never trigger another (no loop; mutation: answer true whenever a request is open -> FAILS)", () => {
+    expect(shouldReloadRequests(ready([scanned("d1", "clean")]), ready([scanned("d1", "clean")]), open)).toBe(false);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "pending")]), open)).toBe(false);
+  });
+
+  it("a customer's file new to this read does; a staff upload new to it does not", () => {
+    expect(shouldReloadRequests(ready([]), ready([scanned("d9", "pending")]), open)).toBe(true);
+    expect(shouldReloadRequests(ready([]), ready([scanned("d9", "pending", { source: "upload" })]), open)).toBe(false);
+  });
+
+  it("nothing open, or the requests not read yet or failed: no re-read (mutation: drop the open-request guard -> FAILS)", () => {
+    const prev = ready([scanned("d1", "pending")]);
+    const next = ready([scanned("d1", "clean")]);
+    expect(shouldReloadRequests(prev, next, requestsReady([]))).toBe(false);
+    expect(shouldReloadRequests(prev, next, { kind: "loading" })).toBe(false);
+    expect(shouldReloadRequests(prev, next, { kind: "error" })).toBe(false);
+  });
+
+  it("no ready read to compare with (the first read, or a failed one) is no change", () => {
+    expect(shouldReloadRequests(null, ready([scanned("d1", "clean")]), open)).toBe(false);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), { status: "error" }, open)).toBe(false);
+  });
+
+  it("another record's read is not a change on this one", () => {
+    const other = { status: "ready", data: { ...(ready([scanned("d1", "clean")]) as { data: object }).data, record: { kind: "contact", id: "c2" } } } as Load;
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), other, open)).toBe(false);
+  });
+});
+
+describe("askAfter: what the dialog does once the handler answers (review M1)", () => {
+  it("a request created closes it; a refusal keeps it open with the refusal's words (mutation: close on a refusal -> FAILS)", () => {
+    expect(askAfter(null)).toEqual({ open: false, error: null });
+    expect(askAfter("documents.request.textOff")).toEqual({ open: true, error: "documents.request.textOff" });
+  });
+});
+
+describe("keepRequests: a failed re-read keeps what the list shows (review M2)", () => {
+  const R = "/api/accounts/acc/contacts/c1/document-requests";
+  it("an error over this route's ready list keeps the list; a first read's error, or another route's, shows the error (mutation: always take the new load -> FAILS)", () => {
+    const shown = { route: R, load: requestsReady([openRequest]) };
+    expect(keepRequests(shown, R, { kind: "error" })).toBe(shown);
+    expect(keepRequests({ route: "", load: { kind: "loading" } }, R, { kind: "error" })).toEqual({ route: R, load: { kind: "error" } });
+    expect(keepRequests({ route: "/other", load: requestsReady([openRequest]) }, R, { kind: "error" })).toEqual({ route: R, load: { kind: "error" } });
+    const fresh = requestsReady([]);
+    expect(keepRequests(shown, R, fresh)).toEqual({ route: R, load: fresh });
   });
 });

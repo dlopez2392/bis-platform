@@ -278,13 +278,13 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     expect([...html.matchAll(/data-record-column="(\w+)"/g)].map((x) => x[1])).toEqual(["happening", "have", "who"]);
   });
 
-  it("the Documents card gets the page's accountId, record, canManage and the household's empty text (S-07 part 1; mutation: use the household sentence for both -> FAILS)", async () => {
+  it("the Documents card gets the page's accountId, record, canManage, the household's empty text and the group's name for Ask the customer (S-07 part 1, 2b; mutation: use the household sentence for both -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
     const html = await render();
     const match = html.match(/data-documents-mock="([^"]*)"/);
     expect(match).toBeTruthy();
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
-    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: false, emptyText: m["documents.empty.household"] });
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: false, emptyText: m["documents.empty.household"], name: "García" });
   });
 
   it("a business group gets the business's empty text, not the household's (mutation: use the household sentence for both -> FAILS)", async () => {
@@ -293,7 +293,7 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     const match = html.match(/data-documents-mock="([^"]*)"/);
     expect(match).toBeTruthy();
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
-    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: true, emptyText: m["documents.empty.business"] });
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: true, emptyText: m["documents.empty.business"], name: "Rio Roofing" });
   });
 
   it("each card fails on its own: People failing leaves Properties, Deals and Details (mutation: one Promise.all with no per-card loads -> the render rejects, FAILS)", async () => {

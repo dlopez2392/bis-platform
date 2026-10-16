@@ -291,7 +291,8 @@ function DocumentsSkeleton() {
  * it is open, the panel's own Upload is that primary and the header draws neither button. Take photo is
  * ghost and shows only on a coarse pointer or a narrow screen. "Ask the customer" (S-07 2b) is ghost too,
  * beside it, once the requests read is ready (its dialog needs the channels on offer). The open requests
- * sit after the file list and before the trash, and their read fails on its own (spec 6). Presentational:
+ * sit after the file list and before the trash, and their read fails on its own (spec 6). Both are drawn
+ * only once the files are ready: the loading and error states are the files' alone. Presentational:
  * the container holds state.
  */
 export function DocumentsCardView(p: {
@@ -419,6 +420,36 @@ export function pollTimerKey(pollMs: number | null, reads: number): string | nul
   return pollMs === null ? null : `${pollMs}:${reads}`;
 }
 
+/**
+ * Review I2: the files' read (the poll's included) re-reads the open requests ONCE when it changed a file
+ * the requests can depend on: the current version's scan state (or the version itself) moved on a file in
+ * both reads, or a customer's file is new to this read. Only while the list has an open request, and only
+ * between two READY reads of the same record (the card holds its last ready read as `prev`). The requests'
+ * re-read never touches the files' read, and the same files read again answers false, so it cannot loop.
+ */
+export function shouldReloadRequests(prev: DocumentsLoad | null, next: DocumentsLoad, requests: DocumentRequestsLoad): boolean {
+  if (requests.kind !== "ready" || requests.data.requests.length === 0) return false;
+  if (prev?.status !== "ready" || next.status !== "ready") return false;
+  if (prev.data.record.kind !== next.data.record.kind || prev.data.record.id !== next.data.record.id) return false;
+  const before = new Map(prev.data.live.map((d) => [d.id, `${d.version.id}:${d.version.scan}`]));
+  return next.data.live.some((d) => {
+    const was = before.get(d.id);
+    return was === undefined ? d.source === "customer" : was !== `${d.version.id}:${d.version.scan}`;
+  });
+}
+
+/** Review M1: once "Ask the customer" answers, a request created closes the dialog; a refusal keeps it open with its words. */
+export function askAfter(answer: MessageKey | null): { open: boolean; error: MessageKey | null } {
+  return answer ? { open: true, error: answer } : { open: false, error: null };
+}
+
+/** Review M2: a failed re-read keeps the list this route already shows; a first read's failure (or another route's) is shown. */
+export function keepRequests(
+  shown: { route: string; load: DocumentRequestsLoad }, route: string, next: DocumentRequestsLoad,
+): { route: string; load: DocumentRequestsLoad } {
+  return next.kind === "error" && shown.route === route && shown.load.kind === "ready" ? shown : { route, load: next };
+}
+
 let panelSeq = 0;
 
 /**
@@ -442,6 +473,20 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   const [openId, setOpenId] = useState<string | null>(null);
   // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it.
   const [purgeId, setPurgeId] = useState<string | null>(null);
+
+  // S-07 2b: the open requests are a second read of their own (its route, its error, its Retry). While the
+  // files are loading or have failed, the card draws only that state, so neither the list nor "Ask the
+  // customer" is drawn then; once the files are ready, a requests failure is the list's own sentence and
+  // never the files'. It re-reads when this card changes a request, and when a files read (the poll's
+  // included) changes a file a request can depend on (shouldReloadRequests); it has no timer of its own.
+  const requestsRoute = documentRequestsRouteFor(accountId, record);
+  const [requestsState, setRequestsState] = useState<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
+  const [requestsNonce, setRequestsNonce] = useState(0);
+  // Written only in the reads' promise callbacks, read only there: the last READY files read, and the
+  // requests the list last showed, so a files read can compare without an effect over render state.
+  const lastReadyFiles = useRef<DocumentsLoad | null>(null);
+  const shownRequests = useRef<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
+
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
@@ -451,12 +496,16 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
       setOpenId((id) => keepOpen(id, load));
       setPurgeId((id) => keepPurge(id, load));
       setReads((r) => r + 1);
+      // Review I2: a customer's file turning clean answers its request item; re-read the list once.
+      const requests: DocumentRequestsLoad = shownRequests.current.route === requestsRoute ? shownRequests.current.load : { kind: "loading" };
+      if (shouldReloadRequests(lastReadyFiles.current, load, requests)) setRequestsNonce((n) => n + 1);
+      if (load.status === "ready") lastReadyFiles.current = load;
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
       .then(settle, () => settle({ status: "error" }));
     return () => { stale = true; };
-  }, [route, nonce]);
+  }, [route, requestsRoute, nonce]);
   const load: DocumentsLoad = state.route === route ? state.load : { status: "loading" };
   const reload = () => setNonce((n) => n + 1);
 
@@ -474,17 +523,14 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pollKey already folds pollMs and reads together (see pollTimerKey); pollMs alone would under-trigger (I1).
   }, [pollKey]);
 
-  // S-07 2b: the open requests are a second read of their own, apart from the files' (spec 6: its failure
-  // never touches the files, and the files' never touches it). A failed re-read keeps what the list shows;
-  // only a first read, or its Retry, shows its error. No timer: it re-reads when this card changes a request.
-  const requestsRoute = documentRequestsRouteFor(accountId, record);
-  const [requestsState, setRequestsState] = useState<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
-  const [requestsNonce, setRequestsNonce] = useState(0);
+  // The requests' own read (declared above): a failed re-read keeps what the list shows (keepRequests); only
+  // a first read, or its Retry, shows its error.
   useEffect(() => {
     let stale = false;
     const settle = (next: DocumentRequestsLoad) => {
       if (stale) return;
-      setRequestsState((s) => (next.kind === "error" && s.route === requestsRoute && s.load.kind === "ready" ? s : { route: requestsRoute, load: next }));
+      setRequestsState((s) => keepRequests(s, requestsRoute, next));
+      shownRequests.current = keepRequests(shownRequests.current, requestsRoute, next);
     };
     fetch(requestsRoute, { cache: "no-store" })
       .then(documentRequestsLoadFrom)
@@ -506,8 +552,11 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   const onAskSubmit = (items: DocumentRequestItem[], channel: RequestChannel) => {
     setAskBusy(true);
     setAskError(null);
+    // askCustomer toasts a thrown action itself and answers null; a rejection here would be a defect in the
+    // handlers, and it gets the same honest words (the request may exist), never "couldn't create".
+    const settled = (answer: MessageKey | null) => { const next = askAfter(answer); setAskOpen(next.open); setAskError(next.error); };
     void handlers.askCustomer({ record, items, channel })
-      .then((error) => { if (error) setAskError(error); else setAskOpen(false); }, () => setAskError("documents.request.failed"))
+      .then(settled, () => { toast.error(t(m, "common.actionCrashed", locale)); settled(null); })
       .finally(() => setAskBusy(false));
   };
 

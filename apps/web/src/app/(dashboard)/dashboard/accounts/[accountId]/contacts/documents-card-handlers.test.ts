@@ -30,7 +30,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
     const reload = vi.fn();
     actions.trashDocumentAction.mockResolvedValue({ ok: true, deletedAt: "2026-10-13T15:00:00.1+00:00" });
     actions.restoreDocumentAction.mockResolvedValue({ ok: true });
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     await h.trash(DOC);
     expect(actions.trashDocumentAction).toHaveBeenCalledWith("acc", "d1");
     expect(toast.success.mock.calls[0]![0]).toBe("Lease moved to the trash.");
@@ -45,7 +45,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
     actions.trashDocumentAction.mockResolvedValue({ ok: true, deletedAt: "x" });
     actions.restoreDocumentAction.mockResolvedValue({ ok: false, error: "documents.undoChanged" });
     const reload = vi.fn();
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload, reloadRequests: vi.fn() });
     await h.trash(DOC);
     expect(toast.success.mock.calls[0]![0]).toBe(m["documents.trashed.es"].replace("{title}", "Lease"));
     expect(undoOf().label).toBe(m["common.undo.es"]);
@@ -58,7 +58,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
   it("a trash the server refused says why and offers no Undo (mutation: toast success before checking ok -> FAILS)", async () => {
     actions.trashDocumentAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
     const reload = vi.fn();
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     await h.trash(DOC);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused"]);
     expect(toast.success).not.toHaveBeenCalled();
@@ -67,7 +67,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
 
   it("a trash that threw (a stale tab after a redeploy) is a plain failure, never a silent one (mutation: drop the .catch -> FAILS)", async () => {
     actions.trashDocumentAction.mockRejectedValue(new Error("gone"));
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
     await h.trash(DOC);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.failed.es"]);
   });
@@ -76,7 +76,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
     actions.restoreDocumentAction.mockResolvedValue({ ok: true });
     actions.trashDocumentAction.mockResolvedValue({ ok: true, deletedAt: "y" });
     const reload = vi.fn();
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     await h.restore({ ...DOC, deletedAt: "2026-10-10T00:00:00Z" });
     expect(actions.restoreDocumentAction).toHaveBeenCalledWith("acc", "d1", "2026-10-10T00:00:00Z");
     expect(toast.success.mock.calls[0]![0]).toBe("Lease is back.");
@@ -89,7 +89,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
   it("a Restore someone beat says it could not, and re-reads so the card shows the truth (mutation: no reload on a lost restore -> FAILS)", async () => {
     actions.restoreDocumentAction.mockResolvedValue({ ok: false, error: "documents.undoChanged" });
     const reload = vi.fn();
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     await h.restore({ ...DOC, deletedAt: "2026-10-10T00:00:00Z" });
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.failed"]);
     expect(reload).toHaveBeenCalledTimes(1);
@@ -99,7 +99,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
   it("Owners only: the Undo is a compare-and-set of prior against written (mutation: undo calls setOwnersOnlyAction(prior) blind -> FAILS)", async () => {
     actions.setOwnersOnlyAction.mockResolvedValue({ ok: true, prior: false });
     actions.undoOwnersOnlyAction.mockResolvedValue({ ok: true });
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
     await h.setOwnersOnly(DOC, true);
     expect(actions.setOwnersOnlyAction).toHaveBeenCalledWith("acc", "d1", true);
     expect(toast.success.mock.calls[0]![0]).toBe("Lease is now Owners only.");
@@ -112,7 +112,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
   it("an Owners-only change the server refused says why and offers no Undo (mutation: delete the !r.ok guard in setOwnersOnly -> FAILS)", async () => {
     actions.setOwnersOnlyAction.mockResolvedValue({ ok: false, error: "documents.error.ownersOnlyRole" });
     const reload = vi.fn();
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload, reloadRequests: vi.fn() });
     await h.setOwnersOnly(DOC, true);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.ownersOnlyRole.es"]);
     expect(toast.success).not.toHaveBeenCalled();
@@ -121,7 +121,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
 
   it("letting the team see it again says so in its own words (mutation: always the Owners-only sentence -> FAILS)", async () => {
     actions.setOwnersOnlyAction.mockResolvedValue({ ok: true, prior: true });
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
     await h.setOwnersOnly({ ...DOC, ownersOnly: true }, false);
     expect(toast.success.mock.calls[0]![0]).toBe(m["documents.madeTeam.es"].replace("{title}", "Lease"));
   });
@@ -129,7 +129,7 @@ describe("trash, restore and Owners only run at once with an Undo (rule 6)", () 
   it("a second click while a write is in flight does nothing (mutation: drop the inFlight guard -> FAILS)", async () => {
     let release!: (v: unknown) => void;
     actions.trashDocumentAction.mockReturnValue(new Promise((r) => { release = r; }));
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
     const first = h.trash(DOC);
     const second = h.trash(DOC);
     release({ ok: true, deletedAt: "z" });
@@ -145,7 +145,7 @@ describe("Download", () => {
     const assign = vi.fn();
     vi.stubGlobal("window", { location: { assign } });
     try {
-      const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn() });
+      const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
       await h.download(DOC);
       expect(actions.getDocumentUrlAction).toHaveBeenCalledWith("acc", "v1", "download");
       expect(toast.error).toHaveBeenCalledWith(m["documents.error.fileNotFound.es"]);
@@ -160,7 +160,7 @@ describe("Download", () => {
     const assign = vi.fn();
     vi.stubGlobal("window", { location: { assign } });
     try {
-      const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() });
+      const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
       await h.download(DOC);
       expect(assign).toHaveBeenCalledWith("https://files.example/x");
     } finally {
@@ -174,7 +174,7 @@ describe("inline edits go through the handlers (PR 1a review M6: the styleguide 
     const reload = vi.fn();
     const undoPayload = { documentId: "d1", field: "title", prior: "Lease", written: "New lease" };
     actions.updateDocumentFieldAction.mockResolvedValue({ ok: true, shown: "New lease", undoPayload });
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     expect(await h.saveField(DOC, "title", "New lease")).toEqual({ ok: true, undoPayload, shown: "New lease" });
     expect(actions.updateDocumentFieldAction).toHaveBeenCalledWith("acc", "d1", "title", "New lease");
     expect(reload).toHaveBeenCalledTimes(1);
@@ -182,19 +182,19 @@ describe("inline edits go through the handlers (PR 1a review M6: the styleguide 
   it("a refused save is the reader's own words, with its params, and re-reads nothing (mutation: answer the raw key -> FAILS)", async () => {
     const reload = vi.fn();
     actions.updateDocumentFieldAction.mockResolvedValue({ ok: false, error: "documents.error.tooLarge", params: { size: "31 MB" } });
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload, reloadRequests: vi.fn() });
     expect(await h.saveField(DOC, "title", "x")).toEqual({ ok: false, error: m["documents.error.tooLarge.es"].replace("{size}", "31 MB") });
     expect(reload).not.toHaveBeenCalled();
   });
   it("an Undo someone beat says so in the reader's language (mutation: swallow the error -> FAILS)", async () => {
     actions.undoDocumentFieldAction.mockResolvedValue({ ok: false, error: "documents.undoChanged" });
-    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
     expect(await h.undoField({ any: "payload" })).toEqual({ ok: false, error: m["documents.undoChanged.es"] });
     expect(actions.undoDocumentFieldAction).toHaveBeenCalledWith("acc", { any: "payload" });
   });
   it("a save that throws (a stale tab) is the plain failure, never a crash (mutation: drop the .catch -> FAILS)", async () => {
     actions.updateDocumentFieldAction.mockRejectedValue(new Error("stale"));
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
     expect(await h.saveField(DOC, "title", "x")).toEqual({ ok: false, error: m["documents.error.failed"] });
   });
 });
@@ -203,7 +203,7 @@ describe("Delete forever (spec 4.4; rule 6)", () => {
   it("gone for good: a plain success toast with NO Undo, a re-read, and true so the dialog closes (mutation: offer an Undo -> FAILS)", async () => {
     const reload = vi.fn();
     actions.purgeDocumentAction.mockResolvedValue({ ok: true });
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
     expect(await h.purge(DOC, "Lease")).toBe(true);
     expect(actions.purgeDocumentAction).toHaveBeenCalledWith("acc", "d1", "Lease");
     expect(toast.success.mock.calls).toEqual([["Lease was deleted for good."]]);
@@ -211,27 +211,27 @@ describe("Delete forever (spec 4.4; rule 6)", () => {
   });
   it("Spanish success words are the Spanish catalogue's (mutation: an English toast in es -> FAILS)", async () => {
     actions.purgeDocumentAction.mockResolvedValue({ ok: true });
-    await documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn() }).purge(DOC, "Lease");
+    await documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() }).purge(DOC, "Lease");
     expect(toast.success.mock.calls).toEqual([[m["documents.purged.es"].replace("{title}", "Lease")]]);
   });
   it("a server mismatch means the title changed underneath (the button only enables on the card's own title): it says why, re-reads, and closes (review I2; mutation: no reload on a mismatch -> FAILS)", async () => {
     const reload = vi.fn();
     actions.purgeDocumentAction.mockResolvedValue({ ok: false, error: "documents.purge.mismatch" });
-    expect(await documentHandlers({ accountId: "acc", locale: "es", reload }).purge(DOC, "Lease")).toBe(true);
+    expect(await documentHandlers({ accountId: "acc", locale: "es", reload, reloadRequests: vi.fn() }).purge(DOC, "Lease")).toBe(true);
     expect(toast.error).toHaveBeenCalledWith(m["documents.purge.mismatch.es"]);
     expect(reload).toHaveBeenCalledTimes(1);
   });
   it("any refusal (changed, in flight, not an Owner) says so, re-reads and closes, never a silent no-op (review I2; mutation: return false on a refusal -> FAILS)", async () => {
     const reload = vi.fn();
     actions.purgeDocumentAction.mockResolvedValue({ ok: false, error: "documents.error.purgeChanged" });
-    expect(await documentHandlers({ accountId: "acc", locale: "en", reload }).purge(DOC, "Lease")).toBe(true);
+    expect(await documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() }).purge(DOC, "Lease")).toBe(true);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.purgeChanged"]);
     expect(reload).toHaveBeenCalledTimes(1);
   });
   it("a second click while the purge is in flight sends nothing and keeps the dialog (mutation: drop the once() guard -> FAILS)", async () => {
     let finish!: (v: { ok: true }) => void;
     actions.purgeDocumentAction.mockReturnValue(new Promise((r) => { finish = r; }));
-    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), inFlight: new Set() });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn(), inFlight: new Set() });
     const first = h.purge(DOC, "Lease");
     expect(await h.purge(DOC, "Lease")).toBe(false);
     finish({ ok: true });
@@ -241,7 +241,7 @@ describe("Delete forever (spec 4.4; rule 6)", () => {
   it("a purge that throws is the purge failure, in words (mutation: drop the .catch -> FAILS)", async () => {
     actions.purgeDocumentAction.mockRejectedValue(new Error("stale"));
     const reload = vi.fn();
-    expect(await documentHandlers({ accountId: "acc", locale: "en", reload }).purge(DOC, "Lease")).toBe(true);
+    expect(await documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() }).purge(DOC, "Lease")).toBe(true);
     expect(toast.error).toHaveBeenCalledWith(m["documents.error.purge"]);
     expect(reload).toHaveBeenCalledTimes(1);
   });
@@ -253,7 +253,7 @@ describe("Download of an older version (spec 4.3)", () => {
     const assign = vi.fn();
     vi.stubGlobal("window", { location: { assign } });
     try {
-      await documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn() }).download(DOC, "v0");
+      await documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() }).download(DOC, "v0");
       expect(actions.getDocumentUrlAction).toHaveBeenCalledWith("acc", "v0", "download");
       expect(assign).toHaveBeenCalledWith("https://files.example/old");
     } finally {
@@ -359,8 +359,6 @@ describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", (
     expect(toast.success).not.toHaveBeenCalled();
     expect(toast.error).not.toHaveBeenCalled();
     expect(reloadRequests).toHaveBeenCalledTimes(1);
-    requestActions.createDocumentRequestAction.mockRejectedValue(new Error("stale"));
-    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBe("documents.request.failed");
   });
 
   it("Revoke runs at once and offers Undo, whose action restores against the instant the revoke answered (rule 6; mutation: undo with new Date() -> FAILS)", async () => {
@@ -380,10 +378,11 @@ describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", (
   });
 
   it("a refused Revoke says why in the reader's language, offers no Undo, and re-reads the list (mutation: toast success before ok -> FAILS)", async () => {
-    requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
+    // The action's real answer for a request that is over (Task 7 fix round, e20c0de7).
+    requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.request.notOpen" });
     const { h, reloadRequests } = handlers("es");
     await h.revokeRequest("r1");
-    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused.es"]);
+    expect(toast.error).toHaveBeenCalledWith("Este pedido ya no está abierto.");
     expect(toast.success).not.toHaveBeenCalled();
     expect(reloadRequests).toHaveBeenCalledTimes(1);
   });
@@ -420,12 +419,30 @@ describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", (
   });
 
   it("Copy link on a request that closed says why, copies nothing, and re-reads the list", async () => {
-    requestActions.documentRequestLinkAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
+    requestActions.documentRequestLinkAction.mockResolvedValue({ ok: false, error: "documents.request.notOpen" });
     const writeText = vi.fn(async () => {});
-    const { h, reloadRequests } = handlers();
+    const { h, reloadRequests } = handlers("es");
     await withClipboard(writeText, () => h.copyRequestLink("r1"));
     expect(writeText).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused"]);
+    expect(toast.error).toHaveBeenCalledWith("Este pedido ya no está abierto.");
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("a request created whose held time cannot be put in its zone still says it was saved, never 'couldn't create' (review M5; mutation: no fallback -> FAILS)", async () => {
+    requestActions.createDocumentRequestAction.mockResolvedValue(created({ kind: "held", until: "2026-10-15T13:00:00.000Z", zone: "Not/AZone" }));
+    const { h, reloadRequests } = handlers();
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBeNull();
+    expect(toast.success.mock.calls[0]![0]).toMatch(/^Request saved\. It goes out at \d{1,2}:\d{2}\s[AP]M, after quiet hours\.$/);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(reloadRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("an action that threw or never answered may still have created the request: it says the page may be out of date, never 'couldn't create', and the dialog closes onto the re-read list (review M5; mutation: answer documents.request.failed -> FAILS)", async () => {
+    requestActions.createDocumentRequestAction.mockRejectedValue(new Error("lost"));
+    const { h, reloadRequests } = handlers("es");
+    expect(await h.askCustomer({ record: RECORD, items: ITEMS, channel: "text" })).toBeNull();
+    expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed.es"]);
+    expect(toast.error).not.toHaveBeenCalledWith(m["documents.request.failed.es"]);
     expect(reloadRequests).toHaveBeenCalledTimes(1);
   });
 });

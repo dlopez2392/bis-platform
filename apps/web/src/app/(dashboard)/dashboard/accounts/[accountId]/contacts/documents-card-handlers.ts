@@ -52,9 +52,12 @@ export type DocumentHandlers = {
 type Answer = { ok: true } | { ok: false; error: string; params?: Record<string, string | number> };
 const failed = { ok: false as const, error: "documents.error.failed" };
 
-export function documentHandlers({ accountId, locale, reload, reloadRequests = () => {}, inFlight = new Set<string>() }: {
-  /** `reloadRequests` re-reads the card's open requests, which load apart from its files (spec 6). */
-  accountId: string; locale: Locale; reload: () => void; reloadRequests?: () => void; inFlight?: Set<string>;
+export function documentHandlers({ accountId, locale, reload, reloadRequests, inFlight = new Set<string>() }: {
+  /**
+   * `reloadRequests` re-reads the card's open requests, which load apart from its files (spec 6). Required
+   * (review I1): a default no-op let the card drop it with no test and no compiler noticing.
+   */
+  accountId: string; locale: Locale; reload: () => void; reloadRequests: () => void; inFlight?: Set<string>;
 }): DocumentHandlers {
   const tt = (key: string, params?: Record<string, string | number>) => t(m, key as MessageKey, locale, params);
   const say = (a: { error: string; params?: Record<string, string | number> }) => toast.error(tt(a.error, a.params));
@@ -89,9 +92,20 @@ export function documentHandlers({ accountId, locale, reload, reloadRequests = (
     }
   }
 
-  /** "8:00 AM" in the zone the answer names (the account's, or UTC when the ledger could not say). */
-  const heldTime = (until: string, zone: string) =>
-    new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", { hour: "numeric", minute: "2-digit", timeZone: zone }).format(new Date(until));
+  /**
+   * "8:00 AM" in the zone the answer names (the account's, or UTC when the ledger could not say). A zone
+   * this browser cannot name (review M5) falls back to the browser's own clock, the account's time with no
+   * zone label: the request exists by now, so the toast must still say it was saved, never throw.
+   */
+  const heldTime = (until: string, zone: string) => {
+    const opts = { hour: "numeric", minute: "2-digit" } as const;
+    const tag = locale === "es" ? "es-US" : "en-US";
+    try {
+      return new Intl.DateTimeFormat(tag, { ...opts, timeZone: zone }).format(new Date(until));
+    } catch {
+      return new Intl.DateTimeFormat(tag, opts).format(new Date(until));
+    }
+  };
   /** A request's row in the one-write-at-a-time lock, apart from any file's id. */
   const requestRow = (id: string) => `request:${id}`;
 
@@ -166,10 +180,13 @@ export function documentHandlers({ accountId, locale, reload, reloadRequests = (
     },
     changed: reload,
     async askCustomer({ record, items, channel }) {
-      const r = await createDocumentRequestAction(accountId, { record, items, channel })
-        .catch(() => ({ ok: false as const, error: "documents.request.failed" }));
+      // Review M5: an action that threw or never answered (a stale tab, a lost response) may still have created
+      // the request, so it is never "Couldn't create the request" (that invites a duplicate send): the page may
+      // be out of date, the dialog closes (null), and the re-read list shows whether it exists.
+      const r = await createDocumentRequestAction(accountId, { record, items, channel }).catch(() => null);
       // Every answer re-reads the requests once: a new one is listed, and a refusal brings the channels up to date.
       reloadRequests();
+      if (!r) { toast.error(tt("common.actionCrashed")); return null; }
       if (!r.ok) return r.error as MessageKey;
       const d = r.delivery;
       if (d.kind === "link") await copyLink(r.url);

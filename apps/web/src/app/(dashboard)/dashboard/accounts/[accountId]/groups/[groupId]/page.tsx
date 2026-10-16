@@ -227,7 +227,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
       : failed("record.card.deals"),
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "group", id: group.id }} canManage={access.canManage}
-        emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} />,
+        emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} name={group.name} />,
     },
     people: people.status === "ready"
       ? {

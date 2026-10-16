@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentRequestForm, requestFromForm, requestTitle } = await import("./document-request-dialog");
+const { DocumentRequestForm, requestFromForm, requestTitle, chosenChannel } = await import("./document-request-dialog");
 type Props = Parameters<typeof DocumentRequestForm>[0];
 
 const render = (over: Partial<Props> = {}) => renderToStaticMarkup(createElement(DocumentRequestForm, {
@@ -126,6 +126,19 @@ describe("the Ask the customer form (spec 4.2)", () => {
 
   it("paints no literal colour (tokens only)", () => {
     expect(render({ error: "documents.request.pickOne", initialItems: ["other"], channels: { text: false, email: false } })).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+  });
+});
+
+describe("chosenChannel (pure, review M3)", () => {
+  it("keeps the person's choice while it is on offer; the link is always on offer", () => {
+    expect(chosenChannel("email", { text: true, email: true })).toBe("email");
+    expect(chosenChannel("link", { text: false, email: false })).toBe("link");
+    expect(chosenChannel("text", { text: true, email: false })).toBe("text");
+  });
+  it("a choice a re-read took away falls back to the seed, never a disabled radio left checked (mutation: return the choice as is -> FAILS)", () => {
+    expect(chosenChannel("text", { text: false, email: true })).toBe("email");
+    expect(chosenChannel("email", { text: true, email: false })).toBe("text");
+    expect(chosenChannel("text", { text: false, email: false })).toBe("link");
   });
 });
 

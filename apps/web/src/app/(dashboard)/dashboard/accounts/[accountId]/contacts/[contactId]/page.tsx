@@ -237,7 +237,7 @@ export default async function ContactDetailPage({
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "contact", id: contactId }} canManage={access.canManage}
-        emptyText={tr.text("documents.empty.contact")} />,
+        emptyText={tr.text("documents.empty.contact")} name={name} />,
     },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"

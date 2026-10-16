@@ -54,6 +54,25 @@ describe("the open requests on the Documents card (spec 4.2, 6)", () => {
     for (const c of ["font-mono", "text-[10px]", "font-medium", "uppercase", "tracking-[0.14em]"]) expect(label).toContain(c);
   });
 
+  it("each row's Copy link and Revoke are described by THAT row's items, so two rows' buttons are told apart (review M8; mutation: drop aria-describedby -> FAILS)", () => {
+    const html = render(ready([request(), request({ id: "r2", items: [{ key: "id", category: "id", note: null, answered: false }] })]));
+    for (const id of ["r1", "r2"]) {
+      const at = html.indexOf(`data-document-request="${id}"`);
+      const next = html.indexOf("data-document-request=", at + 1);
+      const row = html.slice(at, next === -1 ? undefined : next);
+      const list = /<ul id="([^"]+)"/.exec(row)![1]!;
+      const copy = /<button[^>]*data-request-copy[^>]*>/.exec(row)![0];
+      const revoke = /<button[^>]*data-request-revoke[^>]*>/.exec(row)![0];
+      expect(copy).toContain(`aria-describedby="${list}"`);
+      expect(revoke).toContain(`aria-describedby="${list}"`);
+    }
+    const ids = [...html.matchAll(/<ul id="([^"]+)"/g)].map((x) => x[1]);
+    expect(new Set(ids).size).toBe(2);
+    // The describing list holds the items' words.
+    const first = html.slice(html.indexOf(`<ul id="${ids[0]}"`));
+    expect(words(first.slice(0, first.indexOf("</ul>")))).toContain("Insurance · Received");
+  });
+
   it("each request's rows carry its id; one row per request", () => {
     const html = render(ready([request(), request({ id: "r2" })]));
     expect(html.match(/data-document-request="/g)).toHaveLength(2);
