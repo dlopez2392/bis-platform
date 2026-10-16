@@ -14,7 +14,7 @@ vi.mock("./document-requests-actions", () => ({
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
-  shouldReloadRequests, askAfter, keepRequests } = await import("./documents-card");
+  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -520,5 +520,62 @@ describe("keepRequests: a failed re-read keeps what the list shows (review M2)",
     expect(keepRequests({ route: "/other", load: requestsReady([openRequest]) }, R, { kind: "error" })).toEqual({ route: R, load: { kind: "error" } });
     const fresh = requestsReady([]);
     expect(keepRequests(shown, R, fresh)).toEqual({ route: R, load: fresh });
+  });
+});
+
+describe("requestsPollMs: the open requests' own 20s check (S-07 2b follow-up, owner ruling 2026-10-16)", () => {
+  const open = requestsReady([openRequest]);
+  it("an open request on a visible tab checks every 20 seconds", () => {
+    expect(REQUESTS_POLL_MS).toBe(20_000);
+    expect(requestsPollMs(open, false)).toBe(20_000);
+  });
+  it("a hidden tab schedules nothing (mutation: ignore hidden -> FAILS)", () => {
+    expect(requestsPollMs(open, true)).toBeNull();
+  });
+  it("nothing open schedules nothing (mutation: poll with no open request -> FAILS)", () => {
+    expect(requestsPollMs(requestsReady([]), false)).toBeNull();
+  });
+  it("a read still loading, or failed, schedules nothing (mutation: poll whatever the read's kind -> FAILS)", () => {
+    expect(requestsPollMs({ kind: "loading" }, false)).toBeNull();
+    expect(requestsPollMs({ kind: "error" }, false)).toBeNull();
+  });
+  it("its timer key re-arms on every settle, like the files' (mutation: a key that ignores the reads counter -> FAILS)", () => {
+    const ms = requestsPollMs(open, false);
+    expect(pollTimerKey(ms, 3)).not.toBe(pollTimerKey(ms, 4));
+    expect(pollTimerKey(requestsPollMs(open, true), 3)).toBeNull();
+  });
+});
+
+describe("requestsChanged: did a customer's file arrive between two requests reads (S-07 2b follow-up)", () => {
+  const req = (over: Record<string, unknown> = {}, answered = false) => ({ ...openRequest,
+    items: [{ key: "insurance", category: "insurance", note: null, answered }, { key: "other", category: "other", note: "Pool permit", answered: false }], ...over });
+  const at = (now: string, requests: unknown[]) =>
+    ({ kind: "ready", data: { now, channels: { text: true, email: true }, requests } } as RequestsLoad);
+  const T1 = "2026-10-13T15:00:00.000Z";
+  const T2 = "2026-10-13T15:00:20.000Z";
+
+  it("the same read twice is no change, so a refresh (or the files' re-read it causes) can never cause another (mutation: always true -> FAILS)", () => {
+    expect(requestsChanged(at(T1, [req()]), at(T1, [req()]))).toBe(false);
+    expect(requestsChanged(at(T1, [req({}, true)]), at(T1, [req({}, true)]))).toBe(false);
+    expect(requestsChanged(at(T1, []), at(T1, []))).toBe(false);
+  });
+  it("only the clock moving (now, and with it the days-left words) is no change (mutation: compare the whole read -> FAILS)", () => {
+    expect(requestsChanged(at(T1, [req()]), at("2026-10-14T15:00:00.000Z", [req()]))).toBe(false);
+    expect(requestsChanged(at(T1, [req()]), at(T2, [req()]))).toBe(false);
+  });
+  it("an item answered is a change (mutation: ignore answered -> FAILS)", () => {
+    expect(requestsChanged(at(T1, [req()]), at(T2, [req({}, true)]))).toBe(true);
+  });
+  it("a request that completed, or was revoked, leaves the open list: a change (mutation: only compare requests present in both -> FAILS)", () => {
+    expect(requestsChanged(at(T1, [req()]), at(T2, []))).toBe(true);
+    expect(requestsChanged(at(T1, [req(), req({ id: "r2" })]), at(T2, [req({ id: "r2" })]))).toBe(true);
+  });
+  it("a NEW request is not a file arriving: no refresh (staff's own Ask already re-reads)", () => {
+    expect(requestsChanged(at(T1, []), at(T2, [req()]))).toBe(false);
+  });
+  it("no ready read on either side is no change: the first read, a failed tick, a Retry's skeleton", () => {
+    expect(requestsChanged({ kind: "loading" }, at(T1, [req()]))).toBe(false);
+    expect(requestsChanged(at(T1, [req()]), { kind: "error" })).toBe(false);
+    expect(requestsChanged({ kind: "error" }, at(T1, []))).toBe(false);
   });
 });
