@@ -15,7 +15,8 @@ import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { FORM_ACCENT_FALLBACK, SIDEBAR_PREVIEW_BG, resolveSidebarAccent } from "@/lib/branding/color";
 import { SIDEBAR_FOREGROUND } from "@/lib/branding/neutral-ramps";
-import { panelCopy, type BrandingAudience } from "@/lib/branding/panel-copy";
+import { panelCopy, repliesLine, type BrandingAudience } from "@/lib/branding/panel-copy";
+import type { InboundMode } from "@bis/db";
 import { publicFormTheme } from "@/lib/branding/public-form-theme";
 import { deriveTheme, type CornerName, type ModeName, type NeutralName, type TypeName } from "@/lib/branding/theme";
 import { themeStyle } from "@/lib/branding/theme-style";
@@ -75,6 +76,7 @@ export function BrandingPanel({
   brandType,
   brandMode,
   logoUrl,
+  replyRoute,
   action,
   removeLogoAction,
   restoreLogoAction,
@@ -82,6 +84,11 @@ export function BrandingPanel({
   audience?: BrandingAudience;
   brandName: string | null;
   replyToEmail: string | null;
+  /** S-06 part 1, Task 10: the account's Replies setting, read in the SAME
+   *  call the page already makes (getInboundSettings) — never derived here.
+   *  Optional only because the panel also renders with no account behind it
+   *  (the styleguide); every real page passes it. */
+  replyRoute?: { mode: InboundMode; domain: string | null };
   /** Migration 0048, read with `getMailingAddress` — it is not on `Branding`.
    *  Required, not optional, so a caller that forgets it fails typecheck
    *  instead of rendering an empty box whose next save clears the address. */
@@ -271,6 +278,10 @@ export function BrandingPanel({
               defaultValue={replyToEmail ?? ""}
             />
             <p className="text-xs text-muted-foreground">{copy.replyToHint}</p>
+            {replyRoute ? (() => {
+              const line = repliesLine(audience, replyRoute);
+              return line ? <p data-replies-line className="text-xs text-muted-foreground">{line}</p> : null;
+            })() : null}
           </div>
 
           <div className="space-y-1.5">

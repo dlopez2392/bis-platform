@@ -1,10 +1,12 @@
 import { Suspense } from "react";
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding, getMailingAddress,
-         getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, type CustomFieldDef } from "@bis/db";
+         getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, getInboundSettings,
+         type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
-         startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setAccountLanguageAction } from "./actions";
+         startAlertPhoneVerificationAction, confirmAlertPhoneVerificationAction, setAccountLanguageAction,
+         setInboundModeAction, checkInboundDnsAction } from "./actions";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "../branding/actions";
 import { SaveBlueprintDialog } from "./save-blueprint-dialog";
 import { ApplyBlueprintDialog } from "./apply-blueprint-dialog";
@@ -64,7 +66,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate] = await Promise.all([
+  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate, replies] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -95,6 +97,12 @@ export default async function CrmSettingsPage({
     // here purely to decide whether AlertPhoneCard's "nothing will actually
     // send yet" notice applies — not a guard, just the fact behind one.
     resolveSmsSender(db, accountId),
+    // The Replies row (S-06 part 1, Task 10): read the same way as every
+    // other `accounts` column on this page (the request-scoped client) —
+    // 0082 adds no SELECT revoke, only the absent UPDATE grant that makes
+    // setInboundModeAction's own requireAgencyOnlyAccountAccess guard the
+    // only gate on the WRITE.
+    getInboundSettings(db, accountId),
   ]);
 
   const boundCreateField = createFieldAction.bind(null, accountId);
@@ -109,6 +117,8 @@ export default async function CrmSettingsPage({
   const boundStartAlertPhoneVerification = startAlertPhoneVerificationAction.bind(null, accountId);
   const boundConfirmAlertPhoneVerification = confirmAlertPhoneVerificationAction.bind(null, accountId);
   const boundSetAccountLanguage = setAccountLanguageAction.bind(null, accountId);
+  const boundSetInboundMode = setInboundModeAction.bind(null, accountId);
+  const boundCheckInboundDns = checkInboundDnsAction.bind(null, accountId);
   const boundSetRequiredDocumentCategories = setRequiredDocumentCategoriesAction.bind(null, accountId);
   const requiredDocumentCategories = cleanRequiredCategories(account.required_document_categories);
   if (requiredDocumentCategories === null) {
@@ -212,6 +222,7 @@ export default async function CrmSettingsPage({
           brandType={branding.brandType}
           brandMode={branding.brandMode}
           logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+          replyRoute={replies}
           action={boundSetBranding}
           removeLogoAction={boundRemoveLogo}
           restoreLogoAction={boundRestoreLogo}
@@ -219,6 +230,9 @@ export default async function CrmSettingsPage({
         <SendingAddressCard
           fromEmail={sendingIdentity.fromEmail}
           action={boundSetFromEmail}
+          replies={replies}
+          setReplies={boundSetInboundMode}
+          checkDns={boundCheckInboundDns}
         />
         <WeeklyReportCard
           reportEmails={account.report_emails}

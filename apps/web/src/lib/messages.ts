@@ -4708,6 +4708,8 @@ export const m = {
   "settings.replies.ownBody.es": "Los clientes responden a una dirección en {domain}, y la respuesta llega a su conversación aquí.",
   "settings.replies.domainLabel": "Reply domain",
   "settings.replies.domainLabel.es": "Dominio de respuesta",
+  "settings.replies.domainPlaceholder": "reply.example.com",
+  "settings.replies.domainPlaceholder.es": "reply.ejemplo.com",
   "settings.replies.checkDns": "Check DNS",
   "settings.replies.checkDns.es": "Revisar DNS",
   "settings.replies.dnsOk": "The MX record points at Resend. You can use this domain.",

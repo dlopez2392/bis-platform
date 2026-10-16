@@ -40,6 +40,11 @@ const demoOk = async () => ({ ok: true as const });
 const demoStartOk = async () => ({ ok: true as const, phone: "+19565550100" });
 const demoSelfLoopRefusal = async () => ({ ok: false as const, error: m["settings.alertPhoneSelfWarning"] });
 const demoWrongCode = async () => ({ ok: false as const, error: m["settings.alertPhoneWrongCode"] });
+// The Replies row (S-06 part 1, Task 10): setReplies answers the SHAPE
+// setInboundModeAction does (previous settings, for the Undo toast), and
+// checkDns answers ready — nothing here is persisted.
+const demoSetReplies = async () => ({ ok: true as const, previous: { mode: "bis" as const, domain: null } });
+const demoCheckDnsOk = async () => ({ ok: true as const });
 
 function Demo({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -55,8 +60,19 @@ function Demo({ label, children }: { label: string; children: React.ReactNode })
 export function SettingsFieldCards() {
   return (
     <>
+      {/* S-06 part 1, Task 10: the Replies row below the sending-address
+          form. Real and clickable, like the alert-texts demos further
+          down — picking "Own domain" here reveals the field and Check DNS
+          exactly as it does on Settings, so this one demo documents both
+          states rather than freezing a second static copy of the card. */}
       <Demo label="Agency — sending address">
-        <SendingAddressCard fromEmail="hello@rioroofing.test" action={demoOk} />
+        <SendingAddressCard
+          fromEmail="hello@rioroofing.test"
+          action={demoOk}
+          replies={{ mode: "bis", domain: null }}
+          setReplies={demoSetReplies}
+          checkDns={demoCheckDnsOk}
+        />
       </Demo>
       <Demo label="Agency — weekly report">
         <WeeklyReportCard reportEmails={["owner@rioroofing.test"]} action={demoOk} />

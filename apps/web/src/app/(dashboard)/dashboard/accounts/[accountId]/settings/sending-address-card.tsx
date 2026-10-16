@@ -1,13 +1,185 @@
 "use client";
 
+import { useState } from "react";
 import { toast } from "sonner";
+import type { InboundMode } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { SubmitButton } from "../../submit-button";
 import { m } from "@/lib/messages";
+import { cn } from "@/lib/utils";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
+import type { InboundModeResult, DnsCheckResult } from "./actions";
+
+const MODE_LABEL: Record<InboundMode, string> = {
+  off: m["settings.replies.off"],
+  bis: m["settings.replies.bis"],
+  own_domain: m["settings.replies.own"],
+};
+
+const MODE_OPTIONS: readonly InboundMode[] = ["off", "bis", "own_domain"];
+
+/** The body sentence under the state dot — the mode's own sentence, never another mode's (mutation target: swap bis/off → caught in sending-address-card.test.ts). */
+function repliesBody(s: { mode: InboundMode; domain: string | null }): string {
+  if (s.mode === "off") return m["settings.replies.offBody"];
+  if (s.mode === "bis") return m["settings.replies.bisBody"];
+  return m["settings.replies.ownBody"].replace("{domain}", s.domain ?? "");
+}
+
+/**
+ * The Replies row (S-06 part 1, Task 10): on/off customer replies into BIS,
+ * either at the shared BIS address or the client's own domain once its DNS
+ * is proven. Applies AT ONCE with an Undo toast (DESIGN.md rule 6) — there
+ * is no Save button for this row, unlike the sending-address form above it.
+ *
+ * "Own domain" is a two-step choice, not a single radio click: picking the
+ * tile only REVEALS the domain field and Check DNS — selecting it never
+ * calls `setReplies` itself. Only a Check DNS that answers `{ ok: true }`
+ * writes the mode (the server re-checks the MX anyway; this is a
+ * convenience, never a trust boundary — setInboundModeAction's own comment).
+ * Picking Off or BIS address applies immediately, same as every other
+ * at-once control in this app (the Texts row, the Email row).
+ */
+function RepliesRow({
+  replies, setReplies, checkDns,
+}: {
+  replies: { mode: InboundMode; domain: string | null };
+  setReplies: (next: { mode: InboundMode; domain: string | null }) => Promise<InboundModeResult>;
+  checkDns: (domain: string) => Promise<DnsCheckResult>;
+}) {
+  // What is actually SAVED — drives the dot and the body sentence.
+  const [applied, setApplied] = useState(replies);
+  // What the radio group shows — can sit on "own_domain" locally while
+  // nothing has been written yet (the field is revealed but unconfirmed).
+  const [selected, setSelected] = useState<InboundMode>(replies.mode);
+  const [domainInput, setDomainInput] = useState(replies.domain ?? "");
+  const [dnsResult, setDnsResult] = useState<DnsCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  function undoableSave(next: { mode: InboundMode; domain: string | null }, result: InboundModeResult & { ok: true }) {
+    setApplied(next);
+    setSelected(next.mode);
+    toast.success(m["settings.replies.saved"].replace("{mode}", MODE_LABEL[next.mode]), {
+      action: {
+        label: m["common.undo"],
+        onClick: () => {
+          void setReplies(result.previous).then((back) => {
+            if (!back.ok) { toast.error(back.error); return; }
+            setApplied(result.previous);
+            setSelected(result.previous.mode);
+            setDomainInput(result.previous.domain ?? "");
+            setDnsResult(null);
+            toast.success(m["settings.replies.undone"].replace("{mode}", MODE_LABEL[result.previous.mode]));
+          });
+        },
+      },
+    });
+  }
+
+  async function chooseOffOrBis(next: "off" | "bis") {
+    setSaving(true);
+    try {
+      const result = await setReplies({ mode: next, domain: applied.domain });
+      if (!result.ok) { toast.error(result.error); return; }
+      undoableSave({ mode: next, domain: applied.domain }, result);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function chooseOwnDomain() {
+    // Reveals the field; writes nothing yet.
+    setSelected("own_domain");
+    setDnsResult(null);
+  }
+
+  async function runCheckDns() {
+    setChecking(true);
+    try {
+      const result = await checkDns(domainInput);
+      setDnsResult(result);
+      if (!result.ok) return;
+      setSaving(true);
+      try {
+        const saveResult = await setReplies({ mode: "own_domain", domain: domainInput });
+        if (!saveResult.ok) { toast.error(saveResult.error); return; }
+        undoableSave({ mode: "own_domain", domain: domainInput }, saveResult);
+      } finally {
+        setSaving(false);
+      }
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const busy = checking || saving;
+
+  return (
+    <div className="mt-4 border-t border-[var(--line)] pt-4">
+      <Label>{m["settings.replies.label"]}</Label>
+      <p data-replies-state={applied.mode} className="mt-2 flex items-center gap-2 text-sm">
+        <span
+          data-dot
+          aria-hidden
+          className={cn("size-2 rounded-full", applied.mode === "off" ? "bg-[var(--text-3)]" : "bg-[var(--good)]")}
+        />
+        <span className="font-medium text-card-foreground">{MODE_LABEL[applied.mode]}</span>
+      </p>
+      <p className="mt-1 text-sm text-muted-foreground">{repliesBody(applied)}</p>
+
+      <fieldset role="radiogroup" className="mt-3 flex flex-wrap gap-3" disabled={busy}>
+        {MODE_OPTIONS.map((value) => (
+          <label key={value} className="flex min-h-11 items-center gap-1.5 text-sm md:min-h-8">
+            <input
+              type="radio"
+              name="replies-mode"
+              value={value}
+              checked={selected === value}
+              disabled={busy}
+              onChange={() => {
+                if (value === "own_domain") chooseOwnDomain();
+                else void chooseOffOrBis(value);
+              }}
+            />
+            {MODE_LABEL[value]}
+          </label>
+        ))}
+      </fieldset>
+
+      {selected === "own_domain" ? (
+        <div className="mt-3 flex flex-col gap-1.5">
+          <Label htmlFor="replies-domain">{m["settings.replies.domainLabel"]}</Label>
+          <div className="flex gap-2">
+            <Input
+              id="replies-domain"
+              value={domainInput}
+              onChange={(e) => { setDomainInput(e.target.value); setDnsResult(null); }}
+              placeholder={m["settings.replies.domainPlaceholder"]}
+              className="font-mono"
+            />
+            {/* Ghost, never the card's one primary (DESIGN rule 8): Save
+                above stays the only `default`-variant button on this card. */}
+            <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={() => void runCheckDns()}>
+              {m["settings.replies.checkDns"]}
+            </Button>
+          </div>
+          {dnsResult ? (
+            <p className="flex items-center gap-1.5 text-xs">
+              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dnsResult.ok ? "bg-[var(--good)]" : "bg-[var(--crit)]")} />
+              <span className={dnsResult.ok ? "text-muted-foreground" : "text-[var(--crit)]"}>
+                {dnsResult.ok ? m["settings.replies.dnsOk"] : dnsResult.error}
+              </span>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * Agency-only by construction: this component is rendered from the Settings
@@ -24,10 +196,14 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
  * returns a result and this renders it.
  */
 export function SendingAddressCard({
-  fromEmail, action,
+  fromEmail, action, replies, setReplies, checkDns,
 }: {
   fromEmail: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** The Replies row's current, SAVED settings (S-06 part 1, Task 10). */
+  replies: { mode: InboundMode; domain: string | null };
+  setReplies: (next: { mode: InboundMode; domain: string | null }) => Promise<InboundModeResult>;
+  checkDns: (domain: string) => Promise<DnsCheckResult>;
 }) {
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
@@ -83,6 +259,8 @@ export function SendingAddressCard({
           )}
           <SubmitButton pending={pending}>{m["common.save"]}</SubmitButton>
         </form>
+
+        <RepliesRow replies={replies} setReplies={setReplies} checkDns={checkDns} />
       </CardContent>
     </Card>
   );

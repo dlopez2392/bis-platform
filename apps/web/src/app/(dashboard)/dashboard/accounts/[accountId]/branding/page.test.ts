@@ -44,6 +44,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
     return dbFixture.mailingAddress;
   },
   brandLogoUrl: (p: string) => `https://example.test/${p}`,
+  getInboundSettings: async () => ({ mode: "off", domain: null }),
 }));
 
 const gateFixture = vi.hoisted(() => ({ ok: true }));

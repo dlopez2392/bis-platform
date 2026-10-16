@@ -62,6 +62,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   getSiteForAccount: async () => null,
   countTrafficDays: async () => 0,
   brandLogoUrl: (p: string) => `https://example.test/${p}`,
+  getInboundSettings: vi.fn().mockResolvedValue({ mode: "bis", domain: null }),
 }));
 
 // Both third parties answer NEVER. The page must still resolve, because the
@@ -83,6 +84,7 @@ vi.mock("./actions", () => ({
   setFromEmailAction: noop, setReportEmailsAction: noop,
   setAlertPhoneAction: noop, startAlertPhoneVerificationAction: noop,
   confirmAlertPhoneVerificationAction: noop, setAccountLanguageAction: noop,
+  setInboundModeAction: noop, checkInboundDnsAction: noop,
 }));
 vi.mock("./document-requirements-actions", () => ({ setRequiredDocumentCategoriesAction: noop }));
 vi.mock("../branding/actions", () => ({
@@ -308,6 +310,22 @@ describe("settings page — the custom field key input refuses the reserved key 
  * saying what the setting changes — the client's logins and their alert
  * texts — and that agency staff stay in English.
  */
+describe("settings page — the Replies row (S-06 part 1, Task 10)", () => {
+  it("passes the stored inbound settings to SendingAddressCard and the bound actions (mutation: pass replies={mode:'off',domain:null} regardless of the stored value → FAILS)", async () => {
+    const { SendingAddressCard } = await import("./sending-address-card");
+    const all = await pageElements();
+    const el = all.find((e) => e.type === SendingAddressCard);
+    expect(el, "SendingAddressCard mounted").toBeTruthy();
+    expect(el!.props.replies).toEqual({ mode: "bis", domain: null });
+    expect(typeof el!.props.setReplies).toBe("function");
+    expect(typeof el!.props.checkDns).toBe("function");
+  });
+
+  it("passes the same inbound settings to BrandingPanel as replyRoute (mutation: omit replyRoute → FAILS)", async () => {
+    expect((await panelProps()).replyRoute).toEqual({ mode: "bis", domain: null });
+  });
+});
+
 describe("settings page — the Language card", () => {
   it("renders the field over LANGUAGE_OPTIONS and explains what it changes (mutation: drop the CardDescription → FAILS; pass a hand-copied option list → FAILS)", async () => {
     const all = await pageElements();
