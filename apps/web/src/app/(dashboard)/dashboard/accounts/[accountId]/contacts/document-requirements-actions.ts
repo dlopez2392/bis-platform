@@ -61,7 +61,8 @@ export async function undoSkipDocumentRequirementAction(accountId: string, skipI
   try {
     const row = await getDocumentSkip(await dbForRequest(), accountId, skipId.toLowerCase());
     if (!row || row.skipped_by !== access.userId || row.unskipped_at !== null
-      || Date.now() - Date.parse(row.created_at) > DOCUMENT_REQUIREMENT_UNDO_MS) return fail(CHANGED);
+      // Written as "not within" so an unreadable created_at (NaN) is refused, never inside the window.
+      || !(Date.now() - Date.parse(row.created_at) <= DOCUMENT_REQUIREMENT_UNDO_MS)) return fail(CHANGED);
     return (await undoDocumentSkip(serviceDb(), accountId, row.id, access.userId)) ? { ok: true } : fail(CHANGED);
   } catch (e) {
     log("undo skip", accountId, e, skipId);

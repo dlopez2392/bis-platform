@@ -129,13 +129,18 @@ describe("Undo a skip: undoSkipDocumentRequirementAction (the actor's own, withi
   it("refuses, writing nothing, when the row is gone, someone else skipped it, it was un-skipped, or a malformed id (mutation: check skipped_by after the write -> FAILS)", async () => {
     for (const answer of [null, skipRow({ skipped_by: "user_other" }), skipRow({ unskipped_at: "2026-10-16T14:58:00Z", unskipped_by: "user_me" })]) {
       h.getDocumentSkip.mockResolvedValueOnce(answer);
-      expect((await A.undoSkipDocumentRequirementAction(ACC, S)).ok).toBe(false);
+      expect(await A.undoSkipDocumentRequirementAction(ACC, S)).toEqual({ ok: false, error: "documents.checklist.changed" });
     }
     expect(await A.undoSkipDocumentRequirementAction(ACC, "nope")).toEqual({ ok: false, error: "documents.checklist.refused" });
     expect(writes()).toEqual([]);
   });
   it("refuses past the window, writing nothing (mutation: no window -> the 11-minute case writes -> FAILS)", async () => {
     h.getDocumentSkip.mockResolvedValue(skipRow({ created_at: new Date(NOW.getTime() - 11 * 60_000).toISOString() }));
+    expect(await A.undoSkipDocumentRequirementAction(ACC, S)).toEqual({ ok: false, error: "documents.checklist.changed" });
+    expect(writes()).toEqual([]);
+  });
+  it("refuses an unreadable created_at, writing nothing: NaN never passes the window (mutation: `elapsed > MS` -> FAILS)", async () => {
+    h.getDocumentSkip.mockResolvedValue(skipRow({ created_at: "not a time" }));
     expect(await A.undoSkipDocumentRequirementAction(ACC, S)).toEqual({ ok: false, error: "documents.checklist.changed" });
     expect(writes()).toEqual([]);
   });
@@ -208,6 +213,11 @@ describe("Undo Needed again: undoUnskipDocumentRequirementAction (the actor's ow
     expect(await A.undoUnskipDocumentRequirementAction(ACC, S, "yesterday")).toEqual({ ok: false, error: "documents.checklist.refused" });
     expect(await A.undoUnskipDocumentRequirementAction(ACC, "nope", UNSKIPPED_AT)).toEqual({ ok: false, error: "documents.checklist.refused" });
     expect(calls.filter((c) => c !== "requireAccountAccess")).toEqual([]);
+  });
+  it("a Technician may not undo Needed again either (D1; mutation: drop the role check -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(TECH);
+    expect(await A.undoUnskipDocumentRequirementAction(ACC, S, UNSKIPPED_AT)).toEqual({ ok: false, error: "documents.checklist.skipRole" });
+    expect(calls).toEqual(["requireAccountAccess"]);
   });
   it("a restore that found nothing (a race, or a newer skip) is 'changed first'", async () => {
     h.undoDocumentUnskip.mockResolvedValue(false);
