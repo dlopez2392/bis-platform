@@ -4652,6 +4652,10 @@ export const m = {
   "conversations.held.searchLabel.es": "Buscar un cliente",
   "conversations.held.searchEmpty": "No customer matches that.",
   "conversations.held.searchEmpty.es": "Ningún cliente coincide con eso.",
+  // Addition 2 (coordinator, 2026-10-16): the search call itself failing,
+  // distinct from searchEmpty (a real, empty result).
+  "conversations.held.searchFailed": "Couldn't search right now. Try again.",
+  "conversations.held.searchFailed.es": "No se pudo buscar en este momento. Inténtelo de nuevo.",
   "conversations.held.notCustomer": "Not a customer",
   "conversations.held.notCustomer.es": "No es un cliente",
   "conversations.held.filed": "Filed on {name}.",
@@ -4660,6 +4664,10 @@ export const m = {
   "conversations.held.dismissed.es": "Marcado como que no es un cliente.",
   "conversations.held.undone": "Back in Needs a look.",
   "conversations.held.undone.es": "De vuelta en Por revisar.",
+  // Addition 2 (coordinator, 2026-10-16): Undo of a File succeeded, but the
+  // customer's own emailed stop couldn't be lifted along with it.
+  "conversations.held.undoneStopped": "Back in Needs a look, but their emails are still stopped. Open their record to turn them back on.",
+  "conversations.held.undoneStopped.es": "De vuelta en Por revisar, pero sus correos siguen detenidos. Abra su ficha para volver a activarlos.",
   "conversations.held.changed": "Someone already handled this email. Reload to see where it is.",
   "conversations.held.changed.es": "Alguien ya atendió este correo. Vuelva a cargar para ver dónde está.",
   "conversations.held.failed": "That didn't save. Try again.",
