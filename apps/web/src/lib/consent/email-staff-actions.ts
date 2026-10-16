@@ -125,15 +125,24 @@ export async function recordInboundStop(
 
 /**
  * The Undo of an emailed stop (0082): only that inbound_email stop, while it is still the newest row.
- * Any member may run it (no actor_id check — nobody "claims" a webhook-recorded stop the way a staff
- * action is claimed). Past the owner's 7-day window (0082's function), the ledger answers `refused`
- * with the SAME row still as `prior` (same id, method inbound_email): that is the expired state, not
- * a generic "someone else changed this" — shown with its own explanation, never thrown as an error.
+ * No actor_id check here — nobody "claims" a webhook-recorded stop the way a staff action is claimed —
+ * but that is NOT a "any member may run it" exemption: a Technician must still never act for a
+ * household member they cannot see. The caller is responsible for that, BEFORE calling this function:
+ * it must prove `ctx` was built (emailContextFor) for the STOP'S OWN contact specifically — found by
+ * binding `eventId` to a message that actually carries it on a thread the caller can see (Task 11
+ * review, round 1) — never for the thread's own contact on the unchecked assumption that the two are
+ * the same row. `ctx.writer` below is the service client that read ALREADY assumes that proof happened;
+ * this function does not, and cannot, re-derive it from `eventId` alone. Past the owner's 7-day window
+ * (0082's function), the ledger answers `refused` with the SAME row still as `prior` (same id, method
+ * inbound_email): that is the expired state, not a generic "someone else changed this" — shown with
+ * its own explanation, never thrown as an error.
  */
 export function undoInboundStop(ctx: EmailContext, eventId: string): Promise<EmailActionResult> {
   return guarded("undoInboundStop", ctx, async () => {
-    // On ctx.writer, deliberately: the stop's actor_id is null and its contact may be a household
-    // member the caller's Technician RLS cannot see; the caller proved the THREAD's contact first.
+    // On ctx.writer, deliberately: the stop's actor_id is null, and ctx was built (by the CALLER, before
+    // this function runs) for the stop's own contact — which may be a household member the caller's
+    // Technician RLS cannot see directly, so ctx.db could never have proved it; ctx.writer can read the
+    // row this ctx was proven for.
     const row = await readConsentEvent(ctx.writer, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "inbound_email") return changed(ctx);
     const r = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
