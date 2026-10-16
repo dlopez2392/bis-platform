@@ -699,6 +699,7 @@ the old value. Never put the new value on Preview.
 | `CONSENT_TOKEN_SECRET` | 32 random bytes, base64url | Vercel Production. Move the old value to `CONSENT_TOKEN_SECRET_PREVIOUS` first, so links already sent keep working. It is one slot: never rotate twice within 30 days (`.env.example`) |
 | `SOFIA_WEB_SECRET` | any new long random string | Vercel Production AND the bis-website project, byte-identical |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe → Developers → API keys; the `/api/webhooks/stripe` endpoint → roll its signing secret | Vercel Production (`stripe-billing.md`) |
+| `DOCUMENT_LINK_SECRET` | at least 32 random characters (`.env.example`) | Vercel Production, Sensitive. Preview holds its OWN, different value (see the class table below). It has no previous slot: rotating it ends every open customer upload link at once, so staff must create new ones |
 
 The first four rows are the ones the 2026-10-06 read makes likely. The rest
 were not on Preview then, and are listed in case A1 finds otherwise. `LEAD_INTAKE_SECRET`
@@ -857,6 +858,7 @@ and non-secret configuration. Nothing that opens a production system.**
 | CI project values | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (the `preview` key) |
 | Development Clerk instance | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` (`pk_test_`), `CLERK_SECRET_KEY` (`sk_test_`), `NEXT_PUBLIC_CLERK_SIGN_IN_URL` |
 | Non-secret configuration, fine on Preview | `EMAIL_FROM`, `AGENCY_SUPPORT_EMAIL`, `VERCEL_TEAM_ID`, `VOICE_OPENAI_PROJECT_ID`, `TELNYX_PUBLIC_KEY` (a public key), `TELNYX_VOICE_CONNECTION_ID`, `SOFIA_WEB_ORIGINS`, `SOFIA_WEB_NUMBER`, `SOFIA_WEB_DISPLAY_NUMBER`, `REALTIME_MODEL`, every `PHONE_*` knob |
+| Required on Preview, with its own value (never production's) | `DOCUMENT_LINK_SECRET`: customer upload links are signed with it, so a link made on Preview never opens on production and the reverse |
 | **Never on Preview** (production credentials) | `SUPABASE_DB_URL` (any project; unused by the app), `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, `TELNYX_API_KEY`, `OPENAI_API_KEY`, `OPENAI_WEBHOOK_SECRET`, `DAILY_API_KEY`, `VERCEL_API_TOKEN`, `CRON_SECRET`, `FORM_TOKEN_SECRET`, `OPS_HEALTH_SECRET`, `CONSENT_TOKEN_SECRET`, `CONSENT_TOKEN_SECRET_PREVIOUS`, `SOFIA_WEB_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and any webhook signing secret added later |
 | Leave unset on Preview | `EMAIL_DEV_REDIRECT_TO`, `SMS_DEV_REDIRECT_TO`, `VOICE_FORWARD_TO`, `VOICE_FALLBACK_DRILL_TO`, `VOICE_FALLBACK_DRILL_FROM`: inert without the provider keys, and nothing on a preview should send or call. `APP_ORIGIN`: if it is set to production's domain, every link a preview builds points at production. Unset, most links derive from the preview's own host (the web voice session still falls back to `app.bis-rgv.com`, `apps/web/src/app/api/voice/web/session/route.ts:204`) |
 
