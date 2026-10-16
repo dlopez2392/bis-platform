@@ -75,6 +75,28 @@ describe("undoReplyStopAction", () => {
     expect((await undoReplyStopAction(ACCOUNT, "conv", "ev_1")).ok).toBe(false);
     expect(dbMock.readConsentEvent).not.toHaveBeenCalled();
   });
+
+  it("passes undoInboundStop's typed expired flag through, never by matching the error string (mutation: drop the pass-through → FAILS)", async () => {
+    convRead.mockResolvedValue({ data: { id: "conv", contact_id: "ana" }, error: null });
+    dbMock.readConsentEvent.mockResolvedValue({ id: "ev_1", contact_id: "luis", channel: "email", action: "revoked", method: "inbound_email" });
+    ctxMock.emailContextFor.mockResolvedValue(CTX);
+    staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Only the customer can turn these emails back on.", expired: true });
+
+    expect(await undoReplyStopAction(ACCOUNT, "conv", "ev_1")).toEqual({
+      ok: false, error: "Only the customer can turn these emails back on.", expired: true,
+    });
+  });
+
+  it("a stale-click 'changed' refusal carries no expired flag at all (mutation: always set expired → FAILS)", async () => {
+    convRead.mockResolvedValue({ data: { id: "conv", contact_id: "ana" }, error: null });
+    dbMock.readConsentEvent.mockResolvedValue({ id: "ev_1", contact_id: "luis", channel: "email", action: "revoked", method: "inbound_email" });
+    ctxMock.emailContextFor.mockResolvedValue(CTX);
+    staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
+
+    const result = await undoReplyStopAction(ACCOUNT, "conv", "ev_1");
+    expect(result).toEqual({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
+    expect(result).not.toHaveProperty("expired");
+  });
 });
 
 describe("stopEmailsFromReplyAction", () => {

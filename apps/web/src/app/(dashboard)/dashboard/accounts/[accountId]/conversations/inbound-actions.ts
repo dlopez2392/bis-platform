@@ -13,7 +13,7 @@ import { m } from "@/lib/messages";
  * client first (0053/0068: a Technician sees only their own customers' threads); only then the service
  * client reads the stop row (its contact may be a household member) and the ledger writes.
  */
-export type ReplyActionResult = { ok: true } | { ok: false; error: string };
+export type ReplyActionResult = { ok: true } | { ok: false; error: string; expired?: true };
 
 async function provedThread(accountId: string, conversationId: string): Promise<{ contactId: string } | null> {
   const db = await dbForRequest();
@@ -31,7 +31,9 @@ export async function undoReplyStopAction(accountId: string, conversationId: str
   if ("ok" in ctx) return { ok: false, error: ctx.error };
   const r = await undoInboundStop(ctx, eventId);
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
-  return r.ok ? { ok: true } : { ok: false, error: r.error };
+  // The 7-day-window refusal is a typed field on EmailActionResult (Task 5), never a string the
+  // caller re-derives: passed through only when undoInboundStop itself set it.
+  return r.ok ? { ok: true } : { ok: false, error: r.error, ...(r.expired ? { expired: true as const } : {}) };
 }
 
 export async function stopEmailsFromReplyAction(accountId: string, conversationId: string, contactId: string): Promise<ReplyActionResult> {
