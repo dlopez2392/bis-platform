@@ -37,13 +37,25 @@ describe("noResumeLine — what the drawer says in place of a Resume button (D-0
   it("a customer's own unsubscribe link still says the generic line (mutation: say bouncedExplain for every how → FAILS)", () => {
     expect(noResumeLine({ kind: "unsubscribe_link" })).toBe(m["contact.email.customerOnly"]);
   });
+
+  // S-06 part 1, fix round 1 (the execution note, binding on this task): within the 7-day
+  // window the row still says the generic "customer only" line (the Undo is the way out, not a
+  // Resume button); once the window has closed only the customer can turn emails back on, in
+  // BOTH languages, against the literal copy (never the message key, so a wrong key in
+  // `messages.ts` could not hide behind this test).
+  it("'reply' says the generic line within the window, and the expired explanation once it has closed, in English and Spanish (mutation: always say customerOnly → FAILS)", () => {
+    expect(noResumeLine({ kind: "reply", expired: false })).toBe("They can resubscribe from the unsubscribe link in any email from you.");
+    expect(noResumeLine({ kind: "reply", expired: false }, "es")).toBe("Puede volver a suscribirse desde el enlace para darse de baja en cualquier correo que usted le mande.");
+    expect(noResumeLine({ kind: "reply", expired: true })).toBe("Stopped by their reply more than 7 days ago. Only the customer can turn emails back on.");
+    expect(noResumeLine({ kind: "reply", expired: true }, "es")).toBe("Se detuvo por su respuesta hace más de 7 días. Solo el cliente puede volver a activar los correos.");
+  });
 });
 
 // S-06 part 1, plan G9: the emailed stop's own how line, English and Spanish.
 describe("emailHowLine — 'reply' (S-06 part 1, plan G9)", () => {
   it("renders 'they asked in a reply' / 'lo pidió en una respuesta' (mutation: fall back to a generic line → FAILS)", () => {
-    expect(emailHowLine({ kind: "reply" })).toBe("they asked in a reply");
-    expect(emailHowLine({ kind: "reply" }, "es")).toBe("lo pidió en una respuesta");
+    expect(emailHowLine({ kind: "reply", expired: false })).toBe("they asked in a reply");
+    expect(emailHowLine({ kind: "reply", expired: true }, "es")).toBe("lo pidió en una respuesta");
   });
 });
 
@@ -54,6 +66,15 @@ describe("parseEmailResponse — the drawer's read, parsed, never cast", () => {
     expect(parseEmailResponse({ view: { kind: "stopped", since: "x", how: { kind: "staff" }, canResume: true }, zone: "UTC" })).toBeNull();
     expect(parseEmailResponse({ view: { kind: "held" }, zone: "UTC" })).toBeNull();
     expect(parseEmailResponse(null)).toBeNull();
+  });
+
+  // S-06 part 1, fix round 1: a "reply" how carries its own boolean, so a malformed one (the
+  // server forgot `expired`, or sent a string) is refused rather than crashing the row later
+  // (mutation: accept any object for how, regardless of kind → FAILS).
+  it("a 'reply' how needs a boolean expired flag (mutation: accept any object for how → FAILS)", () => {
+    expect(parseEmailResponse({ view: { kind: "stopped", eventId: "e", since: "x", how: { kind: "reply" }, canResume: false }, zone: "UTC" })).toBeNull();
+    expect(parseEmailResponse({ view: { kind: "stopped", eventId: "e", since: "x", how: { kind: "reply", expired: "no" }, canResume: false }, zone: "UTC" })).toBeNull();
+    expect(parseEmailResponse({ view: { kind: "stopped", eventId: "e", since: "x", how: { kind: "reply", expired: true }, canResume: false }, zone: "UTC" })).not.toBeNull();
   });
 });
 

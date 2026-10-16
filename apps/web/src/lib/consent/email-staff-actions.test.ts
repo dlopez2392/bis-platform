@@ -131,17 +131,31 @@ describe("undoInboundStop", () => {
     expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
   });
 
-  it("a refusal past the 7-day window answers the expired explanation, not the generic 'changed' line (owner ruling 2026-10-16; mutation: always answer 'changed' on refused → FAILS)", async () => {
+  it("a refusal past the 7-day window answers the expired explanation, TYPED, not the generic 'changed' line (owner ruling 2026-10-16; mutation: always answer 'changed' on refused → FAILS)", async () => {
     const old = new Date(ctx.now.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString();
     db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: old });
     db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: { id: "ev_1", action: "revoked", method: "inbound_email", evidence: {} } });
-    expect(await undoInboundStop(ctx, "ev_1")).toMatchObject({ ok: false, error: m["contact.email.replyExpiredExplain"] });
+    // Fix round 1 item 4: a typed `expired` flag, not just the error string, so a caller (Task
+    // 11's thread notice) branches on the FIELD and never string-matches a translatable message.
+    expect(await undoInboundStop(ctx, "ev_1")).toMatchObject({ ok: false, expired: true, error: m["contact.email.replyExpiredExplain"] });
   });
 
   it("a refusal because the row is no longer newest answers the generic 'changed' line, not the expiry line (mutation: answer the expiry line whenever refused → FAILS)", async () => {
     db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: new Date().toISOString() });
     db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: { id: "ev_9", action: "resubscribed", method: "staff", evidence: {} } });
     expect(await undoInboundStop(ctx, "ev_1")).toMatchObject({ ok: false, error: m["contact.email.changed"] });
+  });
+
+  // Fix round 1 item 3: a stale click on the SAME method (another inbound_email stop landed and
+  // is now newest) must not be read as "this row expired" just because the method matches —
+  // only the SAME row id, still newest-but-expired, is the expiry case (mutation: drop the
+  // `r.prior.id === eventId &&` check, reading any inbound_email prior as expired → FAILS).
+  it("a stale click onto a DIFFERENT inbound_email row answers the generic 'changed' line, not the expiry line", async () => {
+    db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: new Date().toISOString() });
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: { id: "ev_3", action: "revoked", method: "inbound_email", evidence: {} } });
+    const r = await undoInboundStop(ctx, "ev_1");
+    expect(r).toMatchObject({ ok: false, error: m["contact.email.changed"] });
+    expect(r).not.toHaveProperty("expired");
   });
 });
 

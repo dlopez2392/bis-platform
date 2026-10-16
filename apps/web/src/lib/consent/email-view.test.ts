@@ -41,9 +41,31 @@ describe("emailViewOf — the Email row, as data (spec §6)", () => {
   // Undo or the customer's own resubscribe — not in EMAIL_RESUMABLE_METHODS (mutation: fall
   // through to "staff" → FAILS).
   it("an inbound_email stop reads as 'reply', and is not staff-resumable", () => {
-    expect(emailHowOf("inbound_email")).toEqual({ kind: "reply" });
+    expect(emailHowOf("inbound_email")).toEqual({ kind: "reply", expired: false });
     const r = row("revoked", "inbound_email", "2026-10-10T10:00:00Z");
-    expect(emailViewOf([r], true)).toEqual({ kind: "stopped", eventId: r.id, since: r.occurred_at, how: { kind: "reply" }, canResume: false });
+    expect(emailViewOf([r], true, new Date("2026-10-10T10:00:00Z"))).toEqual({ kind: "stopped", eventId: r.id, since: r.occurred_at, how: { kind: "reply", expired: false }, canResume: false });
+  });
+
+  // S-06 part 1, fix round 1 (the execution note, binding on this task): the Email row shows
+  // the expired explanation once an inbound_email stop is 7 DAYS OLD OR MORE — the boundary is
+  // inclusive, matching 0082's own `occurred_at > now() - interval '7 days'` (strictly within is
+  // still liftable, so AT exactly 7 days the window has already closed). Checked at the boundary
+  // on both sides (mutation: shift the comparison to > 7 days → the exact boundary stays
+  // unexpired, FAILS).
+  it("the reply how's expired flag flips at exactly 7 days, not a moment before", () => {
+    const since = "2026-10-01T00:00:00Z";
+    const r = row("revoked", "inbound_email", since);
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const justUnder = new Date(Date.parse(since) + sevenDaysMs - 1);
+    const exactly = new Date(Date.parse(since) + sevenDaysMs);
+    expect(emailViewOf([r], true, justUnder)).toMatchObject({ how: { kind: "reply", expired: false } });
+    expect(emailViewOf([r], true, exactly)).toMatchObject({ how: { kind: "reply", expired: true } });
+  });
+
+  it("emailHowOf passes the expired flag through for 'reply' only; every other how ignores it (mutation: ignore the second argument → FAILS)", () => {
+    expect(emailHowOf("inbound_email", true)).toEqual({ kind: "reply", expired: true });
+    expect(emailHowOf("inbound_email", false)).toEqual({ kind: "reply", expired: false });
+    expect(emailHowOf("staff", true)).toEqual({ kind: "staff" });
   });
 
   // D-016 item 4: a hard bounce or a complaint (0062's email_bounce/

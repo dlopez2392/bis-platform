@@ -1,6 +1,6 @@
 import {
   appendConsentEventGuarded, readConsentHistory, readConsentEvent, newestDecidingRow,
-  type ConsentAction, type ConsentHistoryRow, type ConsentMethod, type SupabaseClient,
+  type ConsentAction, type ConsentAppend, type ConsentHistoryRow, type ConsentMethod, type SupabaseClient,
 } from "@bis/db";
 import { m } from "@/lib/messages";
 import { loggableError } from "@/lib/loggable-error";
@@ -19,7 +19,9 @@ export type EmailUndo = { kind: "stop"; eventId: string };
 
 export type EmailActionResult =
   | { ok: true; view: EmailView; undo?: EmailUndo }
-  | { ok: false; error: string; view?: EmailView };
+  // `expired` (fix round 1 item 4): set only by undoInboundStop's own 7-day-window refusal, so a
+  // caller branches on the FIELD, never on matching the (translatable) error string.
+  | { ok: false; error: string; view?: EmailView; expired?: boolean };
 
 export type EmailContext = {
   /** The request's RLS client: proved the contact (emailContextFor). */
@@ -64,16 +66,19 @@ async function guarded(label: string, ctx: EmailContext, work: () => Promise<Ema
   }
 }
 
+/** THE one argument-building call every write in this file makes (fix round 1 item 5: both
+ *  `appendConsentEventGuarded` callers below used to build this object twice, independently).
+ *  Returns the full `ConsentAppend` — not just an id — so a caller that needs the `prior` row
+ *  on a refusal (undoInboundStop's 7-day-window check) does not re-issue the same call. */
 async function write(
   ctx: EmailContext, e: { action: ConsentAction; method: ConsentMethod; note?: string; evidence?: Record<string, unknown> },
   expect: string | null,
-): Promise<string | null> {
-  const r = await appendConsentEventGuarded(ctx.writer, {
+): Promise<ConsentAppend> {
+  return appendConsentEventGuarded(ctx.writer, {
     accountId: ctx.accountId, channel: "email", address: ctx.address, contactId: ctx.contactId,
     action: e.action, method: e.method, actorId: ctx.userId, note: e.note ?? null,
     evidence: { ...(e.evidence ?? {}), ...(ctx.actorName ? { actorName: ctx.actorName } : {}) },
   }, { ifNewest: expect });
-  return r.outcome === "appended" ? r.id : null;
 }
 
 /** "Stop emails": revoked / staff, at once, with an Undo — only over an allowed address. */
@@ -83,9 +88,9 @@ export function stopEmails(ctx: EmailContext, expectNewest: string | null): Prom
     if ((newest?.id ?? null) !== expectNewest || (newest !== null && newest.action !== "resubscribed" && newest.action !== "hold_released")) {
       return changed(ctx);
     }
-    const id = await write(ctx, { action: "revoked", method: "staff" }, expectNewest);
-    if (!id) return changed(ctx);
-    return { ok: true, view: await view(ctx), undo: { kind: "stop", eventId: id } };
+    const r = await write(ctx, { action: "revoked", method: "staff" }, expectNewest);
+    if (r.outcome !== "appended") return changed(ctx);
+    return { ok: true, view: await view(ctx), undo: { kind: "stop", eventId: r.id } };
   });
 }
 
@@ -98,8 +103,8 @@ export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<Emai
     const row = await readConsentEvent(ctx.db, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "staff") return changed(ctx);
     if (!undoable(ctx, row)) return { ok: false, error: m["contact.email.undoExpired"] };
-    const id = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
-    return id ? { ok: true, view: await view(ctx) } : changed(ctx);
+    const r = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
+    return r.outcome === "appended" ? { ok: true, view: await view(ctx) } : changed(ctx);
   });
 }
 
@@ -131,14 +136,13 @@ export function undoInboundStop(ctx: EmailContext, eventId: string): Promise<Ema
     // member the caller's Technician RLS cannot see; the caller proved the THREAD's contact first.
     const row = await readConsentEvent(ctx.writer, ctx.accountId, eventId);
     if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "inbound_email") return changed(ctx);
-    const r = await appendConsentEventGuarded(ctx.writer, {
-      accountId: ctx.accountId, channel: "email", address: ctx.address, contactId: ctx.contactId,
-      action: "resubscribed", method: "staff_undo", actorId: ctx.userId,
-      evidence: { undoes: eventId, ...(ctx.actorName ? { actorName: ctx.actorName } : {}) },
-    }, { ifNewest: eventId });
+    const r = await write(ctx, { action: "resubscribed", method: "staff_undo", evidence: { undoes: eventId } }, eventId);
     if (r.outcome === "appended") return { ok: true, view: await view(ctx) };
+    // Fix round 1 item 3: the SAME row, still newest, refused ONLY because 0082's 7-day window
+    // has closed — not merely "some inbound_email row" (a different, newer stop would also be
+    // `method: 'inbound_email'` but is a stale click, not an expiry).
     if (r.outcome === "refused" && r.prior && r.prior.id === eventId && r.prior.method === "inbound_email") {
-      return { ok: false, error: m["contact.email.replyExpiredExplain"] };
+      return { ok: false, error: m["contact.email.replyExpiredExplain"], expired: true };
     }
     return changed(ctx);
   });
@@ -153,7 +157,7 @@ export async function resumeEmails(ctx: EmailContext, expectEventId: string, not
     if (!newest || newest.id !== expectEventId || newest.action !== "revoked" || !EMAIL_RESUMABLE_METHODS.includes(newest.method)) {
       return changed(ctx);
     }
-    const id = await write(ctx, { action: "resubscribed", method: "staff", note: text.slice(0, 500) }, expectEventId);
-    return id ? { ok: true, view: await view(ctx) } : changed(ctx);
+    const r = await write(ctx, { action: "resubscribed", method: "staff", note: text.slice(0, 500) }, expectEventId);
+    return r.outcome === "appended" ? { ok: true, view: await view(ctx) } : changed(ctx);
   });
 }
