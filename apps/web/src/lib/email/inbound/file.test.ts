@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const db = vi.hoisted(() => ({ createMessage: vi.fn(), findMessageByProviderId: vi.fn(), incrementUnreadCount: vi.fn(), setInboundMessage: vi.fn() }));
+const db = vi.hoisted(() => ({ createMessage: vi.fn(), findMessageByProviderId: vi.fn(), incrementUnreadCount: vi.fn(), setInboundMessage: vi.fn(), getContact: vi.fn() }));
 vi.mock("@bis/db", () => db);
 const stop = vi.hoisted(() => ({ recordInboundStop: vi.fn() }));
 vi.mock("@/lib/consent/email-staff-actions", () => stop);
@@ -23,6 +23,7 @@ beforeEach(() => {
   db.createMessage.mockResolvedValue({ id: "msg_1" });
   db.setInboundMessage.mockResolvedValue(true);
   stop.recordInboundStop.mockResolvedValue({ outcome: "stopped", eventId: "ev_1" });
+  db.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => ({ id, email: `${id}@example.com` }));
 });
 
 describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
@@ -147,9 +148,41 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "maybe", phrase: "STOP" });
   });
 
-  it("writes the stop with bareAddress's own normalised result, never the raw From text (mutation: pass row.fromEmail through unguarded → recordInboundStop called with an un-normalised address, FAILS)", async () => {
-    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "Luis <LUIS@EXAMPLE.COM>" } }));
-    expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ address: "luis@example.com" }));
+  describe("final review I1: the stop is recorded under the MATCHED CONTACT's ledger address, never the sender's literal From", () => {
+    it("contact ana+bis@example.com, a STOP from ana@example.com (matched by email_key) → the ledger address is the contact's, read on the filing client (mutation: record under bareAddress(row.fromEmail) → FAILS)", async () => {
+      db.getContact.mockResolvedValue({ id: "ana", email: " Ana+Bis@Example.com " });
+      await fileInboundEmail({ db: DB, now: () => new Date() }, input({
+        row: { ...ROW, fromEmail: "ana@example.com" }, sender: { contactId: "ana", firstName: "Ana", lastName: null, viaGroup: false },
+      }));
+      expect(db.getContact).toHaveBeenCalledWith(DB, "acc", "ana");
+      expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ contactId: "ana", address: "ana+bis@example.com" }));
+    });
+
+    it("a household member's stop is under THAT member's address; a manual File with no sender match is under the proven contact's (mutation: read the thread contact instead of the sender → FAILS)", async () => {
+      await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "someone-else@example.com" } }));
+      expect(stop.recordInboundStop).toHaveBeenLastCalledWith(DB, expect.objectContaining({ contactId: "luis", address: "luis@example.com" }));
+      await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "someone-else@example.com" }, sender: null }));
+      expect(stop.recordInboundStop).toHaveBeenLastCalledWith(DB, expect.objectContaining({ contactId: "ana", address: "ana@example.com" }));
+    });
+
+    it("a matched contact with no usable email (or gone) never writes the ledger: the clear stop becomes the 'maybe' chip (mutation: fall back to the sender's From → recordInboundStop called, FAILS)", async () => {
+      db.getContact.mockResolvedValue({ id: "luis", email: null });
+      expect((await fileInboundEmail({ db: DB, now: () => new Date() }, input())).consent).toEqual({ kind: "maybe", phrase: "STOP" });
+      db.getContact.mockResolvedValue(null);
+      expect((await fileInboundEmail({ db: DB, now: () => new Date() }, input())).consent).toEqual({ kind: "maybe", phrase: "STOP" });
+      expect(stop.recordInboundStop).not.toHaveBeenCalled();
+    });
+
+    it("no contact read for a reply that is not a clear stop (mutation: read the contact on every filing → FAILS)", async () => {
+      await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
+      expect(db.getContact).not.toHaveBeenCalled();
+    });
+
+    it("a contact read failure THROWS before any message, so the webhook answers 503 (mutation: catch it → createMessage called, FAILS)", async () => {
+      db.getContact.mockRejectedValue(new Error("contact read down"));
+      await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input())).rejects.toThrow(/contact read down/);
+      expect(db.createMessage).not.toHaveBeenCalled();
+    });
   });
 
   it("an existing message under a DIFFERENT conversation is never reused — provider_email_id is unique per account, not per thread (mutation: skip the conversation check → FAILS)", async () => {

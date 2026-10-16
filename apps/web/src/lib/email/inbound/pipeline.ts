@@ -50,8 +50,11 @@ async function resumeExisting(
     if (result.created) {
       try {
         await deps.forward({ row, contactId, senderName: row.fromName, attachmentCount: row.attachmentCount });
-      } catch {
-        deps.log(`inbound email: the forward to the owner of account ${row.accountId} failed; the filed message stands`);
+      } catch (e) {
+        // Final review M5: forwardToOwner's own fixed reason (`forward: <reason>`, a closed vocabulary)
+        // is named; any other message (a database error's free text) is never logged.
+        const reason = e instanceof Error ? /^forward: ([a-z_]+)$/.exec(e.message)?.[1] : undefined;
+        deps.log(`inbound email: the forward to the owner of account ${row.accountId} failed${reason ? ` (${reason})` : ""}; the filed message stands`);
       }
     }
     return { status: 200, result: result.created ? "filed" : "duplicate" };
@@ -174,7 +177,9 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     const authenticated = senderAuthenticated(verdict, fromEmail ? domainOf(fromEmail) : null);
     const match = fromEmail ? await matchSender(deps.db, thread.accountId, thread.contactId, fromEmail) : null;
     const filed = authenticated && match !== null;
-    const text = newText(email.text ?? (email.html ? htmlToText(email.html) : ""));
+    // Final review M2: an empty or whitespace-only text part is absent, not the reply — some clients
+    // send `text: ""` beside the real HTML, which used to file a blank message no stop could be read in.
+    const text = newText(email.text?.trim() ? email.text : (email.html ? htmlToText(email.html) : ""));
     // Carried past the narrower try/catch below for step 5/7, which needs `match` only when this
     // call is the one that just inserted the row (the retry path re-reads it itself).
     firstRunMatch = match;

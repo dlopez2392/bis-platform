@@ -119,10 +119,31 @@ describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
     expect(String(log.mock.calls.at(-1)![0])).toMatch(/forward/);
   });
 
+  it("final review M5: a forward failure's line carries forwardToOwner's closed-vocabulary reason, and nothing from any other message (mutation: log e.message unconditionally → the free-text case leaks, FAILS; drop the reason → FAILS)", async () => {
+    forward.mockRejectedValueOnce(new Error("forward: suppressed_account"));
+    await handleReceivedEmail(deps, { email_id: "re_1" });
+    expect(String(log.mock.calls.at(-1)![0])).toBe("inbound email: the forward to the owner of account acc failed (suppressed_account); the filed message stands");
+    forward.mockRejectedValueOnce(new Error("forward: account read failed: relation ana@example.com"));
+    await handleReceivedEmail(deps, { email_id: "re_1" });
+    expect(String(log.mock.calls.at(-1)![0])).toBe("inbound email: the forward to the owner of account acc failed; the filed message stands");
+    forward.mockRejectedValueOnce("not an Error");
+    await handleReceivedEmail(deps, { email_id: "re_1" });
+    expect(String(log.mock.calls.at(-1)![0])).toBe("inbound email: the forward to the owner of account acc failed; the filed message stands");
+  });
+
   it("an HTML-only email files its text (G11; mutation: store '' → FAILS)", async () => {
     fetchEmail.mockResolvedValue(EMAIL({ text: null, html: "<p>Yes &amp; thanks</p>" }));
     await handleReceivedEmail(deps, { email_id: "re_1" });
     expect(db.recordInboundEmail.mock.calls[0]![1].text).toBe("Yes & thanks");
+  });
+
+  it("final review M2: an empty or whitespace-only text part counts as absent, so HTML-only mail still gets its text and the stop classifier sees it (mutation: `email.text ?? …` → '' stored, FAILS)", async () => {
+    for (const blank of ["", "  \r\n\t "]) {
+      db.recordInboundEmail.mockClear();
+      fetchEmail.mockResolvedValue(EMAIL({ text: blank, html: "<p>STOP</p>" }));
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(db.recordInboundEmail.mock.calls[0]![1].text).toBe("STOP");
+    }
   });
 
   describe("fix round 1", () => {

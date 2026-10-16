@@ -1,4 +1,5 @@
-import { createMessage, findMessageByProviderId, incrementUnreadCount, setInboundMessage, type InboundEmailRow, type SupabaseClient } from "@bis/db";
+import { createMessage, findMessageByProviderId, getContact, incrementUnreadCount, setInboundMessage, type InboundEmailRow, type SupabaseClient } from "@bis/db";
+import { emailLedgerAddress } from "@bis/db/email-address";
 import { classifyEmailStop } from "@/lib/consent/email-stop";
 import { recordInboundStop } from "@/lib/consent/email-staff-actions";
 import { bareAddress } from "./address";
@@ -54,12 +55,23 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
   // never written against a string that is not an address; a clear stop with no usable address
   // becomes the same "maybe" chip an unclear phrase does (staff decide by hand), rather than
   // silently dropping the stop to "none" as though nothing was said at all.
+  //
+  // Final review I1: the stop is recorded under the MATCHED CONTACT's own ledger address
+  // (emailLedgerAddress(contact.email)) — the address the email gate and the contact's Email row read —
+  // never the sender's literal From: matchSender matches on email_key, which strips +tags, so a reply
+  // from ana@ to a contact stored as ana+bis@ used to stop an address nothing ever sends to. Read here,
+  // on the filing client, only for a clear stop; the contact was proven by the caller (matchSender in
+  // the pipeline, the request-client proof in the manual File). A contact with no usable email (or
+  // gone) is the same "maybe" chip as an unparseable From: nothing is written against a guess.
   const bare = cls.kind === "clear" ? bareAddress(row.fromEmail) : null;
+  const address = cls.kind === "clear" && bare
+    ? emailLedgerAddress((await getContact(db, row.accountId, stopFor))?.email ?? null)
+    : null;
   let consent: MessageConsent = { kind: "none" };
-  if (cls.kind === "clear" && bare) {
-    const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address: bare, providerEmailId: row.providerEmailId, phrase: cls.phrase });
+  if (cls.kind === "clear" && address) {
+    const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address, providerEmailId: row.providerEmailId, phrase: cls.phrase });
     if (r.outcome === "stopped") consent = { kind: "stopped", eventId: r.eventId };
-  } else if (cls.kind === "unclear" || (cls.kind === "clear" && !bare)) {
+  } else if (cls.kind === "unclear" || cls.kind === "clear") {
     consent = { kind: "maybe", phrase: cls.phrase };
   }
 

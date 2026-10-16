@@ -105,9 +105,46 @@ describe("recordInboundStop (spec 'The stop rule'; plan G3)", () => {
 
   it("a retried delivery answers the same event; an already-stopped address answers already_stopped (mutation: map duplicate to already_stopped → FAILS)", async () => {
     db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "duplicate", id: "ev_1" });
-    expect((await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_1", phrase: "STOP" })).outcome).toBe("stopped");
+    db.readConsentHistory.mockResolvedValueOnce([{ id: "ev_1", action: "revoked", method: "inbound_email", occurred_at: "2026-10-06T10:00:00Z", evidence: { inbound_email_id: "re_1" }, note: null, actor_id: null }]);
+    expect(await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_1", phrase: "STOP" })).toEqual({ outcome: "stopped", eventId: "ev_1" });
+    expect(db.appendConsentEventGuarded).toHaveBeenCalledTimes(1); // a true retry never writes a second stop
     db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "refused", prior: { id: "ev_0", action: "revoked", method: "unsubscribe_link", evidence: {} } });
     expect(await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_2", phrase: "STOP" })).toEqual({ outcome: "already_stopped" });
+  });
+
+  describe("final review C1: File → Undo → File re-applies the stop", () => {
+    const I = { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_1", phrase: "STOP" };
+    const STOP_1 = { id: "ev_1", action: "revoked", method: "inbound_email", occurred_at: "2026-10-06T10:00:00Z", evidence: { inbound_email_id: "re_1" }, note: null, actor_id: null };
+    const UNDO_1 = { id: "ev_2", action: "resubscribed", method: "staff_undo", occurred_at: "2026-10-06T10:01:00Z", evidence: { undoes: "ev_1" }, note: null, actor_id: "user_1" };
+
+    it("the first ref answers duplicate with a REVERSED stop → a fresh stop is appended under a filing-specific ref, read on the writer, and that new id is reported (mutation: keep returning the duplicate's id → FAILS)", async () => {
+      db.appendConsentEventGuarded
+        .mockResolvedValueOnce({ outcome: "duplicate", id: "ev_1" })
+        .mockResolvedValueOnce({ outcome: "appended", id: "ev_3", prior: { id: "ev_2", action: "resubscribed", method: "staff_undo", evidence: {} } });
+      db.readConsentHistory.mockResolvedValueOnce([UNDO_1, STOP_1]);
+      expect(await recordInboundStop(WRITER, I)).toEqual({ outcome: "stopped", eventId: "ev_3" });
+      expect(db.readConsentHistory).toHaveBeenCalledWith(WRITER, "a1", "email", "a@x.com");
+      expect(db.appendConsentEventGuarded).toHaveBeenCalledTimes(2);
+      const [, second, guard] = db.appendConsentEventGuarded.mock.calls[1]!;
+      expect(guard).toBe("if_allowed");
+      expect(second).toMatchObject({ action: "revoked", method: "inbound_email", address: "a@x.com", contactId: "c1", sourceRef: "inbound_email:re_1:after:ev_2", evidence: { inbound_email_id: "re_1", phrase: "STOP" } });
+    });
+
+    it("the re-apply refused (the address is stopped some other way by now) answers already_stopped, never the reversed id (mutation: map that refusal to stopped ev_1 → FAILS)", async () => {
+      db.appendConsentEventGuarded
+        .mockResolvedValueOnce({ outcome: "duplicate", id: "ev_1" })
+        .mockResolvedValueOnce({ outcome: "refused", prior: { id: "ev_9", action: "revoked", method: "one_click", evidence: {} } });
+      db.readConsentHistory.mockResolvedValueOnce([{ ...UNDO_1, id: "ev_9", action: "revoked", method: "one_click" }, UNDO_1, STOP_1]);
+      expect(await recordInboundStop(WRITER, I)).toEqual({ outcome: "already_stopped" });
+    });
+
+    it("a retry of the RE-filing (its fresh stop already newest) answers that stop without a third write (mutation: drop the same-email check → a refused if_allowed reports already_stopped, FAILS)", async () => {
+      const STOP_3 = { ...STOP_1, id: "ev_3", occurred_at: "2026-10-06T10:02:00Z" };
+      db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "duplicate", id: "ev_1" });
+      db.readConsentHistory.mockResolvedValueOnce([STOP_3, UNDO_1, STOP_1]);
+      expect(await recordInboundStop(WRITER, I)).toEqual({ outcome: "stopped", eventId: "ev_3" });
+      expect(db.appendConsentEventGuarded).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("a ledger error THROWS, so the route answers 503 (mutation: catch it → resolves, FAILS)", async () => {

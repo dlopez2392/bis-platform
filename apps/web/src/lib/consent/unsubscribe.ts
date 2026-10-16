@@ -55,6 +55,14 @@ export async function recordResubscribe(db: SupabaseClient, p: ConsentTokenPaylo
 /** The customer's OWN ways to stop email (choice 19). Only these open the page on "You're unsubscribed". */
 export const CUSTOMER_EMAIL_STOP_METHODS: readonly ConsentMethod[] = ["unsubscribe_link", "one_click"];
 
+/** Final review M3: the page's own list — CUSTOMER_EMAIL_STOP_METHODS plus `inbound_email`, the stop the
+ *  customer EMAILED (S-06 part 1): their own choice, so the page opens on "You're unsubscribed" with
+ *  Resubscribe (an unsubscribe_page resubscribe, which 0055/0082 allow over it). Deliberately NOT added
+ *  to CUSTOMER_EMAIL_STOP_METHODS: that list is pinned to 0055's `unless_customer_stopped` guard
+ *  (unsubscribe.test.ts's parity case), and staff Resume reads EMAIL_RESUMABLE_METHODS (email-view.ts),
+ *  which never names inbound_email (plan G9). This list feeds the page and nothing else. */
+const PAGE_CUSTOMER_STOP_METHODS: readonly ConsentMethod[] = [...CUSTOMER_EMAIL_STOP_METHODS, "inbound_email"];
+
 export type EmailStateRead = { state: "allowed" } | { state: "stopped"; method: ConsentMethod };
 
 /** The address's email state, with the stop's METHOD (review R1-I1). A hold, which nothing writes for email, reads as stopped. */
@@ -71,5 +79,5 @@ export async function emailStateOf(db: SupabaseClient, p: ConsentTokenPayload): 
  * can lift it (choice 19) and the drawer offers no Resume.
  */
 export function pageStateOf(s: EmailStateRead): "ask" | "stopped" {
-  return s.state === "stopped" && CUSTOMER_EMAIL_STOP_METHODS.includes(s.method) ? "stopped" : "ask";
+  return s.state === "stopped" && PAGE_CUSTOMER_STOP_METHODS.includes(s.method) ? "stopped" : "ask";
 }

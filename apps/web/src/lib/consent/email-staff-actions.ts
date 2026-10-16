@@ -109,18 +109,37 @@ export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<Emai
 }
 
 /** The emailed clear stop (S-06 part 1): revoked / inbound_email over an ALLOWED address only (plan G3),
- *  idempotent on Resend's id. THROWS on a ledger error: the webhook answers 503 and Resend retries. */
+ *  idempotent on Resend's id. THROWS on a ledger error: the webhook answers 503 and Resend retries.
+ *
+ *  Final review C1: the ledger dedupes `inbound_email:<Resend id>` FOREVER, so after File → Undo → File
+ *  the second filing used to get `duplicate` with the OLD, reversed stop's id and report "stopped" while
+ *  the address stayed allowed. On `duplicate` the address's newest deciding row (read on the writer,
+ *  as this module reads every history) decides: still that stop, or another stop from this same email
+ *  (a retry of a re-filing) → that stop; anything else → a FRESH stop under a ref naming the row it
+ *  lands after, so a re-File is re-applied while a webhook retry of the first delivery (same base ref,
+ *  stop still newest) still dedupes. A refused re-apply (stopped some other way by now) is
+ *  `already_stopped`, never the reversed id. */
 export type InboundStopResult = { outcome: "stopped"; eventId: string } | { outcome: "already_stopped" };
 
 export async function recordInboundStop(
   writer: SupabaseClient, i: { accountId: string; contactId: string; address: string; providerEmailId: string; phrase: string },
 ): Promise<InboundStopResult> {
-  const r = await appendConsentEventGuarded(writer, {
+  const append = (sourceRef: string) => appendConsentEventGuarded(writer, {
     accountId: i.accountId, channel: "email", address: i.address, action: "revoked", method: "inbound_email",
-    contactId: i.contactId, actorId: null, sourceRef: `inbound_email:${i.providerEmailId}`,
+    contactId: i.contactId, actorId: null, sourceRef,
     evidence: { inbound_email_id: i.providerEmailId, phrase: i.phrase },
   }, "if_allowed");
-  return r.outcome === "refused" ? { outcome: "already_stopped" } : { outcome: "stopped", eventId: r.id };
+  const base = `inbound_email:${i.providerEmailId}`;
+  const r = await append(base);
+  if (r.outcome === "refused") return { outcome: "already_stopped" };
+  if (r.outcome === "appended") return { outcome: "stopped", eventId: r.id };
+  const newest = newestDecidingRow(await readConsentHistory(writer, i.accountId, "email", i.address));
+  if (newest && (newest.id === r.id || (newest.action === "revoked" && newest.method === "inbound_email"
+    && newest.evidence?.inbound_email_id === i.providerEmailId))) {
+    return { outcome: "stopped", eventId: newest.id };
+  }
+  const again = await append(`${base}:after:${newest?.id ?? "none"}`);
+  return again.outcome === "refused" ? { outcome: "already_stopped" } : { outcome: "stopped", eventId: again.id };
 }
 
 /**
