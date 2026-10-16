@@ -239,7 +239,10 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
   expect(tasks ?? [], "exactly one task for this request").toHaveLength(1);
   expect((tasks![0] as { document_request_kind: string }).document_request_kind).toBe("received");
 
-  await page.reload();
+  // Every test gets its OWN page (Playwright's per-test fixture; serial mode shares state, not
+  // pages): this one has never navigated, so a reload() reloads about:blank and finds no rows
+  // (first CI run's second failure, 2026-10-16). Open the staff contact page for real.
+  await page.goto(contactUrl());
   const sentRows = recordPage(page).locator('[data-timeline-item="document"]');
   await expect(sentRows.filter({ hasText: m["timeline.documentCustomer"].replace("{title}", "Insurance") }), "a 'Customer sent Insurance' row")
     .not.toHaveCount(0);
