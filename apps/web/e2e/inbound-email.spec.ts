@@ -113,7 +113,15 @@ test("filed for real, it reads on the thread as the customer's email, with its a
   await item(page).getByRole("button", { name: m["conversations.held.fileOn"].replace("{name}", `Respuesta ${STAMP}`) }).click();
   await expect(item(page)).toHaveCount(0);
   await page.goto(inbox(`?c=${conversationId}`));
-  await expect(page.getByText(`Is Thursday ok? ${STAMP}`)).toBeVisible();
+  // CI fix (strict-mode violation): the inbox's own list panel truncates the
+  // SAME body text into its row preview (<span class="truncate ...">), so a
+  // bare page.getByText here matches that preview AND the thread bubble.
+  // message-thread.tsx has no stable data-attribute to scope by (an app-source
+  // change, out of scope for this test-only fix), but its bubble is a real <p>
+  // and the list's preview is a <span> — getByRole("paragraph") excludes it.
+  await expect(page.getByRole("paragraph").filter({ hasText: `Is Thursday ok? ${STAMP}` })).toBeVisible();
   // The stored attachment count survives a manual File (owner ruling 2026-10-16).
+  // Not duplicated in the list preview (which carries only the body text), so
+  // this one stays a plain getByText.
   await expect(page.getByText(m["conversations.reply.attachments"].replace("{count}", "2"))).toBeVisible();
 });
