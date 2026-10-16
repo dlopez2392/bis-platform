@@ -118,10 +118,14 @@ The token: 32 random bytes, base64url, present only in the URL. The database kee
 
 - `accounts.required_document_categories text[] not null default '{}'`, each element one of the nine keys; empty = the checklist is off.
 - `document_requirement_skips`: `account_id`, `contact_id`, `category`, `skipped_by`, `created_at`; unique on (`contact_id`, `category`). Server-written; members read under the contact's visibility.
+  - *Amended 2026-10-16 (2c plan, deviation 1; plan review):* the row also carries `id`, `unskipped_at` and `unskipped_by`. An un-skip stamps the row instead of deleting it, so the skip and the un-skip each keep their timeline row (§5.4). The uniqueness is a partial index over ACTIVE skips, (`account_id`, `contact_id`, `category`) where `unskipped_at` is null, so a category can be skipped again after an un-skip. `unskipped_at > created_at` is a CHECK, and both instants are the database's `now()` (the insert's default, and a service-only `unskip_document_requirement` function). The Undo of a skip deletes that row and the Undo of an un-skip clears its stamp: each is the actor's own, within 10 minutes. `category` is one of the EIGHT requirable keys (§5.2 amendment). (`docs/superpowers/plans/2026-10-16-document-vault-pr2c.md`.)
 
 ### 5.2 Settings
 
 A **Documents** section in Settings (Owners and agency edit; others read), registered in the ⌘K palette: the nine categories as checkboxes, and one sentence, "Each customer's Documents card will show which of these they're missing." One primary Save (rule 8).
+
+- *Amended 2026-10-16 (owner ruling D8):* **eight** categories, not nine: **Other cannot be required.** Anything filed as Other would meet "Other", so it never names a particular document, and 2b's dialog needs a note for Other. `accounts.required_document_categories` and the skips' `category` accept only `id, contract, estimate, invoice, photo, permit, insurance, warranty`.
+- *Amended 2026-10-16 (owner ruling D6):* **for now only the AGENCY edits the list**, on the account's Settings page, which is agency-only (`requireAgencyOnlyAccountAccess`). An Owner screen comes later. Its save action already admits a client Owner, so that screen needs no database change. **Until it ships, P7's "Owners pick required categories in Settings" is not met for client Owners.** Staff and Technicians "read" the list as its effect on each customer's card.
 
 ### 5.3 What counts
 
@@ -130,6 +134,7 @@ A required category is **met** for a customer by a document that is not in the t
 ### 5.4 On the customer's Documents card
 
 - The card header reads "DOCUMENTOS 2 de 3" (met of required-minus-skipped).
+  - *Amended 2026-10-16 (owner ruling D9):* the count sits in the Documents card's own client-rendered **top row**, beside the "N archivos" count: "Requeridos 2 de 3", or "Completo" (dot + word) when nothing is missing. It is not in the record card's title, which the server renders as a fixed string. The row is redrawn live after a skip, an upload or a verdict. Nothing is drawn there while the list is off.
 - Each unmet item is named: **Falta: Seguro** or **Vencido: Identificación**, each with **Pedir al cliente** (2b's dialog with that item ticked) and **Subir** (an upload with the category preset).
 - A skipped item reads "No hace falta" with **Hace falta otra vez**. Skip and un-skip run at once with an Undo toast (rule 6) and each gets a timeline row (person mark).
 - All met: "Completo" (dot + word), and the list disappears. Checklist off: nothing is drawn.
@@ -154,6 +159,7 @@ A required category is **met** for a customer by a document that is not in the t
 - **2a, before merge:** the owner creates the Fly.io account and adds a card; the orchestrator creates the app with `flyctl`, sets its secrets, deploys, reads `/health`; `SCANNER_URL` and `SCANNER_SECRET` go into Vercel Production and Preview; the EICAR check on Preview. The catch-up scan runs by itself through the retry pass after deploy; the orchestrator reads that no version stays `pending`.
 - **2b:** the plan reads `next.config.ts` and the middleware for CSP and public-route rules before adding `/d/[token]` and `/api/d/*`.
 - **2c:** off for every account until an Owner opts in.
+  - *Amended 2026-10-16 (owner ruling D6):* in 2c **only the agency** can opt an account in (§5.2 amendment). The PR states that this line and P7 are **not yet met for client Owners**. The Owner screen that meets them comes later.
 - **Tracker:** item 6 / F-005 stay `in_progress` until part 3.
 
 ## 9. Assumptions (each checked by the plan)

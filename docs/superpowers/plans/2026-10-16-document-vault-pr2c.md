@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** An Owner (or the agency) picks the documents every customer must have; each customer's Documents card then says how many they have ("Required 2 of 3"), names each gap ("Missing: Insurance", "Expired: ID"), and offers **Ask the customer** (2b's dialog with that item ticked) and **Upload** (the category preset) beside it; a gap that does not apply to one customer is marked **Not needed** and can be made **Needed again**, both at once with an Undo toast and a timeline row; when nothing is missing the card says **Complete**. Off for every account until someone opts in.
+**Goal:** An Owner (or the agency) picks the documents every customer must have; each customer's Documents card then says how many they have ("Required 2 of 3"), names each gap ("Missing: Insurance", "Expired: ID"), and offers **Ask the customer** (2b's dialog with that item ticked) and **Upload** (the category preset) beside it; a gap that does not apply to one customer is marked **Not needed** and can be made **Needed again**, both at once with an Undo toast and a timeline row; when nothing is missing the card says **Complete**. Off for every account until the list is set. **Owner ruling D6 (2026-10-16): in 2c only the AGENCY sets the list (on Settings); spec P7's "Owners pick required categories" and §8's "until an Owner opts in" are NOT yet met for client Owners.** That sentence goes into the PR body (Task 11 step 8).
 
-**Architecture:** One migration, **0081**: `accounts.required_document_categories text[]` (empty = off, a CHECK through an immutable helper), `document_requirement_skips` (server-written, members read under the contact's visibility, one ACTIVE skip per contact and category, an un-skip stamps the row instead of deleting it so both moves keep their timeline rows; deviation 1), and one read function `public.document_requirements(account, contact, today)`, SECURITY DEFINER like 0078's `document_space_used`, which re-checks the account AND the contact's visibility itself and answers one row per required category with its state (`met`, `checking`, `expired`, `missing`, `skipped`), never a file, a title or an id (deviation 3, owner decision D7). The app adds a `@bis/db` module (`document-requirements.ts`), a request-client route for the card (`…/contacts/[contactId]/document-requirements`), four skip actions (proof on the request client, then the service client, the actor's own Undo within 10 minutes), a Settings card on the agency's Settings page registered in ⌘K, two timeline kinds, and a checklist section inside the Documents card that re-reads itself only when a files read changed something it depends on (no timer of its own).
+**Revision:** 2026-10-16, after the plan review of `a7847259` (CHANGES REQUESTED, nothing Critical; the reviewer ran the 0081 draft on a PG18 replica). Owner rulings: D1, D6, D8 as recommended; D2–D5, D7, D10–D12 accepted (D7 now names what it reveals); **D9 CHANGED**: "2 of 3" sits in the card's own client-rendered TOP ROW beside "N files". Findings I1–I7 and M1–M10 applied, each named where it lands. The poll PR merged as #262 (squash `c9b099a8` on `main`; branch head `8a6e7f7e`). The spec carries matching "Amended 2026-10-16" lines (§5.1, §5.2, §5.4, §8).
+
+**Architecture:** One migration, **0081**: `accounts.required_document_categories text[]` (empty = off, a CHECK through an immutable helper), `document_requirement_skips` (server-written, members read under the contact's visibility, one ACTIVE skip per contact and category, an un-skip stamps the row instead of deleting it so both moves keep their timeline rows; deviation 1), and one read function `public.document_requirements(account, contact, today)`, SECURITY DEFINER like 0078's `document_space_used`, which re-checks the account AND the contact's visibility itself and answers one row per required category with its state (`met`, `checking`, `expired`, `missing`, `skipped`), never a file, a title or an id (deviation 3, owner decision D7). The app adds a `@bis/db` module (`document-requirements.ts`), a request-client route for the card (`…/contacts/[contactId]/document-requirements`), four skip actions (proof on the request client, then the service client, the actor's own Undo within 10 minutes), a Settings card on the agency's Settings page registered in ⌘K, two timeline kinds, the meter in the Documents card's top row beside "N files" (D9), and a checklist section inside the card that re-reads itself only when a files read changed something it depends on (no timer of its own; pinned by a structure test, I5).
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8 (`rpc`, `from`); Next.js 16.3.6 App Router (server actions, route handlers); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); sonner toasts; the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it), with 2a's real shim and fake clamd already in `webServer`.
 
@@ -12,32 +14,33 @@
 
 `<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s07-2c` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s07-2c`), branch `feat/s07-vault-2c`. `<SCRATCH>` = `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\24e55561-31fd-4769-a14a-4ebbd9d987a9\scratchpad` (Git Bash: `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/24e55561-31fd-4769-a14a-4ebbd9d987a9/scratchpad`); write it out literally in every command. `<KIT2B>` = `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/f54a0255-9568-420c-ad87-a4d62d6b9a05/scratchpad/s07d-kit` (2b's kit; read 2026-10-16: `replica.sh`, `pgrst.sh` present). `<KITSRC>` = `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl` (read 2026-10-16: present). `…/contacts/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/`. `…/settings/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/`. `…/api/` = `apps/web/src/app/api/accounts/[accountId]/`.
 
-## The concurrent poll PR (read before scheduling)
+## The poll PR (#262, MERGED; read before scheduling)
 
-A separate PR is in flight: branch `feat/s07-requests-poll`, worktree `.claude/worktrees/s07-poll`, commit `9fdfc4f7` on top of `6bf592f9` (brief `.claude/worktrees/s07-poll/.superpowers/sdd/poll-brief.md`, read 2026-10-16). It changes exactly three files: `…/contacts/documents-card.tsx` (+84/-4: `requestsPollMs`, `requestsChanged`, a `useSyncExternalStore` visibility store, `useRouter`, a `requestsReads` counter, a 20-second requests timer, and on a change `setNonce` (files re-read) plus `router.refresh()`), `…/contacts/documents-card.test.ts` (+58/-1), and `apps/web/e2e/document-requests.spec.ts` (+23/-9).
+The requests-poll PR is **#262, MERGED** (branch `feat/s07-requests-poll`, head `8a6e7f7e`; squash commit `c9b099a8` on `main`, read 2026-10-16; brief `.claude/worktrees/s07-poll/.superpowers/sdd/poll-brief.md`). It changed exactly FOUR files (`git diff --numstat 6bf592f9 8a6e7f7e`): `…/contacts/documents-card.tsx` (+84/-4: `requestsPollMs`, `requestsChanged`, a `useSyncExternalStore` visibility store, `useRouter`, a `requestsReads` counter, a 20-second requests timer, an `onVisible` effect, and on a change `setNonce` (files re-read) plus `router.refresh()`), `…/contacts/documents-card.test.ts` (+58/-1), **`…/contacts/documents-card-structure.test.ts` (new, +91: source-text pins on the CONTAINER, comments stripped and whitespace squashed: the requests settle's `setRequestsReads` before `if (requestsChanged(`, the timer effect keyed `[requestsPollKey]`, `if (requestsChanged(before, shownRequests.current.load)) { setNonce((n) => n + 1); router.refresh(); }`, the `useSyncExternalStore` visibility line, and the `onVisible` effect's slice up to `}, [requestsRoute]);`)**, and `apps/web/e2e/document-requests.spec.ts` (+23/-9).
 
 **2c fits around it, by construction:**
 - 2c's checklist has **no timer of its own**. It re-reads when the FILES read changes something it depends on (`shouldReloadRequirements`, Task 5). The poll PR's "a customer file arrived" path already re-reads the files (`setNonce`), so a customer's upload reaches the checklist through the files read: requests tick → files re-read → checklist re-read. No second poll, nothing stacked.
 - 2c's skip actions call the card's `router.refresh()` so the timeline shows the skip row; the poll PR adds `const router = useRouter()` to the container. Task 7 uses THAT `router` (it does not add a second `useRouter`).
 - 2c's e2e is a NEW file (`apps/web/e2e/document-requirements.spec.ts`); it never edits `document-requests.spec.ts`.
+- 2c's container edits must keep every pin in `documents-card-structure.test.ts` green: the requests settle, the timer effect and the `onVisible` effect are not edited (the checklist's own effect is a NEW `useEffect`, declared AFTER the `onVisible` effect, so the structure test's `onVisible` slice still ends at its own `}, [requestsRoute]);`). Task 7 adds its own pins to that file (I5).
 
-**Dependency, stated outright: Task 7 (the card) starts only after the poll PR has MERGED to `main`, and its first step merges `origin/main` into `<WT>`** (never a rebase in a shared tree). Task 9 (e2e) and Task 8 (baselines) follow Task 7. **Tasks 1, 2, 3, 4, 5 and 6 touch none of the poll PR's three files and may run before it merges.**
+**Dependency, stated outright: Task 7 (the card) merges `origin/main` (which now holds `c9b099a8`) into `<WT>` as its first step** (never a rebase in a shared tree). Task 9 (e2e) and Task 8 (baselines) follow Task 7. Tasks 1–6 touch none of the poll PR's four files; since #262 has merged, nothing waits on it any more, but Task 7 still verifies the merged base before it edits.
 
-## Owner decisions this plan needs (Task 0 asks them; the plan is written for every RECOMMENDED answer)
+## Owner decisions (RULED 2026-10-16, tiles)
 
-The spec leaves these open, or the code makes the spec's words impossible as written. Task 0 puts each to the owner as a tile, recommendation first. The plan below is written for the recommended answer; for each other answer, the exact lines that change are named.
+The spec left these open, or the code made the spec's words impossible as written. **The owner ruled every one on 2026-10-16: D1–D8 and D10–D12 as recommended; D9 CHANGED (the "Ruling" column says how).** The plan below is written for the rulings. The "other way" column is kept as the record of what was weighed.
 
-| # | Question | Recommended | If ruled the other way |
+| # | Question | Ruling (2026-10-16) | The other way (not taken) |
 |---|---|---|---|
 | D1 | Does a Technician see the checklist, and may they mark an item Not needed? | **Sees it, may Upload and Ask (as on the card today), may NOT skip or un-skip** (a skip is a judgement about what the business requires; `seesWholeAccount`, `lib/auth-role.ts:15`). | Task 5's four actions drop the `seesWholeAccount` check and the `documents.checklist.skipRole` key; Task 7's `canSkip` is `true` for everyone who sees the card. |
 | D2 | "Ask the customer" from a missing item: tick just that item, or every missing item? | **Just that item** (spec §5.4: "2b's dialog with that item ticked"; staff tick more in the dialog). | Task 7's `onAsk(category)` passes `open.map((i) => i.category)` instead of `[category]`. |
 | D3 | Does a household/business page show the checklist? | **No: settled by spec §1** ("Not in part 2: the checklist on household/business pages or in the list drawer"). A group's files still COUNT for its members (§5.3). Listed so the owner sees it was not forgotten. | A new task: a group-level read (whose requirements? the members'?) that the spec has not designed. |
 | D4 | What does "expired" mean when a category holds several files? | **Met if ANY live, clean file of that category (on the customer or a group they belong to) is unexpired; "Expired" only when none is met and at least one live, clean one has expired.** A renewed policy uploaded beside the old one is "met"; the old one does not make it "Expired". | "Newest file decides": Task 1's `st` CTE picks `distinct on (category)` by `created_at desc` before testing expiry; the "newer copy" case in Task 1 flips. |
 | D5 | Does a skip expire? | **No.** It stays until someone presses "Needed again". | A `skips_until` column and a `p_today` comparison in the function; out of 2c's scope as designed. |
-| D6 | Who edits the list? Spec §5.2 says "Owners and agency edit; others read", but the account Settings page is AGENCY-ONLY (`requireAgencyOnlyAccountAccess`, `…/settings/page.tsx:62`; the palette registers every Settings section `agencyOnly: true`, `lib/palette/registry.ts:26-32`), so a client Owner cannot reach it. | **2c ships the editor on Settings for the agency; the save action already admits a client Owner (`canManage`), so a client-Owner editor can arrive with part 3's account-wide Documents view with no database change.** Staff and Technicians "read" the list as its effect on each customer's card. | "Owners edit now": one more bis-frontend task: a client-Owner route on the Branding pattern (`nav-groups.ts`: Branding is a client-only nav item, "the agency reaches the same panel from Settings"), rendering the same `RequiredDocumentsCard`, registered in the palette for Owners; DESIGN.md's module contract allows "one settings section", so the orchestrator confirms a second entry point is not a new top-level surface. |
-| D7 | A file marked **Owners only** (0077): does it meet the requirement for a Staff member who cannot see it? | **Yes.** The checklist is a fact about the customer, not about the reader: a Staff member told "Missing: Insurance" would ask the customer for a file the Owner already holds. The read is SECURITY DEFINER (0078's reason, "the number is the account's") and answers states only, never a file, title or id. | The function becomes SECURITY INVOKER (each reader's RLS decides); Task 1's Owners-only case flips to "missing" for Staff, and the function's own visibility checks go (RLS does them). |
+| D6 | Who edits the list? Spec §5.2 says "Owners and agency edit; others read", but the account Settings page is AGENCY-ONLY (`requireAgencyOnlyAccountAccess`, `…/settings/page.tsx:62`; the palette registers every Settings section `agencyOnly: true`, `lib/palette/registry.ts:26-32`), so a client Owner cannot reach it. | **RULED: the agency edits the list on Settings now; an Owner screen comes later.** The save action already admits a client Owner (`canManage`), so the Owner screen needs no database change. Staff and Technicians "read" the list as its effect on each customer's card. **Stated outright (here, in the spec's §5.2/§8 amendment, and in the PR body): spec P7's "Owners pick required categories in Settings" and §8's "off for every account until an Owner opts in" are NOT yet met for client Owners; in 2c only the agency can opt an account in.** | "Owners edit now": one more bis-frontend task: a client-Owner route on the Branding pattern (`nav-groups.ts`: Branding is a client-only nav item, "the agency reaches the same panel from Settings"), rendering the same `RequiredDocumentsCard`, registered in the palette for Owners; DESIGN.md's module contract allows "one settings section", so the orchestrator confirms a second entry point is not a new top-level surface. |
+| D7 | A file marked **Owners only** (0077): does it meet the requirement for a Staff member who cannot see it? | **Yes.** The checklist is a fact about the customer, not about the reader: a Staff member told "Missing: Insurance" would ask the customer for a file the Owner already holds. The read is SECURITY DEFINER (0078's reason, "the number is the account's") and answers states only, never a file, title or id. **What it reveals, named (owner ruling):** a Staff member or a Technician who cannot read an Owners-only file learns that a file of that CATEGORY exists for this customer (the item reads met, or Checking), and whether it has EXPIRED (the item reads Expired). Nothing else of it: no title, no date, no version, no link. | The function becomes SECURITY INVOKER (each reader's RLS decides); Task 1's Owners-only case flips to "missing" for Staff, and the function's own visibility checks go (RLS does them). |
 | D8 | Can **Other** be required? Spec §5.2 says "the nine categories as checkboxes". | **No: eight.** Anything filed as Other would meet "Other", so it can never mean a particular document; and 2b's dialog needs a note for Other, so "Ask the customer" from an "Other" gap would open with an error. | `'other'` joins the SQL list in Task 1 (both CHECKs), `REQUIRABLE_DOCUMENT_CATEGORIES` becomes `DOCUMENT_CATEGORIES` in Task 3, and Task 1's "other is refused" lines move to the accepted set. |
-| D9 | Where does "2 de 3" sit? Spec §5.4: "The card header reads DOCUMENTOS 2 de 3". The card's title is a fixed string the SERVER renders in `RecordCard` (`[contactId]/page.tsx:266`, `title={tr.text(def.titleKey)}`), while the count changes in the browser (a skip, an upload, a verdict). | **The checklist's own first line, directly under the card's header row: a mono label "Required" / "Requeridos" and "2 of 3" / "2 de 3"** (the same row style as "3 files"), so it changes at once with every move and never needs a page reload. | The page computes the count server-side into the title, and every skip, upload and verdict calls `router.refresh()`; a second read of the same facts, and a stale title until each refresh lands. |
+| D9 | Where does "2 de 3" sit? Spec §5.4: "The card header reads DOCUMENTOS 2 de 3". The card's title is a fixed string the SERVER renders in `RecordCard` (`[contactId]/page.tsx:266`, `title={tr.text(def.titleKey)}`), while the count changes in the browser (a skip, an upload, a verdict). | **RULED (CHANGED from the recommendation): "2 of 3" goes in the Documents card's OWN client-rendered TOP ROW, beside the "N files" count** (`DocumentsCardView`'s first row, `documents-card.tsx:341-345`, where "3 files" and the space-used line stand), redrawn live after a skip, an upload or a verdict (it is the card's own requirements read, not the server's title). It reads "Required 2 of 3" / "Requeridos 2 de 3", or "Complete" / "Completo" with a `--good` dot when nothing is missing; nothing at all while the list is off, loading or failed (the checklist section below says loading or failed). The checklist section keeps the gaps and the skipped items, with no meter line of its own. | (Recommended, not taken: the meter as the checklist section's first line.) Also not taken: the server-rendered RecordCard title, which would need `router.refresh()` after every move. |
 | D10 | A file uploaded for a required category is still being checked (2a): what does the checklist say? | **"Checking: Insurance"** (dot + word), not counted as met, not called "Missing". The file is there; saying "Missing" for two seconds after staff uploaded it reads as a failure. | `checking` folds into `missing` in Task 1's function and the `documents.checklist.checking` key goes. |
 | D11 | When everything required is met: spec says "Completo, and the list disappears". What about skipped items? | **"Complete" (dot + word); the gaps' list disappears; skipped items stay listed** as "Insurance · Not needed" with "Needed again", or a skip could never be undone after the fact. | Task 7 hides skipped rows when complete. |
 | D12 | Does a blueprint carry the required list? | **No, not in 2c** (spec: F-171 "later fills 2c's setting"; `BUNDLE_SCHEMA_VERSION` unchanged). | `captureBlueprint`/`applyBlueprint` gain the column and the bundle version bumps; a task for bis-crm's blueprints owner. |
@@ -54,7 +57,7 @@ The spec leaves these open, or the code makes the spec's words impossible as wri
 - **Shared files, one task at a time.**
   - `apps/web/src/lib/messages.ts`: **Task 2 only**. Every key in this plan is listed in Task 2. A later task that finds a key missing STOPS and reports it; the orchestrator re-opens Task 2. A `.es` twin goes on the line directly under its English key.
   - `packages/db/src/{document-requirements,document-rules,index}.ts`: **Task 3 only**. `packages/db/src/record.ts` and `lib/record/*`: **Task 4 only**.
-  - `…/contacts/documents-card.tsx` and its test: **Task 7 only, after the poll PR merged.**
+  - `…/contacts/documents-card.tsx` and its test: **Task 7 only** (#262 has merged; Task 7 merges `origin/main` first). `…/contacts/documents-card-structure.test.ts` (#262's): Task 7 APPENDS one `describe` and edits nothing in it.
   - `…/accounts/[accountId]/in-account-service-reads.test.ts`: **Task 5 only** (two lines).
   - `apps/web/src/lib/palette/registry.ts`: **Task 6 only** (one line, appended; "add a line, never reorder").
   - `apps/web/src/lib/i18n/*-baseline.json`: **Task 8 only**, after every copy-bearing task has committed.
@@ -66,12 +69,12 @@ The spec leaves these open, or the code makes the spec's words impossible as wri
   - **Tests that read every account.** No 2c function reads every account; every read is scoped to one account and one contact. If a reviewer finds one, its test filters to the test's own account and keeps any count the test's own rows guarantee.
   - **Starts and limits.** 2c adds no limit. (A skip is unique per contact and category; that is a constraint, not a count.)
   - **e2e page state.** Each Playwright test gets a fresh page: every test `goto`s the contact page; nothing calls `reload` to pick up another test's state.
-  - **Polling.** The checklist has no timer. Its re-read is triggered once per change by a pure `shouldReloadRequirements(prev, next)` that answers `false` for the same read twice (Task 5 pins it), so the files' 5-second Checking poll and the poll PR's 20-second requests tick never re-read it for nothing.
+  - **Polling.** The checklist has no timer. Its re-read is triggered once per change by a pure `shouldReloadRequirements(prev, next)` that answers `false` for the same read twice (Task 5 pins it), and the files settle calls it only inside `if (hasChecklist && shouldReloadRequirements(…))` (Task 7 pins that at the source, I5), so the files' 5-second Checking poll and #262's 20-second requests tick never re-read it for nothing.
   - **Briefs list every pinned test.** "Pinned tests this PR changes" below names every file that pins a list 2c changes; a task's brief carries its rows.
 - **0053, server-only writes.** `authenticated` gets SELECT on `document_requirement_skips` and nothing else; no grant on `accounts.required_document_categories` (0031's rule, `0031_weekly_report.sql:33-46`: `accounts` is edited per column by clients, and a server-written column takes no grant). Both new action files are added to `in-account-service-reads.test.ts`'s `ALLOWED` (Task 5). **No new file under `apps/web/src/lib` contains the token `serviceDb`, not even in a comment**: lib functions take the caller's client as a parameter.
 - **SQL rules.** The migration is ASCII only with no backslash anywhere (memory "MCP SQL escapes"; checked with the node byte count in Task 1, which has a positive control). A boolean built from a nullable value is `coalesce(…, false)` (memory "plpgsql NULL guard"); the definer function's two guards both coalesce, as 0078's do. A Supabase `head: true` count throws on `count === null` (memory "head-count null"); this plan adds none.
-- **DESIGN.md definition of done for every UI task (6, 7):** tokens only (radii `rounded-[var(--radius-ctl)]`, pills `rounded-full`; no hex, no literal shadow); both themes via the `.dark` class; the blur fallback; **rule 3: every state is a dot AND a word** ("Missing: Insurance" with a `--warn` dot, "Expired: ID" with a `--crit` dot, "Checking: Warranty" with a `--warn` dot, "Complete" with a `--good` dot; the word always carries the state); rule 5 (the checklist loads, is off, and fails on its own, never blanking the files); rule 6 (Not needed and Needed again run at once with Undo in the toast); rule 7 (a skeleton line while loading, no spinner, nothing pulses); rule 8 (the Documents card keeps exactly ONE `data-variant="default"` button, Upload; every checklist button is ghost; the Settings card has ONE primary Save); rule 1 (the meter is "2 of 3" under the label "Required": the denominator is its context); controls `min-h-11 md:min-h-8`; nothing animates on scroll.
-- **Copy.** Every new string through `t(m, key, locale, params)` with an `.es` twin in the same commit (`apps/web/src/lib/i18n/ratchet.test.ts`). New `.tsx` code carries no JSX literal copy with a letter in it. No vendor or internal words in copy ("token", "RLS", "definer", "skip row", "category key", "checklist" as a machine word is fine in neither language: the words are "Required", "Missing", "Not needed"). The Settings page is English today (`m["settings.…"]`, `…/settings/page.tsx:120-130`); the new card follows its neighbours and reads `m[...]` English, but every key still has its `.es` twin for D6's later client-Owner editor.
+- **DESIGN.md definition of done for every UI task (6, 7):** tokens only (radii `rounded-[var(--radius-ctl)]`, pills `rounded-full`; no hex, no literal shadow); both themes via the `.dark` class; the blur fallback; **rule 3: every state is a dot AND a word** ("Missing: Insurance" with a `--warn` dot, "Expired: ID" with a `--crit` dot, "Checking: Warranty" with a `--warn` dot, "Complete" with a `--good` dot; the word always carries the state); rule 5 (the checklist loads, is off, and fails on its own, never blanking the files); rule 6 (Not needed and Needed again run at once with Undo in the toast); rule 7 (a skeleton line while loading, no spinner, nothing pulses); rule 8 (the Documents card keeps exactly ONE `data-variant="default"` button, Upload; every checklist button is ghost; while the upload panel is open the panel's Upload is the one primary and the checklist draws NO Upload and NO Ask the customer, exactly as the header draws neither, I6; the Settings card has ONE primary Save); rule 1 (the meter is "2 of 3" beside the label "Required", in the card's top row beside "N files", D9: the denominator is its context); controls `min-h-11 md:min-h-8`; nothing animates on scroll.
+- **Copy.** Every new string through `t(m, key, locale, params)` with an `.es` twin in the same commit (`apps/web/src/lib/i18n/ratchet.test.ts`). New `.tsx` code carries no JSX literal copy with a letter in it. No vendor or internal words in copy ("token", "RLS", "definer", "skip row", "category key", "checklist" as a machine word is fine in neither language: the words are "Required", "Missing", "Not needed"). The Settings page is English today (`m["settings.…"]`, `…/settings/page.tsx:120-130`); the new card follows its neighbours and reads `m[...]` English, but every key still has its `.es` twin for D6's later client-Owner editor. **Never reuse `common.actionCrashed` in 2c's bilingual copy** (M9): its `.es` is in tú ("Recárgala e inténtalo de nuevo", `messages.ts:312`); the checklist's handlers toast their own usted sentence, `documents.checklist.crashed` (Task 2). (The Settings card is English-only, so `common.actionCrashed`'s English stays right there.)
 - **Browser code imports the vault's rules from `@bis/db/document-rules`**, never the `@bis/db` barrel. `lib/documents/requirements-load.ts`, `…/contacts/document-checklist.tsx` and `…/contacts/document-checklist-handlers.ts` are browser-safe (no barrel import, no `node:` import).
 - **The `vi.mock` factory check.** A task that adds a NEW named import from `@bis/db` to a module adds that name to every mock factory that reaches the module: `grep -rln 'vi.mock("@bis/db"' apps/web/src | xargs grep -ln "<module basename>"`. A task that adds a new `"use server"` import to a component adds a `vi.mock` for it in that component's tests (`documents-card.test.ts:5-13` mocks both action modules today; Task 7 adds `./document-requirements-actions`).
 - **Running tests.** Only the affected tests, by path: `pnpm --filter web exec vitest run "<path>" …`, `pnpm --filter web typecheck`, `pnpm --filter web exec eslint "<touched files>"`. `@bis/db` suites only on a replica (the kit below), judged by vitest's summary block (capture the exit code to a file with nothing after the command; the `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` trailer lies); in `packages/db` run vitest as `node node_modules/vitest/vitest.mjs run <files>`. **No `@bis/db` vitest may run against bis-ci until Task 11 step 2 has applied 0081 there.** Never the gates (`pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`) and never Playwright: the orchestrator runs them, one at a time (memory "Agent test scope"). Never pass the folder `…/accounts/` to vitest (it holds `calls/[callId]/actions.test.ts`, a live test).
@@ -108,20 +111,21 @@ Paste both values in the report; stop if they differ.
 - `packages/db/src/test/timeline-merge.test.ts:145-147`: "three reads more than there are sources" becomes **five** (`TIMELINE_SOURCES.length + 3` → `+ 5`; the comment names 0081's two `document_requirement_skips` reads); and a new case beside the refused `document_requests` read at `:179`: a refused `document_requirement_skips` read fails the `documents` source (Task 4).
 - `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts:63`: `MEASURED` 26 → **28** (the two skip reads), its comment naming both (Task 4). Read the number off the failing run first; if it is not 28, stop and report.
 - `packages/db/src/test/record.test.ts`: one new case (a skip and an un-skip read as two entries) (Task 4). `TIMELINE_SOURCES` is UNCHANGED (`record.ts:265`; the skip rows join the existing `documents` source, as every vault row has); `record.test.ts`'s pin of it and `[contactId]/page.test.ts:80`'s fake stay as they are.
-- The `TimelineEntry` union gains `documentSkip` and `documentUnskip` (`packages/db/src/record.ts:290-305`). Every exhaustive map of it changes and its test gains a case (Task 4): `apps/web/src/lib/record/author-mark.ts` (`:62` area) + `author-mark.test.ts`; `apps/web/src/lib/record/timeline-rows.ts` (`:118` area) + `timeline-rows.test.ts`; `apps/web/src/lib/record/recent-rows.ts` (`:50`) + `recent-rows.test.ts`; `…/contacts/[contactId]/activity-timeline.tsx` (`:192`) + `activity-timeline.rows.test.ts` (`:224` area); `…/groups/[groupId]/group-timeline.tsx` (`:136`) + `group-timeline.test.ts` (`:154` area); `…/contacts/contact-drawer.tsx` `ROW_ICON` (`:66`); `apps/web/src/lib/contacts/drawer-summary.ts` `ROW_KINDS` (`:52-55`) + `drawer-summary.test.ts`.
-- `…/contacts/[contactId]/page.test.ts:680`: the Documents card's props are asserted EXACTLY (`toEqual`); they gain `checklist: { canSkip: <bool> }` (Task 7). Read which access that case runs under (`:46-48` defaults to the agency, so `canSkip: true`) and assert the value it computes. `…/groups/[groupId]/page.test.ts:284, :293`: UNCHANGED (a group passes no `checklist`); Task 7 runs it to prove so.
+- The `TimelineEntry` union gains `documentSkip` and `documentUnskip` (`packages/db/src/record.ts:290-305`). Every exhaustive map of it changes and its test gains a case (Task 4): `apps/web/src/lib/record/author-mark.ts` (`:62` area) + `author-mark.test.ts`; `apps/web/src/lib/record/timeline-rows.ts` (`:118` area) + `timeline-rows.test.ts`; `apps/web/src/lib/record/recent-rows.ts` (`:50`) + `recent-rows.test.ts`; `…/contacts/[contactId]/activity-timeline.tsx` (`:192`) + `activity-timeline.rows.test.ts` (`:224` area); `…/groups/[groupId]/group-timeline.tsx` (`:136`) + `group-timeline.test.ts` (the request case at `:167`, M8); `…/contacts/contact-drawer.tsx` `ROW_ICON` (`:66`); `apps/web/src/lib/contacts/drawer-summary.ts` `ROW_KINDS` (`:52-55`) + `drawer-summary.test.ts`.
+- `…/contacts/[contactId]/page.test.ts:672-681` (M8): the case runs as STAFF (`requireAccountAccessMock.mockResolvedValueOnce({ … role: "staff", canManage: false })`, `:673`) and asserts the Documents card's props EXACTLY at `:680`; they gain `checklist: { canSkip: true }` (Staff sees the whole account, `seesWholeAccount`) (Task 7). A new case beside it runs as a Technician (`TECH`, `:507`) and asserts `checklist: { canSkip: false }` (D1). `…/groups/[groupId]/page.test.ts:284, :293`: UNCHANGED (a group passes no `checklist`); Task 7 runs it to prove so.
 - `…/settings/page.test.ts:24-35`: the fake `accounts` row gains `required_document_categories: ["insurance"]`, the file gains `vi.mock("./document-requirements-actions", …)` (a `"use server"` module is never imported into vitest, `sections.test.ts:31` states the house rule), and one new case pins the card's mount and props (Task 6).
 - `apps/web/src/lib/palette/registry.test.ts:214-237`: the anchor-parity case's `cardFiles` list gains `../../app/(dashboard)/dashboard/accounts/[accountId]/settings/required-documents-card.tsx`; one new registration case beside `:114` (Task 6).
-- `…/accounts/[accountId]/in-account-service-reads.test.ts:62-130`: `ALLOWED` gains two lines (Task 5).
+- `…/accounts/[accountId]/in-account-service-reads.test.ts`: `ALLOWED` (`:62-130`) gains two lines (Task 5): the contacts action beside the vault's lines (`:89-95`), the Settings action beside the other Settings lines (`:104-107`, M8).
 - `…/contacts/documents-card.test.ts:5-13`: gains a `vi.mock("./document-requirements-actions", …)`; its render helper (`:39-43`) is unchanged (the `checklist` prop is optional); the existing one-primary assertions stay and are re-run with a checklist drawn (Task 7).
-- `apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.test.ts`: its exact counts (`data-documents-card` 6 at `:26`, `data-ask-customer` 3 at `:122`, and the rest) stay; the checklist is drawn as its OWN component under a NEW marker, `data-document-checklist`, counted (Task 7).
+- **`…/contacts/documents-card-structure.test.ts` (#262, new on `main`; I4):** source-text pins on the CONTAINER (the requests settle, the timer effect keyed `[requestsPollKey]`, the `requestsChanged` → `setNonce` + `router.refresh()` line, the visibility store, and the `onVisible` effect's slice, which ends at the first `}, [requestsRoute]);` after `const onVisible = () =>`). Task 7 edits none of those lines, declares its own requirements effect AFTER the `onVisible` effect (so that slice is unchanged), runs the file unedited first, then ADDS one `describe` pinning the checklist's re-read wiring (I5). Every existing pin must stay green.
+- `apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.test.ts`: its exact counts (`data-documents-card` 6 at `:26`, `data-ask-customer` 3 at `:122`, and the rest) stay; the checklist is drawn standalone in five states under a NEW marker, `data-document-checklist`, and the existing English ready card (`documents-demo.tsx:111`) gains a checklist slot, so the counts are `data-document-checklist` 6 and `data-requirements-meter` 1 with no seventh card (Task 7).
 - `apps/web/src/lib/messages.test.ts`: one new `describe` at the end (Task 2).
 - **Unchanged, checked (each task that could disturb one runs it):** `packages/db/src/test/schema-grants-guard.test.ts` (0081 adds a TABLE with RLS on and no client write, and no view; `rlsOff` stays `["document_scan_timeline", "document_version_timeline"]`, `:115`); `weekly-report-grants.test.ts` and `alert-phone-grants.test.ts` (`ACCOUNTS_UPDATE_COLUMNS` stays exactly as it is: 0081 grants nothing on `accounts`); `packages/db/src/account-teardown.ts`' `ACCOUNT_OWNED_TABLES` (unchanged: the new table cascades on its account AND its contact, as `document_requests` does; Task 1 proves the contact cascade); `document-vault-schema.test.ts` (the category set is unchanged); `read-gate.test.ts` (2c mints no URL).
 
 ## Not in this PR
 
 - The checklist on a household or business page, or in the contacts list's drawer (spec §1; D3).
-- A client-Owner screen for the list (D6's recommended answer; the action already admits an Owner).
+- A client-Owner screen for the list (D6, ruled 2026-10-16: an Owner screen comes later; the action already admits an Owner). **So spec P7 ("Owners pick required categories") and §8 ("off … until an Owner opts in") are not yet met for client Owners; the PR body says so.**
 - Required *fields*; pack-supplied lists (F-171 later fills the same column); a blueprint carrying the list (D12).
 - Expiry reminders ("Expired: ID" is shown on the card; telling anyone about it is part 3).
 - An event for a skip, an un-skip or a change of the list (2b deviation 7's rule: the timeline row is the record; `events_read` shows every event to every Owner and Staff, and nothing here needs a subscriber).
@@ -129,15 +133,15 @@ Paste both values in the report; stop if they differ.
 
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
-1. **`document_requirement_skips` keeps the un-skip on the row** (spec §5.1: `account_id, contact_id, category, skipped_by, created_at; unique on (contact_id, category)`). Spec §5.4 gives BOTH moves a timeline row ("Skip and un-skip … each gets a timeline row"). An un-skip that deleted the row would erase the skip's own row with it, and a unique `(contact_id, category)` would forbid a second skip after an un-skip. So the row gains `id` (the timeline's cursor needs one, `timeline-cursor.ts:56-60`), `unskipped_at` and `unskipped_by`; the uniqueness is a partial index over ACTIVE skips, `(account_id, contact_id, category) where unskipped_at is null`; `unskipped_at > created_at` is a CHECK, so a skip row's two timeline entries can never tie on their instant. The timeline reads the table twice (a skip at `created_at`, an un-skip at `unskipped_at`) as two kinds, `documentSkip` and `documentUnskip`, so the row key `${kind}-${id}` (`timeline-rows.ts:142`) never collides.
+1. **`document_requirement_skips` keeps the un-skip on the row** (spec §5.1: `account_id, contact_id, category, skipped_by, created_at; unique on (contact_id, category)`). Spec §5.4 gives BOTH moves a timeline row ("Skip and un-skip … each gets a timeline row"). An un-skip that deleted the row would erase the skip's own row with it, and a unique `(contact_id, category)` would forbid a second skip after an un-skip. So the row gains `id` (the timeline's cursor needs one, `timeline-cursor.ts:56-60`), `unskipped_at` and `unskipped_by`; the uniqueness is a partial index over ACTIVE skips, `(account_id, contact_id, category) where unskipped_at is null`; `unskipped_at > created_at` is a CHECK, so a skip row's two timeline entries can never tie on their instant. **Both instants are the DATABASE's `now()` (M6):** the insert omits `created_at` (its default), and the un-skip goes through a service-only function, `public.unskip_document_requirement(account, skip, actor)`, that writes `now()` under a compare-and-set, so app-server clock skew can never trip the CHECK. The timeline reads the table twice (a skip at `created_at`, an un-skip at `unskipped_at`) as two kinds, `documentSkip` and `documentUnskip`, so the row key `${kind}-${id}` (`timeline-rows.ts:142`) never collides.
 2. **Undo erases.** The Undo of a skip DELETES that row (the actor's own, still active, within 10 minutes), so neither the skip nor its timeline row survives; the Undo of an un-skip clears `unskipped_at`/`unskipped_by` (the actor's own, at the exact instant the toast named, within 10 minutes), so the "needed again" row disappears. An Undo is "it never happened", as the trash's restore is.
 3. **The checklist's read is a SECURITY DEFINER function** (D7), `public.document_requirements(p_account_id, p_contact_id, p_today)`, EXECUTE for `authenticated` only, as 0078's `document_space_used` is. Because it bypasses RLS it re-checks both fences itself: the account (agency, or a member of that account's organisation; 0078's guard, both halves coalesced) AND the contact (Owner, Staff or agency through `app.sees_all_customers`, or a Technician to whom the contact is assigned through `app.my_contact_ids()`; 0068's rule), else 42501. It answers `(category, state)` rows only. The route still proves the contact on the request client first (`getContact`), as every vault read does.
 4. **"Has a clean current version" is read as "has a ready, CLEAN version"** (spec §5.3). 2a's amendment kept `current_version_id` as the newest READY version; what OPENS is the newest clean one (`document-view.ts:38`, `d.versions.find((v) => v.scan_status === "clean") ?? d.version`). A document whose newest version is still being checked, or was just removed, still has an older clean version that opens; it meets the requirement. A document with NO clean version does not.
 5. **A fifth state, `checking`** (D10): no file meets the category, but a live one has a ready version still pending its scan. Precedence: `skipped`, then `met`, then `checking`, then `expired`, then `missing`.
 6. **"Today" comes from the app**, `documentsClock(db, accountId)` (`lib/documents/document-view.ts:20-26`: the account's zone through `renderZone`, the card's own clock), passed as `p_today date`, so the checklist's "expired" and the card's "Expired 3 days ago" can never use two clocks. A caller who passes another day only changes their own answer.
-7. **The meter is the checklist's first line, not the RecordCard's title** (D9).
-8. **The Settings card is agency-reached** (D6); its action admits `canManage` (an Owner or the agency) and is listed `owner-only`.
-9. **Eight categories, not nine** (D8).
+7. **The meter sits in the Documents card's own client-rendered top row, beside "N files", not in the RecordCard's server-rendered title** (D9 as ruled 2026-10-16; spec §5.4 amended).
+8. **The Settings card is agency-reached** (D6 as ruled; spec §5.2 and §8 amended); its action admits `canManage` (an Owner or the agency) and is listed `owner-only`, ready for the later Owner screen. Until that screen ships, P7's Owner half and §8's "until an Owner opts in" are not met for client Owners.
+9. **Eight categories, not nine** (D8, ruled; spec §5.2 amended).
 
 ## Assumptions (not verified by reading; each has a named check)
 
@@ -145,7 +149,7 @@ Paste both values in the report; stop if they differ.
 - **A2** `array_position(arr, null)` finds a NULL element (it compares with IS NOT DISTINCT FROM). Check: Task 1's CHECK case inserts `'{insurance,NULL}'` and expects 23514.
 - **A3** A CHECK constraint may call an immutable SQL function that reads only its argument (0080's `app.document_request_items_ok` already does). Check: Task 1's replica run.
 - **A4** `lucide-react` exports `ListChecks` (the skip rows' icon). Check: `pnpm --filter web typecheck` in Task 4.
-- **A5** The poll PR merges as `9fdfc4f7` reads (its `requestsChanged` path calls `setNonce` then `router.refresh()`). Check: Task 7 step 0 reads `documents-card.tsx` on the merged main and STOPS if the router or the files re-read is gone.
+- **A5** `main` holds #262 as its squash `c9b099a8` with the same container as branch head `8a6e7f7e` (its `requestsChanged` path calls `setNonce` then `router.refresh()`; `documents-card-structure.test.ts` pins it). Check: Task 7 step 0 runs `documents-card-structure.test.ts` on the merged base and greps the container; it STOPS if the router, the files re-read or the structure test is missing.
 - **A6** The e2e default signed-in user is the per-run AGENCY user (`e2e/auth.setup.ts:54-75`), so it reaches Settings. Check: Task 9 test 3 opens `settings#required-documents`.
 - (Read, not assumed: `documents.expires_on` is a `date` (0077); `client_group_members` has hard rows, no soft delete (`0069_client_groups.sql:59-75`); `contacts (account_id, id)` is unique (0080's FKs reference it); `accounts` has table-level SELECT for `authenticated` (0031:46-49).)
 
@@ -180,7 +184,7 @@ Paste both values in the report; stop if they differ.
 | 4 | The timeline: skip and un-skip rows | bis-crm | **opus** | 1, 2, 3 | no | `record.ts`, its tests, `lib/record/*`, both timelines, the drawer maps, `route.reads.test.ts` |
 | 5 | The card's read, its browser parser, the skip actions, the Settings action | bis-crm | **opus** | 2, 3 | no | the route, `requirements-load*`, both action files, two `ALLOWED` lines |
 | 6 | The Settings card, its mount, ⌘K | bis-frontend | sonnet | 2, 5 | no | `required-documents-card*`, `settings/page*`, `palette/registry*` |
-| 7 | The checklist on the Documents card; the contact page's prop; `/styleguide` | bis-frontend | **opus** | 2, 5, **the poll PR merged** | **yes** | `documents-card*`, `document-checklist*`, `[contactId]/page*`, `styleguide/documents-demo*` |
+| 7 | The checklist on the Documents card; the contact page's prop; `/styleguide` | bis-frontend | **opus** | 2, 5, #262 merged (done: `c9b099a8`) | **yes** | `documents-card*`, `document-checklist*`, `[contactId]/page*`, `styleguide/documents-demo*` |
 | 8 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 4, 6, 7 | no | `lib/i18n/*-baseline.json` |
 | 9 | The e2e spec | bis-e2e-qa | sonnet | 6, 7, 8 | no | `e2e/document-requirements.spec.ts` |
 | 10 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–9 | — | none |
@@ -191,9 +195,8 @@ Wave A (two lanes):    T1 (bis-db-schema)            T2 (bis-crm)
 Wave B:                T3 (bis-crm, after T1)
 Wave C (two lanes):    T4 (bis-crm, after T1-T3)     T5 (bis-crm 2nd instance, after T2, T3)
 Wave D:                T6 (bis-frontend, after T5)
--- everything above may run before the poll PR merges --
-Gate:                  the poll PR (feat/s07-requests-poll) is MERGED to main
-Wave E:                T7 (bis-frontend; step 0 merges origin/main into <WT>)
+-- the poll PR (#262) has MERGED (c9b099a8): no gate is left --
+Wave E:                T7 (bis-frontend, after T5; step 0 merges origin/main into <WT>; may run beside T6)
 Wave F:                T8, then T9
 Checkpoint:            T10
 Rollout:               T11 (orchestrator, LAST)
@@ -205,7 +208,7 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the timelines, `contact-drawer.ts
 
 ## Task 0: Confirm the base; the owner rules D1–D12 (orchestrator)
 
-- [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `6bf592f9 Staff ask a customer for documents …`. `git fetch origin && git log --oneline origin/main -1`. If `main` moved past `6bf592f9` and the poll PR is NOT what moved it, `git merge origin/main` (never rebase) and re-run Step 2.
+- [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `6bf592f9 Staff ask a customer for documents …`. `git fetch origin && git log --oneline origin/main -1`. `main` is at `c9b099a8` (#262, the poll PR) or later. Tasks 1–6 may start on `6bf592f9`; Task 7 merges `origin/main` itself. If `main` moved past `c9b099a8`, read what moved it before dispatching anything.
 - [ ] **Step 2.** Confirm, and stop if any line differs:
   - `ls packages/db/supabase/migrations | tail -1` → `0080_document_requests.sql`; `git log --all --oneline -- 'packages/db/supabase/migrations/0081*'` → nothing.
   - `grep -n "requireAgencyOnlyAccountAccess(accountId)" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx"` → `62:` (D6's premise).
@@ -215,8 +218,8 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the timelines, `contact-drawer.ts
   - `grep -n '"documents": "proven-target"\|document-requests-actions.ts": "proven-target"' "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` → one hit, `:95`.
   - `ls "<KIT2B>/replica.sh" "<KIT2B>/pgrst.sh" "<KITSRC>/postgrest.exe" "<KITSRC>/make-jwt.js" "<KITSRC>/proxy.mjs"` → all five exist.
   - Read-only, MCP `execute_sql` on production and `pnpm --filter @bis/db ci:sql` on bis-ci: `select max(version) from supabase_migrations.schema_migrations` names the 0080 apply on both (0080 is applied; never re-apply).
-- [ ] **Step 3. The owner rules D1–D12** (the table under "Owner decisions"), one tile each, the recommended answer first. Record each ruling in the ledger. For any ruling against the recommendation, write the named line changes into the affected task's brief BEFORE dispatching it.
-- [ ] **Step 4. The poll PR.** `git -C /c/Users/danlo/bis-platform/.claude/worktrees/s07-poll log --oneline -1` and its PR state (`gh pr list --head feat/s07-requests-poll --state all`). Tasks 1–6 dispatch now; Task 7 waits for its merge.
+- [x] **Step 3. The owner ruled D1–D12 on 2026-10-16** (tiles): as recommended, except D9 (the meter in the card's top row beside "N files"), which this revision already carries. Record the rulings in the ledger.
+- [x] **Step 4. The poll PR.** #262 is MERGED (head `8a6e7f7e`, squash `c9b099a8`; read 2026-10-16). Tasks 1–6 dispatch now; Task 7 after Task 5.
 
 ---
 
@@ -234,7 +237,8 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the timelines, `contact-drawer.ts
 - Produces (SQL); every name below is read by a later task:
   - `accounts.required_document_categories text[] not null default '{}'`, constraint `accounts_required_document_categories_check` through `app.required_document_categories_ok(text[]) returns boolean` (immutable): one-dimensional, no NULL element, each one of the EIGHT requirable keys (D8: `id, contract, estimate, invoice, photo, permit, insurance, warranty`), no duplicate. Order is the writer's; the app writes the vault's order.
   - `public.document_requirement_skips`: `id uuid primary key default gen_random_uuid()`, `account_id`, `contact_id`, `category` (the eight), `skipped_by text`, `created_at timestamptz`, `unskipped_at timestamptz`, `unskipped_by text`. Constraints: `document_requirement_skips_category_check`, `document_requirement_skips_skipped_by_check` (non-blank), `document_requirement_skips_unskip_coherent` (`(unskipped_at is null) = (unskipped_by is null)`), `document_requirement_skips_unskip_after` (`unskipped_at is null or unskipped_at > created_at`), FK `document_requirement_skips_contact_fkey (account_id, contact_id) → contacts (account_id, id) on delete cascade`; unique partial index `document_requirement_skips_active (account_id, contact_id, category) where unskipped_at is null`; index `document_requirement_skips_by_contact (account_id, contact_id)`. RLS on; `authenticated` SELECT under `document_requirement_skips_member_read` + restrictive `document_requirement_skips_technician_scope`; `service_role` all.
-  - `public.document_requirements(p_account_id uuid, p_contact_id uuid, p_today date) returns table (category text, state text)`, SECURITY DEFINER, stable, EXECUTE for `authenticated` only. `state` ∈ `met | checking | expired | missing | skipped`. Rows in the account's stored order; none when the list is empty. Raises `22004` on a null argument and `42501` when the caller is outside the account or cannot see the contact.
+  - `public.document_requirements(p_account_id uuid, p_contact_id uuid, p_today date) returns table (category text, state text)`, SECURITY DEFINER, stable, EXECUTE for `authenticated` only. `state` ∈ `met | checking | expired | missing | skipped`. Rows in the account's stored order; none when the list is empty. Raises `22004` on a null argument and `42501` when the caller is outside the account or cannot see the contact. The account guard is the ONLY thing that refuses an Owner of an account whose client access is OFF (`app.current_account_id()` requires `client_access_enabled`, `0008_client_access.sql:13-18`, while `app.account_role` does not, `0066:52-60`), so Task 1 tests exactly that case (I2).
+  - `public.unskip_document_requirement(p_account_id uuid, p_skip_id uuid, p_actor text) returns timestamptz`, SECURITY INVOKER, EXECUTE for `service_role` only (M6): stamps `unskipped_at = now()`, `unskipped_by = p_actor` on that account's row while it is still active, and answers the stored instant, or NULL when nothing changed. Raises `22004` on a null argument. (The skip's own `created_at` is the column default, `now()`, so both instants are the database's.)
 
 - [ ] **Step 1: Build the kit.** `mkdir -p <SCRATCH>/s07e-kit`; then
 
@@ -267,7 +271,12 @@ import { withRollback, actAs } from "./db";
 const RUN = Math.random().toString(36).slice(2, 10);
 const ORG = `org_drq2_${RUN}`;
 const ORG_B = `org_drq2b_${RUN}`;
-const SUB = { owner: `u_rq_owner_${RUN}`, staff: `u_rq_staff_${RUN}`, tech: `u_rq_tech_${RUN}`, ownerB: `u_rq_ownerb_${RUN}` } as const;
+/** I2: an account whose client access is OFF (app.current_account_id() is NULL for its members, 0008:13-18). */
+const ORG_OFF = `org_drq2off_${RUN}`;
+const SUB = {
+  owner: `u_rq_owner_${RUN}`, staff: `u_rq_staff_${RUN}`, tech: `u_rq_tech_${RUN}`, ownerB: `u_rq_ownerb_${RUN}`, ownerOff: `u_rq_owneroff_${RUN}`,
+} as const;
+const AGENCY_SUB = `u_rq_agency_${RUN}`;
 const TODAY = "2026-10-16";
 const YESTERDAY = "2026-10-15";
 
@@ -290,17 +299,19 @@ async function seed(c: Client) {
   const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
   const acct = await one(c, "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'RQ Co',true) returning id", [agency!.id, ORG]);
   const acctB = await one(c, "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'RQ B',true) returning id", [agency!.id, ORG_B]);
+  const acctOff = await one(c, "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'RQ Off',false) returning id", [agency!.id, ORG_OFF]);
   const u = {} as Record<keyof typeof SUB, string>;
   for (const k of Object.keys(SUB) as (keyof typeof SUB)[]) u[k] = await one(c, "insert into users (clerk_user_id, email) values ($1, $1 || '@example.com') returning id", [SUB[k]]);
   await c.query(
-    "insert into memberships (user_id, scope, account_id, role) values ($1,'account',$5,'owner'), ($2,'account',$5,'staff'), ($3,'account',$5,'technician'), ($4,'account',$6,'owner')",
-    [u.owner, u.staff, u.tech, u.ownerB, acct, acctB]);
+    "insert into memberships (user_id, scope, account_id, role) values ($1,'account',$5,'owner'), ($2,'account',$5,'staff'), ($3,'account',$5,'technician'), ($4,'account',$6,'owner'), ($7,'account',$8,'owner')",
+    [u.owner, u.staff, u.tech, u.ownerB, acct, acctB, u.ownerOff, acctOff]);
   const ana = await one(c, "insert into contacts (account_id, first_name, assigned_to) values ($1,'Ana',$2) returning id", [acct, u.tech]);
   const bo = await one(c, "insert into contacts (account_id, first_name) values ($1,'Bo') returning id", [acct]);
   const bea = await one(c, "insert into contacts (account_id, first_name) values ($1,'Bea') returning id", [acctB]);
+  const cy = await one(c, "insert into contacts (account_id, first_name) values ($1,'Cy') returning id", [acctOff]);
   const casa = await one(c, "insert into client_groups (account_id, kind, name) values ($1,'household','Casa Ana') returning id", [acct]);
   await c.query("insert into client_group_members (account_id, client_group_id, contact_id, is_primary) values ($1,$2,$3,true)", [acct, casa, ana]);
-  return { acct, acctB, ana, bo, bea, casa };
+  return { acct, acctB, acctOff, ana, bo, bea, cy, casa };
 }
 
 const setList = (c: Client, acct: string, list: string) =>
@@ -367,7 +378,7 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
       await skip(c, s.acct, s.bo, "insurance");
     }));
 
-  it("an un-skip names who and comes after the skip; Other and unknown keys are refused; another account's contact is refused (mutations: drop unskip_coherent, unskip_after, the category check, or the composite FK -> FAILS)", () =>
+  it("an un-skip names who and comes after the skip; Other and unknown keys are refused; a blank skipped_by is refused; another account's contact is refused (mutations: drop unskip_coherent, unskip_after, the category check, skipped_by_check, or the composite FK -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       const id = (await skip(c, s.acct, s.ana, "permit")).rows[0]!.id;
@@ -376,7 +387,8 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
       await expect(attempt(c, "update document_requirement_skips set unskipped_at = created_at, unskipped_by = 'x' where id = $1", [id]))
         .rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_unskip_after" });
       await expect(skip(c, s.acct, s.ana, "other")).rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_category_check" });
-      await expect(skip(c, s.acct, s.ana, "  ", "  ")).rejects.toMatchObject({ code: "23514" });
+      // M1: a VALID category with a blank author, so only skipped_by_check can refuse it.
+      await expect(skip(c, s.acct, s.ana, "id", "  ")).rejects.toMatchObject({ code: "23514", constraint: "document_requirement_skips_skipped_by_check" });
       await expect(skip(c, s.acct, s.bea, "permit")).rejects.toMatchObject({ code: "23503", constraint: "document_requirement_skips_contact_fkey" });
     }));
 
@@ -389,17 +401,38 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
       expect(n!.n).toBe("0");
     }));
 
+  // I1: the skips table ALONE. A join to contacts would let contacts' own RLS do the fencing, and the case
+  // stayed green in review with technician_scope dropped AND member_read set to true.
   it.each([
-    ["owner", ["Ana", "Bo"]], ["staff", ["Ana", "Bo"]], ["tech", ["Ana"]], ["ownerB", []],
-  ] as const)("%s reads %j (mutations: drop the technician_scope policy -> tech reads Bo -> FAILS; drop member_read's account clause -> ownerB reads -> FAILS)", (who, want) =>
+    ["owner", ["ana", "bo"]], ["staff", ["ana", "bo"]], ["tech", ["ana"]], ["ownerB", []],
+  ] as const)("%s reads the skips of %j (mutations: drop the technician_scope policy -> tech reads Bo's -> FAILS; member_read using (true) -> ownerB reads both -> FAILS)", (who, want) =>
     withRollback(async (c) => {
       const s = await seed(c);
       await skip(c, s.acct, s.ana, "permit");
       await skip(c, s.acct, s.bo, "permit");
       await actAs(c, { org_id: who === "ownerB" ? ORG_B : ORG, sub: SUB[who] });
-      const { rows } = await c.query<{ who: string }>(
-        "select ct.first_name as who from document_requirement_skips k join contacts ct on ct.id = k.contact_id order by 1");
-      expect(rows.map((r) => r.who)).toEqual(want);
+      const { rows } = await c.query<{ contact_id: string }>("select k.contact_id from document_requirement_skips k");
+      const ids: Record<string, string> = { ana: s.ana, bo: s.bo };
+      expect(rows.map((r) => r.contact_id).sort()).toEqual(want.map((k) => ids[k]!).sort());
+    }));
+
+  it("unskip_document_requirement stamps the DATABASE's now() once, answers it, and answers NULL for another account's row or an inactive one; only service_role may run it (M6; mutations: drop 'unskipped_at is null', drop the account filter, or grant execute to authenticated -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      // A transaction's now() is constant, so the skip is back-dated: unskip_after needs unskipped_at > created_at.
+      const k = await one(c, "insert into document_requirement_skips (account_id, contact_id, category, skipped_by, created_at) values ($1,$2,'permit','user_seed', now() - interval '1 minute') returning id", [s.acct, s.ana]);
+      const run = (acct: string) => attempt<{ at: string | null }>(c, "select public.unskip_document_requirement($1, $2, 'user_bo') as at", [acct, k]);
+      expect((await run(s.acctB)).rows[0]!.at).toBeNull();
+      const { rows: [now] } = await c.query<{ t: string }>("select now()::text as t");
+      const { rows: [first] } = await attempt<{ at: string }>(c, "select public.unskip_document_requirement($1, $2, 'user_bo')::text as at", [s.acct, k]);
+      expect(first!.at).toBe(now!.t);
+      expect((await run(s.acct)).rows[0]!.at).toBeNull();
+      const { rows: [row] } = await c.query<{ by: string }>("select unskipped_by as by from document_requirement_skips where id = $1", [k]);
+      expect(row!.by).toBe("user_bo");
+      await expect(attempt(c, "select public.unskip_document_requirement($1, null, 'x')", [s.acct])).rejects.toMatchObject({ code: "22004" });
+      const { rows: [g] } = await c.query<{ auth: boolean; svc: boolean }>(
+        "select has_function_privilege('authenticated', 'public.unskip_document_requirement(uuid, uuid, text)', 'EXECUTE') as auth, has_function_privilege('service_role', 'public.unskip_document_requirement(uuid, uuid, text)', 'EXECUTE') as svc");
+      expect(g).toEqual({ auth: false, svc: true });
     }));
 
   it("the client role writes nothing (mutation: grant insert, update or delete to authenticated -> FAILS)", () =>
@@ -464,15 +497,26 @@ describe("0081: document_requirements, what counts (spec 5.3; D4, D7, D10; devia
       expect(await states(c, s.acct, s.ana)).toEqual([["insurance", "met"]]);
     }));
 
-  it("its fences: another account's member, and a Technician for a customer not theirs, get 42501; a null argument 22004; only authenticated may run it (mutations: drop either guard, or grant execute to anon -> FAILS)", () =>
+  // Which mutation each refusal catches (I2): dropping the ACCOUNT guard is caught ONLY by the Owner of an
+  // account whose client access is OFF (app.current_account_id() is NULL for them, but app.account_role still
+  // answers 'owner', so sees_all_customers would let them through). ownerB is refused by BOTH guards, so it
+  // catches neither alone. Dropping the CONTACT guard is caught by the Technician reading Bo.
+  it("its fences: an Owner of an account with client access OFF, another account's member, and a Technician for a customer not theirs get 42501; the agency reads every customer; a null argument 22004; only authenticated may run it (mutations: drop the account guard -> ownerOff reads -> FAILS; drop the contact guard -> tech reads Bo -> FAILS; grant execute to anon -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await setList(c, s.acct, "{insurance}");
       const { rows: [g] } = await c.query<{ anon: boolean; auth: boolean }>(
         "select has_function_privilege('anon', 'public.document_requirements(uuid, uuid, date)', 'EXECUTE') as anon, has_function_privilege('authenticated', 'public.document_requirements(uuid, uuid, date)', 'EXECUTE') as auth");
       expect(g).toEqual({ anon: false, auth: true });
+      await c.query("update accounts set required_document_categories = '{insurance}' where id = $1", [s.acctOff]);
+      await actAs(c, { org_id: ORG_OFF, sub: SUB.ownerOff });
+      await expect(states(c, s.acctOff, s.cy)).rejects.toMatchObject({ code: "42501" });
       await actAs(c, { org_id: ORG_B, sub: SUB.ownerB });
       await expect(states(c, s.acct, s.ana)).rejects.toMatchObject({ code: "42501" });
+      // M10: the agency path (app.is_agency(); no org in the token) reads any customer of any account.
+      await actAs(c, { app_role: "agency_admin", sub: AGENCY_SUB });
+      expect(await states(c, s.acct, s.bo)).toEqual([["insurance", "missing"]]);
+      expect(await states(c, s.acctOff, s.cy)).toEqual([["insurance", "missing"]]);
       await actAs(c, { org_id: ORG, sub: SUB.tech });
       expect(await states(c, s.acct, s.ana)).toEqual([["insurance", "missing"]]);
       await expect(states(c, s.acct, s.bo)).rejects.toMatchObject({ code: "42501" });
@@ -515,6 +559,7 @@ Note on the Technician: `tech` is assigned Ana (`contacts.assigned_to`), the rul
 -- apply_migration, once), then the parity check, then merge. Additive: the build before it reads none of it.
 --
 -- Rollback (by hand, in this order; revert the app first):
+--   drop function public.unskip_document_requirement(uuid, uuid, text);
 --   drop function public.document_requirements(uuid, uuid, date);
 --   drop table public.document_requirement_skips;
 --   alter table public.accounts drop constraint accounts_required_document_categories_check,
@@ -646,6 +691,27 @@ begin
 end $$;
 revoke all on function public.document_requirements(uuid, uuid, date) from public, anon, authenticated, service_role;
 grant execute on function public.document_requirements(uuid, uuid, date) to authenticated;
+
+-- 4. The un-skip, on the DATABASE's clock (plan review M6): the skip's created_at is the column's
+--    default now(), so the un-skip writes now() too, and unskip_after can never be tripped by an app
+--    server's clock. Compare-and-set from active; answers the stored instant, or NULL when nothing changed
+--    (another account's row, or already un-skipped). Plain (invoker), service_role only: the action has
+--    already proved the row on the request client.
+create function public.unskip_document_requirement(p_account_id uuid, p_skip_id uuid, p_actor text)
+returns timestamptz language plpgsql security invoker set search_path = '' as $
+declare v_at timestamptz;
+begin
+  if p_account_id is null or p_skip_id is null or p_actor is null then
+    raise exception 'unskip_document_requirement: a required argument is null' using errcode = '22004';
+  end if;
+  update public.document_requirement_skips
+     set unskipped_at = now(), unskipped_by = p_actor
+   where id = p_skip_id and account_id = p_account_id and unskipped_at is null
+  returning unskipped_at into v_at;
+  return v_at;
+end $;
+revoke all on function public.unskip_document_requirement(uuid, uuid, text) from public, anon, authenticated, service_role;
+grant execute on function public.unskip_document_requirement(uuid, uuid, text) to service_role;
 ```
 
 (`cl.ok` is NULL when the lateral finds nothing; `NULL and …` is NULL and `bool_or` skips NULLs, so `coalesce(…, false)` is what makes a category with only unclean files read `false`, not NULL. The CTE columns are named `cat`, not `category`, so they never meet the OUT parameter `category`; `#variable_conflict use_column` is a belt on top.)
@@ -665,7 +731,7 @@ Expected `{"nonAscii":0,"backslash":0,"control":1}`. Paste it and `md5sum packag
 
 - [ ] **Step 7: Run on the replica, post = pre + 0081.** `bash "$S/s07e-kit/replica.sh" 55600 "$S/s07e-t1-impl"` → `post = pre + 0081`. On `post`: `document-requirements-schema.test.ts`, `schema-grants-guard.test.ts`, `weekly-report-grants.test.ts`, `alert-phone-grants.test.ts`, `document-vault-schema.test.ts`, `document-vault-rls.test.ts`. Expected: all PASS; the three guards unchanged. Paste the summary blocks.
 
-- [ ] **Step 8: Mutation probes, each by name** (a `create or replace`, `alter` or `drop` on the replica's `post`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `app.required_document_categories_ok` with `'other'` in its list → the list case FAILS on `{other}`; (b) without the `count(distinct …)` clause → FAILS on `{id,id}`; (c) `drop index document_requirement_skips_active` → the one-active case FAILS; (d) `drop policy document_requirement_skips_technician_scope` → the `tech` row FAILS; (e) the function with `h.expires_on > p_today` → the every-state case FAILS on `insurance`; (f) without the `client_group_id in (…)` branch → FAILS on `permit`; (g) without `and d.deleted_at is null` → FAILS on `contract`; (h) without `and v.scan_status = 'clean'` in `cl` → FAILS on `contract` or `warranty`; (i) `alter function public.document_requirements(uuid, uuid, date) security invoker` → the D7 case FAILS; (j) the contact guard removed → the fences case FAILS on `bo` for `tech`. Paste each failing assertion line.
+- [ ] **Step 8: Mutation probes, each by name** (a `create or replace`, `alter` or `drop` on the replica's `post`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `app.required_document_categories_ok` with `'other'` in its list → the list case FAILS on `{other}`; (b) without the `count(distinct …)` clause → FAILS on `{id,id}`; (c) `drop index document_requirement_skips_active` → the one-active case FAILS; (d) `drop policy document_requirement_skips_technician_scope` → the `tech` row FAILS; (d2) `member_read` re-created `using (true)` → the `ownerB` row FAILS (I1: both must fail on the skips-only select); (e) the function with `h.expires_on > p_today` → the every-state case FAILS on `insurance`; (f) without the `client_group_id in (…)` branch → FAILS on `permit`; (g) without `and d.deleted_at is null` → FAILS on `contract`; (h) without `and v.scan_status = 'clean'` in `cl` → FAILS on `contract` or `warranty`; (i) `alter function public.document_requirements(uuid, uuid, date) security invoker` → the D7 case FAILS; (j) the contact guard removed → the fences case FAILS on `bo` for `tech`; (k) the ACCOUNT guard removed → the fences case FAILS on `ownerOff` (I2; and say in the report that `ownerB` stays refused by the contact guard, which is why ownerOff exists); (l) `unskip_document_requirement` without `and unskipped_at is null` → its case FAILS on the second call; (m) its execute granted to `authenticated` → its case FAILS. Paste each failing assertion line.
 
 - [ ] **Step 9: Commit.**
 
@@ -708,6 +774,10 @@ describe("the document vault's copy, PR 2c (the required-documents checklist)", 
     "documents.checklist.skipRole": ["Only an Owner or Staff can change a customer's list.", "Solo un dueño o un empleado puede cambiar la lista de un cliente."],
     "documents.checklist.changed": ["Someone changed this first. Reload to see it.", "Alguien lo cambió primero. Vuelva a cargar para verlo."],
     "documents.checklist.notRequired": ["That document isn't on the list anymore.", "Ese documento ya no está en la lista."],
+    // M2: the skip actions' own refusal (a malformed id, an unknown or Other category), never 2b's documents.request.refused.
+    "documents.checklist.refused": ["We couldn't change that. Reload the page.", "No pudimos cambiar eso. Vuelva a cargar la página."],
+    // M9: the checklist's own crash sentence, in usted; common.actionCrashed.es is in tú (messages.ts:312).
+    "documents.checklist.crashed": ["That didn't go through. This page may be out of date: reload it and try again.", "Eso no se completó. Puede que esta página esté desactualizada: vuelva a cargarla e intente de nuevo."],
     "timeline.documentSkip": ["marked {category} as not needed", "marcó que {category} no hace falta"],
     "timeline.documentUnskip": ["marked {category} as needed again", "marcó que {category} hace falta otra vez"],
     "settings.requiredDocuments.title": ["Required documents", "Documentos requeridos"],
@@ -729,7 +799,7 @@ describe("the document vault's copy, PR 2c (the required-documents checklist)", 
       for (const text of [m[k as MessageKey], m[`${k}.es` as MessageKey]]) {
         expect(typeof text, k).toBe("string");
         expect(/token|rls|definer|skip row|category key|supabase|bucket|\{name\}|\{business\}/i.test(text ?? "x"), k).toBe(false);
-        expect(/\b(vuelve|intenta|elige|sube|pide)\b/i.test(text ?? "x"), k).toBe(false);
+        expect(/\b(vuelve|intenta|elige|sube|pide|recárgala|inténtalo)\b/i.test(text ?? "x"), k).toBe(false);
       }
     }
   });
@@ -770,9 +840,9 @@ describe("the document vault's copy, PR 2c (the required-documents checklist)", 
   - `setRequiredDocumentCategories(db, accountId, categories: unknown): Promise<RequirableCategory[]>` (service client; `cleanRequiredCategories` first, `TypeError` on `null`; writes the cleaned list; THROWS when no account row was updated; answers what it wrote).
   - `type DocumentSkipRow = { id: string; account_id: string; contact_id: string; category: RequirableCategory; skipped_by: string; created_at: string; unskipped_at: string | null; unskipped_by: string | null }`.
   - `getActiveDocumentSkip(db, accountId, contactId, category): Promise<DocumentSkipRow | null>`; `getDocumentSkip(db, accountId, skipId): Promise<DocumentSkipRow | null>` (the actions' proof reads, on the REQUEST client).
-  - `skipDocumentRequirement(db, a: { accountId; contactId; category: RequirableCategory; actorId; now: Date }): Promise<{ status: "skipped"; skip: DocumentSkipRow } | { status: "already" }>` (service client; a 23505 on `document_requirement_skips_active` is `already`).
+  - `skipDocumentRequirement(db, a: { accountId; contactId; category: RequirableCategory; actorId }): Promise<{ status: "skipped"; skip: DocumentSkipRow } | { status: "already" }>` (service client; a 23505 on `document_requirement_skips_active` is `already`; `created_at` is the column's default, the database's `now()`, M6).
   - `undoDocumentSkip(db, accountId, skipId, actorId): Promise<boolean>` (service client; deletes only a row still active, skipped by `actorId`).
-  - `unskipDocumentRequirement(db, accountId, skipId, actorId, now: Date): Promise<{ unskippedAt: string } | null>` (service client; compare-and-set from active; answers the stored instant exactly as PostgREST returned it).
+  - `unskipDocumentRequirement(db, accountId, skipId, actorId): Promise<{ unskippedAt: string } | null>` (service client; `rpc("unskip_document_requirement")`, the database's `now()` under a compare-and-set from active, M6; answers the stored instant exactly as PostgREST returned it).
   - `undoDocumentUnskip(db, accountId, skipId, expectedUnskippedAt: string, actorId): Promise<boolean>` (service client; clears only while `unskipped_at` equals `expectedUnskippedAt` and `unskipped_by = actorId`; a 23505 (another skip became active meanwhile) is `false`).
   - `type TimelineDocumentSkip = { id: string; category: RequirableCategory; contact_id: string; skipped_by: string; created_at: string; unskipped_by: string | null; unskipped_at: string | null }`; `listDocumentSkipTimeline(db, accountId, who: string | readonly string[], page: TimelinePageOpts): Promise<{ skips: TimelineDocumentSkip[]; unskips: TimelineDocumentSkip[] }>` (two reads: by `created_at`, and the un-skipped rows by `unskipped_at`; each paged with `withTimelinePage`).
 
@@ -799,8 +869,6 @@ import { cleanRequiredCategories, requirementsMeter, REQUIRABLE_DOCUMENT_CATEGOR
  */
 const ACTOR = "user_drq2_test";
 const OTHER = "user_drq2_other";
-const NOW = new Date();
-const later = (ms: number) => new Date(NOW.getTime() + ms);
 const page = { limit: 31 };
 
 describe("document-rules: the list's pure rules (spec 5.1; D8)", () => {
@@ -824,7 +892,7 @@ describe("listDocumentRequirements: the read's wrapper (fake rpc)", () => {
     const calls: unknown[][] = [];
     return { calls, client: { rpc: async (...a: unknown[]) => { calls.push(a); return answer; } } as unknown as SupabaseClient };
   };
-  it("calls the function with the account, the contact and the account's today, and answers the rows (mutation: pass the server's UTC day -> FAILS)", async () => {
+  it("calls the function with the account, the contact and the account's today, and answers the rows (mutation: drop or rename p_today in the rpc arguments -> FAILS; the account's-day-vs-UTC mutation is the ROUTE test's, Task 5, M7)", async () => {
     const f = fake({ data: [{ category: "insurance", state: "met" }, { category: "id", state: "checking" }], error: null });
     expect(await listDocumentRequirements(f.client, "acc-1", "ct-1", "2026-10-16")).toEqual([
       { category: "insurance", state: "met" }, { category: "id", state: "checking" }]);
@@ -854,34 +922,34 @@ describe("skips: at once, with the actor's own Undo (spec 5.4; deviations 1, 2)"
   it("skip, a second skip is 'already', the proof reads find it, un-skip stamps it, a new skip is allowed after (mutation: un-skip deletes the row -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const s = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: ACTOR, now: NOW });
+      const s = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: ACTOR });
       if (s.status !== "skipped") throw new Error(s.status);
-      expect(await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: OTHER, now: NOW })).toEqual({ status: "already" });
+      expect(await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: OTHER })).toEqual({ status: "already" });
       expect((await getActiveDocumentSkip(db, accountId, ana, "insurance"))?.id).toBe(s.skip.id);
-      const u = await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER, later(1000));
+      const u = await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER);
       expect(u).not.toBeNull();
-      expect(await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER, later(2000))).toBeNull();
+      expect(await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER)).toBeNull();
       const row = await getDocumentSkip(db, accountId, s.skip.id);
       expect([row?.unskipped_by, row?.unskipped_at]).toEqual([OTHER, u!.unskippedAt]);
       expect(await getActiveDocumentSkip(db, accountId, ana, "insurance")).toBeNull();
-      expect((await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: ACTOR, now: later(3000) })).status).toBe("skipped");
+      expect((await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: ACTOR })).status).toBe("skipped");
     }));
 
   it("Undo of a skip deletes only the actor's own active row; Undo of an un-skip restores only the actor's own, at the instant it named, and never over a newer skip (mutations: drop the skipped_by filter; restore with a fresh now; ignore the 23505 -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
-      const a = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: ACTOR, now: NOW });
+      const a = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: ACTOR });
       if (a.status !== "skipped") throw new Error(a.status);
       expect(await undoDocumentSkip(db, accountId, a.skip.id, OTHER)).toBe(false);
       expect(await undoDocumentSkip(db, accountId, a.skip.id, ACTOR)).toBe(true);
       expect(await getDocumentSkip(db, accountId, a.skip.id)).toBeNull();
 
-      const b = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: ACTOR, now: later(1000) });
+      const b = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: ACTOR });
       if (b.status !== "skipped") throw new Error(b.status);
-      const u = await unskipDocumentRequirement(db, accountId, b.skip.id, ACTOR, later(2000));
-      expect(await undoDocumentUnskip(db, accountId, b.skip.id, later(2000).toISOString().replace("Z", "1Z"), ACTOR)).toBe(false);
+      const u = await unskipDocumentRequirement(db, accountId, b.skip.id, ACTOR);
+      expect(await undoDocumentUnskip(db, accountId, b.skip.id, new Date(Date.parse(u!.unskippedAt) + 1).toISOString(), ACTOR)).toBe(false);
       expect(await undoDocumentUnskip(db, accountId, b.skip.id, u!.unskippedAt, OTHER)).toBe(false);
-      const c = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: OTHER, now: later(3000) });
+      const c = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "id", actorId: OTHER });
       expect(c.status).toBe("skipped");
       expect(await undoDocumentUnskip(db, accountId, b.skip.id, u!.unskippedAt, ACTOR)).toBe(false);
       if (c.status === "skipped") expect(await undoDocumentSkip(db, accountId, c.skip.id, OTHER)).toBe(true);
@@ -893,9 +961,9 @@ describe("skips: at once, with the actor's own Undo (spec 5.4; deviations 1, 2)"
     withTestAccount(async (db, accountId) =>
       withTestAccount(async (dbB, accountB) => {
         const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
-        const s = await skipDocumentRequirement(dbB, { accountId: accountB, contactId: bea, category: "permit", actorId: ACTOR, now: NOW });
+        const s = await skipDocumentRequirement(dbB, { accountId: accountB, contactId: bea, category: "permit", actorId: ACTOR });
         if (s.status !== "skipped") throw new Error(s.status);
-        expect(await unskipDocumentRequirement(db, accountId, s.skip.id, ACTOR, later(1000))).toBeNull();
+        expect(await unskipDocumentRequirement(db, accountId, s.skip.id, ACTOR)).toBeNull();
         expect(await undoDocumentSkip(db, accountId, s.skip.id, ACTOR)).toBe(false);
         expect(await getDocumentSkip(db, accountId, s.skip.id)).toBeNull();
         expect((await getDocumentSkip(dbB, accountB, s.skip.id))?.unskipped_at).toBeNull();
@@ -903,18 +971,35 @@ describe("skips: at once, with the actor's own Undo (spec 5.4; deviations 1, 2)"
 });
 
 describe("listDocumentSkipTimeline (spec 5.4: each move is a timeline row)", () => {
-  it("a skip row at created_at, and its un-skip row at unskipped_at, for the asked contacts only (mutations: read un-skips by created_at; drop the contact filter -> FAILS)", () =>
+  it("a skip row at created_at, and its un-skip row at unskipped_at, for the asked contacts only (mutation: drop the contact filter -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
       const bo = (await createContact(db, accountId, { firstName: "Bo" }, ACTOR)).id;
-      const s = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "warranty", actorId: ACTOR, now: NOW });
-      await skipDocumentRequirement(db, { accountId, contactId: bo, category: "warranty", actorId: ACTOR, now: NOW });
+      const s = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "warranty", actorId: ACTOR });
+      await skipDocumentRequirement(db, { accountId, contactId: bo, category: "warranty", actorId: ACTOR });
       if (s.status !== "skipped") throw new Error(s.status);
-      const u = await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER, later(5000));
+      const u = await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER);
       const t = await listDocumentSkipTimeline(db, accountId, ana, page);
       expect(t.skips.map((r) => [r.id, r.category, r.skipped_by, r.created_at])).toEqual([[s.skip.id, "warranty", ACTOR, s.skip.created_at]]);
       expect(t.unskips.map((r) => [r.id, r.unskipped_by, r.unskipped_at])).toEqual([[s.skip.id, OTHER, u!.unskippedAt]]);
       expect((await listDocumentSkipTimeline(db, accountId, [ana, bo], page)).skips).toHaveLength(2);
+    }));
+
+  // I7: two rows whose created_at order and unskipped_at order DIFFER, read one row at a time, so the
+  // un-skips' own ordering column is the only thing that decides which one comes first.
+  it("each read is ordered by its OWN instant: the newest skip by created_at, the newest un-skip by unskipped_at, and the cursor pages on it (mutation: order or page the un-skips by created_at -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const first = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "warranty", actorId: ACTOR });
+      const second = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "photo", actorId: ACTOR });
+      if (first.status !== "skipped" || second.status !== "skipped") throw new Error("seed");
+      await unskipDocumentRequirement(db, accountId, second.skip.id, OTHER); // un-skipped FIRST
+      await unskipDocumentRequirement(db, accountId, first.skip.id, OTHER); // un-skipped LAST
+      const t = await listDocumentSkipTimeline(db, accountId, ana, { limit: 1 });
+      expect(t.skips.map((r) => r.id)).toEqual([second.skip.id]); // created last
+      expect(t.unskips.map((r) => r.id)).toEqual([first.skip.id]); // un-skipped last
+      const older = await listDocumentSkipTimeline(db, accountId, ana, { limit: 1, before: { v: t.unskips[0]!.unskipped_at!, id: first.skip.id } });
+      expect(older.unskips.map((r) => r.id)).toEqual([second.skip.id]);
     }));
 });
 ```
@@ -1038,10 +1123,11 @@ export async function getDocumentSkip(db: SupabaseClient, accountId: string, ski
 
 /** Service client. A second active skip for the same customer and category is "already" (0081's partial unique index). */
 export async function skipDocumentRequirement(db: SupabaseClient, a: {
-  accountId: string; contactId: string; category: RequirableCategory; actorId: string; now: Date;
+  accountId: string; contactId: string; category: RequirableCategory; actorId: string;
 }): Promise<{ status: "skipped"; skip: DocumentSkipRow } | { status: "already" }> {
   const { data, error } = await db.from("document_requirement_skips").insert({
-    account_id: a.accountId, contact_id: a.contactId, category: a.category, skipped_by: a.actorId, created_at: a.now.toISOString(),
+    // created_at is the column's default, the DATABASE's now() (M6): unskip_after compares it with unskip_document_requirement's now().
+    account_id: a.accountId, contact_id: a.contactId, category: a.category, skipped_by: a.actorId,
   }).select(SKIP_COLS).single();
   if (error) {
     if (error.code === "23505") return { status: "already" };
@@ -1058,16 +1144,14 @@ export async function undoDocumentSkip(db: SupabaseClient, accountId: string, sk
   return (data ?? []).length > 0;
 }
 
-/** Service client: compare-and-set from active. Answers the stored instant exactly as PostgREST returned it. */
+/** Service client: 0081's unskip_document_requirement, the database's now() under a compare-and-set from active (M6). Answers the stored instant as PostgREST returned it, or null. */
 export async function unskipDocumentRequirement(
-  db: SupabaseClient, accountId: string, skipId: string, actorId: string, now: Date,
+  db: SupabaseClient, accountId: string, skipId: string, actorId: string,
 ): Promise<{ unskippedAt: string } | null> {
-  const { data, error } = await db.from("document_requirement_skips")
-    .update({ unskipped_at: now.toISOString(), unskipped_by: actorId })
-    .eq("account_id", accountId).eq("id", skipId).is("unskipped_at", null).select("unskipped_at");
+  const { data, error } = await db.rpc("unskip_document_requirement", { p_account_id: accountId, p_skip_id: skipId, p_actor: actorId });
   if (error) throw new Error(`unskipDocumentRequirement failed: ${error.message}`);
-  const row = (data ?? [])[0] as { unskipped_at: string } | undefined;
-  return row ? { unskippedAt: row.unskipped_at } : null;
+  if (data !== null && typeof data !== "string") throw new Error(`unskipDocumentRequirement: unexpected answer ${JSON.stringify(data)}`);
+  return data ? { unskippedAt: data } : null;
 }
 
 /** Service client: the un-skip's Undo, only the actor's own at the instant its toast named; never over a newer active skip (23505). */
@@ -1115,7 +1199,7 @@ export {
 ```
 
 - [ ] **Step 7: Run to pass.** The test file above on the kit; `document-requirements-schema.test.ts` on `post`; `pnpm --filter @bis/db exec tsc --noEmit -p .` (or the package's typecheck script; read `packages/db/package.json`); `pnpm --filter web typecheck` (web imports db as source). All PASS; paste the summary blocks.
-- [ ] **Step 8: Probes, each by name:** (a) `cleanRequiredCategories` without the order filter (`return [...picked]`) → the rules case FAILS; (b) `undoDocumentSkip` without `.eq("skipped_by", actorId)` → the Undo case FAILS; (c) `undoDocumentUnskip` with `if (error.code === "23505")` removed → the Undo case throws; (d) `unskipDocumentRequirement` without `.eq("account_id", accountId)` → the scoped case FAILS; (e) `listDocumentSkipTimeline`'s second read ordered by `created_at` → the timeline case FAILS; (f) `listDocumentRequirements` answering `[]` for `data === null` → the wrapper case FAILS. Paste each.
+- [ ] **Step 8: Probes, each by name:** (a) `cleanRequiredCategories` without the order filter (`return [...picked]`) → the rules case FAILS; (b) `undoDocumentSkip` without `.eq("skipped_by", actorId)` → the Undo case FAILS; (c) `undoDocumentUnskip` with `if (error.code === "23505")` removed → the Undo case throws; (d) `unskipDocumentRequirement` answering `{ unskippedAt: new Date().toISOString() }` instead of the database's instant → the first skips case FAILS (it compares the stored row with the answer; the account filter itself is SQL, proved by Task 1's unskip case on another account's row); (e) `listDocumentSkipTimeline`'s second read ordered by `created_at` → the I7 case FAILS on its first un-skip (a mutation the old case could not see, I7); (f) `listDocumentRequirements` answering `[]` for `data === null` → the wrapper case FAILS. Paste each.
 - [ ] **Step 9: Commit** `-- packages/db/src/document-requirements.ts packages/db/src/document-rules.ts packages/db/src/index.ts packages/db/src/test/document-requirements.test.ts`, message "db: the required-documents module: the list, skips with the actor's own Undo, the timeline reads (S-07 2c)".
 
 ---
@@ -1229,7 +1313,7 @@ export {
     1. `parseRequirements` accepts `{ items: [{ category: "insurance", state: "met" }] }` and `{ items: [] }`; refuses (answers `null`) a missing `items`, an item with `category: "other"`, `state: "done"`, or an extra-less non-object (mutation: skip the per-item check -> FAILS).
     2. `requirementsLoadFrom` answers `{ kind: "error" }` for a 500, a 200 with a bad body, and a body that is not JSON; `{ kind: "ready", data }` otherwise.
     3. `checklistView`: `{ items: [] }` → `{ kind: "off" }`; `[met insurance, missing id, skipped photo, checking warranty, expired permit]` → `{ kind: "on", met: 1, required: 4, complete: false, gaps: [id missing, warranty checking, permit expired] (list order), skipped: [photo] }`; `[met, skipped]` → `complete: true`; `[skipped]` alone → `{ met: 0, required: 0, complete: true }` (D11; mutation: complete when required is 0 → false -> FAILS).
-    4. `shouldReloadRequirements`: `false` when either read is not ready, and for the SAME ready read twice (the poll's loop guard; mutation: always true -> FAILS); `true` when a live file was added or removed, its `category`, `expiresOn` or `version.scan` changed, or its `version.id` changed; `false` when only `title`, `ownersOnly`, `addedBy` or the trashed list's order changed; `true` when a file moved from live to trashed (it is no longer live).
+    4. `shouldReloadRequirements`: `false` when either read is not ready, and for the SAME ready read twice (the poll's loop guard; mutation: always true -> FAILS); `true` when a live file was added or removed, its `category`, `expiresOn` or `version.scan` changed, or its `version.id` changed, or `data.today` changed with nothing else (M4; mutation: compare the files only -> FAILS); `false` when only `title`, `ownersOnly`, `addedBy` or the trashed list's order changed; `true` when a file moved from live to trashed (it is no longer live).
     5. `keepRequirements` keeps a ready list over a failed re-read of the same route; shows a first read's failure; shows another route's.
   - `route.test.ts` (mocks: `@/lib/auth`'s `apiAccountAccess`, `@/lib/db`'s `dbForRequest` → a `REQUEST` fake whose `accounts` read answers `{ timezone: "America/Chicago" }`, `@bis/db` with `getContact`, `listDocumentRequirements`, and `serviceDb: () => { throw new Error("never"); }`, `@/lib/zone` as the documents route test mocks it; fake timers at `2026-10-17T03:00:00.000Z`, which is still 2026-10-16 in Chicago):
     1. answers 200 `{ items }` from `listDocumentRequirements(REQUEST, ACC, C, "2026-10-16")` (the ACCOUNT's day; mutation: pass `new Date().toISOString().slice(0, 10)` = "2026-10-17" -> FAILS).
@@ -1237,15 +1321,15 @@ export {
     3. 500 `{}` when the read throws; the log line names the account and the contact and nothing from the error's data (spy on `console.error`).
     4. never touches `serviceDb` (the mock throws).
   - `contacts/document-requirements-actions.test.ts` (mocks: `@/lib/auth` `requireAccountAccess`, `@/lib/db` `dbForRequest` → `REQUEST`, `@bis/db` with every function the file imports plus `serviceDb: () => SVC`; one shared call log `calls: string[]` every mock pushes to, so ORDER is asserted on one list, never two `toHaveBeenCalled`s):
-    1. skip, as Staff: `requireAccountAccess` → `getContact(REQUEST…)` → `getRequiredDocumentCategories(REQUEST…)` → `skipDocumentRequirement(SVC, { accountId, contactId, category: "insurance", actorId: "user_me", now })` in that order; answers `{ ok: true, skipId }` (mutation: write before the proof -> FAILS by the order).
-    2. skip refusals, each writing nothing: a Technician → `documents.checklist.skipRole` (D1); a malformed contact id or an unknown or `other` category → `documents.request.refused`; `getContact` null → `documents.error.notFound`; the category not on the account's list → `documents.checklist.notRequired`; `already` → `documents.checklist.changed`; a thrown read → `documents.error.failed` (mutation: skip the role check -> the Technician case writes -> FAILS).
+    1. skip, as Staff: `requireAccountAccess` → `getContact(REQUEST…)` → `getRequiredDocumentCategories(REQUEST…)` → `skipDocumentRequirement(SVC, { accountId, contactId, category: "insurance", actorId: "user_me" })` in that order; answers `{ ok: true, skipId }` (mutation: write before the proof -> FAILS by the order).
+    2. skip refusals, each writing nothing: a Technician → `documents.checklist.skipRole` (D1); a malformed contact id or an unknown or `other` category → `documents.checklist.refused` (M2: the checklist's own key, never 2b's `documents.request.refused`); `getContact` null → `documents.error.notFound`; the category not on the account's list → `documents.checklist.notRequired`; `already` → `documents.checklist.changed`; a thrown read → `documents.error.failed` (mutation: skip the role check -> the Technician case writes -> FAILS).
     3. undo a skip: `getDocumentSkip(REQUEST…)` first; refused (writing nothing) when the row is gone, `skipped_by` is someone else, `unskipped_at` is set, or `created_at` is more than `DOCUMENT_REQUIREMENT_UNDO_MS` ago (fake timers); otherwise `undoDocumentSkip(SVC, accountId, skipId, "user_me")`, and its `false` → `documents.checklist.changed` (mutation: compare against `skipped_by` of the caller's own id only after the write -> FAILS by the order; mutation: no window -> the 11-minute case writes -> FAILS).
-    4. un-skip: `getContact(REQUEST…)` → `getActiveDocumentSkip(REQUEST…)` → `unskipDocumentRequirement(SVC, accountId, skip.id, "user_me", now)`; answers `{ ok: true, skipId, unskippedAt }` with the instant the db answered (mutation: answer `now.toISOString()` instead -> FAILS); no active skip → `documents.checklist.changed`; a Technician → `skipRole`.
-    5. undo an un-skip: refused unless the row's `unskipped_by` is the caller, its `unskipped_at` parses equal to the argument, and it is within the window; then `undoDocumentUnskip(SVC, accountId, skipId, unskippedAt, "user_me")` with the ARGUMENT's string (mutation: pass `new Date().toISOString()` -> FAILS); a malformed instant → `documents.request.refused` with no read.
+    4. un-skip: `getContact(REQUEST…)` → `getActiveDocumentSkip(REQUEST…)` → `unskipDocumentRequirement(SVC, accountId, skip.id, "user_me")`; answers `{ ok: true, skipId, unskippedAt }` with the instant the db answered, the fake answering a fixed `"2026-10-16T15:00:00.123456+00:00"` (mutation: answer `new Date().toISOString()` instead -> FAILS); no active skip → `documents.checklist.changed`; a Technician → `skipRole`.
+    5. undo an un-skip: refused unless the row's `unskipped_by` is the caller, its `unskipped_at` parses equal to the argument, and it is within the window; then `undoDocumentUnskip(SVC, accountId, skipId, unskippedAt, "user_me")` with the ARGUMENT's string (mutation: pass `new Date().toISOString()` -> FAILS); a malformed instant → `documents.checklist.refused` with no read (M2).
   - `settings/document-requirements-actions.test.ts` (mocks: `requireAccountAccess`, `serviceDb`, `setRequiredDocumentCategories`, `next/cache`'s `revalidatePath`):
-    1. an Owner's or the agency's `FormData` with `category=insurance`, `category=id`, `category=insurance` → `setRequiredDocumentCategories(SVC, accountId, ["insurance", "id", "insurance"])` (the db cleans), `revalidatePath("/dashboard/accounts/<id>/settings")`, `{ ok: true, list: ["id", "insurance"] }` (the db's answer).
+    1. an Owner's or the agency's `FormData` with `category=insurance`, `category=id`, `category=insurance` → `setRequiredDocumentCategories(SVC, accountId, ["id", "insurance"])` (I3: the ACTION cleans first with `cleanRequiredCategories`, so the db receives the cleaned list in the vault's order, never the raw duplicate list), `revalidatePath("/dashboard/accounts/<id>/settings")`, `{ ok: true, list: ["id", "insurance"] }` (the db's answer; the mock echoes what it was given) (mutation: pass `formData.getAll("category")` raw -> the call log shows `["insurance", "id", "insurance"]` -> FAILS).
     2. Staff (`canManage: false`) → `{ ok: false, error: m["settings.requiredDocuments.role"] }`, nothing written (mutation: drop the role check -> FAILS).
-    3. a `category=other` → `{ ok: false, error: m["settings.requiredDocuments.failed"] }`, nothing written (the action cleans first with `cleanRequiredCategories` and refuses `null`; mutation: pass the raw list to the db -> the db's TypeError is caught as failed but the call log shows the write -> FAILS by the log).
+    3. a `category=other` → `{ ok: false, error: m["settings.requiredDocuments.failed"] }`, nothing written (the action cleans first with `cleanRequiredCategories` and refuses `null` before any write; mutation: skip the action's clean -> the call log shows a write -> FAILS by the log).
     4. no `category` at all → writes `[]` (off) and answers `{ ok: true, list: [] }`.
   - `in-account-service-reads.test.ts`: run it BEFORE adding the lines: it FAILS naming both new files.
 
@@ -1294,7 +1378,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
 ```ts
 /**
  * Re-read the checklist once when a files read changed something it depends on: a live file added or
- * gone, or its category, expiry or shown version (id or scan state) moved. Both reads must be ready. The
+ * gone, or its category, expiry or shown version (id or scan state) moved, or the ACCOUNT'S DAY turned (M4:
+ * a file expiring today reads met until midnight in the account's zone, then expired). Both reads must be ready. The
  * same read twice answers false, so the files' Checking poll (every 5 s) and the requests tick never
  * re-read it for nothing, and its own re-read touches no files read, so it cannot loop. A household's
  * file changed on ANOTHER page is not seen here; the next page load reads it (spec 5.3 counts it).
@@ -1303,10 +1388,10 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
   if (prev?.status !== "ready" || next.status !== "ready") return false;
   const print = (l: Extract<DocumentsLoad, { status: "ready" }>) =>
     l.data.live.map((d) => `${d.id}|${d.category}|${d.expiresOn ?? ""}|${d.version.id}|${d.version.scan}`).sort().join("\n");
-  return print(prev) !== print(next);
+  return prev.data.today !== next.data.today || print(prev) !== print(next);
 }
 ```
-  - `contacts/document-requirements-actions.ts` (`"use server"`; the header comment says what `document-requests-actions.ts`' says, for skips): `const fail = (error: string): DocFail => ({ ok: false, error });`; `requireAccountAccess(accountId)`; `if (!seesWholeAccount(access)) return fail("documents.checklist.skipRole");` (D1; import from `@/lib/auth-role`); `isUuid` on every id; `isRequirableCategory(category)` else `fail("documents.request.refused")`; the reads on `await dbForRequest()`; only then `serviceDb()`; the window `Date.now() - Date.parse(row.created_at) > DOCUMENT_REQUIREMENT_UNDO_MS` (skip) or `- Date.parse(row.unskipped_at)` (un-skip); logs name the account and the skip id, never more; every `catch` answers `fail("documents.error.failed")`.
+  - `contacts/document-requirements-actions.ts` (`"use server"`; the header comment says what `document-requests-actions.ts`' says, for skips): `const fail = (error: string): DocFail => ({ ok: false, error });`; `requireAccountAccess(accountId)`; `if (!seesWholeAccount(access)) return fail("documents.checklist.skipRole");` (D1; import from `@/lib/auth-role`); `isUuid` on every id; `isRequirableCategory(category)` else `fail("documents.checklist.refused")` (M2; a malformed id or instant answers the same key); the reads on `await dbForRequest()`; only then `serviceDb()`; the window `Date.now() - Date.parse(row.created_at) > DOCUMENT_REQUIREMENT_UNDO_MS` (skip) or `- Date.parse(row.unskipped_at)` (un-skip); logs name the account and the skip id, never more; every `catch` answers `fail("documents.error.failed")`.
   - `settings/document-requirements-actions.ts` (`"use server"`): `const access = await requireAccountAccess(accountId); if (!access.canManage) return { ok: false, error: m["settings.requiredDocuments.role"] };` then `const list = cleanRequiredCategories(formData.getAll("category").map(String)); if (!list) return { ok: false, error: m["settings.requiredDocuments.failed"] };` then `try { const saved = await setRequiredDocumentCategories(serviceDb(), accountId, list); revalidatePath(\`/dashboard/accounts/${accountId}/settings\`); return { ok: true, list: saved }; } catch (e) { console.error(…); return { ok: false, error: m["settings.requiredDocuments.failed"] }; }`.
   - `in-account-service-reads.test.ts` `ALLOWED`, beside the vault's lines (`:89-95`):
 
@@ -1365,66 +1450,103 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
 
 ---
 
-## Task 7: The checklist on the Documents card; the contact page's prop; `/styleguide` (bis-frontend)
+## Task 7: The checklist on the Documents card, the meter in its top row; the contact page's prop; `/styleguide` (bis-frontend)
 
-**Review:** opus. **Runs:** ONLY after the poll PR (`feat/s07-requests-poll`) has merged to `main`.
+**Review:** opus. **Runs:** after Tasks 2 and 5. The poll PR (#262) has merged (`c9b099a8`); Step 0 merges `origin/main` first.
 
 **Files**
 - Create: `…/contacts/document-checklist.tsx` (+ `document-checklist.test.ts`), `…/contacts/document-checklist-handlers.ts` (+ `document-checklist-handlers.test.ts`)
-- Modify: `…/contacts/documents-card.tsx` (+ `documents-card.test.ts`), `…/contacts/[contactId]/page.tsx` (one prop, `:243-245`) (+ `page.test.ts:680`), `apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.tsx` (+ `documents-demo.test.ts`)
+- Modify: `…/contacts/documents-card.tsx` (+ `documents-card.test.ts`), **`…/contacts/documents-card-structure.test.ts` (#262's; one `describe` APPENDED, nothing existing edited; I4, I5)**, `…/contacts/[contactId]/page.tsx` (one prop, `:243-245`) (+ `page.test.ts:672-681` and one new case), `apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.tsx` (+ `documents-demo.test.ts`)
 
 **Interfaces**
 - Consumes: the four skip actions and `requirementsRouteFor`, `requirementsLoadFrom`, `checklistView`, `shouldReloadRequirements`, `keepRequirements`, `RequirementsLoad`, `ChecklistView` (Task 5); `RequirableCategory`, `DOCUMENT_CATEGORIES`, `defaultCategory` (existing); keys from Task 2; the poll PR's `router` in `DocumentsCard`.
 - Produces:
-  - `DocumentChecklist` (presentational) props `{ locale: Locale; load: RequirementsLoad; canSkip: boolean; canAsk: boolean; onAsk: (c: RequirableCategory) => void; onUpload: (c: RequirableCategory) => void; onSkip: (c: RequirableCategory) => void; onUnskip: (c: RequirableCategory) => void; onRetry: () => void }`, root marker `data-document-checklist` (with `data-state="loading" | "error" | "on"`), nothing at all when the list is off.
+  - `DocumentChecklist` (presentational) props `{ locale: Locale; load: RequirementsLoad; canSkip: boolean; canAsk: boolean; panelOpen: boolean; onAsk: (c: RequirableCategory) => void; onUpload: (c: RequirableCategory) => void; onSkip: (c: RequirableCategory) => void; onUnskip: (c: RequirableCategory) => void; onRetry: () => void }`, root marker `data-document-checklist` (with `data-state="loading" | "error" | "on"`), nothing at all when the list is off. It draws NO meter (D9: the meter is the card's top row).
+  - `RequirementsMeter({ locale, load }: { locale: Locale; load: RequirementsLoad })`, exported from `document-checklist.tsx`, marker `data-requirements-meter`: "Required 2 of 3" (the label in the Label role, the numbers `tabular-nums`), or a `--good` dot and "Complete"; renders `null` while the list is off, loading or failed.
   - `checklistHandlers({ accountId, contactId, locale, reload, refresh, inFlight }): { skip(c): Promise<void>; unskip(c): Promise<void> }` (`reload` re-reads the checklist; `refresh` is the card's `router.refresh`, so the timeline shows the row).
-  - `DocumentsCard` gains an optional prop `checklist?: { canSkip: boolean }` (the contact page passes it; the group page does not, D3). `DocumentsCardView` gains an optional `checklist?: ChecklistSlot` with `ChecklistSlot = Omit<Parameters<typeof DocumentChecklist>[0], "locale">`, and `onFiles` gains an optional third argument `category?: RequirableCategory | null`.
+  - `DocumentsCard` gains an optional prop `checklist?: { canSkip: boolean }` (the contact page passes it; the group page does not, D3). `DocumentsCardView` gains an optional `checklist?: ChecklistSlot` with `ChecklistSlot = Omit<Parameters<typeof DocumentChecklist>[0], "locale" | "panelOpen" | "onUpload">` (the View supplies those three itself), and `onFiles` gains an optional third argument `category?: RequirableCategory | null`.
   - A pure `panelFiles(chosen: File[], preset: DocumentCategory | null, locale: Locale): PanelFile[]` exported from `documents-card.tsx` (the container's mapping, so the preset is tested without a DOM).
 
-- [ ] **Step 0: The base.** `git fetch origin && git log --oneline origin/main -3` shows the poll PR's squash commit. `git merge origin/main` in `<WT>` (never rebase; a conflict is impossible here because Tasks 1–6 touched none of its files, so any conflict is a STOP and a report). Then read the merged card: `grep -n "useRouter\|requestsChanged\|setNonce((n) => n + 1);\|router.refresh()" "…/contacts/documents-card.tsx"`: the router and the "a file arrived" path (`setNonce` then `router.refresh()`) must be there (Assumption A5); if not, STOP.
+- [ ] **Step 0: The base.** `git fetch origin && git log --oneline origin/main -3` shows `c9b099a8 The Documents card notices a customer's upload without a refresh …` (#262) or later. `git merge origin/main` in `<WT>` (never rebase; Tasks 1–6 touched none of #262's four files, so any conflict is a STOP and a report). Then, before editing anything:
+  - `grep -n "useRouter\|requestsChanged\|setNonce((n) => n + 1); router.refresh();\|const onVisible = () =>" "…/contacts/documents-card.tsx"`: the router, the "a file arrived" path and the `onVisible` effect are there (Assumption A5);
+  - `ls "…/contacts/documents-card-structure.test.ts"` exists, and `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-structure.test.ts"` PASSES on the merged base, unedited (paste its summary line).
+  If any of these fails, STOP.
 
-- [ ] **Step 1: Read** `documents-card.tsx` whole (as merged: the View `:298-409` before the merge, its header row, its `pick`, the container's files effect and its `shouldReloadRequests` call, the requests effect and the poll PR's timer), `documents-card-handlers.ts:1-80` (`offer`, `say`, `once`), `document-requests-list.tsx` (the flat-section look: mono label, row rules, ghost `size="sm"` buttons, dots), `document-request-dialog.tsx:154-167` (`DocumentRequestDialog` spreads the form's props, so `initialItems` passes straight through), `documents-card.test.ts` (as merged), `documents-card-handlers.test.ts:1-60`, `[contactId]/page.tsx:236-246`, `[contactId]/page.test.ts:670-690`, `styleguide/documents-demo.tsx` and its test, `apps/web/src/styles/tokens.css` (`--good`, `--warn`, `--crit`, `--text-3`).
+- [ ] **Step 1: Read** `documents-card.tsx` whole (as merged: the View's header row with "N files" and the space-used line, its `pick`, the container's files effect and its `shouldReloadRequests` call, the requests effect, the poll PR's timer and `onVisible` effects), `documents-card-structure.test.ts` whole (the pins your edits must keep, and the `stripComments`/`squash`/`container` helpers your new `describe` reuses), `documents-card-handlers.ts:1-80` (`offer`, `say`, `once`), `document-requests-list.tsx` (the flat-section look: mono label, row rules, ghost `size="sm"` buttons, dots), `document-request-dialog.tsx:154-167` (`DocumentRequestDialog` spreads the form's props, so `initialItems` passes straight through), `documents-card.test.ts` (as merged), `documents-card-handlers.test.ts:1-60`, `[contactId]/page.tsx:236-246`, `[contactId]/page.test.ts:500-535, :668-690`, `styleguide/documents-demo.tsx` and its test, `apps/web/src/styles/tokens.css` (`--good`, `--warn`, `--crit`, `--text-3`).
 
 - [ ] **Step 2: Failing tests** (`renderToStaticMarkup`, `renderedText`, both languages against literals).
   - `document-checklist.test.ts`:
-    1. On, partial (`[met insurance, missing id, expired permit, checking warranty, skipped photo]`): the label "Required" and "1 of 4" (tabular), then the gaps in the list's order, each a dot AND its words: "Missing: ID" (`--warn` dot), "Expired: Permit or license" (`--crit` dot), "Checking: Warranty" (`--warn` dot); then "Photo · Not needed" with a ghost "Needed again"; each gap row with ghost "Ask the customer", ghost "Upload" and ghost "Not needed" (rule 3: assert the words, not only the dots; mutation: drop the word and keep the dot -> FAILS).
+    1. On, partial (`[met insurance, missing id, expired permit, checking warranty, skipped photo]`), `panelOpen: false`: the gaps in the list's order, each a dot AND its words: "Missing: ID" (`--warn` dot), "Expired: Permit or license" (`--crit` dot), "Checking: Warranty" (`--warn` dot); then "Photo · Not needed" with a ghost "Needed again". The Missing and Expired rows each carry ghost "Ask the customer", ghost "Upload" and ghost "Not needed"; **the Checking row carries ONLY "Not needed"** (M5: the file is already there; asking or uploading again would duplicate it; mutation: give Checking the Ask and Upload buttons -> FAILS). No meter text ("1 of 4") anywhere in the section (D9; mutation: keep the meter line -> FAILS). Rule 3: assert the words, not only the dots (mutation: drop the word and keep the dot -> FAILS).
     2. No `data-variant="default"` anywhere in it (rule 8; mutation: Upload as primary -> FAILS).
     3. `canSkip: false` draws neither "Not needed" nor "Needed again" (D1); `canAsk: false` draws no "Ask the customer" (the requests read is not ready, so the dialog has no channels).
-    4. Complete (`[met insurance, skipped photo]`): "Complete" with a `--good` dot, NO gap rows, and the skipped row still there with "Needed again" (D11; mutation: hide skipped rows when complete -> FAILS).
-    5. Off (`{ items: [] }`): renders `""` (mutation: draw "0 of 0" -> FAILS).
-    6. Loading: a skeleton line with no copy and no `animate-spin`; error: role="alert" "Couldn't load the list." and a ghost Retry ("Retry").
-    7. Spanish: "Requeridos", "1 de 4", "Falta: Identificación", "Vencido: Permiso o licencia", "Revisando: Garantía", "Foto · No hace falta", "Hace falta otra vez", "Pedir al cliente", "Subir", "Completo", "No se pudo cargar la lista." (literals).
+    4. **`panelOpen: true` draws NO "Upload" and NO "Ask the customer" on any row (I6: the upload panel's Upload is the view's one primary, and a checklist Upload would replace the staged batch); "Not needed" stays** (mutation: ignore `panelOpen` -> FAILS).
+    5. Complete (`[met insurance, skipped photo]`): NO gap rows, and the skipped row still there with "Needed again" (D11; mutation: hide skipped rows when complete -> FAILS).
+    6. Off (`{ items: [] }`): renders `""` (mutation: draw an empty section -> FAILS).
+    7. Loading: a skeleton line with no copy and no `animate-spin`; error: role="alert" "Couldn't load the list." and a ghost Retry ("Retry").
+    8. `RequirementsMeter`: partial → "Required" and "1 of 4" (`tabular-nums`); complete → a `--good` dot and "Complete", no "of"; off, loading and error → `""` (mutation: draw "0 of 0" when off -> FAILS).
+    9. Spanish: "Requeridos", "1 de 4", "Falta: Identificación", "Vencido: Permiso o licencia", "Revisando: Garantía", "Foto · No hace falta", "Hace falta otra vez", "Pedir al cliente", "Subir", "Completo", "No se pudo cargar la lista." (literals).
   - `document-checklist-handlers.test.ts` (mock `./document-requirements-actions` and `sonner`; one call log):
     1. `skip("insurance")` calls `skipDocumentRequirementAction(acc, contact, "insurance")`, then `reload` and `refresh` once each, and toasts "Insurance isn't needed for this customer." with an Undo; the Undo calls `undoSkipDocumentRequirementAction(acc, skipId)` with the skip id the action answered, then `reload` and `refresh` again (mutation: Undo with no id -> FAILS).
     2. `unskip("insurance")` toasts "Insurance is needed again." whose Undo calls `undoUnskipDocumentRequirementAction(acc, skipId, unskippedAt)` with the INSTANT the action answered (mutation: `new Date().toISOString()` -> FAILS).
-    3. A refusal toasts its key's words (`documents.checklist.skipRole` → "Only an Owner or Staff can change a customer's list.") and calls neither `reload` nor `refresh`; a thrown action toasts `common.actionCrashed`'s words; a second click while the first is in flight does nothing (`inFlight`, keyed `skip:<category>`).
+    3. A refusal toasts its key's words (`documents.checklist.skipRole` → "Only an Owner or Staff can change a customer's list."; `documents.checklist.refused` → "We couldn't change that. Reload the page.") and calls neither `reload` nor `refresh`; **a thrown action toasts `documents.checklist.crashed`'s words, never `common.actionCrashed`'s** (M9: "Eso no se completó. Puede que esta página esté desactualizada: vuelva a cargarla e intente de nuevo." in Spanish, asserted as the literal; mutation: toast `common.actionCrashed` -> the Spanish literal FAILS); a second click while the first is in flight does nothing (`inFlight`, keyed `skip:<category>`).
     4. Spanish toasts: "Seguro no hace falta para este cliente.", "Seguro hace falta otra vez." (literals).
   - `documents-card.test.ts` (add `vi.mock("./document-requirements-actions", () => ({ skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn() }))`):
-    1. With a `checklist` slot (on, one gap), the View draws `data-document-checklist` AFTER the header row and BEFORE the file list, and the card STILL has exactly one `data-variant="default"` (Upload) (the existing one-primary assertions, re-run with the checklist drawn; mutation: the checklist's Upload as default -> FAILS).
-    2. Without a `checklist` slot (every existing case), no `data-document-checklist` (the group card; D3).
-    3. While the files read is loading or failed, no checklist is drawn (the files' state alone, as the requests list).
-    4. `panelFiles([pdf "lease.pdf", image "roof.jpg"], "insurance", "en")` files both under `insurance`; with `null`, under `defaultCategory` of each type (the existing rule; mutation: ignore the preset -> FAILS).
-  - `[contactId]/page.test.ts:680`: the exact props gain `checklist: { canSkip: true }` (the default access is the agency); one case with `TECH` (`:507`) asserts `checklist: { canSkip: false }` (D1; mutation: pass `canSkip: true` always -> FAILS). Run `…/groups/[groupId]/page.test.ts` unchanged: its `:284`/`:293` exact props still pass (no `checklist`).
-  - `documents-demo.test.ts`: the existing exact counts unchanged; `data-document-checklist(?=[\s>=])` occurs FIVE times (English partial, Spanish partial, complete, loading, error); within the demo's markup, every button inside a `data-document-checklist` block is `data-variant="ghost"`.
+    1. **D9:** with a `checklist` slot (on, `[met insurance, missing id, missing permit]`), the card's TOP ROW (the element holding "N files") also holds `data-requirements-meter` reading "Required" and "1 of 3", BEFORE the header's buttons and before `data-document-checklist`; in Spanish "Requeridos" and "1 de 3" (mutation: render the meter inside the checklist section -> FAILS by position).
+    2. With the checklist drawn, the card STILL has exactly one `data-variant="default"` (Upload) (the existing one-primary assertions, re-run; mutation: the checklist's Upload as default -> FAILS).
+    3. **I6:** with `panel` set AND a checklist slot, the markup holds no `data-checklist-action="upload"` and no `data-checklist-action="ask"` (and, as today, the header draws neither Upload nor Ask) (mutation: pass `panelOpen={false}` always -> FAILS).
+    4. Without a `checklist` slot (every existing case), neither `data-document-checklist` nor `data-requirements-meter` (the group card; D3).
+    5. While the files read is loading or failed, no checklist and no meter (the files' state alone, as the requests list).
+    6. `panelFiles([pdf "lease.pdf", image "roof.jpg"], "insurance", "en")` files both under `insurance`; with `null`, under `defaultCategory` of each type (the existing rule; mutation: ignore the preset -> FAILS).
+  - **`documents-card-structure.test.ts`, one `describe` APPENDED** (reuse the file's `src`, `container`, `squash` and `body`; I5, M3):
 
-- [ ] **Step 3: Run them to see them fail.**
+```ts
+describe("the checklist re-reads only when a files read changed what it depends on (S-07 2c; plan review I5, M3)", () => {
+  /** The FILES settle: from its declaration to its fetch. */
+  const filesSettle = body.slice(body.indexOf("const settle = (load: DocumentsLoad) =>"), body.indexOf("fetch(route, { cache: \"no-store\" })"));
+  const GUARDED = "if (hasChecklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);";
+
+  it("the files settle bumps the checklist's read ONLY inside the shouldReloadRequirements guard (mutations: bump it on every settle, or drop the guard -> FAILS)", () => {
+    expect(filesSettle).toContain(GUARDED);
+    expect(filesSettle.split(GUARDED).join("")).not.toContain("setRequirementsNonce");
+    // Before the last-ready read is replaced, so the guard compares against the PREVIOUS ready read.
+    expect(filesSettle.indexOf(GUARDED)).toBeLessThan(filesSettle.indexOf("lastReadyFiles.current = load;"));
+  });
+
+  it("the files effect depends on the derived boolean, never on the checklist object a page re-creates each render (M3; mutation: deps [route, requestsRoute, nonce, checklist] -> FAILS)", () => {
+    expect(body).toContain("const hasChecklist = checklist !== undefined;");
+    expect(body).toContain("}, [route, requestsRoute, nonce, hasChecklist]);");
+    expect(body).not.toMatch(/\}, \[[^\]]*\bchecklist\b[^\]]*\]\);/);
+  });
+
+  it("the checklist has no timer of its own (mutation: a setTimeout or setInterval in its effect -> FAILS)", () => {
+    const effect = body.slice(body.indexOf("const settleRequirements = (next: RequirementsLoad) =>"), body.indexOf("}, [requirementsRoute, requirementsNonce]);"));
+    expect(effect.length).toBeGreaterThan(0);
+    expect(effect).not.toMatch(/setTimeout|setInterval/);
+  });
+});
+```
+  - `[contactId]/page.test.ts:672-681` (M8): the case runs as STAFF; its exact props at `:680` gain `checklist: { canSkip: true }` (Staff sees the whole account). A new case beside it runs with `TECH` (`:507`) and asserts `checklist: { canSkip: false }` (D1; mutation: pass `canSkip: true` always -> FAILS). Run `…/groups/[groupId]/page.test.ts` unchanged: its `:284`/`:293` exact props still pass (no `checklist`).
+  - `documents-demo.test.ts`: the existing exact counts unchanged; `data-document-checklist(?=[\s>=])` occurs SIX times (five standalone states, plus the one demo card given a checklist slot) and `data-requirements-meter` ONCE (that card's top row); every button inside a `data-document-checklist` block is `data-variant="ghost"`.
+
+- [ ] **Step 3: Run them to see them fail.** (The appended structure `describe` fails on `indexOf` misses; the existing structure pins still PASS: paste that.)
 
 - [ ] **Step 4: Implement.**
-  - `document-checklist.tsx` (`"use client"`, presentational): `const v = load.kind === "ready" ? checklistView(load.data) : null`. Loading → `<div data-document-checklist data-state="loading" aria-hidden="true"><Skeleton className="h-4 w-1/3 rounded-[var(--radius-ctl)]" /></div>`. Error → `<div data-document-checklist data-state="error" role="alert" className="space-y-1 text-sm">` the `documents.checklist.loadFailed` words and a ghost `size="sm"` Retry (`documents.retry`). Off → `null`. On → a flat section (`document-requests-list.tsx`' look: no box, `--row-line` rules between rows):
-    - first line: the label in the Label role (Geist Mono 500, 10px, `tracking-[0.14em]`, uppercase, `text-muted-foreground`), `documents.checklist.label`; beside it `<span className="tabular-nums">{t(m, "documents.checklist.meter", locale, { met, required })}</span>`; when `complete`, a `size-1.5 rounded-full bg-[var(--good)]` dot and `documents.checklist.complete`'s word.
-    - each gap: a 6px dot (`--crit` for `expired`, `--warn` otherwise) and `t(m, \`documents.checklist.${state}\`, locale, { category: label })` where `label = t(m, \`documents.category.${category}\`, locale)`; then, wrapping on a phone, ghost `size="sm"` buttons with `min-h-11 md:min-h-8` and the focus ring: "Ask the customer" (`documents.request.open`) when `canAsk`, "Upload" (`documents.upload`), "Not needed" (`documents.checklist.skip`) when `canSkip`. Each button carries `data-checklist-action="ask|upload|skip|unskip"` and `data-checklist-category={category}`.
+  - `document-checklist.tsx` (`"use client"`, presentational): `const v = load.kind === "ready" ? checklistView(load.data) : null`. Loading → `<div data-document-checklist data-state="loading" aria-hidden="true"><Skeleton className="h-4 w-1/3 rounded-[var(--radius-ctl)]" /></div>`. Error → `<div data-document-checklist data-state="error" role="alert" className="space-y-1 text-sm">` the `documents.checklist.loadFailed` words and a ghost `size="sm"` Retry (`documents.retry`). Off → `null`. On → a flat section (`document-requests-list.tsx`' look: no box, `--row-line` rules between rows), with NO meter line:
+    - each gap: a 6px dot (`--crit` for `expired`, `--warn` otherwise) and `t(m, \`documents.checklist.${state}\`, locale, { category: label })` where `label = t(m, \`documents.category.${category}\`, locale)`; then, wrapping on a phone, ghost `size="sm"` buttons with `min-h-11 md:min-h-8` and the focus ring: for `missing` and `expired` only, and only while `!panelOpen`: "Ask the customer" (`documents.request.open`) when `canAsk`, and "Upload" (`documents.upload`); for every gap, "Not needed" (`documents.checklist.skip`) when `canSkip`. Each button carries `data-checklist-action="ask|upload|skip|unskip"` and `data-checklist-category={category}`.
     - each skipped item: muted `documents.checklist.notNeeded` with `{ category: label }`, and a ghost "Needed again" (`documents.checklist.unskip`) when `canSkip`.
-  - `document-checklist-handlers.ts`: on `documents-card-handlers.ts`' `offer`/`say`/`once` shape (copy the three helpers; do not import private ones). Each success: `reload(); refresh();` then the toast with its Undo; each Undo success: `reload(); refresh();`; each refusal: `toast.error(words)`; a throw: `common.actionCrashed`. The category's words in the toast are `documents.category.<c>` in the reader's language.
+    - `RequirementsMeter`: `null` unless ready and on; then `<span data-requirements-meter className="inline-flex items-center gap-1 text-xs text-muted-foreground tabular-nums">`: when `complete`, a `size-1.5 rounded-full bg-[var(--good)]` dot and `documents.checklist.complete`; otherwise the label in the Label role (Geist Mono 500, 10px, `tracking-[0.14em]`, uppercase) `documents.checklist.label` and `t(m, "documents.checklist.meter", locale, { met, required })`.
+  - `document-checklist-handlers.ts`: on `documents-card-handlers.ts`' `offer`/`say`/`once` shape (copy the three helpers; do not import private ones). Each success: `reload(); refresh();` then the toast with its Undo; each Undo success: `reload(); refresh();`; each refusal: `toast.error(words)`; a throw: `documents.checklist.crashed` (M9). The category's words in the toast are `documents.category.<c>` in the reader's language.
   - `documents-card.tsx`:
-    - View: `checklist?: ChecklistSlot` prop; render `{p.checklist ? <DocumentChecklist locale={p.locale} {...p.checklist} onUpload={(c) => { preset.current = c; uploadRef.current?.click(); }} /> : null}` right after the header row's closing `</div>` and before `{p.panel}`; `const preset = useRef<RequirableCategory | null>(null)`; the header's Upload sets `preset.current = null` before its click; `pick` passes `p.onFiles(files, source, source === "upload" ? preset.current : null)` and then clears `preset.current`; the drop handler passes `null`.
-    - Container: `checklist?: { canSkip: boolean }` prop. When given: `requirementsRoute = requirementsRouteFor(accountId, record.id)`; state `{ route, load }` and `requirementsNonce`, one effect fetching it with `cache: "no-store"` through `requirementsLoadFrom`, settling through `keepRequirements` (its own read, its own failure; nothing on screen changes for a re-read until it lands, rule 7); in the FILES settle, before `lastReadyFiles.current = load`, `if (checklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);` (the ONE trigger besides the handlers; no timer). `const checklistActs = checklistHandlers({ accountId, contactId: record.id, locale, reload: () => setRequirementsNonce((n) => n + 1), refresh: () => router.refresh(), inFlight })` using the poll PR's `router`. `openAsk(items: RequirableCategory[] = [])` sets an `askItems` state; the header's "Ask the customer" calls `openAsk()`; the checklist's `onAsk(c)` calls `openAsk([c])` (D2); `<DocumentRequestDialog … initialItems={askItems} />`. `onFiles(chosen, from, category)` maps through `panelFiles(chosen, category ?? null, locale)`. The View gets `checklist={checklist ? { load: requirementsLoad, canSkip: checklist.canSkip, canAsk: requestsLoad.kind === "ready", onAsk: (c) => openAsk([c]), onUpload: () => {}, onSkip: (c) => void checklistActs.skip(c), onUnskip: (c) => void checklistActs.unskip(c), onRetry: () => { setRequirementsState({ route: "", load: { kind: "loading" } }); setRequirementsNonce((n) => n + 1); } } : undefined}` (the View supplies `onUpload` itself, above).
+    - View: `checklist?: ChecklistSlot` prop. **The top row (D9):** in the header row's left column, after the count and the space-used line, `{p.checklist ? <RequirementsMeter locale={p.locale} load={p.checklist.load} /> : null}`. The section: `{p.checklist ? <DocumentChecklist locale={p.locale} {...p.checklist} panelOpen={p.panel !== null} onUpload={(c) => { preset.current = c; uploadRef.current?.click(); }} /> : null}` right after the header row's closing `</div>` and before `{p.panel}` (I6: `panelOpen` hides its Upload and Ask while the panel is open). `const preset = useRef<RequirableCategory | null>(null)`; the header's Upload sets `preset.current = null` before its click; `pick` passes `p.onFiles(files, source, source === "upload" ? preset.current : null)` and then clears `preset.current`; the drop handler passes `null`.
+    - Container: `checklist?: { canSkip: boolean }` prop; **`const hasChecklist = checklist !== undefined;` and `const canSkip = checklist?.canSkip === true;` (M3: effects and callbacks use these two values, never the object a page re-creates each render).** `requirementsRoute = hasChecklist ? requirementsRouteFor(accountId, record.id) : null`; state `{ route, load }` and `requirementsNonce`. In the FILES settle, before `lastReadyFiles.current = load`, exactly `if (hasChecklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);` (the ONE trigger besides the handlers; no timer), and the files effect's deps become `[route, requestsRoute, nonce, hasChecklist]`. The requirements effect is a NEW `useEffect` declared AFTER the poll PR's `onVisible` effect (so `documents-card-structure.test.ts`' `onVisible` slice is unchanged): when `requirementsRoute` is null it does nothing; otherwise it fetches with `cache: "no-store"` through `requirementsLoadFrom` and settles in a `const settleRequirements = (next: RequirementsLoad) => { if (stale) return; setRequirementsState((s) => keepRequirements(s, requirementsRoute, next)); };` (its own read, its own failure; nothing on screen changes for a re-read until it lands, rule 7), deps `[requirementsRoute, requirementsNonce]`. `const checklistActs = checklistHandlers({ accountId, contactId: record.id, locale, reload: () => setRequirementsNonce((n) => n + 1), refresh: () => router.refresh(), inFlight })` using #262's `router`. `openAsk(items: RequirableCategory[] = [])` sets an `askItems` state; the header's "Ask the customer" calls `openAsk()`; the checklist's `onAsk(c)` calls `openAsk([c])` (D2); `<DocumentRequestDialog … initialItems={askItems} />`. `onFiles(chosen, from, category)` maps through `panelFiles(chosen, category ?? null, locale)`. The View gets `checklist={hasChecklist ? { load: requirementsLoad, canSkip, canAsk: requestsLoad.kind === "ready", onAsk: (c) => openAsk([c]), onSkip: (c) => void checklistActs.skip(c), onUnskip: (c) => void checklistActs.unskip(c), onRetry: () => { setRequirementsState({ route: "", load: { kind: "loading" } }); setRequirementsNonce((n) => n + 1); } } : undefined}`.
+    - Do not edit the requests settle, the timer effect or the `onVisible` effect: every pin in `documents-card-structure.test.ts` must stay green.
     - A record that is a GROUP never passes `checklist` (D3); assert nothing about it beyond the group page test staying green.
   - `[contactId]/page.tsx`: `import { seesWholeAccount } from "@/lib/auth-role";` (the pure module, so the page test's `@/lib/auth` factory keeps working) and the card gains `checklist={{ canSkip: seesWholeAccount(access) }}`.
-  - `documents-demo.tsx`: render `DocumentChecklist` standalone (outside any `DocumentsCardView`, so the card counts do not move) in five states: English partial, a `lang="es"` Spanish partial, complete with one skipped item, loading, error; `canSkip: true`, `canAsk: true`, every callback a no-op.
+  - `documents-demo.tsx`: render `DocumentChecklist` standalone (outside any `DocumentsCardView`) in five states: English partial, a `lang="es"` Spanish partial, complete with one skipped item, loading, error; `canSkip: true`, `canAsk: true`, `panelOpen: false`, every callback a no-op. Give the existing English READY demo card (`documents-demo.tsx:111`) a `checklist` slot (partial, English), so the top-row meter is on the styleguide without adding a seventh card.
 
-- [ ] **Step 5: Run** the six test files, `…/groups/[groupId]/page.test.ts`, `src/components/ui/material.test.ts`, `src/lib/i18n/ratchet.test.ts`, typecheck, eslint. All PASS.
-- [ ] **Step 6: Probes:** (a) the checklist's Upload as the default variant → the card's one-primary assertion FAILS; (b) a gap drawn by its dot only → the checklist case FAILS; (c) the un-skip's Undo with `new Date()` → the handlers case FAILS; (d) `canSkip: true` for a Technician on the page → the page case FAILS; (e) the files settle calling `setRequirementsNonce` on EVERY settle (instead of through `shouldReloadRequirements`) → no unit test sees the extra reads (no DOM): say so in the report; Task 9 test 2's request count is its proof. Paste each.
-- [ ] **Step 7: Commit** every path above, message "documents card: the required-documents checklist, a meter, each gap with Ask the customer and Upload, Not needed with Undo (S-07 2c)".
+- [ ] **Step 5: Run** the six test files, **`documents-card-structure.test.ts` (#262's pins and the appended `describe`)**, `…/groups/[groupId]/page.test.ts`, `src/components/ui/material.test.ts`, `src/lib/i18n/ratchet.test.ts`, typecheck, eslint. All PASS.
+- [ ] **Step 6: Probes:** (a) the checklist's Upload as the default variant → the card's one-primary assertion FAILS; (b) a gap drawn by its dot only → the checklist case FAILS; (c) the un-skip's Undo with `new Date()` → the handlers case FAILS; (d) `canSkip: true` for a Technician on the page → the page case FAILS; (e) **the files settle bumping `setRequirementsNonce` on EVERY settle (outside the guard) → the appended structure case FAILS by name (I5)**; (f) the files effect's deps with `checklist` instead of `hasChecklist` → the M3 structure case FAILS; (g) `panelOpen={false}` always → the I6 card case FAILS; (h) the meter drawn inside the checklist section → the D9 card case FAILS; (i) a Checking row with Ask and Upload → the M5 checklist case FAILS. Paste each.
+- [ ] **Step 7: Commit** every path above, message "documents card: Required 2 of 3 in the top row, each gap with Ask the customer and Upload, Not needed with Undo (S-07 2c)".
 
 ---
 
@@ -1445,12 +1567,12 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
 - Create: `apps/web/e2e/document-requirements.spec.ts`
 
 - [ ] **Step 1: Read** `apps/web/e2e/documents-scan.spec.ts` whole (env loading, the fixture contact, the card locators, the `pdf()` builder, the afterAll that removes objects and rows and re-reads), `apps/web/e2e/support.ts:100-135`, `apps/web/e2e/website.spec.ts:80-95` (opening a Settings anchor), `apps/web/playwright.config.ts:160-175` (one worker).
-- [ ] **Step 2: Write the spec.** `import { test, expect, type Page } from "./fixtures/test"` (never `@playwright/test`: `clerk-cookie-guard.test.ts`). `test.describe.configure({ mode: "serial", timeout: 120_000 })`. `STAMP = \`DocReq2c${Date.now()}\``. `beforeAll`: `readClientFixture()` (throw if missing); READ and keep the account's current `required_document_categories` (service client), then set it to `{insurance,id}`; one contact on the fixture account through `createContact(serviceDb(), accountId, { firstName: "Lista", lastName: STAMP }, ACTOR)` (refuse `existing`). Locators: `card(page)` as `documents-scan.spec.ts:33`; `checklist(page) = card(page).locator("[data-document-checklist]")`; a gap's button by `[data-checklist-action="skip"][data-checklist-category="id"]`. Every test starts with `page.goto(contactUrl())` (never `reload`).
-  1. **The meter and a skip with Undo** (spec §7). `checklist` reads "Required", "0 of 2", "Missing: Insurance", "Missing: ID". Click ID's "Not needed" → the toast "ID isn't needed for this customer." → "0 of 1" and "ID · Not needed". Click the toast's Undo → "0 of 2" and "Missing: ID" again; the database (service client) holds NO skip row for the contact. Click ID's "Not needed" again (keep it). `goto` the contact page: the timeline shows "marked ID as not needed" with the fixture user's mark. Click "Needed again" → "Missing: ID"; the timeline (after a `goto`) shows "marked ID as needed again" above it.
-  2. **Upload from a gap, and the meter turns Complete without a reload.** Skip ID again (so only Insurance is required). Count the page's requests to `/document-requirements` from here with `page.on("request")`. Insurance's "Upload": `const chooser = page.waitForEvent("filechooser")`, click, `(await chooser).setFiles({ name: "Policy.pdf", mimeType: "application/pdf", buffer: pdf("policy") })`; the upload panel's category control shows Insurance (read its value; the preset); press the panel's Upload. The row appears; within 30 s and with NO `goto`/`reload`, the checklist reads "1 of 1" and "Complete" (the fake clamd answers clean; the files read sees the scan change and re-reads the checklist). Then wait 15 s more and assert the checklist was re-read at most 4 times in all since the count began (one per actual change: the upload, the verdict, plus slack; mutation it catches: a re-read on EVERY files settle, which the 5-second Checking poll would multiply).
-  3. **The Settings card** (the agency's signed-in state, A6). `goto` `/dashboard/accounts/<id>/settings#required-documents`: Insurance and ID are ticked; there is no "Other" row. Untick ID, press Save → the toast "Saved. Each customer's Documents card shows the list."; the database reads `{insurance}`. `goto` the contact page: the checklist reads "1 of 1", "Complete", and no ID row at all (its skip still exists but ID is no longer required).
+- [ ] **Step 2: Write the spec.** `import { test, expect, type Page } from "./fixtures/test"` (never `@playwright/test`: `clerk-cookie-guard.test.ts`). `test.describe.configure({ mode: "serial", timeout: 120_000 })`. `STAMP = \`DocReq2c${Date.now()}\``. `beforeAll`: `readClientFixture()` (throw if missing); READ and keep the account's current `required_document_categories` (service client), then set it to `{insurance,id}`; one contact on the fixture account through `createContact(serviceDb(), accountId, { firstName: "Lista", lastName: STAMP }, ACTOR)` (refuse `existing`). Locators: `card(page)` as `documents-scan.spec.ts:33`; `meter(page) = card(page).locator("[data-requirements-meter]")` (the card's top row, D9); `checklist(page) = card(page).locator("[data-document-checklist]")`; a gap's button by `[data-checklist-action="skip"][data-checklist-category="id"]`. Every test starts with `page.goto(contactUrl())` (never `reload`).
+  1. **The meter and a skip with Undo** (spec §7). `meter` reads "Required" and "0 of 2" in the card's top row, beside "0 files"; `checklist` reads "Missing: Insurance", "Missing: ID". Click ID's "Not needed" → the toast "ID isn't needed for this customer." → `meter` "0 of 1" (no reload: the top row is redrawn live, D9) and `checklist` "ID · Not needed". Click the toast's Undo → `meter` "0 of 2" and "Missing: ID" again; the database (service client) holds NO skip row for the contact. Click ID's "Not needed" again (keep it). `goto` the contact page: the timeline shows "marked ID as not needed" with the fixture user's mark. Click "Needed again" → "Missing: ID"; the timeline (after a `goto`) shows "marked ID as needed again" above it.
+  2. **Upload from a gap, and the meter turns Complete without a reload.** Skip ID again (so only Insurance is required). Insurance's "Upload": `const chooser = page.waitForEvent("filechooser")`, click, `(await chooser).setFiles({ name: "Policy.pdf", mimeType: "application/pdf", buffer: pdf("policy") })`; the upload panel's category control shows Insurance (read its value; the preset); while the panel is open, the checklist shows no Upload and no Ask the customer (I6). Press the panel's Upload. The row appears; within 30 s and with NO `goto`/`reload`, `meter` reads "Complete" and the Insurance gap is gone (the fake clamd answers clean; the files read sees the scan change and re-reads the checklist). (No request-count assertion: with the fake clamd answering at once, a count cannot tell "once per change" from "every files settle"; `documents-card-structure.test.ts`' appended `describe` is that proof, I5.)
+  3. **The Settings card** (the agency's signed-in state, A6). `goto` `/dashboard/accounts/<id>/settings#required-documents`: Insurance and ID are ticked; there is no "Other" row. Untick ID, press Save → the toast "Saved. Each customer's Documents card shows the list."; the database reads `{insurance}`. `goto` the contact page: `meter` reads "Complete", and the checklist has no ID row at all (its skip still exists but ID is no longer required).
   `afterAll`: restore the account's list to the value read in `beforeAll` (check the error, re-read it equal); delete the contact's skip rows; remove every stored object of the contact's documents, then the documents, then the contact (`documents-scan.spec.ts`' order); check every `error`; re-read that no row and no object is left.
-- [ ] **Step 3:** `pnpm --filter web exec playwright test --list e2e/document-requirements.spec.ts` lists three tests (listing does not run them). `pnpm --filter web exec eslint e2e/document-requirements.spec.ts`. Commit, message "e2e: the required-documents meter, a skip with Undo, an upload from a gap turning Complete without a reload, the Settings card (S-07 2c)".
+- [ ] **Step 3:** `pnpm --filter web exec playwright test --list e2e/document-requirements.spec.ts` lists three tests (listing does not run them). `pnpm --filter web exec eslint e2e/document-requirements.spec.ts`. Commit, message "e2e: the required-documents meter in the card's top row, a skip with Undo, an upload from a gap turning Complete without a reload, the Settings card (S-07 2c)".
 
 ---
 
@@ -1458,9 +1580,9 @@ export function shouldReloadRequirements(prev: DocumentsLoad | null, next: Docum
 
 **Reviewer:** opus, fresh context. Runs after Tasks 1–9.
 
-- [ ] **Step 1.** Read the spec's §5 and §1–§2, this plan's decisions (as ruled in Task 0) and Deviations, then `git diff 6bf592f9...HEAD` in `<WT>` (the poll PR's own commit arrives through Task 7's merge; review only 2c's paths); walk the coverage table below row by row against the diff.
-- [ ] **Step 2.** Web tests by path: every test file Tasks 2–7 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `src/lib/documents/read-gate.test.ts`, `src/lib/palette/registry.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/groups/[groupId]/page.test.ts"`; `pnpm --filter web typecheck`. The db suites on a replica of your own (ports `55611`/`55612`/`55613`): `document-requirements-schema.test.ts`, `schema-grants-guard.test.ts`, `weekly-report-grants.test.ts`, `alert-phone-grants.test.ts` on `post`, and `document-requirements.test.ts`, `record.test.ts`, `timeline-merge.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name. A bis-design-reviewer pass on a running build (the checklist in both themes at desktop and phone width, partial, complete and failed; the Settings card) if the orchestrator provides one.
-- [ ] **Step 3.** Hunt specifically: (a) a service-client write in either action file before its request-client proof, or a read of the skip, the contact or the list on the service client; (b) the definer function: either guard without `coalesce`, a path that answers a row for a contact the caller cannot see, any column beyond `(category, state)`, EXECUTE for `anon` or `service_role`; (c) "met" counting a trashed document, an uploading or unclean version, an expired file on the wrong side of the day boundary, or a group the contact does not belong to; the day taken from the server's UTC clock anywhere; (d) a skip's or an un-skip's Undo that is not the actor's own, outside 10 minutes, or a blind restore (not compare-and-set on the instant); (e) the checklist re-reading on a timer, or on every files settle; any `useEffect` that sets state in its body; (f) rule 8 (exactly one `data-variant="default"` on the card with the checklist drawn; one primary on the Settings card), rule 3 (every state a dot AND a word), rule 7 (no spinner, no skeleton flash on a re-read), rule 1 (the meter's label); (g) `documentSkip`/`documentUnskip` missing from any exhaustive map (`authorOf`, `timeline-rows`, `recent-rows`, both timelines, `ROW_ICON`, `ROW_KINDS`); `MEASURED` raised without its comment; (h) a Technician able to skip through any path (D1), or the group page drawing a checklist (D3); (i) 0081's ASCII rule, `lock_timeout` first, no grant on `accounts`, RLS on the new table, the partial unique index; (j) a test that cannot fail (memory "Vacuous test shapes"), a Spanish assertion against `t()`'s output, a raw-markup negative on an apostrophe string; (k) `serviceDb` in any new file under `lib/`, or a new service-client file not in `ALLOWED`; (l) the e2e spec mutating anything but the per-run fixture account, or leaving the account's list changed; (m) any interaction with the poll PR's timer: two timers, a second `useRouter`, or the checklist's re-read feeding back into the requests tick.
+- [ ] **Step 1.** Read the spec's §5 and §1–§2, this plan's decisions (as ruled in Task 0) and Deviations, then `git diff c9b099a8...HEAD` in `<WT>` (#262 arrives through Task 7's merge, so diff from its squash commit and review only 2c's paths); walk the coverage table below row by row against the diff.
+- [ ] **Step 2.** Web tests by path: every test file Tasks 2–7 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `src/lib/documents/read-gate.test.ts`, `src/lib/palette/registry.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/groups/[groupId]/page.test.ts"`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-card-structure.test.ts"`; `pnpm --filter web typecheck`. The db suites on a replica of your own (ports `55611`/`55612`/`55613`): `document-requirements-schema.test.ts`, `schema-grants-guard.test.ts`, `weekly-report-grants.test.ts`, `alert-phone-grants.test.ts` on `post`, and `document-requirements.test.ts`, `record.test.ts`, `timeline-merge.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name. A bis-design-reviewer pass on a running build (the checklist in both themes at desktop and phone width, partial, complete and failed; the Settings card) if the orchestrator provides one.
+- [ ] **Step 3.** Hunt specifically: (a) a service-client write in either action file before its request-client proof, or a read of the skip, the contact or the list on the service client; (b) the definer function: either guard without `coalesce`, a path that answers a row for a contact the caller cannot see, any column beyond `(category, state)`, EXECUTE for `anon` or `service_role`; (c) "met" counting a trashed document, an uploading or unclean version, an expired file on the wrong side of the day boundary, or a group the contact does not belong to; the day taken from the server's UTC clock anywhere; (d) a skip's or an un-skip's Undo that is not the actor's own, outside 10 minutes, or a blind restore (not compare-and-set on the instant); (e) the checklist re-reading on a timer, or on every files settle; any `useEffect` that sets state in its body; (f) rule 8 (exactly one `data-variant="default"` on the card with the checklist drawn; one primary on the Settings card), rule 3 (every state a dot AND a word), rule 7 (no spinner, no skeleton flash on a re-read), rule 1 (the meter's label); (g) `documentSkip`/`documentUnskip` missing from any exhaustive map (`authorOf`, `timeline-rows`, `recent-rows`, both timelines, `ROW_ICON`, `ROW_KINDS`); `MEASURED` raised without its comment; (h) a Technician able to skip through any path (D1), or the group page drawing a checklist (D3); (i) 0081's ASCII rule, `lock_timeout` first, no grant on `accounts`, RLS on the new table, the partial unique index; (j) a test that cannot fail (memory "Vacuous test shapes"), a Spanish assertion against `t()`'s output, a raw-markup negative on an apostrophe string; (k) `serviceDb` in any new file under `lib/`, or a new service-client file not in `ALLOWED`; (l) the e2e spec mutating anything but the per-run fixture account, or leaving the account's list changed; (m) any interaction with #262's timer: two timers, a second `useRouter`, the checklist's re-read feeding back into the requests tick, or any existing pin in `documents-card-structure.test.ts` edited rather than appended to; (n) the checklist's Upload or Ask live while the upload panel is open (I6), or a Checking row offering Ask or Upload (M5); (o) the meter anywhere but the card's top row (D9); (p) `common.actionCrashed` reached from the checklist's handlers (M9); (q) the PR body missing D6's sentence that P7 and §8 are not yet met for client Owners.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent.
 
 ---
@@ -1476,7 +1598,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 - [ ] **Step 5. Parity and the advisor.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both; the column, its CHECK, the table, its policies and index, the function's body and ACL equal. MCP `get_advisors` (security): a finding about `document_requirements` (SECURITY DEFINER in `public`) is EXPECTED, as for 0078's `document_space_used`; read it, confirm it names only that, and record it in the ledger beside 0078's.
 - [ ] **Step 6. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first).
 - [ ] **Step 7. Preview, by hand (owner and orchestrator together):** on the branch's Preview (bis-ci), on the per-run-style test account (never Test Client One): Settings → Required documents → tick Insurance and ID → Save; a throwaway contact: "0 of 2", "Missing: Insurance", "Missing: ID"; Not needed on ID → Undo → back; Upload from Insurance (the panel shows Insurance) → "Checking: Insurance" then "Complete" (the real worker); set an expiry date in the past on the file → "Expired: Insurance"; Ask the customer from the gap → the dialog opens with Insurance ticked; sign in as a Technician assigned to the contact (if the account has one) → the checklist shows, with no Not needed. Both themes; a phone width. Then untick everything → Save → the checklist is gone. Delete the throwaway contact and its files.
-- [ ] **Step 8. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 10's findings are closed). The PR body names: the owner's rulings D1–D12, deviations 1–9, the pinned tests this PR changes, "Not in this PR", the Preview check's results, and the 0081 apply lines.
+- [ ] **Step 8. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 10's findings are closed). The PR body names: the owner's rulings D1–D12 (D9 as changed), and says outright: **"Only the agency can set the required list in this PR (owner ruling D6). Spec P7's 'Owners pick required categories' and §8's 'off for every account until an Owner opts in' are NOT yet met for client Owners; an Owner screen comes later."**; deviations 1–9, the pinned tests this PR changes, "Not in this PR", the Preview check's results, and the 0081 apply lines.
 - [ ] **Step 9. After the deploy.** The deploy reads READY on the merge SHA. Spec §8: off for every account until an Owner opts in, so NO production account's list is set by us, except, if one exists, an AGENCY-OWNED production account: set it, read one contact's card ("0 of N"), then set it back to empty and re-read `'{}'`. Tracker: item 6 / F-005 stay `in_progress` (spec §8) with "part 2c (the required-documents checklist) shipped #<n>".
 
 ---
@@ -1494,7 +1616,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 | §5.1 `document_requirement_skips`, unique on (contact, category), server-written, members read under the contact's visibility | Task 1 (partial unique on active skips, RLS, grants); deviation 1 |
 | §5.2 a Documents section in Settings, registered in ⌘K, the categories as checkboxes, the sentence, one primary Save | Task 6; D6, D8 |
 | §5.3 met = not trashed, clean version, not expired in the account's zone, on the customer or any household/business they belong to; skipped left out of both numbers | Task 1 (the function), Task 3 (`requirementsMeter`), Task 5 (`documentsClock`'s today); deviations 3, 4, 6; D7 |
-| §5.4 the header reads "2 de 3" | Task 7 (the checklist's first line); D9, deviation 7 |
+| §5.4 the header reads "2 de 3" (amended 2026-10-16: the card's own top row) | Task 7 (`RequirementsMeter` in the top row beside "N files"); D9 as ruled, deviation 7 |
 | §5.4 each unmet item named, "Falta" / "Vencido", with Pedir al cliente (that item ticked) and Subir (category preset) | Task 7 (`openAsk([c])`, `panelFiles` preset); D2, D10 |
 | §5.4 skipped reads "No hace falta" with "Hace falta otra vez"; at once with Undo; each a timeline row (person mark) | Tasks 3, 4, 5, 7; deviation 2 |
 | §5.4 all met: "Completo" (dot + word), the list disappears; off: nothing drawn | Task 5 (`checklistView`), Task 7; D11 |
@@ -1508,8 +1630,9 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 ## Self-review notes (the writer's own pass, 2026-10-16)
 
-- **Spec coverage:** every §5 bullet maps to a task above. Three of the spec's words are not followed literally, each because the code makes them impossible or wrong, and each is an owner decision in Task 0, not a silent change: "the nine categories" (D8), "the card header reads" (D9: the title is server-rendered), "Owners and agency edit" (D6: Settings is agency-only). The skips table's shape differs from §5.1 (deviation 1) because §5.4 needs both moves on the timeline.
-- **The poll PR:** Tasks 1–6 touch none of `documents-card.tsx`, `documents-card.test.ts` or `document-requests.spec.ts`; Task 7 merges `origin/main` first and STOPS if the poll PR's router or "file arrived" path is not there; the checklist adds no timer and feeds nothing back into the requests tick.
-- **Vacuity pass:** every prescribed test names its mutation; the order-sensitive ones (each action's proof-then-write) assert ONE shared call log; every copy assertion uses `renderedText` and literal Spanish; the checklist's "re-read once per change" has no DOM proof in vitest, and Task 7 step 6 says so and points at Task 9 test 2's request count instead of pretending.
+- **Spec coverage:** every §5 bullet maps to a task above. Four places where the spec's words changed, each RULED by the owner on 2026-10-16 and each carried into the spec as an "Amended 2026-10-16" line: §5.2 eight categories, not nine (D8); §5.4 the count in the card's own top row, not the server-rendered title (D9); §5.2 and §8 the agency edits the list for now, so P7's Owner half and §8's "until an Owner opts in" are not yet met for client Owners (D6); §5.1 the skips table's shape (deviation 1), because §5.4 needs both moves on the timeline.
+- **The poll PR (#262, merged as `c9b099a8`; branch head `8a6e7f7e`):** Tasks 1–6 touch none of its four files (`documents-card.tsx`, `documents-card.test.ts`, `documents-card-structure.test.ts`, `document-requests.spec.ts`); Task 7 runs the structure test on the merged base first, edits none of its pinned lines, and appends its own `describe`; Task 7 merges `origin/main` first and STOPS if the poll PR's router or "file arrived" path is not there; the checklist adds no timer and feeds nothing back into the requests tick.
+- **Vacuity pass:** every prescribed test names its mutation; the order-sensitive ones (each action's proof-then-write) assert ONE shared call log; every copy assertion uses `renderedText` and literal Spanish; the checklist's "re-read once per change" has no DOM proof in vitest, so it is pinned at the source by the structure `describe` Task 7 appends to #262's `documents-card-structure.test.ts` (I5); the e2e request count that could not fail is gone.
 - **Types across tasks:** `REQUIRABLE_DOCUMENT_CATEGORIES`, `RequirableCategory`, `RequirementState`, `cleanRequiredCategories`, `requirementsMeter`, `DOCUMENT_REQUIREMENT_UNDO_MS` (Task 3, document-rules) → Tasks 5, 6, 7; `DocumentRequirement`, `DocumentSkipRow`, `TimelineDocumentSkip`, the ten functions (Task 3) → Tasks 4, 5; `RequirementsLoad`, `RequirementsResponse`, `ChecklistView`, `checklistView`, `shouldReloadRequirements`, `keepRequirements`, `requirementsRouteFor`, `requirementsLoadFrom` (Task 5) → Task 7; the four skip actions (Task 5) → Task 7's handlers; `setRequiredDocumentCategoriesAction` (Task 5) → Task 6.
-- **Not executed:** nothing in this plan was run; the SQL and TypeScript are written against the files read at `6bf592f9` (and the poll PR at `9fdfc4f7`) and are marked where a name must be confirmed by a read (`record_document_scan`'s argument order, the package typecheck script, `timeline-rows.ts`' `detail` type, the kit's env names). Each such read is a named step, not an assumption left open.
+- **Not executed:** nothing in this plan was run; the SQL and TypeScript are written against the files read at `6bf592f9` (and #262 at its branch head `8a6e7f7e`, merged as `c9b099a8`) and are marked where a name must be confirmed by a read (`record_document_scan`'s argument order, the package typecheck script, `timeline-rows.ts`' `detail` type, the kit's env names). Each such read is a named step, not an assumption left open.
+- **Revision of 2026-10-16 (plan review of `a7847259`, CHANGES REQUESTED, nothing Critical):** owner rulings D1–D12 recorded (D9 changed to the card's top row; D7 names what it reveals; D6's unmet P7/§8 stated in the plan, the spec and the PR body). I1 (the skips RLS case selects `contact_id` from the skips table alone; probe (d2)), I2 (an Owner of an account with client access OFF; the fences case's title says which guard each refusal catches; probe (k)), I3 (the Settings action cleans; its test expects the cleaned list), I4 (#262 is merged, four files, `documents-card-structure.test.ts` in Pinned tests, Task 7 step 0 and step 5, A5), I5 (an appended structure `describe` pins the guarded re-read; the e2e count claim is gone), I6 (`panelOpen` hides the checklist's Upload and Ask), I7 (two rows with crossed orders, read one at a time and through the cursor). M1 (`skipped_by_check` with a valid category), M2 (`documents.checklist.refused`), M3 (`hasChecklist` in the files effect's deps, pinned), M4 (`data.today` in the comparison), M5 (Checking offers only Not needed), M6 (both instants are the database's `now()`: the insert's default and `unskip_document_requirement`), M7 (the UTC-day mutation lives in the route test), M8 (citations), M9 (`documents.checklist.crashed`, usted), M10 (the agency path). Not re-executed: the plan is still unrun.
