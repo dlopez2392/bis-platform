@@ -171,8 +171,20 @@ test("1. staff asks, by link: the dialog, the toast, the clipboard matches reque
   await expect(timelineRow).toContainText(m["timeline.documentRequest"].replace("{count}", "2"));
 });
 
-test("2. the customer uploads with no sign-in: clean, the virus, clean again, then done; the database and the work queue agree (mutation: scanVersion skipping the virus check -> no refusal, no removal -> FAILS)", async ({ page, browser }) => {
+test("2. the customer uploads with no sign-in: clean, the virus, clean again, then done; the database and the work queue agree; staff's OPEN page sees it with no reload (mutations: scanVersion skipping the virus check -> no refusal, no removal -> FAILS; the card's requests poll removed -> the open page never changes -> FAILS)", async ({ page, browser }) => {
+  // The no-reload wait below (up to 45s for the open card's 20s poll, then the files and timeline) on top
+  // of the customer's three uploads: more than the file's 150s default would leave on a slow run.
+  test.setTimeout(210_000);
   const token = requestToken(requestId1);
+  // Owner ruling 2026-10-16 (S-07 2b follow-up): staff's contact page is open BEFORE the customer uploads,
+  // and is never reloaded or navigated again until the card, its requests list and the timeline have
+  // caught up by themselves (the card's 20s requests poll, then one files re-read and one router refresh).
+  await page.goto(contactUrl());
+  const staffRequest = card(page).locator(`[data-document-request="${requestId1}"]`);
+  await expect(staffRequest).toHaveCount(1);
+  // A row is addressed by its title (the virus-removed copy may be listed too, so no exact count).
+  const staffFile = (title: string) => card(page).locator("[data-document-row]").filter({ hasText: title });
+  await expect(staffFile("Pool permit")).toHaveCount(0);
   const anonContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const anonPage = await anonContext.newPage();
   try {
@@ -239,15 +251,17 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
   expect(tasks ?? [], "exactly one task for this request").toHaveLength(1);
   expect((tasks![0] as { document_request_kind: string }).document_request_kind).toBe("received");
 
-  // Every test gets its OWN page (Playwright's per-test fixture; serial mode shares state, not
-  // pages): this one has never navigated, so a reload() reloads about:blank and finds no rows
-  // (first CI run's second failure, 2026-10-16). Open the staff contact page for real.
-  await page.goto(contactUrl());
+  // NO reload and NO goto since the page opened above: the open card's requests poll (every 20s) sees the
+  // request leave the open list, re-reads its files and refreshes the server-rendered timeline once.
+  // ~45s covers one full poll interval plus the files read and the refresh, with headroom for a slow run.
+  await expect(staffRequest, "the completed request leaves the open card's list without a reload").toHaveCount(0, { timeout: 45_000 });
+  await expect(staffFile("Insurance"), "the customer's Insurance joins the open card's list").not.toHaveCount(0, { timeout: 15_000 });
+  await expect(staffFile("Pool permit"), "the customer's Pool permit joins the open card's list").not.toHaveCount(0, { timeout: 15_000 });
   const sentRows = recordPage(page).locator('[data-timeline-item="document"]');
-  await expect(sentRows.filter({ hasText: m["timeline.documentCustomer"].replace("{title}", "Insurance") }), "a 'Customer sent Insurance' row")
-    .not.toHaveCount(0);
-  await expect(sentRows.filter({ hasText: m["timeline.documentCustomer"].replace("{title}", "Pool permit") }), "a 'Customer sent Pool permit' row")
-    .not.toHaveCount(0);
+  await expect(sentRows.filter({ hasText: m["timeline.documentCustomer"].replace("{title}", "Insurance") }), "a 'Customer sent Insurance' row, with no reload")
+    .not.toHaveCount(0, { timeout: 15_000 });
+  await expect(sentRows.filter({ hasText: m["timeline.documentCustomer"].replace("{title}", "Pool permit") }), "a 'Customer sent Pool permit' row, with no reload")
+    .not.toHaveCount(0, { timeout: 15_000 });
 
   const name = `Ana ${STAMP}`;
   // The To-do's title follows the ACCOUNT's language (staff read it), never the request's own
