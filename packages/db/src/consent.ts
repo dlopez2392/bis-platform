@@ -21,6 +21,8 @@ export const CONSENT_METHODS = [
   "backfill_0049", "backfill_telnyx",
   // 0062 (D-016): the provider's hard bounce and the recipient's spam complaint.
   "email_bounce", "email_complaint",
+  // 0082 (S-06 part 1): a clear stop in a customer's emailed reply.
+  "inbound_email",
 ] as const;
 export type ConsentMethod = (typeof CONSENT_METHODS)[number];
 

@@ -8,7 +8,7 @@ import { MessageThread } from "./message-thread";
 
 /** The minimal shape `MessageThread` reads off a row — matches `MESSAGE_COLS`
  *  in packages/db/src/messaging.ts (id, conversation_id, channel, direction,
- *  status, provider_message_id, subject, body, error, created_at). */
+ *  status, provider_message_id, subject, body, error, meta, created_at). */
 function message(status: string, error: string | null) {
   return {
     id: "m1", conversation_id: "c1", channel: "email", direction: "outbound",

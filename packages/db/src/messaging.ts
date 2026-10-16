@@ -33,6 +33,9 @@ export type NewMessage = {
   // in full, never queued to go anywhere, so leaving it at the default
   // mislabels it. sms/inbound's message.received handler passes "delivered".
   status?: MessageStatus;
+  /** S-06 part 1: an inbound email's own facts (meta.inbound_email_id, meta.attachment_count,
+   *  meta.sender, meta.consent). Unset for every other writer, which keeps the column default {}. */
+  meta?: Record<string, unknown>;
 };
 
 export type ConversationSummary = {
@@ -73,7 +76,7 @@ function quoteFilterValue(value: string): string {
 }
 
 const MESSAGE_COLS =
-  "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, created_at";
+  "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, meta, created_at";
 
 // Providers deliver webhook events at-least-once and without an ordering
 // guarantee, so the same event can replay and a later-firing event (e.g.
@@ -149,6 +152,7 @@ export async function createMessage(
       author_kind: author.authorKind,
       author_id: author.authorId,
       ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.meta !== undefined ? { meta: input.meta } : {}),
     })
     .select("id").single();
   if (error || !data) throw new Error(`createMessage failed: ${error?.message}`);

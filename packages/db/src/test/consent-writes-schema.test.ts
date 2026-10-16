@@ -170,8 +170,11 @@ describe("0055 append_consent_event: the guards", () => {
         const a = await account(c, `pm_${method}`);
         const actor = method === "staff" || method === "staff_undo" ? "user_1" : null;
         // 0062: a bounce or a complaint is an email row or nothing; the guard's list is channel-blind, so
-        // the question asked of it is the same on either channel.
-        const channel = (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(method) ? "email" as const : "sms" as const;
+        // the question asked of it is the same on either channel. 0082's inbound_email is an email row
+        // too (consent_events_inbound_email_shape_check: channel = 'email' whenever method = 'inbound_email'),
+        // found running this loop after CONSENT_METHODS gained it — a 'sms' row for it violates the CHECK.
+        const channel = (EMAIL_SUPPRESSION_METHODS as readonly string[]).includes(method) || method === "inbound_email"
+          ? "email" as const : "sms" as const;
         if (method === "free_text") {
           // free_text's own state rule needs a hold to land on, whatever the guard:
           const hold = await append(c, { account: a, action: "held", method: "free_text", guard: "if_allowed" });
