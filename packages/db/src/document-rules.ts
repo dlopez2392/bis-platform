@@ -133,7 +133,8 @@ export const DOCUMENT_REQUIREMENT_UNDO_MS = 600_000;
 /** The account's list as 0081 accepts it, in the vault's order, duplicates dropped; null for anything else. */
 export function cleanRequiredCategories(raw: unknown): RequirableCategory[] | null {
   if (!Array.isArray(raw)) return null;
-  if (!raw.every(isRequirableCategory)) return null;
+  // By index, not `every`: `every` skips a sparse array's holes, and a hole is not a category.
+  for (let i = 0; i < raw.length; i++) if (!isRequirableCategory(raw[i])) return null;
   const picked = new Set<string>(raw);
   return REQUIRABLE_DOCUMENT_CATEGORIES.filter((c) => picked.has(c));
 }

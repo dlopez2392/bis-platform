@@ -27,6 +27,12 @@ describe("document-rules: the list's pure rules (spec 5.1; D8)", () => {
     }
     expect([...REQUIRABLE_DOCUMENT_CATEGORIES]).toEqual(DOCUMENT_CATEGORIES.filter((c) => c !== "other"));
   });
+  it("cleanRequiredCategories refuses a sparse array: a hole is not a category (review item 6; mutation: check with `every`, which skips holes -> FAILS)", () => {
+    const holey: unknown[] = [];
+    holey[1] = "id";
+    expect(holey).toHaveLength(2);
+    expect(cleanRequiredCategories(holey)).toBeNull();
+  });
   it("requirementsMeter leaves skipped items out of both numbers (spec 5.3; mutation: count skipped as required -> FAILS)", () => {
     expect(requirementsMeter([{ state: "met" }, { state: "missing" }, { state: "skipped" }, { state: "checking" }, { state: "expired" }]))
       .toEqual({ met: 1, required: 4 });
@@ -62,6 +68,8 @@ describe("the list on the account (spec 5.2)", () => {
       await expect(setRequiredDocumentCategories(db, accountId, ["other"])).rejects.toThrow(TypeError);
       expect(await getRequiredDocumentCategories(db, accountId)).toEqual(["id", "insurance"]);
       await expect(setRequiredDocumentCategories(db, crypto.randomUUID(), ["id"])).rejects.toThrow(/no account/);
+      // Review item 4 (mutation: answer [] for a missing account -> FAILS): a missing account is never "off".
+      await expect(getRequiredDocumentCategories(db, crypto.randomUUID())).rejects.toThrow(/no account/);
     }));
 });
 
@@ -104,6 +112,18 @@ describe("skips: at once, with the actor's own Undo (spec 5.4; deviations 1, 2)"
       expect((await getActiveDocumentSkip(db, accountId, ana, "id"))?.id).toBe(b.skip.id);
     }));
 
+  it("Undo of a skip never deletes a skip someone has since un-skipped, even the actor's own (review item 1; mutation: drop .is('unskipped_at', null) from undoDocumentSkip -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const s = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "photo", actorId: ACTOR });
+      if (s.status !== "skipped") throw new Error(s.status);
+      const u = await unskipDocumentRequirement(db, accountId, s.skip.id, OTHER);
+      expect(u).not.toBeNull();
+      expect(await undoDocumentSkip(db, accountId, s.skip.id, ACTOR)).toBe(false);
+      const row = await getDocumentSkip(db, accountId, s.skip.id);
+      expect([row?.unskipped_by, row?.unskipped_at]).toEqual([OTHER, u!.unskippedAt]);
+    }));
+
   it("every write is scoped to its account (mutation: drop .eq('account_id') from the un-skip -> another account's row moves -> FAILS)", () =>
     withTestAccount(async (db, accountId) =>
       withTestAccount(async (dbB, accountB) => {
@@ -114,6 +134,23 @@ describe("skips: at once, with the actor's own Undo (spec 5.4; deviations 1, 2)"
         expect(await undoDocumentSkip(db, accountId, s.skip.id, ACTOR)).toBe(false);
         expect(await getDocumentSkip(db, accountId, s.skip.id)).toBeNull();
         expect((await getDocumentSkip(dbB, accountB, s.skip.id))?.unskipped_at).toBeNull();
+        // Review item 5 (mutation: drop .eq('account_id') from getActiveDocumentSkip -> FAILS): the proof
+        // read under the wrong account finds nothing; under its own it finds the row (the control).
+        expect(await getActiveDocumentSkip(db, accountId, bea, "permit")).toBeNull();
+        expect((await getActiveDocumentSkip(dbB, accountB, bea, "permit"))?.id).toBe(s.skip.id);
+
+        // Review item 3 (mutation: drop .eq('account_id') from undoDocumentUnskip -> FAILS).
+        const ub = await unskipDocumentRequirement(dbB, accountB, s.skip.id, ACTOR);
+        expect(ub).not.toBeNull();
+        expect(await undoDocumentUnskip(db, accountId, s.skip.id, ub!.unskippedAt, ACTOR)).toBe(false);
+        const after = await getDocumentSkip(dbB, accountB, s.skip.id);
+        expect([after?.unskipped_by, after?.unskipped_at]).toEqual([ACTOR, ub!.unskippedAt]);
+
+        // Review item 5 (mutation: drop .eq('account_id') from listDocumentSkipTimeline's base -> FAILS):
+        // Bea's skip and un-skip read under her own account (the control), and nothing under another.
+        const own = await listDocumentSkipTimeline(dbB, accountB, bea, page);
+        expect([own.skips.map((r) => r.id), own.unskips.map((r) => r.id)]).toEqual([[s.skip.id], [s.skip.id]]);
+        expect(await listDocumentSkipTimeline(db, accountId, bea, page)).toEqual({ skips: [], unskips: [] });
       })));
 });
 
@@ -129,7 +166,11 @@ describe("listDocumentSkipTimeline (spec 5.4: each move is a timeline row)", () 
       const t = await listDocumentSkipTimeline(db, accountId, ana, page);
       expect(t.skips.map((r) => [r.id, r.category, r.skipped_by, r.created_at])).toEqual([[s.skip.id, "warranty", ACTOR, s.skip.created_at]]);
       expect(t.unskips.map((r) => [r.id, r.unskipped_by, r.unskipped_at])).toEqual([[s.skip.id, OTHER, u!.unskippedAt]]);
-      expect((await listDocumentSkipTimeline(db, accountId, [ana, bo], page)).skips).toHaveLength(2);
+      const both = await listDocumentSkipTimeline(db, accountId, [ana, bo], page);
+      expect(both.skips).toHaveLength(2);
+      // Review item 2 (mutation: drop .not('unskipped_at', 'is', null) from the un-skips read -> Bo's
+      // still-active skip reads as a "needed again" row -> FAILS).
+      expect(both.unskips.map((r) => r.id)).toEqual([s.skip.id]);
     }));
 
   // I7: two rows whose created_at order and unskipped_at order DIFFER, read one row at a time, so the
