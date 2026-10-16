@@ -139,4 +139,11 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     stop.recordInboundStop.mockResolvedValue({ outcome: "already_stopped" });
     expect((await fileInboundEmail({ db: DB, now: () => new Date() }, input())).consent).toEqual({ kind: "none" });
   });
+
+  it("an unparseable From is never written to the consent ledger: a clear STOP still files, with no stop recorded (review finding on Task 8; mutation: pass row.fromEmail through unguarded → recordInboundStop called with the raw string, FAILS)", async () => {
+    const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "not an address (garbled header)", text: "STOP" } }));
+    expect(stop.recordInboundStop).not.toHaveBeenCalled();
+    expect(result.consent).toEqual({ kind: "none" });
+    expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "none" });
+  });
 });

@@ -1,6 +1,7 @@
 import { createMessage, findMessageByProviderId, incrementUnreadCount, setInboundMessage, type InboundEmailRow, type SupabaseClient } from "@bis/db";
 import { classifyEmailStop } from "@/lib/consent/email-stop";
 import { recordInboundStop } from "@/lib/consent/email-staff-actions";
+import { bareAddress } from "./address";
 
 /**
  * Filing one inbound email on a thread (spec Inbound steps 5 and 7; Needs a look's File). Order, each
@@ -48,7 +49,12 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
   const stopFor = i.sender?.contactId ?? i.contactId;
   const cls = classifyEmailStop(row.text);
   let consent: MessageConsent = { kind: "none" };
-  if (cls.kind === "clear") {
+  // Review finding (Task 8): `row.fromEmail` can be the RAW, unparseable From header text (set by
+  // pipeline.ts's own fallback when `bareAddress` failed on receipt) rather than a real address. A
+  // clear stop is still real and the message is still filed either way, but the ledger is never
+  // written against a string that is not an address — `bareAddress` here is the same guard that
+  // decided whether this row could be matched to a sender at all.
+  if (cls.kind === "clear" && bareAddress(row.fromEmail)) {
     const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address: row.fromEmail, providerEmailId: row.providerEmailId, phrase: cls.phrase });
     if (r.outcome === "stopped") consent = { kind: "stopped", eventId: r.eventId };
   } else if (cls.kind === "unclear") {
