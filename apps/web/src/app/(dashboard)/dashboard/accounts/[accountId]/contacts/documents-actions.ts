@@ -204,7 +204,7 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
     return fail("documents.error.upload");
   }
   if (!doc) return fail(REFUSED);
-  return finishStoredUpload(serviceDb(), { accountId, documentId: docId, versionId: verId, trashed: doc.deleted_at !== null, actorId: access.userId });
+  return finishStoredUpload(serviceDb(), { accountId, documentId: docId, versionId: verId, trashed: doc.deleted_at !== null, actorId: access.userId, actorType: "user" });
 }
 
 /** The browser's PUT failed: remove what start reserved now, rather than waiting for the clean-up pass. */

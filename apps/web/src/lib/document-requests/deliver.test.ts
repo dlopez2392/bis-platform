@@ -222,7 +222,7 @@ describe("deliverDocumentRequest by text", () => {
 
   it.each([
     ["stopped", BLOCK_REASONS.stopped, "documents.request.reason.textsStopped"],
-    ["held", BLOCK_REASONS.held, "documents.request.reason.textsStopped"],
+    ["held", BLOCK_REASONS.held, "documents.request.reason.textsHeld"],
     ["a2p_not_approved", BLOCK_REASONS.a2p_not_approved, "documents.request.reason.textSetup"],
     ["no_live_number", BLOCK_REASONS.no_live_number, "documents.request.reason.textSetup"],
     // gate.ts step 2: `no_number` means the DESTINATION is not textable, so it is the no-phone line.
@@ -403,7 +403,7 @@ describe("deliverDocumentRequest by email", () => {
 
   it.each([
     ["stopped", EMAIL_BLOCK_REASONS.stopped, "documents.request.reason.emailStopped"],
-    ["held", EMAIL_BLOCK_REASONS.held, "documents.request.reason.emailStopped"],
+    ["held", EMAIL_BLOCK_REASONS.held, "documents.request.reason.emailHeld"],
     ["suppressed", EMAIL_BLOCK_REASONS.suppressed, "documents.request.reason.bounced"],
     ["no_address", EMAIL_BLOCK_REASONS.no_address, "documents.request.reason.noEmail"],
     ["suppressed_account", EMAIL_BLOCK_REASONS.suppressed_account, "documents.request.reason.failed"],

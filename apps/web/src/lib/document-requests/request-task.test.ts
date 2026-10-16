@@ -65,6 +65,21 @@ describe("openRequestTask: the ONE work-queue To-do per request and kind (spec 4
     });
   });
 
+  it("a blank name (whitespace only) falls back to the NO-NAME title, in the account's language, for both kinds (mutation: always use the named key -> FAILS)", async () => {
+    documentRequestTarget.mockResolvedValue({ ...TARGET, name: "   " });
+    await openRequestTask(db("en"), "a1", REQ, "received", NOW);
+    expect(ensureDocumentRequestTask.mock.calls[0]![2]).toMatchObject({ title: "A customer sent documents · Review" });
+    ensureDocumentRequestTask.mockClear();
+    await openRequestTask(db("es"), "a1", REQ, "received", NOW);
+    expect(ensureDocumentRequestTask.mock.calls[0]![2]).toMatchObject({ title: "Un cliente mandó documentos · Revisar" });
+    ensureDocumentRequestTask.mockClear();
+    await openRequestTask(db("en"), "a1", REQ, "storage_full", NOW);
+    expect(ensureDocumentRequestTask.mock.calls[0]![2]).toMatchObject({ title: "A customer couldn't send documents: your storage is full" });
+    ensureDocumentRequestTask.mockClear();
+    await openRequestTask(db("es"), "a1", REQ, "storage_full", NOW);
+    expect(ensureDocumentRequestTask.mock.calls[0]![2]).toMatchObject({ title: "Un cliente no pudo mandar documentos: su espacio está lleno" });
+  });
+
   it("no one to speak to (a deleted contact): nothing is opened, and that is not a failure (mutation: drop the null-target return -> it crashes on target.contactId and logs -> FAILS)", async () => {
     documentRequestTarget.mockResolvedValue(null);
     await openRequestTask(db(), "a1", REQ, "received", NOW);

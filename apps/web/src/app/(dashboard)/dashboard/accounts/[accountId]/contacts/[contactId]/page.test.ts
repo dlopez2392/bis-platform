@@ -680,6 +680,15 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes" });
   });
 
+  it("a nameless contact's Documents card gets the RAW empty name, never contactDisplayName's '(no name)' placeholder (Task 8 fix round; mutation: pass contactDisplayName's name -> FAILS)", async () => {
+    getContactMock.mockResolvedValueOnce({ ...CONTACT, first_name: null, last_name: null });
+    const html = await render();
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props.name).toBe("");
+  });
+
   it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {
     listContactTimelinePageMock.mockRejectedValue(new Error("timeline read down"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

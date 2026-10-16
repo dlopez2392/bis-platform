@@ -111,7 +111,7 @@ describe("createDocumentRequestAction (spec 4.2)", () => {
       { items: [{ key: "id", category: "id", note: "x" }] }, { items: [ITEMS[0], ITEMS[0]] }, { items: [] }, { items: "id" },
       { channel: "fax" }, { channel: undefined },
     ];
-    for (const b of bad) expect(await create(b), JSON.stringify(b)).toEqual({ ok: false, error: "documents.error.refused" });
+    for (const b of bad) expect(await create(b), JSON.stringify(b)).toEqual({ ok: false, error: "documents.request.refused" });
     expect(svcCalls()).toEqual([]);
     expect(h.createDocumentRequest).not.toHaveBeenCalled();
   });
@@ -240,9 +240,9 @@ describe("documentRequestLinkAction (Copy link)", () => {
   });
   it("5c. an invisible or malformed request is refused, and a malformed id reads nothing (mutation: read any id -> FAILS)", async () => {
     h.getDocumentRequest.mockResolvedValueOnce(null);
-    expect(await A.documentRequestLinkAction(ACC, R)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.documentRequestLinkAction(ACC, R)).toEqual({ ok: false, error: "documents.request.refused" });
     h.getDocumentRequest.mockClear();
-    expect(await A.documentRequestLinkAction(ACC, "nope")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.documentRequestLinkAction(ACC, "nope")).toEqual({ ok: false, error: "documents.request.refused" });
     expect(h.getDocumentRequest).not.toHaveBeenCalled();
   });
   it("5d. no origin to build the link on answers the house 'didn't go through' line, never 'couldn't create the request' (fix round 1; mutation: return documents.request.failed -> FAILS)", async () => {
@@ -297,7 +297,7 @@ describe("revokeDocumentRequestAction and its Undo (rule 6)", () => {
   });
   it("6b. an invisible request is refused and touches nothing (mutation: treat null as visible -> FAILS)", async () => {
     h.getDocumentRequest.mockResolvedValueOnce(null);
-    expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.revokeDocumentRequestAction(ACC, R)).toEqual({ ok: false, error: "documents.request.refused" });
     expect(svcCalls()).toEqual([]);
   });
   it("6b2. a revoked, completed or expired request answers 'no longer open' before any write; a revoke that lost the race (null) too (fix round 1; mutations: return the old refused key -> FAILS; drop the state check -> FAILS)", async () => {
@@ -346,8 +346,8 @@ describe("revokeDocumentRequestAction and its Undo (rule 6)", () => {
   });
   it("6g. an invisible request, or no revoke time, is refused and restores nothing (mutation: skip the proof -> FAILS)", async () => {
     h.getDocumentRequest.mockResolvedValueOnce(null);
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.error.refused" });
-    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "")).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, REVOKED_AT)).toEqual({ ok: false, error: "documents.request.refused" });
+    expect(await A.undoRevokeDocumentRequestAction(ACC, R, "")).toEqual({ ok: false, error: "documents.request.refused" });
     expect(h.restoreDocumentRequest).not.toHaveBeenCalled();
   });
   it("6d. a write that throws is 'couldn't save', never a throw, and the log names the account AND the request, never its link (fix round 4; mutations: let it throw -> FAILS; log without the request id -> FAILS)", async () => {

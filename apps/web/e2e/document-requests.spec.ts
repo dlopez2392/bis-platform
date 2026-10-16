@@ -8,6 +8,7 @@ import {
 import { m } from "../src/lib/messages";
 import { readClientFixture, recordPage } from "./support";
 import { requestToken, tokenHash } from "../src/lib/document-requests/token";
+import { docCopy } from "../src/app/d/[token]/copy";
 
 loadEnv({ path: "apps/web/.env.local" });
 loadEnv({ path: ".env.local" });
@@ -148,6 +149,9 @@ test("1. staff asks, by link: the dialog, the toast, the clipboard matches reque
   requestId1 = row.id;
   requestLanguage1 = row.language;
 
+  // Reading the clipboard needs focus; the toast/dialog work above can leave another tab/window
+  // holding it in a headed or multi-tab run (Task 9 fix round, S-07 2b review).
+  await page.bringToFront();
   const clip = await page.evaluate(() => navigator.clipboard.readText());
   expect(clip).toBe(`${BASE_URL}/d/${requestToken(requestId1)}`);
 
@@ -174,7 +178,10 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
   try {
     await anonPage.goto(`/d/${token}`);
 
-    await expect(anonPage.locator(".bis-docreq-title")).toHaveText(m["customerDocs.heading"].replace("{business}", business));
+    // The page's own helper, in the REQUEST's language (never English literally): matches what the
+    // page itself renders, business name and all (Task 9 fix round, S-07 2b review).
+    const tt = docCopy(requestLanguage1, business);
+    await expect(anonPage.locator(".bis-docreq-title")).toHaveText(tt("customerDocs.heading"));
     await expect(anonPage.getByText(m["customerDocs.poweredBy"])).toBeVisible();
     await expect(anonPage.locator("html")).toHaveAttribute("lang", requestLanguage1);
     const cookies = await anonContext.cookies();
@@ -194,7 +201,7 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
     await expect(other).toContainText(m["customerDocs.received"], { timeout: 30_000 });
 
     await expect(anonPage.locator(".bis-docreq-title"))
-      .toHaveText(m["customerDocs.done"].replace("{business}", business), { timeout: 30_000 });
+      .toHaveText(tt("customerDocs.done"), { timeout: 30_000 });
   } finally {
     await anonContext.close();
   }
@@ -238,13 +245,19 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
     .not.toHaveCount(0);
 
   const name = `Ana ${STAMP}`;
-  const taskTitle = (requestLanguage1 === "es" ? m["documents.request.task.received.es"] : m["documents.request.task.received"]).replace("{name}", name);
+  // The To-do's title follows the ACCOUNT's language (staff read it), never the request's own
+  // (Task 9 fix round, S-07 2b review): read it back for real rather than assuming requestLanguage1.
+  const { data: acctRow, error: acctErr } = await svc.from("accounts").select("language").eq("id", accountId).maybeSingle();
+  if (acctErr) throw new Error(`accounts read: ${acctErr.message}`);
+  const accountLanguage = (acctRow as { language: string | null } | null)?.language === "es" ? "es" : "en";
+  const taskTitle = (accountLanguage === "es" ? m["documents.request.task.received.es"] : m["documents.request.task.received"]).replace("{name}", name);
   await page.goto(`/dashboard/accounts/${accountId}/tasks`);
   await expect(page.locator("main").getByText(taskTitle, { exact: true })).toBeVisible();
 });
 
 test("3. Checking outlasts the fast poll with no help from the browser, then clears without a reload once the verdict lands (mutation: the poll effect keyed on ms alone -> it never re-arms -> never clears -> FAILS)", async ({ page }) => {
-  test.setTimeout(60_000);
+  // Bumped alongside the 18s -> 22s observation window (Task 9 fix round) for the same headroom.
+  test.setTimeout(75_000);
   const svc = db();
   const id = randomUUID();
   const items: DocumentRequestItem[] = [
@@ -283,7 +296,9 @@ test("3. Checking outlasts the fast poll with no help from the browser, then cle
     if (new URL(r.url()).pathname === pageUrl.pathname) reads.push(r.url());
   };
   page.on("request", onRequest);
-  await page.waitForTimeout(18_000);
+  // Widened from 18s to 22s (Task 9 fix round, S-07 2b review): more headroom against a slow run
+  // without weakening the claim itself (still "at least 3 re-reads").
+  await page.waitForTimeout(22_000);
   await expect(idItem).toContainText(m["customerDocs.checking"]);
   expect(reads.length, "at least 3 re-reads while the file is young (fast, 5s poll)").toBeGreaterThanOrEqual(3);
   page.off("request", onRequest);

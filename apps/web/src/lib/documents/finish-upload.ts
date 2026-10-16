@@ -40,7 +40,7 @@ export async function cleanUpUpload(svc: SupabaseClient, accountId: string, docu
 }
 
 export async function finishStoredUpload(svc: SupabaseClient, a: {
-  accountId: string; documentId: string; versionId: string; trashed: boolean; actorId: string; actorType?: ActorType;
+  accountId: string; documentId: string; versionId: string; trashed: boolean; actorId: string; actorType: ActorType;
 }): Promise<Finish> {
   const { accountId, documentId: docId, versionId: verId } = a;
   try {

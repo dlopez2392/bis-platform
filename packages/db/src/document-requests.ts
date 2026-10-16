@@ -256,6 +256,11 @@ export async function getDocumentRequestForVersion(db: SupabaseClient, accountId
  * final answer — a run of recent, already-handled requests can otherwise fill the whole page and starve
  * an older, genuinely missing one out of view. `filesPage` is a test seam (default 500, matching the
  * single-page read this replaces); production callers never set it.
+ *
+ * A REVOKED request IS listed (owner decision b, 2026-10-16): a staff member's clean version on a
+ * customer's document already answers the request (decision a, unchanged), but revoking stops nothing
+ * the customer already sent — their clean file still needs the same review a non-revoked one would get,
+ * so revoking a request no longer excludes its customer file's "received" To-do here.
  */
 export async function listRequestsMissingReceivedTask(
   db: SupabaseClient, now: Date, limit: number, opts: { filesPage?: number } = {},
@@ -290,7 +295,8 @@ export async function listRequestsMissingReceivedTask(
     for (let i = 0; i < ids.length; i += 100) {
       const batch = ids.slice(i, i + 100);
       const [reqs, tasks] = await Promise.all([
-        db.from("document_requests").select(REQUEST_COLS).in("id", batch).is("revoked_at", null),
+        // Revoked requests are listed too (owner decision b, 2026-10-16): no `.is("revoked_at", null)` here.
+        db.from("document_requests").select(REQUEST_COLS).in("id", batch),
         db.from("tasks").select("document_request_id").eq("document_request_kind", "received").in("document_request_id", batch),
       ]);
       if (reqs.error) throw new Error(`listRequestsMissingReceivedTask (requests) failed: ${reqs.error.message}`);

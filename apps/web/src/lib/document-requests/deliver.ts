@@ -45,12 +45,14 @@ async function logQuietly(db: SupabaseClient, requestId: string, w: Parameters<t
 
 // gate.ts step 2: `no_number` is a destination that cannot be texted, so it reads as the no-phone line.
 const SMS_REASON: Record<string, MessageKey> = {
-  stopped: "documents.request.reason.textsStopped", held: "documents.request.reason.textsStopped",
+  // `held` is a consent check still IN PROGRESS, never a confirmed stop (`stopped`): its own words
+  // say so (Task 4 fix round, S-07 2b review).
+  stopped: "documents.request.reason.textsStopped", held: "documents.request.reason.textsHeld",
   a2p_not_approved: "documents.request.reason.textSetup", no_live_number: "documents.request.reason.textSetup",
   no_number: "documents.request.reason.noPhone", unconfirmed_number: "documents.request.reason.noPhone",
 };
 const EMAIL_REASON: Record<string, MessageKey> = {
-  stopped: "documents.request.reason.emailStopped", held: "documents.request.reason.emailStopped",
+  stopped: "documents.request.reason.emailStopped", held: "documents.request.reason.emailHeld",
   suppressed: "documents.request.reason.bounced", no_address: "documents.request.reason.noEmail",
 };
 

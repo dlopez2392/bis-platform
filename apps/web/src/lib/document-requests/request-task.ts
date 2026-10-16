@@ -13,6 +13,7 @@ import { loggableError } from "@/lib/loggable-error";
  * cannot be opened is logged by request id; the file's own timeline row still says it arrived.
  */
 const KEY = { received: "documents.request.task.received", storage_full: "documents.request.task.storageFull" } as const;
+const KEY_NO_NAME = { received: "documents.request.task.receivedNoName", storage_full: "documents.request.task.storageFullNoName" } as const;
 const ACTOR = "documents-request";
 
 export async function openRequestTask(
@@ -24,8 +25,10 @@ export async function openRequestTask(
     const { data, error } = await db.from("accounts").select("language").eq("id", accountId).maybeSingle();
     if (error) throw new Error(`account language: ${error.message}`);
     const lang = (data as { language: string | null } | null)?.language === "es" ? "es" : "en";
+    const hasName = target.name.trim().length > 0;
+    const title = hasName ? t(m, KEY[kind], lang, { name: target.name }) : t(m, KEY_NO_NAME[kind], lang);
     await ensureDocumentRequestTask(db, accountId, {
-      requestId: request.id, kind, contactId: target.contactId, title: t(m, KEY[kind], lang, { name: target.name }), dueAt: now.toISOString(),
+      requestId: request.id, kind, contactId: target.contactId, title, dueAt: now.toISOString(),
     }, ACTOR, "system");
   } catch (e) {
     console.error(`document request ${request.id} (account ${accountId}): the ${kind} To-do was not opened: ${loggableError(e)}`);

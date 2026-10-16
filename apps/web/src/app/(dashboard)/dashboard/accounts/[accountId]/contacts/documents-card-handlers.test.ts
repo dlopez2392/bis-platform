@@ -387,14 +387,16 @@ describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", (
     expect(reloadRequests).toHaveBeenCalledTimes(1);
   });
 
-  it("an Undo someone beat says so (mutation: swallow the undo error -> FAILS)", async () => {
+  it("an Undo someone beat says so, in the reader's language (mutation: swallow the undo error -> FAILS)", async () => {
+    // Undo's real answer when it is beaten is "no longer open" (Task 5 fix round, S-07 2b review),
+    // the same key a late Revoke itself answers, never the generic document refusal.
     requestActions.revokeDocumentRequestAction.mockResolvedValue({ ok: true, revokedAt: "t" });
-    requestActions.undoRevokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.error.refused" });
-    const { h } = handlers();
+    requestActions.undoRevokeDocumentRequestAction.mockResolvedValue({ ok: false, error: "documents.request.notOpen" });
+    const { h } = handlers("es");
     await h.revokeRequest("r1");
     undoOf().onClick();
     await flush();
-    expect(toast.error).toHaveBeenCalledWith(m["documents.error.refused"]);
+    expect(toast.error).toHaveBeenCalledWith("Este pedido ya no está abierto.");
   });
 
   it("a second Revoke while the first is in flight sends nothing (mutation: drop once() -> FAILS)", async () => {

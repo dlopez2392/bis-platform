@@ -258,7 +258,7 @@ async function fastCleanRequests(db: SupabaseClient, accountId: string, contactI
 }
 
 describe("document-requests: the 'received' reconcile and the send stamp (plan review I5, re-review R1)", () => {
-  it("lists a request with a clean file and no task; not once the task exists; not revoked, pending, or completed/expired more than a day ago; expired 2h ago IS listed (mutations: drop the clean filter -> FAILS; drop .is('revoked_at', null) -> FAILS; drop the task subtraction -> FAILS; make the expired-24h branch open-only -> FAILS; drop the completed branch -> FAILS)", () =>
+  it("lists a request with a clean file and no task; not once the task exists; a revoked one too (owner decision b, 2026-10-16); not pending, or completed/expired more than a day ago; expired 2h ago IS listed (mutations: drop the clean filter -> FAILS; drop the task subtraction -> FAILS; make the expired-24h branch open-only -> FAILS; drop the completed branch -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const now = new Date();
 
@@ -270,13 +270,14 @@ describe("document-requests: the 'received' reconcile and the send stamp (plan r
       await ensureDocumentRequestTask(db, accountId, { requestId: r1.id, kind: "received", contactId: ana1, title: "x", dueAt: now.toISOString() }, "documents-request");
       expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r1.id);
 
-      // 3) revoked: a clean file, no task, but withdrawn — never listed.
+      // 3) revoked: a clean file, no task — STILL listed (owner decision b, 2026-10-16): revoking
+      //    stops nothing the customer already sent, and that file still needs the same review.
       const ana2 = (await createContact(db, accountId, { firstName: "Ana2" }, ACTOR)).id;
       const r2 = await made(db, accountId, ana2);
       await cleanFile(db, accountId, r2.id, "insurance");
       const revoked = await revokeDocumentRequest(db, accountId, r2.id, ACTOR, now);
       expect(revoked).not.toBeNull();
-      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).not.toContain(r2.id);
+      expect((await listRequestsMissingReceivedTask(db, now, 50)).map((r) => r.id)).toContain(r2.id);
 
       // 4) pending: the only customer file is not yet clean.
       const ana3 = (await createContact(db, accountId, { firstName: "Ana3" }, ACTOR)).id;

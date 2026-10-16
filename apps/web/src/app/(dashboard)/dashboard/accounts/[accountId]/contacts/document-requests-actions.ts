@@ -29,7 +29,8 @@ import type { DocRecordArg, DocFail } from "./documents-actions";
  * never the link.
  */
 const fail = (error: string): DocFail => ({ ok: false, error });
-const REFUSED = "documents.error.refused";
+/** This request's own crafted/not-visible refusal (Task 5 fix round, S-07 2b review): never the generic document key. */
+const REFUSED = "documents.request.refused";
 const CREATE_FAILED = "documents.request.failed";
 /** Revoked, completed or expired (fix round 1): the request is still the caller's to see, just over. */
 const NOT_OPEN = "documents.request.notOpen";

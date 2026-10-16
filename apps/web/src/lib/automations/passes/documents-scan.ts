@@ -45,10 +45,20 @@ import type { Pass } from "../context";
  * The lost-To-do reconcile (Task 6b, S-07 2b, plan review I5) runs FIRST, before the not-configured
  * early return: a request's clean customer file can predate a worker outage (or any crash between its
  * verdict and openRequestTask), and that file is already sitting in storage whether or not the scanner
- * is configured today. It does not touch the budgets above: it is bounded by COUNT, not time
- * (REQUEST_TASK_RECONCILE_LIMIT, 20 rows), adding at most 20 × (two reads + one insert) sequential round
- * trips on the service client — well inside the 75 s of spare the 2a review measured between the four
- * budgeted passes' sum (285 s) and the route's 300 s maxDuration. No fifth budget constant for it.
+ * is configured today. It does not touch the budgets above: it is bounded by COUNT, not time, but the
+ * count is bigger than REQUEST_TASK_RECONCILE_LIMIT (20) alone suggests, because the reconcile's own
+ * SEARCH can page before it ever reaches 20 To-dos: listRequestsMissingReceivedTask pages the clean-
+ * customer-files side up to 40 times (its own guard), up to 500 files a page, and each page costs 1
+ * read for the page itself plus 2 more (document_requests, tasks) per 100 request-id batch on that
+ * page — a pathological backlog's worth of round trips before any To-do opens. Separately, inside the
+ * scan loop below, scanVersion's afterClean hook (openReceivedTaskFor) runs after EVERY clean verdict
+ * this tick produces, reconcile or not, each adding its own read (getDocumentRequestForVersion) and,
+ * on a hit, openRequestTask's own reads and insert. None of this is time-budgeted; in the NORMAL case
+ * — one short page, because the reconcile usually finds nothing stale past its first, often-empty,
+ * page, and a tick's clean verdicts are few — it still sits well inside the 75 s of spare the 2a
+ * review measured between the four budgeted passes' sum (285 s) and the route's 300 s maxDuration. A
+ * backlog that forces the full 40-page guard is the one case this spare does NOT cover; the guard's
+ * own console.error names that call out for a human, not a timeout, rather than silently overrunning.
  */
 export const DOCUMENT_SCAN_BUDGET_MS = 45_000;
 export const DOCUMENT_SCAN_BATCH = 50;

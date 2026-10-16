@@ -114,10 +114,15 @@ describe("startDocumentUploadAction (spec 5.1)", () => {
 describe("finishDocumentUploadAction (spec 5.1, 5.2)", () => {
   it("checks the real bytes against the reserved size and the stored type, hashes them, and marks the version ready (mutation: skip the size comparison -> FAILS on the next case)", async () => {
     expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "clean" });
-    const call = db.markDocumentVersionReady.mock.calls[0]![1] as { bytes: number; sha256: string };
+    const call = db.markDocumentVersionReady.mock.calls[0]![1] as { bytes: number; sha256: string; actorId: string; actorType: string };
     expect(call.bytes).toBe(PDF.length);
     expect(call.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(db.getDocument).toHaveBeenCalledWith(REQUEST, ACC, D);
+  });
+
+  it("the staff finish marks the version ready as the caller's own id, as a USER, never the system (mutation: \"system\" on the staff call -> FAILS)", async () => {
+    expect(await A.finishDocumentUploadAction(ACC, D, V)).toEqual({ ok: true, scan: "clean" });
+    expect(db.markDocumentVersionReady.mock.calls[0]![1]).toMatchObject({ actorId: "user_owner", actorType: "user" });
   });
   it.each([
     ["a stored size other than the reserved size (an understated size; mutation: drop the size comparison -> FAILS)",

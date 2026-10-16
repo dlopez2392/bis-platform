@@ -156,6 +156,10 @@ export default async function ContactDetailPage({
   // 1b: the composer's consent line in the page's language (Task 3's locale parameter).
   const smsBlockedLine = composerStateLine(smsRecipient, zone.zone, locale);
   const name = contactDisplayName(contact);
+  // Task 8 fix round: the Documents card's "Ask the customer" dialog wants the RAW joined name, not
+  // contactDisplayName's "(no name)" placeholder — a non-empty placeholder would stop requestTitle's
+  // own fallback ("Ask the customer") from ever firing for a nameless contact.
+  const rawName = [contact.first_name, contact.last_name].filter(Boolean).join(" ");
   const mainGroup = places?.groups.find((g) => g.isPrimary) ?? places?.groups[0] ?? null;
   const subtitle = mainGroup
     ? tr.text(mainGroup.kind === "household" ? "record.group.household" : "record.group.business", { group: mainGroup.name })
@@ -237,7 +241,7 @@ export default async function ContactDetailPage({
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "contact", id: contactId }} canManage={access.canManage}
-        emptyText={tr.text("documents.empty.contact")} name={name} />,
+        emptyText={tr.text("documents.empty.contact")} name={rawName} />,
     },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"
