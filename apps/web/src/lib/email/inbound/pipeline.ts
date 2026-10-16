@@ -1,4 +1,7 @@
-import { findReplyThread, matchSender, recordInboundEmail, type InboundEmailRow, type SenderMatch, type SupabaseClient } from "@bis/db";
+import {
+  findReplyThread, matchSender, recordInboundEmail, findInboundEmailByProviderId, getConversationSummary,
+  type InboundEmailRow, type SenderMatch, type SupabaseClient,
+} from "@bis/db";
 import type { ReceivedEmailFetcher } from "@/lib/email/receiving";
 import { BIS_REPLY_DOMAIN, bareAddress, displayName, domainOf, parseReplyAddress } from "./address";
 import { parseHeaderBlock, readSesVerdict, senderAuthenticated, authRecord } from "./auth-results";
@@ -26,6 +29,38 @@ function receivedAtOf(raw: string, now: () => Date): string {
   return Number.isNaN(Date.parse(raw)) ? now().toISOString() : new Date(raw).toISOString();
 }
 
+/** Fix round 2: resumes a row this platform already recorded, idempotent via file.ts's item-3 logic
+ *  (a linked row short-circuits there; an unlinked one finishes). Used both when the recipient
+ *  resolves normally to the SAME account as the stored row, and for the orphan retry below, where the
+ *  recipient no longer resolves at all but a `filed` row from an earlier, interrupted attempt proves
+ *  this message was already accepted. */
+async function resumeExisting(
+  deps: PipelineDeps, row: InboundEmailRow, contactId: string,
+  // A row THIS call just inserted already has its sender match in hand (firstRunMatch below) —
+  // undefined means "work it out", which a found-earlier row (never inserted by this call) needs.
+  precomputedSender?: SenderMatch | null,
+): Promise<PipelineOutcome> {
+  if (row.status !== "filed") return { status: 200, result: "duplicate" };
+  try {
+    const sender = precomputedSender !== undefined ? precomputedSender
+      : row.messageId !== null ? null : await matchSender(deps.db, row.accountId, contactId, row.fromEmail);
+    const result = await fileInboundEmail({ db: deps.db, now: deps.now }, {
+      row, contactId, sender, attachmentCount: row.attachmentCount, raiseUnread: true, actor: ACTOR,
+    });
+    if (result.created) {
+      try {
+        await deps.forward({ row, contactId, senderName: row.fromName, attachmentCount: row.attachmentCount });
+      } catch {
+        deps.log(`inbound email: the forward to the owner of account ${row.accountId} failed; the filed message stands`);
+      }
+    }
+    return { status: 200, result: result.created ? "filed" : "duplicate" };
+  } catch {
+    deps.log("inbound email: filing the message failed; 503 so Resend retries");
+    return { status: 503, result: "write_failed" };
+  }
+}
+
 export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?: unknown }): Promise<PipelineOutcome> {
   const emailId = typeof data.email_id === "string" && data.email_id ? data.email_id : null;
   if (!emailId) { deps.log("inbound email: event with no email id, dropped"); return { status: 200, result: "dropped" }; }
@@ -36,6 +71,18 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
   } catch {
     deps.log("inbound email: the received email could not be fetched; 503 so Resend retries");
     return { status: 503, result: "fetch_failed" };
+  }
+
+  // Fix round 2 item 1, spec step 2 order: look up any row already recorded under THIS Resend id,
+  // account-agnostic, BEFORE resolving the recipient — the row (when one exists) is the ground truth
+  // of which account already accepted this exact message, independent of whether the recipient still
+  // resolves the same way on a retry.
+  let existingRow: InboundEmailRow | null;
+  try {
+    existingRow = await findInboundEmailByProviderId(deps.db, email.id);
+  } catch {
+    deps.log("inbound email: checking for an already-recorded row failed; 503 so Resend retries");
+    return { status: 503, result: "write_failed" };
   }
 
   // Step 3: the recipient. Fix round 1 item 5/6b: the envelope (A4) is authoritative whenever Resend
@@ -61,11 +108,40 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     deps.log("inbound email: recipient resolution failed; 503 so Resend retries");
     return { status: 503, result: "write_failed" };
   }
+
   if (!thread || !toEmail) {
+    // Fix round 2: an orphan from an earlier, interrupted attempt — this exact message was already
+    // accepted and filed under SOME account, even though the recipient no longer resolves this time
+    // (a token revoked between attempts, say) — resumes rather than being dropped as if never seen.
+    if (existingRow && existingRow.status === "filed") {
+      let contactId: string;
+      try {
+        const summary = await getConversationSummary(deps.db, existingRow.accountId, existingRow.conversationId);
+        if (!summary) throw new Error("no conversation");
+        contactId = summary.contactId;
+      } catch {
+        deps.log("inbound email: resuming an orphaned row failed; 503 so Resend retries");
+        return { status: 503, result: "write_failed" };
+      }
+      return await resumeExisting(deps, existingRow, contactId);
+    }
     // Fix round 1 item 6g: the account id goes in when a thread WAS found and then rejected
     // (revoked / wrong domain) — never for "unknown"/"no reply address", where there is none to name.
     deps.log(`inbound email: dropped (${reason})${rejectedAccountId ? ` account=${rejectedAccountId}` : ""}`);
     return { status: 200, result: "dropped" };
+  }
+
+  // Fix round 2 item 1: a row already recorded for this Resend id, found before the recipient was
+  // even resolved. Under the SAME account as what just resolved, it is this exact delivery seen
+  // again — resume it (never re-record). Under a DIFFERENT account, the one global Resend id is
+  // claimed by another tenant already: dropped, with no account named either way (both are real
+  // tenants, never logged).
+  if (existingRow) {
+    if (existingRow.accountId !== thread.accountId) {
+      deps.log("inbound email: dropped (provider id already recorded under a different account)");
+      return { status: 200, result: "dropped" };
+    }
+    return await resumeExisting(deps, existingRow, thread.contactId);
   }
 
   let row: InboundEmailRow;
@@ -94,7 +170,15 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     // Carried past this try/catch for step 5/7 below, which needs `match` only when this call is
     // the one that just inserted the row (the retry path re-reads it itself).
     firstRunMatch = match;
-  } catch {
+  } catch (e) {
+    // Fix round 2 item 1: a race between this call's own lookup above (which found nothing) and its
+    // insert below (which collided with a row another process just wrote under a DIFFERENT account)
+    // is the same "already claimed elsewhere" case as the lookup catching it up front — 200 dropped,
+    // never a 503 Resend would retry forever on a collision that can never resolve itself.
+    if (e instanceof Error && e.message.includes("collided outside account")) {
+      deps.log("inbound email: dropped (provider id recorded under a different account during a race)");
+      return { status: 200, result: "dropped" };
+    }
     deps.log("inbound email: recording the inbound row failed; 503 so Resend retries");
     return { status: 503, result: "write_failed" };
   }
@@ -102,29 +186,8 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
   if (row.status !== "filed") {
     return { status: 200, result: rowCreated ? "held" : "duplicate" };
   }
-
-  try {
-    // Step 5 and 7 (and the retry of a 503'd one): idempotent.
-    const sender = rowCreated ? firstRunMatch : await matchSender(deps.db, row.accountId, thread.contactId, row.fromEmail);
-    const result = await fileInboundEmail({ db: deps.db, now: deps.now }, {
-      row, contactId: thread.contactId, sender, attachmentCount: row.attachmentCount, raiseUnread: true, actor: ACTOR,
-    });
-    // Step 8: only a message this delivery completed (fix round 1 item 3's `created`, not the row's
-    // own) is forwarded.
-    if (result.created) {
-      try {
-        await deps.forward({ row, contactId: thread.contactId, senderName: row.fromName, attachmentCount: row.attachmentCount });
-      } catch {
-        deps.log(`inbound email: the forward to the owner of account ${row.accountId} failed; the filed message stands`);
-      }
-    }
-    // Fix round 1 item 6h: "filed" vs "duplicate" is decided by whether FILING just completed
-    // (fileInboundEmail's own `created`), not by whether the ROW insert was new — a retry that
-    // files for the first time (the row already existed, held unfiled by an earlier crash) is
-    // "filed", never "duplicate".
-    return { status: 200, result: result.created ? "filed" : "duplicate" };
-  } catch {
-    deps.log("inbound email: filing the message failed; 503 so Resend retries");
-    return { status: 503, result: "write_failed" };
-  }
+  // Step 5, 7, 8 (fix round 1 item 6h: "filed" vs "duplicate" decided by whether FILING just
+  // completed, never by whether the row insert was new) — the same resume path the two existing-row
+  // branches above use, so a retry's idempotency logic lives in exactly one place.
+  return await resumeExisting(deps, row, thread.contactId, rowCreated ? firstRunMatch : undefined);
 }

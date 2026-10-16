@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const db = vi.hoisted(() => ({ findReplyThread: vi.fn(), matchSender: vi.fn(), recordInboundEmail: vi.fn() }));
+const db = vi.hoisted(() => ({
+  findReplyThread: vi.fn(), matchSender: vi.fn(), recordInboundEmail: vi.fn(),
+  findInboundEmailByProviderId: vi.fn(), getConversationSummary: vi.fn(),
+}));
 vi.mock("@bis/db", () => db);
 const file = vi.hoisted(() => ({ fileInboundEmail: vi.fn() }));
 vi.mock("./file", () => file);
@@ -24,6 +27,8 @@ beforeEach(() => {
   deps = { db: {} as never, fetchEmail, now: () => new Date("2026-10-16T10:00:05Z"), forward, log };
   fetchEmail.mockResolvedValue(EMAIL());
   db.findReplyThread.mockResolvedValue(THREAD);
+  db.findInboundEmailByProviderId.mockResolvedValue(null);
+  db.getConversationSummary.mockResolvedValue({ id: "conv", contactId: "ana", contactFirstName: "Ana", contactLastName: "Ruiz", lastMessageAt: null, lastMessagePreview: null, unreadCount: 0, contactLanguage: null });
   db.matchSender.mockResolvedValue({ contactId: "ana", firstName: "Ana", lastName: "Ruiz", viaGroup: false });
   db.recordInboundEmail.mockImplementation(async (_db: unknown, r: Record<string, unknown>) => ({ row: { id: "ie_1", messageId: null, decidedAt: "x", ...r }, created: true }));
   file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
@@ -161,6 +166,81 @@ describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
       db.recordInboundEmail.mockResolvedValue({ row: { id: "ie_1", accountId: "acc", conversationId: "conv", status: "filed", holdReason: null, fromEmail: "ana@gmail.com", messageId: null }, created: false });
       file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
       expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    });
+  });
+
+  describe("fix round 2 (item 1: the cross-account collision)", () => {
+    const FOREIGN_ROW = {
+      id: "ie_foreign", accountId: "other_acc", conversationId: "other_conv", providerEmailId: "re_1",
+      fromEmail: "ana@gmail.com", fromName: "Ana Ruiz", toEmail: "x", subject: "x", text: "x",
+      auth: { spf: null, dkim: null, dmarc: null, spam: null, virus: null }, attachmentCount: 0,
+      status: "filed" as const, holdReason: null, messageId: "msg_other", decidedBy: "email-inbound", decidedAt: "x", receivedAt: "2026-10-16T10:00:00.000Z",
+    };
+
+    it("looked up BEFORE the recipient is resolved (mutation: resolve the recipient first → FAILS)", async () => {
+      let lookupOrder = -1; let threadOrder = -1; let n = 0;
+      db.findInboundEmailByProviderId.mockImplementation(async () => { lookupOrder = n++; return null; });
+      db.findReplyThread.mockImplementation(async () => { threadOrder = n++; return THREAD; });
+      await handleReceivedEmail(deps, { email_id: "re_1" });
+      expect(lookupOrder).toBeGreaterThanOrEqual(0);
+      expect(lookupOrder).toBeLessThan(threadOrder);
+    });
+
+    it("a row already stored under ANOTHER account is 200 dropped: no write, no filing, no account named either way (mutation: skip the lookup's account check → FAILS)", async () => {
+      db.findInboundEmailByProviderId.mockResolvedValue(FOREIGN_ROW);
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+      expect(db.recordInboundEmail).not.toHaveBeenCalled();
+      expect(file.fileInboundEmail).not.toHaveBeenCalled();
+      expect(String(log.mock.calls[0]![0])).not.toMatch(/account=/); // neither account's id named
+    });
+
+    it("a row already stored under THIS account, still unlinked, finishes filing rather than re-recording (mutation: re-record instead of resuming → FAILS)", async () => {
+      const row = { ...FOREIGN_ROW, accountId: "acc", conversationId: "conv", messageId: null };
+      db.findInboundEmailByProviderId.mockResolvedValue(row);
+      file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+      expect(db.recordInboundEmail).not.toHaveBeenCalled();
+      expect(file.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ row, contactId: "ana" }));
+    });
+
+    it("a row already stored under THIS account, already linked, is 200 duplicate without re-filing (mutation: re-file an already-linked row → FAILS)", async () => {
+      const row = { ...FOREIGN_ROW, accountId: "acc", conversationId: "conv", messageId: "msg_1" };
+      db.findInboundEmailByProviderId.mockResolvedValue(row);
+      // file.ts's own item-3 short-circuit (a real call, unmocked, would answer this for an already-
+      // linked row): created false, no new matchSender needed — mirrored here since fileInboundEmail
+      // itself is mocked in this file.
+      file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: false, consent: { kind: "none" } });
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "duplicate" });
+      expect(db.recordInboundEmail).not.toHaveBeenCalled();
+      expect(file.fileInboundEmail).toHaveBeenCalledTimes(1); // still called — file.ts's own idempotency, not skipped here
+      expect(db.matchSender).not.toHaveBeenCalled(); // row.messageId already set: no sender lookup needed
+    });
+
+    it("the retry-after-503 orphan: a filed, unlinked row from an earlier attempt resumes and completes even though the recipient no longer resolves this time (mutation: drop the orphan instead of resuming → FAILS)", async () => {
+      db.findReplyThread.mockResolvedValue(null); // the recipient no longer resolves on this retry
+      const row = { ...FOREIGN_ROW, accountId: "acc", conversationId: "conv", messageId: null };
+      db.findInboundEmailByProviderId.mockResolvedValue(row);
+      db.getConversationSummary.mockResolvedValue({ id: "conv", contactId: "ana", contactFirstName: "Ana", contactLastName: "Ruiz", lastMessageAt: null, lastMessagePreview: null, unreadCount: 0, contactLanguage: null });
+      file.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+      expect(file.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ row, contactId: "ana" }));
+    });
+
+    it("an orphan whose row is HELD (never filed) is still dropped on this retry — only a FILED orphan resumes (mutation: resume a held orphan too → FAILS)", async () => {
+      db.findReplyThread.mockResolvedValue(null);
+      db.findInboundEmailByProviderId.mockResolvedValue({ ...FOREIGN_ROW, accountId: "acc", status: "held", holdReason: "not_on_record", messageId: null });
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+      expect(file.fileInboundEmail).not.toHaveBeenCalled();
+    });
+
+    it("recordInboundEmail's own cross-account throw (a race between this call's lookup and its insert) is 200 dropped, never a 503 retry loop (mutation: treat every recordInboundEmail throw as 503 → FAILS)", async () => {
+      db.recordInboundEmail.mockRejectedValue(new Error("recordInboundEmail: provider_email_id re_1 collided outside account acc"));
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+    });
+
+    it("the lookup failing outright is still a 503 (Resend retries), distinct from a genuine collision (mutation: swallow the lookup's own error too → FAILS)", async () => {
+      db.findInboundEmailByProviderId.mockRejectedValue(new Error("db down"));
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "write_failed" });
     });
   });
 });
