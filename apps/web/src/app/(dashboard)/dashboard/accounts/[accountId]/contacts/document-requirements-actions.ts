@@ -60,9 +60,13 @@ export async function undoSkipDocumentRequirementAction(accountId: string, skipI
   if (!isUuid(skipId)) return fail(REFUSED);
   try {
     const row = await getDocumentSkip(await dbForRequest(), accountId, skipId.toLowerCase());
-    if (!row || row.skipped_by !== access.userId || row.unskipped_at !== null
-      // Written as "not within" so an unreadable created_at (NaN) is refused, never inside the window.
-      || !(Date.now() - Date.parse(row.created_at) <= DOCUMENT_REQUIREMENT_UNDO_MS)) return fail(CHANGED);
+    if (!row || row.skipped_by !== access.userId || row.unskipped_at !== null) return fail(CHANGED);
+    const elapsed = Date.now() - Date.parse(row.created_at);
+    // An unreadable created_at (NaN) is refused as "changed" (M2: it's not a real expiry, it's a data
+    // problem, and only CHANGED has ever meant "reload, we can't say"); a real elapsed over the window
+    // gets its own, true sentence instead.
+    if (Number.isNaN(elapsed)) return fail(CHANGED);
+    if (elapsed > DOCUMENT_REQUIREMENT_UNDO_MS) return fail("documents.checklist.undoExpiredSkip");
     return (await undoDocumentSkip(serviceDb(), accountId, row.id, access.userId)) ? { ok: true } : fail(CHANGED);
   } catch (e) {
     log("undo skip", accountId, e, skipId);
@@ -105,8 +109,8 @@ export async function undoUnskipDocumentRequirementAction(
   try {
     const row = await getDocumentSkip(await dbForRequest(), accountId, skipId.toLowerCase());
     const at = row?.unskipped_at ? Date.parse(row.unskipped_at) : Number.NaN;
-    if (!row || row.unskipped_by !== access.userId || at !== Date.parse(unskippedAt)
-      || Date.now() - at > DOCUMENT_REQUIREMENT_UNDO_MS) return fail(CHANGED);
+    if (!row || row.unskipped_by !== access.userId || at !== Date.parse(unskippedAt)) return fail(CHANGED);
+    if (Date.now() - at > DOCUMENT_REQUIREMENT_UNDO_MS) return fail("documents.checklist.undoExpiredUnskip");
     return (await undoDocumentUnskip(serviceDb(), accountId, row.id, unskippedAt, access.userId)) ? { ok: true } : fail(CHANGED);
   } catch (e) {
     log("undo unskip", accountId, e, skipId);

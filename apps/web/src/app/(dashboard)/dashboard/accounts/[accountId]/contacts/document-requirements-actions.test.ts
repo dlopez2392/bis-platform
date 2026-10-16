@@ -134,9 +134,9 @@ describe("Undo a skip: undoSkipDocumentRequirementAction (the actor's own, withi
     expect(await A.undoSkipDocumentRequirementAction(ACC, "nope")).toEqual({ ok: false, error: "documents.checklist.refused" });
     expect(writes()).toEqual([]);
   });
-  it("refuses past the window, writing nothing (mutation: no window -> the 11-minute case writes -> FAILS)", async () => {
+  it("refuses past the window with its own 'too late' key, never 'changed' (a skip made 11 minutes ago), writing nothing (mutation: no window -> the 11-minute case writes -> FAILS)", async () => {
     h.getDocumentSkip.mockResolvedValue(skipRow({ created_at: new Date(NOW.getTime() - 11 * 60_000).toISOString() }));
-    expect(await A.undoSkipDocumentRequirementAction(ACC, S)).toEqual({ ok: false, error: "documents.checklist.changed" });
+    expect(await A.undoSkipDocumentRequirementAction(ACC, S)).toEqual({ ok: false, error: "documents.checklist.undoExpiredSkip" });
     expect(writes()).toEqual([]);
   });
   it("refuses an unreadable created_at, writing nothing: NaN never passes the window (mutation: `elapsed > MS` -> FAILS)", async () => {
@@ -200,13 +200,13 @@ describe("Undo Needed again: undoUnskipDocumentRequirementAction (the actor's ow
     }
     expect(writes()).toEqual([]);
   });
-  it("accepts the same instant written another way (the toast's string parses equal), and refuses past the window (mutation: no window -> FAILS)", async () => {
+  it("accepts the same instant written another way (the toast's string parses equal), and refuses past the window with its own 'too late' key, never 'changed' (an un-skip made 11 minutes ago; mutation: no window -> FAILS)", async () => {
     h.getDocumentSkip.mockResolvedValueOnce(unskipped({ unskipped_at: "2026-10-16T14:59:00+00:00" }));
     expect(await A.undoUnskipDocumentRequirementAction(ACC, S, "2026-10-16T14:59:00.000Z")).toEqual({ ok: true });
     const old = "2026-10-16T14:49:00+00:00";
     h.getDocumentSkip.mockResolvedValueOnce(unskipped({ unskipped_at: old }));
     calls.length = 0;
-    expect(await A.undoUnskipDocumentRequirementAction(ACC, S, old)).toEqual({ ok: false, error: "documents.checklist.changed" });
+    expect(await A.undoUnskipDocumentRequirementAction(ACC, S, old)).toEqual({ ok: false, error: "documents.checklist.undoExpiredUnskip" });
     expect(writes()).toEqual([]);
   });
   it("a malformed instant or skip id is refused with no read (M2)", async () => {

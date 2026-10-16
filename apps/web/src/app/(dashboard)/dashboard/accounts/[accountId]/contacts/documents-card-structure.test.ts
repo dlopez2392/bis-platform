@@ -109,7 +109,7 @@ describe("the checklist re-reads only when a files read changed what it depends 
   });
 
   it("the files effect depends on the derived boolean, never on the checklist object a page re-creates each render (M3; mutation: deps [route, requestsRoute, nonce, checklist] -> FAILS)", () => {
-    expect(body).toContain("const hasChecklist = checklist !== undefined;");
+    expect(body).toContain('const hasChecklist = checklist !== undefined && record.kind === "contact";');
     expect(body).toContain("}, [route, requestsRoute, nonce, hasChecklist]);");
     expect(body).not.toMatch(/\}, \[[^\]]*\bchecklist\b[^\]]*\]\);/);
   });

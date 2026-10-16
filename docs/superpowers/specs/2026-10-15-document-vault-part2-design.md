@@ -140,6 +140,7 @@ A required category is **met** for a customer by a document that is not in the t
 - All met: "Completo" (dot + word), and the list disappears. Checklist off: nothing is drawn.
   - *Amended 2026-10-16 (owner ruling D1):* a **Technician** sees the checklist on the customers they can see, and can **Subir** and **Pedir al cliente** as anywhere on the card. They **cannot** mark an item "No hace falta" or "Hace falta otra vez": a skip is a judgement about what the business requires, so only an Owner, Staff and the agency make it. The server refuses a Technician too, not just the screen.
   - *Amended 2026-10-16 (owner ruling D10):* a fifth state, **"Revisando: Seguro"** (dot + word). It is shown when no file meets the category but one is uploaded and still being checked for viruses (2a). It is neither met nor "Falta", so the file staff just uploaded is never called missing. It offers only "No hace falta", never Pedir or Subir, because the file is already there. Order: skipped, met, Revisando, Vencido, Falta.
+    - *Amended 2026-10-16 (final review):* a file that is past its expiry date and STILL being checked reads "Revisando", never "Vencido": the verdict has not landed yet, so the checklist cannot call it either met or expired.
   - *Amended 2026-10-16 (owner ruling D11):* when everything is met, the unmet list disappears but **skipped items stay listed** ("Seguro · No hace falta" with "Hace falta otra vez"). Otherwise a skip could never be undone after the fact. With every required item skipped, the count reads "Completo".
 
 ## 6. Errors and states

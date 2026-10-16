@@ -155,7 +155,7 @@ describe("0081: document_requirement_skips (spec 5.1; deviation 1)", () => {
       await skip(c, s.acct, s.bo, "permit");
       // M10's agency path, as the fences case acts it: no org in the token.
       await actAs(c, who === "agency" ? { app_role: "agency_admin", sub: AGENCY_SUB } : { org_id: who === "ownerB" ? ORG_B : ORG, sub: SUB[who] });
-      const { rows } = await c.query<{ contact_id: string }>("select k.contact_id from document_requirement_skips k");
+      const { rows } = await c.query<{ contact_id: string }>("select k.contact_id from document_requirement_skips k where k.account_id = $1", [s.acct]);
       const ids: Record<string, string> = { ana: s.ana, bo: s.bo };
       expect(rows.map((r) => r.contact_id).sort()).toEqual(want.map((k) => ids[k]!).sort());
     }));

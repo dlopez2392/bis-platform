@@ -4163,6 +4163,11 @@ export const m = {
   "documents.checklist.skipRole.es": "Solo un dueño o un empleado puede cambiar la lista de un cliente.",
   "documents.checklist.changed": "Someone changed this first. Reload to see it.",
   "documents.checklist.changed.es": "Alguien lo cambió primero. Vuelva a cargar para verlo.",
+  // The Undo window (DOCUMENT_REQUIREMENT_UNDO_MS) has closed: this is never "changed", it's just late.
+  "documents.checklist.undoExpiredSkip": "It's too late to undo this. Use Needed again instead.",
+  "documents.checklist.undoExpiredSkip.es": "Ya es tarde para deshacer esto. Use Hace falta otra vez.",
+  "documents.checklist.undoExpiredUnskip": "It's too late to undo this. Use Not needed instead.",
+  "documents.checklist.undoExpiredUnskip.es": "Ya es tarde para deshacer esto. Use No hace falta.",
   "documents.checklist.notRequired": "That document isn't on the list anymore.",
   "documents.checklist.notRequired.es": "Ese documento ya no está en la lista.",
   // M2: the skip actions' own refusal (a malformed id, an unknown or Other category), never 2b's documents.request.refused.

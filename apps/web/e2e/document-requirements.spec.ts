@@ -140,16 +140,12 @@ test("1. the meter in the card's top row, and a skip with its Undo leaves no row
   await expect(skipOrUnskip.first()).toContainText(m["timeline.documentUnskip"].replace("{category}", category("id")));
 });
 
-test("2. Ask from a gap ticks only that category (D2), Upload from a gap presets its category, and the meter turns Complete without a reload (mutations: onAsk ticking every open item instead of just [category] -> ID is ticked too -> FAILS; the panel dropping the preset -> the category select reads the type default, not insurance -> FAILS)", async ({ page }) => {
+test("2. Ask from a gap ticks only that category while ID is still a gap too (D2), Upload from a gap presets its category, and the meter turns Complete without a reload (mutations: onAsk ticking every open item instead of just [category] -> ID is ticked too -> FAILS; the panel dropping the preset -> the category select reads the type default, not insurance -> FAILS)", async ({ page }) => {
   await page.goto(contactUrl());
   await expect(card(page).getByText(/^\d+ files?$/)).toBeVisible();
 
-  // Only Insurance stays required for this test.
-  await checklist(page).locator('[data-checklist-action="skip"][data-checklist-category="id"]').click();
-  await expect(page.getByText(m["documents.checklist.skipped"].replace("{category}", category("id")))).toBeVisible();
-  await expect(meter(page)).toContainText("0 of 1");
-
-  // D2: Ask the customer from the Insurance gap opens the request dialog with ONLY Insurance ticked.
+  // D2: with BOTH Insurance and ID still Missing, Ask the customer from the Insurance gap
+  // opens the request dialog with ONLY Insurance ticked.
   await checklist(page).locator('[data-checklist-action="ask"][data-checklist-category="insurance"]').click();
   const dialog = page.locator("[data-document-request-dialog]");
   await expect(dialog).toBeVisible();
@@ -157,6 +153,11 @@ test("2. Ask from a gap ticks only that category (D2), Upload from a gap presets
   await expect(dialog.getByRole("checkbox", { name: category("id"), exact: true })).not.toBeChecked();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
+
+  // Only Insurance stays required for the rest of this test.
+  await checklist(page).locator('[data-checklist-action="skip"][data-checklist-category="id"]').click();
+  await expect(page.getByText(m["documents.checklist.skipped"].replace("{category}", category("id")))).toBeVisible();
+  await expect(meter(page)).toContainText("0 of 1");
 
   // Upload from the gap opens the upload panel with that category preset.
   const chooser = page.waitForEvent("filechooser");
@@ -179,7 +180,7 @@ test("2. Ask from a gap ticks only that category (D2), Upload from a gap presets
 
 test("3. the Settings card is agency-reached (D6/A6): eight categories, no Other row, and dropping ID there removes its row from the contact's checklist with no code to change (mutation: the save keeping ID in the stored list -> the accounts re-read FAILS)", async ({ page }) => {
   await page.goto(`/dashboard/accounts/${accountId}/settings#required-documents`);
-  const main = page.getByRole("main");
+  const main = page.locator("#required-documents");
   await expect(main.getByRole("checkbox", { name: category("insurance"), exact: true })).toBeChecked();
   await expect(main.getByRole("checkbox", { name: category("id"), exact: true })).toBeChecked();
   await expect(main.getByRole("checkbox", { name: m["documents.category.other"], exact: true })).toHaveCount(0);

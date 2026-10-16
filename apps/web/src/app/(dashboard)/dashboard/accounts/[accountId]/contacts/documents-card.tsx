@@ -578,7 +578,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   // have NO timer: they re-read when this card skips or un-skips, and once when a files read changed
   // something they depend on (shouldReloadRequirements, in the files settle below). M3: the effects use
   // these two plain values, never the `checklist` object a page re-creates on every render.
-  const hasChecklist = checklist !== undefined;
+  const hasChecklist = checklist !== undefined && record.kind === "contact";
   const canSkip = checklist?.canSkip === true;
   const requirementsRoute = hasChecklist && record.kind === "contact" ? requirementsRouteFor(accountId, record.id) : null;
   const [requirementsState, setRequirementsState] = useState<{ route: string; load: RequirementsLoad }>({ route: "", load: { kind: "loading" } });
