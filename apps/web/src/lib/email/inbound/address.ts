@@ -26,11 +26,17 @@ const ANGLE_RE = new RegExp(`^(?:"([^"\\\\<>()]*)"|([^"\\\\<>()@,;:]+))?\\s*<(${
 
 export function bareAddress(raw: string | null | undefined): string | null {
   const v = (raw ?? "").trim();
-  // Any comment anywhere refuses the whole value outright — this is what
-  // closes the `attacker@customer.com (<ana@customer.com>)` forgery: a
-  // parenthetical appended after a real addr-spec, which the old "does the
-  // whole value contain exactly one angle-addr" check did not see as the
-  // trailing junk it is.
+  // Review round 3: this early return is now REDUNDANT with the grammar —
+  // every character class in both BARE_RE and ANGLE_RE already excludes
+  // "(" (and so does the quoted/unquoted display grammar inside ANGLE_RE),
+  // so no string containing "(" can match either regex regardless of this
+  // line. Kept anyway as a deliberate belt-and-braces guard: a parenthetical
+  // (comment) is refused before the regexes are even asked, so a future
+  // change to either pattern that accidentally widened a character class
+  // still has this line as a second, independent backstop against the
+  // `attacker@customer.com (<ana@customer.com>)` forgery. No test can
+  // distinguish this line's presence from its absence — that redundancy is
+  // the point, and it is deliberate, not a vacuous test (see address.test.ts).
   if (v.includes("(")) return null;
   if (BARE_RE.test(v)) return v.toLowerCase();
   const m = ANGLE_RE.exec(v);
@@ -39,6 +45,7 @@ export function bareAddress(raw: string | null | undefined): string | null {
 
 export function displayName(raw: string | null | undefined): string | null {
   const v = (raw ?? "").trim();
+  // Same belt-and-braces guard as bareAddress — see its comment.
   if (v.includes("(")) return null;
   const m = ANGLE_RE.exec(v);
   if (!m) return null;

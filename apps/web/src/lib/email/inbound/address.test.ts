@@ -61,7 +61,20 @@ describe("the reply address", () => {
   // then exactly one angle-addr that ENDS the value, is accepted; anything
   // else — a trailing comment, trailing junk after the angle-addr, or a
   // backslash-escape trick inside a quoted display — is refused outright.
-  it("refuses a comment anywhere in the From, which closes the parenthetical forgery (mutation: only reject a leading comment → the trailing one still parses, FAILS)", () => {
+  // Review round 3: pinned by the grammar's shape, not by the explicit
+  // `includes("(")` guard in bareAddress. Verified (and reverted) two ways:
+  // deleting the guard line leaves this test green (the regexes' own
+  // character classes already exclude "("), AND widening just the
+  // domain-label charset to allow "(" ALSO leaves it green, because the
+  // string ends in ")" while both BARE_RE and ANGLE_RE are anchored to end
+  // in a bare addr-spec or ">" — an end-anchor mismatch no single
+  // character-class widening can repair. No mutation of either regex or of
+  // the `includes("(")` guard found during this review kills this specific
+  // test; it is pinned by the grammar's overall end-anchored SHAPE rather
+  // than by any one guard or charset, and is kept as a named regression
+  // case for the real forgery this closes, not as evidence the test can
+  // fail on demand.
+  it("refuses a comment anywhere in the From, which closes the parenthetical forgery (pinned by the grammar's end-anchored shape; no single-line mutation found that fails this case — see comment above)", () => {
     expect(bareAddress("attacker@customer.com (<ana@customer.com>)")).toBeNull();
   });
 

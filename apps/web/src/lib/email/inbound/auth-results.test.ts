@@ -86,16 +86,42 @@ describe("readSesVerdict: ONLY the topmost amazonses.com header (spec 'Rule from
   const REAL_TAIL = "dkim=fail header.i=@customer.com; dmarc=fail header.from=customer.com;";
   const SES_PASS = "X-SES-Spam-Verdict: PASS\r\nX-SES-Virus-Verdict: PASS";
 
-  it("an escaped quote inside a quoted value does not end the quote early (mutation: ignore backslash escapes → the forged dmarc=pass escapes the quote and wins, FAILS)", () => {
+  // Review round 3: these two carry NO backslash at all — they are
+  // unterminated-quote / unterminated-comment cases (a bare, never-closed
+  // `"` or `(`), not escape cases. Renamed honestly; the mutation that
+  // actually kills each is removing the `unterminated` fail-closed check in
+  // readSesVerdict, not "ignore backslash escapes" (there is no escape
+  // here to ignore). The real escape tests are below.
+  it("an unterminated quote swallows the real dmarc=fail to the end of the header (mutation: drop the `unterminated` fail-closed check → the forged dmarc=pass (parsed before the quote opened) wins, FAILS)", () => {
     const header = `Authentication-Results: amazonses.com; spf=fail; helo=x;dmarc=pass header.from=customer.com;y";${REAL_TAIL}\r\n${SES_PASS}`;
     const v = readSesVerdict(parseHeaderBlock(raw(header)));
     expect(senderAuthenticated(v, "customer.com")).toBe(false);
   });
 
-  it("an escaped ')' inside a comment does not end the comment early (mutation: ignore backslash escapes in comments → the forged dmarc=pass escapes the comment and wins, FAILS)", () => {
+  it("an unterminated comment swallows the real dmarc=fail to the end of the header (mutation: drop the `unterminated` fail-closed check → the forged dmarc=pass (parsed before the comment opened) wins, FAILS)", () => {
     const header = `Authentication-Results: amazonses.com; spf=fail; helo=x;dmarc=pass header.from=customer.com;(y;${REAL_TAIL}\r\n${SES_PASS}`;
     const v = readSesVerdict(parseHeaderBlock(raw(header)));
     expect(senderAuthenticated(v, "customer.com")).toBe(false);
+  });
+
+  // Review round 3: the REAL escape cases — a backslash-escaped `"` inside
+  // a quoted value, and a backslash-escaped `)` inside a comment, where the
+  // quote/comment IS properly closed later (unlike the two tests above).
+  // Each asserts the real dmarc is read correctly (dmarc === "fail"), which
+  // only holds if the escaped char does NOT end the quote/comment early —
+  // if it did, the forged "dmarc=pass" would become a real, isolated token
+  // (read first, since dmarc === null at that point) and/or the real
+  // "dmarc=fail" segment would be mis-split.
+  it("an escaped quote inside a PROPERLY CLOSED quoted value does not end it early, so the real dmarc is read (mutation: drop the escape line → the quote closes early and the forged dmarc=pass is read instead, FAILS)", () => {
+    const header = `Authentication-Results: amazonses.com; envelope-from="a\\";dmarc=pass header.from=customer.com;\\"x"@evil.com;${REAL_TAIL}\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(v.dmarc).toBe("fail");
+  });
+
+  it("an escaped ')' inside a PROPERLY CLOSED comment does not end it early, so the real dmarc is read (mutation: drop the escape line → the comment closes early and the forged dmarc=pass is read instead, FAILS)", () => {
+    const header = `Authentication-Results: amazonses.com; spf=fail (a\\) ;dmarc=pass header.from=customer.com;) helo=x;${REAL_TAIL}\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(v.dmarc).toBe("fail");
   });
 
   it("a scan that ENDS still inside a quote or a comment reads as not found (mutation: still return found:true when unterminated → FAILS)", () => {
