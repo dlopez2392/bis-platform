@@ -104,6 +104,9 @@ const ALLOWED: Record<string, Reason> = {
   // the SAME batch just wrote through the request client, never an arbitrary id.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
+  // S-06 part 1: the thread's inbound-email actions and Needs a look's (Task 12). The conversation, or the held row,
+  // is read on the request client first (0082's RLS, 0068's Technician scope); only then the service client.
+  "app/(dashboard)/dashboard/accounts/[accountId]/conversations/inbound-actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",
