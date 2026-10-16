@@ -119,7 +119,9 @@ test("filed for real, it reads on the thread as the customer's email, with its a
   // message-thread.tsx has no stable data-attribute to scope by (an app-source
   // change, out of scope for this test-only fix), but its bubble is a real <p>
   // and the list's preview is a <span> — getByRole("paragraph") excludes it.
-  await expect(page.getByRole("paragraph").filter({ hasText: `Is Thursday ok? ${STAMP}` })).toBeVisible();
+  // A CSS `p` locator, not getByRole("paragraph"): CI's Chromium did not expose the bubble under
+  // that role (element(s) not found), while the first failure showed it IS a plain <p>.
+  await expect(page.locator("p").filter({ hasText: `Is Thursday ok? ${STAMP}` })).toBeVisible();
   // The stored attachment count survives a manual File (owner ruling 2026-10-16).
   // Not duplicated in the list preview (which carries only the body text), so
   // this one stays a plain getByText.
