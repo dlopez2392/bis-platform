@@ -32,13 +32,21 @@ Source text: `docs/research/2026-09-25-crm-feature-research.md` §6.2 step 1;
   receives mail for *any* local part and fires `email.received`; the full message
   (text, HTML, headers, attachment metadata) is fetched from the Receiving API. Every
   account also has a Resend-managed `<id>.resend.app` receiving subdomain.
-- **ASSUMPTION, verified by the spike before any plan task:** the fetched headers carry
-  SPF, DKIM and DMARC results (an `Authentication-Results` header or equivalent). If they
-  do not, the sender check falls back to verifying the DKIM signature in code, and that
-  change comes back to danlo before planning continues.
-- **ASSUMPTION:** `email.received` is delivered through the same svix-signed webhook
-  endpoint and secret as the delivery events (or a second endpoint with its own secret —
-  the spike records which).
+- **Fact (spike, 2026-10-16):** `reply.bis-rgv.com` is live (MX
+  `inbound-smtp.us-east-1.amazonaws.com` priority 10, DNS on Vercel). A Gmail test message
+  arrived carrying, stamped by Resend's receiving MTA:
+  `Authentication-Results: amazonses.com; spf=pass …; dkim=pass header.i=@gmail.com;
+  dmarc=pass header.from=gmail.com;` plus `Received-SPF`, `X-SES-Spam-Verdict: PASS` and
+  `X-SES-Virus-Verdict: PASS`. The raw message is downloadable; the Received emails API
+  also returns headers (Resend docs).
+- **Rule from the spike:** read ONLY the topmost `Authentication-Results` header whose
+  authserv-id is `amazonses.com`. Any other `Authentication-Results` (a sender can write
+  one into its own message) is ignored. `X-SES-Spam-Verdict` or `X-SES-Virus-Verdict`
+  other than `PASS` holds the message with reason `unverified`.
+- **Settled:** `email.received` is added to the EXISTING Resend webhook, so it arrives at
+  the same endpoint with the same svix secret (`RESEND_WEBHOOK_SECRET`). The webhook
+  payload is metadata only (`email_id`, `from`, `to`, `subject`, attachment metadata);
+  the body and headers are fetched by id.
 
 ## Decisions (danlo, 2026-10-16)
 
@@ -92,8 +100,10 @@ A new `email.received` branch in the Resend webhook:
 4. **Sender check.** Filed only when BOTH hold:
    - the sender's `email_key` matches the thread's contact or a member of any household or
      business group that contact belongs to (`client_group_members`);
-   - the message passes authentication: DMARC pass, or (no DMARC policy) SPF pass and a
-     DKIM pass aligned with the From domain.
+   - the message passes authentication, read from the `amazonses.com`
+     `Authentication-Results` header only: `dmarc=pass`, or (`dmarc=none`, the From
+     domain publishes no policy) `spf=pass` and `dkim=pass` with `header.i`/`header.d`
+     on the From domain; and both SES verdicts are `PASS`.
    Otherwise held, with a reason: `not_on_record` (authenticated, but the sender is not
    the contact or a group member), `unverified` (authentication failed or missing).
 5. **Filed:** a `messages` row on the thread — `channel='email'`, `direction='inbound'`,
@@ -185,8 +195,8 @@ Spanish.
 
 Step by step: `docs/runbooks/inbound-email.md`. In short:
 
-1. DNS: add Resend's MX record on `reply.bis-rgv.com` and add it as a receiving domain in
-   Resend.
+1. DONE 2026-10-16: `reply.bis-rgv.com` verified in Resend (Vercel auto-configure),
+   receiving on, MX live, a test message received.
 2. Resend: add the `email.received` event to the EXISTING webhook on production's
    `/api/webhooks/resend` (same signing secret; this settles the svix assumption above).
 3. Per client with its own domain: the MX record on `reply.<domain>`.
