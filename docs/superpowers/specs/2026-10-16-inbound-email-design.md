@@ -183,9 +183,12 @@ Spanish.
 
 ## Owner actions (danlo)
 
+Step by step: `docs/runbooks/inbound-email.md`. In short:
+
 1. DNS: add Resend's MX record on `reply.bis-rgv.com` and add it as a receiving domain in
    Resend.
-2. Resend: point the `email.received` webhook at production's `/api/webhooks/resend`.
+2. Resend: add the `email.received` event to the EXISTING webhook on production's
+   `/api/webhooks/resend` (same signing secret; this settles the svix assumption above).
 3. Per client with its own domain: the MX record on `reply.<domain>`.
 
 Inbound reaches production only; Preview and CI prove the path with route tests.
