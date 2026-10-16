@@ -104,6 +104,10 @@ const ALLOWED: Record<string, Reason> = {
   // the SAME batch just wrote through the request client, never an arbitrary id.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/import/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
+  // Fix round 1 (Task 11 UI review): the thread's own inbound-email notice needs each involved
+  // contact's CURRENT email-consent state — ledgerDb, only after getContact on the request
+  // client proved that contact (0068's own RLS scope), same pattern as the contact page.
+  "app/(dashboard)/dashboard/accounts/[accountId]/conversations/page.tsx": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",

@@ -8,8 +8,11 @@ import { m } from "@/lib/messages";
 import { t, plural } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { runGuarded } from "@/lib/ui/guarded-run";
+import type { InboundMeta } from "./inbound-meta";
 import { undoReplyStopAction, stopEmailsFromReplyAction } from "./inbound-actions";
 import { runUndoReplyStop, runStopEmailsFromReply } from "./inbound-notice-handlers";
+
+export type { InboundMeta };
 
 /**
  * The thread bubble's inbound-email details (S-06 part 1, Task 11): who sent
@@ -19,41 +22,13 @@ import { runUndoReplyStop, runStopEmailsFromReply } from "./inbound-notice-handl
  * mattered), and either the emailed stop (dot + word, rule 3, a ghost Undo)
  * or the "May want to stop" chip (dot + word, a ghost "Stop emails").
  * Nothing when there is nothing to say (an inbound email with no sender, no
- * attachments and no consent news at all).
+ * attachments and no consent news at all). `readInboundMeta` moved to the
+ * plain `./inbound-meta` module (fix round 1) so the server component that
+ * reads it (`message-thread.tsx`) never calls into this `"use client"` file.
  */
-export type InboundMeta = {
-  attachmentCount: number;
-  sender: { name: string } | null;
-  consent: { kind: "stopped"; eventId: string } | { kind: "maybe" } | { kind: "none" };
-};
-
-type RawSender = { contact_id?: string; first_name?: string | null; last_name?: string | null } | null | undefined;
-type RawConsent = { kind?: string; eventId?: string } | null | undefined;
-type RawMeta = {
-  inbound_email_id?: string;
-  attachment_count?: number;
-  sender?: RawSender;
-  consent?: RawConsent;
-};
-
-/** `null` for any message that is not an inbound email (`file.ts` stamps `inbound_email_id` on
- *  every one it files; nothing else in `messages.meta` ever carries that key). */
-export function readInboundMeta(meta: unknown): InboundMeta | null {
-  if (!meta || typeof meta !== "object" || !("inbound_email_id" in meta)) return null;
-  const raw = meta as RawMeta;
-  const sender = raw.sender
-    ? { name: [raw.sender.first_name, raw.sender.last_name].filter((part): part is string => Boolean(part)).join(" ") }
-    : null;
-  const consent: InboundMeta["consent"] =
-    raw.consent?.kind === "stopped" && raw.consent.eventId
-      ? { kind: "stopped", eventId: raw.consent.eventId }
-      : raw.consent?.kind === "maybe"
-        ? { kind: "maybe" }
-        : { kind: "none" };
-  return { attachmentCount: raw.attachment_count ?? 0, sender, consent };
-}
-
-export function InboundNotice({ meta, accountId, conversationId, contactId, locale, canAct }: {
+export function InboundNotice({
+  meta, accountId, conversationId, contactId, locale, canAct, stopIsCurrent, initiallyExpired, chipActionable,
+}: {
   meta: InboundMeta;
   accountId: string;
   conversationId: string;
@@ -65,24 +40,49 @@ export function InboundNotice({ meta, accountId, conversationId, contactId, loca
    *  see. The status (dot + word) still renders; only the button that would write for that
    *  contact is withheld, same principle rule 3's dot-and-word already applies to status. */
   canAct: boolean;
+  /** Fix round 1 (UI review, important): true only when this message's OWN stop (its
+   *  `consent.eventId`) is still the newest consent row for the address AND was recorded by
+   *  an inbound-email reply — `message-thread.tsx`'s own `currentStopState` (server-computed
+   *  from `lib/consent/email-view.ts`'s `readEmailView`). False after a staff Undo, or once a
+   *  LATER event has superseded this one: the whole stop notice then renders nothing at all,
+   *  because this bubble's own filing-time snapshot is no longer the truth. */
+  stopIsCurrent: boolean;
+  /** Only meaningful when `stopIsCurrent`: the owner's 7-day staff-Undo window
+   *  (`REPLY_STOP_WINDOW_MS`) has already closed as of the SERVER's render — computed
+   *  there, never guessed client-side, so there is no hydration mismatch. */
+  initiallyExpired: boolean;
+  /** Only meaningful for the "maybe" chip: true while the address is CURRENTLY allowed
+   *  (`EmailView.kind === "allowed"`) — the chip's dot-and-word always shows (it is the
+   *  historical signal this reply carried), but its "Stop emails" button only while there
+   *  is still something to stop. */
+  chipActionable: boolean;
 }) {
   const router = useRouter();
   const [consent, setConsent] = useState(meta.consent);
-  const [expired, setExpired] = useState(false);
+  // Server-computed (`stopIsCurrent`/`initiallyExpired`, fix round 1): no client-side guess at
+  // mount, so no hydration mismatch. `expired` still flips reactively — a race where the 7-day
+  // window closes BETWEEN this render and a click — read off the server's own typed `expired`
+  // field on that later attempt, never matched against its (translatable) error string.
+  const [expired, setExpired] = useState(initiallyExpired);
   const [pending, startTransition] = useTransition();
   const busy = useRef(false);
 
   const dot = <span data-dot aria-hidden className="size-2 rounded-full bg-[var(--warn)]" />;
 
   let status: React.ReactNode = null;
-  if (consent.kind === "stopped" && expired) {
+  // Fix round 1 (important): a stop that is no longer CURRENT — a staff Undo already lifted it,
+  // or a later event superseded it — renders nothing at all. Showing "Stopped..." (or its Undo)
+  // for a row that is no longer true would be stale information, not merely a withheld button.
+  if (consent.kind === "stopped" && stopIsCurrent && expired) {
     status = (
       <p data-reply-stopped className="flex items-center gap-2">
         {dot}
+        {t(m, "conversations.reply.stopped", locale)}
+        {" "}
         {t(m, "conversations.reply.stopExpired", locale)}
       </p>
     );
-  } else if (consent.kind === "stopped") {
+  } else if (consent.kind === "stopped" && stopIsCurrent) {
     const eventId = consent.eventId;
     status = (
       <p data-reply-stopped className="flex items-center gap-2">
@@ -107,11 +107,15 @@ export function InboundNotice({ meta, accountId, conversationId, contactId, loca
       </p>
     );
   } else if (consent.kind === "maybe") {
+    // Minor 7 (fix round 1): the "Stop emails" button sits BESIDE the chip, not inside it, so
+    // the chip itself stays a compact pill on a phone rather than growing to fit a button.
     status = (
-      <span data-reply-maybe className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] px-2 py-0.5">
-        {dot}
-        {t(m, "conversations.reply.maybeStop", locale)}
-        {canAct ? (
+      <p className="flex flex-wrap items-center gap-2">
+        <span data-reply-maybe className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] px-2 py-0.5">
+          {dot}
+          {t(m, "conversations.reply.maybeStop", locale)}
+        </span>
+        {canAct && chipActionable ? (
           <Button
             variant="ghost" size="sm" className="min-h-11 md:min-h-8" disabled={pending} aria-busy={pending}
             onClick={() => runGuarded(busy, startTransition, () => runStopEmailsFromReply(
@@ -126,12 +130,16 @@ export function InboundNotice({ meta, accountId, conversationId, contactId, loca
             {t(m, "contact.email.stopEmails", locale)}
           </Button>
         ) : null}
-      </span>
+      </p>
     );
   }
 
+  // Minor 4 (fix round 1): a household member with no stored name reuses `contactDisplayName`'s
+  // own fallback key, localized (the raw reader can't localize — it has no `locale`).
   const memberLine = meta.sender
-    ? <p className="text-muted-foreground">{t(m, "conversations.reply.fromMember", locale, { name: meta.sender.name })}</p>
+    ? <p className="text-muted-foreground">
+        {t(m, "conversations.reply.fromMember", locale, { name: meta.sender.name.trim() || t(m, "contact.noName", locale) })}
+      </p>
     : null;
   const attachmentsLine = meta.attachmentCount > 0
     ? <p className="text-muted-foreground">{plural(m, "conversations.reply.attachments", meta.attachmentCount, locale, { count: meta.attachmentCount })}</p>
@@ -139,8 +147,11 @@ export function InboundNotice({ meta, accountId, conversationId, contactId, loca
 
   if (!memberLine && !attachmentsLine && !status) return null;
 
+  // Fix round 1 (important, item 3): the reader's own language, so a screen reader and the
+  // pseudo-locale sweep both read this fragment correctly even though the surrounding bubble
+  // (the customer's own typed words) may carry a DIFFERENT `lang` (S-09 §9).
   return (
-    <div className="mt-1 space-y-1 text-xs">
+    <div lang={locale} className="mt-1 space-y-1 text-xs">
       {memberLine}
       {attachmentsLine}
       {status}

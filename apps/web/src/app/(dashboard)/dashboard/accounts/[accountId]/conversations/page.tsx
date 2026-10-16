@@ -1,5 +1,5 @@
 import { MessagesSquare } from "lucide-react";
-import { listConversations, getConversationSummary, listMessages } from "@bis/db";
+import { listConversations, getConversationSummary, listMessages, getContact } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -14,7 +14,11 @@ import { loadAssignView } from "@/lib/assign/view";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
+import { ledgerDb } from "@/lib/consent/ledger-db";
+import { readEmailView, type EmailView } from "@/lib/consent/email-view";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { readInboundMeta } from "./inbound-meta";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
 import { EmailComposer } from "./email-composer";
@@ -152,6 +156,38 @@ export default async function ConversationsPage({
       visibleSenderIds = new Set((visible ?? []).map((row) => (row as { id: string }).id));
     }
   }
+  // Fix round 1 (UI review, important #2): the notice must reflect the stop's CURRENT state,
+  // not the filing-time snapshot `meta.consent` carries — a staff Undo, a later event, or the
+  // 7-day staff-Undo window (lib/consent/email-view.ts's REPLY_STOP_WINDOW_MS) may have moved
+  // past it since. Bounded to only the contacts a filed reply actually names something about
+  // (never "none"): the thread's own contact when a message with no sender carries one, or a
+  // household member's when a message's own `meta.sender` does. Each contact is proven on the
+  // REQUEST client (getContact, 0068's own RLS scope) before its ledger history is read at all;
+  // an error or a filtered-out contact leaves it OUT of `emailViews` — fail closed, same as
+  // `visibleSenderIds` above — never a thrown page.
+  const now = new Date();
+  const consentContactIds = Array.from(new Set(
+    messages.flatMap((message) => {
+      if (message.direction !== "inbound" || message.channel !== "email") return [];
+      const parsed = readInboundMeta(message.meta);
+      if (!parsed || parsed.consent.kind === "none") return [];
+      const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
+      return senderId ? [senderId] : active ? [active.contactId] : [];
+    }),
+  ));
+  const emailViews = new Map<string, EmailView>();
+  if (consentContactIds.length > 0) {
+    const ledger = ledgerDb();
+    await Promise.all(consentContactIds.map(async (id) => {
+      try {
+        const contact = await getContact(db, accountId, id);
+        if (!contact?.email) return;
+        emailViews.set(id, await readEmailView(ledger, accountId, contact, now));
+      } catch (e) {
+        console.error(`conversations: account ${accountId} contact ${id} email-view read failed: ${loggableError(e)}`);
+      }
+    }));
+  }
 
   return (
     <>
@@ -192,6 +228,7 @@ export default async function ConversationsPage({
               contactId={active.contactId}
               locale={locale}
               visibleSenderIds={visibleSenderIds}
+              emailViews={emailViews}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,

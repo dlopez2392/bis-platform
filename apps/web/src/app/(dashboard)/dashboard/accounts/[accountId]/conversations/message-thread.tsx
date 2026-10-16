@@ -1,10 +1,19 @@
 import type { listMessages } from "@bis/db";
+import type { EmailView } from "@/lib/consent/email-view";
 import { formatDateTimeInZone } from "@/lib/format";
 import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n/locale";
-import { readInboundMeta, InboundNotice } from "./inbound-notice";
+// Fix round 1 (UI review, critical): `readInboundMeta` moved to the plain `./inbound-meta`
+// module. This file is a SERVER component — `inbound-notice.tsx` is `"use client"`, and
+// calling a non-component export of a client module from server code throws at runtime
+// ("Attempted to call readInboundMeta() from the server"), a failure vitest's own render
+// never surfaces because it does not apply Next's RSC transform (pinned by the import-site
+// scan in `inbound-meta.test.ts`).
+import { readInboundMeta } from "./inbound-meta";
+import { InboundNotice } from "./inbound-notice";
+import { currentStopState } from "./inbound-notice-state";
 
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
 
@@ -19,6 +28,7 @@ export function MessageThread({
   contactId,
   locale,
   visibleSenderIds,
+  emailViews,
 }: {
   messages: Message[];
   contactName: string;
@@ -44,6 +54,13 @@ export function MessageThread({
    *  is the thread's own contact, already proven visible by the page
    *  itself before any message loaded, so it needs no entry here. */
   visibleSenderIds: ReadonlySet<string>;
+  /** Fix round 1 (UI review, important #2): each involved contact's CURRENT
+   *  email-consent state (`lib/consent/email-view.ts`'s `EmailView`), keyed
+   *  by contact id — `page.tsx`'s own server read (`readEmailView`), so a
+   *  bubble's stop notice reflects reality now, not its filing-time
+   *  snapshot. Missing an entry (not visible, no email on file, or the
+   *  read failed) reads as "nothing current to show" (fail closed). */
+  emailViews: ReadonlyMap<string, EmailView>;
 }) {
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
@@ -116,18 +133,26 @@ export function MessageThread({
               const meta = message.direction === "inbound" && message.channel === "email" ? readInboundMeta(message.meta) : null;
               if (!meta) return null;
               const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
+              const effectiveContactId = senderId ?? contactId;
               // No sender at all means this bubble's address IS the thread's own contact —
               // already proven visible by page.tsx before any message loaded. A sender
               // (a household member) must be in the viewer's own visible set.
               const canAct = !senderId || visibleSenderIds.has(senderId);
+              // Fix round 1 (important #2): the notice reflects the address's CURRENT
+              // consent state, not this message's own filing-time snapshot.
+              const { stopIsCurrent, initiallyExpired, chipActionable } =
+                currentStopState(meta.consent, emailViews.get(effectiveContactId));
               return (
                 <InboundNotice
                   meta={meta}
                   accountId={accountId}
                   conversationId={conversationId}
-                  contactId={senderId ?? contactId}
+                  contactId={effectiveContactId}
                   locale={locale}
                   canAct={canAct}
+                  stopIsCurrent={stopIsCurrent}
+                  initiallyExpired={initiallyExpired}
+                  chipActionable={chipActionable}
                 />
               );
             })()}
