@@ -1,13 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const sendMock = vi.fn();
+const receivingGet = vi.hoisted(() => vi.fn());
 vi.mock("resend", () => ({
   Resend: class {
-    emails = { send: (...a: unknown[]) => sendMock(...a) };
+    emails = { send: (...a: unknown[]) => sendMock(...a), receiving: { get: (...a: unknown[]) => receivingGet(...a) } };
   },
 }));
 
-import { resendEmailProvider } from "./resend";
+import { resendEmailProvider, fetchReceivedEmailFromResend } from "./resend";
 
 beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ data: { id: "re_1" }, error: null });
@@ -103,5 +104,34 @@ describe("tags (D-016 item 1)", () => {
     expect(sendMock.mock.calls[0]![0].tags).toEqual(tags);
     await provider.send({ to: "c@example.com", fromName: "Rio", subject: "Hi", body: "plain" });
     expect("tags" in sendMock.mock.calls[1]![0]).toBe(false);
+  });
+});
+
+describe("fetchReceivedEmailFromResend", () => {
+  it("maps Resend's received email and reads the raw message's header block (mutation: drop received_for → [], FAILS)", async () => {
+    receivingGet.mockResolvedValue({ data: {
+      id: "re_1", from: "Ana <ana@gmail.com>", to: ["r-x@reply.bis-rgv.com"], received_for: ["r-y@reply.bis-rgv.com"],
+      subject: "Re: Hi", text: "Yes", html: null, headers: {}, created_at: "2026-10-16T10:00:00.000Z",
+      raw: { download_url: "https://raw.example/1", expires_at: "x" }, attachments: [{ id: "a" }, { id: "b" }],
+    }, error: null });
+    const fetchRaw = vi.fn().mockResolvedValue(new Response("Authentication-Results: amazonses.com; dmarc=pass\r\nFrom: a\r\n\r\nbody"));
+    expect(await fetchReceivedEmailFromResend("key", "re_1", fetchRaw)).toEqual({
+      id: "re_1", from: "Ana <ana@gmail.com>", to: ["r-x@reply.bis-rgv.com"], receivedFor: ["r-y@reply.bis-rgv.com"],
+      subject: "Re: Hi", text: "Yes", html: null, rawHeaders: "Authentication-Results: amazonses.com; dmarc=pass\r\nFrom: a", attachmentCount: 2,
+      receivedAt: "2026-10-16T10:00:00.000Z",
+    });
+    expect(fetchRaw).toHaveBeenCalledWith("https://raw.example/1");
+  });
+
+  it("no raw message, or a raw fetch that fails, reads as no headers, never a throw (plan G5: the sender is then unverified; mutation: throw → FAILS)", async () => {
+    receivingGet.mockResolvedValue({ data: { id: "re_2", from: "a@b.com", to: [], received_for: [], subject: "", text: null, html: null, headers: null, created_at: "x", raw: null, attachments: [] }, error: null });
+    expect((await fetchReceivedEmailFromResend("key", "re_2", vi.fn())).rawHeaders).toBeNull();
+    receivingGet.mockResolvedValue({ data: { id: "re_3", from: "a@b.com", to: [], received_for: [], subject: "", text: null, html: null, headers: null, created_at: "x", raw: { download_url: "https://raw.example/3", expires_at: "x" }, attachments: [] }, error: null });
+    expect((await fetchReceivedEmailFromResend("key", "re_3", vi.fn().mockResolvedValue(new Response("", { status: 403 })))).rawHeaders).toBeNull();
+  });
+
+  it("an API error throws (the route answers 503; mutation: return null → FAILS)", async () => {
+    receivingGet.mockResolvedValue({ data: null, error: { message: "not found", name: "not_found" } });
+    await expect(fetchReceivedEmailFromResend("key", "re_4", vi.fn())).rejects.toThrow(/not found/);
   });
 });

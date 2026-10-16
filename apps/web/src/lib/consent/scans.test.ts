@@ -724,6 +724,8 @@ describe("scan 1 (email): only the email gate reaches an email provider (consent
   const PROVIDER_MODULES = new Set([
     "apps/web/src/lib/email/index.ts", "apps/web/src/lib/email/resend.ts", "apps/web/src/lib/email/fake.ts",
     "apps/web/src/lib/consent/email-gate.ts",
+    // S-06 part 1: the received-email seam; it re-exports no provider and names none.
+    "apps/web/src/lib/email/receiving.ts",
   ]);
   const PROVIDER_IDS = new Set(["apps/web/src/lib/email", "apps/web/src/lib/email/resend", "apps/web/src/lib/email/fake"]);
   const NAMES = /\bgetEmailProvider\b|\bresendEmailProvider\b|\bfakeEmailProvider\b/;
