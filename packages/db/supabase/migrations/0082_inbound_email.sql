@@ -23,8 +23,10 @@
 --
 -- Rollback (by hand, in this order; revert the app first):
 --   drop function public.unfile_inbound_email(uuid, uuid, uuid);
---   re-run 0055's create function body for public.append_consent_event as create or replace (the
---     one line back to v_prior_method = 'staff');
+--   re-run 0055's whole create function body for public.append_consent_event as create or replace.
+--     That one statement undoes all three of section 5's changes at once: the v_prior_occurred_at
+--     variable (and its column in the prior-row select) goes, the revoked/inbound_email branch goes,
+--     and the staff_undo line returns to v_prior_method = 'staff' with no 7-day window;
 --   delete nothing from consent_events: an inbound_email row is legal evidence. If any exist, keep the
 --     widened CHECK; with none: drop consent_events_inbound_email_shape_check, then re-add 0062's
 --     consent_events_method_check exactly.
@@ -131,7 +133,12 @@ alter table public.consent_events add constraint consent_events_inbound_email_sh
 comment on constraint consent_events_inbound_email_shape_check on public.consent_events is
   'inbound_email (0082): a clear stop keyword in a customer''s reply, applied at once. Email stops only.';
 
--- 5. append_consent_event: 0055's body, one line widened (see the file header).
+-- 5. append_consent_event: 0055's body with three changes (see the file header):
+--    (a) a new v_prior_occurred_at, read with the prior newest deciding row;
+--    (b) a new revoked/inbound_email branch: an emailed stop lands only while the address is allowed;
+--    (c) the resubscribed/staff_undo line widened to an inbound_email stop as well as a staff one, and
+--        for inbound_email only while that stop is under 7 days old (v_prior_occurred_at).
+--    Everything else is 0055's text unchanged. Rollback: re-run 0055's body (file header).
 create or replace function public.append_consent_event(
   p_account_id uuid, p_channel text, p_address text, p_action text, p_method text,
   p_guard text, p_expect_id uuid,
