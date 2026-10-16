@@ -59,6 +59,8 @@ Source text: `docs/research/2026-09-25-crm-feature-research.md` §6.2 step 1;
 | 5 | One opaque token per customer thread is the reply address's local part. |
 | 6 | The owner's forwarded copy comes from the same sender as lead alerts (operator class). |
 
+**Amended 2026-10-16:** the plan's spec gaps G1–G15 (`docs/superpowers/plans/2026-10-16-inbound-email.md`) were all accepted by danlo as proposed (tiles), and a held email keeps its attachment count. The lines below marked "Amended 2026-10-16" carry those rulings; the plan's G table is the full record.
+
 ## Design
 
 ### Turning it on
@@ -74,7 +76,7 @@ dot and word, three states:
   Resend's inbound host; staff add the domain in the Resend dashboard by hand (no
   Domains API in this part).
 
-An Owner sees the address their customers reply to, read-only.
+An Owner sees the address their customers reply to, read-only. (Amended 2026-10-16, owner ruling G6: on the Owner's own Branding page, under the reply-to field, because Settings is agency-only. G7: choosing a Replies state applies at once with an Undo toast, with no Save of its own, so the Sending address card keeps one primary button.)
 
 ### Outbound
 
@@ -91,7 +93,7 @@ becomes the forwarding destination.
 
 A new `email.received` branch in the Resend webhook:
 
-1. Verify svix; bad signature → 401.
+1. Verify svix; bad signature → 400 (Amended 2026-10-16, owner ruling G1: the route's existing answer for every event).
 2. Fetch the full message from Resend; fetch failure → 503 (Resend retries). Dedupe on
    Resend's received-email id: an existing `inbound_emails` row → 200.
 3. Parse the recipient: local part `r-<token>`, domain must be `reply.bis-rgv.com` or the
@@ -101,7 +103,7 @@ A new `email.received` branch in the Resend webhook:
    - the sender's `email_key` matches the thread's contact or a member of any household or
      business group that contact belongs to (`client_group_members`);
    - the message passes authentication, read from the `amazonses.com`
-     `Authentication-Results` header only: `dmarc=pass`, or (`dmarc=none`, the From
+     `Authentication-Results` header only (Amended 2026-10-16, owner ruling G5: read from the raw message's header block, because the API's headers are a map that cannot keep two headers or their order; no raw message means unverified): `dmarc=pass`, or (`dmarc=none`, the From
      domain publishes no policy) `spf=pass` and `dkim=pass` with `header.i`/`header.d`
      on the From domain; and both SES verdicts are `PASS`.
    Otherwise held, with a reason: `not_on_record` (authenticated, but the sender is not
@@ -110,7 +112,7 @@ A new `email.received` branch in the Resend webhook:
    `status='delivered'`, `author_kind='customer'`, `provider_message_id` = Resend's id,
    `subject`, `body` = the new text with quoted history stripped (English and Spanish
    quote markers: "On … wrote:", "El … escribió:", `>` lines, Outlook's "From:" block),
-   `meta.inbound_email_id`, `meta.attachment_count`. Unread is raised. When the sender is
+   `meta.inbound_email_id`, `meta.attachment_count`. (Amended 2026-10-16, owner ruling G11: an HTML-only email's text is taken from its HTML.) Unread is raised. When the sender is
    a group member other than the contact, the bubble names them ("from Luis Ruiz").
 6. **Held:** only the `inbound_emails` row; nothing on the thread.
 7. Filed mail runs the stop rule (below).
@@ -129,10 +131,11 @@ Attachments are not stored in this part: the bubble says "2 attachments — not 
 Filed mail only (held mail's sender is not confirmed). The new text (never the quoted
 history) runs through the texts' English/Spanish matcher (`lib/consent/phrases.ts`).
 
+- (Amended 2026-10-16, owner ruling G4) **Clear** is a stop keyword other than CANCEL/CANCELAR (on a reminder those mean the appointment); **unclear** is a stop sentence, or CANCEL/CANCELAR. Each is tried on the whole new text, then on its first non-blank line (a phone signature under "STOP").
 - **Clear stop:** append "No marketing emails" for the sender's address to the ledger,
-  method `inbound_email`, evidence = the message id and the matched phrase. The thread
+  method `inbound_email`, only while the address is allowed (Amended 2026-10-16, owner ruling G3: so its Undo can never lift an older stop such as an unsubscribe link), evidence = the message id and the matched phrase. The thread
   shows "Stopped marketing emails · from their reply" with **Undo**. Undo appends a
-  reversing staff event (the ledger stays append-only). A ledger write failure → 503 so
+  reversing staff event (the ledger stays append-only; Amended 2026-10-16 (owner ruling G2: 0082 lets the ledger's staff Undo reverse an `inbound_email` stop. G9: Resume emails does not lift it; its Undo or the customer's own resubscribe does). A ledger write failure → 503 so
   Resend retries, the same rule as SMS.
 - **Unclear:** a ghost chip "May want to stop" with the existing **Stop emails** action.
 - Per the 2026-09-30 decision, an email stop covers referral asks.
@@ -151,21 +154,25 @@ customer as the suggestion. Actions, one primary per item:
 - **Not a customer** (ghost): status `dismissed`, toast with Undo.
 
 Empty: "Emails we couldn't match to a customer wait here for you to file." Error and
-loading states per DESIGN.md rules 5 and 7. The work queue shows one row,
+loading states per DESIGN.md rules 5 and 7. The work queue (Amended 2026-10-16, owner ruling G8: the account's To do; not the agency's cross-account queue) shows one row,
 "N emails need a look", linking to the filter, only when N > 0. All copy in English and
 Spanish.
 
 ## Data model (migration 0082)
 
 - `conversations.reply_token text unique` (12 random bytes, url-safe, lowercase so it
-  survives mail clients that lowercase local parts), `reply_token_revoked_at timestamptz`.
+  survives mail clients that lowercase local parts; Amended 2026-10-16 (owner ruling G12: 24 lowercase hex characters), `reply_token_revoked_at timestamptz`.
 - `accounts.inbound_mode text not null default 'off'` check in (`off`, `bis`,
   `own_domain`); `accounts.inbound_domain text` (lowercase, required when `own_domain`).
   Agency-only writes, like `from_email`.
 - `inbound_emails`: `id`, `account_id`, `conversation_id`, `provider_email_id` (unique),
   `from_email`, `from_name`, `to_email`, `subject`, `text`, `auth` jsonb
   (`spf`, `dkim`, `dmarc`), `status` (`filed`, `held`, `dismissed`), `hold_reason`,
-  `message_id` (the filed message, nullable), `decided_by`, `decided_at`, `received_at`.
+  `message_id` (the filed message, nullable), `decided_by`, `decided_at`, `received_at`,
+  and (Amended 2026-10-16, owner ruling) `attachment_count int not null default 0`, written at receive time, so a held
+  email filed later still shows its attachments line. (Amended 2026-10-16, owner ruling G13: the conversation FK carries
+  the account, through a new `conversations (account_id, id)` key, and `unfile_inbound_email` is
+  the Undo of a manual File.)
   Members of the account read; only the server writes (0053 rule); the Technician
   restriction (0068) applies as it does to messages.
 - `consent_events.method` check gains `inbound_email`.
@@ -174,7 +181,7 @@ Spanish.
 
 | Case | Response |
 |---|---|
-| Bad svix signature | 401 |
+| Bad svix signature | 400 (amended 2026-10-16, G1) |
 | Resend fetch fails | 503 (retry) |
 | Duplicate delivery | 200, no second row |
 | Unknown or revoked token, foreign domain | 200, dropped, logged |

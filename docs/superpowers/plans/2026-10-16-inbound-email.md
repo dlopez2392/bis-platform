@@ -21,32 +21,32 @@
 
 **From the spec's recorded spike (2026-10-16), not re-verified:** the MX for `reply.bis-rgv.com` is `inbound-smtp.us-east-1.amazonaws.com` priority 10; a Gmail message carried, stamped by Resend's receiving MTA, `Authentication-Results: amazonses.com; spf=pass …; dkim=pass header.i=@gmail.com; dmarc=pass header.from=gmail.com;`, `X-SES-Spam-Verdict: PASS`, `X-SES-Virus-Verdict: PASS`.
 
-**ASSUMPTIONS (each has a named check):**
-- **A1** `raw.download_url` is a pre-signed URL a plain `fetch` (no `Authorization` header) can GET, answering the RFC 5322 message. Check: Task 16 step 8 (the first real reply on production; the ledger records whether it filed or held `unverified`). Until then route tests prove only the parser.
-- **A2** Resend's receiving MTA PREPENDS its `Authentication-Results` and `X-SES-*` headers above any the sender wrote (the spike saw them; the order was not recorded). Check: Task 16 step 8 reads the raw headers of the first real reply in the Resend dashboard and records the order in the ledger.
-- **A3** Every Resend inbound MX host is `inbound-smtp.<region>.amazonaws.com` (only `us-east-1` was seen). Check: Task 10's Check DNS matches `/^inbound-smtp\.[a-z0-9-]+\.amazonaws\.com\.?$/i`; a client in another region would read "No MX record pointing at Resend" and the orchestrator widens the pattern with evidence.
+**ASSUMPTIONS (each has a named check; the orchestrator's spike evidence of 2026-10-16 is recorded on each row):**
+- **A1** `raw.download_url` is a pre-signed URL a plain `fetch` (no `Authorization` header) can GET, answering the RFC 5322 message. Check: Task 16 step 8 (the first real reply on production; the ledger records whether it filed or held `unverified`). **VERIFIED 2026-10-16 (orchestrator's spike):** the raw-message URL the Received emails API returns (`cdn.resend.app/receiving/raw/...`, a signed CloudFront URL with `Expires`/`Signature` query parameters, about one hour's lifetime) downloaded with a plain unauthenticated GET. Task 16 step 8 still confirms it on the first real reply.
+- **A2** Resend's receiving MTA PREPENDS its `Authentication-Results` and `X-SES-*` headers above any the sender wrote (the spike saw them; the order was not recorded). Check: Task 16 step 8 reads the raw headers of the first real reply in the Resend dashboard and records the order in the ledger. **VERIFIED 2026-10-16 for one Gmail message (orchestrator's spike):** `Authentication-Results: amazonses.com; ...`, `Received-SPF`, `X-SES-Spam-Verdict` and `X-SES-Virus-Verdict` sat ABOVE every header Gmail wrote (Gmail's own `ARC-Authentication-Results: i=1; mx.google.com` came after). Still checked on the first real reply, as Task 16 step 8 says.
+- **A3** Every Resend inbound MX host is `inbound-smtp.<region>.amazonaws.com` (only `us-east-1` was seen: the spike of 2026-10-16 observed the MX and receiving host `inbound-smtp.us-east-1.amazonaws.com`). Check: Task 10's Check DNS matches `/^inbound-smtp\.[a-z0-9-]+\.amazonaws\.com\.?$/i`; a client in another region would read "No MX record pointing at Resend" and the orchestrator widens the pattern with evidence.
 - **A4** Resend's `received_for` holds the envelope recipient(s) (the `r-<token>` address even when the customer's client rewrote `To`). Check: route tests use both fields; the pipeline tries `received_for` first, then `to`.
-- **A5** The `email.received` event arrives on the EXISTING webhook with the same svix secret (spec "Settled"; runbook step 5). Check: Task 16 step 5.
+- **A5** The `email.received` event arrives on the EXISTING webhook with the same svix secret (spec "Settled"; runbook step 5). Check: Task 16 step 5. Unchanged on 2026-10-16: the owner edits the EXISTING webhook, per the runbook.
 
-## Spec gaps and contradictions (the plan's handling; listed, not silently resolved; the orchestrator confirms each with the owner in Task 0)
+## Spec gaps and contradictions (ALL FIFTEEN ACCEPTED as proposed by the owner, danlo, 2026-10-16, tiles; the spec is amended to match; implementers do not re-ask)
 
 | # | What the spec says / omits | What the code says | This plan does |
 |---|---|---|---|
-| G1 | "Bad svix signature → 401" (Inbound step 1; Failure table) | The route answers **400** (`apps/web/src/app/api/webhooks/resend/route.ts`, "invalid signature", status 400) and `route.test.ts:37-44` pins 400 for every event | Keeps **400** (one route, one answer; Resend retries neither). If the owner wants 401, Task 8 changes the line and the existing test together. |
-| G2 | "Undo appends a reversing staff event" | 0055's `append_consent_event` allows `resubscribed / staff_undo` ONLY over `revoked / staff` (`0055_consent_writes.sql:196-197`), so an Undo of an `inbound_email` stop would be **refused** | 0082 replaces the function with that one line widened to `in ('staff', 'inbound_email')`; Task 1 proves only that line changed. |
-| G3 | (silent) | An Undo that writes `resubscribed` would ALSO lift an older customer stop (an unsubscribe link from last week) under it | The emailed stop is written with guard `if_allowed`: an address that is already stopped gets no new row and no notice, so its Undo can only ever return the address to where it was. |
-| G4 | "Clear stop" vs "Unclear" over the texts' matcher, split undefined | `classifyInbound` (`lib/consent/inbound.ts:57-69`): a keyword is a stop, a phrase is a HOLD that asks staff | Clear = a stop KEYWORD (`matchKeyword`, `keywords.ts:46`) other than CANCEL/CANCELAR (`CANCEL_WORDS`, `:31`: a reply "Cancel" to a reminder means the appointment); Unclear = a phrase (`matchPhrase`) or CANCEL/CANCELAR. Tried on the whole new text, then on its first non-blank line (a phone's "Sent from my iPhone" signature would otherwise hide "STOP"). |
-| G5 | "read ONLY the topmost `Authentication-Results`" | The received-email API's `headers` is a `Record` (above) | The raw message's header block (A1); none → `unverified`. |
-| G6 | "An Owner sees the address their customers reply to, read-only" | Settings is agency-only (`…/settings/page.tsx:65`, `requireAgencyOnlyAccountAccess`) | The read-only line goes on the Owner's own **Branding** page under the reply-to field (`components/branding-panel.tsx:262-273`), in both audiences' panel copy. |
-| G7 | "The Settings 'Sending address' card gains a Replies row" | That card already has ONE primary Save (`sending-address-card.tsx`, `SubmitButton`); a second Save would break DESIGN.md rule 8 | The mode change runs at once with an Undo toast (rule 6); Check DNS is ghost; the card keeps one primary. |
-| G8 | "The work queue shows one row" | Two queues exist: the account's To do (`…/acct/tasks/page.tsx`) and the agency's cross-account `/dashboard/work` | The account's To do only. The agency queue is listed in "Not in this PR". |
-| G9 | (silent) on Resume | `resubscribed / staff` is allowed only over `staff`, `free_text`, `backfill_0049` (`0055:194-195`); `EMAIL_RESUMABLE_METHODS` (`email-view.ts:29`) | An `inbound_email` stop is lifted by its Undo or by the customer's own resubscribe; the Email row says "they asked in a reply" with no Resume. |
-| G10 | (silent) the Reply-To when the token cannot be made | — | The gate logs and sends with the caller's own `replyTo` (the account's `reply_to_email`); it never blocks a customer email over a Reply-To. |
-| G11 | (silent) an HTML-only email | `text` may be `null` | The new text is derived from `html` (tags dropped, five entities decoded) before quote stripping. |
-| G12 | "12 random bytes, url-safe, lowercase" | — | 24 lowercase hex characters (`randomBytes(12).toString("hex")`); a CHECK pins `^[0-9a-f]{24}$`. |
-| G13 | `inbound_emails` columns | `conversations` has no `(account_id, id)` key to reference | 0082 adds `conversations_account_id_id_key unique (account_id, id)` so the conversation FK carries the account (tenant-safe), and `unfile_inbound_email` (the Undo of a manual file, one transaction). |
-| G14 | "All copy in English and Spanish" | The inbox (`…/conv/page.tsx`), To do (`…/acct/tasks/page.tsx`) and Settings render English `m[...]` today | Every new key has its `.es` twin (Task 2). The inbox and To do pages resolve the reader's locale (`requestLocale`, as the record page does, `[contactId]/page.tsx:122-124`) for the NEW strings; Settings stays English like its neighbours. |
-| G15 | "dkim=pass with header.i/header.d on the From domain" | — | Exact match of the domain (lowercase), not "a subdomain of": the strict reading. |
+| G1 | "Bad svix signature → 401" (Inbound step 1; Failure table) | The route answers **400** (`apps/web/src/app/api/webhooks/resend/route.ts`, "invalid signature", status 400) and `route.test.ts:37-44` pins 400 for every event | Keeps **400** (one route, one answer; Resend retries neither). If the owner wants 401, Task 8 changes the line and the existing test together. **Accepted 2026-10-16.** |
+| G2 | "Undo appends a reversing staff event" | 0055's `append_consent_event` allows `resubscribed / staff_undo` ONLY over `revoked / staff` (`0055_consent_writes.sql:196-197`), so an Undo of an `inbound_email` stop would be **refused** | 0082 replaces the function with that one line widened to `in ('staff', 'inbound_email')`; Task 1 proves only that line changed. **Accepted 2026-10-16.** |
+| G3 | (silent) | An Undo that writes `resubscribed` would ALSO lift an older customer stop (an unsubscribe link from last week) under it | The emailed stop is written with guard `if_allowed`: an address that is already stopped gets no new row and no notice, so its Undo can only ever return the address to where it was. **Accepted 2026-10-16.** |
+| G4 | "Clear stop" vs "Unclear" over the texts' matcher, split undefined | `classifyInbound` (`lib/consent/inbound.ts:57-69`): a keyword is a stop, a phrase is a HOLD that asks staff | Clear = a stop KEYWORD (`matchKeyword`, `keywords.ts:46`) other than CANCEL/CANCELAR (`CANCEL_WORDS`, `:31`: a reply "Cancel" to a reminder means the appointment); Unclear = a phrase (`matchPhrase`) or CANCEL/CANCELAR. Tried on the whole new text, then on its first non-blank line (a phone's "Sent from my iPhone" signature would otherwise hide "STOP"). **Accepted 2026-10-16.** |
+| G5 | "read ONLY the topmost `Authentication-Results`" | The received-email API's `headers` is a `Record` (above) | The raw message's header block (A1); none → `unverified`. **Accepted 2026-10-16.** |
+| G6 | "An Owner sees the address their customers reply to, read-only" | Settings is agency-only (`…/settings/page.tsx:65`, `requireAgencyOnlyAccountAccess`) | The read-only line goes on the Owner's own **Branding** page under the reply-to field (`components/branding-panel.tsx:262-273`), in both audiences' panel copy. **Accepted 2026-10-16.** |
+| G7 | "The Settings 'Sending address' card gains a Replies row" | That card already has ONE primary Save (`sending-address-card.tsx`, `SubmitButton`); a second Save would break DESIGN.md rule 8 | The mode change runs at once with an Undo toast (rule 6); Check DNS is ghost; the card keeps one primary. **Accepted 2026-10-16.** |
+| G8 | "The work queue shows one row" | Two queues exist: the account's To do (`…/acct/tasks/page.tsx`) and the agency's cross-account `/dashboard/work` | The account's To do only. The agency queue is listed in "Not in this PR". **Accepted 2026-10-16.** |
+| G9 | (silent) on Resume | `resubscribed / staff` is allowed only over `staff`, `free_text`, `backfill_0049` (`0055:194-195`); `EMAIL_RESUMABLE_METHODS` (`email-view.ts:29`) | An `inbound_email` stop is lifted by its Undo or by the customer's own resubscribe; the Email row says "they asked in a reply" with no Resume. **Accepted 2026-10-16.** |
+| G10 | (silent) the Reply-To when the token cannot be made | — | The gate logs and sends with the caller's own `replyTo` (the account's `reply_to_email`); it never blocks a customer email over a Reply-To. **Accepted 2026-10-16.** |
+| G11 | (silent) an HTML-only email | `text` may be `null` | The new text is derived from `html` (tags dropped, five entities decoded) before quote stripping. **Accepted 2026-10-16.** |
+| G12 | "12 random bytes, url-safe, lowercase" | — | 24 lowercase hex characters (`randomBytes(12).toString("hex")`); a CHECK pins `^[0-9a-f]{24}$`. **Accepted 2026-10-16.** |
+| G13 | `inbound_emails` columns | `conversations` has no `(account_id, id)` key to reference | 0082 adds `conversations_account_id_id_key unique (account_id, id)` so the conversation FK carries the account (tenant-safe), and `unfile_inbound_email` (the Undo of a manual file, one transaction). **Accepted 2026-10-16.** |
+| G14 | "All copy in English and Spanish" | The inbox (`…/conv/page.tsx`), To do (`…/acct/tasks/page.tsx`) and Settings render English `m[...]` today | Every new key has its `.es` twin (Task 2). The inbox and To do pages resolve the reader's locale (`requestLocale`, as the record page does, `[contactId]/page.tsx:122-124`) for the NEW strings; Settings stays English like its neighbours. **Accepted 2026-10-16.** |
+| G15 | "dkim=pass with header.i/header.d on the From domain" | — | Exact match of the domain (lowercase), not "a subdomain of": the strict reading. **Accepted 2026-10-16.** |
 
 ## Global Constraints
 
@@ -182,7 +182,7 @@ Disjointness: T4/T7 share no file with T1–T3. T6 edits only the gate and its t
   - `grep -n '"common.undo.es"' apps/web/src/lib/messages.ts` → `297:`; `grep -n '^} as const;' apps/web/src/lib/messages.ts` → `4628:`; `wc -l < apps/web/src/lib/messages.test.ts` → `463`.
   - `ls "<KIT2C>/replica.sh" "<KIT2C>/pgrst.sh"` → both exist.
   - Read-only: MCP `execute_sql` on production and `pnpm --filter @bis/db ci:sql` on bis-ci: `select max(version) from supabase_migrations.schema_migrations` names the 0081 apply on both.
-- [ ] **Step 3.** Put G1–G15 to the owner as tiles (memory "Choice tiles"), the plan's handling recommended first. If any is ruled differently, the orchestrator edits the affected task in this file BEFORE dispatching it, and records the ruling in the ledger.
+- [x] **Step 3. RULED 2026-10-16 (danlo, tiles):** G1–G15 ALL ACCEPTED exactly as proposed (each row reads "Accepted 2026-10-16"). The attachments question ACCEPTED too: `inbound_emails.attachment_count int not null default 0` (Task 1), written at receive time (Task 8), used when a held email is filed from Needs a look (Task 12). The spec's "Design", "The stop rule", "Data model" and "Failure behaviour" were amended to match in the same commit. Record the rulings in the ledger; no implementer re-asks.
 
 ---
 
@@ -200,7 +200,7 @@ Disjointness: T4/T7 share no file with T1–T3. T6 edits only the gate and its t
 - Produces (SQL); every name below is read by a later task:
   - `conversations.reply_token text` (CHECK `conversations_reply_token_check`: null or `^[0-9a-f]{24}$`), `conversations.reply_token_revoked_at timestamptz` (CHECK `conversations_reply_token_revoked_check`: null, or the token is set), unique partial index `conversations_reply_token_key (reply_token) where reply_token is not null`, constraint `conversations_account_id_id_key unique (account_id, id)`.
   - `accounts.inbound_mode text not null default 'off'` (CHECK `accounts_inbound_mode_check` in `off`, `bis`, `own_domain`), `accounts.inbound_domain text` (CHECK `accounts_inbound_domain_check`: null, or lowercase, a dotted hostname, and never `reply.bis-rgv.com`; CHECK `accounts_inbound_domain_required`: `own_domain` needs a domain), unique partial index `accounts_inbound_domain_key (inbound_domain) where inbound_domain is not null`. No grant.
-  - `public.inbound_emails` (columns below), RLS on; `inbound_emails_member_read` (SELECT) + restrictive `inbound_emails_technician_scope`; `authenticated` SELECT only, `service_role` all.
+  - `public.inbound_emails` (columns below, including `attachment_count integer not null default 0` with CHECK `inbound_emails_attachment_count_check` (`>= 0`), owner ruling 2026-10-16), RLS on; `inbound_emails_member_read` (SELECT) + restrictive `inbound_emails_technician_scope`; `authenticated` SELECT only, `service_role` all.
   - `consent_events_method_check` gains `inbound_email`; new `consent_events_inbound_email_shape_check` (`inbound_email` is only `channel = 'email'` and `action = 'revoked'`).
   - `public.append_consent_event` — the same body, with `resubscribed / staff_undo` allowed over `revoked / staff` OR `revoked / inbound_email`.
   - `public.unfile_inbound_email(p_account_id uuid, p_id uuid, p_message_id uuid) returns boolean`, SECURITY INVOKER, EXECUTE for `service_role` only: when the row is `filed`, was held before (`hold_reason is not null`), and points at `p_message_id`, it returns the row to `held`, clears `message_id`, `decided_by`, `decided_at`, deletes that message, and answers `true`; otherwise `false`. `22004` on a null argument.
@@ -316,7 +316,7 @@ describe("0082: the account's reply mode", () => {
 });
 
 describe("0082: inbound_emails", () => {
-  it("one row per Resend id; status, reason and decision are coherent; text is capped (mutation: drop inbound_emails_held_has_reason → a reasonless held row is ok, FAILS)", async () => {
+  it("one row per Resend id; status, reason and decision are coherent; text is capped; attachment_count is never negative and defaults to 0 (mutation: drop inbound_emails_attachment_count_check → -1 is ok, FAILS; drop inbound_emails_held_has_reason → a reasonless held row is ok, FAILS)", async () => {
     await withRollback(async (c) => {
       const s = await seed(c);
       const ins = (pid: string, status: string, reason: string | null, extra = "") => attempt(c,
@@ -328,6 +328,8 @@ describe("0082: inbound_emails", () => {
       expect(await code(ins(`re_${RUN}_5`, "held", "spam"))).toBe("23514");
       expect(await code(ins(`re_${RUN}_6`, "filed", null, "user_x"))).toBe("23514");   // decided_by without decided_at
       expect(await code(attempt(c, "update inbound_emails set text = repeat('a', 100001) where id = $1", [s.heldMine]))).toBe("23514");
+      expect(await code(attempt(c, "update inbound_emails set attachment_count = -1 where id = $1", [s.heldMine]))).toBe("23514");
+      expect((await c.query("select attachment_count from inbound_emails where id = $1", [s.heldMine])).rows[0]).toEqual({ attachment_count: 0 });
     });
   });
 
@@ -527,6 +529,7 @@ create table public.inbound_emails (
   subject text,
   text text not null default '',
   auth jsonb not null default '{}'::jsonb,
+  attachment_count integer not null default 0,
   status text not null,
   hold_reason text,
   message_id uuid references public.messages(id) on delete set null,
@@ -541,6 +544,7 @@ create table public.inbound_emails (
   constraint inbound_emails_hold_reason_check check (hold_reason is null or hold_reason in ('not_on_record', 'unverified')),
   constraint inbound_emails_held_has_reason check (status <> 'held' or hold_reason is not null),
   constraint inbound_emails_text_length check (char_length(text) <= 100000),
+  constraint inbound_emails_attachment_count_check check (attachment_count >= 0),
   constraint inbound_emails_decided_coherent check ((decided_by is null) = (decided_at is null))
 );
 create index inbound_emails_held on public.inbound_emails (account_id, received_at desc) where status = 'held';
@@ -614,7 +618,7 @@ Expected: `non-ascii=0 backslash=0`, then the control's `non-ascii=2 backslash=1
 
 - [ ] **Step 7: Run on the replica, post = pre + 0082.** `bash "$S/s06-kit/replica.sh" 55620 "$S/s06-t1-impl"` → `post = pre + 0082`. On `post`: `inbound-email-schema.test.ts`, `schema-grants-guard.test.ts`, `weekly-report-grants.test.ts`, `alert-phone-grants.test.ts`, `client-branding-grants.test.ts`, and the consent ledger suites (`grep -rln "append_consent_event" packages/db/src/test`). Expected: all PASS, the guards unchanged. Paste the summary blocks.
 
-- [ ] **Step 8: Mutation probes, each by name** (on the replica's `post` with `alter`/`drop`/`create or replace`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `alter table conversations drop constraint conversations_reply_token_check` → the token case FAILS on `'ABC…'`; (b) `drop index conversations_reply_token_key` → FAILS on the duplicate; (c) `drop constraint accounts_inbound_domain_required` → the mode case FAILS; (d) `grant update (inbound_mode) on accounts to authenticated` → the grant case FAILS; (e) `drop constraint inbound_emails_held_has_reason` → FAILS; (f) the composite FK replaced by a plain `conversation_id` FK → the cross-account case FAILS; (g) `drop policy inbound_emails_technician_scope` → the read case FAILS on `tech`; (h) `inbound_emails_member_read` re-created `using (true)` → FAILS on `ownerB`; (i) the function re-created with 0055's original line → the Undo case FAILS; (j) `unfile_inbound_email` without `and hold_reason is not null` → FAILS on the webhook row; (k) `grant execute on function public.unfile_inbound_email(uuid, uuid, uuid) to authenticated` → FAILS. Paste each failing assertion line.
+- [ ] **Step 8: Mutation probes, each by name** (on the replica's `post` with `alter`/`drop`/`create or replace`, run the named case, then rebuild with `replica.sh`; never edit the committed file for a probe): (a) `alter table conversations drop constraint conversations_reply_token_check` → the token case FAILS on `'ABC…'`; (b) `drop index conversations_reply_token_key` → FAILS on the duplicate; (c) `drop constraint accounts_inbound_domain_required` → the mode case FAILS; (d) `grant update (inbound_mode) on accounts to authenticated` → the grant case FAILS; (e) `drop constraint inbound_emails_held_has_reason` → FAILS; (f) the composite FK replaced by a plain `conversation_id` FK → the cross-account case FAILS; (g) `drop policy inbound_emails_technician_scope` → the read case FAILS on `tech`; (h) `inbound_emails_member_read` re-created `using (true)` → FAILS on `ownerB`; (i) the function re-created with 0055's original line → the Undo case FAILS; (j) `unfile_inbound_email` without `and hold_reason is not null` → FAILS on the webhook row; (k) `grant execute on function public.unfile_inbound_email(uuid, uuid, uuid) to authenticated` → FAILS; (l) `drop constraint inbound_emails_attachment_count_check` → the coherence case FAILS on -1. Paste each failing assertion line.
 
 - [ ] **Step 9: Commit** `-- packages/db/supabase/migrations/0082_inbound_email.sql packages/db/src/test/inbound-email-schema.test.ts`, message "db: 0082 inbound email: reply tokens, the Replies mode, inbound_emails, the inbound_email stop and its Undo (S-06 part 1)".
 
@@ -816,7 +820,7 @@ export type InboundAuthRecord = { spf: string | null; dkim: string | null; dmarc
 export type InboundEmailRow = {
   id: string; accountId: string; conversationId: string; providerEmailId: string;
   fromEmail: string; fromName: string | null; toEmail: string; subject: string | null; text: string;
-  auth: InboundAuthRecord; status: InboundStatus; holdReason: HoldReason | null; messageId: string | null;
+  auth: InboundAuthRecord; attachmentCount: number; status: InboundStatus; holdReason: HoldReason | null; messageId: string | null;
   decidedBy: string | null; decidedAt: string | null; receivedAt: string;
 };
 export type NewInboundEmail = Omit<InboundEmailRow, "id" | "messageId" | "decidedBy" | "decidedAt"> & { decidedBy: string | null };
@@ -857,7 +861,7 @@ const AUTH = { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "P
 const row = (accountId: string, conversationId: string, over: Partial<NewInboundEmail> = {}): NewInboundEmail => ({
   accountId, conversationId, providerEmailId: `re_${RUN}_${Math.random().toString(36).slice(2, 8)}`,
   fromEmail: "ana@example.com", fromName: "Ana", toEmail: `r-x@${BIS_REPLY_DOMAIN}`, subject: "Re: Hi",
-  text: "Sounds good", auth: AUTH, status: "held", holdReason: "not_on_record", decidedBy: null,
+  text: "Sounds good", auth: AUTH, attachmentCount: 0, status: "held", holdReason: "not_on_record", decidedBy: null,
   receivedAt: new Date().toISOString(), ...over,
 });
 
@@ -917,8 +921,9 @@ describe("inbound rows", () => {
     await withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana3@example.com" }, ACTOR);
       const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
-      const r = row(accountId, t.conversationId);
+      const r = row(accountId, t.conversationId, { attachmentCount: 3 });
       const a = await recordInboundEmail(db, r);
+      expect(a.row.attachmentCount).toBe(3);   // owner ruling 2026-10-16 (mutation: drop attachment_count from the insert → 0, FAILS)
       const b = await recordInboundEmail(db, { ...r, text: "a different body" });
       expect(a.created).toBe(true); expect(b.created).toBe(false);
       expect(b.row.id).toBe(a.row.id); expect(b.row.text).toBe("Sounds good");
@@ -1088,20 +1093,20 @@ export type InboundAuthRecord = { spf: string | null; dkim: string | null; dmarc
 export type InboundEmailRow = {
   id: string; accountId: string; conversationId: string; providerEmailId: string;
   fromEmail: string; fromName: string | null; toEmail: string; subject: string | null; text: string;
-  auth: InboundAuthRecord; status: InboundStatus; holdReason: HoldReason | null; messageId: string | null;
+  auth: InboundAuthRecord; attachmentCount: number; status: InboundStatus; holdReason: HoldReason | null; messageId: string | null;
   decidedBy: string | null; decidedAt: string | null; receivedAt: string;
 };
 export type NewInboundEmail = Omit<InboundEmailRow, "id" | "messageId" | "decidedBy" | "decidedAt"> & { decidedBy: string | null };
 
-const COLS = "id, account_id, conversation_id, provider_email_id, from_email, from_name, to_email, subject, text, auth, status, hold_reason, message_id, decided_by, decided_at, received_at";
+const COLS = "id, account_id, conversation_id, provider_email_id, from_email, from_name, to_email, subject, text, auth, attachment_count, status, hold_reason, message_id, decided_by, decided_at, received_at";
 type Raw = {
   id: string; account_id: string; conversation_id: string; provider_email_id: string; from_email: string; from_name: string | null;
-  to_email: string; subject: string | null; text: string; auth: InboundAuthRecord; status: InboundStatus; hold_reason: HoldReason | null;
+  to_email: string; subject: string | null; text: string; auth: InboundAuthRecord; attachment_count: number; status: InboundStatus; hold_reason: HoldReason | null;
   message_id: string | null; decided_by: string | null; decided_at: string | null; received_at: string;
 };
 const toRow = (r: Raw): InboundEmailRow => ({
   id: r.id, accountId: r.account_id, conversationId: r.conversation_id, providerEmailId: r.provider_email_id,
-  fromEmail: r.from_email, fromName: r.from_name, toEmail: r.to_email, subject: r.subject, text: r.text, auth: r.auth,
+  fromEmail: r.from_email, fromName: r.from_name, toEmail: r.to_email, subject: r.subject, text: r.text, auth: r.auth, attachmentCount: r.attachment_count,
   status: r.status, holdReason: r.hold_reason, messageId: r.message_id, decidedBy: r.decided_by, decidedAt: r.decided_at,
   // Normalised so a row read back equals the row first answered (PostgREST spells timestamptz its own way).
   receivedAt: new Date(r.received_at).toISOString(),
@@ -1112,7 +1117,7 @@ export async function recordInboundEmail(db: SupabaseClient, row: NewInboundEmai
   const { data, error } = await db.from("inbound_emails").insert({
     account_id: row.accountId, conversation_id: row.conversationId, provider_email_id: row.providerEmailId,
     from_email: row.fromEmail, from_name: row.fromName, to_email: row.toEmail, subject: row.subject,
-    text: row.text.slice(0, 100000), auth: row.auth, status: row.status, hold_reason: row.holdReason,
+    text: row.text.slice(0, 100000), auth: row.auth, attachment_count: row.attachmentCount, status: row.status, hold_reason: row.holdReason,
     decided_by: row.decidedBy, decided_at: row.decidedBy ? new Date().toISOString() : null, received_at: row.receivedAt,
   }).select(COLS).single();
   if (!error && data) return { row: toRow(data as Raw), created: true };
@@ -2076,7 +2081,7 @@ import { fileInboundEmail, type FileInput } from "./file";
 const DB = { service: true } as never;
 const ROW = {
   id: "ie_1", accountId: "acc", conversationId: "conv", providerEmailId: "re_1", fromEmail: "luis@example.com", fromName: "Luis",
-  toEmail: "r-x@reply.bis-rgv.com", subject: "Re: Hi", text: "STOP", auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" },
+  toEmail: "r-x@reply.bis-rgv.com", subject: "Re: Hi", text: "STOP", auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" }, attachmentCount: 2,
   status: "filed" as const, holdReason: null, messageId: null, decidedBy: "email-inbound", decidedAt: "x", receivedAt: "2026-10-16T10:00:00.000Z",
 };
 const input = (over: Partial<FileInput> = {}): FileInput => ({
@@ -2177,15 +2182,16 @@ beforeEach(() => {
 });
 
 describe("handleReceivedEmail (spec 'Inbound', 'Failure behaviour')", () => {
-  it("files an authenticated reply from the thread's customer: the row, the new text, the message, the forward (mutation: store the full text → the quote is kept, FAILS)", async () => {
+  it("files an authenticated reply from the thread's customer: the row (with its attachment count), the new text, the message, the forward (mutation: store the full text → the quote is kept, FAILS; drop attachmentCount from the row → 0, FAILS)", async () => {
+    fetchEmail.mockResolvedValue(EMAIL({ attachmentCount: 2 }));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
     expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({
       accountId: "acc", conversationId: "conv", providerEmailId: "re_1", fromEmail: "ana@gmail.com", fromName: "Ana Ruiz",
-      toEmail: `r-${T}@reply.bis-rgv.com`, subject: "Re: Hi", text: "Sounds good", status: "filed", holdReason: null, decidedBy: "email-inbound",
+      toEmail: `r-${T}@reply.bis-rgv.com`, subject: "Re: Hi", text: "Sounds good", attachmentCount: 2, status: "filed", holdReason: null, decidedBy: "email-inbound",
       auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" },
     });
-    expect(file.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: "ana", raiseUnread: true, attachmentCount: 0, actor: { id: "email-inbound", type: "system" } }));
-    expect(forward).toHaveBeenCalledWith(expect.objectContaining({ contactId: "ana", senderName: "Ana Ruiz", attachmentCount: 0 }));
+    expect(file.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ contactId: "ana", raiseUnread: true, attachmentCount: 2, actor: { id: "email-inbound", type: "system" } }));
+    expect(forward).toHaveBeenCalledWith(expect.objectContaining({ contactId: "ana", senderName: "Ana Ruiz", attachmentCount: 2 }));
   });
 
   it("a household member's reply files on the thread, named (mutation: drop the sender → FAILS)", async () => {
@@ -2428,7 +2434,7 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     const { row, created } = await recordInboundEmail(deps.db, {
       accountId: thread.accountId, conversationId: thread.conversationId, providerEmailId: email.id,
       fromEmail: fromEmail ?? email.from.slice(0, 320), fromName: displayName(email.from), toEmail,
-      subject: email.subject, text, auth: authRecord(verdict),
+      subject: email.subject, text, auth: authRecord(verdict), attachmentCount: email.attachmentCount,
       status: filed ? "filed" : "held", holdReason: filed ? null : (authenticated ? "not_on_record" : "unverified"),
       decidedBy: filed ? ACTOR.id : null, receivedAt: new Date(email.receivedAt || deps.now()).toISOString(),
     });
@@ -2439,12 +2445,12 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     // Step 5 and 7 (and the retry of a 503'd one): idempotent.
     const sender = created ? match : await matchSender(deps.db, row.accountId, thread.contactId, row.fromEmail);
     const result = await fileInboundEmail({ db: deps.db, now: deps.now }, {
-      row, contactId: thread.contactId, sender, attachmentCount: email.attachmentCount, raiseUnread: true, actor: ACTOR,
+      row, contactId: thread.contactId, sender, attachmentCount: row.attachmentCount, raiseUnread: true, actor: ACTOR,
     });
     // Step 8: only a message this delivery created is forwarded.
     if (result.created) {
       try {
-        await deps.forward({ row, contactId: thread.contactId, senderName: row.fromName, attachmentCount: email.attachmentCount });
+        await deps.forward({ row, contactId: thread.contactId, senderName: row.fromName, attachmentCount: row.attachmentCount });
       } catch {
         deps.log(`inbound email: the forward to the owner of account ${row.accountId} failed; the filed message stands`);
       }
@@ -2516,7 +2522,7 @@ import { forwardToOwner } from "./forward";
 
 const ROW = {
   id: "ie_1", accountId: "acc", conversationId: "conv", providerEmailId: "re_1", fromEmail: "ana@gmail.com", fromName: "Ana Ruiz",
-  toEmail: "r-x@reply.bis-rgv.com", subject: "Re: Your appointment", text: "Sounds good", auth: { spf: null, dkim: null, dmarc: null, spam: null, virus: null },
+  toEmail: "r-x@reply.bis-rgv.com", subject: "Re: Your appointment", text: "Sounds good", auth: { spf: null, dkim: null, dmarc: null, spam: null, virus: null }, attachmentCount: 0,
   status: "filed" as const, holdReason: null, messageId: "msg_1", decidedBy: "email-inbound", decidedAt: "x", receivedAt: "x",
 };
 const fakeDb = (account: Record<string, unknown> | null) => ({
@@ -3061,7 +3067,7 @@ describe("fileHeldEmailAction (spec 'Needs a look')", () => {
     fileMock.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
     expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: true, undo: { kind: "unfile", id: "ie_1", messageId: "msg_1" } });
     expect(dbMock.decideInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "held", { status: "filed", decidedBy: USER });
-    expect(fileMock.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ raiseUnread: false, actor: { id: USER, type: "user" }, contactId: HELD_CONTACT }));
+    expect(fileMock.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ raiseUnread: false, actor: { id: USER, type: "user" }, contactId: HELD_CONTACT, attachmentCount: 2 }));   // the stored count (owner ruling 2026-10-16; mutation: pass 0 → FAILS)
   });
 
   it("Choose a record: proves the chosen contact on the request client and files on THAT contact's thread (mutation: file on the suggestion → FAILS)", async () => {
@@ -3114,7 +3120,7 @@ describe("dismiss and the Undos", () => {
 });
 ```
 
-(`requestRow` is `getInboundEmail` called with the REQUEST client: mock `getInboundEmail` to answer `requestRow()` when its first argument is the request fake and fail the test otherwise, so a service-client read is caught: `dbMock.getInboundEmail.mockImplementation((c) => c === REQUEST ? requestRow() : Promise.reject(new Error("service read")))`. `HELD` is a held `InboundEmailRow` whose `conversationId` is `"conv"`; `HELD_CONTACT` is that conversation's contact, which the action reads on the request client: `from("conversations").select("contact_id")…`.)
+(`requestRow` is `getInboundEmail` called with the REQUEST client: mock `getInboundEmail` to answer `requestRow()` when its first argument is the request fake and fail the test otherwise, so a service-client read is caught: `dbMock.getInboundEmail.mockImplementation((c) => c === REQUEST ? requestRow() : Promise.reject(new Error("service read")))`. `HELD` is a held `InboundEmailRow` with `attachmentCount: 2` whose `conversationId` is `"conv"`; `HELD_CONTACT` is that conversation's contact, which the action reads on the request client: `from("conversations").select("contact_id")…`.)
 
 `held-email-list.test.ts`:
 
@@ -3212,7 +3218,7 @@ export async function fileHeldEmailAction(accountId: string, id: string, contact
   try {
     const sender = await matchSender(svc, accountId, target, p.row.fromEmail);
     const r = await fileInboundEmail({ db: svc, now: () => new Date() }, {
-      row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: 0,
+      row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: p.row.attachmentCount,
       raiseUnread: false, actor: { id: userId, type: "user" },
     });
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -3245,7 +3251,7 @@ export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Pr
 }
 ```
 
-(The attachment count of a held email is not stored on the row; a manually filed bubble says nothing about attachments. If the reviewer wants it, the orchestrator adds an `attachment_count` column to 0082 before Task 1 commits — note it in the report as a question, do not change the schema here. A file Undo after the stop rule applied a stop leaves the stop: the notice's own Undo on the thread lifts it; say so in the PR body.)
+(The attachment count comes from the row: `inbound_emails.attachment_count`, written at receive time by Task 8 (owner ruling 2026-10-16), so a bubble filed from Needs a look still says "2 attachments — not saved yet". A file Undo after the stop rule applied a stop leaves the stop: the notice's own Undo on the thread lifts it; say so in the PR body.)
 
 `held-email-list.tsx` (`"use client"`): a `ListPanel` of items, each `<article data-held-item={id} className={cn("flex flex-col gap-2 px-3 py-3", LIST_ROW)}>`: line 1 sender name (`font-medium`) and address (`text-muted-foreground`) with the time (`formatDateTimeInZone`, `text-xs`, tabular-nums); line 2 the subject (or `noSubject`); line 3 `<p data-held-reason={reason} className="flex items-center gap-2 text-xs">` with a `--warn` dot and the reason's words; line 4 the excerpt (`line-clamp-2`); line 5 the suggestion sentence; then the actions row: `Button` (default) "File on <name>", ghost "Choose a record" (opens an inline search box: an `Input` labelled `searchLabel` that fetches `/api/accounts/${accountId}/search?q=` after 2 characters, lists its `contacts` hits as ghost buttons, `searchEmpty` when none; picking one calls `fileHeldEmailAction(accountId, id, hit.id)`), ghost "Not a customer". Each action removes the item at once (optimistic, from local state) and toasts `filed` (with the chosen name) or `dismissed` with an **Undo** action (`t(m, "common.undo", locale)`) that calls `undoHeldEmailAction` and, on ok, toasts `undone` and `router.refresh()`; a `changed` answer toasts `changed`, a `failed` answer toasts `failed` and puts the item back. Empty: `EmptyState` with `conversations.held.empty`. All copy `t(m, key, locale, params)`. `held-email-skeleton.tsx`: three skeleton items shaped like the article (four `Skeleton` bars and a button-sized bar), no spinner.
 
@@ -3312,7 +3318,7 @@ test.beforeAll(async () => {
   const { data, error } = await db().from("inbound_emails").insert({
     account_id: accountId, conversation_id: conversationId, provider_email_id: `e2e_${STAMP}`,
     from_email: "neighbour@example.com", from_name: "Vecino", to_email: "r-x@reply.bis-rgv.com",
-    subject: `Re: ${STAMP}`, text: `Is Thursday ok? ${STAMP}`, status: "held", hold_reason: "not_on_record",
+    subject: `Re: ${STAMP}`, text: `Is Thursday ok? ${STAMP}`, attachment_count: 2, status: "held", hold_reason: "not_on_record",
     received_at: new Date().toISOString(),
   }).select("id").single();
   if (error || !data) throw new Error(`inbound-email.spec: seed failed: ${error?.message}`);
@@ -3359,12 +3365,14 @@ test("File on the customer puts it on their thread; Undo brings it back to Needs
   await expect(item(page)).toHaveCount(1);
 });
 
-test("filed for real, it reads on the thread as the customer's email", async ({ page }) => {
+test("filed for real, it reads on the thread as the customer's email, with its attachments line", async ({ page }) => {
   await page.goto(inbox("?view=held"));
   await item(page).getByRole("button", { name: m["conversations.held.fileOn"].replace("{name}", `Respuesta ${STAMP}`) }).click();
   await expect(item(page)).toHaveCount(0);
   await page.goto(inbox(`?c=${conversationId}`));
   await expect(page.getByText(`Is Thursday ok? ${STAMP}`)).toBeVisible();
+  // The stored attachment count survives a manual File (owner ruling 2026-10-16).
+  await expect(page.getByText(m["conversations.reply.attachments"].replace("{count}", "2"))).toBeVisible();
 });
 ```
 
@@ -3387,7 +3395,7 @@ test("filed for real, it reads on the thread as the customer's email", async ({ 
 ## Task 16: Rollout (orchestrator; LAST; not a coding task)
 
 - [ ] **Step 1.** The rulings on G1–G15 are in the ledger (Task 0 step 3).
-- [ ] **Step 2. bis-ci** (only AFTER Task 15 approves): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/s06-inbound-email` → its log lists exactly `0082_inbound_email.sql`; then `-f step=push`. Post-apply, read-only with `pnpm --filter @bis/db ci:sql`: `select column_default from information_schema.columns where table_name='accounts' and column_name='inbound_mode'` → `'off'::text`; `select relrowsecurity from pg_class where oid='public.inbound_emails'::regclass` → `t`; `select count(*) from information_schema.column_privileges where grantee='authenticated' and table_name in ('accounts','conversations') and column_name in ('inbound_mode','inbound_domain','reply_token','reply_token_revoked_at') and privilege_type='UPDATE'` → 0; `select has_function_privilege('authenticated','public.unfile_inbound_email(uuid,uuid,uuid)','EXECUTE')` → `f`; `select position('inbound_email' in prosrc) > 0 from pg_proc where proname='append_consent_event'` → `t`. From here on the `@bis/db` suites may run against bis-ci again.
+- [ ] **Step 2. bis-ci** (only AFTER Task 15 approves): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/s06-inbound-email` → its log lists exactly `0082_inbound_email.sql`; then `-f step=push`. Post-apply, read-only with `pnpm --filter @bis/db ci:sql`: `select column_default from information_schema.columns where table_name='accounts' and column_name='inbound_mode'` → `'off'::text`; `select relrowsecurity from pg_class where oid='public.inbound_emails'::regclass` → `t`; `select column_default from information_schema.columns where table_name='inbound_emails' and column_name='attachment_count'` → `0`; `select count(*) from information_schema.column_privileges where grantee='authenticated' and table_name in ('accounts','conversations') and column_name in ('inbound_mode','inbound_domain','reply_token','reply_token_revoked_at') and privilege_type='UPDATE'` → 0; `select has_function_privilege('authenticated','public.unfile_inbound_email(uuid,uuid,uuid)','EXECUTE')` → `f`; `select position('inbound_email' in prosrc) > 0 from pg_proc where proname='append_consent_event'` → `t`. From here on the `@bis/db` suites may run against bis-ci again.
 - [ ] **Step 3. Push and CI.** Until Step 2, `e2e` is red on its migration check by design; after Step 2, re-run and read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
 - [ ] **Step 4. Production** (MCP on `tlbkbmlrfafquucsmsmm`): read-only pre-flight `select max(version) from supabase_migrations.schema_migrations` → the 0081 apply; `select count(*) from consent_events where method not in ('keyword','start_keyword','free_text','staff','staff_undo','carrier_block','unsubscribe_link','one_click','unsubscribe_page','form','booking','inbound_text','backfill_0049','backfill_telnyx','email_bounce','email_complaint')` → 0 (the re-added CHECK will hold); then `apply_migration` with 0082's exact text, ONCE (md5 equals Task 1 step 6's). Ledger line: `0082 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
 - [ ] **Step 5. Parity, the advisor, the webhook.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both; the columns, CHECKs, indexes, the table and its policies, both functions' bodies and ACLs equal. MCP `get_advisors` (security): no new finding naming 0082's objects (both functions are SECURITY INVOKER). Owner action (runbook step 5, ASSUMPTION A5): edit the EXISTING production webhook in Resend to add `email.received`; the orchestrator confirms the event list in the dashboard, never a new webhook.
@@ -3423,7 +3431,7 @@ test("filed for real, it reads on the thread as the customer's email", async ({ 
 | Inbound 7 + The stop rule: clear stop → ledger `inbound_email`, notice with Undo (reversing staff event), 503 on ledger failure; unclear → chip with Stop emails; covers referral asks | 5, 8, 11, 1 (method, function line) |
 | Inbound 8: the owner's forwarded copy | 9 |
 | Inbound 9: `stampHeartbeat("email.inbound")` | 8 |
-| Attachments: "2 attachments — not saved yet" | 8 (meta), 11 (bubble), 9 (owner's copy) |
+| Attachments: "2 attachments — not saved yet" (and, owner ruling 2026-10-16, `inbound_emails.attachment_count` so a held email filed later keeps it) | 1 (column), 3, 8 (row and meta), 11 (bubble), 9 (owner's copy), 12 (manual File), 14 |
 | Needs a look: filter with count, items with reason in words and the suggestion, File (no unread, stop runs, no forward) with Undo, Choose a record, Not a customer with Undo, empty/error/loading, To do row when N > 0, EN and ES | 12, 2 |
 | Data model 0082 | 1 |
 | Failure behaviour table | 8 (route and pipeline tests), 9 |
@@ -3434,4 +3442,4 @@ test("filed for real, it reads on the thread as the customer's email", async ({ 
 
 - Counts read off this file: G1–G15 is fifteen rows; A1–A5 is five; Task 16 has eight steps; the e2e spec lists three tests; `classes.test.ts` 27 → 28 and `scans.test.ts` 38 → 39 each add exactly one kind (`operator.reply_forward`).
 - Names checked across tasks: `ensureReplyToken(db, accountId, contactId, actorId, make?)` (Tasks 3, 6, 14); `fileInboundEmail(deps, { row, contactId, sender, attachmentCount, raiseUnread, actor })` (Tasks 8, 12); `recordInboundStop(writer, { accountId, contactId, address, providerEmailId, phrase })` (Tasks 5, 8); `MessageConsent` kinds `stopped | maybe | none` in `meta.consent` (Tasks 8, 11); `HeldUndo` kinds `unfile | undismiss` (Task 12, both sides); `InboundSettings { mode, domain }` (Tasks 3, 6, 10).
-- Open question for the orchestrator (not a spec contradiction): a held row does not store its attachment count, so a bubble filed from Needs a look says nothing about attachments. Adding `inbound_emails.attachment_count` to 0082 before Task 1 commits would close it; Task 12 asks rather than changes the schema.
+- Revision 2026-10-16 (owner rulings): G1–G15 accepted as proposed; `inbound_emails.attachment_count` added (Task 1 migration, test and probe (l); Task 3 `InboundEmailRow.attachmentCount`, `COLS`, the insert and a test line; Task 8 the pipeline writes it and files and forwards from `row.attachmentCount`; Task 12 files with `p.row.attachmentCount`; Task 14 seeds 2 and asserts the line; Task 16 step 2 checks the column); A1–A3 carry the spike's evidence.
