@@ -197,8 +197,10 @@ test("2. the customer uploads with no sign-in: clean, the virus, clean again, th
     await fileInput(other).setInputFiles({ name: "bad.pdf", mimeType: "application/pdf", buffer: Buffer.concat([pdf("bad"), Buffer.from(`\n% ${EICAR}\n`)]) });
     await expect(other).toContainText(`${m["customerDocs.refused"]} · ${m["customerDocs.why.virus"]}`, { timeout: 30_000 });
 
+    // The last clean file completes the request, and the page's re-read swaps the list for the
+    // done state at once: the item's own "Received" may never paint, so the done title is the
+    // proof (first CI run, 2026-10-16: the item went Checking, then the list was gone).
     await fileInput(other).setInputFiles({ name: "Other.pdf", mimeType: "application/pdf", buffer: pdf("clean-other") });
-    await expect(other).toContainText(m["customerDocs.received"], { timeout: 30_000 });
 
     await expect(anonPage.locator(".bis-docreq-title"))
       .toHaveText(tt("customerDocs.done"), { timeout: 30_000 });
