@@ -409,3 +409,55 @@ describe("the document vault's copy, PR 2b (customer upload links)", () => {
     for (const k of Object.keys(WANT)) expect(holes(m[`${k}.es` as MessageKey]), k).toBe(holes(m[k as MessageKey]));
   });
 });
+
+describe("the document vault's copy, PR 2c (the required-documents checklist)", () => {
+  const WANT: Record<string, [string, string]> = {
+    "documents.checklist.label": ["Required", "Requeridos"],
+    "documents.checklist.meter": ["{met} of {required}", "{met} de {required}"],
+    "documents.checklist.complete": ["Complete", "Completo"],
+    "documents.checklist.missing": ["Missing: {category}", "Falta: {category}"],
+    "documents.checklist.expired": ["Expired: {category}", "Vencido: {category}"],
+    "documents.checklist.checking": ["Checking: {category}", "Revisando: {category}"],
+    "documents.checklist.notNeeded": ["{category} · Not needed", "{category} · No hace falta"],
+    "documents.checklist.skip": ["Not needed", "No hace falta"],
+    "documents.checklist.unskip": ["Needed again", "Hace falta otra vez"],
+    "documents.checklist.skipped": ["{category} isn't needed for this customer.", "{category} no hace falta para este cliente."],
+    "documents.checklist.unskipped": ["{category} is needed again.", "{category} hace falta otra vez."],
+    "documents.checklist.loadFailed": ["Couldn't load the list.", "No se pudo cargar la lista."],
+    "documents.checklist.skipRole": ["Only an Owner or Staff can change a customer's list.", "Solo un dueño o un empleado puede cambiar la lista de un cliente."],
+    "documents.checklist.changed": ["Someone changed this first. Reload to see it.", "Alguien lo cambió primero. Vuelva a cargar para verlo."],
+    "documents.checklist.notRequired": ["That document isn't on the list anymore.", "Ese documento ya no está en la lista."],
+    // M2: the skip actions' own refusal (a malformed id, an unknown or Other category), never 2b's documents.request.refused.
+    "documents.checklist.refused": ["We couldn't change that. Reload the page.", "No pudimos cambiar eso. Vuelva a cargar la página."],
+    // M9: the checklist's own crash sentence, in usted; common.actionCrashed.es is in tú (messages.ts:312).
+    "documents.checklist.crashed": ["That didn't go through. This page may be out of date: reload it and try again.", "Eso no se completó. Puede que esta página esté desactualizada: vuelva a cargarla e intente de nuevo."],
+    "timeline.documentSkip": ["marked {category} as not needed", "marcó que {category} no hace falta"],
+    "timeline.documentUnskip": ["marked {category} as needed again", "marcó que {category} hace falta otra vez"],
+    "settings.requiredDocuments.title": ["Required documents", "Documentos requeridos"],
+    "settings.requiredDocuments.body": ["Each customer's Documents card will show which of these they're missing.", "La tarjeta de Documentos de cada cliente mostrará cuáles de estos le faltan."],
+    "settings.requiredDocuments.off": ["Nothing is required yet, so the list is off.", "Todavía no se requiere nada, así que la lista está apagada."],
+    "settings.requiredDocuments.saved": ["Saved. Each customer's Documents card shows the list.", "Guardado. La tarjeta de Documentos de cada cliente muestra la lista."],
+    "settings.requiredDocuments.savedOff": ["Saved. The list is off.", "Guardado. La lista está apagada."],
+    "settings.requiredDocuments.role": ["Only an Owner can change this list.", "Solo un dueño puede cambiar esta lista."],
+    "settings.requiredDocuments.failed": ["Couldn't save the list. Try again.", "No se pudo guardar la lista. Intente de nuevo."],
+    "palette.settings.requiredDocuments": ["Required documents", "Documentos requeridos"],
+  };
+  it("every new key is the plan's wording, in both languages (mutation: any word changed, or a tú form such as 'Vuelve' -> FAILS)", () => {
+    for (const [k, [en, es]] of Object.entries(WANT)) {
+      expect([m[k as MessageKey], m[`${k}.es` as MessageKey]], k).toEqual([en, es]);
+    }
+  });
+  it("no new string names the machinery or the customer (mutation: 'Couldn't load the skip rows' or a {name} -> FAILS)", () => {
+    for (const k of Object.keys(WANT)) {
+      for (const text of [m[k as MessageKey], m[`${k}.es` as MessageKey]]) {
+        expect(typeof text, k).toBe("string");
+        expect(/token|rls|definer|skip row|category key|supabase|bucket|\{name\}|\{business\}/i.test(text ?? "x"), k).toBe(false);
+        expect(/\b(vuelve|intenta|elige|sube|pide|recárgala|inténtalo)\b/i.test(text ?? "x"), k).toBe(false);
+      }
+    }
+  });
+  it("a placeholder in English is a placeholder in Spanish (mutation: drop {category} from documents.checklist.missing.es -> FAILS)", () => {
+    const holes = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort().join(",");
+    for (const k of Object.keys(WANT)) expect(holes(m[`${k}.es` as MessageKey]), k).toBe(holes(m[k as MessageKey]));
+  });
+});
