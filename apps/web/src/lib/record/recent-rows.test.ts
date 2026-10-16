@@ -126,3 +126,17 @@ describe("a document request in the drawer's Recent (S-07 2b)", () => {
     expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["documentRequest", "asked for 1 document", null]);
   });
 });
+
+describe("a required-document skip in the drawer's Recent (S-07 2c)", () => {
+  it("a skip and an un-skip are each their head only, their own kind, no excerpt (mutation: return a detail as the excerpt -> FAILS)", () => {
+    const skip = { id: "k1", category: "insurance", contact_id: "c1", skipped_by: "u_ana", created_at: AT, unskipped_by: "u_ana", unskipped_at: "2026-10-09T17:00:00Z" };
+    const rows = view([
+      { kind: "documentUnskip", id: "k1", at: "2026-10-09T17:00:00Z", contactId: "c1", skip },
+      { kind: "documentSkip", id: "k1", at: AT, contactId: "c1", skip },
+    ] as TimelineEntry[]);
+    expect(rows.map((d) => [d.kind, d.verb, d.excerpt])).toEqual([
+      ["documentUnskip", "marked Insurance as needed again", null],
+      ["documentSkip", "marked Insurance as not needed", null],
+    ]);
+  });
+});

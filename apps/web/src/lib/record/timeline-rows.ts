@@ -123,6 +123,11 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
         detail: entry.request.items.map((i) => (i.category === "other" && i.note ? i.note : tr.text(`documents.category.${i.category}` as MessageKey))).join(", "),
       };
     }
+    // S-07 2c (spec 5.4): "{person} marked Insurance as not needed" / "… as needed again"; no status, no detail.
+    case "documentSkip":
+      return { verb: tr.text("timeline.documentSkip", { category: tr.text(`documents.category.${entry.skip.category}` as MessageKey) }), status: null, detail: null };
+    case "documentUnskip":
+      return { verb: tr.text("timeline.documentUnskip", { category: tr.text(`documents.category.${entry.skip.category}` as MessageKey) }), status: null, detail: null };
   }
 }
 

@@ -13,6 +13,7 @@ import { createForm, createSubmission, linkSubmissionContact } from "../forms";
 import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import { createDocumentRequest } from "../document-requests";
+import { skipDocumentRequirement, unskipDocumentRequirement } from "../document-requirements";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
@@ -618,5 +619,25 @@ describe("the documents source's request rows (S-07 2b, plan deviation 6)", () =
       expect(rows.map((i) => i.id)).toEqual([req.id]);
       const e = rows[0]!;
       expect(e.kind === "documentRequest" && [e.at, e.contactId, e.request.items, e.request.created_by]).toEqual([req.created_at, ana, items, "user_asker"]);
+    }));
+});
+
+describe("the documents source's skip rows (S-07 2c)", () => {
+  it("a skip that was then un-skipped reads two entries, documentUnskip at unskipped_at then documentSkip at created_at, both the skip's id (mutation: drop the fifth read -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const r = await skipDocumentRequirement(db, { accountId, contactId: ana, category: "insurance", actorId: "user_skipper" });
+      if (r.status !== "skipped") throw new Error("seed skip failed");
+      const un = await unskipDocumentRequirement(db, accountId, r.skip.id, "user_unskipper");
+      if (!un) throw new Error("seed un-skip failed");
+      const page = await listTimelinePage(db, accountId, [ana]);
+      expect(page.failed).toEqual([]);
+      const rows = page.items.filter((i) => i.kind === "documentSkip" || i.kind === "documentUnskip");
+      expect(rows.map((i) => [i.kind, i.id, iso(i.at), i.contactId])).toEqual([
+        ["documentUnskip", r.skip.id, iso(un.unskippedAt), ana],
+        ["documentSkip", r.skip.id, iso(r.skip.created_at), ana],
+      ]);
+      expect(rows.map((i) => (i.kind === "documentSkip" || i.kind === "documentUnskip") && [i.skip.category, i.skip.skipped_by, i.skip.unskipped_by]))
+        .toEqual([["insurance", "user_skipper", "user_unskipper"], ["insurance", "user_skipper", "user_unskipper"]]);
     }));
 });

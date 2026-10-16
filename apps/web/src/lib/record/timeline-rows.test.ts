@@ -216,3 +216,20 @@ describe("customer upload links' rows (S-07 2b)", () => {
     expect(rows([doc], "en")[0]!.mark).toEqual({ kind: "customer", label: "Customer" });
   });
 });
+
+describe("required-documents skip rows (S-07 2c)", () => {
+  const AT = "2026-10-16T15:00:00.000Z";
+  it("a skip reads 'marked Insurance as not needed', an un-skip 'marked … as needed again', and their keys differ (mutations: one key for both; the category's raw key -> FAILS)", () => {
+    const skip = { id: "k1", category: "insurance", contact_id: "c1", skipped_by: "u1", created_at: AT, unskipped_by: "u1", unskipped_at: "2026-10-16T16:00:00.000Z" };
+    const entries = [
+      { kind: "documentUnskip", id: "k1", at: "2026-10-16T16:00:00.000Z", contactId: "c1", skip },
+      { kind: "documentSkip", id: "k1", at: AT, contactId: "c1", skip },
+    ] as TimelineEntry[];
+    const en = rows(entries, "en");
+    expect(en.map((r) => r.verb)).toEqual(["marked Insurance as needed again", "marked Insurance as not needed"]);
+    const es = rows(entries, "es");
+    expect(es.map((r) => r.verb)).toEqual(["marcó que Seguro hace falta otra vez", "marcó que Seguro no hace falta"]);
+    expect(en.map((r) => [r.status, r.detail])).toEqual([[null, null], [null, null]]);
+    expect(new Set(en.map((r) => r.key)).size).toBe(2);
+  });
+});

@@ -123,6 +123,17 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     });
   });
 
+  it("a skip and an un-skip row (S-07 2c) each parse and are kept (mutation: drop documentSkip or documentUnskip from ROW_KINDS -> FAILS)", () => {
+    const body = clone();
+    const skip = { key: "documentSkip-k1", kind: "documentSkip", mark: { kind: "person", label: "Ana" }, verb: "marked Insurance as not needed",
+      status: null, detail: null, time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z", excerpt: null };
+    const unskip = { ...skip, key: "documentUnskip-k1", kind: "documentUnskip", verb: "marked Insurance as needed again", dateTime: "2026-10-09T17:12:00Z" };
+    (body.recent as { rows: unknown[] }).rows = [unskip, skip];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [unskip, skip], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("a recent row whose excerpt carries the contact's language ('es') parses (mutation: keep lang === \"\" || lang === \"en\" -> the row is malformed -> FAILS)", () => {
     const body = clone();
     (body.recent as { rows: unknown[] }).rows = [{ ...ROW, excerpt: { text: "Hola", lang: "es", done: false } }];

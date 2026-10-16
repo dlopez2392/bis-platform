@@ -60,6 +60,10 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     case "documentRemoved": return { kind: "automation", personId: null };
     // S-07 2b: the person who asked.
     case "documentRequest": return { kind: "person", personId: entry.request.created_by };
+    // S-07 2c: the person who marked it not needed, and the person who marked it needed again (both
+    // NOT NULL on a skip row that carries them; DESIGN.md "Provenance": always a person mark).
+    case "documentSkip": return { kind: "person", personId: entry.skip.skipped_by };
+    case "documentUnskip": return { kind: "person", personId: entry.skip.unskipped_by };
   }
 }
 
