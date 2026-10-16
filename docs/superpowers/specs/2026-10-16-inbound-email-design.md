@@ -132,11 +132,12 @@ Filed mail only (held mail's sender is not confirmed). The new text (never the q
 history) runs through the texts' English/Spanish matcher (`lib/consent/phrases.ts`).
 
 - (Amended 2026-10-16, owner ruling G4) **Clear** is a stop keyword other than CANCEL/CANCELAR (on a reminder those mean the appointment); **unclear** is a stop sentence, or CANCEL/CANCELAR. Each is tried on the whole new text, then on its first non-blank line (a phone signature under "STOP").
-- **Clear stop:** append "No marketing emails" for the sender's address to the ledger,
+- **Clear stop:** append "No marketing emails" for the ledger address of the contact the sender matched (amended 2026-10-16, final review I1: the contact's own stored address as the email gate and the Email row read it, never the sender's literal From, which can differ by a +tag) to the ledger,
   method `inbound_email`, only while the address is allowed (Amended 2026-10-16, owner ruling G3: so its Undo can never lift an older stop such as an unsubscribe link), evidence = the message id and the matched phrase. The thread
   shows "Stopped marketing emails · from their reply" with **Undo**. Undo appends a
   reversing staff event (the ledger stays append-only; amended 2026-10-16, owner ruling G2: 0082 lets the ledger's staff Undo reverse an `inbound_email` stop. G9: Resume emails does not lift it; its Undo or the customer's own resubscribe does). A ledger write failure → 503 so
   Resend retries, the same rule as SMS.
+- (Amended 2026-10-16, final review C1) A re-File after an Undo (File, Undo, then File or Choose a record again) re-applies the stop: a fresh stop is recorded, never the earlier, reversed one reported as standing.
 - **Unclear:** a ghost chip "May want to stop" with the existing **Stop emails** action.
 - Per the 2026-09-30 decision, an email stop covers referral asks.
 
