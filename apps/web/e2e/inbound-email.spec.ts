@@ -51,11 +51,26 @@ test.afterAll(async () => {
   if (inboundId) { const { error } = await svc.from("inbound_emails").delete().eq("id", inboundId); expect(error).toBeNull(); }
   if (conversationId) {
     const { error: e1 } = await svc.from("messages").delete().eq("account_id", accountId).eq("conversation_id", conversationId); expect(e1).toBeNull();
-    const { error: e2 } = await svc.from("conversations").delete().eq("id", conversationId); expect(e2).toBeNull();
+    const { error: e2 } = await svc.from("conversations").delete().eq("account_id", accountId).eq("id", conversationId); expect(e2).toBeNull();
   }
-  if (contactId) { const { error } = await svc.from("contacts").delete().eq("id", contactId); expect(error).toBeNull(); }
+  if (contactId) { const { error } = await svc.from("contacts").delete().eq("account_id", accountId).eq("id", contactId); expect(error).toBeNull(); }
+
   const { count, error } = await svc.from("inbound_emails").select("id", { count: "exact", head: true }).eq("provider_email_id", `e2e_${STAMP}`);
   expect(error).toBeNull(); expect(count).toBe(0);
+
+  // Fix round 1 (review): the document-requirements.spec.ts shape — re-read every row this
+  // afterAll just deleted, by the SAME id it deleted it by, and assert none is left, rather than
+  // trusting the delete calls' own null-error check alone.
+  if (contactId) {
+    const { data: leftContact, error: cErr } = await svc.from("contacts").select("id").eq("account_id", accountId).eq("id", contactId);
+    expect(cErr).toBeNull(); expect(leftContact ?? []).toEqual([]);
+  }
+  if (conversationId) {
+    const { data: leftConvo, error: convErr } = await svc.from("conversations").select("id").eq("account_id", accountId).eq("id", conversationId);
+    expect(convErr).toBeNull(); expect(leftConvo ?? []).toEqual([]);
+    const { data: leftMsgs, error: msgErr } = await svc.from("messages").select("id").eq("account_id", accountId).eq("conversation_id", conversationId);
+    expect(msgErr).toBeNull(); expect(leftMsgs ?? []).toEqual([]);
+  }
 });
 
 test("a held email waits in Needs a look, with its reason and the suggestion", async ({ page }) => {
