@@ -13,12 +13,7 @@ import { cn } from "@/lib/utils";
 import { notifyActionResult } from "@/lib/forms/action-feedback";
 import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import type { InboundModeResult, DnsCheckResult } from "./actions";
-
-const MODE_LABEL: Record<InboundMode, string> = {
-  off: m["settings.replies.off"],
-  bis: m["settings.replies.bis"],
-  own_domain: m["settings.replies.own"],
-};
+import { applyReplies, probeDns, MODE_LABEL, type RepliesSettings } from "./replies-row-handlers";
 
 const MODE_OPTIONS: readonly InboundMode[] = ["off", "bis", "own_domain"];
 
@@ -60,32 +55,28 @@ function RepliesRow({
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  function undoableSave(next: { mode: InboundMode; domain: string | null }, result: InboundModeResult & { ok: true }) {
+  // Every write below runs through applyReplies/probeDns
+  // (replies-row-handlers.ts), which catches a THROWN server action — a
+  // stale deployment, an expired session — and toasts common.actionCrashed
+  // instead of failing silently (fix round 1, code review). Local state is
+  // only ever written from onApplied/onUndone, which those helpers call
+  // ONLY once the server has answered `{ ok: true }` — so a crash or a
+  // refusal leaves `applied`/`selected`/`domainInput` exactly as they were.
+  function onApplied(next: RepliesSettings) {
     setApplied(next);
     setSelected(next.mode);
-    toast.success(m["settings.replies.saved"].replace("{mode}", MODE_LABEL[next.mode]), {
-      action: {
-        label: m["common.undo"],
-        onClick: () => {
-          void setReplies(result.previous).then((back) => {
-            if (!back.ok) { toast.error(back.error); return; }
-            setApplied(result.previous);
-            setSelected(result.previous.mode);
-            setDomainInput(result.previous.domain ?? "");
-            setDnsResult(null);
-            toast.success(m["settings.replies.undone"].replace("{mode}", MODE_LABEL[result.previous.mode]));
-          });
-        },
-      },
-    });
+  }
+  function onUndone(previous: RepliesSettings) {
+    setApplied(previous);
+    setSelected(previous.mode);
+    setDomainInput(previous.domain ?? "");
+    setDnsResult(null);
   }
 
   async function chooseOffOrBis(next: "off" | "bis") {
     setSaving(true);
     try {
-      const result = await setReplies({ mode: next, domain: applied.domain });
-      if (!result.ok) { toast.error(result.error); return; }
-      undoableSave({ mode: next, domain: applied.domain }, result);
+      await applyReplies({ setReplies, toast, onApplied, onUndone }, { mode: next, domain: applied.domain });
     } finally {
       setSaving(false);
     }
@@ -100,14 +91,13 @@ function RepliesRow({
   async function runCheckDns() {
     setChecking(true);
     try {
-      const result = await checkDns(domainInput);
+      const result = await probeDns(checkDns, domainInput, toast);
+      if (!result) return; // crashed; probeDns already toasted
       setDnsResult(result);
       if (!result.ok) return;
       setSaving(true);
       try {
-        const saveResult = await setReplies({ mode: "own_domain", domain: domainInput });
-        if (!saveResult.ok) { toast.error(saveResult.error); return; }
-        undoableSave({ mode: "own_domain", domain: domainInput }, saveResult);
+        await applyReplies({ setReplies, toast, onApplied, onUndone }, { mode: "own_domain", domain: domainInput });
       } finally {
         setSaving(false);
       }
