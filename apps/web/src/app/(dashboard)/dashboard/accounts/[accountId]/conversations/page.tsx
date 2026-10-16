@@ -11,6 +11,9 @@ import { parseCursor, encodeCursor } from "@/lib/cursor";
 import { requireAccountAccess } from "@/lib/auth";
 import { withWho } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
 import { m } from "@/lib/messages";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
@@ -45,17 +48,23 @@ export default async function ConversationsPage({
   // one) rather than throwing on a hand-editable URL — `parseCursor`'s own
   // contract (lib/cursor.ts).
   const cursor = parseCursor(before);
-  const [conversations, account] = await Promise.all([
+  const [conversations, account, prefs] = await Promise.all([
     listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor, assignee: assign.assignee }),
-    // The zone every row's own timestamp renders in below — not a throw: one
+    // The zone every row's own timestamp renders in below, and the account's
+    // own default language (Task 11's locale resolution) — not a throw: one
     // cosmetic date column must not take the whole inbox down, same reasoning
     // as the contacts list's own read (D-010).
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle(),
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle(),
+    getPersonPrefs(),
   ]);
   if (account.error) {
-    console.error(`conversations: account ${accountId} timezone read failed: ${account.error.message}`);
+    console.error(`conversations: account ${accountId} timezone and language read failed: ${account.error.message}`);
   }
-  const zone = await renderZone((account.data as { timezone: string } | null)?.timezone);
+  const accountRow = account.data as { timezone: string; language?: Locale | null } | null;
+  const zone = await renderZone(accountRow?.timezone);
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: accountRow?.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
   const base = `/dashboard/accounts/${accountId}/conversations`;
 
   // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see the
@@ -122,6 +131,27 @@ export default async function ConversationsPage({
       ?? (await getConversationSummary(db, accountId, c)) ?? undefined)
     : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
+  // Orchestrator ruling (Task 11, visibility): a Technician may not act for a household member
+  // they cannot see. Every distinct `meta.sender.contact_id` this thread's own messages carry,
+  // checked under the REQUEST client (0068's own RLS scope) — an id that comes back is visible
+  // to this viewer; one that does not (a Technician's own customers only) is withheld from the
+  // bubble's Undo/Stop-emails button, even though the status text itself still shows.
+  const senderIds = Array.from(new Set(
+    messages.flatMap((message) => {
+      const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
+      return senderId ? [senderId] : [];
+    }),
+  ));
+  let visibleSenderIds = new Set<string>();
+  if (senderIds.length > 0) {
+    const { data: visible, error: visibleError } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).in("id", senderIds);
+    if (visibleError) {
+      console.error(`conversations: account ${accountId} sender-visibility read failed: ${visibleError.message}`);
+    } else {
+      visibleSenderIds = new Set((visible ?? []).map((row) => (row as { id: string }).id));
+    }
+  }
 
   return (
     <>
@@ -157,6 +187,11 @@ export default async function ConversationsPage({
               messages={messages}
               timezone={zone.zone}
               contactLanguage={active.contactLanguage}
+              accountId={accountId}
+              conversationId={active.id}
+              contactId={active.contactId}
+              locale={locale}
+              visibleSenderIds={visibleSenderIds}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,

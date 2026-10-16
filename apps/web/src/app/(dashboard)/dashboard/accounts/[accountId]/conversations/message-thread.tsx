@@ -3,6 +3,8 @@ import { formatDateTimeInZone } from "@/lib/format";
 import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
+import type { Locale } from "@/lib/i18n/locale";
+import { readInboundMeta, InboundNotice } from "./inbound-notice";
 
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
 
@@ -12,6 +14,11 @@ export function MessageThread({
   composer,
   timezone,
   contactLanguage,
+  accountId,
+  conversationId,
+  contactId,
+  locale,
+  visibleSenderIds,
 }: {
   messages: Message[];
   contactName: string;
@@ -23,6 +30,20 @@ export function MessageThread({
   timezone: string;
   /** S-09 §9: the customer's language for their own words; null when not set. */
   contactLanguage: "en" | "es" | null;
+  /** Task 11 (S-06 part 1): threaded to each bubble's InboundNotice. Its
+   *  actions prove the conversation and build their context for the right
+   *  contact — this thread's own, UNLESS a given bubble's own
+   *  `meta.sender.contact_id` names a household member instead. */
+  accountId: string;
+  conversationId: string;
+  contactId: string;
+  locale: Locale;
+  /** Orchestrator ruling (visibility): the set of this thread's own
+   *  `meta.sender.contact_id`s the viewer can actually see — `page.tsx`'s
+   *  own request-client (RLS) read. A bubble with no `meta.sender` at all
+   *  is the thread's own contact, already proven visible by the page
+   *  itself before any message loaded, so it needs no entry here. */
+  visibleSenderIds: ReadonlySet<string>;
 }) {
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
@@ -88,6 +109,28 @@ export function MessageThread({
             {message.direction === "outbound" && messageFailureReason(message) ? (
               <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(message)}</p>
             ) : null}
+            {/* Task 11 (S-06 part 1): who sent it, how many attachments, the
+                emailed stop or the May-want-to-stop chip — only for an
+                inbound email that `file.ts` actually filed as one. */}
+            {(() => {
+              const meta = message.direction === "inbound" && message.channel === "email" ? readInboundMeta(message.meta) : null;
+              if (!meta) return null;
+              const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
+              // No sender at all means this bubble's address IS the thread's own contact —
+              // already proven visible by page.tsx before any message loaded. A sender
+              // (a household member) must be in the viewer's own visible set.
+              const canAct = !senderId || visibleSenderIds.has(senderId);
+              return (
+                <InboundNotice
+                  meta={meta}
+                  accountId={accountId}
+                  conversationId={conversationId}
+                  contactId={senderId ?? contactId}
+                  locale={locale}
+                  canAct={canAct}
+                />
+              );
+            })()}
           </div>
         ))}
       </div>
