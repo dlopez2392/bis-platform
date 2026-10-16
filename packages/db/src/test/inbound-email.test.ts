@@ -9,6 +9,7 @@ import {
   BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
   ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage,
   decideInboundEmail, unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
+  findInboundEmailByProviderId,
   type NewInboundEmail,
 } from "../inbound-email";
 
@@ -251,6 +252,25 @@ describe("recordInboundEmail's duplicate re-read is account-scoped", () => {
       expect(second.created).toBe(false);
       expect(second.row.id).toBe(first.row.id);
       expect(second.row.text).toBe(first.row.text);
+    });
+  });
+});
+
+describe("findInboundEmailByProviderId", () => {
+  it("absent answers null; present answers the row with its own accountId — account-agnostic by design, SERVICE CLIENT ONLY: the caller compares row.accountId itself (mutation: swap .maybeSingle() for .single() → an absent id throws instead of answering null, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const providerEmailId = `re_${RUN}_${Math.random().toString(36).slice(2, 8)}`;
+      expect(await findInboundEmailByProviderId(db, providerEmailId)).toBeNull();
+
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Finder", email: "finder@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const { row: stored } = await recordInboundEmail(db, row(accountId, t.conversationId, { providerEmailId }));
+
+      const found = await findInboundEmailByProviderId(db, providerEmailId);
+      expect(found).toEqual(stored);
+      expect(found!.accountId).toBe(accountId);
+
+      expect(await findInboundEmailByProviderId(db, `re_${RUN}_${Math.random().toString(36).slice(2, 8)}`)).toBeNull();
     });
   });
 });

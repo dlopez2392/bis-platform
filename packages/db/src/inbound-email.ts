@@ -160,6 +160,20 @@ export async function getInboundEmail(db: SupabaseClient, accountId: string, id:
   return data ? toRow(data as Raw) : null;
 }
 
+/**
+ * Account-agnostic lookup by the globally-unique `provider_email_id` (`inbound_emails_provider_email_id_key`).
+ * SERVICE CLIENT USE ONLY — there is no account scope to this read, so callers MUST compare
+ * `row.accountId` themselves against whatever account they believe they are acting on before trusting
+ * anything else about the row (same shape as `recordInboundEmail`'s own 23505 re-read, which is scoped;
+ * this one deliberately is not, because its whole purpose is finding a row when the caller does not yet
+ * know, or cannot trust, which account it belongs to).
+ */
+export async function findInboundEmailByProviderId(db: SupabaseClient, providerEmailId: string): Promise<InboundEmailRow | null> {
+  const { data, error } = await db.from("inbound_emails").select(COLS).eq("provider_email_id", providerEmailId).maybeSingle();
+  if (error) throw new Error(`findInboundEmailByProviderId failed: ${error.message}`);
+  return data ? toRow(data as Raw) : null;
+}
+
 /** Points a filed row at its message, once (message_id is null). */
 export async function setInboundMessage(db: SupabaseClient, accountId: string, id: string, messageId: string): Promise<boolean> {
   const { data, error } = await db.from("inbound_emails").update({ message_id: messageId })

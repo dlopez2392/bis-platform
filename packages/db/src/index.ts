@@ -78,7 +78,7 @@ export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sendin
 // S-06 part 1: inbound email (0082).
 export {
   INBOUND_MODES, BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
-  ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage, decideInboundEmail,
+  ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, findInboundEmailByProviderId, setInboundMessage, decideInboundEmail,
   unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
   type InboundMode, type InboundSettings, type ReplyThread, type InboundStatus, type HoldReason, type InboundAuthRecord,
   type InboundEmailRow, type NewInboundEmail, type HeldInboundEmail, type SenderMatch,
