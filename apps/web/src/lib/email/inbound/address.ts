@@ -3,6 +3,11 @@ export const BIS_REPLY_DOMAIN = "reply.bis-rgv.com";
 export type ReplyAddress = { token: string; domain: string };
 
 const HAS_LETTER = /\p{L}/u;
+// Fix round 1 (header injection, Task 9 review item 1): CR, LF, tab, NUL and
+// every other C0 control character. displayName feeds resend.ts's
+// string-built `From: "<name>" <address>` header; a CR/LF inside the name
+// is a header-injection payload (a forged Bcc/extra header), not a name.
+const HAS_CONTROL_CHAR = /[\x00-\x1F\x7F]/;
 
 /**
  * CRITICAL (review round 2): a strict, fail-closed grammar replaces the
@@ -52,7 +57,12 @@ export function displayName(raw: string | null | undefined): string | null {
   const name = (m[1] ?? m[2] ?? "").trim();
   // M4: a forged quoted fake address can collapse `name` to a lone quote
   // character or other punctuation with no letter in it — never a real name.
-  return name && HAS_LETTER.test(name) ? name : null;
+  if (!name || !HAS_LETTER.test(name)) return null;
+  // Fix round 1: a control character (CR/LF above all) is never part of a
+  // real display name — refuse rather than hand a header-injection payload
+  // to any caller that composes a raw header from this.
+  if (HAS_CONTROL_CHAR.test(name)) return null;
+  return name;
 }
 
 export function domainOf(address: string): string | null {

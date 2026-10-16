@@ -90,4 +90,13 @@ describe("the reply address", () => {
     expect(bareAddress(`"Ruiz, Ana" <Ana@Customer.com>`)).toBe("ana@customer.com");
     expect(displayName(`"Ruiz, Ana" <Ana@Customer.com>`)).toBe("Ruiz, Ana");
   });
+
+  // Fix round 1 (header injection, Task 9 review item 1): a CRLF inside the
+  // display name reaches resend.ts's string-built `From` header via
+  // `fromName` unless displayName refuses any control character outright —
+  // quoted or not.
+  it("refuses a display name carrying CR/LF (quoted or unquoted) rather than passing a header-injection payload through (mutation: drop the control-character check → FAILS)", () => {
+    expect(displayName(`"Ana\r\nBcc: evil@attacker.com" <ana@gmail.com>`)).toBeNull();
+    expect(displayName(`Ana\r\nEvil <ana@gmail.com>`)).toBeNull();
+  });
 });
