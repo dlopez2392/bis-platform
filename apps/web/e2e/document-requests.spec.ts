@@ -173,8 +173,8 @@ test("1. staff asks, by link: the dialog, the toast, the clipboard matches reque
 
 test("2. the customer uploads with no sign-in: clean, the virus, clean again, then done; the database and the work queue agree; staff's OPEN page sees it with no reload (mutations: scanVersion skipping the virus check -> no refusal, no removal -> FAILS; the card's requests poll removed -> the open page never changes -> FAILS)", async ({ page, browser }) => {
   // The no-reload wait below (up to 45s for the open card's 20s poll, then the files and timeline) on top
-  // of the customer's three uploads: more than the file's 150s default would leave on a slow run.
-  test.setTimeout(210_000);
+  // of the customer's three uploads: more than the file's 150s default leaves; the worst case sums to about 205-215s and retries are 0.
+  test.setTimeout(240_000);
   const token = requestToken(requestId1);
   // Owner ruling 2026-10-16 (S-07 2b follow-up): staff's contact page is open BEFORE the customer uploads,
   // and is never reloaded or navigated again until the card, its requests list and the timeline have
