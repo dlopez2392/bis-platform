@@ -35,6 +35,8 @@ const dbMocks = vi.hoisted(() => ({
   listSitesToSync: vi.fn(),
   // The documents sweep, every tick: two reads, no write when nothing is due.
   listAbandonedUploads: vi.fn(async () => []), listPurgeableDocuments: vi.fn(async () => []),
+  // S-07 2b, Task 6b: the scan pass's lost-To-do reconcile, every tick, before anything else in it.
+  listRequestsMissingReceivedTask: vi.fn(),
   listAccountsDueWeeklyReport: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
@@ -213,6 +215,8 @@ beforeEach(() => {
   // The documents sweep, same treatment: nothing is due, so it must run to real counters, not errored.
   dbMocks.listAbandonedUploads.mockResolvedValue([]);
   dbMocks.listPurgeableDocuments.mockResolvedValue([]);
+  // The scan pass's lost-To-do reconcile: nothing missing, so it must run to its own counter, not errored.
+  dbMocks.listRequestsMissingReceivedTask.mockResolvedValue([]);
   dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
@@ -262,7 +266,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.siteTraffic).not.toHaveProperty("errored");
     expect(results.documentsSweep).toEqual({ abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 });
     // S-07 2a: the suite sets no SCANNER_URL, so the pass reports its own not-configured counter.
-    expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1 });
+    expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1, requestTasks: 0 });
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));

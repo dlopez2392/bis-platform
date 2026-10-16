@@ -26,8 +26,8 @@ describe("reserve_document_version serialises on the account row", () => {
         "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'DV Lock') returning id", [agency!.id, `${TEST_ORG_ID_PREFIX}dvlock_${RUN}`])).rows[0]!.id;
       const contact = (await seedC.query<{ id: string }>("insert into contacts (account_id, first_name) values ($1,'Lock') returning id", [acct])).rows[0]!.id;
       const doc = (await seedC.query<{ id: string }>(
-        `insert into documents (account_id, contact_id, title, category, source, scan_status, created_by)
-         values ($1,$2,'Lock','other','upload','skipped','user_lock') returning id`, [acct, contact])).rows[0]!.id;
+        `insert into documents (account_id, contact_id, title, category, source, created_by)
+         values ($1,$2,'Lock','other','upload','user_lock') returning id`, [acct, contact])).rows[0]!.id;
 
       await a.query("begin");
       const ra = await a.query("select public.reserve_document_version($1,$2,10,'application/pdf','a.pdf','user_lock') as r", [acct, doc]);

@@ -46,6 +46,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "document": return null;
     case "documentVersion": return null;
     case "documentRemoved": return null;
+    // S-07 2b: the head already names how many; the items are the row's detail.
+    case "documentRequest": return null;
   }
 }
 

@@ -8,9 +8,13 @@ vi.mock("./documents-actions", () => ({
   startDocumentUploadAction: vi.fn(), finishDocumentUploadAction: vi.fn(), abandonDocumentUploadAction: vi.fn(),
   startDocumentVersionUploadAction: vi.fn(), purgeDocumentAction: vi.fn(),
 }));
+vi.mock("./document-requests-actions", () => ({
+  createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
+}));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey } = await import("./documents-card");
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
+  shouldReloadRequests, askAfter, keepRequests } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -23,10 +27,19 @@ const view = (over: Record<string, unknown> = {}) => ({
 });
 const ready = (live: unknown[], trashed: unknown[] = [], capped = false, space: { used: number; quota: number } | null = null): Load => ({ status: "ready", data: {
   today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "c1" }, live, trashed, capped, space } } as Load);
-const handlers = { trash: vi.fn(), restore: vi.fn(), setOwnersOnly: vi.fn(), download: vi.fn(), saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(), changed: vi.fn() };
+const handlers = { trash: vi.fn(), restore: vi.fn(), setOwnersOnly: vi.fn(), download: vi.fn(), saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(), changed: vi.fn(),
+  askCustomer: vi.fn(), copyRequestLink: vi.fn(), revokeRequest: vi.fn() };
+type RequestsLoad = Props["requests"]["load"];
+const openRequest = { id: "r1", channel: "link", createdAt: "2026-10-13T15:00:00.000Z", expiresAt: "2026-10-19T15:00:00.000Z",
+  items: [{ key: "insurance", category: "insurance", note: null, answered: false }] };
+const requestsReady = (requests: unknown[] = []): RequestsLoad =>
+  ({ kind: "ready", data: { now: "2026-10-13T15:00:00.000Z", channels: { text: true, email: true }, requests } } as RequestsLoad);
+const slot = (load: RequestsLoad = requestsReady()) => ({ load, onAsk: vi.fn(), onRetry: vi.fn(), onCopy: vi.fn(), onRevoke: vi.fn() });
+// Every case renders with the requests read ready (so "Ask the customer" is drawn): the card's one-primary assertions below hold with it.
 const render = (load: Load, over: Partial<Props> = {}) => renderToStaticMarkup(createElement(DocumentsCardView, {
   accountId: "acc", load, canManage: true, emptyText: m["documents.empty.contact"], locale: "en", handlers,
-  onRetry: vi.fn(), onFiles: vi.fn(), onOpen: vi.fn(), panel: null, versionPhases: {}, onNewVersion: vi.fn(), onPurge: vi.fn(), ...over,
+  onRetry: vi.fn(), onFiles: vi.fn(), onOpen: vi.fn(), panel: null, versionPhases: {}, onNewVersion: vi.fn(), onPurge: vi.fn(),
+  requests: slot(), ...over,
 } as Props));
 /** One row's own markup, from its opening <li> to the next row or the end of the list. */
 const rowOf = (html: string, id: string) => {
@@ -400,5 +413,112 @@ describe("pollTimerKey: the re-read timer's own key (review I1)", () => {
   it("answers null (no timer) once nothing is left to poll, whatever reads has reached (mutation: return a key for null -> FAILS)", () => {
     expect(pollTimerKey(null, 0)).toBeNull();
     expect(pollTimerKey(null, 9)).toBeNull();
+  });
+});
+
+describe("Ask the customer on the card (S-07 2b, spec 4.2)", () => {
+  const askTag = (html: string) => /<button[^>]*data-ask-customer[^>]*>/.exec(html)?.[0] ?? null;
+
+  it("the header gains a ghost 'Ask the customer' beside Take photo, and the card STILL has exactly one primary, Upload (rule 8; mutation: the new button as default -> FAILS)", () => {
+    const html = render(ready([view()]));
+    expect(askTag(html)).toContain('data-variant="ghost"');
+    expect(html).toMatch(/data-ask-customer[^>]*>Ask the customer</);
+    expect(html.match(/data-variant="default"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-variant="default"[^>]*>Upload</);
+    // Beside Take photo, in the header's button row: after the count, before the file list.
+    expect(html.indexOf("data-ask-customer")).toBeLessThan(html.indexOf("data-take-photo"));
+    expect(html.indexOf("data-ask-customer")).toBeLessThan(html.indexOf("data-document-row"));
+    expect(renderedText(render(ready([view()]), { locale: "es", emptyText: m["documents.empty.contact.es"] }))).toContain("Pedir al cliente");
+  });
+
+  it("is not drawn while the upload panel is open (the panel's Upload is the one primary), nor before the requests read is ready (the dialog needs its channels)", () => {
+    expect(askTag(render(ready([view()]), { panel: createElement("div", { "data-documents-panel": "" }) }))).toBeNull();
+    expect(askTag(render(ready([view()]), { requests: slot({ kind: "loading" }) }))).toBeNull();
+    expect(askTag(render(ready([view()]), { requests: slot({ kind: "error" }) }))).toBeNull();
+  });
+
+  it("the open requests sit after the file list and before the trash (mutation: never draw them -> FAILS)", () => {
+    const html = render(ready([view()], [view({ id: "t1", deletedAt: "2026-10-10T15:00:00.000Z" })]), { requests: slot(requestsReady([openRequest])) });
+    const at = html.indexOf("data-document-requests");
+    expect(at).toBeGreaterThan(html.indexOf('data-document-row="d1"'));
+    expect(at).toBeLessThan(html.indexOf("data-documents-trash"));
+    expect(renderedText(html)).toContain("Asked for");
+    expect(html.match(/data-variant="default"/g)).toHaveLength(1);
+  });
+
+  it("a failed requests read is its own alert and never blanks the files (spec 6, rule 5; mutation: the files' error state for it -> FAILS)", () => {
+    const html = render(ready([view()]), { requests: slot({ kind: "error" }) });
+    expect(html).toContain('data-document-row="d1"');
+    expect(renderedText(html)).toContain(m["documents.requests.loadFailed"]);
+    expect(renderedText(html)).not.toContain(m["documents.loadFailed"]);
+    expect(html).not.toContain("data-record-error");
+  });
+
+  it("a customer's file reads 'Sent by the customer · <when>', never 'Added by …', in both languages (mutation: the staff line for a customer file -> FAILS)", () => {
+    const sent = view({ source: "customer", addedBy: { you: false, name: null } });
+    const html = render(ready([sent]));
+    expect(renderedText(html)).toContain("Sent by the customer · 3 days ago");
+    expect(renderedText(html)).not.toContain("Added by");
+    const es = render(ready([sent]), { locale: "es", emptyText: m["documents.empty.contact.es"] });
+    expect(renderedText(es)).toContain("Enviado por el cliente · hace 3 días");
+    expect(sourceLine(sent as never, "2026-10-13", "en")).toBe("Sent by the customer · 3 days ago");
+  });
+});
+
+describe("shouldReloadRequests: the files' poll keeps the open requests honest (review I2)", () => {
+  const scanned = (id: string, scan: string, over: Record<string, unknown> = {}) =>
+    view({ id, source: "customer", version: { id: `v-${id}`, contentType: "application/pdf", bytes: 1, scan, createdAt: "2026-10-13T14:00:00.000Z" }, ...over });
+  const open = requestsReady([openRequest]);
+
+  it("a file's scan state changing while a request is open re-reads the requests (mutation: never reload -> FAILS)", () => {
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "clean")]), open)).toBe(true);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "infected")]), open)).toBe(true);
+  });
+
+  it("the same read again does not: a re-read the reload itself caused can never trigger another (no loop; mutation: answer true whenever a request is open -> FAILS)", () => {
+    expect(shouldReloadRequests(ready([scanned("d1", "clean")]), ready([scanned("d1", "clean")]), open)).toBe(false);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), ready([scanned("d1", "pending")]), open)).toBe(false);
+  });
+
+  it("a customer's file new to this read does; a staff upload new to it does not", () => {
+    expect(shouldReloadRequests(ready([]), ready([scanned("d9", "pending")]), open)).toBe(true);
+    expect(shouldReloadRequests(ready([]), ready([scanned("d9", "pending", { source: "upload" })]), open)).toBe(false);
+  });
+
+  it("nothing open, or the requests not read yet or failed: no re-read (mutation: drop the open-request guard -> FAILS)", () => {
+    const prev = ready([scanned("d1", "pending")]);
+    const next = ready([scanned("d1", "clean")]);
+    expect(shouldReloadRequests(prev, next, requestsReady([]))).toBe(false);
+    expect(shouldReloadRequests(prev, next, { kind: "loading" })).toBe(false);
+    expect(shouldReloadRequests(prev, next, { kind: "error" })).toBe(false);
+  });
+
+  it("no ready read to compare with (the first read, or a failed one) is no change", () => {
+    expect(shouldReloadRequests(null, ready([scanned("d1", "clean")]), open)).toBe(false);
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), { status: "error" }, open)).toBe(false);
+  });
+
+  it("another record's read is not a change on this one", () => {
+    const other = { status: "ready", data: { ...(ready([scanned("d1", "clean")]) as { data: object }).data, record: { kind: "contact", id: "c2" } } } as Load;
+    expect(shouldReloadRequests(ready([scanned("d1", "pending")]), other, open)).toBe(false);
+  });
+});
+
+describe("askAfter: what the dialog does once the handler answers (review M1)", () => {
+  it("a request created closes it; a refusal keeps it open with the refusal's words (mutation: close on a refusal -> FAILS)", () => {
+    expect(askAfter(null)).toEqual({ open: false, error: null });
+    expect(askAfter("documents.request.textOff")).toEqual({ open: true, error: "documents.request.textOff" });
+  });
+});
+
+describe("keepRequests: a failed re-read keeps what the list shows (review M2)", () => {
+  const R = "/api/accounts/acc/contacts/c1/document-requests";
+  it("an error over this route's ready list keeps the list; a first read's error, or another route's, shows the error (mutation: always take the new load -> FAILS)", () => {
+    const shown = { route: R, load: requestsReady([openRequest]) };
+    expect(keepRequests(shown, R, { kind: "error" })).toBe(shown);
+    expect(keepRequests({ route: "", load: { kind: "loading" } }, R, { kind: "error" })).toEqual({ route: R, load: { kind: "error" } });
+    expect(keepRequests({ route: "/other", load: requestsReady([openRequest]) }, R, { kind: "error" })).toEqual({ route: R, load: { kind: "error" } });
+    const fresh = requestsReady([]);
+    expect(keepRequests(shown, R, fresh)).toEqual({ route: R, load: fresh });
   });
 });

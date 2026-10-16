@@ -295,3 +295,117 @@ describe("the document vault's copy, PR 2a (virus scanning)", () => {
     }
   });
 });
+
+describe("the document vault's copy, PR 2b (customer upload links)", () => {
+  const WANT: Record<string, [string, string]> = {
+    "documents.request.open": ["Ask the customer", "Pedir al cliente"],
+    "documents.request.title": ["Ask {name} for documents", "Pedir documentos a {name}"],
+    "documents.request.what": ["What do you need?", "¿Qué necesita?"],
+    "documents.request.otherNote": ["What is it?", "¿Qué es?"],
+    "documents.request.how": ["How should it go?", "¿Cómo se lo enviamos?"],
+    "documents.request.channel.text": ["Text", "Mensaje de texto"],
+    "documents.request.channel.email": ["Email", "Correo"],
+    "documents.request.channel.link": ["Copy link", "Copiar enlace"],
+    "documents.request.textOff": ["Texting isn't available for this customer.", "No se le pueden enviar mensajes de texto a este cliente."],
+    "documents.request.emailOff": ["There's no email address on file.", "No hay un correo en el expediente."],
+    "documents.request.send": ["Send request", "Enviar pedido"],
+    "documents.request.createLink": ["Create link", "Crear enlace"],
+    "documents.request.cancel": ["Cancel", "Cancelar"],
+    "documents.request.pickOne": ["Pick at least one document.", "Elija al menos un documento."],
+    "documents.request.noteNeeded": ["Say what you need under Other.", "Diga qué necesita en Otro."],
+    "documents.request.sentText": ["Request sent by text.", "Pedido enviado por mensaje de texto."],
+    "documents.request.sentEmail": ["Request sent by email.", "Pedido enviado por correo."],
+    "documents.request.held": ["Request saved. It goes out at {time}, after quiet hours.", "Pedido guardado. Sale a las {time}, después del horario de descanso."],
+    "documents.request.linkCopied": ["Link copied. It works for 7 days.", "Enlace copiado. Funciona por 7 días."],
+    "documents.request.copyFailed": ["Your browser didn't let us copy it. Here's the link to copy yourself:", "Su navegador no nos dejó copiarlo. Este es el enlace para copiarlo usted:"],
+    "documents.request.notSent": ["Request saved, but not sent: {reason}. Copy the link instead.", "Pedido guardado, pero no se envió: {reason}. Copie el enlace en su lugar."],
+    "documents.request.failed": ["Couldn't create the request. Try again.", "No se pudo crear el pedido. Intente de nuevo."],
+    "documents.request.reason.textsStopped": ["they asked not to get texts", "pidió no recibir mensajes de texto"],
+    "documents.request.reason.noPhone": ["there's no number we can text", "no hay un número para mensajes de texto"],
+    "documents.request.reason.textSetup": ["texting isn't set up yet", "los mensajes de texto aún no están configurados"],
+    "documents.request.reason.noEmail": ["there's no email address", "no hay un correo"],
+    "documents.request.reason.emailStopped": ["they asked not to get these emails", "pidió no recibir estos correos"],
+    "documents.request.reason.bounced": ["this email address bounced", "este correo rebotó"],
+    "documents.request.reason.failed": ["it couldn't be delivered", "no se pudo entregar"],
+    "documents.request.task.received": ["{name} sent documents · Review", "{name} mandó documentos · Revisar"],
+    "documents.request.task.storageFull": ["{name} couldn't send documents: your storage is full", "{name} no pudo mandar documentos: su espacio está lleno"],
+    "documents.requests.label": ["Asked for", "Pedido"],
+    "documents.requests.expires": ["expires in {count} days", "vence en {count} días"],
+    "documents.requests.expiresOne": ["expires in 1 day", "vence en 1 día"],
+    "documents.requests.expiresToday": ["expires today", "vence hoy"],
+    "documents.requests.received": ["Received", "Recibido"],
+    "documents.requests.waiting": ["Waiting", "Pendiente"],
+    "documents.requests.copy": ["Copy link", "Copiar enlace"],
+    "documents.requests.revoke": ["Revoke", "Anular"],
+    "documents.requests.revoked": ["Request revoked.", "Pedido anulado."],
+    "documents.requests.loadFailed": ["Couldn't load the requests.", "No se pudieron cargar los pedidos."],
+    "documents.addedByCustomer": ["Sent by the customer · {when}", "Enviado por el cliente · {when}"],
+    "timeline.documentRequest": ["asked for {count} documents", "pidió {count} documentos"],
+    "timeline.documentRequestOne": ["asked for 1 document", "pidió 1 documento"],
+    "timeline.documentCustomer": ["sent {title}", "mandó {title}"],
+    "activity.source.documentRequest": ["Document request", "Pedido de documentos"],
+    "documentRequest.sms": ["{business}: please send us {items}. Upload them here:", "{business}: por favor envíenos {items}. Súbalos aquí:"],
+    "documentRequest.email.subject": ["{business} needs a few documents", "{business} necesita unos documentos"],
+    "documentRequest.email.body": ["Please send us: {items}. The link works for 7 days, and you don't need an account.", "Por favor envíenos: {items}. El enlace funciona por 7 días y no necesita una cuenta."],
+    "documentRequest.email.button": ["Upload documents", "Subir documentos"],
+    "customerDocs.pageTitle": ["Send documents", "Enviar documentos"],
+    "customerDocs.heading": ["{business} asks for these documents", "{business} le pide estos documentos"],
+    "customerDocs.intro": ["Upload each one below. Only {business} will see them.", "Suba cada uno abajo. Solo {business} los verá."],
+    "customerDocs.headingNoName": ["The business asks for these documents", "El negocio le pide estos documentos"],
+    "customerDocs.introNoName": ["Upload each one below. Only the business will see them.", "Suba cada uno abajo. Solo el negocio los verá."],
+    "customerDocs.upload": ["Upload", "Subir"],
+    "customerDocs.takePhoto": ["Take photo", "Tomar foto"],
+    "customerDocs.uploading": ["Uploading {percent} %", "Subiendo {percent} %"],
+    "customerDocs.checking": ["Checking", "Revisando"],
+    "customerDocs.received": ["Received", "Recibido"],
+    "customerDocs.refused": ["We couldn't accept this file", "No pudimos aceptar este archivo"],
+    "customerDocs.why.type": ["Use a PDF, a photo, or a Word or Excel file.", "Use un PDF, una foto o un archivo de Word o Excel."],
+    "customerDocs.why.size": ["It's over 25 MB.", "Pesa más de 25 MB."],
+    "customerDocs.why.virus": ["It had a virus.", "Tenía un virus."],
+    "customerDocs.why.password": ["It has a password: remove it and upload it again.", "Tiene contraseña: quítela y vuelva a subirlo."],
+    "customerDocs.why.unscannable": ["We couldn't check it. Try another copy.", "No pudimos revisarlo. Pruebe con otra copia."],
+    "customerDocs.why.full": ["Please call {business} at {phone}.", "Por favor llame a {business} al {phone}."],
+    "customerDocs.why.fullNoPhone": ["Please call {business}.", "Por favor llame a {business}."],
+    "customerDocs.why.fullNoName": ["Please call the business at {phone}.", "Por favor llame al negocio al {phone}."],
+    "customerDocs.why.fullNoPhoneNoName": ["Please call the business.", "Por favor llame al negocio."],
+    "customerDocs.why.limit": ["That's a lot of files for one day. Try again tomorrow.", "Son muchos archivos para un día. Intente mañana."],
+    "customerDocs.failed": ["Didn't upload. Try again.", "No se subió. Intente de nuevo."],
+    "customerDocs.done": ["Thank you. {business} has everything it asked for.", "Gracias. {business} ya tiene todo lo que pidió."],
+    "customerDocs.doneNoName": ["Thank you. The business has everything it asked for.", "Gracias. El negocio ya tiene todo lo que pidió."],
+    "customerDocs.expired": ["This link has expired.", "Este enlace venció."],
+    "customerDocs.revoked": ["This link is no longer active.", "Este enlace ya no está activo."],
+    "customerDocs.notFound": ["This link doesn't work.", "Este enlace no funciona."],
+    "customerDocs.ask": ["Ask {business} for a new link.", "Pida a {business} un enlace nuevo."],
+    "customerDocs.call": ["Questions? Call {business} at {phone}.", "¿Preguntas? Llame a {business} al {phone}."],
+    "customerDocs.callNoPhone": ["Questions? Contact {business}.", "¿Preguntas? Comuníquese con {business}."],
+    "customerDocs.askNoName": ["Ask the business for a new link.", "Pida al negocio un enlace nuevo."],
+    "customerDocs.callNoName": ["Questions? Call the business at {phone}.", "¿Preguntas? Llame al negocio al {phone}."],
+    "customerDocs.callNoPhoneNoName": ["Questions? Contact the business.", "¿Preguntas? Comuníquese con el negocio."],
+    "customerDocs.business": ["the business", "el negocio"],
+    "customerDocs.poweredBy": ["Powered by BIS", "Con tecnología de BIS"],
+    "customerDocs.error.title": ["Something went wrong on our side.", "Algo salió mal de nuestro lado."],
+    "customerDocs.error.body": ["Please try again in a moment.", "Por favor intente de nuevo en un momento."],
+    "customerDocs.error.retry": ["Try again", "Intentar de nuevo"],
+  };
+  it("every new key is the plan's wording, in both languages (mutation: any word changed, or a tú form such as 'Sube' -> FAILS)", () => {
+    for (const [k, [en, es]] of Object.entries(WANT)) {
+      expect([m[k as MessageKey], m[`${k}.es` as MessageKey]], k).toEqual([en, es]);
+    }
+  });
+  it("no new string names the machinery (mutation: 'Your upload token expired' -> FAILS)", () => {
+    // "storage" is deliberately NOT in this ban list: documents.request.task.storageFull's
+    // wording ("your storage is full") is a legitimate customer-facing quota concept, the
+    // same way "your inbox is full" is, not a mention of the vendor's storage backend.
+    // Supabase/bucket/signed stay banned, so a real vendor leak is still caught.
+    for (const k of Object.keys(WANT)) {
+      for (const text of [m[k as MessageKey], m[`${k}.es` as MessageKey]]) {
+        expect(typeof text, k).toBe("string");
+        expect(/token|hash|scanner|escáner|supabase|signed|firmad|request id|bucket/i.test(text ?? "x"), k).toBe(false);
+      }
+    }
+  });
+  it("a placeholder in English is a placeholder in Spanish (mutation: drop {items} from documentRequest.sms.es -> FAILS)", () => {
+    const holes = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort().join(",");
+    for (const k of Object.keys(WANT)) expect(holes(m[`${k}.es` as MessageKey]), k).toBe(holes(m[k as MessageKey]));
+  });
+});

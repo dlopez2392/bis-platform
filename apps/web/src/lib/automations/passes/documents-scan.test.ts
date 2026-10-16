@@ -4,11 +4,13 @@ const listPendingScans = vi.fn();
 const oldestPendingScanAt = vi.fn();
 const recordHeartbeat = vi.fn();
 const recordDocumentScan = vi.fn();
+const listRequestsMissingReceivedTask = vi.fn();
 vi.mock("@bis/db", () => ({
   listPendingScans: (...a: unknown[]) => listPendingScans(...a),
   oldestPendingScanAt: (...a: unknown[]) => oldestPendingScanAt(...a),
   recordHeartbeat: (...a: unknown[]) => recordHeartbeat(...a),
   recordDocumentScan: (...a: unknown[]) => recordDocumentScan(...a),
+  listRequestsMissingReceivedTask: (...a: unknown[]) => listRequestsMissingReceivedTask(...a),
 }));
 const scannerConfig = vi.fn();
 const scannerHealth = vi.fn();
@@ -21,8 +23,12 @@ const spendScanError = vi.fn();
 vi.mock("@/lib/documents/scan-version", () => ({
   scanVersion: (...a: unknown[]) => scanVersion(...a), spendScanError: (...a: unknown[]) => spendScanError(...a),
 }));
+const openRequestTask = vi.fn();
+vi.mock("@/lib/document-requests/request-task", () => ({
+  openRequestTask: (...a: unknown[]) => openRequestTask(...a),
+}));
 
-const { documentsScanPass, scannerProblem, DOCUMENT_SCAN_BUDGET_MS, DOCUMENT_SCAN_BATCH } = await import("./documents-scan");
+const { documentsScanPass, scannerProblem, DOCUMENT_SCAN_BUDGET_MS, DOCUMENT_SCAN_BATCH, REQUEST_TASK_RECONCILE_LIMIT } = await import("./documents-scan");
 const { SCAN_TIMEOUT_MS } = await import("@/lib/documents/scan-client");
 
 const NOW = new Date("2026-10-15T15:00:00.000Z");
@@ -30,16 +36,18 @@ const DB = { tag: "service" } as never;
 const ctx = { db: DB, now: NOW, origin: "https://app.example.com" } as never;
 const row = (id: string, attempts = 0) => ({ id, account_id: "acc", document_id: "doc", storage_path: `acc/doc/${id}`, scan_attempts: attempts, created_at: "2026-10-15T14:59:00.000Z" });
 const target = (id: string, attempts = 0) => ({ accountId: "acc", versionId: id, storagePath: `acc/doc/${id}`, attempts });
+const reqRow = (id: string, accountId = "acc") => ({ id, account_id: accountId, contact_id: null, client_group_id: null, items: [], language: "en", channel: "email", created_by: "u", created_at: "2026-10-14T12:00:00.000Z", expires_at: "2026-10-21T12:00:00.000Z", revoked_at: null, revoked_by: null, completed_at: null, sent_at: null });
 const FRESH = new Date(NOW.getTime() - 3_600_000).toISOString();
-const ZERO = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0 };
+const ZERO = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 0, requestTasks: 0 };
 
 beforeEach(() => {
-  for (const f of [listPendingScans, oldestPendingScanAt, recordHeartbeat, recordDocumentScan, scannerConfig, scannerHealth, scanVersion, spendScanError]) f.mockReset();
+  for (const f of [listPendingScans, oldestPendingScanAt, recordHeartbeat, recordDocumentScan, listRequestsMissingReceivedTask, scannerConfig, scannerHealth, scanVersion, spendScanError, openRequestTask]) f.mockReset();
   recordDocumentScan.mockResolvedValue({ status: "ok", attempts: 0 });
   scannerConfig.mockReturnValue({ origin: "https://s", secret: "x" });
   scannerHealth.mockResolvedValue({ ok: true, signaturesAt: FRESH });
   oldestPendingScanAt.mockResolvedValue(null);
   listPendingScans.mockResolvedValue([]);
+  listRequestsMissingReceivedTask.mockResolvedValue([]);
   spendScanError.mockResolvedValue("pending");
 });
 afterEach(() => vi.restoreAllMocks());
@@ -52,6 +60,39 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "not configured (SCANNER_URL or SCANNER_SECRET unset)" });
   });
 
+  it("the lost-To-do reconcile runs EVERY tick, even with the scanner not configured — a request's clean file may predate a worker outage (plan review I5; mutation: run it after the early return -> FAILS)", async () => {
+    scannerConfig.mockReturnValue(null);
+    const a = reqRow("req-a", "acc-a");
+    const b = reqRow("req-b", "acc-b");
+    listRequestsMissingReceivedTask.mockResolvedValue([a, b]);
+    expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, notConfigured: 1, requestTasks: 2 });
+    expect(openRequestTask).toHaveBeenCalledTimes(2);
+    expect(openRequestTask).toHaveBeenNthCalledWith(1, DB, "acc-a", a, "received", NOW);
+    expect(openRequestTask).toHaveBeenNthCalledWith(2, DB, "acc-b", b, "received", NOW);
+  });
+
+  it("the reconcile's read is bounded by REQUEST_TASK_RECONCILE_LIMIT, 20 (mutation: no limit -> FAILS)", async () => {
+    await documentsScanPass.run(ctx);
+    expect(REQUEST_TASK_RECONCILE_LIMIT).toBe(20);
+    expect(listRequestsMissingReceivedTask).toHaveBeenCalledWith(DB, NOW, 20);
+  });
+
+  it("a reconcile read that throws is logged and counted as failed for the tick, and the scan still runs (mutation: let it abort the scan loop -> FAILS)", async () => {
+    listRequestsMissingReceivedTask.mockRejectedValue(new Error("db down"));
+    listPendingScans.mockResolvedValue([row("a")]);
+    scanVersion.mockResolvedValue("clean");
+    await expect(documentsScanPass.run(ctx)).rejects.toThrow(/"failed":1/);
+    expect(scanVersion).toHaveBeenCalledTimes(1);
+    expect(openRequestTask).not.toHaveBeenCalled();
+  });
+
+  it("a reconcile read that throws still THROWS on the not-configured exit, not just the configured one, and the not-configured heartbeat still goes out (review gap; mutation: bare 'return c' in the not-configured branch -> FAILS)", async () => {
+    scannerConfig.mockReturnValue(null);
+    listRequestsMissingReceivedTask.mockRejectedValue(new Error("db down"));
+    await expect(documentsScanPass.run(ctx)).rejects.toThrow(/"failed":1/);
+    expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: false, error: "not configured (SCANNER_URL or SCANNER_SECRET unset)" });
+  });
+
   it("scans every pending version oldest first with the TRIED stamp's own fresh attempts, HOLDING clamd errors, counts each outcome, and beats ok (mutations: pass attempts 0 -> FAILS; scan without holdErrors -> FAILS; read v.scan_attempts instead of the stamp's answer -> FAILS)", async () => {
     // Review fix 5: the fresh attempts count comes from the tried stamp's own answer, not the
     // (possibly stale) row read — "b" is mocked to answer 2 regardless of row("b", 2)'s own field.
@@ -60,8 +101,10 @@ describe("documentsScan, the retry pass (spec 3.4)", () => {
     scanVersion.mockResolvedValueOnce("clean").mockResolvedValueOnce("unscannable").mockResolvedValueOnce("infected");
     expect(await documentsScanPass.run(ctx)).toEqual({ ...ZERO, scanned: 3, clean: 1, unscannable: 1, infected: 1 });
     expect(listPendingScans).toHaveBeenCalledWith(DB, DOCUMENT_SCAN_BATCH);
+    // Plan review M2: `now: ctx.now` rides alongside `holdErrors` so scanVersion's afterClean hook
+    // (the request To-do it opens on a clean customer file) stamps with the TICK's clock, never `new Date()`.
     expect(scanVersion.mock.calls.map((c) => [c[1], c[3]])).toEqual([
-      [target("a"), { holdErrors: true }], [target("b", 2), { holdErrors: true }], [target("c"), { holdErrors: true }]]);
+      [target("a"), { holdErrors: true, now: NOW }], [target("b", 2), { holdErrors: true, now: NOW }], [target("c"), { holdErrors: true, now: NOW }]]);
     expect(recordHeartbeat).toHaveBeenCalledWith(DB, "documents.scanner", { ok: true });
   });
 

@@ -62,7 +62,7 @@ describe("an upload's life (spec 5.1)", () => {
       // capped read returns only them, and the ready document falls off the card.
       const { error } = await db.from("documents").insert(Array.from({ length: MAX_DOCUMENTS_READ + 1 }, (_, n) => ({
         account_id: accountId, contact_id: ana, title: `Pending ${n}`, category: "other", source: "upload",
-        scan_status: "skipped", created_by: ACTOR,
+        created_by: ACTOR,
       })));
       if (error) throw error;
       const list = await listRecordDocuments(db, accountId, { kind: "contact", id: ana });
@@ -122,6 +122,17 @@ describe("an upload's life (spec 5.1)", () => {
       const d = await readyDoc(db, accountId, ana);
       await discardDocumentUpload(db, accountId, d.id, d.versionId);
       expect(await getDocument(db, accountId, d.id)).not.toBeNull();
+    }));
+
+  it("a customer's ready version emits document.added as the system actor (mutation: drop actorType from emit -> actor_type 'user' -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const docId = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Seguro", category: "insurance", expiresOn: null, ownersOnly: false, source: "upload", createdBy: ACTOR });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: docId, bytes: 10, contentType: "application/pdf", originalName: "a.pdf", uploadedBy: ACTOR });
+      if (r.status !== "ok") throw new Error(r.status);
+      await markDocumentVersionReady(db, { accountId, documentId: docId, versionId: r.versionId, bytes: 10, sha256: "c".repeat(64), actorId: "customer:x", actorType: "system" });
+      const { data } = await db.from("events").select("actor_type, actor_id").eq("account_id", accountId).eq("type", "document.added").single();
+      expect(data).toEqual({ actor_type: "system", actor_id: "customer:x" });
     }));
 });
 

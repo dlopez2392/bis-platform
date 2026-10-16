@@ -53,7 +53,7 @@ function isView(v: unknown, trashed: boolean): boolean {
   if (!isObj(v) || !isObj(v.addedBy) || !isObj(v.version)) return false;
   return str(v.id) && typeof v.title === "string" && isDocumentCategory(v.category)
     && (v.expiresOn === null || isDay(v.expiresOn)) && typeof v.ownersOnly === "boolean"
-    && (v.source === "upload" || v.source === "camera")
+    && (v.source === "upload" || v.source === "camera" || v.source === "customer")
     && typeof v.addedBy.you === "boolean" && (v.addedBy.name === null || typeof v.addedBy.name === "string")
     && instant(v.createdAt) && isDay(v.addedOn) && (trashed ? instant(v.deletedAt) : v.deletedAt === null)
     && str(v.version.id) && isDocumentContentType(v.version.contentType)

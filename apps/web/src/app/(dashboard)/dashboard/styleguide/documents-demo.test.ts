@@ -8,6 +8,10 @@ vi.mock("../accounts/[accountId]/contacts/documents-actions", () => ({
   startDocumentUploadAction: vi.fn(), finishDocumentUploadAction: vi.fn(), abandonDocumentUploadAction: vi.fn(),
   startDocumentVersionUploadAction: vi.fn(), purgeDocumentAction: vi.fn(),
 }));
+vi.mock("../accounts/[accountId]/contacts/document-requests-actions", () => ({
+  createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
+}));
+const requestActions = await import("../accounts/[accountId]/contacts/document-requests-actions");
 const { DocumentsDemo, demoHandlers } = await import("./documents-demo");
 const actions = await import("../accounts/[accountId]/contacts/documents-actions");
 const { m } = await import("@/lib/messages");
@@ -85,6 +89,42 @@ describe("styleguide: the Documents card in every state (DoD: /styleguide gains 
     expect(await demoHandlers.saveField(doc, "title", "Renamed")).toMatchObject({ ok: true, shown: "Renamed" });
     expect(await demoHandlers.undoField({})).toEqual({ ok: true });
     expect(await demoHandlers.purge(doc, "Signed contract")).toBe(false);
+    expect(await demoHandlers.askCustomer({ record: { kind: "contact", id: "sg-c" }, items: [{ key: "id", category: "id", note: null }], channel: "link" })).toBeNull();
+    await demoHandlers.copyRequestLink("sg-r1");
+    await demoHandlers.revokeRequest("sg-r1");
     for (const fn of Object.values(actions)) if (vi.isMockFunction(fn)) expect(fn).not.toHaveBeenCalled();
+    for (const fn of Object.values(requestActions)) if (vi.isMockFunction(fn)) expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe("styleguide: Ask the customer (S-07 2b)", () => {
+  const html = renderToStaticMarkup(createElement(DocumentsDemo));
+  const text = renderedText(html).replace(/\s+/g, " ");
+
+  it("the request form in English (both channels) and Spanish (no texting, the Other error) (mutation: drop a form -> FAILS)", () => {
+    expect(html.match(/data-document-request-form(?=[\s>=])/g)).toHaveLength(2);
+    expect(text).toContain("Ask Ana for documents");
+    expect(text).toContain("Pedir documentos a Ana");
+    expect(text).toContain(m["documents.request.textOff.es"]);
+    expect(html).toMatch(/role="alert"[^>]*>Diga qué necesita en Otro\.</);
+  });
+
+  it("the open requests loaded (one received and one waiting item) and in their error state (mutation: drop a state -> FAILS)", () => {
+    expect(html.match(/data-document-requests(?=[\s>=])/g)).toHaveLength(2);
+    expect(text).toContain("Insurance · Received");
+    expect(text).toContain("Pool permit · Waiting");
+    expect(text).toContain("expires in 6 days");
+    expect(text).toContain(m["documents.requests.loadFailed"]);
+  });
+
+  it("every loaded card offers Ask the customer as a ghost and still has one primary (rule 8)", () => {
+    // Three loaded cards draw the header (the panel card gives its header to the panel).
+    expect(html.match(/data-ask-customer/g)).toHaveLength(3);
+    for (const tag of html.match(/<button[^>]*data-ask-customer[^>]*>/g)!) expect(tag).toContain('data-variant="ghost"');
+  });
+
+  it("a customer's file reads 'Sent by the customer' on the loaded cards, in both languages", () => {
+    expect(text).toContain("Sent by the customer ·");
+    expect(renderedText(html.slice(html.indexOf('lang="es"')))).toContain("Enviado por el cliente ·");
   });
 });

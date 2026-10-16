@@ -7,10 +7,11 @@ export default clerkMiddleware(async (auth, req) => {
 });
 
 /**
- * Clerk never runs on the four public, stranger-facing trees: /c (the chat
- * widget), /f (forms), /b (booking) and /u (unsubscribe). None of them reads
- * auth — each has its own root layout with no ClerkProvider (see
- * app/c/layout.tsx) — and Clerk running there is not merely wasted work.
+ * Clerk never runs on the five public, stranger-facing trees: /c (the chat
+ * widget), /f (forms), /b (booking), /u (unsubscribe) and /d (document
+ * upload links). None of them reads auth — each has its own root layout with
+ * no ClerkProvider (see app/c/layout.tsx) — and Clerk running there is not
+ * merely wasted work.
  *
  * WHY IT BROKE EMBEDS (2026-10-05). A browser that has ever signed in to the
  * platform carries Clerk's `__client_uat` cookie, and the embeds are
@@ -25,7 +26,10 @@ export default clerkMiddleware(async (auth, req) => {
  * Their APIs and server actions stay matched: they are not documents, so
  * Clerk never hands them a handshake, and /api/concierge reads no auth
  * either. `embed.js` is already outside the matcher (it contains a dot).
+ *
+ * `/d/<token>` (S-07 2b) is the customer's document upload page, reached
+ * from a text or an email, with no sign-in, the same reason as `/u`.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|c/|f/|b/|u/|d/|.*\\..*).*)", "/(api|trpc)(.*)"],
 };

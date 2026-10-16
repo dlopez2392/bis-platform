@@ -30,8 +30,8 @@ async function seed(c: Client) {
 /** A document on a contact, as the table owner; `ownersOnly` and `trashed` set directly. */
 async function doc(c: Client, acct: string, contact: string, o: { ownersOnly?: boolean; trashed?: boolean } = {}) {
   const { rows: [d] } = await c.query<{ id: string }>(
-    `insert into documents (account_id, contact_id, title, category, source, scan_status, created_by, owners_only, deleted_at, deleted_by)
-     values ($1,$2,'File','other','upload','skipped','user_su',$3,$4,$5) returning id`,
+    `insert into documents (account_id, contact_id, title, category, source, created_by, owners_only, deleted_at, deleted_by)
+     values ($1,$2,'File','other','upload','user_su',$3,$4,$5) returning id`,
     [acct, contact, o.ownersOnly ?? false, o.trashed ? new Date().toISOString() : null, o.trashed ? "user_su" : null]);
   return d!.id;
 }

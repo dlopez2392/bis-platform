@@ -123,6 +123,32 @@ describe("scanVersion (spec 3.2-3.4; owner decision P4: nothing infected is kept
     expect(await scanVersion(DB, V, deps({ verdict: "clean" }))).toBe("stale");
   });
 
+  it("S-07 2b: a clean verdict RECORDED ok calls afterClean once, after the record, with the caller's now (or a Date); a stale one never does (mutations: call it before recordDocumentScan -> the order FAILS; call it on stale -> FAILS)", async () => {
+    const NOW = new Date("2026-10-15T15:00:00.000Z");
+    const afterClean = vi.fn(async () => { calls.push("afterClean"); });
+    recordDocumentScan.mockResolvedValue({ status: "ok", attempts: 1 });
+    expect(await scanVersion(DB, V, { ...deps({ verdict: "clean" }), afterClean }, { now: NOW })).toBe("clean");
+    expect(calls).toEqual(["mint", "scan", "record:clean", "afterClean"]);
+    expect(afterClean).toHaveBeenCalledTimes(1);
+    expect(afterClean).toHaveBeenCalledWith(DB, V, NOW);
+    // No `now` given: still a Date (the finish passes none).
+    afterClean.mockClear();
+    await scanVersion(DB, V, { ...deps({ verdict: "clean" }), afterClean });
+    expect((afterClean.mock.calls[0] as unknown[])[2]).toBeInstanceOf(Date);
+    // Another verdict already won: the To-do is not this scan's to open.
+    afterClean.mockClear();
+    recordDocumentScan.mockResolvedValue({ status: "stale" });
+    expect(await scanVersion(DB, V, { ...deps({ verdict: "clean" }), afterClean }, { now: NOW })).toBe("stale");
+    expect(afterClean).not.toHaveBeenCalled();
+  });
+
+  it("S-07 2b: an afterClean that rejects never changes the verdict (mutation: await it unguarded -> FAILS)", async () => {
+    recordDocumentScan.mockResolvedValue({ status: "ok", attempts: 1 });
+    const afterClean = vi.fn(async () => { throw new Error("tasks down"); });
+    expect(await scanVersion(DB, V, { ...deps({ verdict: "clean" }), afterClean })).toBe("clean");
+    expect(afterClean).toHaveBeenCalledTimes(1);
+  });
+
   it("M5: removeThenRecord's 'stale' answer comes back AFTER the object is already gone — log an error naming the version id, never a URL or token (mutation: drop the log -> FAILS)", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     recordDocumentScan.mockResolvedValue({ status: "stale" });

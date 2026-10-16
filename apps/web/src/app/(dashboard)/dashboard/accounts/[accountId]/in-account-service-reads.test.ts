@@ -89,6 +89,10 @@ const ALLOWED: Record<string, Reason> = {
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/documents-actions.ts": "proven-target",
+  // Ask the customer (S-07 2b): the record or the request is read on the request client first (getContact /
+  // readGroup / getDocumentRequest under 0080's RLS); the target and the channels on offer are read there too,
+  // ledgerDb for the consent state only after that proof, and only then the service client's writes.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requests-actions.ts": "proven-target",
   // The Groups card: every service write follows a request-client read of its contact, membership or group;
   // restore's events read vouches a narrow caller's own removal (0069's tables are server-written).
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/groups-actions.ts": "proven-target",
@@ -114,6 +118,10 @@ const ALLOWED: Record<string, Reason> = {
   "app/api/accounts/[accountId]/contacts/[contactId]/texts/route.ts": "proven-target",
   // The list drawer's summary (S-03 part 3): ledgerDb for the Text gate, only after getContact on the request client.
   "app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts": "proven-target",
+  // The Documents card's requests (S-07 2b): getContact / readGroup on the request client first; ledgerDb for
+  // the consent state after that proof.
+  "app/api/accounts/[accountId]/contacts/[contactId]/document-requests/route.ts": "proven-target",
+  "app/api/accounts/[accountId]/groups/[groupId]/document-requests/route.ts": "proven-target",
   "lib/auth.ts": "before-trust",
   "lib/booking/availability.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",

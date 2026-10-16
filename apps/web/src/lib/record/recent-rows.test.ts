@@ -116,3 +116,13 @@ describe("a removed file in the drawer's Recent (spec 3.5)", () => {
     expect(json).not.toContain("scan_status");
   });
 });
+
+describe("a document request in the drawer's Recent (S-07 2b)", () => {
+  it("is its head only, its own kind, never an excerpt of its items (mutation: return the items -> FAILS)", () => {
+    const req = { kind: "documentRequest", id: "r1", at: AT, contactId: "c1", request: {
+      id: "r1", items: [{ key: "other", category: "other", note: "Pool permit" }], channel: "text", created_by: "u_ana", created_at: AT,
+      contact_id: "c1", client_group_id: null } } as TimelineEntry;
+    const [d] = view([req]);
+    expect([d!.kind, d!.verb, d!.excerpt]).toEqual(["documentRequest", "asked for 1 document", null]);
+  });
+});

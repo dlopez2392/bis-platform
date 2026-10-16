@@ -669,7 +669,7 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     expect(order(await render())).toEqual(["summary", "next-up", "timeline", "groups", "properties", "deals", "documents", "details", "tags", "related-people"]);
   });
 
-  it("the Documents card gets the page's accountId, record, canManage and the contact's empty text (S-07 part 1; mutation: pass canManage: true always -> FAILS for a Staff requireAccountAccess stub)", async () => {
+  it("the Documents card gets the page's accountId, record, canManage, the contact's empty text and the header's name for Ask the customer (S-07 part 1, 2b; mutation: pass canManage: true always -> FAILS for a Staff requireAccountAccess stub)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
     readPersonIdMock.mockResolvedValueOnce("p-s");
     const html = await render();
@@ -677,7 +677,16 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     const match = html.match(/data-documents-mock="([^"]*)"/);
     expect(match).toBeTruthy();
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
-    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"] });
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes" });
+  });
+
+  it("a nameless contact's Documents card gets the RAW empty name, never contactDisplayName's '(no name)' placeholder (Task 8 fix round; mutation: pass contactDisplayName's name -> FAILS)", async () => {
+    getContactMock.mockResolvedValueOnce({ ...CONTACT, first_name: null, last_name: null });
+    const html = await render();
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props.name).toBe("");
   });
 
   it("the timeline's reads failing is the timeline's error, and every other card still renders (mutation: let loadTimeline rethrow, as today's Promise.all did -> the render rejects, FAILS)", async () => {

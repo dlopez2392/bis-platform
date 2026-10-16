@@ -194,3 +194,25 @@ describe("a removed file's row (spec 3.5)", () => {
     }
   });
 });
+
+describe("customer upload links' rows (S-07 2b)", () => {
+  const AT = "2026-10-15T15:00:00.000Z";
+  it("a request row reads 'asked for N documents' with the items in the reader's language (mutation: the One key for 2 -> FAILS)", () => {
+    const req = (items: { key: string; category: string; note: string | null }[]) => ({ kind: "documentRequest", id: "r1", at: AT, contactId: "c1",
+      request: { id: "r1", items, channel: "text", created_by: "u1", created_at: AT, contact_id: "c1", client_group_id: null } }) as TimelineEntry;
+    const two = [{ key: "insurance", category: "insurance", note: null }, { key: "other", category: "other", note: "Pool permit" }];
+    for (const [locale, verb, detail] of [["en", "asked for 2 documents", "Insurance, Pool permit"], ["es", "pidió 2 documentos", `${m["documents.category.insurance.es"]}, Pool permit`]] as const) {
+      const [row] = rows([req(two)], locale);
+      expect([row!.verb, row!.detail]).toEqual([verb, detail]);
+    }
+    expect(m["documents.category.insurance"]).toBe("Insurance");
+    const [one] = rows([req([two[0]!])], "es");
+    expect(one!.verb).toBe("pidió 1 documento");
+  });
+  it("a customer's file reads 'sent <title>' (mutation: keep 'added a file' for source customer -> FAILS)", () => {
+    const doc = { kind: "document", id: "d1", at: AT, contactId: "c1", document: { id: "d1", title: "Seguro", category: "insurance", source: "customer", created_by: "customer:r1", created_at: AT, deleted_at: null, contact_id: "c1", client_group_id: null } } as TimelineEntry;
+    expect(rows([doc], "en")[0]!.verb).toBe("sent Seguro");
+    expect(rows([doc], "es")[0]!.verb).toBe("mandó Seguro");
+    expect(rows([doc], "en")[0]!.mark).toEqual({ kind: "customer", label: "Customer" });
+  });
+});

@@ -136,3 +136,20 @@ describe("a removed file's author (spec 3.5)", () => {
     expect(personIdsOf([removed])).toEqual([]);
   });
 });
+
+describe("customer upload links' marks (S-07 2b)", () => {
+  it("a customer's file and its versions carry the customer mark (mutation: drop the customer: branch -> person -> FAILS)", () => {
+    const doc = { kind: "document", id: "d1", at: AT, contactId: "c1", document: { id: "d1", title: "Seguro", category: "insurance", source: "customer", created_by: "customer:r1", created_at: AT, deleted_at: null, contact_id: "c1", client_group_id: null } } as TimelineEntry;
+    const ver = { kind: "documentVersion", id: "v2", at: AT, contactId: "c1", version: { id: "v2", document_id: "d1", title: "Seguro", category: "insurance", uploaded_by: "customer:r1", created_at: AT, deleted_at: null, contact_id: "c1", client_group_id: null } } as TimelineEntry;
+    expect([authorOf(doc), authorOf(ver)]).toEqual([{ kind: "customer", personId: null }, { kind: "customer", personId: null }]);
+    expect(personIdsOf([doc, ver])).toEqual([]);
+  });
+  it("a request row carries the person who asked (mutation: automation -> FAILS)", () => {
+    const req = { kind: "documentRequest", id: "r1", at: AT, contactId: "c1", request: { id: "r1", items: [{ key: "id", category: "id", note: null }], channel: "text", created_by: "u_ana", created_at: AT, contact_id: "c1", client_group_id: null } } as TimelineEntry;
+    expect(authorOf(req)).toEqual({ kind: "person", personId: "u_ana" });
+  });
+  it("a To-do opened for a request carries the automation mark (mutation: drop the document_request_id branch -> person -> FAILS)", () => {
+    const task = { kind: "task", id: "t1", at: AT, contactId: "c1", task: { id: "t1", title: "Ana sent documents · Review", due_at: AT, completed_at: null, created_at: AT, consent_event_id: null, call_id: null, assigned_to: null, created_by: null, document_request_id: "r1" } } as TimelineEntry;
+    expect(authorOf(task)).toEqual({ kind: "automation", personId: null });
+  });
+});

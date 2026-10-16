@@ -1,11 +1,10 @@
 "use server";
 
-import { createHash } from "node:crypto";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
-  reserveDocumentVersion, markDocumentVersionReady, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
+  reserveDocumentVersion, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
   trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
@@ -13,8 +12,8 @@ import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
 import { validateInlineRule } from "@/lib/inline-rule";
 import { extensionAllowed, extensionForType, isDay, OFFICE_TYPES, purgeNameKey, shownSize } from "@/lib/documents/rules";
-import { checkDocumentBytes } from "@/lib/documents/content-check";
-import { scanVersion, type ScanResult } from "@/lib/documents/scan-version";
+import type { ScanResult } from "@/lib/documents/scan-version";
+import { finishStoredUpload, cleanUpUpload } from "@/lib/documents/finish-upload";
 
 /**
  * The document vault's actions (spec 5.1). Every one: requireAccountAccess, then a REQUEST-client
@@ -192,24 +191,6 @@ export async function startDocumentVersionUploadAction(
   }
 }
 
-/**
- * Removes a refused or failed upload: the object first, then the rows (spec 5.1 step 3). Never throws.
- * If the object cannot be removed, the rows are LEFT: the version stays `uploading`, so it still counts
- * against the quota and the sweep (passes/documents-sweep.ts) removes object and rows once it is older
- * than its cutoff. Deleting the rows first would strand an object nothing could find.
- */
-async function cleanUp(svc: SupabaseClient, accountId: string, documentId: string, versionId: string, path: string): Promise<void> {
-  const { error } = await svc.storage.from(DOCUMENT_BUCKET).remove([path]);
-  if (error) {
-    log(`cleanup: object ${path} not removed, rows kept for the sweep`, accountId, error);
-    return;
-  }
-  await discardDocumentUpload(svc, accountId, documentId, versionId).catch((e: unknown) => log("cleanup: rows", accountId, e));
-}
-
-/** The media type storage holds for the object: lowercased, any ";" parameter dropped. */
-const mediaType = (t: string): string => t.split(";")[0]!.trim().toLowerCase();
-
 export async function finishDocumentUploadAction(accountId: string, documentId: string, versionId: string): Promise<{ ok: true; scan: ScanResult } | DocFail> {
   const access = await requireAccountAccess(accountId);
   if (!isUuid(documentId) || !isUuid(versionId)) return fail(REFUSED);
@@ -223,68 +204,7 @@ export async function finishDocumentUploadAction(accountId: string, documentId: 
     return fail("documents.error.upload");
   }
   if (!doc) return fail(REFUSED);
-  const svc = serviceDb();
-  try {
-    const version = await getUploadingVersion(svc, accountId, docId, verId);
-    if (!version) {
-      // No uploading row. If NO row of that id exists at all (the sweep took it, or a refused finish
-      // or an abandon cleaned it up after removing its object), an object the browser PUT afterwards
-      // could still sit at the path the server reserved: remove that OBJECT only. A row that exists (already ready) is never touched, and no row is: a
-      // crafted finish(document, random id) must never delete a teammate's document whose own upload
-      // is still in flight. The sweep owns rows.
-      if (!(await getDocumentVersion(svc, accountId, verId))) {
-        const { error } = await svc.storage.from(DOCUMENT_BUCKET).remove([`${accountId}/${docId}/${verId}`]);
-        if (error) log("finish: orphan object", accountId, error);
-      }
-      return fail(REFUSED);
-    }
-    // A version is never added to a file in the trash (plan deviation 2): trashed after this upload's
-    // start, its object and its reservation go now, object first (cleanUp), and the file keeps the
-    // versions it had. A trash that commits after this read is the serial order "ready, then trashed".
-    if (doc.deleted_at !== null) {
-      await cleanUp(svc, accountId, docId, verId, version.storage_path);
-      return fail("documents.error.trashed");
-    }
-    const { data: blob, error } = await svc.storage.from(DOCUMENT_BUCKET).download(version.storage_path);
-    if (error || !blob) {
-      // No object (or no answer from storage): the rows are LEFT uploading (review M2). The signed
-      // upload URL lives 2 hours, so a PUT still in flight could land after this; with its rows gone
-      // nothing would ever find that object. The sweep removes object and rows together once the URL
-      // has expired (its cutoff is later than the URL life), and the reservation counts against the
-      // quota until then.
-      log("finish: object not downloadable, rows left for the sweep", accountId, error ?? "no data");
-      return fail("documents.error.upload");
-    }
-    const bytes = new Uint8Array(await blob.arrayBuffer());
-    // Spec 3.5/5.1 (plan review I2): the stored size must be the RESERVED size, or a client that
-    // understated it would slip past the quota. The reserved size is at most 25 MiB, so this also caps it.
-    if (bytes.length !== version.bytes) {
-      await cleanUp(svc, accountId, docId, verId, version.storage_path);
-      return fail("documents.error.upload");
-    }
-    // The type storage holds for the object must be the declared one, and the bytes must be that type.
-    if (mediaType(blob.type) !== version.content_type || checkDocumentBytes(bytes, version.content_type) !== "ok") {
-      await cleanUp(svc, accountId, docId, verId, version.storage_path);
-      return fail("documents.error.badType");
-    }
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    const ok = await markDocumentVersionReady(svc, { accountId, documentId: docId, versionId: verId, bytes: bytes.length, sha256, actorId: access.userId });
-    // false: the database refused (size_mismatch, or the row is no longer uploading because another
-    // finish made it ready). Nothing is removed here: the object may be that ready version's. A
-    // reservation still uploading is the sweep's.
-    if (!ok) return fail(REFUSED);
-    // Spec 3.4: scanned at once, so a file normally reads "Checking" for a second or two only. A scan
-    // that fails never fails the upload: the file is stored, stays Checking, and the retry pass
-    // (passes/documents-scan.ts) scans it. A fresh version has spent no attempt.
-    // Re-review N2a: the finish NEVER spends an attempt (holdErrors): only the retry pass does, after the
-    // worker's self-test passes again in its own run.
-    const scan = await scanVersion(svc, { accountId, versionId: verId, storagePath: version.storage_path, attempts: 0 }, undefined, { holdErrors: true })
-      .catch((e: unknown): ScanResult => { log("finish: scan", accountId, e); return "pending"; });
-    return { ok: true, scan };
-  } catch (e) {
-    log("finish", accountId, e);
-    return fail("documents.error.upload");
-  }
+  return finishStoredUpload(serviceDb(), { accountId, documentId: docId, versionId: verId, trashed: doc.deleted_at !== null, actorId: access.userId, actorType: "user" });
 }
 
 /** The browser's PUT failed: remove what start reserved now, rather than waiting for the clean-up pass. */
@@ -297,7 +217,7 @@ export async function abandonDocumentUploadAction(accountId: string, documentId:
     if (!(await visibleDocument(accountId, docId, false))) return fail(REFUSED);
     const svc = serviceDb();
     const version = await getUploadingVersion(svc, accountId, docId, verId);
-    if (version) await cleanUp(svc, accountId, docId, verId, version.storage_path);
+    if (version) await cleanUpUpload(svc, accountId, docId, verId, version.storage_path);
     return { ok: true };
   } catch (e) {
     log("abandon", accountId, e);

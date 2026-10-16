@@ -1,11 +1,14 @@
 "use client";
 
 import type { DocumentsLoad, DocumentView } from "@/lib/documents/documents-load";
+import type { DocumentRequestsLoad } from "@/lib/document-requests/requests-load";
 import { m } from "@/lib/messages";
-import { DocumentsCardView, addedWhen, type DocumentHandlers } from "../accounts/[accountId]/contacts/documents-card";
+import { DocumentsCardView, addedWhen, type DocumentHandlers, type RequestsSlot } from "../accounts/[accountId]/contacts/documents-card";
 import { DocumentVersionsList } from "../accounts/[accountId]/contacts/document-viewer";
 import { DocumentPurgeForm } from "../accounts/[accountId]/contacts/document-purge-dialog";
 import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-upload-panel";
+import { DocumentRequestForm } from "../accounts/[accountId]/contacts/document-request-dialog";
+import { DocumentRequestsList } from "../accounts/[accountId]/contacts/document-requests-list";
 
 /**
  * The Documents card (S-07 part 1, spec 4) in every state it has, in both languages, and with its upload
@@ -17,6 +20,10 @@ import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-u
  * through it to see the focus rings. Each loaded card shows a contract on its second version, the account above
  * 80% of its space, and Delete forever beside Restore in the trash; the panel card shows a new version
  * uploading; then the viewer's Versions list and the typed-name form on their own.
+ * S-07 2b: each card's header offers a ghost "Ask the customer", the Checking estimate is one the customer
+ * sent ("Sent by the customer"), and below the cards sit the request form (English with every channel on
+ * offer; Spanish with no texting and the Other note's error) and the open requests, loaded (one item
+ * received, one waiting) and failed.
  */
 const base: Omit<DocumentView, "id" | "title" | "category" | "createdAt" | "addedOn"> = {
   addedBy: { you: false, name: "Ana" }, deletedAt: null, ownersOnly: false, source: "upload", expiresOn: null,
@@ -33,8 +40,10 @@ const DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
       versions: [{ id: "sg-v2", contentType: "image/jpeg", bytes: 800_000, createdAt: "2026-10-13T02:30:00.000Z", addedOn: "2026-10-12", scan: "clean" }] },
     { ...base, id: "sg-3", title: "Driver license", category: "id", createdAt: "2026-09-01T15:00:00.000Z", addedOn: "2026-09-01", ownersOnly: true,
       expiresOn: "2026-10-01", addedBy: { you: false, name: null } },
-    // S-07 2a: a Checking file and a removed-by-the-scan file, as a dot and a word (rule 3).
+    // S-07 2a: a Checking file and a removed-by-the-scan file, as a dot and a word (rule 3). S-07 2b: the
+    // Checking one came from the customer's request link, so it reads "Sent by the customer".
     { ...base, id: "sg-6", title: "New estimate", category: "estimate", createdAt: "2026-10-13T14:59:00.000Z", addedOn: "2026-10-13",
+      source: "customer", addedBy: { you: false, name: null },
       version: { id: "sg-v6", contentType: "application/pdf", bytes: 50_000, scan: "pending", createdAt: "2026-10-13T14:59:00.000Z" },
       versions: [{ id: "sg-v6", contentType: "application/pdf", bytes: 50_000, createdAt: "2026-10-13T14:59:00.000Z", addedOn: "2026-10-13", scan: "pending" }] },
     { ...base, id: "sg-7", title: "Bad upload", category: "other", createdAt: "2026-10-13T14:00:00.000Z", addedOn: "2026-10-13",
@@ -65,10 +74,21 @@ export const demoHandlers: DocumentHandlers = {
   undoField: async () => ({ ok: true }),
   purge: async () => false,
   changed: noop,
+  askCustomer: async () => null, copyRequestLink: async () => {}, revokeRequest: async () => {},
 };
+const REQUESTS_NOW = "2026-10-15T15:00:00.000Z";
+/** Ready with nothing open: each card draws its "Ask the customer" and no list (the lists are drawn on their own below). */
+const NO_REQUESTS: DocumentRequestsLoad = { kind: "ready", data: { now: REQUESTS_NOW, channels: { text: true, email: true }, requests: [] } };
+const OPEN_REQUESTS: DocumentRequestsLoad = { kind: "ready", data: { now: REQUESTS_NOW, channels: { text: true, email: true }, requests: [
+  { id: "sg-r1", channel: "text", createdAt: "2026-10-14T15:00:00.000Z", expiresAt: "2026-10-21T15:00:00.000Z", items: [
+    { key: "insurance", category: "insurance", note: null, answered: true },
+    { key: "other", category: "other", note: "Pool permit", answered: false },
+  ] },
+] } };
+const requests: RequestsSlot = { load: NO_REQUESTS, onAsk: noop, onRetry: noop, onCopy: noop, onRevoke: noop };
 const common = {
   accountId: "sg", canManage: true, handlers: demoHandlers, onRetry: noop, onFiles: noop, onOpen: noop, panel: null,
-  versionPhases: {}, onNewVersion: noop, onPurge: noop,
+  versionPhases: {}, onNewVersion: noop, onPurge: noop, requests,
 };
 const box = "min-w-0 rounded-[var(--radius-card)] border border-border p-4";
 const file = (name: string) => new File([new Uint8Array(1)], name);
@@ -102,6 +122,19 @@ export function DocumentsDemo() {
       </div>
       <div className={box}>
         <DocumentPurgeForm title={DATA.trashed[0]!.title} versionCount={1} typed="Old est" busy={false} locale="en" onTyped={noop} onCancel={noop} onConfirm={noop} />
+      </div>
+      <div className={box}>
+        <DocumentRequestForm locale="en" name="Ana" channels={{ text: true, email: true }} busy={false} error={null} onSubmit={noop} onCancel={noop} />
+      </div>
+      <div className={box} lang="es">
+        <DocumentRequestForm locale="es" name="Ana" channels={{ text: false, email: true }} initialItems={["insurance", "other"]}
+          busy={false} error="documents.request.noteNeeded" onSubmit={noop} onCancel={noop} />
+      </div>
+      <div className={box}>
+        <DocumentRequestsList locale="en" load={OPEN_REQUESTS} onRetry={noop} onCopy={noop} onRevoke={noop} />
+      </div>
+      <div className={box}>
+        <DocumentRequestsList locale="en" load={{ kind: "error" }} onRetry={noop} onCopy={noop} onRevoke={noop} />
       </div>
     </div>
   );

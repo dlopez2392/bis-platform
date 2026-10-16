@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, ShieldAlert, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, Mail, MessageSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -188,6 +188,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // S-07 2a: a removed file wears a shield (the row's own crit dot and word carry the state).
     case "documentRemoved":
       return <TimelineItem {...head} icon={ShieldAlert} />;
+    // S-07 2b: a request for files wears the send arrow (the link went out to the customer).
+    case "documentRequest":
+      return <TimelineItem {...head} icon={Send} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (

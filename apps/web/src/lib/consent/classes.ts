@@ -39,6 +39,8 @@ export const SMS_KINDS = {
   "automation.quote_followup": { class: "marketing", hours: "marketing", footer: "stop_line" },
   "voice.textback": { class: "informational", hours: "automated", footer: "stop_line" },
   "staff.composer_sms": { class: "staff_typed", hours: "any", footer: "none" },
+  // S-07 2b (plan deviation 11): a staff-chosen request, but its text is ours, so stops and quiet hours apply.
+  "staff.document_request_sms": { class: "informational", hours: "automated", footer: "stop_line" },
   "operator.alert_sms": { class: "operator", hours: "any", footer: "none" },
   "operator.alert_phone_code": { class: "operator", hours: "any", footer: "none" },
   "consent.stop_confirmation": { class: "consent_reply", hours: "any", footer: "none" },
@@ -101,6 +103,8 @@ export const EMAIL_KINDS = {
   // composer is: an unsubscribe does not stop a customer hearing that their
   // appointment is off, and it may go at any hour the owner cancels.
   "staff.booking_cancel_notice": { class: "staff_typed", hours: "any", footer: "none" },
+  // S-07 2b (plan deviation 11): a staff-chosen request, but its text is ours, so stops and quiet hours apply.
+  "staff.document_request_email": { class: "informational", hours: "automated", footer: "unsubscribe" },
   "operator.booking_alert": { class: "operator", hours: "any", footer: "none" },
   "operator.cancel_notice": { class: "operator", hours: "any", footer: "none" },
   "operator.move_notice": { class: "operator", hours: "any", footer: "none" },

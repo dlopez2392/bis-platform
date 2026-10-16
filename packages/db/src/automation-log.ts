@@ -25,6 +25,8 @@ export const AUTOMATION_LOG_SOURCES = [
   // Consent chain PR-1 (0054): the missed-call text-back, held outside the
   // sending hours and released by the same queue.
   "textback",
+  // S-07 2b (0080): a document request's text or email, held outside the sending hours.
+  "document_request",
 ] as const;
 export type AutomationLogSource = (typeof AUTOMATION_LOG_SOURCES)[number];
 export type AutomationLogChannel = "sms" | "email" | "ai";

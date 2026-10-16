@@ -58,7 +58,9 @@ const { GET } = await import("./route");
 // Raised 24 -> 25 on 2026-10-15 by S-07 part 2a (spec 3.5): a removed file is its own timeline row,
 // read from 0079's view document_scan_timeline (security_invoker, so the same RLS decides), inside
 // the same documents source.
-const MEASURED = 25; // measured 2026-10-15: 25 reads (+1 prefs), the 25th is request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
+// Raised 25 -> 26 on 2026-10-15 by S-07 part 2b (plan deviation 6): a request for files is its own
+// timeline row, read from 0080's document_requests (under RLS), inside the same documents source.
+const MEASURED = 26; // measured 2026-10-15: 26 reads (+1 prefs), the 26th is request:document_requests (S-07 2b); 25 before S-07 2b, the 25th request:document_scan_timeline; 24 before S-07 2a, 23 before S-07 1b, 22 before S-07, 20 with non-uuid fixture ids, 7 (+0) before S-03 part 3
 
 describe("reads per drawer open (S-03 part 3 §5: measured, not assumed)", () => {
   it("the contact read first, the ledger only after it, and no more reads than measured (mutation: re-add the unpaged listContactMessages read -> FAILS)", async () => {

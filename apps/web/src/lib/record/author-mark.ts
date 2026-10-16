@@ -1,4 +1,5 @@
 import type { AuthorKind, TimelineEntry } from "@bis/db";
+import { isCustomerAuthor } from "@bis/db/document-rules";
 import type { Tr } from "./copy";
 
 export type AuthorMarkView = { kind: AuthorKind; label: string };
@@ -27,7 +28,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     case "note": return { kind: "person", personId: entry.note.author_id };
     case "task":
       if (entry.task.call_id) return { kind: "ai", personId: null };
-      if (entry.task.consent_event_id) return { kind: "automation", personId: null };
+      // S-07 2b: a To-do opened for a request's files is the automation's, like the stop-hold one.
+      if (entry.task.consent_event_id || entry.task.document_request_id) return { kind: "automation", personId: null };
       return { kind: "person", personId: entry.task.created_by };
     case "deal": return { kind: "person", personId: entry.deal.created_by };
     case "submission": {
@@ -46,12 +48,18 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     }
     case "call": return { kind: "ai", personId: null };
     // S-07: the person who added the file (documents.created_by is NOT NULL); one the reader cannot
-    // name reads "Someone on the team", still the person mark.
-    case "document": return { kind: "person", personId: entry.document.created_by };
-    // S-07 1b: the person who uploaded the new version (document_versions.uploaded_by is NOT NULL).
-    case "documentVersion": return { kind: "person", personId: entry.version.uploaded_by };
+    // name reads "Someone on the team", still the person mark. S-07 2b: a customer's upload is
+    // "customer:<request id>" (0080), the customer mark; staff files stay the person's.
+    case "document": return isCustomerAuthor(entry.document.created_by)
+      ? { kind: "customer", personId: null } : { kind: "person", personId: entry.document.created_by };
+    // S-07 1b: the person who uploaded the new version (document_versions.uploaded_by is NOT NULL);
+    // S-07 2b: the customer's, as above.
+    case "documentVersion": return isCustomerAuthor(entry.version.uploaded_by)
+      ? { kind: "customer", personId: null } : { kind: "person", personId: entry.version.uploaded_by };
     // S-07 2a: the scan removed it; nobody on the team did (DESIGN.md "Provenance": the automation mark).
     case "documentRemoved": return { kind: "automation", personId: null };
+    // S-07 2b: the person who asked.
+    case "documentRequest": return { kind: "person", personId: entry.request.created_by };
   }
 }
 

@@ -10,7 +10,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useLocale } from "@/components/locale-provider";
-import { DOCUMENT_CATEGORIES, DOCUMENT_TITLE_MAX, type DocumentCategory } from "@bis/db/document-rules";
+import { DOCUMENT_CATEGORIES, DOCUMENT_TITLE_MAX, type DocumentCategory, type DocumentRequestItem } from "@bis/db/document-rules";
 import type { Locale } from "@/lib/i18n/locale";
 import { t, plural } from "@/lib/i18n/t";
 import { m, type MessageKey } from "@/lib/messages";
@@ -26,8 +26,18 @@ import { documentHandlers, type DocumentHandlers, type FieldSave } from "./docum
 import { DocumentUploadPanel, type PanelFile } from "./document-upload-panel";
 import { DocumentViewer, canOpen } from "./document-viewer";
 import { DocumentPurgeDialog } from "./document-purge-dialog";
+import { DocumentRequestDialog, type RequestChannel } from "./document-request-dialog";
+import { DocumentRequestsList } from "./document-requests-list";
+import {
+  documentRequestsLoadFrom, documentRequestsRouteFor, type DocumentRequestsLoad,
+} from "@/lib/document-requests/requests-load";
 
 export type { DocumentHandlers } from "./documents-card-handlers";
+
+/** The card's open requests (S-07 2b): their own read, and what the list and "Ask the customer" do. */
+export type RequestsSlot = {
+  load: DocumentRequestsLoad; onAsk: () => void; onRetry: () => void; onCopy: (id: string) => void; onRevoke: (id: string) => void;
+};
 
 type DocRecord = { kind: "contact" | "group"; id: string };
 type Params = Record<string, string | number>;
@@ -50,8 +60,13 @@ export function addedWhen(addedOn: string, today: string, locale: Locale): strin
   return new Intl.RelativeTimeFormat(locale === "es" ? "es-US" : "en-US", { numeric: "auto" }).format(-days, "day");
 }
 
-/** "Added by Ana · 3 days ago" / "Photo taken by you · today"; a person the reader cannot name is "Someone on the team". */
+/**
+ * "Added by Ana · 3 days ago" / "Photo taken by you · today"; a person the reader cannot name is "Someone on the team".
+ * A file the customer sent through a request link reads "Sent by the customer · …" (S-07 2b): its author is the
+ * customer mark, never a person on the team, so `addedBy` is not consulted for it.
+ */
 export function sourceLine(doc: DocumentView, today: string, locale: Locale): string {
+  if (doc.source === "customer") return t(m, "documents.addedByCustomer", locale, { when: addedWhen(doc.addedOn, today, locale) });
   const name = doc.addedBy.you ? t(m, "documents.you", locale) : doc.addedBy.name ?? t(m, "assign.someone", locale);
   return t(m, doc.source === "camera" ? "documents.photoBy" : "documents.addedBy", locale, { name, when: addedWhen(doc.addedOn, today, locale) });
 }
@@ -274,13 +289,18 @@ function DocumentsSkeleton() {
  * The card's body inside its RecordCard (spec 4.1): the count in the first row (the card's title is
  * a fixed string), then Upload, the card's ONE primary while the upload panel is closed (rule 8); while
  * it is open, the panel's own Upload is that primary and the header draws neither button. Take photo is
- * ghost and shows only on a coarse pointer or a narrow screen. Presentational: the container holds state.
+ * ghost and shows only on a coarse pointer or a narrow screen. "Ask the customer" (S-07 2b) is ghost too,
+ * beside it, once the requests read is ready (its dialog needs the channels on offer). The open requests
+ * sit after the file list and before the trash, and their read fails on its own (spec 6). Both are drawn
+ * only once the files are ready: the loading and error states are the files' alone. Presentational:
+ * the container holds state.
  */
 export function DocumentsCardView(p: {
   accountId: string; load: DocumentsLoad; canManage: boolean; emptyText: string; locale: Locale; handlers: DocumentHandlers;
   onRetry: () => void; onFiles: (files: File[], source: "upload" | "camera") => void; onOpen: (doc: DocumentView) => void;
   panel: ReactNode | null;
   versionPhases: Readonly<Record<string, UploadPhase>>; onNewVersion: (doc: DocumentView) => void; onPurge: (doc: DocumentView) => void;
+  requests: RequestsSlot;
 }) {
   const tt = (key: MessageKey, params?: Params) => t(m, key, p.locale, params);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -325,6 +345,11 @@ export function DocumentsCardView(p: {
         </div>
         {p.panel ? null : (
           <div className="flex flex-wrap gap-2">
+            {p.requests.load.kind === "ready" ? (
+              <Button type="button" variant="ghost" data-ask-customer className={control} onClick={p.requests.onAsk}>
+                {tt("documents.request.open")}
+              </Button>
+            ) : null}
             <Button type="button" variant="ghost" data-take-photo
               className={cn("hidden max-md:inline-flex pointer-coarse:inline-flex", control)}
               onClick={() => cameraRef.current?.click()}>{tt("documents.takePhoto")}</Button>
@@ -346,6 +371,8 @@ export function DocumentsCardView(p: {
         </ul>
       )}
       {data.capped ? <p className="text-xs text-muted-foreground">{tt("documents.capped")}</p> : null}
+      <DocumentRequestsList locale={p.locale} load={p.requests.load} onRetry={p.requests.onRetry}
+        onCopy={p.requests.onCopy} onRevoke={p.requests.onRevoke} />
       {data.trashed.length > 0 ? (
         <details data-documents-trash className="text-sm">
           <summary className={cn("cursor-pointer rounded-[var(--radius-ctl)] py-1 text-xs text-muted-foreground", focusRing)}>
@@ -393,6 +420,36 @@ export function pollTimerKey(pollMs: number | null, reads: number): string | nul
   return pollMs === null ? null : `${pollMs}:${reads}`;
 }
 
+/**
+ * Review I2: the files' read (the poll's included) re-reads the open requests ONCE when it changed a file
+ * the requests can depend on: the current version's scan state (or the version itself) moved on a file in
+ * both reads, or a customer's file is new to this read. Only while the list has an open request, and only
+ * between two READY reads of the same record (the card holds its last ready read as `prev`). The requests'
+ * re-read never touches the files' read, and the same files read again answers false, so it cannot loop.
+ */
+export function shouldReloadRequests(prev: DocumentsLoad | null, next: DocumentsLoad, requests: DocumentRequestsLoad): boolean {
+  if (requests.kind !== "ready" || requests.data.requests.length === 0) return false;
+  if (prev?.status !== "ready" || next.status !== "ready") return false;
+  if (prev.data.record.kind !== next.data.record.kind || prev.data.record.id !== next.data.record.id) return false;
+  const before = new Map(prev.data.live.map((d) => [d.id, `${d.version.id}:${d.version.scan}`]));
+  return next.data.live.some((d) => {
+    const was = before.get(d.id);
+    return was === undefined ? d.source === "customer" : was !== `${d.version.id}:${d.version.scan}`;
+  });
+}
+
+/** Review M1: once "Ask the customer" answers, a request created closes the dialog; a refusal keeps it open with its words. */
+export function askAfter(answer: MessageKey | null): { open: boolean; error: MessageKey | null } {
+  return answer ? { open: true, error: answer } : { open: false, error: null };
+}
+
+/** Review M2: a failed re-read keeps the list this route already shows; a first read's failure (or another route's) is shown. */
+export function keepRequests(
+  shown: { route: string; load: DocumentRequestsLoad }, route: string, next: DocumentRequestsLoad,
+): { route: string; load: DocumentRequestsLoad } {
+  return next.kind === "error" && shown.route === route && shown.load.kind === "ready" ? shown : { route, load: next };
+}
+
 let panelSeq = 0;
 
 /**
@@ -400,8 +457,9 @@ let panelSeq = 0;
  * panel's state and the viewer. A re-read after a change that fails keeps what the card already shows;
  * only a first read, or a Retry (which goes back to the skeleton first), shows the error state.
  */
-export function DocumentsCard({ accountId, record, canManage, emptyText }: {
-  accountId: string; record: DocRecord; canManage: boolean; emptyText: string;
+export function DocumentsCard({ accountId, record, canManage, emptyText, name = "" }: {
+  /** `name`: who "Ask the customer" asks, for its dialog's title; with none, the title is the action's own words. */
+  accountId: string; record: DocRecord; canManage: boolean; emptyText: string; name?: string;
 }) {
   const locale = useLocale();
   // A plain string, stable by value even when the caller hands `record` a fresh object each render.
@@ -415,6 +473,20 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
   const [openId, setOpenId] = useState<string | null>(null);
   // Delete forever holds its file by id (plan review): the dialog shows the file as the card last read it.
   const [purgeId, setPurgeId] = useState<string | null>(null);
+
+  // S-07 2b: the open requests are a second read of their own (its route, its error, its Retry). While the
+  // files are loading or have failed, the card draws only that state, so neither the list nor "Ask the
+  // customer" is drawn then; once the files are ready, a requests failure is the list's own sentence and
+  // never the files'. It re-reads when this card changes a request, and when a files read (the poll's
+  // included) changes a file a request can depend on (shouldReloadRequests); it has no timer of its own.
+  const requestsRoute = documentRequestsRouteFor(accountId, record);
+  const [requestsState, setRequestsState] = useState<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
+  const [requestsNonce, setRequestsNonce] = useState(0);
+  // Written only in the reads' promise callbacks, read only there: the last READY files read, and the
+  // requests the list last showed, so a files read can compare without an effect over render state.
+  const lastReadyFiles = useRef<DocumentsLoad | null>(null);
+  const shownRequests = useRef<{ route: string; load: DocumentRequestsLoad }>({ route: "", load: { kind: "loading" } });
+
   useEffect(() => {
     let stale = false;
     const settle = (load: DocumentsLoad) => {
@@ -424,12 +496,16 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       setOpenId((id) => keepOpen(id, load));
       setPurgeId((id) => keepPurge(id, load));
       setReads((r) => r + 1);
+      // Review I2: a customer's file turning clean answers its request item; re-read the list once.
+      const requests: DocumentRequestsLoad = shownRequests.current.route === requestsRoute ? shownRequests.current.load : { kind: "loading" };
+      if (shouldReloadRequests(lastReadyFiles.current, load, requests)) setRequestsNonce((n) => n + 1);
+      if (load.status === "ready") lastReadyFiles.current = load;
     };
     fetch(route, { cache: "no-store" })
       .then(documentsLoadFrom)
       .then(settle, () => settle({ status: "error" }));
     return () => { stale = true; };
-  }, [route, nonce]);
+  }, [route, requestsRoute, nonce]);
   const load: DocumentsLoad = state.route === route ? state.load : { status: "loading" };
   const reload = () => setNonce((n) => n + 1);
 
@@ -447,9 +523,42 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- pollKey already folds pollMs and reads together (see pollTimerKey); pollMs alone would under-trigger (I1).
   }, [pollKey]);
 
+  // The requests' own read (declared above): a failed re-read keeps what the list shows (keepRequests); only
+  // a first read, or its Retry, shows its error.
+  useEffect(() => {
+    let stale = false;
+    const settle = (next: DocumentRequestsLoad) => {
+      if (stale) return;
+      setRequestsState((s) => keepRequests(s, requestsRoute, next));
+      shownRequests.current = keepRequests(shownRequests.current, requestsRoute, next);
+    };
+    fetch(requestsRoute, { cache: "no-store" })
+      .then(documentRequestsLoadFrom)
+      .then(settle, () => settle({ kind: "error" }));
+    return () => { stale = true; };
+  }, [requestsRoute, requestsNonce]);
+  const requestsLoad: DocumentRequestsLoad = requestsState.route === requestsRoute ? requestsState.load : { kind: "loading" };
+  const reloadRequests = () => setRequestsNonce((n) => n + 1);
+
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
-  const handlers = documentHandlers({ accountId, locale, reload, inFlight });
+  const handlers = documentHandlers({ accountId, locale, reload, reloadRequests, inFlight });
+
+  // "Ask the customer": the dialog closes once a request exists, and stays open with the refusal's words otherwise.
+  const [askOpen, setAskOpen] = useState(false);
+  const [askBusy, setAskBusy] = useState(false);
+  const [askError, setAskError] = useState<MessageKey | null>(null);
+  const openAsk = () => { setAskError(null); setAskOpen(true); };
+  const onAskSubmit = (items: DocumentRequestItem[], channel: RequestChannel) => {
+    setAskBusy(true);
+    setAskError(null);
+    // askCustomer toasts a thrown action itself and answers null; a rejection here would be a defect in the
+    // handlers, and it gets the same honest words (the request may exist), never "couldn't create".
+    const settled = (answer: MessageKey | null) => { const next = askAfter(answer); setAskOpen(next.open); setAskError(next.error); };
+    void handlers.askCustomer({ record, items, channel })
+      .then(settled, () => { toast.error(t(m, "common.actionCrashed", locale)); settled(null); })
+      .finally(() => setAskBusy(false));
+  };
 
   const [files, setFiles] = useState<PanelFile[]>([]);
   const [source, setSource] = useState<"upload" | "camera">("upload");
@@ -554,7 +663,15 @@ export function DocumentsCard({ accountId, record, canManage, emptyText }: {
       <DocumentsCardView accountId={accountId} load={load} canManage={canManage} emptyText={emptyText} locale={locale} handlers={handlers}
         onRetry={() => { setState({ route: "", load: { status: "loading" } }); reload(); }}
         onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel}
-        versionPhases={versionPhases} onNewVersion={onNewVersion} onPurge={(d) => setPurgeId(d.id)} />
+        versionPhases={versionPhases} onNewVersion={onNewVersion} onPurge={(d) => setPurgeId(d.id)}
+        requests={{
+          load: requestsLoad, onAsk: openAsk,
+          onRetry: () => { setRequestsState({ route: "", load: { kind: "loading" } }); reloadRequests(); },
+          onCopy: (id) => void handlers.copyRequestLink(id), onRevoke: (id) => void handlers.revokeRequest(id),
+        }} />
+      <DocumentRequestDialog open={askOpen} locale={locale} name={name}
+        channels={requestsLoad.kind === "ready" ? requestsLoad.data.channels : { text: false, email: false }}
+        busy={askBusy} error={askError} onSubmit={onAskSubmit} onClose={() => setAskOpen(false)} />
       <input ref={versionInput} type="file" accept={ACCEPT} hidden data-version-input onChange={onVersionFile} />
       <DocumentViewer accountId={accountId} doc={open} locale={locale} onClose={() => setOpenId(null)}
         onDownload={(d) => void handlers.download(d)}

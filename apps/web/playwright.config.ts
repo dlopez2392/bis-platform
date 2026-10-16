@@ -129,6 +129,15 @@ const USE_DEV_SERVER = process.env.E2E_DEV === "1";
 const E2E_SCANNER_SECRET = "bis_e2e_scanner_fixture_only";
 const FAKE_CLAMD_PORT = 3399;
 const SCANNER_PORT = 8399;
+
+/**
+ * Document upload links (S-07 2b). A fixed test literal, never a real secret
+ * (task 10 brief). Set unconditionally on the runner's own env too, so a
+ * developer's `.env.local` value can never make the runner's `requestToken`
+ * (the spec) disagree with the app server's (below) about the token.
+ */
+const DOCUMENT_LINK_FIXTURE = "bis_e2e_document_link_fixture_only_0000000000";
+process.env.DOCUMENT_LINK_SECRET = DOCUMENT_LINK_FIXTURE;
 const storageOrigin = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? fileEnv.NEXT_PUBLIC_SUPABASE_URL ?? "http://127.0.0.1:54321").origin;
 const SCANNER_SERVERS = [
   {
@@ -249,6 +258,7 @@ export default defineConfig({
         // shim this config starts above, in front of the fake clamd.
         SCANNER_URL: `http://127.0.0.1:${SCANNER_PORT}`,
         SCANNER_SECRET: E2E_SCANNER_SECRET,
+        DOCUMENT_LINK_SECRET: DOCUMENT_LINK_FIXTURE,
       },
       // On the build path this is FALSE on purpose. `reuseExistingServer` will
       // happily adopt whatever is already listening on 3000 — including a dev

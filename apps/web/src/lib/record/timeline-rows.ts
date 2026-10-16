@@ -93,7 +93,9 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
     // S-07: a file the camera took reads as a photo; a trashed one is still listed, with "In the trash"
     // as a dot and a word (rule 3). The category is the detail, in the page's language.
     case "document": return {
-      verb: tr.text(entry.document.source === "camera" ? "timeline.documentPhoto" : "timeline.document", { title: entry.document.title }),
+      // S-07 2b: a file the customer sent through a request link reads "sent <title>".
+      verb: tr.text(entry.document.source === "camera" ? "timeline.documentPhoto" : entry.document.source === "customer" ? "timeline.documentCustomer" : "timeline.document",
+        { title: entry.document.title }),
       status: entry.document.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.document.category}`),
     };
@@ -110,6 +112,16 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       const verb = why === "virus" ? "timeline.documentRemoved" : why === "password" ? "timeline.documentPassword" : "timeline.documentUnscannable";
       const word = why === "virus" ? "documents.status.virusRemoved" : why === "password" ? "documents.status.passwordRemoved" : "documents.status.unscannable";
       return { verb: tr.text(verb, { title: entry.scan.title }), status: { tone: "crit", word: tr.text(word) }, detail: tr.text(`documents.category.${entry.scan.category}`) };
+    }
+    // S-07 2b (plan deviation 6): "{person} asked for N documents", the items in the reader's language;
+    // an "other" item is the staff's own note, as typed.
+    case "documentRequest": {
+      const n = entry.request.items.length;
+      return {
+        verb: tr.text(n === 1 ? "timeline.documentRequestOne" : "timeline.documentRequest", { count: n }),
+        status: null,
+        detail: entry.request.items.map((i) => (i.category === "other" && i.note ? i.note : tr.text(`documents.category.${i.category}` as MessageKey))).join(", "),
+      };
     }
   }
 }

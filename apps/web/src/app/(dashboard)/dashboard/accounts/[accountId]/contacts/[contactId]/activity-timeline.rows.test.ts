@@ -219,3 +219,18 @@ describe("the 1b timeline (spec §6, §9.4)", () => {
     expect(row).toContain(`>${m["documents.status.virusRemoved.es"]}<`);
   });
 });
+
+describe("a document-request row (S-07 2b)", () => {
+  it("renders as one: its verb, the asker's mark and the Send icon (mutations: return null for the documentRequest case, or wear the Paperclip -> FAILS)", () => {
+    const entries = [{ kind: "documentRequest", id: "r1", at: AT, contactId: "c1", request: { id: "r1", items: [{ key: "insurance", category: "insurance", note: null },
+      { key: "other", category: "other", note: "Pool permit" }], channel: "text", created_by: "user_me", created_at: AT, contact_id: "c1", client_group_id: null } }] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "es", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    const row = html.match(/<div data-timeline-item="documentRequest"[\s\S]*?<\/li>/)?.[0] ?? "";
+    expect(row).toContain(`>${m["timeline.documentRequest.es"].replace("{count}", "2")}<`);
+    expect(row).toContain(`>${m["provenance.you.es"]}<`);
+    expect(row).toContain("lucide-send");
+  });
+});
