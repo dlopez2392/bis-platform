@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { runHeldAction, runUndoHeldEmail } from "./held-email-handlers";
-import type { HeldActionResult, HeldUndo } from "./inbound-actions";
+import type { HeldActionResult, HeldUndo, HeldUndoResult } from "./inbound-actions";
+import { m } from "@/lib/messages";
 
 function toast() {
   return { success: vi.fn(), error: vi.fn() };
@@ -72,5 +73,28 @@ describe("runUndoHeldEmail", () => {
     const t = toast();
     await runUndoHeldEmail(async () => { throw new Error("boom"); }, t, "en", vi.fn());
     expect(t.error).toHaveBeenCalledWith("That didn't go through — this page may be out of date. Reload it and try again.");
+  });
+
+  it("ok with a stop that could not be reversed (expired) toasts BOTH undone AND the expired explanation (fix round 1; mutation: drop the second toast -> FAILS)", async () => {
+    const t = toast();
+    const onUndone = vi.fn();
+    const result: HeldUndoResult = { ok: true, stopNotReversed: m["contact.email.replyExpiredExplain"] };
+    await runUndoHeldEmail(async () => result, t, "en", onUndone);
+    expect(t.success).toHaveBeenCalledWith("Back in Needs a look.");
+    expect(t.error).toHaveBeenCalledWith("Only the customer can turn these emails back on.");
+    expect(onUndone).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unrecognized stopNotReversed string falls back to the generic held.failed toast, in Spanish too (mutation: show the raw English server string -> FAILS)", async () => {
+    const t = toast();
+    const result: HeldUndoResult = { ok: true, stopNotReversed: m["contact.email.noEmail"] };
+    await runUndoHeldEmail(async () => result, t, "es", vi.fn());
+    expect(t.error).toHaveBeenCalledWith("No se guardó. Inténtelo de nuevo.");
+  });
+
+  it("ok with no stopNotReversed never fires the second toast", async () => {
+    const t = toast();
+    await runUndoHeldEmail(async () => ({ ok: true }), t, "en", vi.fn());
+    expect(t.error).not.toHaveBeenCalled();
   });
 });
