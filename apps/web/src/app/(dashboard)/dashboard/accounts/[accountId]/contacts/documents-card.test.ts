@@ -11,10 +11,13 @@ vi.mock("./documents-actions", () => ({
 vi.mock("./document-requests-actions", () => ({
   createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
 }));
+vi.mock("./document-requirements-actions", () => ({
+  skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn(),
+}));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
-  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS } = await import("./documents-card");
+  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -577,5 +580,75 @@ describe("requestsChanged: did a customer's file arrive between two requests rea
     expect(requestsChanged({ kind: "loading" }, at(T1, [req()]))).toBe(false);
     expect(requestsChanged(at(T1, [req()]), { kind: "error" })).toBe(false);
     expect(requestsChanged({ kind: "error" }, at(T1, []))).toBe(false);
+  });
+});
+
+describe("the required documents on the card (S-07 2c, spec 5.4; D3, D9, I6)", () => {
+  type Checklist = NonNullable<Props["checklist"]>;
+  const reqs = (items: [string, string][]) =>
+    ({ kind: "ready", data: { items: items.map(([category, state]) => ({ category, state })) } } as Checklist["load"]);
+  const PARTIAL = reqs([["insurance", "met"], ["id", "missing"], ["permit", "missing"]]);
+  const checklist = (load: Checklist["load"] = PARTIAL): Checklist =>
+    ({ load, canSkip: true, canAsk: true, onAsk: vi.fn(), onSkip: vi.fn(), onUnskip: vi.fn(), onRetry: vi.fn() });
+
+  it("D9: 'Required 1 of 3' sits in the card's TOP ROW with the file count, before the header's buttons and before the checklist, in both languages (mutation: render the meter inside the checklist section -> FAILS by position)", () => {
+    const html = render(ready([view(), view({ id: "d2" })]), { checklist: checklist() });
+    const count = html.indexOf(">2 files<");
+    const meter = html.indexOf("data-requirements-meter");
+    expect(count).toBeGreaterThan(0);
+    expect(meter).toBeGreaterThan(count);
+    expect(meter).toBeLessThan(html.indexOf("data-ask-customer"));
+    expect(meter).toBeLessThan(html.indexOf("data-document-checklist"));
+    const top = renderedText(html.slice(meter, html.indexOf("data-ask-customer"))).replace(/\s+/g, " ");
+    expect(top).toContain("Required");
+    expect(top).toContain("1 of 3");
+    const es = render(ready([view(), view({ id: "d2" })]), { checklist: checklist(), locale: "es", emptyText: m["documents.empty.contact.es"] });
+    const esMeter = es.indexOf("data-requirements-meter");
+    expect(esMeter).toBeLessThan(es.indexOf("data-document-checklist"));
+    const esTop = renderedText(es.slice(esMeter, es.indexOf("data-ask-customer"))).replace(/\s+/g, " ");
+    expect(esTop).toContain("Requeridos");
+    expect(esTop).toContain("1 de 3");
+  });
+
+  it("the checklist sits under the top row, before the file list; the card STILL has exactly one primary, Upload (rule 8; mutation: the checklist's Upload as default -> FAILS)", () => {
+    const html = render(ready([view()]), { checklist: checklist() });
+    expect(html.indexOf("data-document-checklist")).toBeLessThan(html.indexOf("data-document-row"));
+    expect(html).toContain('data-checklist-action="upload"');
+    expect(html.match(/data-variant="default"/g)).toHaveLength(1);
+    expect(html).toMatch(/data-variant="default"[^>]*>Upload</);
+  });
+
+  it("I6: with the upload panel open, the checklist draws no Upload and no Ask the customer, and the header draws neither (mutation: pass panelOpen={false} always -> FAILS)", () => {
+    const html = render(ready([view()]), { checklist: checklist(), panel: createElement("div", { "data-documents-panel": "" }) });
+    expect(html).toContain("data-document-checklist");
+    expect(html).not.toContain('data-checklist-action="upload"');
+    expect(html).not.toContain('data-checklist-action="ask"');
+    expect(html).not.toContain("data-ask-customer");
+    expect(html).not.toContain('data-variant="default"');
+  });
+
+  it("D3: without a checklist slot (a household's card, and every card before 2c) there is neither checklist nor meter (mutation: draw them unconditionally -> FAILS)", () => {
+    const html = render(ready([view()]));
+    expect(html).not.toContain("data-document-checklist");
+    expect(html).not.toContain("data-requirements-meter");
+  });
+
+  it("while the files read is loading or failed, neither the checklist nor the meter is drawn (the files' state alone, rule 5)", () => {
+    for (const load of [{ status: "loading" }, { status: "error" }] as Load[]) {
+      const html = render(load, { checklist: checklist() });
+      expect(html).not.toContain("data-document-checklist");
+      expect(html).not.toContain("data-requirements-meter");
+    }
+  });
+
+  it("panelFiles: a gap's Upload files every chosen file under its category; with no preset, each type's default (mutation: ignore the preset -> FAILS)", () => {
+    const pdf = new File([new Uint8Array(1)], "lease.pdf", { type: "application/pdf" });
+    const jpg = new File([new Uint8Array(1)], "roof.jpg", { type: "image/jpeg" });
+    const preset = panelFiles([pdf, jpg], "insurance", "en");
+    expect(preset.map((f) => f.category)).toEqual(["insurance", "insurance"]);
+    expect(preset.map((f) => f.title)).toEqual(["lease", "roof"]);
+    expect(preset.map((f) => f.phase)).toEqual([null, null]);
+    expect(new Set(preset.map((f) => f.key)).size).toBe(2);
+    expect(panelFiles([pdf, jpg], null, "en").map((f) => f.category)).toEqual(["other", "photo"]);
   });
 });

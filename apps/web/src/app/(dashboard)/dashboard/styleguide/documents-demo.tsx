@@ -3,7 +3,9 @@
 import type { DocumentsLoad, DocumentView } from "@/lib/documents/documents-load";
 import type { DocumentRequestsLoad } from "@/lib/document-requests/requests-load";
 import { m } from "@/lib/messages";
-import { DocumentsCardView, addedWhen, type DocumentHandlers, type RequestsSlot } from "../accounts/[accountId]/contacts/documents-card";
+import type { RequirementsLoad } from "@/lib/documents/requirements-load";
+import { DocumentsCardView, addedWhen, type ChecklistSlot, type DocumentHandlers, type RequestsSlot } from "../accounts/[accountId]/contacts/documents-card";
+import { DocumentChecklist } from "../accounts/[accountId]/contacts/document-checklist";
 import { DocumentVersionsList } from "../accounts/[accountId]/contacts/document-viewer";
 import { DocumentPurgeForm } from "../accounts/[accountId]/contacts/document-purge-dialog";
 import { DocumentUploadPanel } from "../accounts/[accountId]/contacts/document-upload-panel";
@@ -24,6 +26,10 @@ import { DocumentRequestsList } from "../accounts/[accountId]/contacts/document-
  * sent ("Sent by the customer"), and below the cards sit the request form (English with every channel on
  * offer; Spanish with no texting and the Other note's error) and the open requests, loaded (one item
  * received, one waiting) and failed.
+ * S-07 2c: the English loaded card carries the required documents ("Required 1 of 4" in its top row, the
+ * gaps under it), and below everything the checklist stands alone in its five states: English and Spanish
+ * partial (a missing, an expired, a checking and a skipped item), complete with one skipped item, loading,
+ * and failed. Every button in it is ghost; the card keeps its one primary, Upload.
  */
 const base: Omit<DocumentView, "id" | "title" | "category" | "createdAt" | "addedOn"> = {
   addedBy: { you: false, name: "Ana" }, deletedAt: null, ownersOnly: false, source: "upload", expiresOn: null,
@@ -91,6 +97,16 @@ const common = {
   versionPhases: {}, onNewVersion: noop, onPurge: noop, requests,
 };
 const box = "min-w-0 rounded-[var(--radius-card)] border border-border p-4";
+
+const requirements = (items: [string, string][]): RequirementsLoad =>
+  ({ kind: "ready", data: { items: items.map(([category, state]) => ({ category, state })) } } as RequirementsLoad);
+const PARTIAL = requirements([["contract", "met"], ["insurance", "missing"], ["id", "expired"], ["warranty", "checking"], ["photo", "skipped"]]);
+const COMPLETE = requirements([["contract", "met"], ["insurance", "met"], ["photo", "skipped"]]);
+const checklistActs = { canSkip: true, canAsk: true, onAsk: noop, onSkip: noop, onUnskip: noop, onRetry: noop };
+const cardChecklist: ChecklistSlot = { load: PARTIAL, ...checklistActs };
+const standalone = (load: RequirementsLoad, locale: "en" | "es" = "en") => (
+  <DocumentChecklist locale={locale} load={load} panelOpen={false} onUpload={noop} {...checklistActs} />
+);
 const file = (name: string) => new File([new Uint8Array(1)], name);
 
 function PanelOpen() {
@@ -108,7 +124,7 @@ function PanelOpen() {
 export function DocumentsDemo() {
   return (
     <div className="grid w-full gap-4 md:grid-cols-2" data-testid="styleguide-documents">
-      <div className={box}><DocumentsCardView {...common} load={READY} emptyText={m["documents.empty.contact"]} locale="en" /></div>
+      <div className={box}><DocumentsCardView {...common} load={READY} emptyText={m["documents.empty.contact"]} locale="en" checklist={cardChecklist} /></div>
       <div className={box} lang="es"><DocumentsCardView {...common} load={READY} emptyText={m["documents.empty.contact.es"]} locale="es" /></div>
       <div className={box}><DocumentsCardView {...common} load={EMPTY} emptyText={m["documents.empty.contact"]} locale="en" /></div>
       <div className={box}><DocumentsCardView {...common} load={{ status: "loading" }} emptyText={m["documents.empty.contact"]} locale="en" /></div>
@@ -136,6 +152,11 @@ export function DocumentsDemo() {
       <div className={box}>
         <DocumentRequestsList locale="en" load={{ kind: "error" }} onRetry={noop} onCopy={noop} onRevoke={noop} />
       </div>
+      <div className={box}>{standalone(PARTIAL)}</div>
+      <div className={box} lang="es">{standalone(PARTIAL, "es")}</div>
+      <div className={box}>{standalone(COMPLETE)}</div>
+      <div className={box}>{standalone({ kind: "loading" })}</div>
+      <div className={box}>{standalone({ kind: "error" })}</div>
     </div>
   );
 }

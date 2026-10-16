@@ -4,6 +4,7 @@ import { getContact } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { loadAssignView, type AssignView } from "@/lib/assign/view";
 import type { MessageKey } from "@/lib/messages";
 import { LocaleProvider } from "@/components/locale-provider";
@@ -241,7 +242,9 @@ export default async function ContactDetailPage({
     deals: deals.status === "ready" ? { node: <DealsBody deals={deals.deals} tr={tr} /> } : cardFailed("record.card.deals"),
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "contact", id: contactId }} canManage={access.canManage}
-        emptyText={tr.text("documents.empty.contact")} name={rawName} />,
+        emptyText={tr.text("documents.empty.contact")} name={rawName}
+        // S-07 2c (D1): everyone who sees the customer sees the required list; only the whole account's view changes it.
+        checklist={{ canSkip: seesWholeAccount(access) }} />,
     },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"

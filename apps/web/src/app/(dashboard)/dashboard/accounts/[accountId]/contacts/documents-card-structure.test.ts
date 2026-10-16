@@ -89,3 +89,39 @@ describe("coming back to the tab re-reads at once (owner ruling 2026-10-16)", ()
     expect(effect).toMatch(/if \(shown\.route === requestsRoute && requestsPollMs\(shown\.load, false\) !== null\) setRequestsNonce\(\(n\) => n \+ 1\);/);
   });
 });
+
+describe("the checklist re-reads only when a files read changed what it depends on (S-07 2c; plan review I5, M3)", () => {
+  /** The FILES settle: from its declaration to its fetch. */
+  const settleFrom = body.indexOf("const settle = (load: DocumentsLoad) =>");
+  const settleTo = body.indexOf("fetch(route, { cache: \"no-store\" })");
+  const filesSettle = settleFrom >= 0 && settleTo > settleFrom ? body.slice(settleFrom, settleTo) : "";
+  it("both anchors of the files settle are found (N2: a missing anchor must fail, never slice the wrong text)", () => {
+    expect(settleFrom).toBeGreaterThanOrEqual(0);
+    expect(settleTo).toBeGreaterThan(settleFrom);
+  });
+  const GUARDED = "if (hasChecklist && shouldReloadRequirements(lastReadyFiles.current, load)) setRequirementsNonce((n) => n + 1);";
+
+  it("the files settle bumps the checklist's read ONLY inside the shouldReloadRequirements guard (mutations: bump it on every settle, or drop the guard -> FAILS)", () => {
+    expect(filesSettle).toContain(GUARDED);
+    expect(filesSettle.split(GUARDED).join("")).not.toContain("setRequirementsNonce");
+    // Before the last-ready read is replaced, so the guard compares against the PREVIOUS ready read.
+    expect(filesSettle.indexOf(GUARDED)).toBeLessThan(filesSettle.indexOf("lastReadyFiles.current = load;"));
+  });
+
+  it("the files effect depends on the derived boolean, never on the checklist object a page re-creates each render (M3; mutation: deps [route, requestsRoute, nonce, checklist] -> FAILS)", () => {
+    expect(body).toContain("const hasChecklist = checklist !== undefined;");
+    expect(body).toContain("}, [route, requestsRoute, nonce, hasChecklist]);");
+    expect(body).not.toMatch(/\}, \[[^\]]*\bchecklist\b[^\]]*\]\);/);
+  });
+
+  it("the checklist has no timer of its own (mutation: a setTimeout or setInterval in its effect -> FAILS)", () => {
+    // N2: both anchors must be FOUND before slicing; a missing one (-1) would slice the wrong text and pass.
+    const from = body.indexOf("const settleRequirements = (next: RequirementsLoad) =>");
+    const to = body.indexOf("}, [requirementsRoute, requirementsNonce]);");
+    expect(from).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThan(from);
+    const effect = body.slice(from, to);
+    expect(effect).not.toMatch(/setTimeout|setInterval/);
+  });
+});

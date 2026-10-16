@@ -677,7 +677,18 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     const match = html.match(/data-documents-mock="([^"]*)"/);
     expect(match).toBeTruthy();
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
-    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes" });
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes",
+      checklist: { canSkip: true } });
+  });
+
+  it("a Technician's Documents card gets the checklist with no Not needed (S-07 2c D1: they see the list and can Upload or Ask, never change it; mutation: pass canSkip: true always -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "technician", canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-t");
+    const html = await render();
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props.checklist).toEqual({ canSkip: false });
   });
 
   it("a nameless contact's Documents card gets the RAW empty name, never contactDisplayName's '(no name)' placeholder (Task 8 fix round; mutation: pass contactDisplayName's name -> FAILS)", async () => {
