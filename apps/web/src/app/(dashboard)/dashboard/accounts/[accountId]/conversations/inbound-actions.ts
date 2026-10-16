@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import {
   readConsentHistory, newestDecidingRow, listMessages, type SupabaseClient,
   getInboundEmail, decideInboundEmail, unfileInboundEmail, matchSender, ensureConversation, getContact, serviceDb,
+  deleteInboundMessageByProviderId,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
@@ -86,66 +87,139 @@ export async function stopEmailsFromReplyAction(accountId: string, conversationI
 /**
  * "Needs a look" (Task 12): File on <customer>, Choose a record, Not a customer, each with Undo
  * (spec G13 — a one-transaction Undo for a manual File). Every action proves the held row on the
- * REQUEST client first (0082's RLS: a Technician sees only their own customers' threads), then
- * writes through the service client (0053) only against the id that row itself named — never a
- * browser-supplied id trusted on its own.
+ * REQUEST client first (0082's RLS: a Technician sees only their own customers' threads) — and,
+ * when "Choose a record" names a DIFFERENT contact than the row's own thread, proves that contact
+ * too (`getContact` on the SAME request client, never the service client: a Technician must not be
+ * able to file onto a customer they cannot otherwise see) — then writes through the service client
+ * (0053) only against the id that row itself named, never a browser-supplied id trusted on its own.
+ * Fix round 1 (review): every action body now runs inside its own try/catch — a throw from
+ * anywhere in that body (a malformed id, an outage) answers the same typed `"failed"` the filing
+ * rollback already used, rather than an unhandled rejection the UI cannot show a toast for.
  */
-export type HeldUndo = { kind: "unfile"; id: string; messageId: string } | { kind: "undismiss"; id: string };
+export type HeldUndo = { kind: "unfile"; id: string; messageId: string; eventId?: string } | { kind: "undismiss"; id: string };
 export type HeldActionResult = { ok: true; undo: HeldUndo } | { ok: false; error: "changed" | "failed" };
+/** Fix round 1 item 1: Undo of a File can need to reverse the stop that File itself recorded. A
+ *  refused reversal (expired, or changed since) still unfiles — the File is undone either way — but
+ *  is reported via `stopNotReversed` so the UI can say so, rather than claiming a clean undo. */
+export type HeldUndoResult = { ok: true; stopNotReversed?: string } | { ok: false };
 
-/** The held row, proven on the request client, plus its thread's own contact (the suggestion). */
+/** The held row, proven on the request client, plus its thread's own contact (the suggestion).
+ *  Fix round 1 (minor): the conversation read's own `error` is now checked — an outage here must
+ *  throw (and be reported as "failed" by the caller's wrapping try/catch), not be read as "changed"
+ *  the way a genuine miss is. */
 async function provedRow(accountId: string, id: string) {
   const db = await dbForRequest();
   const row = await getInboundEmail(db, accountId, id);
   if (!row) return null;
-  const { data } = await db.from("conversations").select("contact_id").eq("account_id", accountId).eq("id", row.conversationId).maybeSingle();
+  const { data, error } = await db.from("conversations").select("contact_id").eq("account_id", accountId).eq("id", row.conversationId).maybeSingle();
+  if (error) throw new Error(`provedRow: conversation read failed: ${error.message}`);
   if (!data) return null;
   return { db, row, suggestion: (data as { contact_id: string }).contact_id };
 }
 
 export async function fileHeldEmailAction(accountId: string, id: string, contactId: string | null): Promise<HeldActionResult> {
   const { userId } = await requireAccountAccess(accountId);
-  const p = await provedRow(accountId, id);
-  if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
-  const target = contactId ?? p.suggestion;
-  let conversationId = p.row.conversationId;
-  if (target !== p.suggestion) {
-    if (!(await getContact(p.db, accountId, target))) return { ok: false, error: "changed" };
-    conversationId = (await ensureConversation(serviceDb(), accountId, target, userId)).id;
-  }
-  const svc = serviceDb();
-  if (!(await decideInboundEmail(svc, accountId, id, "held", { status: "filed", decidedBy: userId }))) return { ok: false, error: "changed" };
   try {
-    const sender = await matchSender(svc, accountId, target, p.row.fromEmail);
-    const r = await fileInboundEmail({ db: svc, now: () => new Date() }, {
-      row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: p.row.attachmentCount,
-      raiseUnread: false, actor: { id: userId, type: "user" },
-    });
-    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
-    return { ok: true, undo: { kind: "unfile", id, messageId: r.messageId } };
-  } catch (e) {
-    console.error(`fileHeldEmailAction: account ${accountId} row ${id}: ${e instanceof Error ? e.name : typeof e}`);
-    await decideInboundEmail(svc, accountId, id, "filed", { status: "held", messageId: null, decidedBy: null }).catch(() => false);
+    const p = await provedRow(accountId, id);
+    if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
+    const target = contactId ?? p.suggestion;
+    const moving = target !== p.suggestion;
+    // Proven on the REQUEST client, same as the row itself: a Technician filing onto a different
+    // contact must still only be able to name one they can otherwise see.
+    if (moving && !(await getContact(p.db, accountId, target))) return { ok: false, error: "changed" };
+    const svc = serviceDb();
+    let conversationId = p.row.conversationId;
+    try {
+      // Fix round 1 item 4 ("Choose a record"): the row's own conversation_id moves to the chosen
+      // contact's thread in the SAME compare-and-set that files it (decideInboundEmail's own
+      // account+id+expected-status WHERE clause), so Undo (unfileInboundEmail) later resets THIS
+      // thread's last_message_at, never the original one the row no longer belongs to.
+      if (moving) conversationId = (await ensureConversation(svc, accountId, target, userId)).id;
+      if (!(await decideInboundEmail(svc, accountId, id, "held", {
+        status: "filed", decidedBy: userId, ...(moving ? { conversationId } : {}),
+      }))) return { ok: false, error: "changed" };
+      const sender = await matchSender(svc, accountId, target, p.row.fromEmail);
+      const r = await fileInboundEmail({ db: svc, now: () => new Date() }, {
+        row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: p.row.attachmentCount,
+        raiseUnread: false, actor: { id: userId, type: "user" },
+      });
+      revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+      if (r.consent.kind === "stopped") revalidatePath(`/dashboard/accounts/${accountId}/contacts/${target}`);
+      // r.created distinguishes fileInboundEmail's own compare-and-set winner from its loser — a
+      // race that can only exist between two CONCURRENT deliveries of the same unlinked row
+      // (file.ts fix round 3 item 1). This row was proven "held" and flipped to "filed" by exactly
+      // one compare-and-set above, run by exactly one caller: nothing else can be racing this
+      // specific call, so r.created is always true here and is deliberately not branched on.
+      return {
+        ok: true,
+        undo: { kind: "unfile", id, messageId: r.messageId, ...(r.consent.kind === "stopped" ? { eventId: r.consent.eventId } : {}) },
+      };
+    } catch {
+      // Fix round 1 item 2: a File that fails partway (after its own message landed, before the row
+      // committed back to "filed" — or any other mid-flight failure) must not leave that message
+      // dangling once the row returns to held. Scoped by account + this row's own provider id, so
+      // the rollback can never touch another row's message even if something else collided here.
+      const deleted = await deleteInboundMessageByProviderId(svc, accountId, p.row.providerEmailId).catch(() => false);
+      console.error("fileHeldEmailAction rollback", { accountId, id, deleted });
+      await decideInboundEmail(svc, accountId, id, "filed", { status: "held", messageId: null, decidedBy: null }).catch(() => false);
+      return { ok: false, error: "failed" };
+    }
+  } catch {
+    console.error("fileHeldEmailAction failed", { accountId });
     return { ok: false, error: "failed" };
   }
 }
 
 export async function dismissHeldEmailAction(accountId: string, id: string): Promise<HeldActionResult> {
   const { userId } = await requireAccountAccess(accountId);
-  const p = await provedRow(accountId, id);
-  if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
-  if (!(await decideInboundEmail(serviceDb(), accountId, id, "held", { status: "dismissed", decidedBy: userId }))) return { ok: false, error: "changed" };
-  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
-  return { ok: true, undo: { kind: "undismiss", id } };
+  try {
+    const p = await provedRow(accountId, id);
+    if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
+    if (!(await decideInboundEmail(serviceDb(), accountId, id, "held", { status: "dismissed", decidedBy: userId }))) return { ok: false, error: "changed" };
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    return { ok: true, undo: { kind: "undismiss", id } };
+  } catch {
+    console.error("dismissHeldEmailAction failed", { accountId });
+    return { ok: false, error: "failed" };
+  }
 }
 
-export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Promise<{ ok: boolean }> {
-  await requireAccountAccess(accountId);
-  const p = await provedRow(accountId, undo.id);
-  if (!p) return { ok: false };
-  const ok = undo.kind === "unfile"
-    ? p.row.status === "filed" && await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId)
-    : p.row.status === "dismissed" && await decideInboundEmail(serviceDb(), accountId, undo.id, "dismissed", { status: "held", decidedBy: null });
-  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
-  return { ok };
+export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Promise<HeldUndoResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  try {
+    const p = await provedRow(accountId, undo.id);
+    if (!p) return { ok: false };
+    if (undo.kind === "undismiss") {
+      const ok = p.row.status === "dismissed" && await decideInboundEmail(serviceDb(), accountId, undo.id, "dismissed", { status: "held", decidedBy: null });
+      revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+      return { ok };
+    }
+    if (p.row.status !== "filed") return { ok: false };
+    // Fix round 1 item 1: Undo of a File also reverses the stop THAT File recorded, when it
+    // recorded one. Bound the same way Task 11's own reply-stop Undo is: find the message on this
+    // thread that actually carries this eventId, and undo for THAT message's own sender (a
+    // household member's, when the stop came from one) rather than the thread's own contact.
+    let stopNotReversed: string | undefined;
+    if (undo.eventId) {
+      const messages = await listMessages(p.db, accountId, p.row.conversationId);
+      const owning = messages.find((msg) => metaOf(msg)?.consent?.kind === "stopped" && metaOf(msg)?.consent?.eventId === undo.eventId);
+      const targetContactId = (owning ? metaOf(owning)?.sender?.contact_id : undefined) ?? p.suggestion;
+      const ctx = await emailContextFor(accountId, targetContactId, userId);
+      if ("ok" in ctx) {
+        stopNotReversed = ctx.error;
+      } else {
+        const r = await undoInboundStop(ctx, undo.eventId);
+        if (!r.ok) stopNotReversed = r.error;
+        else revalidatePath(`/dashboard/accounts/${accountId}/contacts/${targetContactId}`);
+      }
+    }
+    // The reversal above is best-effort and reported, never blocking: a refused reversal (expired,
+    // or changed since) still leaves the File undone below.
+    const ok = await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId);
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    return ok ? { ok: true, ...(stopNotReversed ? { stopNotReversed } : {}) } : { ok: false };
+  } catch {
+    console.error("undoHeldEmailAction failed", { accountId });
+    return { ok: false };
+  }
 }

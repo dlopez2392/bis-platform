@@ -2,14 +2,14 @@ import { describe, it, expect } from "vitest";
 import "dotenv/config";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
-import { createMessage, listMessages, listConversations } from "../messaging";
+import { createMessage, listMessages, listConversations, ensureConversation } from "../messaging";
 import { createAccount } from "../accounts";
 import { deleteAccountCascade } from "../account-teardown";
 import {
   BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
   ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage,
   decideInboundEmail, unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
-  findInboundEmailByProviderId,
+  findInboundEmailByProviderId, deleteInboundMessageByProviderId,
   type NewInboundEmail,
 } from "../inbound-email";
 
@@ -355,6 +355,77 @@ describe("messages carry meta", () => {
       await createMessage(db, accountId, { conversationId: t.conversationId, channel: "email", direction: "inbound", body: "a", meta: { attachment_count: 2 } }, ACTOR);
       await createMessage(db, accountId, { conversationId: t.conversationId, channel: "email", direction: "outbound", body: "b" }, ACTOR);
       expect((await listMessages(db, accountId, t.conversationId)).map((x) => x.meta)).toEqual([{ attachment_count: 2 }, {}]);
+    });
+  });
+});
+
+/**
+ * NOT RUN in this session (Task 12 fix round 1): this worktree has no Supabase env configured
+ * (`serviceDb()` throws "Supabase service env vars missing" from `withTestAccount` itself — every
+ * other test in this file is equally unexercised here), so these two were written to the same
+ * style as the rest of the file and read for correctness, but never watched red-then-green. Flagged
+ * for the orchestrator per the brief's "say if you couldn't" instruction.
+ */
+describe("Task 12 fix round 1, item 4: decideInboundEmail's own conversation_id move", () => {
+  it("'Choose a record' moves the row to Pat's conversation in the SAME compare-and-set that files it; Undo resets PAT's own last_message_at to his newest remaining message, not the original thread's (mutation: write conversation_id as a second, separate update → a reader between the two sees the old thread still filed, FAILS; mutation: drop conversationId from the update entirely → the row never moves, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana", email: "ana7@example.com" }, ACTOR);
+      const { id: pat } = await createContact(db, accountId, { firstName: "Pat", email: "pat7@example.com" }, ACTOR);
+      const anaThread = await ensureReplyToken(db, accountId, ana, ACTOR);
+      const patConvo = await ensureConversation(db, accountId, pat, ACTOR);
+      // Pat already has messages on his own thread — the scenario the ruling names ("Choose Pat,
+      // who has messages"): his last_message_at must read as his own newest AFTER Undo, never as
+      // the held row's own received time and never as stale.
+      const { id: patOlder } = await createMessage(db, accountId, { conversationId: patConvo.id, channel: "email", direction: "inbound", body: "older" }, ACTOR);
+      await new Promise((r) => setTimeout(r, 10));
+      const { id: patNewer } = await createMessage(db, accountId, { conversationId: patConvo.id, channel: "email", direction: "inbound", body: "newer" }, ACTOR);
+      void patOlder;
+
+      const { row: held } = await recordInboundEmail(db, row(accountId, anaThread.conversationId));
+      expect(await decideInboundEmail(db, accountId, held.id, "held", {
+        status: "filed", decidedBy: ACTOR, conversationId: patConvo.id,
+      })).toBe(true);
+      const moved = await getInboundEmail(db, accountId, held.id);
+      expect(moved?.conversationId).toBe(patConvo.id);
+      expect(moved?.status).toBe("filed");
+
+      const { id: filedMsg } = await createMessage(db, accountId, { conversationId: patConvo.id, channel: "email", direction: "inbound", body: "the held reply, now filed" }, ACTOR);
+      expect(await setInboundMessage(db, accountId, held.id, filedMsg)).toBe(true);
+
+      expect(await unfileInboundEmail(db, accountId, held.id, filedMsg)).toBe(true);
+      const { data: patRow } = await db.from("conversations").select("last_message_at").eq("id", patConvo.id).single();
+      const { data: newerMsg } = await db.from("messages").select("created_at").eq("id", patNewer).single();
+      expect((patRow as { last_message_at: string }).last_message_at).toBe((newerMsg as { created_at: string }).created_at);
+
+      // Ana's OWN thread was never touched by any of this — the move was total, not a copy.
+      expect(await listMessages(db, accountId, anaThread.conversationId)).toEqual([]);
+    });
+  });
+
+  it("decideInboundEmail without conversationId leaves the row's own thread untouched (mutation: always write conversation_id even when not given → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana8@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const { row: held } = await recordInboundEmail(db, row(accountId, t.conversationId));
+      expect(await decideInboundEmail(db, accountId, held.id, "held", { status: "dismissed", decidedBy: ACTOR })).toBe(true);
+      expect((await getInboundEmail(db, accountId, held.id))?.conversationId).toBe(t.conversationId);
+    });
+  });
+});
+
+describe("Task 12 fix round 1, item 2: deleteInboundMessageByProviderId", () => {
+  it("removes the message for this row's own provider id, scoped to the account; answers false (never throws) on a provider id with no message at all (mutation: drop the account scope → a same-provider-id row under another account is also removed, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana9@example.com" }, ACTOR);
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      const { row: held } = await recordInboundEmail(db, row(accountId, t.conversationId));
+      await createMessage(db, accountId, {
+        conversationId: t.conversationId, channel: "email", direction: "inbound", body: "x", providerMessageId: held.providerEmailId,
+      }, ACTOR);
+      expect(await deleteInboundMessageByProviderId(db, accountId, held.providerEmailId)).toBe(true);
+      expect(await listMessages(db, accountId, t.conversationId)).toEqual([]);
+      expect(await deleteInboundMessageByProviderId(db, accountId, held.providerEmailId)).toBe(false);
+      expect(await deleteInboundMessageByProviderId(db, accountId, "re_never_existed")).toBe(false);
     });
   });
 });

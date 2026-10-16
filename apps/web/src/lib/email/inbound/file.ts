@@ -48,22 +48,32 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
 
   const stopFor = i.sender?.contactId ?? i.contactId;
   const cls = classifyEmailStop(row.text);
+  // Review finding (Task 8) + Task 12 fix round 1 ruling (item 6): `row.fromEmail` can be the RAW,
+  // unparseable From header text (set by pipeline.ts's own fallback when `bareAddress` failed on
+  // receipt) rather than a real address. The message is still filed either way, but the ledger is
+  // never written against a string that is not an address; a clear stop with no usable address
+  // becomes the same "maybe" chip an unclear phrase does (staff decide by hand), rather than
+  // silently dropping the stop to "none" as though nothing was said at all.
+  const bare = cls.kind === "clear" ? bareAddress(row.fromEmail) : null;
   let consent: MessageConsent = { kind: "none" };
-  // Review finding (Task 8): `row.fromEmail` can be the RAW, unparseable From header text (set by
-  // pipeline.ts's own fallback when `bareAddress` failed on receipt) rather than a real address. A
-  // clear stop is still real and the message is still filed either way, but the ledger is never
-  // written against a string that is not an address — `bareAddress` here is the same guard that
-  // decided whether this row could be matched to a sender at all.
-  if (cls.kind === "clear" && bareAddress(row.fromEmail)) {
-    const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address: row.fromEmail, providerEmailId: row.providerEmailId, phrase: cls.phrase });
+  if (cls.kind === "clear" && bare) {
+    const r = await recordInboundStop(db, { accountId: row.accountId, contactId: stopFor, address: bare, providerEmailId: row.providerEmailId, phrase: cls.phrase });
     if (r.outcome === "stopped") consent = { kind: "stopped", eventId: r.eventId };
-  } else if (cls.kind === "unclear") {
+  } else if (cls.kind === "unclear" || (cls.kind === "clear" && !bare)) {
     consent = { kind: "maybe", phrase: cls.phrase };
   }
 
   const existing = await findMessageByProviderId(db, row.accountId, row.providerEmailId);
   let messageId: string;
   if (existing) {
+    // Task 12 fix round 1 (item 2): provider_email_id's uniqueness is per-ACCOUNT, never per-thread
+    // — a hit here that sits on a different conversation than the one being filed onto is never
+    // this row's own message, and reusing it would silently attach this email to the wrong
+    // customer's thread. Thrown, like every other failure in this function: the caller (the manual
+    // File action, or pipeline.ts's retry) is the one that decides what a throw here means.
+    if (existing.conversationId !== row.conversationId) {
+      throw new Error("fileInboundEmail: an existing message for this provider id sits on a different conversation");
+    }
     messageId = existing.id;
   } else {
     const meta: Record<string, unknown> = { inbound_email_id: row.providerEmailId, attachment_count: i.attachmentCount };

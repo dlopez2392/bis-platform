@@ -283,13 +283,20 @@ export async function updateMessageStatusByProviderId(
  */
 export async function findMessageByProviderId(
   db: SupabaseClient, accountId: string, providerMessageId: string,
-): Promise<{ id: string } | null> {
+  // `conversationId` added (Task 12 fix round 1, item 2): fileInboundEmail's own reuse of a hit
+  // needs to know whether that message actually sits on the SAME conversation it is filing onto — a
+  // provider id only disambiguates per account, never per thread. Additive: every existing caller
+  // (sms/inbound's own idempotency check) reads only `=== null`, never `.id` or any other field, so
+  // the widened shape changes nothing for it.
+): Promise<{ id: string; conversationId: string } | null> {
   const { data, error } = await db.from("messages")
-    .select("id")
+    .select("id, conversation_id")
     .eq("account_id", accountId).eq("provider_message_id", providerMessageId)
     .maybeSingle();
   if (error) throw new Error(`findMessageByProviderId failed: ${error.message}`);
-  return (data as { id: string } | null) ?? null;
+  if (!data) return null;
+  const row = data as { id: string; conversation_id: string };
+  return { id: row.id, conversationId: row.conversation_id };
 }
 
 /**

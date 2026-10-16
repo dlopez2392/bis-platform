@@ -79,7 +79,7 @@ export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sendin
 export {
   INBOUND_MODES, BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, INBOUND_EMAIL_COLLISION, newReplyToken, getInboundSettings, setInboundSettings,
   ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, findInboundEmailByProviderId, setInboundMessage, decideInboundEmail,
-  unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
+  unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender, deleteInboundMessageByProviderId,
   type InboundMode, type InboundSettings, type ReplyThread, type InboundStatus, type HoldReason, type InboundAuthRecord,
   type InboundEmailRow, type NewInboundEmail, type HeldInboundEmail, type SenderMatch,
 } from "./inbound-email";

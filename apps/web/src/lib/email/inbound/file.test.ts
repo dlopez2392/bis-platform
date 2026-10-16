@@ -64,7 +64,7 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
 
       // Retry: the SAME row (messageId still null — the DB write never committed), the message now
       // found by provider id (it was really inserted on attempt 1).
-      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1", conversationId: "conv" });
       db.setInboundMessage.mockResolvedValue(true);
       const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
       expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
@@ -78,7 +78,7 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
       await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }))).rejects.toThrow(/unread write failed/);
       expect(db.setInboundMessage).not.toHaveBeenCalled(); // never reached: unread threw first
 
-      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1", conversationId: "conv" });
       const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
       expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
       expect(db.createMessage).toHaveBeenCalledTimes(1);
@@ -91,7 +91,7 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
       expect(db.incrementUnreadCount).not.toHaveBeenCalled();
 
       // Retry: the orphaned insert is now found by provider id.
-      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+      db.findMessageByProviderId.mockResolvedValue({ id: "msg_1", conversationId: "conv" });
       const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, text: "See you then" } }));
       expect(result).toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
       expect(db.createMessage).toHaveBeenCalledTimes(1); // the first (failed) attempt only
@@ -105,7 +105,7 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     // commit write — exactly what real concurrent deliveries of an already-inserted, still-unlinked
     // row do. setInboundMessage answers in CALL order: whichever of the two genuinely interleaved
     // calls reaches it first wins (true); the other's compare-and-set matches zero rows (false).
-    db.findMessageByProviderId.mockResolvedValue({ id: "msg_1" });
+    db.findMessageByProviderId.mockResolvedValue({ id: "msg_1", conversationId: "conv" });
     db.setInboundMessage.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const row = { ...ROW, text: "See you then" };
     const [a, b] = await Promise.all([
@@ -140,10 +140,22 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     expect((await fileInboundEmail({ db: DB, now: () => new Date() }, input())).consent).toEqual({ kind: "none" });
   });
 
-  it("an unparseable From is never written to the consent ledger: a clear STOP still files, with no stop recorded (review finding on Task 8; mutation: pass row.fromEmail through unguarded → recordInboundStop called with the raw string, FAILS)", async () => {
+  it("an unparseable From is never written to the consent ledger: a clear STOP still files, as the unclear chip rather than silently none (review finding on Task 8; fix round 1 ruling item 6; mutation: map it to none → FAILS)", async () => {
     const result = await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "not an address (garbled header)", text: "STOP" } }));
     expect(stop.recordInboundStop).not.toHaveBeenCalled();
-    expect(result.consent).toEqual({ kind: "none" });
-    expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "none" });
+    expect(result.consent).toEqual({ kind: "maybe", phrase: "STOP" });
+    expect(db.createMessage.mock.calls[0]![2].meta.consent).toEqual({ kind: "maybe", phrase: "STOP" });
+  });
+
+  it("writes the stop with bareAddress's own normalised result, never the raw From text (mutation: pass row.fromEmail through unguarded → recordInboundStop called with an un-normalised address, FAILS)", async () => {
+    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: { ...ROW, fromEmail: "Luis <LUIS@EXAMPLE.COM>" } }));
+    expect(stop.recordInboundStop).toHaveBeenCalledWith(DB, expect.objectContaining({ address: "luis@example.com" }));
+  });
+
+  it("an existing message under a DIFFERENT conversation is never reused — provider_email_id is unique per account, not per thread (mutation: skip the conversation check → FAILS)", async () => {
+    db.findMessageByProviderId.mockResolvedValue({ id: "msg_1", conversationId: "conv_other" });
+    await expect(fileInboundEmail({ db: DB, now: () => new Date() }, input())).rejects.toThrow(/different conversation/);
+    expect(db.createMessage).not.toHaveBeenCalled();
+    expect(db.setInboundMessage).not.toHaveBeenCalled();
   });
 });

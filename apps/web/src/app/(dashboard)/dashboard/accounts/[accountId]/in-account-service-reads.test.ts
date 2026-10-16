@@ -106,7 +106,9 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/actions.ts": "proven-target",
   // Task 12's held-email actions (File / Choose a record / Not a customer, each with Undo):
   // every service write follows provedRow's own read of the inbound_emails row (and its thread's
-  // contact_id) on the request client, 0082's RLS.
+  // contact_id) on the request client, 0082's RLS; "Choose a record" additionally proves the
+  // CHOSEN contact the same way — getContact on this same request client, never the service one —
+  // before any service write names that contact at all (fix round 1 item 3).
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/inbound-actions.ts": "proven-target",
   // Fix round 1 (Task 11 UI review): the thread's own inbound-email notice needs each involved
   // contact's CURRENT email-consent state — ledgerDb, only after getContact on the request

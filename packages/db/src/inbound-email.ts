@@ -186,17 +186,40 @@ export async function setInboundMessage(db: SupabaseClient, accountId: string, i
   return (data?.length ?? 0) > 0;
 }
 
-/** A compare-and-set on the status the caller saw; false when someone moved it first. */
+/**
+ * A compare-and-set on the status the caller saw; false when someone moved it first.
+ *
+ * `conversationId` (Task 12 fix round 1, item 4 — "Choose a record"): optional, and written in this
+ * SAME update when given, never a second write — the row's thread reassignment and its held→filed
+ * transition are one atomic compare-and-set, scoped by the same account+id+expected-status WHERE
+ * clause as everything else here, so a row someone else already moved can never have its thread
+ * silently reassigned underneath that other write.
+ */
 export async function decideInboundEmail(
   db: SupabaseClient, accountId: string, id: string, from: InboundStatus,
-  to: { status: InboundStatus; messageId?: string | null; decidedBy: string | null },
+  to: { status: InboundStatus; messageId?: string | null; decidedBy: string | null; conversationId?: string },
 ): Promise<boolean> {
   const { data, error } = await db.from("inbound_emails").update({
     status: to.status,
     ...(to.messageId !== undefined ? { message_id: to.messageId } : {}),
+    ...(to.conversationId !== undefined ? { conversation_id: to.conversationId } : {}),
     decided_by: to.decidedBy, decided_at: to.decidedBy !== null ? new Date().toISOString() : null,
   }).eq("account_id", accountId).eq("id", id).eq("status", from).select("id");
   if (error) throw new Error(`decideInboundEmail failed: ${error.message}`);
+  return (data?.length ?? 0) > 0;
+}
+
+/**
+ * Rollback for a manual File that failed partway (Task 12 fix round 1, item 2): removes any message
+ * row left behind for THIS row's own provider id, scoped to the account, so a failed File never
+ * leaves a dangling message when the row returns to held. Returns whether a row was actually
+ * removed — false is the ordinary case (the ledger write itself is what failed, before any message
+ * ever existed), not a diagnostic in itself.
+ */
+export async function deleteInboundMessageByProviderId(db: SupabaseClient, accountId: string, providerEmailId: string): Promise<boolean> {
+  const { data, error } = await db.from("messages").delete()
+    .eq("account_id", accountId).eq("provider_message_id", providerEmailId).select("id");
+  if (error) throw new Error(`deleteInboundMessageByProviderId failed: ${error.message}`);
   return (data?.length ?? 0) > 0;
 }
 
