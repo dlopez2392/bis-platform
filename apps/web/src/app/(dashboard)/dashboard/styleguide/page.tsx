@@ -48,6 +48,7 @@ import { AssignDemo } from "./assign-demo";
 import { RelationshipsDemo } from "./relationships-demo";
 import { PlacesDemo } from "./places-demo";
 import { DocumentsDemo } from "./documents-demo";
+import { HeldEmailsDemo } from "./held-emails-demo";
 import { RecordDemo } from "./record-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -264,6 +265,12 @@ export default async function StyleguidePage({
             loading, in error, and with its upload panel open mid-batch. */}
         <Section title={m["documents.title"]} file="accounts/[accountId]/contacts/documents-card.tsx">
           <DocumentsDemo />
+        </Section>
+
+        {/* S-06 part 1, Task 12: the inbox's "Needs a look" filter — two held
+            items (one not on record, one unverified), empty and loading. */}
+        <Section title={t(m, "conversations.held.title", "en")} file="accounts/[accountId]/conversations/held-email-list.tsx">
+          <HeldEmailsDemo />
         </Section>
 
         {/* S-03 part 1 (spec §15): the record kit: layout at both widths, header with all and no

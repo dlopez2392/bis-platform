@@ -1,0 +1,228 @@
+"use client";
+
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Inbox } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
+import { EmptyState } from "@/components/empty-state";
+import { formatDateTimeInZone } from "@/lib/format";
+import { m, type MessageKey } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
+import { cn } from "@/lib/utils";
+import { runGuarded } from "@/lib/ui/guarded-run";
+import { runHeldAction, runUndoHeldEmail } from "./held-email-handlers";
+import { fileHeldEmailAction, dismissHeldEmailAction, undoHeldEmailAction } from "./inbound-actions";
+
+/** S-06 part 1, Task 12: the inbox's "Needs a look" filter — held emails
+ *  Task 3 could not match to a customer with confidence (not on the
+ *  reached conversation's own contact's record, or whose SPF/DKIM could
+ *  not be confirmed). Each offers one primary — File on the suggested
+ *  contact (the token's own customer) — and two ghosts: Choose a different
+ *  record, or Not a customer at all (rule 8, rule 3). */
+export type HeldItemView = {
+  id: string;
+  fromName: string | null;
+  fromEmail: string;
+  subject: string | null;
+  excerpt: string;
+  receivedAt: string;
+  reason: "not_on_record" | "unverified";
+  suggestion: { contactId: string; name: string };
+};
+
+type SearchHitLite = { id: string; label: string };
+
+const REASON_KEY: Record<HeldItemView["reason"], MessageKey> = {
+  not_on_record: "conversations.held.reason.notOnRecord",
+  unverified: "conversations.held.reason.unverified",
+};
+
+const SEARCH_MIN = 2;
+const SEARCH_DEBOUNCE_MS = 250;
+
+function HeldEmailRow({
+  accountId, item, locale, timezone, onHide, onShow, onUndone,
+}: {
+  accountId: string;
+  item: HeldItemView;
+  locale: Locale;
+  timezone: string;
+  /** Optimistic removal — called immediately on click, before the server
+   *  answers (DESIGN.md rule 6: reversible actions run at once). */
+  onHide: () => void;
+  /** Puts the row back — only on a thrown action or a `failed` answer. */
+  onShow: () => void;
+  onUndone: () => void;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const busy = useRef(false);
+  const [choosing, setChoosing] = useState(false);
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState<{ query: string; hits: SearchHitLite[] } | null>(null);
+
+  useEffect(() => {
+    // Too short to search: the render below already withholds `search` for
+    // any query shorter than this, so there is nothing to clear here —
+    // setting state synchronously inside an effect body is exactly the
+    // cascading-render shape `react-hooks/set-state-in-effect` flags.
+    if (!choosing || query.trim().length < SEARCH_MIN) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch(`/api/accounts/${accountId}/search?q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then(async (res) => {
+          if (!res.ok) { setSearch({ query, hits: [] }); return; }
+          const payload = (await res.json()) as { contacts?: SearchHitLite[] };
+          setSearch({ query, hits: payload.contacts ?? [] });
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setSearch({ query, hits: [] });
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [choosing, query, accountId]);
+
+  function runFile(contactId: string | null, name: string) {
+    onHide();
+    runGuarded(busy, startTransition, () => runHeldAction(
+      () => fileHeldEmailAction(accountId, item.id, contactId),
+      toast, locale,
+      t(m, "conversations.held.filed", locale, { name }),
+      onShow,
+      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, undo), toast, locale, () => { onUndone(); router.refresh(); }),
+    ));
+  }
+
+  function runDismiss() {
+    onHide();
+    runGuarded(busy, startTransition, () => runHeldAction(
+      () => dismissHeldEmailAction(accountId, item.id),
+      toast, locale,
+      t(m, "conversations.held.dismissed", locale),
+      onShow,
+      (undo) => runUndoHeldEmail(() => undoHeldEmailAction(accountId, undo), toast, locale, () => { onUndone(); router.refresh(); }),
+    ));
+  }
+
+  const dot = <span data-dot aria-hidden className="size-2 rounded-full bg-[var(--warn)]" />;
+  const shownHits = search?.query === query ? search.hits : [];
+
+  return (
+    <article data-held-item={item.id} lang={locale} className={cn("flex flex-col gap-2 px-3 py-3", LIST_ROW)}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-1.5">
+          <span className="font-medium text-foreground">{item.fromName ?? item.fromEmail}</span>
+          <span className="truncate text-xs text-muted-foreground">{item.fromEmail}</span>
+        </span>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          {formatDateTimeInZone(item.receivedAt, timezone, locale)}
+        </span>
+      </div>
+      <p className="truncate text-sm">{item.subject ?? t(m, "conversations.held.noSubject", locale)}</p>
+      <p data-held-reason={item.reason} className="flex items-center gap-2 text-xs">
+        {dot}
+        {t(m, REASON_KEY[item.reason], locale)}
+      </p>
+      <p className="line-clamp-2 text-xs text-muted-foreground">{item.excerpt}</p>
+      <p className="text-xs text-muted-foreground">
+        {t(m, "conversations.held.suggestion", locale, { name: item.suggestion.name })}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button" size="sm" className="min-h-11 md:min-h-8" disabled={pending}
+          onClick={() => runFile(null, item.suggestion.name)}
+        >
+          {t(m, "conversations.held.fileOn", locale, { name: item.suggestion.name })}
+        </Button>
+        <Button
+          type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8" disabled={pending}
+          aria-expanded={choosing}
+          onClick={() => setChoosing((v) => !v)}
+        >
+          {t(m, "conversations.held.choose", locale)}
+        </Button>
+        <Button
+          type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8" disabled={pending}
+          onClick={runDismiss}
+        >
+          {t(m, "conversations.held.notCustomer", locale)}
+        </Button>
+      </div>
+      {choosing ? (
+        <div className="flex flex-col gap-2 pt-1">
+          <label className="sr-only" htmlFor={`held-search-${item.id}`}>
+            {t(m, "conversations.held.searchLabel", locale)}
+          </label>
+          <Input
+            id={`held-search-${item.id}`}
+            className="min-h-11 md:min-h-8"
+            placeholder={t(m, "conversations.held.searchLabel", locale)}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query.trim().length >= SEARCH_MIN ? (
+            search?.query === query && shownHits.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t(m, "conversations.held.searchEmpty", locale)}</p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {shownHits.map((hit) => (
+                  <Button
+                    key={hit.id} type="button" variant="ghost" size="sm" className="min-h-11 md:min-h-8"
+                    disabled={pending}
+                    onClick={() => runFile(hit.id, hit.label)}
+                  >
+                    {hit.label}
+                  </Button>
+                ))}
+              </div>
+            )
+          ) : null}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+export function HeldEmailList({
+  accountId, items, locale, timezone,
+}: {
+  accountId: string;
+  items: HeldItemView[];
+  locale: Locale;
+  timezone: string;
+}) {
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const visible = items.filter((i) => !hidden.has(i.id));
+
+  if (visible.length === 0) {
+    return (
+      <EmptyState
+        icon={Inbox}
+        title={t(m, "conversations.held.title", locale)}
+        body={t(m, "conversations.held.empty", locale)}
+      />
+    );
+  }
+
+  return (
+    <ListPanel as="div" className="flex flex-col">
+      {visible.map((item) => (
+        <HeldEmailRow
+          key={item.id}
+          accountId={accountId}
+          item={item}
+          locale={locale}
+          timezone={timezone}
+          onHide={() => setHidden((s) => { const n = new Set(s); n.add(item.id); return n; })}
+          onShow={() => setHidden((s) => { const n = new Set(s); n.delete(item.id); return n; })}
+          onUndone={() => setHidden((s) => { const n = new Set(s); n.delete(item.id); return n; })}
+        />
+      ))}
+    </ListPanel>
+  );
+}

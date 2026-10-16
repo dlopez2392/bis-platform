@@ -9,13 +9,15 @@
 // can catch by name (page.test.ts) rather than by reading rendered output.
 import Link from "next/link";
 import type { CallProposal, ContactFieldPayload, WorkRow, WorkSource } from "@bis/db";
-import { ListTodo } from "lucide-react";
+import { Inbox, ListTodo } from "lucide-react";
 import type { Bucket, BucketedWork } from "@/lib/work/buckets";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
+import { plural } from "@/lib/i18n/t";
+import type { Locale } from "@/lib/i18n/locale";
 import { cn } from "@/lib/utils";
 import {
   completeWorkTask, reopenWorkTask, dismissToTask, closeOutBooking,
@@ -428,6 +430,7 @@ export function WorkList({
   canAssign = false,
   members = [],
   who = "all",
+  heldEmails,
 }: {
   buckets: BucketedWork;
   accountId: string;
@@ -459,8 +462,28 @@ export function WorkList({
   members?: AssignMember[];
   /** The Mine / Unassigned filter the page applied, for the empty state. */
   who?: Who;
+  /** Task 12 (S-06 part 1): the inbox's own "Needs a look" count, read by
+   *  `tasks/page.tsx` once alongside this screen's own buckets — never a
+   *  fourth bucket, same reasoning `proposals` already carries above. Only
+   *  rendered at count > 0 (an unknown count, read-failure included, omits
+   *  the row rather than showing "0 emails need a look"). */
+  heldEmails?: { count: number; href: string; locale: Locale };
 }) {
   const shown = visibleBuckets(buckets);
+
+  // The one row above everything else on this screen, including the empty
+  // state below — a real held email waiting still needs a look even on a
+  // day with no other to-dos at all.
+  const heldRow = heldEmails && heldEmails.count > 0 ? (
+    <Link
+      data-held-emails-row
+      href={heldEmails.href}
+      className={cn("flex items-center gap-2 px-3 py-2.5 text-sm", LIST_ROW, "hover:bg-[var(--surface-3)]")}
+    >
+      <Inbox className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+      {plural(m, "work.heldEmails", heldEmails.count, heldEmails.locale, { count: heldEmails.count })}
+    </Link>
+  ) : null;
 
   // Fix-wave Important 3: the real queue can be empty while a suggestion
   // still exists — mirrors the agency screen's own
@@ -469,9 +492,9 @@ export function WorkList({
   // pending proposal.
   if (shown.length === 0 && proposals.length === 0) {
     // F-085 part 1: an empty filter is not an empty queue, so it says which.
-    if (who === "mine") return <EmptyState icon={ListTodo} title={m["assign.empty.mine"]} />;
-    if (who === "unassigned") return <EmptyState icon={ListTodo} title={m["assign.empty.unassignedWork"]} />;
-    return <EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} />;
+    if (who === "mine") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.mine"]} /></>;
+    if (who === "unassigned") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.unassignedWork"]} /></>;
+    return <>{heldRow}<EmptyState icon={ListTodo} title={m["work.empty"]} body={m["work.empty.body"]} /></>;
   }
   const assign = canAssign ? { members } : null;
 
@@ -491,6 +514,7 @@ export function WorkList({
 
   return (
     <div className="flex flex-col gap-6">
+      {heldRow}
       {shown.map((bucket) => (
         // `data-bucket` is a test-only marker (no visual effect), matching
         // the agency screen's own — it lets a render test isolate ONE

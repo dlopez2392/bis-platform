@@ -1,5 +1,11 @@
+import { Suspense } from "react";
+import Link from "next/link";
 import { MessagesSquare } from "lucide-react";
-import { listConversations, getConversationSummary, listMessages, getContact } from "@bis/db";
+import {
+  listConversations, getConversationSummary, listMessages, getContact,
+  listHeldInboundEmails, countHeldInboundEmails, getInboundSettings,
+  type SupabaseClient,
+} from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -13,6 +19,7 @@ import { withWho } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale } from "@/lib/i18n/request-locale";
+import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { readEmailView, type EmailView } from "@/lib/consent/email-view";
@@ -25,6 +32,49 @@ import { EmailComposer } from "./email-composer";
 import { MarkRead } from "./mark-read";
 import { ConversationBack } from "./conversation-back";
 import { sendEmailAction, markConversationReadAction } from "./actions";
+import { HeldEmailList, type HeldItemView } from "./held-email-list";
+import { HeldEmailSkeleton } from "./held-email-skeleton";
+
+/** Task 12 (S-06 part 1): the "Needs a look" list — Task 3's held rows,
+ *  mapped to `HeldItemView`. Its own async component (rather than inlined
+ *  in `ConversationsPage`) so it can sit behind its OWN `<Suspense>`
+ *  boundary (`HeldEmailSkeleton` as fallback) without the whole page
+ *  waiting on it, and so a failed read degrades to the `loadFailed` line
+ *  (rule 5) rather than taking the inbox down. Not paged — 50 newest held
+ *  items; a pager is a follow-up if an account ever holds more than that. */
+async function HeldEmailPane({
+  db, accountId, timezone, locale,
+}: {
+  db: SupabaseClient;
+  accountId: string;
+  timezone: string;
+  locale: Locale;
+}) {
+  let items: HeldItemView[];
+  try {
+    const rows = await listHeldInboundEmails(db, accountId, { limit: 50 });
+    items = rows.map((r) => ({
+      id: r.id,
+      fromName: r.fromName,
+      fromEmail: r.fromEmail,
+      subject: r.subject,
+      excerpt: r.text.slice(0, 280),
+      receivedAt: r.receivedAt,
+      // `holdReason` is non-null for every row this query returns
+      // (`status = "held"` only ever gets there via a hold reason); the
+      // fallback is only to satisfy the nullable column type.
+      reason: r.holdReason ?? "not_on_record",
+      suggestion: {
+        contactId: r.contactId,
+        name: contactDisplayName({ first_name: r.contactFirstName, last_name: r.contactLastName }),
+      },
+    }));
+  } catch (e) {
+    console.error(`conversations: account ${accountId} held list read failed: ${loggableError(e)}`);
+    return <p className="p-4 text-sm text-muted-foreground">{t(m, "conversations.held.loadFailed", locale)}</p>;
+  }
+  return <HeldEmailList accountId={accountId} items={items} locale={locale} timezone={timezone} />;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -38,10 +88,11 @@ export default async function ConversationsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ c?: string; before?: string; who?: string }>;
+  searchParams: Promise<{ c?: string; before?: string; who?: string; view?: string }>;
 }) {
   const { accountId } = await params;
-  const { c, before, who: rawWho } = await searchParams;
+  const { c, before, who: rawWho, view } = await searchParams;
+  const heldView = view === "held";
   const access = await requireAccountAccess(accountId);
   const db = await dbForRequest();
   // F-085 part 1 (spec §8-§9): Mine / Unassigned, by the CUSTOMER's holder,
@@ -52,8 +103,10 @@ export default async function ConversationsPage({
   // one) rather than throwing on a hand-editable URL — `parseCursor`'s own
   // contract (lib/cursor.ts).
   const cursor = parseCursor(before);
+  // `?view=held` never needs the normal thread list at all (Task 12) — the
+  // cold-start empty state below is about THAT list, not this one.
   const [conversations, account, prefs] = await Promise.all([
-    listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor, assignee: assign.assignee }),
+    heldView ? Promise.resolve([]) : listConversations(db, accountId, { limit: PAGE_SIZE, before: cursor, assignee: assign.assignee }),
     // The zone every row's own timestamp renders in below, and the account's
     // own default language (Task 11's locale resolution) — not a throw: one
     // cosmetic date column must not take the whole inbox down, same reasoning
@@ -71,6 +124,44 @@ export default async function ConversationsPage({
   const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
   const base = `/dashboard/accounts/${accountId}/conversations`;
 
+  // Task 12: the "Needs a look" filter pill, beside Mine/Unassigned — read
+  // on EVERY render of this page (not only `?view=held`), because the pill
+  // itself is how a held email is ever discovered. Best-effort: one cosmetic
+  // count, or one off/on setting, must never take the inbox down (rule 5).
+  let heldCount: number | null = null;
+  try {
+    heldCount = await countHeldInboundEmails(db, accountId);
+  } catch (e) {
+    console.error(`conversations: account ${accountId} held count read failed: ${loggableError(e)}`);
+  }
+  let inboundOn = false;
+  try {
+    inboundOn = (await getInboundSettings(db, accountId)).mode !== "off";
+  } catch (e) {
+    console.error(`conversations: account ${accountId} inbound settings read failed: ${loggableError(e)}`);
+  }
+  const showHeldFilter = (heldCount !== null && heldCount > 0) || inboundOn || heldView;
+  const heldFilterHref = heldView ? base : `${base}?view=held`;
+  const heldFilterLabel = heldCount !== null && heldCount > 0
+    ? t(m, "conversations.held.filterCount", locale, { count: heldCount })
+    : t(m, "conversations.held.filter", locale);
+  // Copies `WhoFilter`'s own pill look (components/assign/who-filter.tsx) —
+  // read there in Task 12's own Step 1, never refactored into a shared
+  // export, so a change to one does not silently move the other.
+  const heldFilterPill = (
+    <Link
+      data-held-filter
+      href={heldFilterHref}
+      aria-current={heldView ? "page" : undefined}
+      className={cn(
+        "rounded-full px-3 py-1 text-sm whitespace-nowrap transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+        heldView ? "bg-[var(--accent-dim)] font-medium text-foreground" : "text-muted-foreground hover:bg-[var(--surface-3)] hover:text-foreground",
+      )}
+    >
+      {heldFilterLabel}
+    </Link>
+  );
+
   // F-085 part 1 (spec §9): All · Mine · Unassigned, for those who see the
   // whole account, on BOTH renders below: an emptied filter must still offer
   // the way back to All. Carries nothing else: a filter change returns to
@@ -78,11 +169,34 @@ export default async function ConversationsPage({
   const header = (
     <PageHeader
       title={m["nav.conversations"]}
-      filters={assign.canAssign ? (
-        <WhoFilter base={base} current={assign.who} showMine={assign.showMine} params={{}} />
+      filters={assign.canAssign || showHeldFilter ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {assign.canAssign ? <WhoFilter base={base} current={assign.who} showMine={assign.showMine} params={{}} /> : null}
+          {showHeldFilter ? heldFilterPill : null}
+        </div>
       ) : undefined}
     />
   );
+
+  if (heldView) {
+    return (
+      <>
+        {header}
+        <div className="grid gap-4 p-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="block">
+            <Suspense fallback={<HeldEmailSkeleton />}>
+              <HeldEmailPane db={db} accountId={accountId} timezone={zone.zone} locale={locale} />
+            </Suspense>
+          </div>
+          <EmptyState
+            icon={MessagesSquare}
+            title={m["conversations.pickThread"]}
+            className="hidden lg:flex"
+          />
+        </div>
+      </>
+    );
+  }
 
   // The COLD-START reading of zero rows: no `?before=` cursor, so this is
   // page one and there is nothing behind it either — an account that has
