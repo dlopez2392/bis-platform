@@ -135,7 +135,7 @@ history) runs through the texts' English/Spanish matcher (`lib/consent/phrases.t
 - **Clear stop:** append "No marketing emails" for the sender's address to the ledger,
   method `inbound_email`, only while the address is allowed (Amended 2026-10-16, owner ruling G3: so its Undo can never lift an older stop such as an unsubscribe link), evidence = the message id and the matched phrase. The thread
   shows "Stopped marketing emails · from their reply" with **Undo**. Undo appends a
-  reversing staff event (the ledger stays append-only; Amended 2026-10-16 (owner ruling G2: 0082 lets the ledger's staff Undo reverse an `inbound_email` stop. G9: Resume emails does not lift it; its Undo or the customer's own resubscribe does). A ledger write failure → 503 so
+  reversing staff event (the ledger stays append-only; amended 2026-10-16, owner ruling G2: 0082 lets the ledger's staff Undo reverse an `inbound_email` stop. G9: Resume emails does not lift it; its Undo or the customer's own resubscribe does). A ledger write failure → 503 so
   Resend retries, the same rule as SMS.
 - **Unclear:** a ghost chip "May want to stop" with the existing **Stop emails** action.
 - Per the 2026-09-30 decision, an email stop covers referral asks.
@@ -161,7 +161,7 @@ Spanish.
 ## Data model (migration 0082)
 
 - `conversations.reply_token text unique` (12 random bytes, url-safe, lowercase so it
-  survives mail clients that lowercase local parts; Amended 2026-10-16 (owner ruling G12: 24 lowercase hex characters), `reply_token_revoked_at timestamptz`.
+  survives mail clients that lowercase local parts; amended 2026-10-16, owner ruling G12: 24 lowercase hex characters), `reply_token_revoked_at timestamptz`.
 - `accounts.inbound_mode text not null default 'off'` check in (`off`, `bis`,
   `own_domain`); `accounts.inbound_domain text` (lowercase, required when `own_domain`).
   Agency-only writes, like `from_email`.
