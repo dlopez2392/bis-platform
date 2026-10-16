@@ -129,6 +129,12 @@ export async function fileHeldEmailAction(accountId: string, id: string, contact
     if (moving && !(await getContact(p.db, accountId, target))) return { ok: false, error: "changed" };
     const svc = serviceDb();
     let conversationId = p.row.conversationId;
+    // Fix round 2 item 1: the rollback below (deleting a message, putting the row back to held)
+    // must run ONLY when THIS call's own compare-and-set actually claimed the row — never when
+    // something upstream of it (ensureConversation, or the CAS call itself) threw. `claimed` is set
+    // the instant decideInboundEmail returns true and never before, so a throw before that point
+    // leaves the row exactly as provedRow found it: still "held", nothing to roll back.
+    let claimed = false;
     try {
       // Fix round 1 item 4 ("Choose a record"): the row's own conversation_id moves to the chosen
       // contact's thread in the SAME compare-and-set that files it (decideInboundEmail's own
@@ -138,6 +144,7 @@ export async function fileHeldEmailAction(accountId: string, id: string, contact
       if (!(await decideInboundEmail(svc, accountId, id, "held", {
         status: "filed", decidedBy: userId, ...(moving ? { conversationId } : {}),
       }))) return { ok: false, error: "changed" };
+      claimed = true;
       const sender = await matchSender(svc, accountId, target, p.row.fromEmail);
       const r = await fileInboundEmail({ db: svc, now: () => new Date() }, {
         row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: p.row.attachmentCount,
@@ -159,9 +166,12 @@ export async function fileHeldEmailAction(accountId: string, id: string, contact
       // committed back to "filed" — or any other mid-flight failure) must not leave that message
       // dangling once the row returns to held. Scoped by account + this row's own provider id, so
       // the rollback can never touch another row's message even if something else collided here.
-      const deleted = await deleteInboundMessageByProviderId(svc, accountId, p.row.providerEmailId).catch(() => false);
-      console.error("fileHeldEmailAction rollback", { accountId, id, deleted });
-      await decideInboundEmail(svc, accountId, id, "filed", { status: "held", messageId: null, decidedBy: null }).catch(() => false);
+      // Fix round 2 item 1: gated on `claimed` — nothing here ran if the CAS itself never landed.
+      if (claimed) {
+        const deleted = await deleteInboundMessageByProviderId(svc, accountId, p.row.providerEmailId).catch(() => false);
+        console.error("fileHeldEmailAction rollback", { accountId, id, deleted });
+        await decideInboundEmail(svc, accountId, id, "filed", { status: "held", messageId: null, decidedBy: null }).catch(() => false);
+      }
       return { ok: false, error: "failed" };
     }
   } catch {
@@ -195,27 +205,37 @@ export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Pr
       return { ok };
     }
     if (p.row.status !== "filed") return { ok: false };
-    // Fix round 1 item 1: Undo of a File also reverses the stop THAT File recorded, when it
-    // recorded one. Bound the same way Task 11's own reply-stop Undo is: find the message on this
-    // thread that actually carries this eventId, and undo for THAT message's own sender (a
-    // household member's, when the stop came from one) rather than the thread's own contact.
+    // Fix round 2 items 2 and 3: bind FIRST (find the message carrying this eventId, before
+    // unfiling anything), but actually REVERSE the stop only once the unfile itself has returned
+    // true — a refused unfile ({ ok: false }) must never touch undoInboundStop at all, which fix
+    // round 1's ordering let happen. The binding is now also strict: the message found must carry
+    // BOTH the eventId AND the exact messageId the browser sent (no fallback to the thread's own
+    // contact) — a message that carries this eventId under a DIFFERENT id than `undo.messageId`
+    // names is not proof enough that the two belong to the same File at all.
+    let reversalTarget: { contactId: string } | null = null;
     let stopNotReversed: string | undefined;
     if (undo.eventId) {
       const messages = await listMessages(p.db, accountId, p.row.conversationId);
-      const owning = messages.find((msg) => metaOf(msg)?.consent?.kind === "stopped" && metaOf(msg)?.consent?.eventId === undo.eventId);
-      const targetContactId = (owning ? metaOf(owning)?.sender?.contact_id : undefined) ?? p.suggestion;
-      const ctx = await emailContextFor(accountId, targetContactId, userId);
+      const owning = messages.find((msg) =>
+        metaOf(msg)?.consent?.kind === "stopped" && metaOf(msg)?.consent?.eventId === undo.eventId
+        && (msg as { id?: string }).id === undo.messageId);
+      if (owning) {
+        reversalTarget = { contactId: metaOf(owning)?.sender?.contact_id ?? p.suggestion };
+      } else {
+        stopNotReversed = m["conversations.held.changed"];
+      }
+    }
+    const ok = await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId);
+    if (ok && reversalTarget) {
+      const ctx = await emailContextFor(accountId, reversalTarget.contactId, userId);
       if ("ok" in ctx) {
         stopNotReversed = ctx.error;
       } else {
-        const r = await undoInboundStop(ctx, undo.eventId);
+        const r = await undoInboundStop(ctx, undo.eventId!);
         if (!r.ok) stopNotReversed = r.error;
-        else revalidatePath(`/dashboard/accounts/${accountId}/contacts/${targetContactId}`);
+        else revalidatePath(`/dashboard/accounts/${accountId}/contacts/${reversalTarget.contactId}`);
       }
     }
-    // The reversal above is best-effort and reported, never blocking: a refused reversal (expired,
-    // or changed since) still leaves the File undone below.
-    const ok = await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId);
     revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
     return ok ? { ok: true, ...(stopNotReversed ? { stopNotReversed } : {}) } : { ok: false };
   } catch {

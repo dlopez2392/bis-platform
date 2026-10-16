@@ -66,11 +66,16 @@ export async function fileInboundEmail(deps: FileDeps, i: FileInput): Promise<Fi
   const existing = await findMessageByProviderId(db, row.accountId, row.providerEmailId);
   let messageId: string;
   if (existing) {
-    // Task 12 fix round 1 (item 2): provider_email_id's uniqueness is per-ACCOUNT, never per-thread
-    // — a hit here that sits on a different conversation than the one being filed onto is never
-    // this row's own message, and reusing it would silently attach this email to the wrong
-    // customer's thread. Thrown, like every other failure in this function: the caller (the manual
-    // File action, or pipeline.ts's retry) is the one that decides what a throw here means.
+    // Task 12 fix round 2 (minor — corrected comment): `provider_email_id`'s uniqueness is GLOBAL
+    // (messaging.ts's own doc on `messages_provider_message_id_unique`), not per-account, so a hit
+    // scoped to THIS account can only ever be a message THIS SAME row already created on an
+    // earlier attempt — never another row's or another account's. The only way that earlier
+    // message can sit on a different conversation than the one being filed onto now is a
+    // "Choose a record" move between attempts: the row's own conversation_id changed, but its
+    // earlier, still-linked-by-provider-id message did not move with it. Reusing it anyway would
+    // silently leave the newly-chosen customer's thread without the message it was just told it
+    // has. Thrown, like every other failure in this function: the caller (the manual File action,
+    // or pipeline.ts's retry) decides what a throw here means.
     if (existing.conversationId !== row.conversationId) {
       throw new Error("fileInboundEmail: an existing message for this provider id sits on a different conversation");
     }

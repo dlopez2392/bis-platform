@@ -215,10 +215,17 @@ export async function decideInboundEmail(
  * leaves a dangling message when the row returns to held. Returns whether a row was actually
  * removed — false is the ordinary case (the ledger write itself is what failed, before any message
  * ever existed), not a diagnostic in itself.
+ *
+ * `channel`/`direction` (fix round 2 minor): `provider_message_id` is reused across channels and
+ * directions on `messages` (sms's own inbound writer sets it too; an outbound send's provider id is
+ * a different provider's value, but nothing stops it colliding in theory) — this rollback only ever
+ * means "the inbound email THIS row created," so it is scoped to exactly that shape, never anything
+ * else that happens to carry the same provider id.
  */
 export async function deleteInboundMessageByProviderId(db: SupabaseClient, accountId: string, providerEmailId: string): Promise<boolean> {
   const { data, error } = await db.from("messages").delete()
-    .eq("account_id", accountId).eq("provider_message_id", providerEmailId).select("id");
+    .eq("account_id", accountId).eq("provider_message_id", providerEmailId)
+    .eq("channel", "email").eq("direction", "inbound").select("id");
   if (error) throw new Error(`deleteInboundMessageByProviderId failed: ${error.message}`);
   return (data?.length ?? 0) > 0;
 }

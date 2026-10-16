@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { m } from "@/lib/messages";
 
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
@@ -96,8 +97,8 @@ vi.mock("@/lib/consent/email-staff-actions", () => staffMock);
 
 import { undoReplyStopAction, stopEmailsFromReplyAction, fileHeldEmailAction, dismissHeldEmailAction, undoHeldEmailAction } from "./inbound-actions";
 
-const message = (over: Partial<{ channel: string; direction: string; meta: unknown }> = {}) => ({
-  channel: "email", direction: "inbound", meta: {}, ...over,
+const message = (over: Partial<{ id: string; channel: string; direction: string; meta: unknown }> = {}) => ({
+  id: "msg_other", channel: "email", direction: "inbound", meta: {}, ...over,
 });
 
 beforeEach(() => {
@@ -297,6 +298,23 @@ describe("fileHeldEmailAction (spec 'Needs a look')", () => {
     expect(dbMock.decideInboundEmail).toHaveBeenLastCalledWith(SERVICE, ACCOUNT, "ie_1", "filed", { status: "held", messageId: null, decidedBy: null });
   });
 
+  it("ensureConversation throwing BEFORE the compare-and-set claims nothing: no rollback delete, no decide-back attempt (fix round 2 item 1; mutation: roll back unconditionally → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    getContactResult.mockResolvedValue({ id: "pat" });
+    dbMock.ensureConversation.mockRejectedValue(new Error("down"));
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", "pat")).toEqual({ ok: false, error: "failed" });
+    expect(dbMock.deleteInboundMessageByProviderId).not.toHaveBeenCalled();
+    expect(dbMock.decideInboundEmail).not.toHaveBeenCalled();
+  });
+
+  it("the compare-and-set itself throwing (not merely returning false) also claims nothing: no rollback delete, and decideInboundEmail is never called a second time to revert it (fix round 2 item 1; mutation: set claimed before the CAS resolves → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockRejectedValue(new Error("down"));
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: false, error: "failed" });
+    expect(dbMock.deleteInboundMessageByProviderId).not.toHaveBeenCalled();
+    expect(dbMock.decideInboundEmail).toHaveBeenCalledTimes(1);
+  });
+
   it("any throw anywhere in the body answers 'failed', never an unhandled rejection — a malformed contactId that makes the request-client existence check itself throw (fix round 1 item 5; mutation: drop the outer try/catch → the throw escapes, FAILS)", async () => {
     requestRow.mockResolvedValue({ ...HELD, status: "held" });
     getContactResult.mockRejectedValue(new Error("invalid input syntax for type uuid"));
@@ -320,10 +338,10 @@ describe("dismiss and the Undos", () => {
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
   });
 
-  it("Undo of a File that recorded a stop reverses it too — bound to the message that actually carries the eventId on this thread, for THAT message's sender (fix round 1 item 1; mutation: drop the stop-reversal call → FAILS)", async () => {
+  it("Undo of a File that recorded a stop binds FIRST (finds the message carrying the eventId AND the exact messageId), then unfiles, and reverses the stop only AFTER the unfile succeeds (fix round 2 items 2, 3; mutation: drop the stop-reversal call → FAILS)", async () => {
     requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
     dbMock.listMessages.mockResolvedValue([
-      message({ meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+      message({ id: "msg_1", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
     ]);
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: true, view: {} });
@@ -332,12 +350,27 @@ describe("dismiss and the Undos", () => {
     expect(ctxMock.emailContextFor).toHaveBeenCalledWith(ACCOUNT, HELD_CONTACT, USER);
     expect(staffMock.undoInboundStop).toHaveBeenCalledWith(CTX, "ev_1");
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
+    // The reversal ran strictly AFTER the unfile call, not before it.
+    const unfileOrder = dbMock.unfileInboundEmail.mock.invocationCallOrder[0]!;
+    const reversalOrder = staffMock.undoInboundStop.mock.invocationCallOrder[0]!;
+    expect(unfileOrder).toBeLessThan(reversalOrder);
+  });
+
+  it("unfile refused: the stop reversal is never attempted at all (fix round 2 item 2; mutation: call undoInboundStop before checking unfile's result → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.listMessages.mockResolvedValue([
+      message({ id: "msg_1", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+    ]);
+    dbMock.unfileInboundEmail.mockResolvedValue(false);
+    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" })).toEqual({ ok: false });
+    expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
+    expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
   });
 
   it("a refused stop reversal (expired, or changed since) still unfiles the File, reported via stopNotReversed rather than blocked (mutation: skip the unfile when the reversal fails → FAILS)", async () => {
     requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
     dbMock.listMessages.mockResolvedValue([
-      message({ meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+      message({ id: "msg_1", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
     ]);
     ctxMock.emailContextFor.mockResolvedValue(CTX);
     staffMock.undoInboundStop.mockResolvedValue({ ok: false, error: "Their emails changed while you were looking. This is where they stand now." });
@@ -345,6 +378,28 @@ describe("dismiss and the Undos", () => {
     expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
       .toEqual({ ok: true, stopNotReversed: "Their emails changed while you were looking. This is where they stand now." });
     expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
+  });
+
+  it("the message carrying the eventId exists but under a DIFFERENT id than undo.messageId names: no fallback, no reversal, stopNotReversed set to the changed sentence (fix round 2 item 3; mutation: fall back to the suggestion contact → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.listMessages.mockResolvedValue([
+      message({ id: "msg_DIFFERENT", meta: { consent: { kind: "stopped", eventId: "ev_1" } } }),
+    ]);
+    dbMock.unfileInboundEmail.mockResolvedValue(true);
+    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+      .toEqual({ ok: true, stopNotReversed: m["conversations.held.changed"] });
+    expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
+    expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
+  });
+
+  it("no message on the thread carries the eventId at all (listMessages answers []): no reversal, stopNotReversed set to the changed sentence (fix round 2 item 3; mutation: skip setting stopNotReversed when unbound → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.listMessages.mockResolvedValue([]);
+    dbMock.unfileInboundEmail.mockResolvedValue(true);
+    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1", eventId: "ev_1" }))
+      .toEqual({ ok: true, stopNotReversed: m["conversations.held.changed"] });
+    expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
+    expect(staffMock.undoInboundStop).not.toHaveBeenCalled();
   });
 
   it("a row the caller cannot see (a Technician's other customer) is refused before any service write (mutation: read the row on the service client → FAILS)", async () => {

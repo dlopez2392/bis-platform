@@ -367,7 +367,7 @@ describe("messages carry meta", () => {
  * for the orchestrator per the brief's "say if you couldn't" instruction.
  */
 describe("Task 12 fix round 1, item 4: decideInboundEmail's own conversation_id move", () => {
-  it("'Choose a record' moves the row to Pat's conversation in the SAME compare-and-set that files it; Undo resets PAT's own last_message_at to his newest remaining message, not the original thread's (mutation: write conversation_id as a second, separate update → a reader between the two sees the old thread still filed, FAILS; mutation: drop conversationId from the update entirely → the row never moves, FAILS)", async () => {
+  it("'Choose a record' moves the row to Pat's conversation in the SAME compare-and-set that files it; Undo resets PAT's own last_message_at to his newest remaining message, not the original thread's (mutation: drop conversationId from the update entirely → moved?.conversationId reads back as Ana's own thread, not Pat's, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: ana } = await createContact(db, accountId, { firstName: "Ana", email: "ana7@example.com" }, ACTOR);
       const { id: pat } = await createContact(db, accountId, { firstName: "Pat", email: "pat7@example.com" }, ACTOR);
@@ -414,7 +414,7 @@ describe("Task 12 fix round 1, item 4: decideInboundEmail's own conversation_id 
 });
 
 describe("Task 12 fix round 1, item 2: deleteInboundMessageByProviderId", () => {
-  it("removes the message for this row's own provider id, scoped to the account; answers false (never throws) on a provider id with no message at all (mutation: drop the account scope → a same-provider-id row under another account is also removed, FAILS)", async () => {
+  it("removes the message for this row's own provider id; answers false (never throws) on a provider id with no message at all (mutation: drop the provider_message_id filter entirely → every message in the account is removed, FAILS — the only part of this function's scoping this single-row test CAN falsify. The account, channel and direction filters are defence in depth this test is honest about NOT proving: `messages_provider_message_id_unique` (0005_messaging.sql) is a GLOBAL unique index with no channel/direction/account component, so no second row — in this account or any other, inbound email or anything else — could ever exist to collide with `held.providerEmailId` in the first place, and no single-account test can manufacture the collision those filters guard against)", async () => {
     await withTestAccount(async (db, accountId) => {
       const { id: contactId } = await createContact(db, accountId, { firstName: "Ana", email: "ana9@example.com" }, ACTOR);
       const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
