@@ -72,6 +72,53 @@ describe("readSesVerdict: ONLY the topmost amazonses.com header (spec 'Rule from
     const v2 = readSesVerdict(parseHeaderBlock(raw(duplicateSpf)));
     expect(v2.spf).toBeNull();
   });
+
+  // CRITICAL (review, round 2): a backslash escapes the next character
+  // inside BOTH a quoted string and a comment (RFC 8601's own grammar).
+  // Without tracking escapes, a sender can plant an escaped quote or an
+  // escaped `)` that fools the tokenizer into ending the quote/comment
+  // early, letting a forged "dmarc=pass header.from=customer.com" segment
+  // slip past it. The real tail after each probe is the same:
+  // `dkim=fail header.i=@customer.com; dmarc=fail header.from=customer.com;`
+  // — the honest verdict is "not authenticated" every time. Each probe also
+  // carries PASS spam/virus verdicts, so a `senderAuthenticated` false comes
+  // from the injection defense, not from an incidental missing header.
+  const REAL_TAIL = "dkim=fail header.i=@customer.com; dmarc=fail header.from=customer.com;";
+  const SES_PASS = "X-SES-Spam-Verdict: PASS\r\nX-SES-Virus-Verdict: PASS";
+
+  it("an escaped quote inside a quoted value does not end the quote early (mutation: ignore backslash escapes → the forged dmarc=pass escapes the quote and wins, FAILS)", () => {
+    const header = `Authentication-Results: amazonses.com; spf=fail; helo=x;dmarc=pass header.from=customer.com;y";${REAL_TAIL}\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(senderAuthenticated(v, "customer.com")).toBe(false);
+  });
+
+  it("an escaped ')' inside a comment does not end the comment early (mutation: ignore backslash escapes in comments → the forged dmarc=pass escapes the comment and wins, FAILS)", () => {
+    const header = `Authentication-Results: amazonses.com; spf=fail; helo=x;dmarc=pass header.from=customer.com;(y;${REAL_TAIL}\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(senderAuthenticated(v, "customer.com")).toBe(false);
+  });
+
+  it("a scan that ENDS still inside a quote or a comment reads as not found (mutation: still return found:true when unterminated → FAILS)", () => {
+    const header = `Authentication-Results: amazonses.com; spf=fail; envelope-from="a\\";dmarc=pass header.from=customer.com;\\"@evil.com;${REAL_TAIL}\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(v.found).toBe(false);
+    expect(senderAuthenticated(v, "customer.com")).toBe(false);
+  });
+
+  it("a comment after dmarc=pass's header.from still fails closed (pin: already true today)", () => {
+    const header = `Authentication-Results: amazonses.com; spf=pass; dkim=pass header.i=@customer.com; dmarc=pass header.from=customer.com(x)\r\n${SES_PASS}`;
+    const v = readSesVerdict(parseHeaderBlock(raw(header)));
+    expect(senderAuthenticated(v, "customer.com")).toBe(false);
+  });
+
+  it("the spike's real Gmail header, and a dmarc=pass with a (p=none) comment, still authenticate", () => {
+    const v1 = readSesVerdict(parseHeaderBlock(raw(SES)));
+    expect(senderAuthenticated(v1, "gmail.com")).toBe(true);
+
+    const withComment = `Authentication-Results: amazonses.com; spf=pass; dkim=pass header.i=@gmail.com; dmarc=pass (p=none) header.from=gmail.com;\r\n${SES_PASS}`;
+    const v2 = readSesVerdict(parseHeaderBlock(raw(withComment)));
+    expect(senderAuthenticated(v2, "gmail.com")).toBe(true);
+  });
 });
 
 describe("senderAuthenticated (spec Inbound step 4)", () => {

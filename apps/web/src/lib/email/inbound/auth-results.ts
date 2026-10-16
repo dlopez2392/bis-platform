@@ -30,19 +30,29 @@ export type SesVerdict = {
 const first = (h: HeaderList, name: string) => h.find(([n]) => n === name)?.[1] ?? null;
 
 /**
- * CRITICAL 2 (review, round 1): split the header's `;`-separated segments
- * WITHOUT breaking inside a `"…"` quoted string or a `(…)` comment — RFC
- * 8601's own grammar for this header. A sender controls `envelope-from=` and
- * `helo=`, and an unquoted-split would let a quoted value's embedded `;`
- * manufacture a fake extra segment (`envelope-from="a;dmarc=pass"@evil.com`)
- * ahead of the real `dmarc=` result.
+ * CRITICAL 2 (review, round 1 and round 2): split the header's
+ * `;`-separated segments WITHOUT breaking inside a `"…"` quoted string or a
+ * `(…)` comment — RFC 8601's own grammar for this header. A sender controls
+ * `envelope-from=` and `helo=`, and an unquoted-split would let a quoted
+ * value's embedded `;` manufacture a fake extra segment
+ * (`envelope-from="a;dmarc=pass"@evil.com`) ahead of the real `dmarc=`
+ * result. Round 2: a backslash escapes the NEXT character, both inside a
+ * quoted string and inside a comment (the same grammar) — without tracking
+ * that, a sender's escaped `"` or `)` fools the naive toggle into closing
+ * the quote/comment early, letting a forged segment slip out as if it were
+ * a real, unquoted one. And if the scan ends STILL inside a quote or a
+ * comment, the header never closed what it opened — fail closed entirely
+ * (`unterminated: true`) rather than trust whatever was parsed so far.
  */
-function splitAuthResultsSegments(s: string): string[] {
+function tokenizeAuthResults(s: string): { segments: string[]; unterminated: boolean } {
   const parts: string[] = [];
   let depth = 0;
   let inQuotes = false;
+  let escaped = false;
   let cur = "";
   for (const c of s) {
+    if (escaped) { cur += c; escaped = false; continue; }
+    if (c === "\\" && (inQuotes || depth > 0)) { escaped = true; cur += c; continue; }
     if (c === '"') { inQuotes = !inQuotes; cur += c; continue; }
     if (!inQuotes && c === "(") { depth++; cur += c; continue; }
     if (!inQuotes && c === ")") { depth = Math.max(0, depth - 1); cur += c; continue; }
@@ -50,7 +60,7 @@ function splitAuthResultsSegments(s: string): string[] {
     cur += c;
   }
   parts.push(cur);
-  return parts;
+  return { segments: parts, unterminated: inQuotes || depth > 0 };
 }
 
 export function readSesVerdict(headers: HeaderList): SesVerdict {
@@ -58,13 +68,18 @@ export function readSesVerdict(headers: HeaderList): SesVerdict {
   const virus = first(headers, "x-ses-virus-verdict")?.trim() ?? null;
   const ar = headers.find(([n, v]) => n === "authentication-results" && v.split(";")[0]!.trim().toLowerCase() === "amazonses.com")?.[1];
   if (!ar) return { found: false, spf: null, dmarc: null, dmarcDomain: null, dkim: [], spam, virus };
+  const { segments, unterminated } = tokenizeAuthResults(ar);
+  // CRITICAL (review, round 2): an Authentication-Results header that never
+  // closed a quote or a comment it opened is malformed on its face — fail
+  // closed rather than trust the segments a half-open scan produced.
+  if (unterminated) return { found: false, spf: null, dmarc: null, dmarcDomain: null, dkim: [], spam, virus };
   let spf: string | null = null;
   let spfSeen = 0;
   let dmarc: string | null = null;
   let dmarcDomain: string | null = null;
   let dmarcSeen = 0;
   const dkim: { result: string; domain: string | null }[] = [];
-  for (const part of splitAuthResultsSegments(ar).slice(1)) {
+  for (const part of segments.slice(1)) {
     const m = /^\s*(spf|dkim|dmarc)=([a-z]+)/i.exec(part);
     if (!m) continue;
     const method = m[1]!.toLowerCase();

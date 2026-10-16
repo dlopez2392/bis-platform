@@ -55,4 +55,26 @@ describe("the reply address", () => {
   it("displayName with no letter in the result is null, not a lone quote (mutation: drop the letter check → the quote mark is returned, FAILS)", () => {
     expect(displayName(`"<ana@customer.com>" <x@evil.com>`)).toBeNull();
   });
+
+  // CRITICAL (review, round 2): a strict, fail-closed grammar replaces the
+  // case-by-case patching. Only a bare addr-spec, or an optional display
+  // then exactly one angle-addr that ENDS the value, is accepted; anything
+  // else — a trailing comment, trailing junk after the angle-addr, or a
+  // backslash-escape trick inside a quoted display — is refused outright.
+  it("refuses a comment anywhere in the From, which closes the parenthetical forgery (mutation: only reject a leading comment → the trailing one still parses, FAILS)", () => {
+    expect(bareAddress("attacker@customer.com (<ana@customer.com>)")).toBeNull();
+  });
+
+  it("refuses trailing junk after the angle-addr (mutation: drop the end anchor → FAILS)", () => {
+    expect(bareAddress("Ana <ana@customer.com> trailing")).toBeNull();
+  });
+
+  it("refuses a backslash-escape trick inside a quoted display (mutation: allow a backslash in the quoted content → FAILS)", () => {
+    expect(bareAddress(`"a \\" b" <ana@customer.com>`)).toBeNull();
+  });
+
+  it("keeps a quoted display with a comma (mutation: exclude ',' from the quoted charset too → FAILS)", () => {
+    expect(bareAddress(`"Ruiz, Ana" <Ana@Customer.com>`)).toBe("ana@customer.com");
+    expect(displayName(`"Ruiz, Ana" <Ana@Customer.com>`)).toBe("Ruiz, Ana");
+  });
 });
