@@ -18,7 +18,12 @@ export type EmailHow =
   // (which the drawer would otherwise say for them, reading as "you did
   // this"). Resumable only by the customer's own resubscribe: neither name
   // is in EMAIL_RESUMABLE_METHODS below.
-  | { kind: "bounced" } | { kind: "complained" };
+  | { kind: "bounced" } | { kind: "complained" }
+  // S-06 part 1 (plan G9): a clear stop keyword in a customer's own reply —
+  // their own choice, like unsubscribe_link, but not the SAME choice (no
+  // link was clicked), so its own kind. Lifted only by its Undo (0082) or
+  // the customer's own resubscribe: not in EMAIL_RESUMABLE_METHODS.
+  | { kind: "reply" };
 
 export type EmailView =
   | { kind: "no_email" }
@@ -36,6 +41,7 @@ export function emailHowOf(method: ConsentMethod): EmailHow {
     case "backfill_0049": return { kind: "backfill_0049" };
     case "email_bounce": return { kind: "bounced" };
     case "email_complaint": return { kind: "complained" };
+    case "inbound_email": return { kind: "reply" };
     default: return { kind: "staff" };
   }
 }

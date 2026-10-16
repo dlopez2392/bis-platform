@@ -103,6 +103,47 @@ export function undoStopEmails(ctx: EmailContext, eventId: string): Promise<Emai
   });
 }
 
+/** The emailed clear stop (S-06 part 1): revoked / inbound_email over an ALLOWED address only (plan G3),
+ *  idempotent on Resend's id. THROWS on a ledger error: the webhook answers 503 and Resend retries. */
+export type InboundStopResult = { outcome: "stopped"; eventId: string } | { outcome: "already_stopped" };
+
+export async function recordInboundStop(
+  writer: SupabaseClient, i: { accountId: string; contactId: string; address: string; providerEmailId: string; phrase: string },
+): Promise<InboundStopResult> {
+  const r = await appendConsentEventGuarded(writer, {
+    accountId: i.accountId, channel: "email", address: i.address, action: "revoked", method: "inbound_email",
+    contactId: i.contactId, actorId: null, sourceRef: `inbound_email:${i.providerEmailId}`,
+    evidence: { inbound_email_id: i.providerEmailId, phrase: i.phrase },
+  }, "if_allowed");
+  return r.outcome === "refused" ? { outcome: "already_stopped" } : { outcome: "stopped", eventId: r.id };
+}
+
+/**
+ * The Undo of an emailed stop (0082): only that inbound_email stop, while it is still the newest row.
+ * Any member may run it (no actor_id check — nobody "claims" a webhook-recorded stop the way a staff
+ * action is claimed). Past the owner's 7-day window (0082's function), the ledger answers `refused`
+ * with the SAME row still as `prior` (same id, method inbound_email): that is the expired state, not
+ * a generic "someone else changed this" — shown with its own explanation, never thrown as an error.
+ */
+export function undoInboundStop(ctx: EmailContext, eventId: string): Promise<EmailActionResult> {
+  return guarded("undoInboundStop", ctx, async () => {
+    // On ctx.writer, deliberately: the stop's actor_id is null and its contact may be a household
+    // member the caller's Technician RLS cannot see; the caller proved the THREAD's contact first.
+    const row = await readConsentEvent(ctx.writer, ctx.accountId, eventId);
+    if (!row || row.channel !== "email" || row.address !== ctx.address || row.action !== "revoked" || row.method !== "inbound_email") return changed(ctx);
+    const r = await appendConsentEventGuarded(ctx.writer, {
+      accountId: ctx.accountId, channel: "email", address: ctx.address, contactId: ctx.contactId,
+      action: "resubscribed", method: "staff_undo", actorId: ctx.userId,
+      evidence: { undoes: eventId, ...(ctx.actorName ? { actorName: ctx.actorName } : {}) },
+    }, { ifNewest: eventId });
+    if (r.outcome === "appended") return { ok: true, view: await view(ctx) };
+    if (r.outcome === "refused" && r.prior && r.prior.id === eventId && r.prior.method === "inbound_email") {
+      return { ok: false, error: m["contact.email.replyExpiredExplain"] };
+    }
+    return changed(ctx);
+  });
+}
+
 /** "Resume emails" with the required note: only a stop staff may lift (choice 19). */
 export async function resumeEmails(ctx: EmailContext, expectEventId: string, note: string): Promise<EmailActionResult> {
   const text = note.trim();

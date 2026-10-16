@@ -39,6 +39,14 @@ describe("noResumeLine — what the drawer says in place of a Resume button (D-0
   });
 });
 
+// S-06 part 1, plan G9: the emailed stop's own how line, English and Spanish.
+describe("emailHowLine — 'reply' (S-06 part 1, plan G9)", () => {
+  it("renders 'they asked in a reply' / 'lo pidió en una respuesta' (mutation: fall back to a generic line → FAILS)", () => {
+    expect(emailHowLine({ kind: "reply" })).toBe("they asked in a reply");
+    expect(emailHowLine({ kind: "reply" }, "es")).toBe("lo pidió en una respuesta");
+  });
+});
+
 describe("parseEmailResponse — the drawer's read, parsed, never cast", () => {
   it("accepts the three views and refuses anything it cannot trust (mutation: accept a stopped view with no eventId → FAILS)", () => {
     expect(parseEmailResponse({ view: { kind: "allowed", newestId: null }, zone: "UTC" })).toEqual({ view: { kind: "allowed", newestId: null }, zone: "UTC" });

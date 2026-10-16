@@ -37,6 +37,15 @@ describe("emailViewOf — the Email row, as data (spec §6)", () => {
     expect(emailHowOf("unsubscribe_page")).toEqual({ kind: "unsubscribe_link" });
   });
 
+  // S-06 part 1, plan G9: an emailed clear stop is its own how ("reply"), lifted only by its
+  // Undo or the customer's own resubscribe — not in EMAIL_RESUMABLE_METHODS (mutation: fall
+  // through to "staff" → FAILS).
+  it("an inbound_email stop reads as 'reply', and is not staff-resumable", () => {
+    expect(emailHowOf("inbound_email")).toEqual({ kind: "reply" });
+    const r = row("revoked", "inbound_email", "2026-10-10T10:00:00Z");
+    expect(emailViewOf([r], true)).toEqual({ kind: "stopped", eventId: r.id, since: r.occurred_at, how: { kind: "reply" }, canResume: false });
+  });
+
   // D-016 item 4: a hard bounce or a complaint (0062's email_bounce/
   // email_complaint methods) is its own `how`, not a fallthrough to "staff
   // stopped" — the two read completely differently to the operator (a broken

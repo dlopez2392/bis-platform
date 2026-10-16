@@ -37,6 +37,7 @@ export function emailHowLine(how: EmailHow, locale: Locale = "en"): string {
     case "backfill_0049": return t(m, "contact.email.how.backfill0049", locale);
     case "bounced": return t(m, "contact.email.how.bounced", locale);
     case "complained": return t(m, "contact.email.how.complained", locale);
+    case "reply": return t(m, "contact.email.how.reply", locale);
   }
 }
 

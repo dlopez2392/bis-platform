@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({ appendConsentEventGuarded: vi.fn(), readConsentHistory: vi.fn(), readConsentEvent: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 
-import { stopEmails, undoStopEmails, resumeEmails, type EmailContext } from "./email-staff-actions";
+import { stopEmails, undoStopEmails, resumeEmails, recordInboundStop, undoInboundStop, type EmailContext } from "./email-staff-actions";
 import { m } from "@/lib/messages";
 
 const READER = { reader: true } as never;
@@ -89,6 +89,59 @@ describe("resumeEmails", () => {
   it("a thrown read or write is the plain failure line, logged (mutation: rethrow → the drawer crashes, FAILS)", async () => {
     db.readConsentHistory.mockRejectedValue(new Error("down"));
     expect(await resumeEmails(ctx, "ev_1", "asked")).toEqual({ ok: false, error: m["contact.email.failed"] });
+  });
+});
+
+describe("recordInboundStop (spec 'The stop rule'; plan G3)", () => {
+  it("appends revoked / inbound_email under if_allowed, sourced on the Resend id, with the phrase as evidence (mutation: guard 'none' → FAILS)", async () => {
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "appended", id: "ev_1", prior: null });
+    expect(await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "ana@example.com", providerEmailId: "re_1", phrase: "STOP" }))
+      .toEqual({ outcome: "stopped", eventId: "ev_1" });
+    expect(db.appendConsentEventGuarded).toHaveBeenCalledWith(WRITER, {
+      accountId: "a1", channel: "email", address: "ana@example.com", action: "revoked", method: "inbound_email",
+      contactId: "c1", actorId: null, sourceRef: "inbound_email:re_1", evidence: { inbound_email_id: "re_1", phrase: "STOP" },
+    }, "if_allowed");
+  });
+
+  it("a retried delivery answers the same event; an already-stopped address answers already_stopped (mutation: map duplicate to already_stopped → FAILS)", async () => {
+    db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "duplicate", id: "ev_1" });
+    expect((await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_1", phrase: "STOP" })).outcome).toBe("stopped");
+    db.appendConsentEventGuarded.mockResolvedValueOnce({ outcome: "refused", prior: { id: "ev_0", action: "revoked", method: "unsubscribe_link", evidence: {} } });
+    expect(await recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_2", phrase: "STOP" })).toEqual({ outcome: "already_stopped" });
+  });
+
+  it("a ledger error THROWS, so the route answers 503 (mutation: catch it → resolves, FAILS)", async () => {
+    db.appendConsentEventGuarded.mockRejectedValueOnce(new Error("append_consent_event failed: down"));
+    await expect(recordInboundStop(WRITER, { accountId: "a1", contactId: "c1", address: "a@x.com", providerEmailId: "re_3", phrase: "STOP" })).rejects.toThrow(/down/);
+  });
+});
+
+describe("undoInboundStop", () => {
+  it("writes resubscribed / staff_undo over that inbound stop, if it is still newest; any member may (mutation: require actor_id === userId → FAILS)", async () => {
+    db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: new Date().toISOString() });
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "appended", id: "ev_2", prior: null });
+    const r = await undoInboundStop(ctx, "ev_1");
+    expect(r.ok).toBe(true);
+    expect(db.appendConsentEventGuarded).toHaveBeenCalledWith(WRITER, expect.objectContaining({ action: "resubscribed", method: "staff_undo", evidence: expect.objectContaining({ undoes: "ev_1" }) }), { ifNewest: "ev_1" });
+  });
+
+  it("refuses a row that is not an inbound_email stop at this address (mutation: drop the method check → a staff stop is undone here, FAILS)", async () => {
+    db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "staff", actor_id: "u", occurred_at: new Date().toISOString() });
+    expect((await undoInboundStop(ctx, "ev_1")).ok).toBe(false);
+    expect(db.appendConsentEventGuarded).not.toHaveBeenCalled();
+  });
+
+  it("a refusal past the 7-day window answers the expired explanation, not the generic 'changed' line (owner ruling 2026-10-16; mutation: always answer 'changed' on refused → FAILS)", async () => {
+    const old = new Date(ctx.now.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString();
+    db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: old });
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: { id: "ev_1", action: "revoked", method: "inbound_email", evidence: {} } });
+    expect(await undoInboundStop(ctx, "ev_1")).toMatchObject({ ok: false, error: m["contact.email.replyExpiredExplain"] });
+  });
+
+  it("a refusal because the row is no longer newest answers the generic 'changed' line, not the expiry line (mutation: answer the expiry line whenever refused → FAILS)", async () => {
+    db.readConsentEvent.mockResolvedValue({ id: "ev_1", channel: "email", address: ctx.address, action: "revoked", method: "inbound_email", actor_id: null, occurred_at: new Date().toISOString() });
+    db.appendConsentEventGuarded.mockResolvedValue({ outcome: "refused", prior: { id: "ev_9", action: "resubscribed", method: "staff", evidence: {} } });
+    expect(await undoInboundStop(ctx, "ev_1")).toMatchObject({ ok: false, error: m["contact.email.changed"] });
   });
 });
 
