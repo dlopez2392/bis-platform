@@ -137,6 +137,7 @@ history) runs through the texts' English/Spanish matcher (`lib/consent/phrases.t
   shows "Stopped marketing emails · from their reply" with **Undo**. Undo appends a
   reversing staff event (the ledger stays append-only; amended 2026-10-16, owner ruling G2: 0082 lets the ledger's staff Undo reverse an `inbound_email` stop. G9: Resume emails does not lift it; its Undo or the customer's own resubscribe does). A ledger write failure → 503 so
   Resend retries, the same rule as SMS.
+- (Amended 2026-10-16, orchestrator ruling) Only a sender that matched (the contact or a household/business member) applies a clear stop: a manual File or Choose a record of a sender that did not match the target contact shows a clear STOP as the "May want to stop" chip and writes nothing to the ledger.
 - (Amended 2026-10-16, final review C1) A re-File after an Undo (File, Undo, then File or Choose a record again) re-applies the stop: a fresh stop is recorded, never the earlier, reversed one reported as standing.
 - **Unclear:** a ghost chip "May want to stop" with the existing **Stop emails** action.
 - Per the 2026-09-30 decision, an email stop covers referral asks.
