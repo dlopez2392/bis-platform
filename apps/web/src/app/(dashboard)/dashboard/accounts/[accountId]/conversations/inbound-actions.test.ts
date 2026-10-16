@@ -41,12 +41,41 @@ vi.mock("@/lib/db", () => ({
   }),
 }));
 
+const SERVICE = vi.hoisted(() => ({ tag: "service-db" }));
 const dbMock = vi.hoisted(() => ({
   readConsentHistory: vi.fn(),
   newestDecidingRow: vi.fn(),
   listMessages: vi.fn(),
+  getInboundEmail: vi.fn(),
+  decideInboundEmail: vi.fn(),
+  unfileInboundEmail: vi.fn(),
+  matchSender: vi.fn(),
+  ensureConversation: vi.fn(),
+  getContact: vi.fn(),
+  serviceDb: vi.fn(() => SERVICE),
 }));
 vi.mock("@bis/db", () => dbMock);
+
+const fileMock = vi.hoisted(() => ({ fileInboundEmail: vi.fn() }));
+vi.mock("@/lib/email/inbound/file", () => fileMock);
+
+/**
+ * Task 12's held-row fixture and the `requestRow` helper the brief names: `getInboundEmail` is
+ * mocked to answer `requestRow()` only when called with the REQUEST client (the object
+ * `dbForRequest`'s fake hands back, tagged "request-db" since that fake is rebuilt — spread — on
+ * every call, so no two calls are ever `===`), and to fail the test with a thrown "service read"
+ * for any other first argument, so a service-client read of the held row is caught by name.
+ */
+const requestRow = vi.hoisted(() => vi.fn());
+const HELD = vi.hoisted(() => ({
+  id: "ie_1", accountId: "acc_1", conversationId: "conv", providerEmailId: "prov_1",
+  fromEmail: "luis@example.com", fromName: "Luis", toEmail: "r-abc@reply.bis-rgv.com",
+  subject: "Re: appointment", text: "Thursday works for me.",
+  auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "no", virus: "no" },
+  attachmentCount: 2, status: "held", holdReason: "not_on_record" as const, messageId: null as string | null,
+  decidedBy: null as string | null, decidedAt: null as string | null, receivedAt: "2026-10-16T15:00:00.000Z",
+}));
+const HELD_CONTACT = "ana";
 
 const ctxMock = vi.hoisted(() => ({ emailContextFor: vi.fn() }));
 vi.mock("@/lib/consent/email-context", () => ctxMock);
@@ -54,7 +83,7 @@ vi.mock("@/lib/consent/email-context", () => ctxMock);
 const staffMock = vi.hoisted(() => ({ undoInboundStop: vi.fn(), stopEmails: vi.fn() }));
 vi.mock("@/lib/consent/email-staff-actions", () => staffMock);
 
-import { undoReplyStopAction, stopEmailsFromReplyAction } from "./inbound-actions";
+import { undoReplyStopAction, stopEmailsFromReplyAction, fileHeldEmailAction, dismissHeldEmailAction, undoHeldEmailAction } from "./inbound-actions";
 
 const message = (over: Partial<{ channel: string; direction: string; meta: unknown }> = {}) => ({
   channel: "email", direction: "inbound", meta: {}, ...over,
@@ -69,6 +98,16 @@ beforeEach(() => {
   ctxMock.emailContextFor.mockReset();
   staffMock.undoInboundStop.mockReset();
   staffMock.stopEmails.mockReset();
+
+  requestRow.mockReset();
+  dbMock.getInboundEmail.mockReset().mockImplementation((c: { tag?: string }) =>
+    c?.tag === "request-db" ? requestRow() : Promise.reject(new Error("service read")));
+  dbMock.decideInboundEmail.mockReset();
+  dbMock.unfileInboundEmail.mockReset();
+  dbMock.matchSender.mockReset().mockResolvedValue(null);
+  dbMock.ensureConversation.mockReset();
+  dbMock.getContact.mockReset();
+  fileMock.fileInboundEmail.mockReset();
 });
 
 describe("undoReplyStopAction", () => {
@@ -183,5 +222,64 @@ describe("stopEmailsFromReplyAction", () => {
     expect(ctxMock.emailContextFor).not.toHaveBeenCalled();
     expect(dbMock.readConsentHistory).not.toHaveBeenCalled();
     expect(staffMock.stopEmails).not.toHaveBeenCalled();
+  });
+});
+
+describe("fileHeldEmailAction (spec 'Needs a look')", () => {
+  it("proves the held row on the request client, files it on the suggestion with no unread and no forward, as the person (mutation: raiseUnread true → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockResolvedValue(true);
+    fileMock.fileInboundEmail.mockResolvedValue({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: true, undo: { kind: "unfile", id: "ie_1", messageId: "msg_1" } });
+    expect(dbMock.decideInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "held", { status: "filed", decidedBy: USER });
+    expect(fileMock.fileInboundEmail).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ raiseUnread: false, actor: { id: USER, type: "user" }, contactId: HELD_CONTACT, attachmentCount: 2 }));
+  });
+
+  it("Choose a record: proves the chosen contact on the request client and files on THAT contact's thread (mutation: file on the suggestion → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.getContact.mockResolvedValue({ id: "pat", first_name: "Pat" });
+    dbMock.ensureConversation.mockResolvedValue({ id: "conv_pat", created: false });
+    dbMock.decideInboundEmail.mockResolvedValue(true);
+    fileMock.fileInboundEmail.mockResolvedValue({ messageId: "msg_2", created: true, consent: { kind: "none" } });
+    await fileHeldEmailAction(ACCOUNT, "ie_1", "pat");
+    expect(fileMock.fileInboundEmail.mock.calls[0]![1]).toMatchObject({ contactId: "pat", row: expect.objectContaining({ conversationId: "conv_pat" }) });
+    dbMock.getContact.mockResolvedValue(null);
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", "ghost")).toEqual({ ok: false, error: "changed" });
+  });
+
+  it("a row someone already moved answers 'changed' and files nothing (mutation: skip the compare-and-set → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockResolvedValue(false);
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: false, error: "changed" });
+    expect(fileMock.fileInboundEmail).not.toHaveBeenCalled();
+  });
+
+  it("a filing failure puts the row back to held and answers 'failed' (mutation: leave it filed → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockResolvedValue(true);
+    fileMock.fileInboundEmail.mockRejectedValue(new Error("down"));
+    expect(await fileHeldEmailAction(ACCOUNT, "ie_1", null)).toEqual({ ok: false, error: "failed" });
+    expect(dbMock.decideInboundEmail).toHaveBeenLastCalledWith(SERVICE, ACCOUNT, "ie_1", "filed", { status: "held", messageId: null, decidedBy: null });
+  });
+});
+
+describe("dismiss and the Undos", () => {
+  it("Not a customer → dismissed; its Undo → held; File's Undo → unfile (mutation: Undo of dismiss calls unfile → FAILS)", async () => {
+    requestRow.mockResolvedValue({ ...HELD, status: "held" });
+    dbMock.decideInboundEmail.mockResolvedValue(true);
+    expect(await dismissHeldEmailAction(ACCOUNT, "ie_1")).toEqual({ ok: true, undo: { kind: "undismiss", id: "ie_1" } });
+    requestRow.mockResolvedValue({ ...HELD, status: "dismissed" });
+    expect(await undoHeldEmailAction(ACCOUNT, { kind: "undismiss", id: "ie_1" })).toEqual({ ok: true });
+    expect(dbMock.decideInboundEmail).toHaveBeenLastCalledWith(SERVICE, ACCOUNT, "ie_1", "dismissed", { status: "held", decidedBy: null });
+    requestRow.mockResolvedValue({ ...HELD, status: "filed", messageId: "msg_1" });
+    dbMock.unfileInboundEmail.mockResolvedValue(true);
+    expect(await undoHeldEmailAction(ACCOUNT, { kind: "unfile", id: "ie_1", messageId: "msg_1" })).toEqual({ ok: true });
+    expect(dbMock.unfileInboundEmail).toHaveBeenCalledWith(SERVICE, ACCOUNT, "ie_1", "msg_1");
+  });
+
+  it("a row the caller cannot see (a Technician's other customer) is refused before any service write (mutation: read the row on the service client → FAILS)", async () => {
+    requestRow.mockResolvedValue(null);
+    expect(await dismissHeldEmailAction(ACCOUNT, "ie_1")).toEqual({ ok: false, error: "changed" });
+    expect(dbMock.decideInboundEmail).not.toHaveBeenCalled();
   });
 });

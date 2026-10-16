@@ -1,11 +1,15 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { readConsentHistory, newestDecidingRow, listMessages, type SupabaseClient } from "@bis/db";
+import {
+  readConsentHistory, newestDecidingRow, listMessages, type SupabaseClient,
+  getInboundEmail, decideInboundEmail, unfileInboundEmail, matchSender, ensureConversation, getContact, serviceDb,
+} from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { emailContextFor } from "@/lib/consent/email-context";
 import { undoInboundStop, stopEmails } from "@/lib/consent/email-staff-actions";
+import { fileInboundEmail } from "@/lib/email/inbound/file";
 import { m } from "@/lib/messages";
 
 /**
@@ -77,4 +81,71 @@ export async function stopEmailsFromReplyAction(accountId: string, conversationI
   revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
   revalidatePath(`/dashboard/accounts/${accountId}/contacts/${contactId}`);
   return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
+/**
+ * "Needs a look" (Task 12): File on <customer>, Choose a record, Not a customer, each with Undo
+ * (spec G13 — a one-transaction Undo for a manual File). Every action proves the held row on the
+ * REQUEST client first (0082's RLS: a Technician sees only their own customers' threads), then
+ * writes through the service client (0053) only against the id that row itself named — never a
+ * browser-supplied id trusted on its own.
+ */
+export type HeldUndo = { kind: "unfile"; id: string; messageId: string } | { kind: "undismiss"; id: string };
+export type HeldActionResult = { ok: true; undo: HeldUndo } | { ok: false; error: "changed" | "failed" };
+
+/** The held row, proven on the request client, plus its thread's own contact (the suggestion). */
+async function provedRow(accountId: string, id: string) {
+  const db = await dbForRequest();
+  const row = await getInboundEmail(db, accountId, id);
+  if (!row) return null;
+  const { data } = await db.from("conversations").select("contact_id").eq("account_id", accountId).eq("id", row.conversationId).maybeSingle();
+  if (!data) return null;
+  return { db, row, suggestion: (data as { contact_id: string }).contact_id };
+}
+
+export async function fileHeldEmailAction(accountId: string, id: string, contactId: string | null): Promise<HeldActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  const p = await provedRow(accountId, id);
+  if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
+  const target = contactId ?? p.suggestion;
+  let conversationId = p.row.conversationId;
+  if (target !== p.suggestion) {
+    if (!(await getContact(p.db, accountId, target))) return { ok: false, error: "changed" };
+    conversationId = (await ensureConversation(serviceDb(), accountId, target, userId)).id;
+  }
+  const svc = serviceDb();
+  if (!(await decideInboundEmail(svc, accountId, id, "held", { status: "filed", decidedBy: userId }))) return { ok: false, error: "changed" };
+  try {
+    const sender = await matchSender(svc, accountId, target, p.row.fromEmail);
+    const r = await fileInboundEmail({ db: svc, now: () => new Date() }, {
+      row: { ...p.row, status: "filed", conversationId }, contactId: target, sender, attachmentCount: p.row.attachmentCount,
+      raiseUnread: false, actor: { id: userId, type: "user" },
+    });
+    revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+    return { ok: true, undo: { kind: "unfile", id, messageId: r.messageId } };
+  } catch (e) {
+    console.error(`fileHeldEmailAction: account ${accountId} row ${id}: ${e instanceof Error ? e.name : typeof e}`);
+    await decideInboundEmail(svc, accountId, id, "filed", { status: "held", messageId: null, decidedBy: null }).catch(() => false);
+    return { ok: false, error: "failed" };
+  }
+}
+
+export async function dismissHeldEmailAction(accountId: string, id: string): Promise<HeldActionResult> {
+  const { userId } = await requireAccountAccess(accountId);
+  const p = await provedRow(accountId, id);
+  if (!p || p.row.status !== "held") return { ok: false, error: "changed" };
+  if (!(await decideInboundEmail(serviceDb(), accountId, id, "held", { status: "dismissed", decidedBy: userId }))) return { ok: false, error: "changed" };
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+  return { ok: true, undo: { kind: "undismiss", id } };
+}
+
+export async function undoHeldEmailAction(accountId: string, undo: HeldUndo): Promise<{ ok: boolean }> {
+  await requireAccountAccess(accountId);
+  const p = await provedRow(accountId, undo.id);
+  if (!p) return { ok: false };
+  const ok = undo.kind === "unfile"
+    ? p.row.status === "filed" && await unfileInboundEmail(serviceDb(), accountId, undo.id, undo.messageId)
+    : p.row.status === "dismissed" && await decideInboundEmail(serviceDb(), accountId, undo.id, "dismissed", { status: "held", decidedBy: null });
+  revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
+  return { ok };
 }
