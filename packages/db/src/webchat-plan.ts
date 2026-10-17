@@ -44,7 +44,7 @@ export const WEBCHAT_MAX_ROWS_PER_CHAT = 48;
 
 /**
  * Every transcript index the thread does not hold yet (G2: the array position), in index order, with
- * a created_at that strictly increases in index order (G5: +1 ms on a tie, and never at or before the
+ * a created_at that strictly increases in index order given the thread holds a prefix of the transcript (G5: +1 ms on a tie, and never at or before the
  * nearest earlier row, written or planned). An `at` that does not parse takes the previous time + 1 ms,
  * or `now` for the first row.
  */
