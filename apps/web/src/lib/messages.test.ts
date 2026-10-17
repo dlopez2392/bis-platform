@@ -609,3 +609,94 @@ describe("S-06 part 1: inbound email keys, English and Spanish (plan Task 2)", (
     }
   });
 });
+
+describe("S-06 part 2: forward to a record and Never record keys, English and Spanish (plan Task 2)", () => {
+  const WANT: Record<string, string> = {
+    "contact.forwarding.label": "Forwarding address",
+    "contact.forwarding.label.es": "Dirección para reenviar",
+    "contact.forwarding.hint": "Forward an email here to save it on this customer.",
+    "contact.forwarding.hint.es": "Reenvíe un correo a esta dirección para guardarlo con este cliente.",
+    "contact.forwarding.copy": "Copy",
+    "contact.forwarding.copy.es": "Copiar",
+    "contact.forwarding.copyLabel": "Copy the forwarding address",
+    "contact.forwarding.copyLabel.es": "Copiar la dirección para reenviar",
+    "contact.forwarding.copied": "Copied",
+    "contact.forwarding.copied.es": "Copiado",
+    "contact.forwarding.copyFailed": "Couldn't copy. Select the address and copy it by hand.",
+    "contact.forwarding.copyFailed.es": "No se pudo copiar. Seleccione la dirección y cópiela a mano.",
+    "contact.forwarding.turnOn": "Turn on Replies in Settings to get a forwarding address",
+    "contact.forwarding.turnOn.es": "Active Respuestas en Configuración para obtener una dirección para reenviar",
+    "contact.forwarding.failed": "We couldn't load the forwarding address. Reload the page to try again.",
+    "contact.forwarding.failed.es": "No pudimos cargar la dirección para reenviar. Vuelva a cargar la página para intentarlo de nuevo.",
+    "conversations.forward.by": "Forwarded by {name} · team",
+    "conversations.forward.by.es": "Reenviado por {name} · equipo",
+    "conversations.forward.bySomeone": "Forwarded by someone on the team",
+    "conversations.forward.bySomeone.es": "Reenviado por alguien del equipo",
+    "neverLog.title": "Never record",
+    "neverLog.title.es": "No registrar nunca",
+    "neverLog.body": "Mail from these addresses or domains is dropped and never saved, even when it comes from a customer.",
+    "neverLog.body.es": "El correo de estas direcciones o dominios se descarta y nunca se guarda, aunque venga de un cliente.",
+    "neverLog.empty": "Mail from addresses or domains you add here is never saved.",
+    "neverLog.empty.es": "El correo de las direcciones o dominios que agregue aquí nunca se guarda.",
+    "neverLog.loadFailed": "We couldn't load this list. Reload the page to try again.",
+    "neverLog.loadFailed.es": "No pudimos cargar esta lista. Vuelva a cargar la página para intentarlo de nuevo.",
+    "neverLog.inputLabel": "Address or domain",
+    "neverLog.inputLabel.es": "Dirección o dominio",
+    "neverLog.placeholder": "billing@supplier.com or supplier.com",
+    "neverLog.placeholder.es": "facturas@proveedor.com o proveedor.com",
+    "neverLog.add": "Add",
+    "neverLog.add.es": "Agregar",
+    "neverLog.remove": "Remove",
+    "neverLog.remove.es": "Quitar",
+    "neverLog.removeLabel": "Remove {pattern}",
+    "neverLog.removeLabel.es": "Quitar {pattern}",
+    "neverLog.kind.address": "Address",
+    "neverLog.kind.address.es": "Dirección",
+    "neverLog.kind.domain": "Whole domain",
+    "neverLog.kind.domain.es": "Todo el dominio",
+    "neverLog.added": "Mail from {pattern} will never be saved.",
+    "neverLog.added.es": "El correo de {pattern} nunca se guardará.",
+    "neverLog.removed": "{pattern} is off the list.",
+    "neverLog.removed.es": "{pattern} ya no está en la lista.",
+    "neverLog.undone": "Back as it was.",
+    "neverLog.undone.es": "Quedó como estaba.",
+    "neverLog.duplicate": "Already on the list.",
+    "neverLog.duplicate.es": "Ya está en la lista.",
+    "neverLog.invalid": "Enter an address like name@example.com or a domain like example.com.",
+    "neverLog.invalid.es": "Escriba una dirección como nombre@ejemplo.com o un dominio como ejemplo.com.",
+    "neverLog.full": "The list is full (200). Remove one to add another.",
+    "neverLog.full.es": "La lista está llena (200). Quite una para agregar otra.",
+    "neverLog.failed": "That didn't save. Try again.",
+    "neverLog.failed.es": "No se guardó. Inténtelo de nuevo.",
+  };
+
+  it("has every key with exactly this text (mutation: change any .es string → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("is 28 English keys, each with its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
+    const en = Object.keys(WANT).filter((x) => !x.endsWith(".es"));
+    expect(en).toHaveLength(28);
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of en) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'Vuelve a cargar' in .failed.es → FAILS; drop {pattern} from added.es → FAILS)", () => {
+    const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?|reenvía|selecciona|quita|activa)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(WANT[k]!), k).toBe(false);
+      const en = WANT[k.slice(0, -3)]!;
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(WANT[k]!), k).toEqual(ph(en));
+    }
+  });
+
+  it("no key uses provider or internal words (mutation: 'token' in contact.forwarding.hint → FAILS)", () => {
+    const BANNED = /\b(token|dkim|dmarc|spf|ses|webhook|resend|mx|clerk|pattern)\b/i;
+    for (const [k, v] of Object.entries(WANT)) expect(BANNED.test(v.replace(/\{pattern\}/g, "")), k).toBe(false);
+  });
+});
