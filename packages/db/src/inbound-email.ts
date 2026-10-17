@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { emit } from "./events";
+import { emit, type ActorType } from "./events";
 import { ensureConversation } from "./messaging";
 import { emailKey } from "./contacts";
 
@@ -62,8 +62,11 @@ const ENSURE_REPLY_TOKEN_MAX_ROUNDS = 3;
  */
 export async function ensureReplyToken(
   db: SupabaseClient, accountId: string, contactId: string, actorId: string, make: () => string = newReplyToken,
+  /** Who the conversation.created event (when this call creates the conversation) names: "system" for the
+   *  email gate (the default, unchanged), "user" for a person's own click on the record (S-06 part 2). */
+  actorType: ActorType = "system",
 ): Promise<{ conversationId: string; token: string }> {
-  const { id: conversationId } = await ensureConversation(db, accountId, contactId, actorId, "system");
+  const { id: conversationId } = await ensureConversation(db, accountId, contactId, actorId, actorType);
   const read = async () => {
     const { data, error } = await db.from("conversations").select("reply_token, reply_token_revoked_at")
       .eq("account_id", accountId).eq("id", conversationId).single();

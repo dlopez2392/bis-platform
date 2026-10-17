@@ -461,3 +461,28 @@ describe("readReplyToken (S-06 part 2, owner ruling: a page view never writes)",
     });
   });
 });
+
+describe("ensureReplyToken's actor type (S-06 part 2 fix round 2, Minor 4)", () => {
+  const created = async (db: Parameters<Parameters<typeof withTestAccount>[0]>[0], accountId: string) => {
+    const { data, error } = await db.from("events").select("actor_type, actor_id")
+      .eq("account_id", accountId).eq("type", "conversation.created");
+    if (error) throw error;
+    return data;
+  };
+
+  it("defaults to system: the email gate's call is unchanged (mutation: default to user -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Gate", email: "gate@example.com" }, ACTOR);
+      await ensureReplyToken(db, accountId, contactId, "email-gate");
+      expect(await created(db, accountId)).toEqual([{ actor_type: "system", actor_id: "email-gate" }]);
+    });
+  });
+
+  it("a person's click records the conversation as theirs, actor type user (mutation: drop the actorType pass-through -> system, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Click", email: "click@example.com" }, ACTOR);
+      await ensureReplyToken(db, accountId, contactId, "user_clicker", undefined, "user");
+      expect(await created(db, accountId)).toEqual([{ actor_type: "user", actor_id: "user_clicker" }]);
+    });
+  });
+});
