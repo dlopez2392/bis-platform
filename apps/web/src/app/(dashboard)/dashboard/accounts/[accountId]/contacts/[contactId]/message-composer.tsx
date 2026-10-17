@@ -34,11 +34,25 @@ export function modeAfterSend(current: ComposeMode, initialMode: ComposeMode | u
   return initialMode ?? current;
 }
 
+/** The starting tab, clamped to what's actually on screen: the caller's `initialMode` when it is one of
+ *  `modes`, else Note when `modes` carries it, else the first of `modes` (fix round 1). */
+export function resolveInitialMode(modes: readonly ComposeMode[], initialMode: ComposeMode | undefined): ComposeMode {
+  if (initialMode && modes.includes(initialMode)) return initialMode;
+  return modes.includes("note") ? "note" : modes[0]!;
+}
+
 /** The record header's Text/Email links (S-03 part 1, spec §9.1): `#compose-sms`, `#compose-email`. */
 export function composeModeFromHash(hash: string): "email" | "sms" | null {
   if (hash === "#compose-sms") return "sms";
   if (hash === "#compose-email") return "email";
   return null;
+}
+
+/** `composeModeFromHash`, gated to the tabs actually on screen (fix round 1): a stray fragment must
+ *  never select a channel the inbox didn't give it a tab for. */
+export function hashTargetFor(hash: string, modes: readonly ComposeMode[]): "email" | "sms" | null {
+  const target = composeModeFromHash(hash);
+  return target && modes.includes(target) ? target : null;
 }
 
 /** The line the Text tab shows in place of its form, in today's order; null when the form shows.
@@ -98,7 +112,7 @@ export function MessageComposer({
 }) {
   const locale = useLocale();
   const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
-  const [mode, setMode] = useState<Mode>(initialMode ?? (modes.includes("note") ? "note" : modes[0]!));
+  const [mode, setMode] = useState<Mode>(resolveInitialMode(modes, initialMode));
   // Controlled, not a plain uncontrolled Input, so the segment counter below
   // can recompute on every keystroke.
   const [body, setBody] = useState("");
@@ -112,7 +126,7 @@ export function MessageComposer({
   // link twice (no hashchange then). Only the note boundary clears the draft, as the tabs do.
   useEffect(() => {
     const open = (hash: string) => {
-      const target = composeModeFromHash(hash);
+      const target = hashTargetFor(hash, modes);
       if (!target) return;
       const current = modeRef.current;
       if (target !== current) {
@@ -181,7 +195,7 @@ export function MessageComposer({
     <div className="w-full space-y-2">
       <span id="compose-sms" className="block scroll-mt-24" aria-hidden />
       <span id="compose-email" className="block scroll-mt-24" aria-hidden />
-      <div className="flex gap-1" {...(modes.includes("note") ? {} : { role: "group", "aria-label": tx("conversations.compose.via") })}>
+      <div className="flex gap-1" {...(modes.includes("note") ? {} : { role: "group", "aria-label": tx("conversations.compose.via"), lang: locale })}>
         {modes.map((value) => (
           <button
             key={value}
