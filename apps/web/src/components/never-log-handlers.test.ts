@@ -75,4 +75,34 @@ describe("runRemoveNeverLog", () => {
     expect(d.onRemoved).toHaveBeenCalledWith("n1");
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  it("a THROWN remove toasts common.actionCrashed and never fires onRemoved (mutation: unguarded remove call → the rejection escapes, FAILS)", async () => {
+    const { d, toast } = deps({ remove: vi.fn(async () => { throw new Error("stale deploy"); }) });
+    expect(await runRemoveNeverLog(d, E)).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith("That didn't go through — this page may be out of date. Reload it and try again.");
+    expect(d.onRemoved).not.toHaveBeenCalled();
+  });
+
+  it("a server-answered failure toasts neverLog.failed and never fires onRemoved (mutation: deleted 'if (!r.ok)' → onRemoved fires on a failed answer, FAILS)", async () => {
+    const { d, toast } = deps({ remove: vi.fn(async () => ({ ok: false as const, error: "failed" as const })) });
+    expect(await runRemoveNeverLog(d, E)).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith("That didn't save. Try again.");
+    expect(d.onRemoved).not.toHaveBeenCalled();
+  });
+
+  it("on the remove's Undo, a THROWN add toasts common.actionCrashed and never fires onAdded (mutation: unguarded remove-Undo add → the rejection escapes, FAILS)", async () => {
+    const { d, toast } = deps({ add: vi.fn(async () => { throw new Error("stale deploy"); }) });
+    expect(await runRemoveNeverLog(d, E)).toBe(true);
+    undoOf(toast).onClick(); await flush();
+    expect(toast.error).toHaveBeenCalledWith("That didn't go through — this page may be out of date. Reload it and try again.");
+    expect(d.onAdded).not.toHaveBeenCalled();
+  });
+
+  it("on the remove's Undo, a duplicate answer toasts neverLog.duplicate and never fires onAdded (mutation: remove-Undo ignoring !u.ok → onAdded fires anyway, FAILS)", async () => {
+    const { d, toast } = deps({ add: vi.fn(async () => ({ ok: false as const, error: "duplicate" as const })) });
+    expect(await runRemoveNeverLog(d, E)).toBe(true);
+    undoOf(toast).onClick(); await flush();
+    expect(toast.error).toHaveBeenCalledWith("Already on the list.");
+    expect(d.onAdded).not.toHaveBeenCalled();
+  });
 });

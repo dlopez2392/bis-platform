@@ -49,6 +49,7 @@ describe("addNeverLogAction", () => {
     await expect(addNeverLogAction("acc", "supplier.com")).rejects.toThrow("NEXT_REDIRECT");
     expect(db.addNeverLog).not.toHaveBeenCalled();
   });
+
 });
 
 describe("removeNeverLogAction", () => {
@@ -63,5 +64,19 @@ describe("removeNeverLogAction", () => {
     expect(db.removeNeverLog).not.toHaveBeenCalled();
     db.removeNeverLog.mockResolvedValueOnce(null);
     expect(await removeNeverLogAction("acc", ID)).toEqual({ ok: true, removed: null });
+  });
+
+  it("a refused caller never reaches the database (requireAccountOwner redirects by throwing; mutation: catch around the guard → FAILS)", async () => {
+    auth.requireAccountOwner.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
+    await expect(removeNeverLogAction("acc", ID)).rejects.toThrow("NEXT_REDIRECT");
+    expect(db.removeNeverLog).not.toHaveBeenCalled();
+  });
+
+  it("a database failure logs the diagnosis in full — the action holds only an id, never a pattern to redact (mutation: truncate the message as Add used to → FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    db.removeNeverLog.mockRejectedValueOnce(Object.assign(new Error("constraint boom detail"), { code: "XX000" }));
+    expect(await removeNeverLogAction("acc", ID)).toEqual({ ok: false, error: "failed" });
+    expect(err.mock.calls.flat().join(" ")).toContain("constraint boom detail");
+    err.mockRestore();
   });
 });
