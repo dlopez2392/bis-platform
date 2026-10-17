@@ -5,7 +5,7 @@
 // `WorkRowActions`). This page itself still only reads and buckets
 // `listAccountWork`'s three sources and renders them — the writes live in
 // the files below it, not here.
-import { listAccountWork, listPendingProposals, type CallProposal } from "@bis/db";
+import { listAccountWork, listPendingProposals, countHeldInboundEmails, type CallProposal } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { requireAccountAccess } from "@/lib/auth";
@@ -15,6 +15,10 @@ import { dbForRequest } from "@/lib/db";
 import { loadAssignView } from "@/lib/assign/view";
 import { bucketWork } from "@/lib/work/buckets";
 import { contactDisplayName } from "@/lib/format";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { WorkList } from "./work-list";
 import type { ResolvedStage } from "../calls/[callId]/proposals";
@@ -40,19 +44,35 @@ export default async function TasksPage({
   // server. Never for a Technician (their queue is already theirs).
   const assign = await loadAssignView(db, accountId, access, rawWho, { members: true });
 
-  // Only `timezone` — this page never shows the account/brand name (every
-  // sibling list in this folder — Contacts, Calls, Forms, Conversations —
-  // is titled plainly too; the sidebar already carries account identity).
+  // `timezone` and `language` — this page never shows the account/brand
+  // name itself (every sibling list in this folder — Contacts, Calls,
+  // Forms, Conversations — is titled plainly too; the sidebar already
+  // carries account identity), but `language` feeds the "Needs a look"
+  // held-emails row's own locale below (Task 12).
   const account = await db
     .from("accounts")
-    .select("timezone")
+    .select("timezone, language")
     .eq("id", accountId)
     .maybeSingle()
     .then(({ data, error }) => {
       if (error) throw new Error(`tasks: account lookup failed: ${error.message}`);
       if (!data) throw new Error("tasks: account not found");
-      return data as { timezone: string };
+      return data as { timezone: string; language?: Locale | null };
     });
+  const prefs = await getPersonPrefs();
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: account.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+
+  // Task 12 (S-06 part 1): the inbox's own "Needs a look" count, read here
+  // once alongside this screen's own work — best-effort (rule 5): a failed
+  // read omits the row rather than taking the whole to-do queue down.
+  let heldCount: number | null = null;
+  try {
+    heldCount = await countHeldInboundEmails(db, accountId);
+  } catch (e) {
+    console.error(`tasks: account ${accountId} held count read failed: ${loggableError(e)}`);
+  }
 
   const rows = await listAccountWork(db, accountId, { assignee: assign.assignee });
 
@@ -168,6 +188,11 @@ export default async function TasksPage({
           canAssign={assign.canAssign}
           members={assign.members}
           who={assign.who}
+          heldEmails={heldCount && heldCount > 0 ? {
+            count: heldCount,
+            href: `/dashboard/accounts/${accountId}/conversations?view=held`,
+            locale,
+          } : undefined}
         />
       </div>
     </>

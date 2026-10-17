@@ -22,6 +22,9 @@ let role: "owner" | "staff" | "technician" | null = null;
 vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency, role }),
 }));
+// Task 12: the page now resolves its own render locale (for the held-emails
+// row's words) the same way conversations/page.tsx already does.
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 
 /** Mutable so each test can pick the account's own (possibly invalid) zone
  *  without a fresh `vi.mock` per test — assigned in `beforeEach` before the
@@ -91,6 +94,14 @@ let agencyTimezone: string | null = "America/Chicago";
 const listAccountWorkMock = vi.fn<(...a: unknown[]) => Promise<WorkRow[]>>(async () => workRows);
 const readPersonIdMock = vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => "p-me");
 const listAccountTeamMock = vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []);
+/** Task 12: this account's own held-email count — mutable per test, and a
+ *  real mock (never the real `countHeldInboundEmails`, whose own two
+ *  chained `.eq()` calls this file's `@/lib/db` fake does not support). */
+let heldEmailsCount: number | null = 0;
+const countHeldInboundEmailsMock = vi.fn(async (): Promise<number> => {
+  if (heldEmailsCount === null) throw new Error("held count read failed");
+  return heldEmailsCount;
+});
 vi.mock("@bis/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@bis/db")>();
   return {
@@ -99,6 +110,7 @@ vi.mock("@bis/db", async (importOriginal) => {
     listPendingProposals: () => listPendingProposalsMock(),
     readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
     listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
+    countHeldInboundEmails: () => countHeldInboundEmailsMock(),
     serviceDb: () => ({
       from: () => ({
         select: () => ({
@@ -746,5 +758,57 @@ describe("TasksPage — the All · Mine · Unassigned row (F-085)", () => {
   it("a Technician gets no filter row (mutation: render it for everyone -> FAILS)", async () => {
     role = "technician";
     expect(await render({})).not.toContain(NAV);
+  });
+});
+
+// Task 12 (S-06 part 1): the page's own read of the inbox's "Needs a look"
+// count, threaded into WorkList's own row.
+describe("TasksPage — the held-emails row (Task 12)", () => {
+  beforeEach(() => {
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    role = null;
+    workRows = [];
+    pendingProposals = [];
+    heldEmailsCount = 0;
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+  });
+  afterEach(() => {
+    heldEmailsCount = 0;
+  });
+
+  it("a held count above zero reaches WorkList as its own row (mutation: drop heldEmails from the WorkList call -> FAILS)", async () => {
+    heldEmailsCount = 3;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).toContain("data-held-emails-row");
+    expect(html).toContain(`href="/dashboard/accounts/acct1/conversations?view=held"`);
+    expect(renderedText(html)).toContain("3 emails need a look");
+  });
+
+  it("a held count of zero renders no row at all", async () => {
+    heldEmailsCount = 0;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).not.toContain("data-held-emails-row");
+  });
+
+  it("a failed count read omits the row rather than taking the page down (rule 5; mutation: let the throw escape -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    heldEmailsCount = null;
+    const { default: TasksPage } = await import("./page");
+    const html = renderToStaticMarkup(
+      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
+    );
+    expect(html).not.toContain("data-held-emails-row");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("held count read failed"));
+    spy.mockRestore();
   });
 });

@@ -37,6 +37,7 @@ export function emailHowLine(how: EmailHow, locale: Locale = "en"): string {
     case "backfill_0049": return t(m, "contact.email.how.backfill0049", locale);
     case "bounced": return t(m, "contact.email.how.bounced", locale);
     case "complained": return t(m, "contact.email.how.complained", locale);
+    case "reply": return t(m, "contact.email.how.reply", locale);
   }
 }
 
@@ -53,6 +54,10 @@ export function noResumeLine(how: EmailHow, locale: Locale = "en"): string {
   switch (how.kind) {
     case "bounced": return t(m, "contact.email.bouncedExplain", locale);
     case "complained": return t(m, "contact.email.complainedExplain", locale);
+    // Fix round 1 (the execution note): within the 7-day window the Undo is the way out (the
+    // row still says the generic line, same as unsubscribe_link); past it, only the customer's
+    // own resubscribe can lift it.
+    case "reply": return how.expired ? t(m, "contact.email.replyExpiredExplain", locale) : t(m, "contact.email.customerOnly", locale);
     default: return t(m, "contact.email.customerOnly", locale);
   }
 }
@@ -77,7 +82,13 @@ export function parseEmailResponse(json: unknown): { view: EmailView; zone: stri
   if (v.kind === "no_email") return { view: { kind: "no_email" }, zone: j.zone };
   if (v.kind === "allowed" && (v.newestId === null || typeof v.newestId === "string")) return { view: v as EmailView, zone: j.zone };
   if (v.kind === "stopped" && typeof v.eventId === "string" && typeof v.since === "string"
-    && typeof v.how === "object" && v.how !== null && typeof v.canResume === "boolean") return { view: v as EmailView, zone: j.zone };
+    && typeof v.how === "object" && v.how !== null && typeof v.canResume === "boolean") {
+    // Fix round 1: a "reply" how carries its own boolean — refuse a malformed one rather than
+    // let a later render crash or silently say the wrong thing.
+    const how = v.how as { kind?: unknown; expired?: unknown };
+    if (how.kind === "reply" && typeof how.expired !== "boolean") return null;
+    return { view: v as EmailView, zone: j.zone };
+  }
   return null;
 }
 

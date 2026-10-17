@@ -8,9 +8,11 @@ import { createCustomField, upsertCustomValue, setClientAccess, setFromEmail, se
          setAlertPhone, serviceDb, type CustomFieldDef,
          startAlertPhoneVerification, verifyAlertPhoneCode, countRecentAlertPhoneVerifications,
          discardAlertPhoneVerification,
-         ALERT_CODE_MAX_SENDS_PER_HOUR, setAccountLanguage } from "@bis/db";
+         ALERT_CODE_MAX_SENDS_PER_HOUR, setAccountLanguage,
+         getInboundSettings, setInboundSettings, type InboundSettings } from "@bis/db";
 import { operatorMailer, EmailNotSent } from "@/lib/consent/email-gate";
 import { saveVerifiedFromAddress } from "@/lib/email/preflight";
+import { inboundMxReady, cleanInboundDomain } from "@/lib/email/inbound/mx-check";
 // The public form's own validator, reused deliberately rather than a second
 // regex — the same reasoning branding/actions.ts records: one email regex
 // that drifts from another is worse than one that is strict.
@@ -416,4 +418,46 @@ export async function confirmAlertPhoneVerificationAction(
   }
   if (outcome === "wrong_code") return { ok: false, error: m["settings.alertPhoneWrongCode"] };
   return { ok: false, error: m["settings.alertPhoneCodeExpired"] };
+}
+
+export type InboundModeResult = { ok: true; previous: InboundSettings } | { ok: false; error: string };
+
+/**
+ * The Replies row (S-06 part 1). Agency-only by `requireAgencyOnlyAccountAccess` on the first line: no
+ * column grant stands behind accounts.inbound_mode / inbound_domain (0082), so this guard is the ONLY gate.
+ * Own domain is re-checked here (the browser's Check DNS is a convenience, never trusted). Off keeps the
+ * stored domain. Answers the previous settings, so the toast's Undo restores exactly them.
+ */
+export async function setInboundModeAction(accountId: string, next: InboundSettings): Promise<InboundModeResult> {
+  const { userId } = await requireAgencyOnlyAccountAccess(accountId);
+  const db = serviceDb();
+  const previous = await getInboundSettings(db, accountId);
+  let domain = previous.domain;
+  if (next.mode === "own_domain") {
+    const clean = cleanInboundDomain(next.domain ?? "");
+    if (!clean) return { ok: false, error: m["settings.replies.invalidDomain"] };
+    const mx = await inboundMxReady(clean);
+    if (mx !== "ready") return { ok: false, error: (mx === "missing" ? m["settings.replies.dnsMissing"] : m["settings.replies.dnsFailed"]).replace("{domain}", clean) };
+    domain = clean;
+  }
+  try {
+    await setInboundSettings(db, accountId, { mode: next.mode, domain }, userId);
+  } catch (e) {
+    if (String(e).includes("accounts_inbound_domain_key")) return { ok: false, error: m["settings.replies.domainTaken"] };
+    console.error(`setInboundModeAction: save failed for account ${accountId}: ${String(e)}`);
+    return { ok: false, error: m["common.actionCrashed"] };
+  }
+  revalidatePath(`/dashboard/accounts/${accountId}/settings`);
+  return { ok: true, previous };
+}
+
+export type DnsCheckResult = { ok: true } | { ok: false; error: string };
+
+export async function checkInboundDnsAction(accountId: string, raw: string): Promise<DnsCheckResult> {
+  await requireAgencyOnlyAccountAccess(accountId);
+  const domain = cleanInboundDomain(raw);
+  if (!domain) return { ok: false, error: m["settings.replies.invalidDomain"] };
+  const mx = await inboundMxReady(domain);
+  if (mx === "ready") return { ok: true };
+  return { ok: false, error: (mx === "missing" ? m["settings.replies.dnsMissing"] : m["settings.replies.dnsFailed"]).replace("{domain}", domain) };
 }

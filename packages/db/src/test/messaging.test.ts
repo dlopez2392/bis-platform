@@ -46,6 +46,9 @@ describe("messaging", () => {
       expect(first.created).toBe(true);
       expect(second.created).toBe(false);
 
+      // S-06 part 1: listConversations excludes a thread with no message at all (below), so this one
+      // needs a message to prove the SAME conversation row, not a second one.
+      await createMessage(db, accountId, { conversationId: first.id, channel: "email", direction: "outbound", body: "hi" }, "user_test");
       const convos = await listConversations(db, accountId);
       expect(convos).toHaveLength(1);
     }));
@@ -762,6 +765,94 @@ describe("messaging", () => {
       expect([...seen].sort()).toEqual([...ids].sort()); // no skips
     }));
 
+  // S-06 part 1: once Replies is on, every automatic email creates the customer's conversation (to
+  // hold the reply token) without writing any message — ensureConversation alone, as inbound-email.ts's
+  // ensureReplyToken already does. Such a thread must never appear in the inbox list: it has nothing
+  // to show, and it is not something anyone did. Filtered on message EXISTENCE (`messages!inner(id)`,
+  // fix round 3) rather than `last_message_at is not null` — see that filter's own comment for why
+  // the column alone is not a safe proxy.
+  it("a conversation with no messages is never listed; the same conversation IS listed once a message lands (mutation: drop the messages!inner existence filter → the empty conversation is listed, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: emptyContactId } = await createContact(db, accountId, { firstName: "Empty" }, "user_test");
+      const empty = await ensureConversation(db, accountId, emptyContactId, "user_test");
+
+      const { id: realContactId } = await createContact(db, accountId, { firstName: "Real" }, "user_test");
+      const real = await ensureConversation(db, accountId, realContactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: real.id, channel: "email", direction: "outbound", body: "hello",
+      }, "user_test");
+
+      const convos = await listConversations(db, accountId);
+      const ids = convos.map((c) => c.id);
+      expect(ids).toContain(real.id);
+      expect(ids).not.toContain(empty.id);
+
+      // Paging must still land on the one real conversation and terminate — an empty thread must
+      // never surface on a later page either.
+      const seen: string[] = [];
+      let before: { v: string | null; id: string } | undefined;
+      for (let page = 0; page < 5; page++) {
+        const rows = await listConversations(db, accountId, { limit: 1, before });
+        if (rows.length === 0) break;
+        seen.push(...rows.map((r) => r.id));
+        const last = rows[rows.length - 1]!;
+        before = { v: last.lastMessageAt, id: last.id };
+      }
+      expect(seen).toEqual([real.id]);
+    }));
+
+  // S-06 part 1, fix round 3: `last_message_at is not null` is only a PROXY for "this conversation
+  // has a message," and it is wrong on this path — createMessage's own conversation touch (after the
+  // message row and its event both already exist) is deliberately best-effort and non-fatal; if THAT
+  // write fails, the thread genuinely has a message, yet last_message_at stays null. The rule the
+  // owner actually wants is "lists a conversation that holds at least one message," so the filter
+  // must test message EXISTENCE, not this one column.
+  it("a conversation with a real message but a null last_message_at (a failed best-effort touch) is still listed, and its unread count still counts consistently with the sidebar's sum (mutation: filter on last_message_at not null instead of message existence → excluded here even though it has a message, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "StaleTouch" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId, {
+        conversationId: convo.id, channel: "email", direction: "inbound", body: "hi",
+      }, "customer", "system");
+      await incrementUnreadCount(db, accountId, convo.id);
+
+      // Simulate the touch's own documented failure mode directly: the message and its event both
+      // already exist (createMessage's job is done), but the conversation's own last_message_at never
+      // got set.
+      const { error: nullErr } = await db.from("conversations").update({ last_message_at: null }).eq("id", convo.id);
+      expect(nullErr, `forcing the null failed: ${nullErr?.message}`).toBeNull();
+
+      const convos = await listConversations(db, accountId);
+      const row = convos.find((c) => c.id === convo.id);
+      expect(row).toBeDefined();
+      expect(row!.unreadCount).toBe(1);
+      expect(await sumUnreadCount(db, accountId)).toBe(1);
+    }));
+
+  // Fix round 4 (minor): pins the embed's own cap. `messages!inner(id)` is the exists-join; without
+  // `.limit(1, { referencedTable: "messages" })` PostgREST aggregates EVERY matching message's id
+  // into the embedded array, fetching a chatty thread's whole history just to prove it has at least
+  // one — this test builds the SAME select/filter/limit shape listConversations uses (not through
+  // the public API, which strips the embed before returning ConversationSummary, so this has to read
+  // the raw row to see it at all) and proves a three-message thread's embed still carries exactly one.
+  it("the messages!inner embed stays capped at one id even on a chatty thread (mutation: drop .limit(1, { referencedTable: 'messages' }) → the embed carries every message id, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Chatty" }, "user_test");
+      const convo = await ensureConversation(db, accountId, contactId, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "one" }, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "two" }, "user_test");
+      await createMessage(db, accountId, { conversationId: convo.id, channel: "email", direction: "outbound", body: "three" }, "user_test");
+
+      const { data, error } = await db.from("conversations")
+        .select("id, messages!inner(id)")
+        .eq("account_id", accountId).eq("id", convo.id)
+        .eq("messages.account_id", accountId)
+        .limit(1, { referencedTable: "messages" })
+        .single();
+      expect(error).toBeNull();
+      expect((data as unknown as { messages: { id: string }[] }).messages.length).toBeLessThanOrEqual(1);
+    }));
+
   // MEASURED, not guessed: ~4s alone on an idle machine (one bulk insert of
   // 1005 rows, one network round trip). The heaviest test in this file
   // besides listFailedOutboundSms's own; covered by the package's
@@ -817,14 +908,13 @@ describe("messaging", () => {
       expect(quietSummary!.lastMessagePreview).toBe("quiet's only message");
     }), 20_000);
 
-  // Review fix (messaging.ts:602). A conversation that has never been
-  // messaged (`ensureConversation` alone, no `createMessage` — the 'note'
-  // tab, say, or a race between the two) has a NULL last_message_at. SQL's
-  // `<` and `=` are never true against NULL, so once a cursor's `v` is a
-  // real timestamp, the two normal OR-branches can never match a null row
-  // at all — the explicit `,last_message_at.is.null` branch is what keeps
-  // it reachable on a LATER page rather than silently dropping it forever.
-  it("pages a conversation with no messages yet (null last_message_at) onto a later page, never dropping it (mutation: remove the `is.null` OR branch → FAILS)", () =>
+  // S-06 part 1 (superseding the prior fix at this spot, which paged a never-messaged conversation
+  // onto a LATER page rather than losing it; now it is excluded on EVERY page by design — see the
+  // `messages!inner(id)` existence filter's comment in listConversations, fix round 3). A conversation
+  // that has never been messaged (`ensureConversation` alone, no `createMessage` — the 'note' tab,
+  // say, a race between the two, or a reply token made before any mail arrives) has nothing to show;
+  // it must never surface, on page 1 or any page after it.
+  it("a conversation with no messages is excluded from every page, not merely pushed to a later one (mutation: drop the messages!inner existence filter → it reappears on page 2, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const { id: withMsgContact } = await createContact(db, accountId, { firstName: "Messaged" }, "user_test");
       const withMsg = await ensureConversation(db, accountId, withMsgContact, "user_test");
@@ -835,19 +925,14 @@ describe("messaging", () => {
       const { id: noMsgContact } = await createContact(db, accountId, { firstName: "Never messaged" }, "user_test");
       const noMsg = await ensureConversation(db, accountId, noMsgContact, "user_test");
 
-      // Page 1, limit 1: the messaged conversation sorts first (non-null
-      // last_message_at outranks null in this ordering), so it alone fills
-      // the page and hands back a cursor whose `v` is a REAL timestamp —
-      // exactly the branch that must still reach the null row next.
       const page1 = await listConversations(db, accountId, { limit: 1 });
       expect(page1).toHaveLength(1);
       expect(page1[0]!.id).toBe(withMsg.id);
 
       const page2 = await listConversations(
         db, accountId, { limit: 1, before: { v: page1[0]!.lastMessageAt, id: page1[0]!.id } });
-      expect(page2).toHaveLength(1);
-      expect(page2[0]!.id).toBe(noMsg.id);
-      expect(page2[0]!.lastMessageAt).toBeNull();
+      expect(page2).toHaveLength(0);
+      expect(page2.map((r) => r.id)).not.toContain(noMsg.id);
     }));
 
   // D-019's deep-link escape hatch: a link naming a conversation id has no

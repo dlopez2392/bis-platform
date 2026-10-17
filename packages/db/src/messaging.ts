@@ -33,6 +33,9 @@ export type NewMessage = {
   // in full, never queued to go anywhere, so leaving it at the default
   // mislabels it. sms/inbound's message.received handler passes "delivered".
   status?: MessageStatus;
+  /** S-06 part 1: an inbound email's own facts (meta.inbound_email_id, meta.attachment_count,
+   *  meta.sender, meta.consent). Unset for every other writer, which keeps the column default {}. */
+  meta?: Record<string, unknown>;
 };
 
 export type ConversationSummary = {
@@ -73,7 +76,7 @@ function quoteFilterValue(value: string): string {
 }
 
 const MESSAGE_COLS =
-  "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, created_at";
+  "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, meta, created_at";
 
 // Providers deliver webhook events at-least-once and without an ordering
 // guarantee, so the same event can replay and a later-firing event (e.g.
@@ -149,6 +152,7 @@ export async function createMessage(
       author_kind: author.authorKind,
       author_id: author.authorId,
       ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.meta !== undefined ? { meta: input.meta } : {}),
     })
     .select("id").single();
   if (error || !data) throw new Error(`createMessage failed: ${error?.message}`);
@@ -161,11 +165,14 @@ export async function createMessage(
     actorType);
 
   // The touch is best-effort and deliberately non-fatal. The message is real
-  // and visible either way (row + event both exist above); if this update
-  // fails, only the inbox's sort order and preview go stale, and that
-  // self-heals on the conversation's next message. Throwing here would be
-  // worse: the caller would mark a message "failed" that was actually
-  // written successfully.
+  // and visible either way (row + event both exist above) — listConversations
+  // lists this thread regardless, because its own filter is message
+  // EXISTENCE (fix round 3), not this column. If this update fails, only the
+  // inbox's SORT ORDER goes stale (the thread sorts to the bottom, nulls
+  // last, until its next message repairs it); the preview is unaffected too,
+  // since fetchConversationPreview reads `messages` directly and never this
+  // column. Throwing here would be worse: the caller would mark a message
+  // "failed" that was actually written successfully.
   const { error: touchErr } = await db.from("conversations")
     .update({ last_message_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", input.conversationId);
@@ -276,13 +283,20 @@ export async function updateMessageStatusByProviderId(
  */
 export async function findMessageByProviderId(
   db: SupabaseClient, accountId: string, providerMessageId: string,
-): Promise<{ id: string } | null> {
+  // `conversationId` added (Task 12 fix round 1, item 2): fileInboundEmail's own reuse of a hit
+  // needs to know whether that message actually sits on the SAME conversation it is filing onto — a
+  // provider id only disambiguates per account, never per thread. Additive: every existing caller
+  // (sms/inbound's own idempotency check) reads only `=== null`, never `.id` or any other field, so
+  // the widened shape changes nothing for it.
+): Promise<{ id: string; conversationId: string } | null> {
   const { data, error } = await db.from("messages")
-    .select("id")
+    .select("id, conversation_id")
     .eq("account_id", accountId).eq("provider_message_id", providerMessageId)
     .maybeSingle();
   if (error) throw new Error(`findMessageByProviderId failed: ${error.message}`);
-  return (data as { id: string } | null) ?? null;
+  if (!data) return null;
+  const row = data as { id: string; conversation_id: string };
+  return { id: row.id, conversationId: row.conversation_id };
 }
 
 /**
@@ -614,11 +628,35 @@ export async function listConversations(
   // filter apply to the conversation row itself (Mine/Unassigned, spec §8).
   const embed = opts.assignee ? "contacts!inner(first_name, last_name, language, assigned_to)" : "contacts(first_name, last_name, language)";
   let q = db.from("conversations")
-    .select(`id, contact_id, last_message_at, unread_count, ${embed}`)
+    // S-06 part 1, fix round 3: the owner's rule is "list a conversation that holds at least one
+    // message" — EXISTENCE, not `last_message_at is not null`. That column is only a proxy, and it is
+    // wrong on two paths: createMessage's own conversation touch is deliberately best-effort (a
+    // failed touch leaves last_message_at null on a thread that genuinely HAS a message), and
+    // unfileInboundEmail's Undo deletes a message without resetting it (a reset was added there, but
+    // relying on that alone here would mean trusting every message-deleting caller to keep it
+    // honest, forever). `messages!inner(id)` makes the join itself an EXISTS filter — true existence,
+    // never stale — and `.limit(1, { referencedTable: "messages" })` below caps the embedded array at
+    // one id so a chatty thread's full history is never fetched just to prove it has ONE message.
+    .select(`id, contact_id, last_message_at, unread_count, messages!inner(id), ${embed}`)
     .eq("account_id", accountId)
+    // Fix round 4 (reviewer measurement: 30,966 buffers / 12ms without this vs 495 / 0.7ms with it,
+    // production Postgres 17, no skip scan). Without an account_id filter ON THE EMBED ITSELF, the
+    // planner cannot use messages_thread's own leading column (account_id, conversation_id,
+    // created_at) to probe the exists-join per conversation — it has only `conversation_id` to go on
+    // and ends up scanning far more of the index than this account owns. `account_id` is already
+    // true of every row this embed could ever match (a conversation's messages are always its own
+    // account's), so this filter changes no ROW the query returns — only how cheaply the planner can
+    // find it.
+    .eq("messages.account_id", accountId)
+    // last_message_at remains the ORDER key (nulls last) — a thread kept by the exists filter above
+    // despite a failed touch (so this column is null) still sorts; it just sorts to the bottom until
+    // its next message repairs it, same self-healing promise createMessage's own comment makes. The
+    // cursor's `v === null` OR-branch below is therefore reachable again (not dead code): a thread can
+    // have messages yet a null last_message_at.
     .order("last_message_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
-    .limit(limit);
+    .limit(limit)
+    .limit(1, { referencedTable: "messages" });
   q = withAssigneeOn(q, opts.assignee, "contacts.assigned_to");
 
   if (opts.before) {

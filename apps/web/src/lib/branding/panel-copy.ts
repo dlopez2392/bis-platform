@@ -1,3 +1,4 @@
+import { BIS_REPLY_DOMAIN, type InboundMode } from "@bis/db";
 import { m } from "@/lib/messages";
 
 /**
@@ -60,4 +61,20 @@ const CLIENT: PanelCopy = {
 
 export function panelCopy(audience: BrandingAudience): PanelCopy {
   return audience === "client" ? CLIENT : AGENCY;
+}
+
+/**
+ * The read-only "where your customers' replies go" line under Branding's
+ * reply-to hint (S-06 part 1, Task 10). `null` for Replies off — there is
+ * nothing to say: the reply-to hint above it already covers that case.
+ * The domain named is BIS_REPLY_DOMAIN for mode "bis" (the shared mailbox
+ * every unthemed account's replies land in) or the account's own stored
+ * domain for "own_domain" — never the other way around, which would tell an
+ * operator customers reply to a domain nothing is actually listening on.
+ */
+export function repliesLine(audience: BrandingAudience, s: { mode: InboundMode; domain: string | null }): string | null {
+  if (s.mode === "off") return null;
+  const domain = s.mode === "bis" ? BIS_REPLY_DOMAIN : (s.domain ?? "");
+  const key = audience === "client" ? "branding.replies.client" : "branding.replies.agency";
+  return m[key].replace("{domain}", domain);
 }

@@ -92,6 +92,11 @@ describe("emailStateOf and pageStateOf — what the page opens on (review R1-I1,
     }
     expect(pageStateOf({ state: "allowed" })).toBe("ask");
   });
+
+  it("final review M3: a stop the customer EMAILED is their own too — the page opens on 'You're unsubscribed' with Resubscribe, while the guard-parity list below stays exactly 0055's (mutation: drop inbound_email from the page's list → 'ask', FAILS; add it to CUSTOMER_EMAIL_STOP_METHODS instead → the parity test FAILS)", () => {
+    expect(pageStateOf({ state: "stopped", method: "inbound_email" })).toBe("stopped");
+    expect(CUSTOMER_EMAIL_STOP_METHODS).not.toContain("inbound_email");
+  });
 });
 
 describe("CUSTOMER_EMAIL_STOP_METHODS stays identical to 0055's unless_customer_stopped guard, email members only (choice 19)", () => {

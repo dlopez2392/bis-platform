@@ -1,4 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Suspense, isValidElement, type ReactElement } from "react";
 
 /**
  * D-021. Below `lg` the grid's two columns stack into one scroll
@@ -44,10 +45,29 @@ const conversationsFixture = [
     lastMessageAt: "2026-10-08T10:00:00Z", lastMessagePreview: "hi", unreadCount: 0,
   },
 ];
+
+// Task 12: the "Needs a look" filter and its own list. Mutable so individual
+// tests can flip the read into a throw without a second `vi.mock` body.
+const held = vi.hoisted(() => ({
+  count: 0 as number | null,
+  countThrows: false,
+  listThrows: false,
+  mode: "off" as "off" | "bis",
+  items: [] as {
+    id: string; accountId: string; conversationId: string; providerEmailId: string;
+    fromEmail: string; fromName: string | null; toEmail: string; subject: string | null; text: string;
+    auth: unknown; attachmentCount: number; status: "held"; holdReason: "not_on_record" | "unverified";
+    messageId: string | null; decidedBy: string | null; decidedAt: string | null; receivedAt: string;
+    contactId: string; contactFirstName: string | null; contactLastName: string | null;
+  }[],
+}));
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
   readPersonId: async () => null,
   listMessages: async () => [],
+  countHeldInboundEmails: async () => { if (held.countThrows) throw new Error("count failed"); return held.count; },
+  getInboundSettings: async () => ({ mode: held.mode, domain: null }),
+  listHeldInboundEmails: async () => { if (held.listThrows) throw new Error("list failed"); return held.items; },
 }));
 
 const { default: ConversationsPage } = await import("./page");
@@ -58,6 +78,89 @@ function route(c?: string) {
     searchParams: Promise.resolve({ c }),
   };
 }
+
+function heldRoute(view?: string) {
+  return {
+    params: Promise.resolve({ accountId: "acct1" }),
+    searchParams: Promise.resolve({ view }),
+  };
+}
+
+function all(node: unknown): ReactElement<Record<string, unknown>>[] {
+  if (Array.isArray(node)) return node.flatMap(all);
+  if (!isValidElement(node)) return [];
+  const el = node as ReactElement<Record<string, unknown>>;
+  // Walks every prop value, not only `children` — `filters` on `PageHeader`
+  // carries this page's own held-filter link as a PROP, not as a child.
+  return [el, ...Object.values(el.props).flatMap((v) => all(v))];
+}
+
+const HELD_ITEM = {
+  id: "ie_1", accountId: "acct1", conversationId: "conv_1", providerEmailId: "prov_1",
+  fromEmail: "luis@example.com", fromName: "Luis", toEmail: "reply@bis.com", subject: "Re: Your appointment",
+  text: "Is Thursday ok?", auth: {}, attachmentCount: 0, status: "held" as const, holdReason: "not_on_record" as const,
+  messageId: null, decidedBy: null, decidedAt: null, receivedAt: "2026-10-16T15:00:00.000Z",
+  contactId: "ana", contactFirstName: "Ana", contactLastName: "Ruiz",
+};
+
+beforeEach(() => {
+  held.count = 0;
+  held.countThrows = false;
+  held.listThrows = false;
+  held.mode = "off";
+  held.items = [];
+});
+
+describe("ConversationsPage — Task 12: the 'Needs a look' filter and its list", () => {
+  it("?view=held renders HeldEmailList with the mapped items, and the header's filter link reads 'Needs a look · 2' (mutation: drop the count from the label -> FAILS)", async () => {
+    held.count = 2;
+    held.items = [HELD_ITEM, { ...HELD_ITEM, id: "ie_2" }];
+    const { renderedText } = await import("@/lib/rendered-text");
+    const html = (await ConversationsPage(heldRoute("held"))) as React.ReactElement;
+    const els = all(html);
+    const link = els.find((e) => (e.props as Record<string, unknown>)["data-held-filter"] !== undefined);
+    expect(link).toBeTruthy();
+    expect(link!.props.children).toBe("Needs a look · 2");
+    // Coordinator round 1, item 4: the pill carries lang for its own render locale.
+    expect(link!.props.lang).toBe("en");
+
+    const boundary = els.find((e) => e.type === Suspense)!;
+    const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+    const resolved = await (child.type as (p: Record<string, unknown>) => Promise<ReactElement>)(child.props);
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const childHtml = renderToStaticMarkup(resolved);
+    expect(renderedText(childHtml)).toContain("Luis");
+    expect(renderedText(childHtml)).toContain("Ana Ruiz");
+  });
+
+  it("countHeldInboundEmails throwing still renders the inbox, with the link reading 'Needs a look' and no number (mutation: let the throw escape -> FAILS)", async () => {
+    held.countThrows = true;
+    held.mode = "bis"; // inbound replies are ON, so the filter still has a reason to show even with no known count.
+    const html = (await ConversationsPage(route(undefined))) as React.ReactElement;
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const markup = renderToStaticMarkup(html);
+    const { renderedText } = await import("@/lib/rendered-text");
+    expect(renderedText(markup)).toContain("Needs a look");
+    expect(renderedText(markup)).not.toContain("Needs a look · ");
+  });
+
+  it("listHeldInboundEmails throwing under ?view=held renders the loadFailed line (rule 5; mutation: let the throw escape -> FAILS)", async () => {
+    held.count = 2;
+    held.listThrows = true;
+    const { m } = await import("@/lib/messages");
+    const { renderedText } = await import("@/lib/rendered-text");
+    const html = (await ConversationsPage(heldRoute("held"))) as React.ReactElement;
+    const els = all(html);
+    const boundary = els.find((e) => e.type === Suspense)!;
+    const child = boundary.props.children as ReactElement<Record<string, unknown>>;
+    const resolved = await (child.type as (p: Record<string, unknown>) => Promise<ReactElement>)(child.props);
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const childHtml = renderToStaticMarkup(resolved);
+    expect(renderedText(childHtml)).toContain(m["conversations.held.loadFailed"]);
+    // Coordinator round 1, item 4: the loadFailed line carries lang too.
+    expect(childHtml).toMatch(/lang="en"/);
+  });
+});
 
 describe("ConversationsPage's mobile layout (D-021)", () => {
   it("hides the list (lg:block only) and shows a Back link once a thread is open (mutation: drop the `hidden` class → FAILS)", async () => {

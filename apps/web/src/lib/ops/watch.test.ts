@@ -93,6 +93,7 @@ describe("describeKey — every key a webhook route stamps has a plain-language 
   // line here is a type error, so it cannot reach an email as a raw key.
   const KEYS: Record<WebhookHeartbeatKey, true> = {
     "voice.texml": true, "voice.sip_webhook": true, "email.resend_webhook": true, "sms.inbound": true, "stripe.webhook": true,
+    "email.inbound": true,
   };
   it.each(Object.keys(KEYS))("%s is described in words, not echoed (mutation: drop its case → FAILS)", (key) => {
     expect(describeKey(key)).not.toBe(key);

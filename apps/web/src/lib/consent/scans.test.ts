@@ -263,10 +263,10 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — all fifteen SMS kinds and all twenty-seven email kinds, 38 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
+  it("the scan reaches every send path's kind — all fifteen SMS kinds and all twenty-eight email kinds, 39 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
-    expect(all).toHaveLength(38);
+    expect(all).toHaveLength(39);
     expect([...seen].sort()).toEqual(all);
   });
 });
@@ -724,6 +724,8 @@ describe("scan 1 (email): only the email gate reaches an email provider (consent
   const PROVIDER_MODULES = new Set([
     "apps/web/src/lib/email/index.ts", "apps/web/src/lib/email/resend.ts", "apps/web/src/lib/email/fake.ts",
     "apps/web/src/lib/consent/email-gate.ts",
+    // S-06 part 1: the received-email seam; it re-exports no provider and names none.
+    "apps/web/src/lib/email/receiving.ts",
   ]);
   const PROVIDER_IDS = new Set(["apps/web/src/lib/email", "apps/web/src/lib/email/resend", "apps/web/src/lib/email/fake"]);
   const NAMES = /\bgetEmailProvider\b|\bresendEmailProvider\b|\bfakeEmailProvider\b/;
@@ -785,6 +787,7 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "operator.billing_link": [`${DASH}/settings/billing-actions.ts`],
     "operator.sender_check": [`${DASH}/settings/actions.ts`],
     "operator.ops_alert": [`${PASSES}/ops-watch.ts`],
+    "operator.reply_forward": ["apps/web/src/lib/email/inbound/forward.ts"],
   };
   const REGISTRY = "apps/web/src/lib/consent/classes.ts";
 

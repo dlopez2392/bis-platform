@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { m, type MessageKey } from "./messages";
 
 /**
@@ -459,5 +461,151 @@ describe("the document vault's copy, PR 2c (the required-documents checklist)", 
   it("a placeholder in English is a placeholder in Spanish (mutation: drop {category} from documents.checklist.missing.es -> FAILS)", () => {
     const holes = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort().join(",");
     for (const k of Object.keys(WANT)) expect(holes(m[`${k}.es` as MessageKey]), k).toBe(holes(m[k as MessageKey]));
+  });
+});
+
+describe("S-06 part 1: inbound email keys, English and Spanish (plan Task 2)", () => {
+  const WANT: Record<string, string> = {
+    "conversations.held.filter": "Needs a look",
+    "conversations.held.filter.es": "Por revisar",
+    "conversations.held.filterCount": "Needs a look · {count}",
+    "conversations.held.filterCount.es": "Por revisar · {count}",
+    "conversations.held.title": "Emails that need a look",
+    "conversations.held.title.es": "Correos por revisar",
+    "conversations.held.empty": "Emails we couldn't match to a customer wait here for you to file.",
+    "conversations.held.empty.es": "Aquí esperan los correos que no pudimos vincular con un cliente, para que usted los archive.",
+    "conversations.held.loadFailed": "We couldn't load these emails. Reload the page to try again.",
+    "conversations.held.loadFailed.es": "No pudimos cargar estos correos. Vuelva a cargar la página para intentarlo de nuevo.",
+    "conversations.held.reason.notOnRecord": "Not on this customer's record",
+    "conversations.held.reason.notOnRecord.es": "No está en el registro de este cliente",
+    "conversations.held.reason.unverified": "Couldn't confirm who sent it",
+    "conversations.held.reason.unverified.es": "No pudimos confirmar quién lo envió",
+    "conversations.held.suggestion": "A reply to an email sent to {name}",
+    "conversations.held.suggestion.es": "Respuesta a un correo enviado a {name}",
+    "conversations.held.noSubject": "(no subject)",
+    "conversations.held.noSubject.es": "(sin asunto)",
+    "conversations.held.fileOn": "File on {name}",
+    "conversations.held.fileOn.es": "Archivar con {name}",
+    "conversations.held.choose": "Choose a record",
+    "conversations.held.choose.es": "Elegir un registro",
+    "conversations.held.searchLabel": "Find a customer",
+    "conversations.held.searchLabel.es": "Buscar un cliente",
+    "conversations.held.searchEmpty": "No customer matches that.",
+    "conversations.held.searchEmpty.es": "Ningún cliente coincide con eso.",
+    "conversations.held.searchFailed": "Couldn't search right now. Try again.",
+    "conversations.held.searchFailed.es": "No se pudo buscar en este momento. Inténtelo de nuevo.",
+    "conversations.held.notCustomer": "Not a customer",
+    "conversations.held.notCustomer.es": "No es un cliente",
+    "conversations.held.filed": "Filed on {name}.",
+    "conversations.held.filed.es": "Archivado con {name}.",
+    "conversations.held.dismissed": "Marked as not a customer.",
+    "conversations.held.dismissed.es": "Marcado como que no es un cliente.",
+    "conversations.held.undone": "Back in Needs a look.",
+    "conversations.held.undone.es": "De vuelta en Por revisar.",
+    "conversations.held.undoneStopped": "Back in Needs a look, but their emails are still stopped. Open their record to turn them back on.",
+    "conversations.held.undoneStopped.es": "De vuelta en Por revisar, pero sus correos siguen detenidos. Abra su ficha para volver a activarlos.",
+    "conversations.held.changed": "Someone already handled this email. Reload to see where it is.",
+    "conversations.held.changed.es": "Alguien ya atendió este correo. Vuelva a cargar para ver dónde está.",
+    "conversations.held.failed": "That didn't save. Try again.",
+    "conversations.held.failed.es": "No se guardó. Inténtelo de nuevo.",
+    "conversations.reply.fromMember": "from {name}",
+    "conversations.reply.fromMember.es": "de {name}",
+    "conversations.reply.attachments": "{count} attachments — not saved yet",
+    "conversations.reply.attachments.es": "{count} archivos adjuntos — aún no se guardan",
+    "conversations.reply.attachmentsOne": "1 attachment — not saved yet",
+    "conversations.reply.attachmentsOne.es": "1 archivo adjunto — aún no se guarda",
+    "conversations.reply.stopped": "Stopped marketing emails · from their reply",
+    "conversations.reply.stopped.es": "Se detuvieron los correos de promoción · por su respuesta",
+    "conversations.reply.stopUndone": "Marketing emails are on again.",
+    "conversations.reply.stopUndone.es": "Los correos de promoción están activos otra vez.",
+    "conversations.reply.maybeStop": "May want to stop",
+    "conversations.reply.maybeStop.es": "Quizás quiere dejar de recibirlos",
+    "conversations.reply.stopDone": "Emails stopped.",
+    "conversations.reply.stopDone.es": "Correos detenidos.",
+    "conversations.reply.stopExpired": "Only the customer can turn these emails back on.",
+    "conversations.reply.stopExpired.es": "Solo el cliente puede volver a activar estos correos.",
+    "contact.email.replyExpiredExplain": "Stopped by their reply more than 7 days ago. Only the customer can turn emails back on.",
+    "contact.email.replyExpiredExplain.es": "Se detuvo por su respuesta hace más de 7 días. Solo el cliente puede volver a activar los correos.",
+    "work.heldEmails": "{count} emails need a look",
+    "work.heldEmails.es": "{count} correos por revisar",
+    "work.heldEmailsOne": "1 email needs a look",
+    "work.heldEmailsOne.es": "1 correo por revisar",
+    "contact.email.how.reply": "they asked in a reply",
+    "contact.email.how.reply.es": "lo pidió en una respuesta",
+    "settings.replies.label": "Replies",
+    "settings.replies.label.es": "Respuestas",
+    "settings.replies.off": "Off",
+    "settings.replies.off.es": "Apagado",
+    "settings.replies.bis": "BIS address",
+    "settings.replies.bis.es": "Dirección de BIS",
+    "settings.replies.own": "Own domain",
+    "settings.replies.own.es": "Dominio propio",
+    "settings.replies.offBody": "Customers' replies go to the reply-to address on Branding.",
+    "settings.replies.offBody.es": "Las respuestas de los clientes van a la dirección de respuesta de Marca.",
+    "settings.replies.bisBody": "Customers reply to an address at reply.bis-rgv.com, and the reply lands on their thread here.",
+    "settings.replies.bisBody.es": "Los clientes responden a una dirección en reply.bis-rgv.com, y la respuesta llega a su conversación aquí.",
+    "settings.replies.ownBody": "Customers reply to an address at {domain}, and the reply lands on their thread here.",
+    "settings.replies.ownBody.es": "Los clientes responden a una dirección en {domain}, y la respuesta llega a su conversación aquí.",
+    "settings.replies.domainLabel": "Reply domain",
+    "settings.replies.domainLabel.es": "Dominio de respuesta",
+    "settings.replies.checkDns": "Check DNS",
+    "settings.replies.checkDns.es": "Revisar DNS",
+    "settings.replies.dnsOk": "The MX record points at Resend. You can use this domain.",
+    "settings.replies.dnsOk.es": "El registro MX apunta a Resend. Puede usar este dominio.",
+    "settings.replies.dnsMissing": "No MX record on {domain} points at Resend yet. Add it, then check again.",
+    "settings.replies.dnsMissing.es": "Aún no hay un registro MX en {domain} que apunte a Resend. Agréguelo y vuelva a revisar.",
+    "settings.replies.dnsFailed": "We couldn't look up {domain}. Check the spelling and try again.",
+    "settings.replies.dnsFailed.es": "No pudimos consultar {domain}. Revise cómo está escrito e inténtelo de nuevo.",
+    "settings.replies.invalidDomain": "Enter a domain like reply.example.com.",
+    "settings.replies.invalidDomain.es": "Escriba un dominio como reply.example.com.",
+    "settings.replies.domainTaken": "Another account already uses that domain.",
+    "settings.replies.domainTaken.es": "Otra cuenta ya usa ese dominio.",
+    "settings.replies.saved": "Replies: {mode}.",
+    "settings.replies.saved.es": "Respuestas: {mode}.",
+    "settings.replies.undone": "Replies are back to {mode}.",
+    "settings.replies.undone.es": "Las respuestas volvieron a {mode}.",
+    "branding.replies.agency": "Customer replies come back into BIS at {domain}; the reply-to address above gets a copy.",
+    "branding.replies.agency.es": "Las respuestas de los clientes regresan a BIS en {domain}; la dirección de respuesta de arriba recibe una copia.",
+    "branding.replies.client": "Your customers' replies come back into BIS at {domain}, and a copy goes to the reply-to address above.",
+    "branding.replies.client.es": "Las respuestas de sus clientes regresan a BIS en {domain}, y una copia llega a la dirección de respuesta de arriba.",
+    "email.replyForward.fromName": "{customer} via {business}",
+    "email.replyForward.fromName.es": "{customer} vía {business}",
+    "email.replyForward.answer": "Answer in BIS",
+    "email.replyForward.answer.es": "Responder en BIS",
+    "email.replyForward.attachments": "This email had {count} attachments. They are not saved in BIS yet.",
+    "email.replyForward.attachments.es": "Este correo traía {count} archivos adjuntos. Aún no se guardan en BIS.",
+    "email.replyForward.attachmentsOne": "This email had 1 attachment. It is not saved in BIS yet.",
+    "email.replyForward.attachmentsOne.es": "Este correo traía 1 archivo adjunto. Aún no se guarda en BIS.",
+  };
+
+  it("has every key with exactly this text (mutation: change any .es string → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("every English key has its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of Object.keys(WANT).filter((x) => !x.endsWith(".es"))) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'Vuelve a cargar' in .changed.es → FAILS; drop {domain} from dnsMissing.es → FAILS)", () => {
+    const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?)\b/i;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(WANT[k]!), k).toBe(false);
+      const en = WANT[k.slice(0, -3)]!;
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(WANT[k]!), k).toEqual(ph(en));
+    }
+  });
+
+  it("no client-facing key uses provider or internal words (mutation: 'token' in a conversations.* key → FAILS)", () => {
+    const BANNED = /\b(token|dkim|dmarc|spf|ses|webhook|resend|mx)\b/i;
+    for (const [k, v] of Object.entries(WANT)) {
+      if (k.startsWith("settings.replies.")) continue;   // the agency's own Settings card names DNS and MX on purpose
+      expect(BANNED.test(v), k).toBe(false);
+    }
   });
 });

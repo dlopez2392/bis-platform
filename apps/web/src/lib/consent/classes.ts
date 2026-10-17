@@ -59,10 +59,11 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites then; twenty-six kinds now, with the operational
- * floor's ops alert, F-048's cancel notice and the two emails of F-048's
- * customer move (the customer's and the business's), each named at exactly one
- * send site, which scans.test.ts pins). The email gate (email-gate.ts) throws on a kind
+ * twenty-two send sites then; twenty-eight kinds now, with the operational
+ * floor's ops alert, F-048's cancel notice, the two emails of F-048's
+ * customer move (the customer's and the business's), and S-06's reply
+ * forward, each named at exactly one send site, which scans.test.ts pins).
+ * The email gate (email-gate.ts) throws on a kind
  * that is not here, and scan 2 fails on any kind literal handed to it that
  * is not here.
  *
@@ -116,6 +117,8 @@ export const EMAIL_KINDS = {
   "operator.billing_link": { class: "operator", hours: "any", footer: "none" },
   "operator.sender_check": { class: "operator", hours: "any", footer: "none" },
   "operator.ops_alert": { class: "operator", hours: "any", footer: "none" },
+  // S-06 part 1: the owner's copy of a customer's reply; operator mail, as the lead alert is.
+  "operator.reply_forward": { class: "operator", hours: "any", footer: "none" },
 } as const satisfies Record<string, EmailKindSpec>;
 
 export type EmailKind = keyof typeof EMAIL_KINDS;

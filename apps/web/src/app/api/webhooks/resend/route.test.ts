@@ -11,6 +11,16 @@ const stampMock = vi.fn();
 vi.mock("@/lib/ops/stamp", () => ({ stampHeartbeat: (...a: unknown[]) => stampMock(...a) }));
 const verifyMock = vi.fn();
 vi.mock("svix", () => ({ Webhook: class { verify(...a: unknown[]) { return verifyMock(...a); } } }));
+const pipelineMock = vi.fn();
+vi.mock("@/lib/email/inbound/pipeline", () => ({ handleReceivedEmail: (...a: unknown[]) => pipelineMock(...a) }));
+vi.mock("@/lib/email/receiving", () => ({
+  receivedEmailFetcher: () => {
+    if (!process.env.RESEND_API_KEY) throw new Error("RESEND_API_KEY is not set");
+    return async () => { throw new Error("not in tests"); };
+  },
+}));
+vi.mock("@/lib/email/inbound/forward", () => ({ forwardToOwner: vi.fn() }));
+vi.mock("@/lib/consent/email-gate", () => ({ sendEmail: vi.fn() }));
 
 import { POST } from "./route";
 
@@ -30,7 +40,9 @@ beforeEach(() => {
   suppressMock.mockReset().mockResolvedValue("appended");
   verifyMock.mockReset();
   stampMock.mockReset();
+  pipelineMock.mockReset();
   process.env.RESEND_WEBHOOK_SECRET = "whsec_test";
+  process.env.RESEND_API_KEY = "re_test";
 });
 
 describe("resend webhook", () => {
@@ -379,6 +391,38 @@ describe("resend webhook", () => {
       await expect(POST(req({}))).rejects.toThrow(TypeError);
       expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.resend_webhook", { ok: false, error: "status write failed: TypeError" });
       expect(JSON.stringify(stampMock.mock.calls)).not.toContain("example.com");
+    });
+  });
+
+  describe("resend webhook: email.received (S-06 part 1)", () => {
+    it("hands a verified email.received to the pipeline and answers its status, stamping email.inbound (mutation: route it through STATUS_BY_EVENT → 'ignored', FAILS)", async () => {
+      verifyMock.mockReturnValue({ type: "email.received", data: { email_id: "re_1" } });
+      pipelineMock.mockResolvedValue({ status: 200, result: "filed" });
+      const res = await POST(req({}));
+      expect(res.status).toBe(200);
+      expect(pipelineMock).toHaveBeenCalledWith(expect.objectContaining({ db: expect.anything() }), { email_id: "re_1" });
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.inbound", { ok: true });
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("a 503 from the pipeline is a 503 and an error stamp (mutation: always 200 → FAILS)", async () => {
+      verifyMock.mockReturnValue({ type: "email.received", data: { email_id: "re_1" } });
+      pipelineMock.mockResolvedValue({ status: 503, result: "fetch_failed" });
+      expect((await POST(req({}))).status).toBe(503);
+      expect(stampMock).toHaveBeenCalledExactlyOnceWith("email.inbound", { ok: false, error: "fetch_failed" });
+    });
+
+    it("no RESEND_API_KEY is a 503 and an error stamp, before the pipeline (mutation: 200 → FAILS)", async () => {
+      verifyMock.mockReturnValue({ type: "email.received", data: { email_id: "re_1" } });
+      delete process.env.RESEND_API_KEY;
+      expect((await POST(req({}))).status).toBe(503);
+      expect(pipelineMock).not.toHaveBeenCalled();
+    });
+
+    it("a bad signature on an email.received is refused 400 like any other, nothing read (G1; mutation: verify after the branch → pipeline called, FAILS)", async () => {
+      verifyMock.mockImplementation(() => { throw new Error("bad"); });
+      expect((await POST(req({ type: "email.received", data: { email_id: "re_1" } }))).status).toBe(400);
+      expect(pipelineMock).not.toHaveBeenCalled();
     });
   });
 });

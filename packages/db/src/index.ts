@@ -75,6 +75,14 @@ export { uploadBrandLogo, removeBrandLogo, sweepOrphanedLogos, restoreBrandLogoI
          type Branding } from "./branding";
 export { getMailingAddress } from "./branding";
 export { getSendingIdentity, setFromEmail, type SendingIdentity } from "./sending-identity";
+// S-06 part 1: inbound email (0082).
+export {
+  INBOUND_MODES, BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, INBOUND_EMAIL_COLLISION, newReplyToken, getInboundSettings, setInboundSettings,
+  ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, findInboundEmailByProviderId, setInboundMessage, decideInboundEmail,
+  unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender, deleteInboundMessageByProviderId,
+  type InboundMode, type InboundSettings, type ReplyThread, type InboundStatus, type HoldReason, type InboundAuthRecord,
+  type InboundEmailRow, type NewInboundEmail, type HeldInboundEmail, type SenderMatch,
+} from "./inbound-email";
 export { getOrCreateCalendar, getCalendarForAccount, getCalendarByPublicId, updateCalendarSettings,
          listBookedRanges, createBooking, cancelBookingByToken, setBookingStatus,
          listCalendarBookings, nextBookedStart, countRecentBookings, listDueReminders, stampReminderSent,

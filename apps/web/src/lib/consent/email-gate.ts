@@ -1,7 +1,8 @@
 import {
   readConsentState, readAccountTimezone, getMailingAddress, readEmailSuppression, serviceDb,
-  EMAIL_SUPPRESSION_METHODS, isAccountOutboundSuppressed, type SupabaseClient,
+  EMAIL_SUPPRESSION_METHODS, isAccountOutboundSuppressed, getInboundSettings, ensureReplyToken, type SupabaseClient,
 } from "@bis/db";
+import { replyAddressFor } from "@/lib/email/inbound/address";
 import { emailLedgerAddress } from "@bis/db/email-address";
 import { getEmailProvider } from "@/lib/email";
 import { isProductionEnv } from "@/lib/email/environment";
@@ -45,6 +46,9 @@ import { sealConsentToken, consentTokenSecrets, isUuid } from "./token";
  *      account's mailing_address: set → printed under the unsubscribe line;
  *      blank → nothing, and they still send; unreadable → blocked;
  *   5. the provider;
+ *   5b. a customer kind with a contact gets the account's reply address as
+ *      its Reply-To when Replies is on (S-06 part 1); never operator mail;
+ *      a failure keeps the caller's own;
  *   6. a customer email gets its way out: the footer row in place of the
  *      shell's marker, the footer line under the text part, and the RFC 8058
  *      List-Unsubscribe / List-Unsubscribe-Post headers, all carrying ONE
@@ -216,6 +220,22 @@ function withFooter(req: EmailRequest, links: Links | null, postal: readonly str
   };
 }
 
+/** S-06 part 1 (spec "Outbound"): the thread's reply address, or the caller's own replyTo (G10). */
+async function customerReplyTo(req: EmailRequest, deps: EmailGateDeps): Promise<string | undefined> {
+  if (EMAIL_KINDS[req.kind].class === "operator" || !req.accountId || !isUuid(req.contactId)) return req.replyTo;
+  try {
+    const settings = await getInboundSettings(deps.db ?? serviceDb(), req.accountId);
+    if (settings.mode === "off") return req.replyTo;
+    // The service client always: conversations is server-written (0053), and the gate's callers pass
+    // either client.
+    const { token } = await ensureReplyToken(serviceDb(), req.accountId, req.contactId, "email-gate");
+    return replyAddressFor(token, settings) ?? req.replyTo;
+  } catch (e) {
+    console.error(`email gate: ${req.kind} for account ${req.accountId} keeps its own reply address, the thread's could not be made: ${loggableError(e)}`);
+    return req.replyTo;
+  }
+}
+
 export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Promise<EmailSendResult> {
   const env = deps.env ?? process.env;
   if (!isEmailKind(req.kind)) throw new Error(`email gate: unknown email kind "${String(req.kind)}"`);
@@ -322,14 +342,21 @@ export async function sendEmail(req: EmailRequest, deps: EmailGateDeps = {}): Pr
     return { kind: "failed", stage: "provider_unavailable", error: e instanceof Error ? e.message : String(e) };
   }
 
-  let input: SendEmailInput;
+  // The reply-token/conversation write (customerReplyTo) comes AFTER both the
+  // provider build and the unsubscribe-link check: a send blocked
+  // `unsubscribe_unavailable`, or failed `provider_unavailable`, makes no
+  // conversation or token for a message that was never going to go out.
+  let links: Links | null = null;
   if (spec.footer === "unsubscribe") {
-    const links = unsubscribeLinks(req, address, now, env);
-    if (links === "unavailable") return { kind: "blocked", reason: "unsubscribe_unavailable" };
-    input = withFooter(req, links, postal);
-  } else {
-    input = withoutFooter(req);
+    const l = unsubscribeLinks(req, address, now, env);
+    if (l === "unavailable") return { kind: "blocked", reason: "unsubscribe_unavailable" };
+    links = l;
   }
+
+  const replyTo = await customerReplyTo(req, deps);
+  const out: EmailRequest = replyTo === req.replyTo ? req : { ...req, replyTo };
+
+  const input: SendEmailInput = spec.footer === "unsubscribe" ? withFooter(out, links, postal) : withoutFooter(out);
 
   try {
     const { providerMessageId } = await provider.send(input);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { m } from "@/lib/messages";
-import { panelCopy } from "./panel-copy";
+import { panelCopy, repliesLine } from "./panel-copy";
 
 /**
  * The defect this file exists to stop, and it was found by LOOKING at the page
@@ -75,5 +75,22 @@ describe("panelCopy", () => {
     expect(agency.modeHint).toBe(m["branding.modeHint"]);
     expect(agency.modeFollow).toBe(m["branding.modeFollow"]);
     expect(agency.mailingAddressHint).toBe(m["branding.mailingAddressHint"]);
+  });
+});
+
+/** The read-only "where your customers' replies go" line under Branding's reply-to hint (S-06 part 1, Task 10). */
+describe("repliesLine", () => {
+  it("names the BIS reply domain for the client audience when Replies is on (mutation: name s.domain instead of BIS_REPLY_DOMAIN for mode bis → FAILS)", () => {
+    expect(repliesLine("client", { mode: "bis", domain: null }))
+      .toBe("Your customers' replies come back into BIS at reply.bis-rgv.com, and a copy goes to the reply-to address above.");
+  });
+
+  it("names the client's own domain for the agency audience when own_domain is set (mutation: name BIS_REPLY_DOMAIN instead of s.domain for mode own_domain → FAILS)", () => {
+    expect(repliesLine("agency", { mode: "own_domain", domain: "reply.rio.com" }))
+      .toBe("Customer replies come back into BIS at reply.rio.com; the reply-to address above gets a copy.");
+  });
+
+  it("answers null for off — no line to show when Replies is off (mutation: answer a line for off → FAILS)", () => {
+    expect(repliesLine("client", { mode: "off", domain: null })).toBeNull();
   });
 });

@@ -17,7 +17,11 @@ import { cn } from "@/lib/utils";
  */
 export function WhoFilter({ base, current, showMine, params }: {
   base: string;
-  current: Who;
+  /** `null` (Task 12 review, coordinator round 1): the page this filter sits
+   *  on is showing something ELSE entirely (the "Needs a look" held-email
+   *  list) — none of All/Mine/Unassigned is the page the reader is on, so
+   *  none of them may claim `aria-current="page"`. */
+  current: Who | null;
   showMine: boolean;
   params: Record<string, string>;
 }) {

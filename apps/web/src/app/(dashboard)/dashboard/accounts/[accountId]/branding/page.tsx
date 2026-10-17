@@ -1,4 +1,4 @@
-import { getBranding, getAlertPhone, getMailingAddress, brandLogoUrl, serviceDb } from "@bis/db";
+import { getBranding, getAlertPhone, getMailingAddress, brandLogoUrl, serviceDb, getInboundSettings } from "@bis/db";
 import { BrandingPanel } from "@/components/branding-panel";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
@@ -61,7 +61,7 @@ export default async function BrandingPage({
   // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
   // has no write here at all — AlertPhoneCard renders with no `action`,
   // which is what makes it read-only rather than merely disabled-looking.
-  const [branding, mailingAddress, alertPhone, smsGate] = await Promise.all([
+  const [branding, mailingAddress, alertPhone, smsGate, replies] = await Promise.all([
     getBranding(serviceDb(), accountId),
     getMailingAddress(serviceDb(), accountId),
     getAlertPhone(serviceDb(), accountId),
@@ -69,6 +69,10 @@ export default async function BrandingPage({
     // this card) consults — never re-derived. Only `!smsGate.ok` crosses
     // into the card; the reason never does.
     resolveSmsSender(serviceDb(), accountId),
+    // Read-only here too (S-06 part 1, Task 10): the "where your customers'
+    // replies go" line under the reply-to hint. No write path exists on
+    // this page, same shape as alert_phone above.
+    getInboundSettings(serviceDb(), accountId),
   ]);
 
   return (
@@ -94,6 +98,7 @@ export default async function BrandingPage({
         brandType={branding.brandType}
         brandMode={branding.brandMode}
         logoUrl={branding.brandLogoPath ? brandLogoUrl(branding.brandLogoPath) : null}
+        replyRoute={replies}
         action={setBrandingAction.bind(null, accountId)}
         removeLogoAction={removeBrandLogoAction.bind(null, accountId)}
         restoreLogoAction={restoreBrandLogoAction.bind(null, accountId)}
