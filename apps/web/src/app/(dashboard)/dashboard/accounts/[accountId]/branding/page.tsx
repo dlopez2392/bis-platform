@@ -1,12 +1,19 @@
-import { getBranding, getAlertPhone, getMailingAddress, brandLogoUrl, serviceDb, getInboundSettings } from "@bis/db";
+import { getBranding, getAlertPhone, getMailingAddress, brandLogoUrl, serviceDb, getInboundSettings, listNeverLog } from "@bis/db";
 import { BrandingPanel } from "@/components/branding-panel";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
+import { NeverLogList } from "@/components/never-log-list";
+import { Card, CardContent } from "@/components/ui/card";
 import { requireNotTechnician } from "@/lib/auth";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { m } from "@/lib/messages";
+import { loggableError } from "@/lib/loggable-error";
+import { requestLocale } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { setBrandingAction, removeBrandLogoAction, restoreBrandLogoAction } from "./actions";
+import { addNeverLogAction, removeNeverLogAction, type NeverLogView } from "../never-log-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -34,26 +41,47 @@ export const dynamic = "force-dynamic";
  * registration reads a qualified claim instead of a present-tense one that
  * is not yet true (the send path's own gate is `resolveSmsSender`, sender.ts
  * — this reads it purely to decide which sentence is honest right now, not
- * as a second gate). There is still no branch here for a future edit to get
- * wrong — only more reads that share that property.
+ * as a second gate). Every read above stays unconditional.
+ *
+ * S-06 part 2 adds ONE conditional read, gated on `access.canManage` (the
+ * agency, or this account's Owner; plan G8): the account's Never record list,
+ * with the reader's language and the account's to draw it in. Staff read
+ * nothing of it and see nothing of it. Its write path is the two
+ * Owner-guarded actions in ../never-log-actions.ts (`requireAccountOwner`
+ * before any database call), never this page.
  */
 export default async function BrandingPage({
   params,
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string }>;
+  searchParams: Promise<{ from?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
   // below appears only for someone who arrived mid-flow. The wizard is
   // agency-only, so a client reaching their own branding page never sees it.
-  const { from } = await searchParams;
+  // `locale` is the QA override only (request-locale.ts: off unless BIS_I18N_QA, never on Vercel).
+  const { from, locale: localeParam } = await searchParams;
   // Redirects a client asking for another account to their own, and refuses a
   // client whose access is switched off. The agency passes straight through —
   // they reach the same panel from Settings, so this route works for them too
   // rather than 404ing in a way someone would later have to debug.
-  await requireNotTechnician(accountId);
+  const access = await requireNotTechnician(accountId);
+
+  // S-06 part 2: the Never record list, for the agency and Owners only (plan G8), read beside the
+  // page's own reads. A failed list read is the list's own error state, never the page's; a failed
+  // language read draws the list in the reader's default language rather than failing anything.
+  const neverLogReads = access.canManage
+    ? Promise.all([
+        getPersonPrefs(),
+        serviceDb().from("accounts").select("language").eq("id", accountId).maybeSingle(),
+        listNeverLog(serviceDb(), accountId).then(
+          (rows) => rows.map((e) => ({ id: e.id, pattern: e.pattern, kind: e.kind })),
+          (e: unknown) => { console.error(`branding: account ${accountId} never-record list read failed: ${loggableError(e)}`); return null; },
+        ),
+      ])
+    : null;
 
   // serviceDb for the READS, matching every other in-account read of this
   // row. It changes no boundary: accounts_member_read already returns the
@@ -61,7 +89,7 @@ export default async function BrandingPage({
   // that moved to the RLS-enforced client — see ./actions.ts. alert_phone
   // has no write here at all — AlertPhoneCard renders with no `action`,
   // which is what makes it read-only rather than merely disabled-looking.
-  const [branding, mailingAddress, alertPhone, smsGate, replies] = await Promise.all([
+  const [branding, mailingAddress, alertPhone, smsGate, replies, ownerReads] = await Promise.all([
     getBranding(serviceDb(), accountId),
     getMailingAddress(serviceDb(), accountId),
     getAlertPhone(serviceDb(), accountId),
@@ -73,7 +101,21 @@ export default async function BrandingPage({
     // replies go" line under the reply-to hint. No write path exists on
     // this page, same shape as alert_phone above.
     getInboundSettings(serviceDb(), accountId),
+    neverLogReads,
   ]);
+
+  let neverLogCard: { entries: NeverLogView[] | null; locale: Locale } | undefined;
+  if (ownerReads) {
+    const [prefs, accountRead, entries] = ownerReads;
+    if (accountRead.error) {
+      console.error(`branding: account ${accountId} language read failed: ${loggableError(accountRead.error)}`);
+    }
+    const accountRow = accountRead.data as { language?: string | null } | null;
+    // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+    const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
+    const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+    neverLogCard = { entries, locale };
+  }
 
   return (
     <div className="space-y-6">
@@ -103,6 +145,15 @@ export default async function BrandingPage({
         removeLogoAction={removeBrandLogoAction.bind(null, accountId)}
         restoreLogoAction={restoreBrandLogoAction.bind(null, accountId)}
       />
+      {/* S-06 part 2: its own card, OUTSIDE the branding form (plan G6), and no primary of its own. */}
+      {neverLogCard !== undefined ? (
+        <Card id="never-record">
+          <CardContent className="pt-6">
+            <NeverLogList entries={neverLogCard.entries} add={addNeverLogAction.bind(null, accountId)}
+              remove={removeNeverLogAction.bind(null, accountId)} locale={neverLogCard.locale} idPrefix="branding" />
+          </CardContent>
+        </Card>
+      ) : null}
       <AlertPhoneCard
         isAgency={false}
         accountId={accountId}

@@ -90,3 +90,59 @@ Settings → Replies → **Off** restores the old Reply-To at once. Replies alre
 `r-<token>` address still arrive and are filed while the webhook is connected. To stop a
 single leaked address, set that conversation's `reply_token_revoked_at` (there is no
 button for it in part 1); mail to the old address is then dropped.
+
+## Forwarding to a record, and Never record (S-06 part 2)
+
+**The forwarding address is the customer's reply address.** Each customer's record shows it
+as **Forwarding address** (with Replies on); it is the same `r-<token>@…` address their
+emails carry as Reply-To. A teammate who forwards an email there saves it on that customer:
+the whole text, the quoted original included, marked as a forward and as written by that
+teammate. A forward raises no unread badge, sends no copy to the owner's mailbox, and a
+"STOP" inside it never stops the customer (staff can still press Stop emails by hand).
+
+**Who counts as the team:** anyone with a membership in the account, any role, and the
+account's reply-to mailbox (Settings → Sending address). A forward from the mailbox is
+filed with no named person and reads "Someone on the team". BIS agency staff are NOT the
+team here: their forwards wait in **Needs a look** like any other sender. The forgery check
+still applies: a teammate's forward that fails it waits in Needs a look as `unverified`,
+and the team is not even looked up (except when the message carries a forwarding rule's
+marker, where the lookup decides whether it is dropped).
+
+**What a held message keeps.** Anything held from someone who is not the customer (an
+unverified teammate, BIS agency staff, a stranger) is kept whole, quoted original
+included, so that filing it by hand from Needs a look puts the customer's own words on the
+record and not just a "Forwarded message" line. Only the customer's own reply, filed or
+held, has the quoted history below it removed.
+
+**Dropped, never stored.** Two kinds of mail are dropped before anything is saved, with one
+log line that names only the account (production's logs prefix each with `resend webhook: `):
+
+- Automatic mail (out-of-office and other auto-replies, bounces, mail from `mailer-daemon`
+  or `postmaster`): `inbound email: dropped (automatic) account=<id>`
+- A sender on the account's **Never record** list (an address, or a domain and every
+  subdomain of it), even when the sender is the customer:
+  `inbound email: dropped (never record) account=<id>`
+
+A forwarding rule (`Auto-Submitted: auto-forwarded`) set up by a teammate files normally,
+as their forward; anyone else's forwarding rule is dropped as automatic mail. A drop is
+never retroactive: an entry added to Never record does not touch mail already saved, and a
+Resend retry of a dropped message is dropped again.
+
+**503s (Resend retries):** the webhook answers `503 lookup_failed`, and saves nothing, when
+reading the Never record list fails ("reading the never record list failed") or when the
+team lookup fails ("the team lookup failed"). A team lookup that fails on a RETRY of a
+forward already recorded (the first attempt saved the row but not the message) answers
+`503 write_failed` instead ("filing the message failed"), and still files nothing until
+the retry succeeds. All of these clear on their own once the database answers; Resend's
+retry then files, holds or drops the message as usual.
+
+One cause does NOT clear on its own: **migration 0083 missing** on the database the app
+talks to. Then the Never record list cannot be read, so EVERY inbound email answers
+`503 lookup_failed`. Apply 0083 (CI project first, then production), then replay the
+failed events from Resend → **Webhooks**. Deleting a customer fails too while 0083 is
+missing, safely: the delete stops before anything is removed.
+
+**Reading a dropped message:** BIS stores nothing for it, by design. Resend still has it:
+Resend → **Receiving** → the message (or **Webhooks** → the `email.received` event, which
+answered `200` with the body `dropped`). Production's logs show which of the two lines
+above dropped it, and for which account.

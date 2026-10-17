@@ -1020,6 +1020,54 @@ export async function listTags(
  * 2026-10-13), and the FK refuses the delete of any contact a purge did not
  * clear, so no stored object is ever stranded. Documents never BLOCK: they
  * are not in the pre-read below.
+ *
+ * S-06 part 2 (owner ruling 2026-10-17): an EMPTY conversation (no message and no inbound email; the
+ * record page made one on view before the ruling, and a forwarding address can make one) no longer
+ * blocks. 0053 gives no client a delete on conversations, so the caller passes the SERVICE client as
+ * `conversationsDb`, and the empty ones are cleared through `delete_empty_conversations` (migration
+ * 0083 section 3) — the database's own check-then-delete, now TWO statements internally (lock and
+ * wait, then a fresh-snapshot delete; re-review found a single-statement DELETE's NOT EXISTS checks
+ * can miss a row that committed while the delete was blocked on that very row's lock). That ordering
+ * is load-bearing, not stylistic: review found the prior shape (read every messages/inbound_emails
+ * row for the whole batch on the request client, THEN delete) unsafe two ways. CRITICAL: PostgREST
+ * caps a read at `max_rows` (1000); a talked-to customer whose messages alone cross that cap was
+ * judged empty, `beforeDelete` ran (the irreversible documents purge), and only then did the
+ * conversations delete hit `messages_conversation_id_fkey` and throw — the files were already gone,
+ * the customer was not. Reproduced on the replica (a 1001-message customer and a 1-message customer,
+ * both supposedly "chatty" but misjudged by the truncated read). IMPORTANT: `inbound_emails.
+ * conversation_id` is ON DELETE CASCADE (0082:93-94), so a held email arriving in the GAP between a
+ * separate check and a separate delete would be silently destroyed — see 0083 section 3's own
+ * comment for how the function itself closes that gap now. Without `conversationsDb` every
+ * conversation still blocks, exactly as before this ruling.
+ *
+ * SECOND review fix (2026-10-17, this call's own order): `delete_empty_conversations` runs ONLY on
+ * the contacts that are otherwise deletable — ours, and not blocked by opportunities/bookings —
+ * never on the raw request batch. A contact that a deal or a booking blocks keeps its own
+ * conversation (and the reply token on it) exactly as it was: the owner's ruling made an empty
+ * conversation with nothing but a reply token on it exist precisely when a teammate clicked "Get
+ * forwarding address" on a customer's record — sweeping that address out from under a BLOCKED
+ * contact (one that is staying, by definition) would destroy an address a teammate may already have
+ * copied and saved, for no reason tied to the contact actually going anywhere. Whatever conversation
+ * survives the cleanup (because it had a message or an inbound email, the contact was already
+ * blocked, or `conversationsDb` was not given) is read and blocked exactly like opportunities/
+ * bookings. `conversations.contact_id` is a plain (NO ACTION) FK, same as opportunities/bookings: if
+ * a NEW conversation is created for a `go` contact in the gap between THAT read and the final
+ * `contacts` delete below (the record page, a forwarding address, or an inbound email can all make
+ * one), that one row's FK violation aborts the whole batch delete and `deleteContacts` throws — no
+ * customer is half-deleted and no conversation is silently lost, but the caller sees every contact
+ * in that call fail together, same as the pre-existing race on opportunities/bookings.
+ *
+ * ACCEPTED (re-review, not narrowed further): `beforeDelete`'s own "kept" outcome — a customer
+ * `purgeContactDocuments` could not fully clear ("files could not be cleared") — is NOT knowable
+ * before `beforeDelete` actually runs (it depends on a runtime storage-removal result, not
+ * anything this function could pre-read), and `delete_empty_conversations` has, by this point,
+ * already run for that contact (it was never blocked by opportunities/bookings). So a customer
+ * `beforeDelete` ends up keeping for files reasons has ALSO lost their empty conversation and any
+ * reply token on it, same as a customer who actually goes. Narrowing this would mean calling
+ * `beforeDelete` BEFORE the cleanup, which would also run the irreversible purge on contacts the
+ * conversation-emptiness check has not yet filtered — a strictly worse trade. Opportunities and
+ * bookings are the only blockers knowable before the purge runs; a files-kept customer's lost
+ * token is accepted.
  */
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
@@ -1027,11 +1075,13 @@ export async function deleteContacts(
     /** Runs on the deletable ids (blocked ones already removed) BEFORE any contact row is deleted; answers
      *  the ids it could not clear, which are then kept. The document vault's purge (0077, deviation 2). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
+    /** The SERVICE client that may run delete_empty_conversations (see above). */
+    conversationsDb?: SupabaseClient;
   } = {},
 ): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }> {
   if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0, skippedFiles: 0 };
   const blocked = new Set<string>();
-  for (const table of ["opportunities", "conversations", "bookings"] as const) {
+  for (const table of ["opportunities", "bookings"] as const) {
     const { data, error } = await db.from(table).select("contact_id")
       .eq("account_id", accountId).in("contact_id", contactIds);
     if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
@@ -1044,6 +1094,22 @@ export async function deleteContacts(
     .eq("account_id", accountId).in("id", contactIds);
   if (mineError) throw new Error(`deleteContacts contacts pre-read failed: ${mineError.message}`);
   const ours = new Set((mine ?? []).map((r) => r.id as string));
+  // Otherwise deletable: ours, and not already blocked by a deal or a booking. ONLY these ever
+  // reach delete_empty_conversations — a blocked contact's conversation (and any reply token on
+  // it) is never touched by this call, because that contact is staying either way.
+  const otherwiseDeletable = contactIds.filter((id) => ours.has(id) && !blocked.has(id));
+  if (opts.conversationsDb && otherwiseDeletable.length > 0) {
+    const { error: emptyError } = await opts.conversationsDb
+      .rpc("delete_empty_conversations", { p_account_id: accountId, p_contact_ids: otherwiseDeletable });
+    if (emptyError) throw new Error(`deleteContacts delete_empty_conversations failed: ${emptyError.message}`);
+  }
+  // Conversations: whatever is left (because it had a message or an inbound email, the contact was
+  // already blocked above, or conversationsDb was not given) still blocks, same as opportunities/
+  // bookings — the cleanup above either removed it or proved it is not empty.
+  const { data: convRows, error: convError } = await db.from("conversations").select("contact_id")
+    .eq("account_id", accountId).in("contact_id", contactIds);
+  if (convError) throw new Error(`deleteContacts conversations pre-read failed: ${convError.message}`);
+  for (const r of convRows ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
   const deletable = contactIds.filter((id) => ours.has(id) && !blocked.has(id));
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));

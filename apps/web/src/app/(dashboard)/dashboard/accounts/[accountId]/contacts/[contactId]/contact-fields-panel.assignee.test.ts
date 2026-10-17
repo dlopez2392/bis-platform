@@ -23,6 +23,8 @@ vi.mock("@/components/assign/assignee-field", () => ({
 // "use server" modules and the rows' own reads are not what this pins.
 vi.mock("./actions", () => ({ updateContactAction: async () => {}, addTagAction: async () => {}, removeTagAction: async () => {} }));
 vi.mock("../actions", () => ({ updateContactFieldAction: async () => ({ ok: true }), undoInlinePhoneEditAction: async () => ({ ok: true }) }));
+// S-06 part 2: the Forwarding row's "use server" action (reached through the panel), never run here.
+vi.mock("./forwarding-actions", () => ({ getForwardingAddressAction: async () => ({ ok: false }) }));
 vi.mock("../texts-row", () => ({ TextsRow: () => null }));
 vi.mock("../email-row", () => ({ EmailRow: () => null }));
 

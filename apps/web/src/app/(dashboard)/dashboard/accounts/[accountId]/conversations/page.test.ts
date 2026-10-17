@@ -65,6 +65,8 @@ vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
   readPersonId: async () => null,
   listMessages: async () => [],
+  // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
+  listPeopleNames: async () => ({}),
   countHeldInboundEmails: async () => { if (held.countThrows) throw new Error("count failed"); return held.count; },
   getInboundSettings: async () => ({ mode: held.mode, domain: null }),
   listHeldInboundEmails: async () => { if (held.listThrows) throw new Error("list failed"); return held.items; },

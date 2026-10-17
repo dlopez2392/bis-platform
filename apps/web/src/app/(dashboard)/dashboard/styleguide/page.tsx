@@ -49,6 +49,8 @@ import { RelationshipsDemo } from "./relationships-demo";
 import { PlacesDemo } from "./places-demo";
 import { DocumentsDemo } from "./documents-demo";
 import { HeldEmailsDemo } from "./held-emails-demo";
+import { NeverLogDemo } from "./never-log-demo";
+import { ForwardingDemo } from "./forwarding-demo";
 import { RecordDemo } from "./record-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -271,6 +273,17 @@ export default async function StyleguidePage({
             items (one not on record, one unverified), empty and loading. */}
         <Section title={t(m, "conversations.held.title", "en")} file="accounts/[accountId]/conversations/held-email-list.tsx">
           <HeldEmailsDemo />
+        </Section>
+
+        {/* S-06 part 2: the Never record list — loaded (English and Spanish), empty, and a failed read. */}
+        <Section title={t(m, "neverLog.title", "en")} file="components/never-log-list.tsx">
+          <NeverLogDemo />
+        </Section>
+
+        {/* S-06 part 2: the record's Forwarding address row — the address with Copy (English and
+            Spanish), the agency's turn-on line, the error, and none, which draws nothing. */}
+        <Section title={t(m, "contact.forwarding.label", "en")} file="accounts/[accountId]/contacts/[contactId]/forwarding-address-row.tsx">
+          <ForwardingDemo />
         </Section>
 
         {/* S-03 part 1 (spec §15): the record kit: layout at both widths, header with all and no

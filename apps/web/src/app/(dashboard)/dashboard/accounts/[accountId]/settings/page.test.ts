@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Suspense, isValidElement, type ReactElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 
 /**
@@ -20,6 +21,8 @@ const fx = vi.hoisted(() => ({
   blueprints: [] as Array<{ id: string; name: string; version: number; created_at: string; appliedCount: number }>,
   mailingReads: [] as unknown[][],
   brandingReads: [] as unknown[][],
+  neverLogReads: [] as unknown[][],
+  neverLogFails: false,
   /** The request-scoped client. Answers the page's one inline accounts read. */
   requestDb: {
     tag: "dbForRequest",
@@ -63,6 +66,13 @@ vi.mock("@bis/db", async (importOriginal) => ({
   countTrafficDays: async () => 0,
   brandLogoUrl: (p: string) => `https://example.test/${p}`,
   getInboundSettings: vi.fn().mockResolvedValue({ mode: "bis", domain: null }),
+  // S-06 part 2. The rows answer for the account asked (a1), the only state RLS lets the
+  // agency's request client return; a rejection stands for a failed read.
+  listNeverLog: async (...args: unknown[]) => {
+    fx.neverLogReads.push(args);
+    if (fx.neverLogFails) throw new Error("listNeverLog failed: boom");
+    return [{ id: "n1", pattern: "billing@supplier.com", kind: "address", addedBy: "user_1", createdAt: "2026-10-16T00:00:00.000Z" }];
+  },
 }));
 
 // Both third parties answer NEVER. The page must still resolve, because the
@@ -87,6 +97,7 @@ vi.mock("./actions", () => ({
   setInboundModeAction: noop, checkInboundDnsAction: noop,
 }));
 vi.mock("./document-requirements-actions", () => ({ setRequiredDocumentCategoriesAction: noop }));
+vi.mock("../never-log-actions", () => ({ addNeverLogAction: noop, removeNeverLogAction: noop }));
 vi.mock("../branding/actions", () => ({
   setBrandingAction: noop, removeBrandLogoAction: noop, restoreBrandLogoAction: noop,
 }));
@@ -166,6 +177,8 @@ beforeEach(() => {
   blueprintActions.applyBlueprintAction.mockClear();
   fx.mailingReads = [];
   fx.brandingReads = [];
+  fx.neverLogReads = [];
+  fx.neverLogFails = false;
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -337,5 +350,35 @@ describe("settings page — the Language card", () => {
     expect(all.some((e) => e.props.children === m["settings.language.description"])).toBe(true);
     expect(m["settings.language.description"]).toMatch(/sign in/);
     expect(m["settings.language.description"]).toMatch(/Agency staff stay in English/);
+  });
+});
+
+describe("settings page — the Never record list (S-06 part 2)", () => {
+  async function neverLogSlot() {
+    const { SendingAddressCard } = await import("./sending-address-card");
+    const all = await pageElements();
+    const card = all.find((e) => e.type === SendingAddressCard);
+    expect(card, "SendingAddressCard mounted").toBeTruthy();
+    return { all, html: renderToStaticMarkup(card!.props.neverLog as ReactElement) };
+  }
+
+  it("reads THIS account's list on the request client and renders its entries in the card's slot (mutation: drop the neverLog prop → FAILS)", async () => {
+    const { html } = await neverLogSlot();
+    expect(fx.neverLogReads).toEqual([[fx.requestDb, "a1"]]);
+    expect(html).toContain('data-never-log-entry="billing@supplier.com"');
+    expect(html).toContain('lang="en"');
+    expect(html).not.toContain("data-never-log-error");
+  });
+
+  it("a failed read is the list's own error state, and the rest of the page still renders (mutation: drop the .then rejection handler → the page throws, FAILS)", async () => {
+    fx.neverLogFails = true;
+    const { all, html } = await neverLogSlot();
+    expect(html).toContain("data-never-log-error");
+    expect(html).not.toContain("data-never-log-entry");
+    expect(all.some((e) => e.type === panel.BrandingPanel)).toBe(true);
+    expect(all.some((e) => e.type === RequiredDocumentsCard)).toBe(true);
+    const lines = vi.mocked(console.error).mock.calls.map((c) => String(c[0]));
+    expect(lines.some((l) => l.startsWith("settings: account a1 never-record list read failed:"))).toBe(true);
+    expect(lines.join("\n")).not.toContain("billing@supplier.com");
   });
 });

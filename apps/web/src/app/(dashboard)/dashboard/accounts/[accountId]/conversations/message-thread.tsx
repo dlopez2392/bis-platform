@@ -5,6 +5,8 @@ import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n/locale";
+import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 // Fix round 1 (UI review, critical): `readInboundMeta` moved to the plain `./inbound-meta`
 // module. This file is a SERVER component — `inbound-notice.tsx` is `"use client"`, and
 // calling a non-component export of a client module from server code throws at runtime
@@ -29,6 +31,7 @@ export function MessageThread({
   locale,
   visibleSenderIds,
   emailViews,
+  forwardedNames,
 }: {
   messages: Message[];
   contactName: string;
@@ -71,6 +74,10 @@ export function MessageThread({
    *  snapshot. Missing an entry (not visible, no email on file, or the
    *  read failed) reads as "nothing current to show" (fail closed). */
   emailViews: ReadonlyMap<string, EmailView>;
+  /** S-06 part 2 (spec §1, G4): who forwarded a filed forward — Clerk id to name, read by
+   *  `page.tsx` with `listPeopleNames` on the REQUEST client, so a person the reader cannot see
+   *  stays unnamed. A missing id (or a forward with none) reads "someone on the team". */
+  forwardedNames: ReadonlyMap<string, string>;
 }) {
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
@@ -153,17 +160,28 @@ export function MessageThread({
               const { stopIsCurrent, initiallyExpired, chipActionable } =
                 currentStopState(meta.consent, emailViews.get(effectiveContactId));
               return (
-                <InboundNotice
-                  meta={meta}
-                  accountId={accountId}
-                  conversationId={conversationId}
-                  contactId={effectiveContactId}
-                  locale={locale}
-                  canAct={canAct}
-                  stopIsCurrent={stopIsCurrent}
-                  initiallyExpired={initiallyExpired}
-                  chipActionable={chipActionable}
-                />
+                <>
+                  {/* S-06 part 2: in the STAFF member's language (lang={locale}), because the
+                      body above carries the customer's. */}
+                  {meta.forwarded ? (
+                    <p lang={locale} data-forwarded="" className="mt-1 text-xs text-muted-foreground">
+                      {meta.forwarded.byId && forwardedNames.get(meta.forwarded.byId)
+                        ? t(m, "conversations.forward.by", locale, { name: forwardedNames.get(meta.forwarded.byId)! })
+                        : t(m, "conversations.forward.bySomeone", locale)}
+                    </p>
+                  ) : null}
+                  <InboundNotice
+                    meta={meta}
+                    accountId={accountId}
+                    conversationId={conversationId}
+                    contactId={effectiveContactId}
+                    locale={locale}
+                    canAct={canAct}
+                    stopIsCurrent={stopIsCurrent}
+                    initiallyExpired={initiallyExpired}
+                    chipActionable={chipActionable}
+                  />
+                </>
               );
             })()}
           </div>

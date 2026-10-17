@@ -195,6 +195,12 @@ describe("bulkDeleteContactsAction", () => {
     await bulkDeleteContactsAction("a1", ["x"]);
     expect(dbMocks.deleteContacts.mock.calls[0]![0]).toBe(REQUEST);
   });
+  it("S-06 part 2: deleteContacts gets the SERVICE client as conversationsDb, so a customer's EMPTY conversation stops blocking (0053: no client deletes a conversation; mutation: drop conversationsDb -> FAILS)", async () => {
+    dbForRequest.mockResolvedValue(REQUEST);
+    dbMocks.deleteContacts.mockResolvedValue({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
+    await bulkDeleteContactsAction("a1", ["x"]);
+    expect((dbMocks.deleteContacts.mock.calls.at(-1)![3] as { conversationsDb?: unknown }).conversationsDb).toBe(SERVICE);
+  });
   it("a purge that throws fails the whole delete, never a silent success (mutation: catch the purge's throw and return [] -> FAILS)", async () => {
     dbMocks.purgeContactDocuments.mockRejectedValue(new Error("db down"));
     dbMocks.deleteContacts.mockImplementation(async (_db: unknown, _a: string, _ids: string[], opts?: DeleteOpts) => {

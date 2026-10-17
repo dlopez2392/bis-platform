@@ -211,3 +211,32 @@ describe("fileInboundEmail (spec Inbound step 5, 7)", () => {
     expect(db.setInboundMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("S-06 part 2: a team forward (spec §4)", () => {
+  const FWD = { ...ROW, fromEmail: "maria@rio.com", text: "STOP\n\n---------- Forwarded message ---------\nFrom: Ana", decidedBy: "email-inbound-forward" };
+
+  it("files the whole text as the teammate's message: the person mark, forwarded and forwarded_by in meta, no sender, no stop, unread untouched (mutation: classify the forward's STOP → recordInboundStop runs, FAILS)", async () => {
+    expect(await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: FWD, sender: null, raiseUnread: false, forward: { authorId: "user_maria" } })))
+      .toEqual({ messageId: "msg_1", created: true, consent: { kind: "none" } });
+    expect(stop.recordInboundStop).not.toHaveBeenCalled();
+    expect(db.getContact).not.toHaveBeenCalled();
+    expect(db.createMessage).toHaveBeenCalledWith(DB, "acc", {
+      conversationId: "conv", channel: "email", direction: "inbound", status: "delivered", subject: "Re: Hi", body: FWD.text,
+      providerMessageId: "re_1",
+      meta: { inbound_email_id: "re_1", attachment_count: 2, forwarded: true, forwarded_by: "user_maria", consent: { kind: "none" } },
+      author: { kind: "person", id: "user_maria" },
+    }, "email-inbound", "system");
+    expect(db.incrementUnreadCount).not.toHaveBeenCalled();
+    expect(db.setInboundMessage).toHaveBeenCalledWith(DB, "acc", "ie_1", "msg_1");
+  });
+
+  it("the reply-to mailbox's forward carries a null author id (spec: 'Someone on the team'; mutation: default the id to the actor → 'email-inbound', FAILS)", async () => {
+    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: FWD, sender: null, raiseUnread: false, forward: { authorId: null } }));
+    expect(db.createMessage.mock.calls[0]![2]).toMatchObject({ author: { kind: "person", id: null }, meta: { forwarded: true, forwarded_by: null } });
+  });
+
+  it("a forward never raises unread even if a caller passes raiseUnread true (defence; mutation: drop the !forward guard → FAILS)", async () => {
+    await fileInboundEmail({ db: DB, now: () => new Date() }, input({ row: FWD, sender: null, raiseUnread: true, forward: { authorId: "user_maria" } }));
+    expect(db.incrementUnreadCount).not.toHaveBeenCalled();
+  });
+});

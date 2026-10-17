@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { Braces, SlidersHorizontal } from "lucide-react";
 import { serviceDb, listCustomFields, listCustomValues, listBlueprints, getBranding, getMailingAddress,
-         getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, getInboundSettings,
+         getSendingIdentity, brandLogoUrl, getSiteForAccount, countTrafficDays, getInboundSettings, listNeverLog,
          type CustomFieldDef } from "@bis/db";
 import { SubmitButton } from "../../submit-button";
 import { createFieldAction, upsertValueAction, setFromEmailAction, setReportEmailsAction, setAlertPhoneAction,
@@ -18,6 +18,9 @@ import { SendingAddressCard } from "./sending-address-card";
 import { WeeklyReportCard } from "./weekly-report-card";
 import { RequiredDocumentsCard } from "./required-documents-card";
 import { setRequiredDocumentCategoriesAction } from "./document-requirements-actions";
+import { addNeverLogAction, removeNeverLogAction } from "../never-log-actions";
+import { NeverLogList } from "@/components/never-log-list";
+import { loggableError } from "@/lib/loggable-error";
 import { cleanRequiredCategories } from "@bis/db/document-rules";
 import { BillingSection, BillingCardSkeleton } from "./billing-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
@@ -66,7 +69,7 @@ export default async function CrmSettingsPage({
   const { from } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
   const db = await dbForRequest();
-  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate, replies] = await Promise.all([
+  const [fields, values, blueprints, account, branding, mailingAddress, sendingIdentity, site, daysStored, smsGate, replies, neverLog] = await Promise.all([
     listCustomFields(db, accountId, "contact"),
     listCustomValues(db, accountId),
     // Agency-wide, not account-scoped — this account is just where the
@@ -103,6 +106,11 @@ export default async function CrmSettingsPage({
     // setInboundModeAction's own requireAgencyOnlyAccountAccess guard the
     // only gate on the WRITE.
     getInboundSettings(db, accountId),
+    // S-06 part 2: the Never record list. A failed read is the list's own error state, never the page's.
+    listNeverLog(db, accountId).then(
+      (rows) => rows.map((e) => ({ id: e.id, pattern: e.pattern, kind: e.kind })),
+      (e: unknown) => { console.error(`settings: account ${accountId} never-record list read failed: ${loggableError(e)}`); return null; },
+    ),
   ]);
 
   const boundCreateField = createFieldAction.bind(null, accountId);
@@ -233,6 +241,9 @@ export default async function CrmSettingsPage({
           replies={replies}
           setReplies={boundSetInboundMode}
           checkDns={boundCheckInboundDns}
+          // S-06 part 2: English, like the rest of this agency-only page (part 1 G14).
+          neverLog={<NeverLogList entries={neverLog} add={addNeverLogAction.bind(null, accountId)}
+            remove={removeNeverLogAction.bind(null, accountId)} locale="en" idPrefix="settings" />}
         />
         <WeeklyReportCard
           reportEmails={account.report_emails}

@@ -75,6 +75,10 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/checklist/actions.ts": "agency-only",
   // completeTaskAction's hold check: ledgerDb, beside a task write on the request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
+  // S-06 part 2 (owner ruling 2026-10-17): "Get forwarding address" makes the reply token on the service
+  // client only after requireAccountAccess and getContact on the request client found the customer,
+  // scoped to the route's own account and contact.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/forwarding-actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
   // setContactBusinessAction / undoContactBusinessAction: the group writes run on the service client
@@ -84,7 +88,13 @@ const ALLOWED: Record<string, Reason> = {
   // getContact on the request client found the contact.
   // bulkDeleteContactsAction (0077, owner ruling 2026-10-13): the documents purge runs on the service
   // client only for the ids deleteContacts' request-client pre-read left deletable, scoped to the same
-  // account, and only after requireAccountOwner.
+  // account, and only after requireAccountOwner. The same action hands deleteContacts the service client as
+  // conversationsDb (S-06 part 2, 0053: no client deletes a conversation; migration 0083 section 3,
+  // second review fix): it calls delete_empty_conversations only for the contacts that are otherwise
+  // deletable -- ours, under requireAccountOwner, and not already blocked by an opportunity or a
+  // booking, as the request client's own pre-read proved -- never on a contact a deal or a booking
+  // is keeping, so a reply token already sitting on that contact's empty conversation is never swept
+  // out from under it.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
@@ -114,6 +124,9 @@ const ALLOWED: Record<string, Reason> = {
   // contact's CURRENT email-consent state — ledgerDb, only after getContact on the request
   // client proved that contact (0068's own RLS scope), same pattern as the contact page.
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/page.tsx": "proven-target",
+  // The Never record list's Add/Remove (S-06 part 2): requireAccountOwner (the agency or this
+  // account's own Owner) proves the caller before any service write, every write scoped by account_id.
+  "app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",

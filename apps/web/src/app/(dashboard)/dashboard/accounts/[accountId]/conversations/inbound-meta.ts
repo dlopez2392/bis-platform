@@ -20,6 +20,10 @@ export type InboundMeta = {
   attachmentCount: number;
   sender: { name: string } | null;
   consent: { kind: "stopped"; eventId: string } | { kind: "maybe" } | { kind: "none" };
+  /** S-06 part 2: a team member's forward (`file.ts` stamps `forwarded: true` and `forwarded_by`).
+   *  `byId` is the forwarder's Clerk id, or null for the account's own reply-to mailbox; the page
+   *  names it on the REQUEST client, and an id it cannot name reads "someone on the team". */
+  forwarded: { byId: string | null } | null;
 };
 
 type RawSender = { contact_id?: string; first_name?: string | null; last_name?: string | null } | null | undefined;
@@ -29,6 +33,8 @@ type RawMeta = {
   attachment_count?: number;
   sender?: RawSender;
   consent?: RawConsent;
+  forwarded?: boolean;
+  forwarded_by?: string | null;
 };
 
 /** `null` for any message that is not an inbound email (`file.ts` stamps `inbound_email_id` on
@@ -47,5 +53,9 @@ export function readInboundMeta(meta: unknown): InboundMeta | null {
       : raw.consent?.kind === "maybe"
         ? { kind: "maybe" }
         : { kind: "none" };
-  return { attachmentCount: raw.attachment_count ?? 0, sender, consent };
+  // Only a real `true` is a forward: nothing else in this app writes the key, and a look-alike is not one.
+  const forwarded = raw.forwarded === true
+    ? { byId: typeof raw.forwarded_by === "string" && raw.forwarded_by ? raw.forwarded_by : null }
+    : null;
+  return { attachmentCount: raw.attachment_count ?? 0, sender, consent, forwarded };
 }

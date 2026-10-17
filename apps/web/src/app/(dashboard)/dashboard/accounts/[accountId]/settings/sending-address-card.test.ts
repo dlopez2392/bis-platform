@@ -31,3 +31,26 @@ describe("the Replies row (spec 'Turning it on'; plan G7)", () => {
     expect(renderedText(html({ mode: "off", domain: null }))).toContain("Customers' replies go to the reply-to address on Branding.");
   });
 });
+
+describe("the Never record slot (S-06 part 2; spec 'The Never record list')", () => {
+  const withSlot = () => renderToStaticMarkup(createElement(SendingAddressCard, {
+    fromEmail: null, action: vi.fn(), replies: { mode: "bis", domain: null }, setReplies: vi.fn(), checkDns: vi.fn(),
+    neverLog: createElement("p", { "data-x": "1" }),
+  }));
+
+  it("renders AFTER the Replies row and OUTSIDE the form (mutation: render the slot inside the form → FAILS)", () => {
+    const h = withSlot();
+    const slot = h.indexOf('data-x="1"');
+    expect(slot).toBeGreaterThan(-1);
+    expect(slot).toBeGreaterThan(h.indexOf("</form>"));
+    expect(slot).toBeGreaterThan(h.indexOf("data-replies-state"));
+  });
+
+  it("the card still has exactly ONE default-variant button, Save (rule 8)", () => {
+    expect(withSlot().match(/data-variant="default"/g)).toHaveLength(1);
+  });
+
+  it("renders nothing extra when no slot is passed", () => {
+    expect(html({ mode: "bis", domain: null })).not.toContain('data-x="1"');
+  });
+});

@@ -10,7 +10,8 @@
     "./email-address": "./src/email-address.ts",
     "./profile-ready": "./src/profile-ready.ts",
     "./relationship-keys": "./src/relationship-keys.ts",
-    "./document-rules": "./src/document-rules.ts"
+    "./document-rules": "./src/document-rules.ts",
+    "./never-log-rules": "./src/never-log-rules.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
