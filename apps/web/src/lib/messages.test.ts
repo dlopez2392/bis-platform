@@ -687,11 +687,12 @@ describe("S-06 part 2: forward to a record and Never record keys, English and Sp
 
   it("Spanish is usted, and every placeholder survives translation (mutation: 'Vuelve a cargar' in .failed.es → FAILS; drop {pattern} from added.es → FAILS)", () => {
     const TU = /\b(vuelve|inténtalo|revisa|escribe|agrégalo|puedes|tienes|tus?|reenvía|selecciona|quita|activa)\b/i;
+    const mm = m as Record<string, string>;
     for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
-      expect(TU.test(WANT[k]!), k).toBe(false);
-      const en = WANT[k.slice(0, -3)]!;
+      expect(TU.test(mm[k]!), k).toBe(false);
+      const en = mm[k.slice(0, -3)]!;
       const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
-      expect(ph(WANT[k]!), k).toEqual(ph(en));
+      expect(ph(mm[k]!), k).toEqual(ph(en));
     }
   });
 
