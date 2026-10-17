@@ -75,7 +75,8 @@ describe("ForwardingAddressRow (S-06 part 2, spec §1): one row in Details, ever
     expect(src).toMatch(/getForwardingAddress\(\s*\(\)\s*=>\s*getForwardingAddressAction\(accountId, contactId\)/);
     // The action is reached ONLY through the handler: exactly one call site, inside it.
     expect(src.match(/getForwardingAddressAction\(/g)).toHaveLength(1);
-    expect(src).toMatch(/setAddress\(/);
+    // The click's address goes into state (fix round 2: the only state; what shows is derived).
+    expect(src).toMatch(/if \(address\) setMade\(address\);/);
   });
 
   it("failed: an alert that says what to do, in both languages (rule 5's error state)", () => {

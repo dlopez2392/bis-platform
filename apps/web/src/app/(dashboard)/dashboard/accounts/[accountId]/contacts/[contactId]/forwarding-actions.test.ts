@@ -68,7 +68,8 @@ describe("getForwardingAddressAction (S-06 part 2: made on click, never on view)
     expect(await getForwardingAddressAction(ACCOUNT, CONTACT)).toEqual({ ok: true, address: `r-${TOKEN}@reply.bis-rgv.com` });
     expect(getContact.mock.calls[0]![0]).toBe(REQUEST);
     expect(getInboundSettings).toHaveBeenCalledWith(SERVICE, ACCOUNT);
-    expect(ensureReplyToken).toHaveBeenCalledWith(SERVICE, ACCOUNT, CONTACT, "user_1");
+    // Fix round 2, Minor 4: a person clicked, so the conversation.created event is theirs ("user").
+    expect(ensureReplyToken).toHaveBeenCalledWith(SERVICE, ACCOUNT, CONTACT, "user_1", undefined, "user");
     expect(ensureReplyToken.mock.invocationCallOrder[0]!).toBeGreaterThan(getContact.mock.invocationCallOrder[0]!);
   });
 

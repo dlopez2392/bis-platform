@@ -24,7 +24,8 @@ export async function getForwardingAddressAction(accountId: string, contactId: s
     if (!contact) return { ok: false };
     const settings = await getInboundSettings(serviceDb(), accountId);
     if (!canFormReplyAddress(settings)) return { ok: false };
-    const { token } = await ensureReplyToken(serviceDb(), accountId, contactId, userId);
+    // A person clicked: the conversation.created event, if this makes the conversation, is theirs.
+    const { token } = await ensureReplyToken(serviceDb(), accountId, contactId, userId, undefined, "user");
     const address = replyAddressFor(token, settings);
     return address ? { ok: true, address } : { ok: false };
   } catch (e) {

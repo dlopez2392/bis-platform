@@ -88,7 +88,10 @@ const ALLOWED: Record<string, Reason> = {
   // getContact on the request client found the contact.
   // bulkDeleteContactsAction (0077, owner ruling 2026-10-13): the documents purge runs on the service
   // client only for the ids deleteContacts' request-client pre-read left deletable, scoped to the same
-  // account, and only after requireAccountOwner.
+  // account, and only after requireAccountOwner. The same action hands deleteContacts the service client as
+  // conversationsDb (S-06 part 2, 0053: no client deletes a conversation): it reads the contents of the
+  // conversations the request client found and deletes only the EMPTY ones, scoped by account and by the
+  // contacts the request-client read proved and that are actually being deleted.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/actions.ts": "proven-target",
   // The document vault (S-07): every service write and every minted URL follows a request-client read of the
   // record (getContact / readGroup) or the document (getDocument / getDocumentVersion, 0077's RLS).
