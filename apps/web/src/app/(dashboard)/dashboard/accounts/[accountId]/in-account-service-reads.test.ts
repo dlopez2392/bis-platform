@@ -114,6 +114,9 @@ const ALLOWED: Record<string, Reason> = {
   // contact's CURRENT email-consent state — ledgerDb, only after getContact on the request
   // client proved that contact (0068's own RLS scope), same pattern as the contact page.
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/page.tsx": "proven-target",
+  // The Never record list's Add/Remove (S-06 part 2): requireAccountOwner (the agency or this
+  // account's own Owner) proves the caller before any service write, every write scoped by account_id.
+  "app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",
