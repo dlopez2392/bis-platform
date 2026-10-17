@@ -705,3 +705,67 @@ describe("S-06 part 2: forward to a record and Never record keys, English and Sp
     for (const [k, v] of Object.entries(WANT)) expect(BANNED.test(v.replace(/\{pattern\}/g, "")), k).toBe(false);
   });
 });
+
+describe("S-06 part 3: web chat in the inbox and the record, English and Spanish (plan Task 1)", () => {
+  const WANT: Record<string, string> = {
+    // G8: the four existing channel words gain Spanish; their English is unchanged.
+    "conversations.channel.form": "Form submission",
+    "conversations.channel.form.es": "Formulario",
+    "conversations.channel.email": "Email",
+    "conversations.channel.email.es": "Correo",
+    "conversations.channel.voice": "Call",
+    "conversations.channel.voice.es": "Llamada",
+    "conversations.channel.sms": "Text",
+    "conversations.channel.sms.es": "Texto",
+    "conversations.channel.webchat": "Web chat",
+    "conversations.channel.webchat.es": "Chat web",
+    "conversations.compose.via": "Reply by",
+    "conversations.compose.via.es": "Responder por",
+    "conversations.webchat.unconfirmed": "Matched by the phone or email they typed; not confirmed.",
+    "conversations.webchat.unconfirmed.es": "Lo relacionamos por el teléfono o el correo que escribió; no está confirmado.",
+    // G23: the chat row's verb and its count, the kit's grammar ("Customer chatted with Sofía … · 12 messages").
+    "timeline.webchat": "chatted with {name} on your website",
+    "timeline.webchat.es": "conversó con {name} en su sitio web",
+    "timeline.webchatCount": "{count} messages",
+    "timeline.webchatCount.es": "{count} mensajes",
+    "timeline.webchatCountOne": "1 message",
+    "timeline.webchatCountOne.es": "1 mensaje",
+    // G24, G25.
+    "timeline.what.chats": "website chats",
+    "timeline.what.chats.es": "chats del sitio web",
+    "timeline.openChat": "Open chat",
+    "timeline.openChat.es": "Ver chat",
+    "record.facts.channel.chat": "website chat",
+    "record.facts.channel.chat.es": "chat del sitio web",
+  };
+
+  it("has every key with exactly this text (mutation: change any .es string → FAILS naming it)", () => {
+    for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
+  });
+
+  it("is 13 English keys, each with its .es twin on the very next line (mutation: append conversations.channel.email.es at the end of the file → FAILS)", () => {
+    const en = Object.keys(WANT).filter((x) => !x.endsWith(".es"));
+    expect(en).toHaveLength(13);
+    const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
+    for (const k of en) {
+      const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
+      expect(i, k).toBeGreaterThan(-1);
+      expect(src[i + 1]!.trimStart().startsWith(`"${k}.es":`), k).toBe(true);
+    }
+  });
+
+  it("Spanish is usted, and every placeholder survives translation (mutation: 'escribiste' in unconfirmed.es → FAILS; drop {count} from webchatCount.es → FAILS)", () => {
+    const TU = /\b(escribiste|tu|tus|tienes|puedes|abre|responde|confirmaste)\b/i;
+    const mm = m as Record<string, string>;
+    for (const k of Object.keys(WANT).filter((x) => x.endsWith(".es"))) {
+      expect(TU.test(mm[k]!), k).toBe(false);
+      const ph = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((x) => x[1]).sort();
+      expect(ph(mm[k]!), k).toEqual(ph(mm[k.slice(0, -3)]!));
+    }
+  });
+
+  it("no key uses an internal or vendor word (mutation: 'webchat transcript' in timeline.webchat → FAILS)", () => {
+    const BANNED = /\b(webchat|concierge|transcript|provider|index|openai|telnyx|resend)\b/i;
+    for (const [k, v] of Object.entries(WANT)) expect(BANNED.test(v), k).toBe(false);
+  });
+});
