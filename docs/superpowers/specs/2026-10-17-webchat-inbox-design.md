@@ -2,12 +2,13 @@
 
 Status: approved in brainstorming 2026-10-17 (danlo, tiles; `.superpowers/sdd/s06c-design.md`).
 First-release item 7, part 3 of 3 (`docs/crm-features.md:1284-1285`: F-036 part, F-068 part).
+**Amended 2026-10-17 (owner rulings, tiles):** the chat matched to an existing customer is marked unconfirmed (§5a); the record gets one row per chat and the chat counts for "Last talked" (§7, G12 changed); G9 as proposed; every other gap accepted. New gaps G18-G22 are open.
 Part 1 (#264, 0082) and part 2 (#266, 0083) are live: `2026-10-16-inbound-email-design.md`,
 `2026-10-17-forward-to-record-design.md`.
 
 This spec writes the approved design down. It does not re-decide it. Where the code made a
 ruling impossible to follow as worded, or left a choice open, the choice is a numbered gap
-(G1..G17) with a proposal, at the end. Every claim about code cites `file:line` as read on
+(G1..G22; G18-G22 arose from the owner's rulings of 2026-10-17) with a proposal, at the end. Every claim about code cites `file:line` as read on
 branch `feat/s06-webchat-inbox` at `d6be0a06`. Anything not read is marked ASSUMPTION.
 
 ## What exists today
@@ -114,7 +115,7 @@ an existing customer lands on that customer's thread, decision 5).
 | `subject` | null | null |
 | `provider_message_id` | `webchat:<chat id>:<index>` (G1) | same shape |
 | `created_at` | the turn's `at`, made strictly increasing in index order (G5) | same |
-| `meta` | `{ webchat: { chat_id, index, locale } }` | same |
+| `meta` | `{ webchat: { chat_id, index, locale, submission_id, matched_existing } }` (§5a) | same |
 
 `<index>` is the turn's position in the `transcript` array, 0-based (G2). `locale` is the chat's
 own `concierge_conversations.locale`, the language the visitor chatted in.
@@ -130,7 +131,9 @@ route schedules ONE background job in `after()` (the usage leg's precedent, `rou
 
 1. Read the chat fresh (`getConciergeConversation`, `concierge.ts:238-245`): the transcript as
    stored, including this turn's pair and anything another tab appended.
-2. Resolve the thread (§1). No customer → drop, log, stop.
+2. Resolve the thread (§1). No customer → drop, log, stop. The same one read of the
+   submission (`form_submissions.select("contact_id, created_at, contacts(created_at)")`) also
+   answers whether the chat matched an existing customer (§5a).
 3. Read the keys already on the thread: `provider_message_id` of this account's messages on
    this conversation whose key starts `webchat:<chat id>:` (served by `messages_thread`,
    0005:47).
@@ -204,6 +207,37 @@ States (DESIGN.md rules 5 and 7): loading is the page's existing skeleton; an em
 never listed (`listConversations`' existence join, `messaging.ts:645`); a failed persona read
 costs only the name. Tokens only; dark and light come from the existing two surfaces.
 
+### 5a. A chat matched to an existing customer is marked unconfirmed (RULED 2026-10-17)
+
+`enrich` attaches a lead to an EXISTING customer when the typed email OR phone matches one,
+unverified by design (`enrich.ts:82-89`, `97-108`; `created.existing`, `enrich.ts:149`). The owner
+ruled that such a chat is shown on the thread as unconfirmed.
+
+**How "matched existing" is known.** `enrich` returns nothing (`enrich.ts:48`) and the sync may
+run in a LATER request than the filing (§3), so an in-process return value is not enough. The
+fact is derived instead, from two timestamps the sync already reaches: the chat's submission is
+written BEFORE `enrich` looks for a contact (`lead.ts:151` then `lead.ts:170`), so
+
+- `contacts.created_at < form_submissions.created_at` → the customer already existed: **matched**;
+- otherwise → `enrich` created them from this chat: **new**, no line.
+
+This needs NO change to `enrich`, `fileLead` or the schema, and it gives the same answer on every
+retry. (A contact created by another path in the milliseconds between the submission insert and
+the dedupe would read as "new"; G19.) The sync writes the answer into every copied row's
+`meta.webchat.matched_existing` (boolean), together with `meta.webchat.submission_id`, so the
+thread and the record (§7) read it from the rows themselves with no extra query.
+
+**Rendering.** ONE line per chat, not per bubble: above the chat's first row on the thread (the
+row whose `meta.webchat.index` is the lowest of that `chat_id` on the thread), only when
+`matched_existing` is true:
+
+> Matched by the phone or email they typed; not confirmed.
+
+Muted text (`text-muted-foreground`, `text-xs`), in the staff member's language
+(`lang={locale}`), with `data-webchat-unconfirmed` for tests; the same shape as the forward line
+(`message-thread.tsx:164-171`). It is a fact about the match, not a status, so no dot. A customer
+created from the chat shows no line. The record's chat row carries the same line (§7, G18).
+
 ### 6. The composer that follows the last reply
 
 **The inbox composer becomes Text | Email** (G9): the existing `MessageComposer` with two new
@@ -258,6 +292,57 @@ for the open thread (`getContact` on the request client, then on the ledger clie
 
 It never returns `webchat`: nothing sends a webchat row (decision 5).
 
+### 7. The record page: one row per chat (RULED 2026-10-17, G12 changed)
+
+The record timeline gets ONE row per chat; individual turns are never timeline rows, and the
+messages source keeps its `email`/`sms` filter (`record.ts:375`).
+
+**Where it is computed.** A ninth timeline source, `chats`, in `listTimelinePage`
+(`record.ts:336-411`; `TimelineSource` and `TIMELINE_SOURCES` at `record.ts:265-266` gain
+`"chats"`), on the caller's client so RLS and 0068's Technician fence decide, for one contact or a
+household's set through `forContacts` exactly as the messages source does:
+
+1. The anchor read: this account's `webchat` messages on the contact(s)' conversations whose
+   `meta->webchat->>index = '0'`, paged by `withTimelinePage` on `created_at` (the source rule:
+   `limit + 1` past the cursor). Index 0 is always the first row a sync inserts (§3 step 5, index
+   order), so every copied chat has one.
+2. The count read, only for the chat ids on this page: `select meta->webchat->>chat_id` of the
+   same conversations' webchat rows with that `chat_id` in the page's set; counted in JS (at most
+   48 rows a chat, `CONCIERGE_MAX_TURNS` 24 × 2).
+
+A new entry kind, `{ kind: "chat"; id: <anchor message id>; at: <anchor created_at>; contactId;
+chat: { conversationId, count, matchedExisting } }`. Its `at` is the chat's START, so later turns
+never move the row and the cursor stays total. The drawer's five newest rows
+(`lib/record/recent-rows.ts:56`) and the group page read the same page, so they follow with no
+code of their own.
+
+**N** is the number of the chat's rows on the thread, both sides (visitor and Sofía): what staff
+will see when they open it.
+
+**The row** reads (persona from the timeline loader's existing `personaName`,
+`lib/record/loaders.ts:65-81`):
+
+> Customer · Chatted with Sofía on your website · 12 messages
+
+and the whole row opens `/dashboard/accounts/<accountId>/conversations?c=<conversationId>`.
+When `matchedExisting`, it carries the §5a line beneath it.
+
+**The author mark is the customer** (G20): the chat is the customer's act of reaching the
+business, and "Chatted with Sofía" already names Sofía in the words; a "Sofía · AI" mark would
+read "Sofía · AI · Chatted with Sofía". `authorOf` (`author-mark.ts:25-70`) gains
+`case "chat": return { kind: "customer", personId: null }`, inside the closed five.
+
+**The existing "took a request in the website chat" row stays alongside** (G21): it is a
+different event (the lead Sofía filed, `lead.ts:151-156`, mark "Sofía · AI", `timeline.chat`,
+`lib/messages.ts:4515`), and it carries the captured answers (name, phone, need) the chat row does
+not. The two read, newest first: the request at filing time, the chat row at the chat's start.
+
+**"Last talked" counts the chat.** `newestConversationMessage` and `newestSetMessage`
+(`record.ts:58-61`, `119-122`) add `webchat` to their channel filter; `LastTalkedChannel`
+(`record.ts:33`) gains `"chat"`, mapped from `webchat`; the fact reads "Last talked 2 hours ago
+(website chat)". Any turn counts, Sofía's included: both are the customer's conversation with the
+business.
+
 ## Every reader of `messages`, and what web chat rows do to it
 
 | Reader | File:line | Filter | Effect of webchat rows |
@@ -273,8 +358,8 @@ It never returns `webchat`: nothing sends a webchat row (decision 5).
 | Delivery webhooks | `messaging.ts:242-246` | provider id + outbound | A `webchat:` key never matches a Resend or Telnyx id |
 | Inbound-email dedupe | `messaging.ts:289-305` | provider id | No overlap (Resend ids only) |
 | Booking notice discard | `booking.ts:566-568` | `email`, outbound, queued | No effect |
-| Record "Last talked" | `record.ts:53-66`, `115-125` | `email`, `sms` | No effect (G12) |
-| Record timeline | `record.ts:375` | `email`, `sms` | Not shown; the lead's submission row stays the record's mark (G12) |
+| Record "Last talked" | `record.ts:53-66`, `115-125` | `email`, `sms`, plus `webchat` (§7) | The chat counts: "(website chat)" |
+| Record timeline | `record.ts:375` | `email`, `sms` (unchanged) | Turns are not rows; the new `chats` source adds ONE row per chat (§7); the drawer's recent rows and the group page follow |
 | Empty-thread delete | 0083:95-108 | existence | A chat row keeps the thread (as any message) |
 | Message visibility proof | `lib/auth/visible.ts:41` | id | Unchanged |
 | Technician restriction | 0068 (through the conversation) | | Webchat rows inherit it |
@@ -300,6 +385,10 @@ TypeScript, all additive:
 - `listMessages` selects `author_kind, author_id`.
 - The thread resolver (§1, submission → contact → conversation) as one `@bis/db` function.
 - The route stamps the visitor line's `at` with the request's arrival (G4).
+- `meta.webchat` carries `submission_id` and `matched_existing` (§5a); jsonb, so no migration.
+- `record.ts`: `TimelineSource` gains `"chats"`, `TimelineEntry` gains `kind: "chat"`,
+  `LastTalkedChannel` gains `"chat"`, both newest-message reads add `webchat` (§7);
+  `author-mark.ts`'s `authorOf` gains the `chat` case (customer).
 
 ## Copy (English, and Spanish usted)
 
@@ -311,6 +400,10 @@ TypeScript, all additive:
 | `conversations.channel.form.es` (G8) | | Formulario |
 | `conversations.channel.voice.es` (G8) | | Llamada |
 | `conversations.compose.via` (the tab group's label) | Reply by | Responder por |
+| `conversations.webchat.unconfirmed` (§5a, ruling 1) | Matched by the phone or email they typed; not confirmed. | Lo relacionamos por el teléfono o el correo que escribió; no está confirmado. |
+| `timeline.webchat` (§7, ruling 2) | Chatted with {name} on your website · {count} messages | Conversó con {name} en su sitio web · {count} mensajes |
+| `timeline.webchat.one` | Chatted with {name} on your website · 1 message | Conversó con {name} en su sitio web · 1 mensaje |
+| `record.facts.channel.chat` (§7) | website chat | chat del sitio web |
 | reused: `provenance.customer` | Customer | Cliente |
 | reused: `provenance.ai` | {name} · AI | {name} · IA |
 | reused: `compose.sms`, `compose.email`, every stopped / held / unknown line | as today | as today |
@@ -356,6 +449,16 @@ only").
   footer in the staff locale, no status word) in English and Spanish; the inbox composer opens on
   `initialMode`, switches with one tap, returns to it after a send; `messageChannelLabel` for all
   five channels in both languages; the pseudo-locale overflow on the new footer.
+- **Unconfirmed match (ruling 1)**: the derivation (contact older than the submission → matched;
+  created by it → new; equal times read as new); the line renders once per chat, above its first
+  row, only when matched, in both languages; never for a new customer.
+- **Record (ruling 2)**: the `chats` source returns one entry per chat (a 6-turn chat is ONE row,
+  never six), N counts both sides, `at` is the chat's start and stays put after a later turn,
+  paging across a page boundary neither repeats nor skips a chat, a household page merges members'
+  chats, a Technician sees only their own customers' chats, a failed read names `chats` in
+  `failed`; the row's mark is Customer, it links to the thread, it carries the unconfirmed line;
+  the "took a request" row still shows beside it; "Last talked" reads "(website chat)" when the
+  chat is newest; the drawer's recent rows show the chat row. Both languages, singular and plural.
 - **e2e** (one, per-run fixture account, G15): seed a lead chat (a `concierge_conversations` row
   with a four-turn transcript and a submission linked to a fixture contact with its thread), post
   one turn through the real route with `page.request` and the chat's id, open the inbox and see
@@ -366,27 +469,32 @@ only").
 
 | # | Gap | Proposal |
 |---|---|---|
-| G1 | How turn idempotency is stored | `provider_message_id = 'webchat:<chat id>:<index>'` on the existing global partial unique index (0005:51-52), insert and treat `23505` as "already there" (the `document-requirements.ts:87` pattern; ASSUMPTION: a PostgREST upsert cannot target a partial index, so plain insert). No migration. The alternative, `meta` plus a new unique index, costs migration 0084 for nothing. |
-| G2 | What "turn index" means | The array position in `transcript`. Stable, because the transcript is append-only (0044:28-34). A retried visitor POST already stores its exchange twice (`route.ts:30-34`); those are two indices and appear twice on the thread, mirroring the transcript. A retried SYNC never duplicates. |
-| G3 | Where the copy runs | In the turn route, after the transcript append, in `after()`. Not in `fileLead`: `enrich` returns `void` (`enrich.ts:48`), so neither knows the thread, and the filing turn's own pair is appended only after `fileLead` returns (`route.ts:653`). One sync covers the copy, later turns and retries. The lead alert (`enrich.ts:197-203`) goes out about a second before the turns land; it links to the record page (`enrich.ts:423-425`), which does not show chat rows anyway. |
-| G4 | The filing turn's order | Today both lines share one `now` taken after the model (`route.ts:642`). Stamp the visitor line with the request's arrival (`startedAt`, `route.ts:155`): then the visitor's details read BEFORE the lead entry and Sofía's thank-you AFTER it, which is what happened. The approved "chat turns, then the lead" holds for every turn except that one reply; moving it above the lead would misstate the time. |
-| G5 | Equal times | Both lines of an exchange carry the same `at` (`route.ts:654-655`) and `listMessages` orders by `created_at` only (`messaging.ts:840`), so Sofía could render above the question. The planner writes `created_at` strictly increasing in index order (+1 ms on a tie). |
-| G6 | One event per row | A full 24-turn chat (`CONCIERGE_MAX_TURNS`, `lib/concierge/guards.ts:14`) copied at filing is 48 rows; one `message.created` each (`messaging.ts:168`) would fill the Activity card's 50-event raw window (`dashboard/page.tsx:45`) and push real bookings out. `fileWebchatTurns` emits ONE `webchat.filed` `{conversationId, chatId, count}` per batch (actor `system`) and one touch, instead of going through `createMessage` per row. Nothing reads `message.created` (grep). |
-| G7 | The unread rule | As §4: only when the lead was on file at the turn's start; +1 per inserted visitor row; Sofía's rows never touch `last_message_at`. |
-| G8 | Channel labels are English only (`labels.ts:46-51`) | `messageChannelLabel` takes the locale (default `en`); all five labels get `.es`. A web chat bubble would otherwise be the one Spanish thread with an English channel word. |
-| G9 | The inbox has no Text composer (`email-composer.tsx:11-14`) | The inbox gets `MessageComposer` with `modes = ["sms", "email"]` and `initialMode`; no Note (the inbox has none today). `EmailComposer` retires. The record page's composer is unchanged and still starts on Note. |
-| G10 | Neither channel ready | Open on the one the customer has NOT stopped (its line says what is missing); both stopped, or both merely unavailable → the preferred one, showing today's notice. |
-| G11 | What counts as "their last reply" | As §6: a teammate's forward does not count; a call's inbox copy does even though its author is `ai`. |
-| G12 | The record page | Web chat stays off the record timeline and off "Last talked" (`record.ts:60`, `121`, `375`: email and text only, the C4 rule). The submission row ("Sofía · AI · took a request in the website chat", `lead.ts:154`) is the record's mark; the full chat is one link away in the inbox. |
-| G13 | Leads filed before this ships | No backfill. If such a chat gets a new turn after release, its sync copies the whole chat then. |
-| G14 | Retention | None added. `concierge_conversations` keeps every chat forever today, including chats that never became leads; the copy makes a lead's chat part of the permanent thread, like texts and emails. A retention rule for unconverted chats is a later privacy item. |
-| G15 | The one e2e | "A chat becomes a lead" depends on the model choosing `capture_lead`, which no test can force. Seed the lead chat, post one REAL turn (skips without the key), and assert the inbox. The copy and the planner are proven deterministically by the unit and replica tests. |
-| G16 | "New lead from your website" | No new copy: the lead entry stays exactly as `enrich` writes it (`enrich.ts:179-182`): subject = the form's name, "Form submission". |
-| G17 | A chat after a missed call | A visitor turn does not cancel a held 08:00 text-back (`voice.ts:1029-1032` reads inbound texts only). Unchanged in this part. |
+| G1 | How turn idempotency is stored | `provider_message_id = 'webchat:<chat id>:<index>'` on the existing global partial unique index (0005:51-52), insert and treat `23505` as "already there" (the `document-requirements.ts:87` pattern; ASSUMPTION: a PostgREST upsert cannot target a partial index, so plain insert). No migration. The alternative, `meta` plus a new unique index, costs migration 0084 for nothing. **RULED 2026-10-17: accepted as proposed.** |
+| G2 | What "turn index" means | The array position in `transcript`. Stable, because the transcript is append-only (0044:28-34). A retried visitor POST already stores its exchange twice (`route.ts:30-34`); those are two indices and appear twice on the thread, mirroring the transcript. A retried SYNC never duplicates. **RULED 2026-10-17: accepted as proposed.** |
+| G3 | Where the copy runs | In the turn route, after the transcript append, in `after()`. Not in `fileLead`: `enrich` returns `void` (`enrich.ts:48`), so neither knows the thread, and the filing turn's own pair is appended only after `fileLead` returns (`route.ts:653`). One sync covers the copy, later turns and retries. The lead alert (`enrich.ts:197-203`) goes out about a second before the turns land; it links to the record page (`enrich.ts:423-425`), where the chat row (§7) appears once the copy has landed. **RULED 2026-10-17: accepted as proposed.** |
+| G4 | The filing turn's order | Today both lines share one `now` taken after the model (`route.ts:642`). Stamp the visitor line with the request's arrival (`startedAt`, `route.ts:155`): then the visitor's details read BEFORE the lead entry and Sofía's thank-you AFTER it, which is what happened. The approved "chat turns, then the lead" holds for every turn except that one reply; moving it above the lead would misstate the time. **RULED 2026-10-17: accepted as proposed.** |
+| G5 | Equal times | Both lines of an exchange carry the same `at` (`route.ts:654-655`) and `listMessages` orders by `created_at` only (`messaging.ts:840`), so Sofía could render above the question. The planner writes `created_at` strictly increasing in index order (+1 ms on a tie). **RULED 2026-10-17: accepted as proposed.** |
+| G6 | One event per row | A full 24-turn chat (`CONCIERGE_MAX_TURNS`, `lib/concierge/guards.ts:14`) copied at filing is 48 rows; one `message.created` each (`messaging.ts:168`) would fill the Activity card's 50-event raw window (`dashboard/page.tsx:45`) and push real bookings out. `fileWebchatTurns` emits ONE `webchat.filed` `{conversationId, chatId, count}` per batch (actor `system`) and one touch, instead of going through `createMessage` per row. Nothing reads `message.created` (grep). **RULED 2026-10-17: accepted as proposed.** |
+| G7 | The unread rule | As §4: only when the lead was on file at the turn's start; +1 per inserted visitor row; Sofía's rows never touch `last_message_at`. **RULED 2026-10-17: accepted as proposed.** |
+| G8 | Channel labels are English only (`labels.ts:46-51`) | `messageChannelLabel` takes the locale (default `en`); all five labels get `.es`. A web chat bubble would otherwise be the one Spanish thread with an English channel word. **RULED 2026-10-17: accepted as proposed.** |
+| G9 | The inbox has no Text composer (`email-composer.tsx:11-14`) | The inbox gets `MessageComposer` with `modes = ["sms", "email"]` and `initialMode`; no Note (the inbox has none today). `EmailComposer` retires. The record page's composer is unchanged and still starts on Note. **RULED 2026-10-17: as proposed.** |
+| G10 | Neither channel ready | Open on the one the customer has NOT stopped (its line says what is missing); both stopped, or both merely unavailable → the preferred one, showing today's notice. **RULED 2026-10-17: accepted as proposed.** |
+| G11 | What counts as "their last reply" | As §6: a teammate's forward does not count; a call's inbox copy does even though its author is `ai`. **RULED 2026-10-17: accepted as proposed.** |
+| G12 | The record page | Proposed: web chat off the record timeline and off "Last talked". **RULED 2026-10-17: CHANGED.** One row per chat ("Chatted with Sofía on your website · N messages") that opens the thread; individual turns are not timeline rows; the chat counts for "Last talked". Settled in §7, with G20-G22. |
+| G13 | Leads filed before this ships | No backfill. If such a chat gets a new turn after release, its sync copies the whole chat then. **RULED 2026-10-17: accepted as proposed.** |
+| G14 | Retention | None added. `concierge_conversations` keeps every chat forever today, including chats that never became leads; the copy makes a lead's chat part of the permanent thread, like texts and emails. A retention rule for unconverted chats is a later privacy item. **RULED 2026-10-17: accepted as proposed.** |
+| G15 | The one e2e | "A chat becomes a lead" depends on the model choosing `capture_lead`, which no test can force. Seed the lead chat, post one REAL turn (skips without the key), and assert the inbox. The copy and the planner are proven deterministically by the unit and replica tests. **RULED 2026-10-17: accepted as proposed.** |
+| G16 | "New lead from your website" | No new copy: the lead entry stays exactly as `enrich` writes it (`enrich.ts:179-182`): subject = the form's name, "Form submission". **RULED 2026-10-17: accepted as proposed.** |
+| G17 | A chat after a missed call | A visitor turn does not cancel a held 08:00 text-back (`voice.ts:1029-1032` reads inbound texts only). Unchanged in this part. **RULED 2026-10-17: accepted as proposed.** |
+| G18 | The unconfirmed line on the record (new, from ruling 1) | The ruling names the thread; the record is where a wrong match does its harm, so the chat row (§7) carries the same "Matched by the phone or email they typed; not confirmed." line beneath it. Same key, same `matched_existing` fact. OPEN. |
+| G19 | How "matched existing" is known (new, from ruling 1) | Derived, not returned by `enrich`: `contacts.created_at < form_submissions.created_at` means the customer existed before this chat's lead (the submission is written first, `lead.ts:151`, then `enrich`, `lead.ts:170`). Stored in every copied row's `meta.webchat.matched_existing`. No change to `enrich`, `fileLead` or the schema. The alternative (enrich returns `{ contactId, conversationId, matchedExisting }`) only reaches the filing turn; carrying it to later turns would need a column, so a migration. Known edge: a contact created by another path in the milliseconds between the submission insert and the dedupe reads as new (no line). OPEN. |
+| G20 | The chat row's author mark (new, from ruling 2) | The customer (`provenance.customer`): the chat is the customer reaching the business, and the words already name Sofía ("Sofía · AI · Chatted with Sofía" would repeat her). Inside the closed five. OPEN. |
+| G21 | The "took a request in the website chat" row (new, from ruling 2) | Stays alongside: it is Sofía's filing of the lead (mark "Sofía · AI") and carries the captured answers; the chat row is the customer's conversation. Two rows, two events. OPEN. |
+| G22 | Where the chat row sits in time, and N (new, from ruling 2) | At the chat's START (its index-0 row's `created_at`), so later turns never move it and the timeline cursor stays total; "Last talked" carries the chat's newest turn. N counts the chat's rows on the thread, visitor and Sofía both (what opening it shows), with a singular form for 1. OPEN. |
 
 ## Out of scope
 
 Live staff takeover (F-036 future); chats that never become a lead; the "transcript view" and the
 "offline panel" that `docs/crm-features.md:1284` lists for F-036 part 1 (not in the approved
-design); booking from the chat; sending anything over web chat; a backfill; retention; web chat
-rows on the record timeline or in "Last talked"; any change to the widget or its strings.
+design); booking from the chat; sending anything over web chat; a backfill; retention; individual
+turns as record timeline rows (the chat is one row, §7); any change to the widget or its strings.
