@@ -44,6 +44,7 @@ const dbFixture = vi.hoisted(() => ({
         eq: (col: string, id: string) => ({
           maybeSingle: async () => {
             dbFixture.languageReads.push([table, cols, col, id]);
+            if (dbFixture.languageError) return { data: null, error: dbFixture.languageError };
             return { data: { language: dbFixture.accountLanguage }, error: null };
           },
         }),
@@ -51,6 +52,7 @@ const dbFixture = vi.hoisted(() => ({
     }),
   },
   accountLanguage: null as string | null,
+  languageError: null as { code: string; message: string } | null,
   languageReads: [] as unknown[][],
   neverLogReads: [] as unknown[][],
   neverLogFails: false,
@@ -118,12 +120,12 @@ const { default: BrandingPage } = await import("./page");
 
 let lastHtml = "";
 
-async function render() {
+async function render(search: { from?: string; locale?: string } = {}) {
   captured.props = null;
   captured.panel = null;
   const el = await BrandingPage({
     params: Promise.resolve({ accountId: "a1" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(search),
   });
   lastHtml = renderToStaticMarkup(el);
   return captured.props!;
@@ -136,6 +138,7 @@ beforeEach(() => {
   gateFixture.ok = true;
   accessFixture.access = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
   dbFixture.accountLanguage = null;
+  dbFixture.languageError = null;
   dbFixture.languageReads = [];
   dbFixture.neverLogReads = [];
   dbFixture.neverLogFails = false;
@@ -231,5 +234,40 @@ describe("branding page — the Never record card (S-06 part 2; plan G8)", () =>
     expect(captured.panel).not.toBeNull();
     expect(err.mock.calls.map((c) => String(c[0])).some((l) => l.startsWith("branding: account a1 never-record list read failed:"))).toBe(true);
     err.mockRestore();
+  });
+});
+
+describe("branding page — the Never record card's language (review fix round 1, M1 and M2)", () => {
+  const OWNER = { userId: "user_1", isAgency: false, role: "owner", canManage: true };
+
+  it("a failed account-language read still renders the page and the list, logs the account id and the error's diagnosis only, and falls back to the reader's default (English) (mutation: delete the error branch → the log assertion FAILS)", async () => {
+    accessFixture.access = OWNER;
+    dbFixture.accountLanguage = "es";
+    dbFixture.languageError = { code: "XX000", message: "internal error" };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await render();
+    expect(captured.panel).not.toBeNull();
+    expect(lastHtml).toContain('data-never-log-entry="billing@supplier.com"');
+    expect(lastHtml).toContain('lang="en"');
+    const lines = err.mock.calls.map((c) => String(c[0]));
+    const line = lines.find((l) => l.startsWith("branding: account a1 language read failed:"));
+    expect(line, lines.join("\n")).toBeDefined();
+    expect(line).toContain("XX000");
+    expect(lines.join("\n")).not.toContain("billing@supplier.com");
+    err.mockRestore();
+  });
+
+  it("the QA ?locale= override drives the list, as on the record page (mutation: drop { locale: localeParam } → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      accessFixture.access = OWNER;
+      await render({ locale: "es" });
+      expect(lastHtml).toContain('lang="es"');
+      const { renderedText } = await import("@/lib/rendered-text");
+      expect(renderedText(lastHtml)).toContain("No registrar nunca");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

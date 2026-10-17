@@ -35,7 +35,7 @@ export type PaletteEntry = {
  */
 const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[] = [
   { anchor: "client-access", label: m["palette.settings.clientAccess"], keywords: ["login", "invite", "portal"] },
-  { anchor: "sending-address", label: m["palette.settings.sendingAddress"], keywords: ["email", "from", "domain"] },
+  { anchor: "sending-address", label: m["palette.settings.sendingAddress"], keywords: ["email", "from", "domain", "never record", "block", "ignore sender"] },
   { anchor: "custom-fields", label: m["palette.settings.customFields"], keywords: ["field", "crm"] },
   { anchor: "custom-values", label: m["palette.settings.customValues"], keywords: ["value", "variable", "merge"] },
   { anchor: "alert-phone", label: m["palette.settings.alertPhone"], keywords: ["sms", "text", "notify", "lead alert"] },

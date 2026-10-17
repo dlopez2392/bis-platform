@@ -10,6 +10,7 @@ import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import type { AddNeverLogActionResult, RemoveNeverLogActionResult, NeverLogView } from "@/app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions";
 import { runAddNeverLog, runRemoveNeverLog, type NeverLogDeps } from "./never-log-handlers";
+import { initNeverLogState, syncNeverLogState } from "./never-log-sync";
 
 /**
  * S-06 part 2: the account's Never record list, on Settings (agency) and Branding (Owner). Server-rendered
@@ -24,7 +25,13 @@ export function NeverLogList({ entries, add, remove, locale, idPrefix }: {
   locale: Locale;
   idPrefix: string;
 }) {
-  const [list, setList] = useState<NeverLogView[]>(entries ?? []);
+  // The list follows the server: when `entries` changes (a revalidation, an add in another tab, a
+  // re-read that succeeds after a failed one), it is reset to it during render (never-log-sync.ts).
+  const [state, setState] = useState(() => initNeverLogState(entries));
+  const synced = syncNeverLogState(state, entries);
+  if (synced !== state) setState(synced);
+  const list = synced.list;
+  const setList = (f: (l: NeverLogView[]) => NeverLogView[]) => setState((s) => ({ ...s, list: f(s.list) }));
   const [value, setValue] = useState("");
   const [inline, setInline] = useState<string | null>(null);
   const [pending, setPending] = useState(false);

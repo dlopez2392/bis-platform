@@ -171,6 +171,15 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  // S-06 part 2: the Never record list lives inside the Sending address card (agency-only Settings);
+  // the client Owner's copy is on /branding, whose own keywords stay as they were.
+  it("finds the Never record list by the words an operator types, agency only (mutation: drop the keywords → FAILS)", () => {
+    for (const q of ["never record", "block", "ignore sender"]) {
+      expect(filterEntries(buildPaletteEntries(BASE, true, false), q).map((e) => e.id), q).toContain("settings:sending-address");
+      expect(filterEntries(buildPaletteEntries(BASE, false, true), q).map((e) => e.id), q).not.toContain("settings:sending-address");
+    }
+  });
+
   it("has no duplicate ids and no entry without a label", () => {
     for (const [isAgency, isOwner] of [[true, false], [false, true], [false, false]] as const) {
       const entries = buildPaletteEntries(BASE, isAgency, isOwner);

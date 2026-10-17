@@ -55,13 +55,14 @@ export default async function BrandingPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string }>;
+  searchParams: Promise<{ from?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
   // below appears only for someone who arrived mid-flow. The wizard is
   // agency-only, so a client reaching their own branding page never sees it.
-  const { from } = await searchParams;
+  // `locale` is the QA override only (request-locale.ts: off unless BIS_I18N_QA, never on Vercel).
+  const { from, locale: localeParam } = await searchParams;
   // Redirects a client asking for another account to their own, and refuses a
   // client whose access is switched off. The agency passes straight through —
   // they reach the same panel from Settings, so this route works for them too
@@ -112,7 +113,7 @@ export default async function BrandingPage({
     const accountRow = accountRead.data as { language?: string | null } | null;
     // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
     const accountLanguage = { language: (accountRow?.language as Locale | null | undefined) ?? null };
-    const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+    const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
     neverLogCard = { entries, locale };
   }
 
