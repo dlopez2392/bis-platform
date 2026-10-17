@@ -1,12 +1,15 @@
 import {
   findReplyThread, matchSender, recordInboundEmail, findInboundEmailByProviderId, getConversationSummary,
-  INBOUND_EMAIL_COLLISION, type InboundEmailRow, type SenderMatch, type SupabaseClient,
+  INBOUND_EMAIL_COLLISION, listNeverLog, matchTeamSender,
+  type InboundEmailRow, type SenderMatch, type SupabaseClient, type TeamSender,
 } from "@bis/db";
+import { neverLogMatches } from "@bis/db/never-log-rules";
 import type { ReceivedEmailFetcher } from "@/lib/email/receiving";
 import { BIS_REPLY_DOMAIN, bareAddress, displayName, domainOf, parseReplyAddress } from "./address";
 import { parseHeaderBlock, readSesVerdict, senderAuthenticated, authRecord } from "./auth-results";
 import { newText, htmlToText } from "./new-text";
 import { fileInboundEmail } from "./file";
+import { classifyAutomatic } from "./automatic";
 
 /**
  * The email.received steps 2-9 (spec "Inbound", "Failure behaviour"). The route verifies svix and
@@ -19,9 +22,14 @@ export type PipelineDeps = {
 };
 export type PipelineOutcome =
   | { status: 200; result: "filed" | "held" | "duplicate" | "dropped" }
-  | { status: 503; result: "fetch_failed" | "write_failed" };
+  | { status: 503; result: "fetch_failed" | "write_failed" | "lookup_failed" };
 
 const ACTOR = { id: "email-inbound", type: "system" as const };
+/** S-06 part 2 (G5): the decided_by of a webhook-filed team forward, the durable marker a retry reads. */
+export const FORWARD_ACTOR_ID = "email-inbound-forward";
+type Filing = { kind: "customer"; sender: SenderMatch | null } | { kind: "forward"; authorId: string | null };
+/** Spec §3 (G1 as ruled): the account's members (any role) and its reply-to mailbox; never the agency. */
+const authorOf = (t: TeamSender): string | null => ("userId" in t ? t.userId : null);
 
 /** Fix round 1 item 6d: a Resend-reported timestamp this platform cannot parse is never fatal — the
  *  received time falls back to now() rather than letting `new Date(garbage).toISOString()` throw. */
@@ -36,18 +44,29 @@ function receivedAtOf(raw: string, now: () => Date): string {
  *  this message was already accepted. */
 async function resumeExisting(
   deps: PipelineDeps, row: InboundEmailRow, contactId: string,
-  // A row THIS call just inserted already has its sender match in hand (firstRunMatch below) —
-  // undefined means "work it out", which a found-earlier row (never inserted by this call) needs.
-  precomputedSender?: SenderMatch | null,
+  // A row THIS call just inserted already has its filing decided (firstRunFiling below) — undefined
+  // means "work it out", which a found-earlier row (never inserted by this call) needs.
+  precomputed?: Filing,
 ): Promise<PipelineOutcome> {
   if (row.status !== "filed") return { status: 200, result: "duplicate" };
   try {
-    const sender = precomputedSender !== undefined ? precomputedSender
-      : row.messageId !== null ? null : await matchSender(deps.db, row.accountId, contactId, row.fromEmail);
+    let filing: Filing;
+    if (precomputed) filing = precomputed;
+    else if (row.decidedBy === FORWARD_ACTOR_ID) {
+      // A retry of a forward: the author is looked up again (null if the person has since left).
+      const bare = row.messageId === null ? bareAddress(row.fromEmail) : null;
+      const t = bare ? await matchTeamSender(deps.db, row.accountId, bare) : null;
+      filing = { kind: "forward", authorId: t ? authorOf(t) : null };
+    } else {
+      filing = { kind: "customer", sender: row.messageId !== null ? null : await matchSender(deps.db, row.accountId, contactId, row.fromEmail) };
+    }
+    const isForward = filing.kind === "forward";
     const result = await fileInboundEmail({ db: deps.db, now: deps.now }, {
-      row, contactId, sender, attachmentCount: row.attachmentCount, raiseUnread: true, actor: ACTOR,
+      row, contactId, sender: filing.kind === "customer" ? filing.sender : null, attachmentCount: row.attachmentCount,
+      raiseUnread: !isForward, actor: ACTOR, ...(filing.kind === "forward" ? { forward: { authorId: filing.authorId } } : {}),
     });
-    if (result.created) {
+    // Spec §4: the owner's forwarded copy is NOT sent for a teammate's forward.
+    if (result.created && !isForward) {
       try {
         await deps.forward({ row, contactId, senderName: row.fromName, attachmentCount: row.attachmentCount });
       } catch (e) {
@@ -165,24 +184,74 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     return await resumeExisting(deps, existingRow, contactId);
   }
 
+  // S-06 part 2, spec "Pipeline order" 1 and 2: dropped before anything is stored, stateless (a Resend
+  // retry is dropped again). G16: a row already stored resumed above; a drop is never retroactive.
+  // Fix round 1 item 2: `email.from` can itself be null (a malformed or stripped header) —
+  // `bareAddress` already tolerates that, and the RAW fallback below must too.
+  const fromEmail = bareAddress(email.from);
+  // The team answer, looked up at most once per delivery (the auto-forwarded exemption and the sender
+  // check share it). THROWS on a read failure: each caller answers 503.
+  let teamMemo: Promise<TeamSender | null> | null = null;
+  const accountId = thread.accountId;
+  const teamOf = () => (teamMemo ??= fromEmail ? matchTeamSender(deps.db, accountId, fromEmail) : Promise.resolve(null));
+  // Task 4's contract: the BARE address, never raw `email.from` (a display-name From would let a
+  // mailer-daemon bounce through).
+  const auto = classifyAutomatic(email.rawHeaders ? parseHeaderBlock(email.rawHeaders) : null, fromEmail);
+  let autoDrop = auto === "automatic";
+  if (auto === "auto_forwarded") {
+    // G10 as ruled: a teammate's forwarding rule files normally; anyone else's is automatic mail.
+    try {
+      autoDrop = (await teamOf()) === null;
+    } catch {
+      deps.log("inbound email: the team lookup failed; 503 so Resend retries");
+      return { status: 503, result: "lookup_failed" };
+    }
+  }
+  if (autoDrop) {
+    deps.log(`inbound email: dropped (automatic) account=${thread.accountId}`);
+    return { status: 200, result: "dropped" };
+  }
+  let neverLog: Awaited<ReturnType<typeof listNeverLog>>;
+  try {
+    neverLog = await listNeverLog(deps.db, thread.accountId);
+  } catch {
+    deps.log("inbound email: reading the never record list failed; 503 so Resend retries");
+    return { status: 503, result: "lookup_failed" };
+  }
+  if (neverLogMatches(neverLog, fromEmail)) {
+    deps.log(`inbound email: dropped (never record) account=${thread.accountId}`);
+    return { status: 200, result: "dropped" };
+  }
+
   let row: InboundEmailRow;
   let rowCreated: boolean;
-  let firstRunMatch: SenderMatch | null = null;
+  let firstRunFiling: Filing | undefined;
   try {
-    // Step 4: the sender check, both halves. Fix round 1 item 2: `email.from` can itself be null (a
-    // malformed or stripped header) — `bareAddress` already tolerates that, but the RAW fallback
-    // below must too, or a null From throws before this ever reaches the ledger.
-    const fromEmail = bareAddress(email.from);
+    // Step 4: the sender check, both halves.
     const verdict = readSesVerdict(parseHeaderBlock(email.rawHeaders ?? ""));
     const authenticated = senderAuthenticated(verdict, fromEmail ? domainOf(fromEmail) : null);
     const match = fromEmail ? await matchSender(deps.db, thread.accountId, thread.contactId, fromEmail) : null;
-    const filed = authenticated && match !== null;
+    // Spec "Pipeline order" 3 and G13: the team only when the customer did not match and the forgery
+    // check passed; an unauthenticated sender is held unverified without a lookup.
+    let team: { authorId: string | null } | null = null;
+    if (authenticated && match === null && fromEmail) {
+      try {
+        const t = await teamOf();
+        team = t ? { authorId: authorOf(t) } : null;
+      } catch {
+        deps.log("inbound email: the team lookup failed; 503 so Resend retries");
+        return { status: 503, result: "lookup_failed" };
+      }
+    }
+    const filed = authenticated && (match !== null || team !== null);
     // Final review M2: an empty or whitespace-only text part is absent, not the reply — some clients
     // send `text: ""` beside the real HTML, which used to file a blank message no stop could be read in.
-    const text = newText(email.text?.trim() ? email.text : (email.html ? htmlToText(email.html) : ""));
-    // Carried past the narrower try/catch below for step 5/7, which needs `match` only when this
+    const whole = email.text?.trim() ? email.text : (email.html ? htmlToText(email.html) : "");
+    // Spec §4: a forward keeps the whole text (the customer's original is the point of it).
+    const text = team ? whole.trim() : newText(whole);
+    // Carried past the narrower try/catch below for step 5/7, which needs the filing only when this
     // call is the one that just inserted the row (the retry path re-reads it itself).
-    firstRunMatch = match;
+    firstRunFiling = team ? { kind: "forward", authorId: team.authorId } : { kind: "customer", sender: match };
 
     try {
       const recorded = await recordInboundEmail(deps.db, {
@@ -190,7 +259,7 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
         fromEmail: fromEmail ?? (email.from ?? "").slice(0, 320), fromName: displayName(email.from), toEmail,
         subject: email.subject, text, auth: authRecord(verdict), attachmentCount: email.attachmentCount,
         status: filed ? "filed" : "held", holdReason: filed ? null : (authenticated ? "not_on_record" : "unverified"),
-        decidedBy: filed ? ACTOR.id : null, receivedAt: receivedAtOf(email.receivedAt, deps.now),
+        decidedBy: filed ? (team ? FORWARD_ACTOR_ID : ACTOR.id) : null, receivedAt: receivedAtOf(email.receivedAt, deps.now),
       });
       row = recorded.row;
       rowCreated = recorded.created;
@@ -219,5 +288,5 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
   // Step 5, 7, 8 (fix round 1 item 6h: "filed" vs "duplicate" decided by whether FILING just
   // completed, never by whether the row insert was new) — the same resume path the two existing-row
   // branches above use, so a retry's idempotency logic lives in exactly one place.
-  return await resumeExisting(deps, row, thread.contactId, rowCreated ? firstRunMatch : undefined);
+  return await resumeExisting(deps, row, thread.contactId, rowCreated ? firstRunFiling : undefined);
 }
