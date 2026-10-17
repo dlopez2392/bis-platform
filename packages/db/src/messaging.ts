@@ -815,7 +815,7 @@ export async function listContactMessages(
   if (list.length === 0) return [];
   // One conversation per customer (`conversations_account_contact_unique`, 0005_messaging.sql:22-25),
   // so list[0] is that customer's only one for a string id — same row `listMessages` would read.
-  if (!page) return listMessages(db, accountId, list[0]!.id);
+  if (!page) return listMessagesWithoutAuthor(db, accountId, list[0]!.id);
   // The record timeline (S-03 1b, 2b): one page, newest first, with who wrote each (0073) and which
   // member it belongs to. `channels` keeps the inbox's form/voice copies out (spec C4): those events
   // have rows of their own there. postgrest-js types a column list built by a template as a
@@ -834,11 +834,26 @@ export async function listContactMessages(
 /** One message as the record reads it; the author pair (0073) and `contact_id` (S-03 2b) are both
  *  present in page mode only — `contact_id` optional for that reason, the author pair still optional
  *  because 0074 closed that column with NOT NULL only going forward. */
-export type ContactMessageRow = Awaited<ReturnType<typeof listMessages>>[number] & {
+export type ContactMessageRow = Awaited<ReturnType<typeof listMessagesWithoutAuthor>>[number] & {
   author_kind?: AuthorKind;
   author_id?: string | null;
   contact_id?: string;
 };
+
+/** listContactMessages' no-page read: one conversation, oldest first, MESSAGE_COLS only, exactly as
+ *  listMessages read before S-06 part 3 (pinned by messaging-author-shape.test.ts). Its own reader,
+ *  not listMessages: THREAD_COLS widened that one for the inbox thread, which reads listMessages
+ *  directly (conversations/page.tsx, inbound-actions.ts) and never through listContactMessages. */
+async function listMessagesWithoutAuthor(
+  db: SupabaseClient, accountId: string, conversationId: string,
+) {
+  const { data, error } = await db.from("messages")
+    .select(MESSAGE_COLS)
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
 
 export async function listMessages(
   db: SupabaseClient, accountId: string, conversationId: string,
