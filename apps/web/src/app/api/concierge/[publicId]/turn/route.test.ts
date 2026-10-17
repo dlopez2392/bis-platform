@@ -18,6 +18,7 @@ const dbFns = vi.hoisted(() => ({
   createSubmission: vi.fn(),
   recordAutomationLog: vi.fn(async () => undefined),
   recordUsage: vi.fn(async () => "recorded"),
+  syncWebchatTurns: vi.fn(),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -257,6 +258,8 @@ beforeEach(() => {
   dbFns.setConciergeSubmission.mockResolvedValue(true);
   dbFns.recordAutomationLog.mockResolvedValue(undefined);
   dbFns.recordUsage.mockResolvedValue("recorded");
+  // What a sync with nothing to copy answers (S-06 part 3).
+  dbFns.syncWebchatTurns.mockResolvedValue({ outcome: "nothing_new" });
 });
 
 afterEach(() => {
@@ -439,6 +442,24 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
     expect((turns as { role: string; text: string }[])[1]!.text)
       .toHaveLength(CONCIERGE_MAX_MESSAGE_CHARS);
+  });
+
+  it("stamps the visitor's line with the request's ARRIVAL and Sofía's with the moment after the model (spec G4; mutation: stamp both with `now` → equal times, FAILS)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-17T15:00:00.000Z"));
+      fetchMock.mockImplementation(async () => {
+        vi.setSystemTime(new Date("2026-10-17T15:00:02.500Z"));
+        return modelReplies("Yes, we do.");
+      });
+      await laterTurn();
+      const [, , turns] = dbFns.appendConciergeTurns.mock.calls[0]!;
+      expect((turns as { role: string; at: string }[]).map((x) => [x.role, x.at])).toEqual([
+        ["visitor", "2026-10-17T15:00:00.000Z"], ["assistant", "2026-10-17T15:00:02.500Z"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1231,5 +1252,125 @@ describe("POST /api/concierge/[publicId]/turn — usage: one website chat, bille
     expect(await res.json()).toEqual({ conversationId: "c1", reply: "Yes, we do.", ended: false, closing: "" });
     await expect(flushAfter()).resolves.toBeUndefined();
     expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — a lead's chat files on the customer's thread (S-06 part 3, spec §3)", () => {
+  const LEAD = { fullName: "Ana", phone: "9565550100", need: "a table" };
+  const filedEarlier = () => dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "s0" });
+
+  it("a turn that files the lead schedules ONE sync in after(), for this account and chat, with no unread flag: the sync decides unread per row (final review P1; mutation: drop the sync → not called, FAILS; pass a caller flag again → a fourth argument, FAILS)", async () => {
+    fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
+    const res = await laterTurn();
+    expect(res.status).toBe(200);
+    expect(dbFns.syncWebchatTurns).not.toHaveBeenCalled();
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledTimes(1);
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
+  });
+
+  it("a lead filed on an earlier turn: every later turn syncs, the same three arguments (spec §4; mutation: sync only when filed THIS turn → not called, FAILS)", async () => {
+    filedEarlier();
+    await laterTurn();
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
+  });
+
+  it("another tab filed it first: this turn syncs too (route.ts:567-568; mutation: sync on outcome 'filed' only → not called, FAILS)", async () => {
+    dbFns.setConciergeSubmission.mockResolvedValue(false);
+    dbFns.getConciergeConversation
+      .mockResolvedValueOnce({ ...CONVERSATION })
+      .mockResolvedValueOnce({ ...CONVERSATION, submission_id: "s-other-tab" });
+    fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
+    await laterTurn();
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
+  });
+
+  it("no lead on file, or a held capture: no sync (decision 1; mutation: sync on every answered turn → FAILS)", async () => {
+    await firstTurn();
+    fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana" }));
+    await laterTurn();
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).not.toHaveBeenCalled();
+  });
+
+  it("no refusal schedules one, even on a chat with a lead: unknown widget, the turn cap, a failed model call (spec §3 'Where it does NOT run'; mutation: schedule before the claim → the cap case calls it, FAILS)", async () => {
+    filedEarlier();
+    dbFns.getVoiceProfileByPublicId.mockResolvedValueOnce(null);
+    expect((await laterTurn()).status).toBe(404);
+    dbFns.claimConciergeTurn.mockResolvedValueOnce(null);
+    expect(((await (await laterTurn()).json()) as { ended: boolean }).ended).toBe(true);
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+    expect((await laterTurn()).status).toBe(503);
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).not.toHaveBeenCalled();
+  });
+
+  it("a sync that throws or fails leaves the visitor's response byte-identical, the background work resolves, and each log line names the account only (decision 5; mutation: run the sync inline → the body changes or the turn 503s, FAILS; log the chat id → FAILS)", async () => {
+    const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+    filedEarlier();
+    const baseline = await (await laterTurn()).text();
+    await flushAfter();
+    const lines = (msg: string) => logs.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(`"msg":"${msg}"`)).map((l) => JSON.parse(l));
+    dbFns.syncWebchatTurns.mockRejectedValueOnce(new Error("db down for c1 Ana 9565550100"));
+    expect(await (await laterTurn()).text()).toBe(baseline);
+    await expect(flushAfter()).resolves.toBeUndefined();
+    dbFns.syncWebchatTurns.mockResolvedValueOnce({ outcome: "failed", stage: "keys" });
+    expect(await (await laterTurn()).text()).toBe(baseline);
+    await flushAfter();
+    dbFns.syncWebchatTurns.mockResolvedValueOnce({ outcome: "no_customer" });
+    await laterTurn();
+    await flushAfter();
+    dbFns.syncWebchatTurns.mockResolvedValueOnce({ outcome: "filed", result: { inserted: 1, visitorInserted: 1, unreadRaised: 0, stoppedAt: 1, failedSteps: ["unread"] } });
+    await laterTurn();
+    await flushAfter();
+    expect(lines("webchat sync failed")).toEqual([
+      { at: "concierge/turn", msg: "webchat sync failed", accountId: "a1", stage: "threw" },
+      { at: "concierge/turn", msg: "webchat sync failed", accountId: "a1", stage: "keys" },
+    ]);
+    expect(lines("webchat sync dropped")).toEqual([{ at: "concierge/turn", msg: "webchat sync dropped", accountId: "a1", reason: "no customer" }]);
+    expect(lines("webchat sync partial")).toEqual([{ at: "concierge/turn", msg: "webchat sync partial", accountId: "a1", inserted: 1, stopped: true, failedSteps: ["unread"] }]);
+    const all = logs.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("webchat sync")).join("\n");
+    expect(all).not.toMatch(/"c1"|Ana|9565550100/);
+  });
+
+  it("the visitor waits for nothing the sync does: a sync that never settles does not hold the reply (mutation: await the sync before returning → the race answers 'held', FAILS)", async () => {
+    filedEarlier();
+    dbFns.syncWebchatTurns.mockReturnValue(new Promise(() => {}));
+    const res = await Promise.race([laterTurn(), new Promise<"held">((r) => setTimeout(() => r("held"), 2_000))]);
+    expect(res).not.toBe("held");
+    expect((res as Response).status).toBe(200);
+  });
+
+  // Task 3 review: `conversationId` in the body is the visitor's own string. Postgres matches any
+  // spelling of the same uuid (`.eq("id", …)` on a uuid column), so after the tenant check every key,
+  // the id handed to the sync and the id echoed back are the STORED row's, or one chat could be
+  // billed, claimed and copied under two spellings.
+  it("a chat id sent in another uuid spelling: the claim, the transcript, the sync and the reply all carry the STORED id (Task 3 review; mutation: `conversationId = priorId` → 'C1…' reaches them, FAILS)", async () => {
+    const STORED = "0b7e3c2a-9f41-4d6e-8a52-3c1d9e7f6a10";
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, id: STORED, submission_id: "s0" });
+    const res = await laterTurn({ conversationId: STORED.toUpperCase() });
+    expect(dbFns.getConciergeConversation).toHaveBeenCalledWith(expect.anything(), STORED.toUpperCase());
+    expect(((await res.json()) as { conversationId: string }).conversationId).toBe(STORED);
+    expect(dbFns.claimConciergeTurn).toHaveBeenCalledWith(expect.anything(), STORED, CONCIERGE_MAX_TURNS);
+    expect(dbFns.appendConciergeTurns).toHaveBeenCalledWith(expect.anything(), STORED, expect.any(Array));
+    await flushAfter();
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED);
+  });
+
+  it("the same spelling on the chat's first answered turn, which also files the lead: the usage ledger's source and the lead's claimed slot carry the STORED id too (Task 4 M1; mutations: sourceRef from priorId → 'conversation:0B7E…', FAILS; fileLead's conversationId from priorId → setConciergeSubmission gets the upper-case spelling, FAILS)", async () => {
+    const STORED = "0b7e3c2a-9f41-4d6e-8a52-3c1d9e7f6a10";
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, id: STORED });
+    fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
+    const res = await laterTurn({ conversationId: STORED.toUpperCase() });
+    expect(res.status).toBe(200);
+    // fileLead is the real one (lib/concierge/lead.ts): the slot it claims is keyed on the id it was given.
+    expect(dbFns.setConciergeSubmission).toHaveBeenCalledTimes(1);
+    expect(dbFns.setConciergeSubmission).toHaveBeenCalledWith(expect.anything(), STORED, expect.any(String));
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ meter: "ai_chats", sourceRef: `conversation:${STORED}` }));
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED);
   });
 });

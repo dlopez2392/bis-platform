@@ -47,6 +47,10 @@ vi.mock("@bis/db", () => ({
   // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
   listPeopleNames: async () => ({}),
   readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
+  // S-06 part 3: the composer's customer read answers null (the customer could not be read: the composer
+  // opens with nothing ready); no thread here holds a chat, so the persona is never read.
+  getContact: async () => null,
+  getVoiceProfile: async () => null,
 }));
 
 const { default: ConversationsPage } = await import("./page");

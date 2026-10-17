@@ -14,9 +14,11 @@ import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import { createDocumentRequest } from "../document-requests";
 import { skipDocumentRequirement, unskipDocumentRequirement } from "../document-requirements";
+import { createConciergeConversation, appendConciergeTurns, setConciergeSubmission, type ConciergeTurn } from "../concierge";
+import { syncWebchatTurns } from "../webchat";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
-  listTimelinePage, groupActivityMembers, groupFacts, groupNextUp,
+  listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, type TimelineEntry,
 } from "../record";
 
 const ACTOR = "user_test";
@@ -295,7 +297,77 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(errors).toEqual(["calls"]);
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
       // The pinned list, in source order, documents last (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS).
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"]);
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"]);
+    }));
+});
+
+describe("the chats source and Last talked (S-06 part 3, spec §7, G20-G22)", () => {
+  // ONE base time, so the turns written and the times asserted agree to the millisecond.
+  const BASE = Date.now() + 3_600_000;
+  const SOON = (s: number) => new Date(BASE + s * 1000).toISOString();
+  const chatTurns = (n: number, from: number): ConciergeTurn[] =>
+    Array.from({ length: n }, (_, i) => ({ role: i % 2 === 0 ? "visitor" : "assistant", text: `t${i}`, at: SOON(from + i) }));
+  /** One lead chat for an existing customer, synced as the route would. */
+  async function chatFor(db: SupabaseClient, accountId: string, contactId: string, n: number, from: number) {
+    const form = await createForm(db, accountId, { name: "Website chat" }, ACTOR);
+    const chat = await createConciergeConversation(db, { accountId, formId: form.id, ipHash: "h", locale: "en", attribution: {}, origin: null });
+    await appendConciergeTurns(db, chat.id, chatTurns(n, from));
+    const sub = await createSubmission(db, accountId, form.id, { answers: [], authorKind: "ai" });
+    await linkSubmissionContact(db, accountId, sub.id, contactId);
+    expect(await setConciergeSubmission(db, chat.id, sub.id)).toBe(true);
+    expect((await syncWebchatTurns(db, accountId, chat.id)).outcome).toBe("filed");
+    return chat.id;
+  }
+  const chatsOf = (items: TimelineEntry[]) => items.flatMap((i) => (i.kind === "chat" ? [i] : []));
+
+  it("one row per chat, at its START, counting both sides; a later turn moves neither the row nor its time (mutations: drop the index-0 filter → six rows, FAILS; count visitor rows only → 3, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const chatId = await chatFor(db, accountId, ana, 6, 0);
+      const first = chatsOf((await listContactTimelinePage(db, accountId, ana)).items);
+      expect(first).toHaveLength(1);
+      expect(first[0]!.chat.count).toBe(6);
+      expect(first[0]!.chat.matchedExisting).toBe(true);
+      expect(Date.parse(first[0]!.at)).toBe(Date.parse(SOON(0)));
+      await appendConciergeTurns(db, chatId, chatTurns(2, 50));
+      await syncWebchatTurns(db, accountId, chatId);
+      const later = chatsOf((await listContactTimelinePage(db, accountId, ana)).items);
+      expect(later.map((e) => [e.id, e.at, e.chat.count])).toEqual([[first[0]!.id, first[0]!.at, 8]]);
+    }));
+
+  it("two chats are two rows, paged with neither a repeat nor a skip (mutation: drop withTimelinePage on the anchor read → page two repeats the newer chat, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      await chatFor(db, accountId, ana, 2, 0);
+      await chatFor(db, accountId, ana, 2, 100);
+      const p1 = await listContactTimelinePage(db, accountId, ana, undefined, { limit: 1 });
+      const p2 = await listContactTimelinePage(db, accountId, ana, p1.older!, { limit: 1 });
+      expect([p1.items[0]!.kind, p2.items[0]!.kind]).toEqual(["chat", "chat"]);
+      expect(Date.parse(p1.items[0]!.at)).toBe(Date.parse(SOON(100)));
+      expect(Date.parse(p2.items[0]!.at)).toBe(Date.parse(SOON(0)));
+    }));
+
+  it("a household's page merges its members' chats, each naming its member (C6)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      const { id: luis } = await createContact(db, accountId, { firstName: "Luis" }, ACTOR);
+      await chatFor(db, accountId, ana, 2, 0);
+      await chatFor(db, accountId, luis, 2, 10);
+      expect(chatsOf((await listTimelinePage(db, accountId, [ana, luis])).items).map((e) => e.contactId)).toEqual([luis, ana]);
+    }));
+
+  it("Last talked counts the chat, its newest turn, as 'chat'; a newer email wins (mutation: leave webchat out of the channel filter → null, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+      await chatFor(db, accountId, ana, 2, 0);
+      const talked = (await contactFacts(db, accountId, ana)).lastTalked;
+      expect(talked.ok && talked.value?.channel).toBe("chat");
+      expect(talked.ok && Date.parse(talked.value!.at)).toBe(Date.parse(SOON(1)));
+      expect((await groupFacts(db, accountId, [ana])).lastTalked).toMatchObject({ ok: true, value: { channel: "chat", contactId: ana } });
+      const { id: conv } = await ensureConversation(db, accountId, ana, ACTOR);
+      await seedMessage(db, accountId, conv, "email", SOON(30), "sent");
+      const after = (await contactFacts(db, accountId, ana)).lastTalked;
+      expect(after.ok && after.value?.channel).toBe("email");
     }));
 });
 

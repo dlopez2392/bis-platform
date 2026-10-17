@@ -47,6 +47,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
       return { kind, personId: kind === "person" ? entry.booking.author_id : null };
     }
     case "call": return { kind: "ai", personId: null };
+    // S-06 part 3 (G20): the chat is the customer reaching the business; the words already name Sofía.
+    case "chat": return { kind: "customer", personId: null };
     // S-07: the person who added the file (documents.created_by is NOT NULL); one the reader cannot
     // name reads "Someone on the team", still the person mark. S-07 2b: a customer's upload is
     // "customer:<request id>" (0080), the customer mark; staff files stay the person's.

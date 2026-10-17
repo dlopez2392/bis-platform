@@ -4,6 +4,8 @@ import { config as loadEnv } from "dotenv";
 import {
   serviceDb, createForm, updateForm, getVoiceProfile, upsertVoiceProfile,
   enableConcierge, getBranding, setBranding, type VoiceProfileRow, type Branding,
+  createContact, createConciergeConversation, appendConciergeTurns, setConciergeSubmission,
+  createSubmission, linkSubmissionContact, ensureConversation,
 } from "@bis/db";
 import { conciergeStrings } from "../src/lib/concierge/strings";
 import { signRenderToken, RENDER_TOKEN_FIELD } from "../src/lib/forms/guards";
@@ -470,6 +472,71 @@ test("the Voice page's checkbox turns the assistant off and back on, through the
   // Leave it ON: `afterAll` restores the profile regardless, but the
   // "embedded" describe below runs after this test in the same file and
   // needs the assistant ON to resolve `/c/${widget.publicId}`.
+});
+
+// S-06 part 3 (spec "Tests", G15): a lead's chat on the customer's inbox thread, through the REAL turn
+// route. The lead itself is seeded (no test can make the model call capture_lead); ONE real turn is posted
+// and its after() sync copies the whole chat. ON THE PER-RUN FIXTURE ACCOUNT ONLY. Every row it makes is
+// deleted in `finally`, each error checked, then every table re-read.
+test("a lead's chat files on the customer's inbox thread as Web chat, every turn marked", async ({ page }) => {
+  test.skip(!widget, skipReason);
+  test.skip(!process.env.OPENAI_API_KEY,
+    "OPENAI_API_KEY is not set here, so the turn route refuses by design and nothing files. Set it in apps/web/.env.local to run this.");
+  const db = serviceDb();
+  const accountId = widget!.accountId;
+  const stamp = `wc${Date.now()}`;
+  const made: { contactId?: string; chatId?: string; submissionId?: string; conversationId?: string } = {};
+  try {
+    // The customer exists BEFORE the lead, so the chat reads as matched (spec §5a): one line.
+    made.contactId = (await createContact(db, accountId, { firstName: `Chat ${stamp}` }, "e2e")).id;
+    const chat = await createConciergeConversation(db, { accountId, formId: widget!.formId, ipHash: `e2e-${stamp}`, locale: "en", attribution: {}, origin: null });
+    made.chatId = chat.id;
+    const at = (s: number) => new Date(Date.now() - 600_000 + s * 1000).toISOString();
+    await appendConciergeTurns(db, chat.id, [
+      { role: "visitor", text: `Do you build benches? ${stamp}`, at: at(0) },
+      { role: "assistant", text: "We do. What size do you need?", at: at(1) },
+      { role: "visitor", text: "About six feet. I'm Ana.", at: at(2) },
+      { role: "assistant", text: "Thanks, Ana. The team will follow up.", at: at(3) },
+    ]);
+    made.submissionId = (await createSubmission(db, accountId, widget!.formId, { answers: [], authorKind: "ai" })).id;
+    await linkSubmissionContact(db, accountId, made.submissionId, made.contactId);
+    expect(await setConciergeSubmission(db, chat.id, made.submissionId)).toBe(true);
+    made.conversationId = (await ensureConversation(db, accountId, made.contactId, "e2e", "system")).id;
+
+    const res = await page.request.post(`/api/concierge/${widget!.publicId}/turn`, {
+      data: { conversationId: chat.id, text: "Do you work on Saturdays?", locale: "en" },
+    });
+    expect(res.status()).toBe(200);
+    // The copy runs in after(), once the reply is sent.
+    await expect.poll(async () => {
+      const { count, error } = await db.from("messages").select("id", { count: "exact", head: true })
+        .eq("conversation_id", made.conversationId!).eq("channel", "webchat");
+      expect(error).toBeNull();
+      return count;
+    }, { timeout: 30_000 }).toBe(6);
+
+    await page.goto(`/dashboard/accounts/${accountId}/conversations?c=${made.conversationId}`);
+    const rows = page.locator("[data-webchat-row]");
+    await expect(rows).toHaveCount(6);
+    await expect(rows.first()).toContainText(m["conversations.channel.webchat"]);
+    await expect(rows.first()).toContainText(m["provenance.customer"]);
+    await expect(rows.nth(1)).toContainText("· AI");
+    await expect(page.locator("[data-webchat-unconfirmed]")).toHaveCount(1);
+  } finally {
+    const del = async (table: string, column: string, value: string | undefined) => {
+      if (!value) return;
+      const { error } = await db.from(table).delete().eq(column, value);
+      expect(error, table).toBeNull();
+      const { count, error: e2 } = await db.from(table).select("id", { count: "exact", head: true }).eq(column, value);
+      expect(e2, table).toBeNull();
+      expect(count, table).toBe(0);
+    };
+    await del("messages", "conversation_id", made.conversationId);
+    await del("conversations", "id", made.conversationId);
+    await del("concierge_conversations", "id", made.chatId);
+    await del("form_submissions", "id", made.submissionId);
+    await del("contacts", "id", made.contactId);
+  }
 });
 
 /**

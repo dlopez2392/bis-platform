@@ -305,10 +305,12 @@ jobs:
       # project's one value this job reads is scoped to the migration check
       # step below.
       #
-      # The one e2e test that calls the model (concierge.spec.ts, "a visitor's
-      # message comes back with a reply") skips itself when this is unset — so
-      # until 2026-09-21 no machine had ever proved a real answer comes back
-      # (the first proof was a person, in a browser, on Test Client One).
+      # The two e2e tests that call the model, both in concierge.spec.ts,
+      # skip themselves when this is unset: "a visitor's message comes back
+      # with a reply" and (S-06 part 3) "a lead's chat files on the customer's
+      # inbox thread as Web chat, every turn marked". Until 2026-09-21 no
+      # machine had ever proved a real answer comes back (the first proof was
+      # a person, in a browser, on Test Client One).
       # Scoped to THIS job on purpose: the unit suites under `verify` stub or
       # clear the key themselves, and a job that never talks to OpenAI should
       # not carry the credential. The secret is a separate CI key (`bis-ci`),

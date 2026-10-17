@@ -12,7 +12,7 @@
 // This bounds how many turns and how many conversations. It claims nothing
 // about duration, because text has none to claim.
 //
-// THREE PROPERTIES THIS ROUTE DOES NOT HAVE, stated so the next reader does
+// FOUR PROPERTIES THIS ROUTE DOES NOT HAVE, stated so the next reader does
 // not assume them:
 //
 //   1. The transcript is atomic but NOT ORDERED. `concierge_append_turns`
@@ -32,6 +32,11 @@
 //      consumed. v1 accepts that: the failure mode is a duplicated pair in a
 //      transcript, not a duplicated lead (the submission slot is claimed
 //      once, in the database).
+//   4. (S-06 part 3) A lead's chat is copied to the customer's inbox thread
+//      AFTER the response, in after() (syncWebchatTurns): idempotent per
+//      transcript index, so a retried sync never duplicates; a retried POST
+//      still files its pair twice (property 3), and both copies appear on
+//      the thread, mirroring the transcript.
 import { NextResponse, after } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy imports in the handler below).
@@ -179,7 +184,7 @@ export async function POST(
     serviceDb, getVoiceProfileByPublicId, createConciergeConversation,
     getConciergeConversation, claimConciergeTurn, appendConciergeTurns,
     countConciergeConversationsByIp, countConciergeConversationsForAccount,
-    brandDisplayName, recordAutomationLog,
+    brandDisplayName, recordAutomationLog, syncWebchatTurns,
   } = await import("@bis/db");
 
   const ipHash = hashIp(clientIp(req.headers));
@@ -384,17 +389,22 @@ export async function POST(
       };
     } else {
       // ── TURN 2+ ─────────────────────────────────────────────────────────
-      conversationId = priorId;
-      const existing = await getConciergeConversation(db, conversationId);
+      const existing = await getConciergeConversation(db, priorId);
       // The conversation row is the authorisation now, and it must belong to
       // the tenant this address resolves to — otherwise a leaked id could be
       // driven through another client's widget, spending their budget and
       // filing into their CRM.
       if (!existing || existing.account_id !== profile.account_id) {
-        log("refused: conversation not this tenant's", { publicId, conversationId });
+        log("refused: conversation not this tenant's", { publicId, conversationId: priorId });
         return NextResponse.json({ error: "forbidden" }, { status: 403 });
       }
       conversation = existing;
+      // The STORED id from here on, never the visitor's string (S-06 part 3,
+      // Task 3 review): the lookup above matches any spelling Postgres accepts
+      // for the same uuid (upper case, no hyphens, braces), so a text key
+      // built from `priorId` (the usage ledger's `conversation:<id>`, the web
+      // chat sync's message keys) would name one chat two ways.
+      conversationId = existing.id;
 
       // Unchanged position: already ran before `claimConciergeTurn`, the
       // thing that spends on this branch.
@@ -651,7 +661,8 @@ export async function POST(
       // it drives cost, and clipping what a reader sees mid-sentence would be
       // a visible defect, not a cost saving.
       await appendConciergeTurns(db, conversationId, [
-        { role: "visitor", text, at: now },
+        // S-06 part 3 (spec G4): the visitor's line at the request's ARRIVAL, Sofía's after the model, so a filing turn reads: their details, the lead, her thank-you.
+        { role: "visitor", text, at: new Date(startedAt).toISOString() },
         { role: "assistant", text: storedSpoken, at: now },
       ]);
     } catch (e) {
@@ -695,6 +706,34 @@ export async function POST(
           }, `concierge ${conversationId}`);
         } catch (e) {
           log("usage leg failed", { conversationId, error: String(e) });
+        }
+      });
+    }
+
+    // S-06 part 3 (spec §3, G3): a chat with a lead on file files on that customer's thread. ONE job, in
+    // after(), like the usage leg: the visitor already has this reply, so nothing the sync does can
+    // change, delay or break it, and syncWebchatTurns answers outcomes instead of throwing. It reads what
+    // IS on the thread, so the next turn heals whatever this one missed (the chat's last turn has no next
+    // turn: that pair stays only in the transcript, spec failure table). Logged with the account id only
+    // (decision 5): never the chat id, never a word of the chat. "no customer" is what the sync answers
+    // when the lead's submission has no contact: deleted since, OR a lead another tab filed moments ago
+    // whose contact is not linked yet (the next turn's sync finds it then).
+    if (filed) {
+      const accountId = profile.account_id;
+      after(async () => {
+        try {
+          // No unread flag (final review P1): the sync raises unread per ROW, for each post-lead visitor
+          // turn it actually inserts, so whichever tab's sync copies a turn counts it exactly once.
+          const r = await syncWebchatTurns(db, accountId, conversationId);
+          if (r.outcome === "failed") log("webchat sync failed", { accountId, stage: r.stage });
+          else if (r.outcome === "no_customer") log("webchat sync dropped", { accountId, reason: "no customer" });
+          else if (r.outcome === "filed" && (r.result.stoppedAt !== null || r.result.failedSteps.length > 0)) {
+            log("webchat sync partial", {
+              accountId, inserted: r.result.inserted, stopped: r.result.stoppedAt !== null, failedSteps: r.result.failedSteps,
+            });
+          }
+        } catch {
+          log("webchat sync failed", { accountId, stage: "threw" });
         }
       });
     }

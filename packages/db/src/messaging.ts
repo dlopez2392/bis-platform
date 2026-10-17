@@ -5,6 +5,7 @@ import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
 import { messageAuthor, type AuthorKind } from "./provenance";
 import { withTimelinePage, forContacts, type TimelinePageOpts } from "./timeline-cursor";
+import { WEBCHAT_ACTOR_ID, type PlannedWebchatRow } from "./webchat-plan";
 
 export type MessageStatus =
   | "queued" | "sent" | "delivered" | "opened" | "bounced" | "failed";
@@ -17,7 +18,8 @@ export type NewMessage = {
   // "sms" needs no migration: 0006_forms.sql:92 already sets the CHECK to
   // ('email','sms','webchat','voice','note','form') — a deliberate
   // "channels are adapters, not migrations" decision.
-  channel: "email" | "form" | "voice" | "sms";
+  // "webchat" (S-06 part 3): written ONLY by fileWebchatTurns below; nothing ever sends one.
+  channel: "email" | "form" | "voice" | "sms" | "webchat";
   direction: "outbound" | "inbound";
   subject?: string;
   body: string;
@@ -80,6 +82,12 @@ function quoteFilterValue(value: string): string {
 
 const MESSAGE_COLS =
   "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, meta, created_at";
+
+/** The inbox thread's columns (S-06 part 3, spec §5): MESSAGE_COLS plus who wrote each row (0073), so a
+ *  web chat bubble carries its mark and the composer can tell the customer's last reply (spec §6). A
+ *  literal, not a template: postgrest-js types a template-built column list as a ParserError. */
+const THREAD_COLS =
+  "id, conversation_id, channel, direction, status, provider_message_id, subject, body, error, meta, created_at, author_kind, author_id";
 
 // Providers deliver webhook events at-least-once and without an ordering
 // guarantee, so the same event can replay and a later-firing event (e.g.
@@ -243,6 +251,8 @@ export async function updateMessageStatusByProviderId(
     .select("id, account_id, status, conversations(contact_id)")
     .eq("provider_message_id", providerMessageId)
     .eq("direction", "outbound")
+    // S-06 part 3 (plan G29): a chat row is never a provider's send, so no delivery event may relabel one.
+    .neq("channel", "webchat")
     .maybeSingle();
   if (error) throw new Error(`updateMessageStatusByProviderId failed: ${error.message}`);
   if (!data) return { updated: false, accountId: null, contactId: null };
@@ -805,7 +815,7 @@ export async function listContactMessages(
   if (list.length === 0) return [];
   // One conversation per customer (`conversations_account_contact_unique`, 0005_messaging.sql:22-25),
   // so list[0] is that customer's only one for a string id — same row `listMessages` would read.
-  if (!page) return listMessages(db, accountId, list[0]!.id);
+  if (!page) return listMessagesWithoutAuthor(db, accountId, list[0]!.id);
   // The record timeline (S-03 1b, 2b): one page, newest first, with who wrote each (0073) and which
   // member it belongs to. `channels` keeps the inbox's form/voice copies out (spec C4): those events
   // have rows of their own there. postgrest-js types a column list built by a template as a
@@ -824,17 +834,32 @@ export async function listContactMessages(
 /** One message as the record reads it; the author pair (0073) and `contact_id` (S-03 2b) are both
  *  present in page mode only — `contact_id` optional for that reason, the author pair still optional
  *  because 0074 closed that column with NOT NULL only going forward. */
-export type ContactMessageRow = Awaited<ReturnType<typeof listMessages>>[number] & {
+export type ContactMessageRow = Awaited<ReturnType<typeof listMessagesWithoutAuthor>>[number] & {
   author_kind?: AuthorKind;
   author_id?: string | null;
   contact_id?: string;
 };
 
-export async function listMessages(
+/** listContactMessages' no-page read: one conversation, oldest first, MESSAGE_COLS only, exactly as
+ *  listMessages read before S-06 part 3 (pinned by messaging-author-shape.test.ts). Its own reader,
+ *  not listMessages: THREAD_COLS widened that one for the inbox thread, which reads listMessages
+ *  directly (conversations/page.tsx, inbound-actions.ts) and never through listContactMessages. */
+async function listMessagesWithoutAuthor(
   db: SupabaseClient, accountId: string, conversationId: string,
 ) {
   const { data, error } = await db.from("messages")
     .select(MESSAGE_COLS)
+    .eq("account_id", accountId).eq("conversation_id", conversationId)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function listMessages(
+  db: SupabaseClient, accountId: string, conversationId: string,
+) {
+  const { data, error } = await db.from("messages")
+    .select(THREAD_COLS)
     .eq("account_id", accountId).eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
   if (error) throw new Error(error.message);
@@ -914,3 +939,77 @@ export async function searchConversations(
 // components can reach them through the @bis/db/spanish-box subpath); re-exported here so every
 // existing `from "./messaging"` import keeps working.
 export { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox, type RecipientLanguage, type BodyDefaults } from "./spanish-box";
+
+/** What one fileWebchatTurns batch did (S-06 part 3, spec §3 step 5; plan G27, G28). Never logged here:
+ *  the route logs the account id only (spec decision 5). */
+export type WebchatFileResult = {
+  inserted: number;
+  visitorInserted: number;
+  unreadRaised: number;
+  /** The index whose insert failed with anything but 23505; the batch stopped there (order is kept). */
+  stoppedAt: number | null;
+  /** Steps after the inserts that failed; the rows stand (createMessage's touch posture, above). */
+  failedSteps: ("touch" | "event" | "unread")[];
+};
+
+/**
+ * S-06 part 3 (spec §2, §3 step 5; G1, G6, G7; plan G27, G28): writes a lead's website-chat turns to the
+ * customer's thread, one row each, IN INDEX ORDER, on the caller's SERVICE client (0053). Not
+ * createMessage: that emits one event and one touch per row (G6). Each row's author comes from the one
+ * mapping (messageAuthor): the visitor's ("concierge", "system") inbound → customer; Sofía's
+ * ("concierge", "ai") → ai. 23505 on the provider id = that row is already there (another tab's sync,
+ * a retry): skipped, not counted. Any other error stops the batch. Then ONCE, only if something was
+ * inserted: the touch (only for a VISITOR row: Sofía's never move the thread), one `webchat.filed`
+ * event, and +1 unread for every visitor row THIS batch inserted whose planner flag `countsUnread` is
+ * set (the turn's own `at` is later than the lead's). The rule is per ROW, never per caller (final
+ * review P1): whichever tab's sync happens to insert a post-lead visitor turn raises its unread, so a
+ * race between two tabs can neither lose that unread nor count it twice (the row inserts once).
+ */
+export async function fileWebchatTurns(
+  db: SupabaseClient, accountId: string, conversationId: string,
+  rows: readonly PlannedWebchatRow[],
+): Promise<WebchatFileResult> {
+  const result: WebchatFileResult = { inserted: 0, visitorInserted: 0, unreadRaised: 0, stoppedAt: null, failedSteps: [] };
+  let toRaise = 0;
+  for (const row of rows) {
+    const author = messageAuthor(row.direction === "inbound" ? "system" : "ai", WEBCHAT_ACTOR_ID, row.direction);
+    const { error } = await db.from("messages").insert({
+      account_id: accountId, conversation_id: conversationId, channel: "webchat", direction: row.direction,
+      status: "delivered", subject: null, body: row.body, provider_message_id: row.providerMessageId,
+      author_kind: author.authorKind, author_id: author.authorId, meta: row.meta, created_at: row.createdAt,
+    });
+    if (error?.code === "23505") continue;
+    if (error) {
+      result.stoppedAt = row.index;
+      break;
+    }
+    result.inserted += 1;
+    if (row.direction === "inbound") {
+      result.visitorInserted += 1;
+      if (row.countsUnread) toRaise += 1;
+    }
+  }
+  if (result.inserted === 0) return result;
+  if (result.visitorInserted > 0) {
+    const now = new Date().toISOString();
+    const { error } = await db.from("conversations").update({ last_message_at: now, updated_at: now })
+      .eq("account_id", accountId).eq("id", conversationId);
+    if (error) result.failedSteps.push("touch");
+  }
+  const chatId = rows[0]?.meta.webchat.chat_id ?? "";
+  try {
+    await emit(db, accountId, "webchat.filed", WEBCHAT_ACTOR_ID, { conversationId, chatId, count: result.inserted }, "system");
+  } catch {
+    result.failedSteps.push("event");
+  }
+  for (let i = 0; i < toRaise; i++) {
+    try {
+      await incrementUnreadCount(db, accountId, conversationId);
+      result.unreadRaised += 1;
+    } catch {
+      result.failedSteps.push("unread");
+      break;
+    }
+  }
+  return result;
+}

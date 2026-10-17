@@ -3,7 +3,7 @@ import Link from "next/link";
 import { MessagesSquare } from "lucide-react";
 import {
   listConversations, getConversationSummary, listMessages, getContact,
-  listHeldInboundEmails, countHeldInboundEmails, getInboundSettings, listPeopleNames,
+  listHeldInboundEmails, countHeldInboundEmails, getInboundSettings, listPeopleNames, getVoiceProfile,
   type SupabaseClient,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -25,13 +25,16 @@ import { ledgerDb } from "@/lib/consent/ledger-db";
 import { readEmailView, type EmailView } from "@/lib/consent/email-view";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
+import { softSmsGate } from "@/lib/record/loaders";
+import { smsRecipientState, emailRecipientState } from "@/lib/consent/recipient-state";
 import { readInboundMeta } from "./inbound-meta";
 import { ConversationList } from "./conversation-list";
 import { MessageThread } from "./message-thread";
-import { EmailComposer } from "./email-composer";
 import { MarkRead } from "./mark-read";
 import { ConversationBack } from "./conversation-back";
-import { sendEmailAction, markConversationReadAction } from "./actions";
+import { sendEmailAction, sendSmsAction, markConversationReadAction } from "./actions";
+import { MessageComposer } from "../contacts/[contactId]/message-composer";
+import { loadInboxComposer } from "./composer-facts";
 import { HeldEmailList, type HeldItemView } from "./held-email-list";
 import { HeldEmailSkeleton } from "./held-email-skeleton";
 
@@ -82,6 +85,9 @@ export const dynamic = "force-dynamic";
  *  more — `listConversations` returns rows, not a total — so it also
  *  decides whether the "Older" link renders (same idiom as calls/activity). */
 const PAGE_SIZE = 50;
+
+/** S-06 part 3 (spec §6, G9): the inbox replies by text or email; no Note here. */
+const INBOX_MODES = ["sms", "email"] as const;
 
 export default async function ConversationsPage({
   params,
@@ -309,6 +315,27 @@ export default async function ConversationsPage({
     }));
   }
 
+  // S-06 part 3 (spec §5): the receptionist's name on Sofía's bubbles, read only when the thread holds a
+  // chat, on the request client; a failed read costs only the name ("Sofía").
+  const personaName = messages.some((x) => x.channel === "webchat")
+    ? await getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+      console.error(`conversations: account ${accountId} persona read failed: ${loggableError(e)}`);
+      return null;
+    })
+    : null;
+  // S-06 part 3 (spec §6): the composer's facts and its first channel, decided HERE. getContact on the
+  // REQUEST client proves the customer is the viewer's (0068); only then are the two recipient states read
+  // on the ledger client — the record page's order (contacts/[contactId]/page.tsx:84-121).
+  const composerFacts = active
+    ? await loadInboxComposer({
+      contact: () => getContact(db, accountId, active.contactId),
+      gate: () => softSmsGate(db, accountId),
+      smsState: (c) => smsRecipientState(ledgerDb(), accountId, c),
+      emailState: (c) => emailRecipientState(ledgerDb(), accountId, c),
+      log: (line) => console.error(`conversations: account ${accountId} composer: ${line}`),
+    }, { messages, zone: zone.zone, locale })
+    : null;
+
   return (
     <>
       {header}
@@ -350,16 +377,28 @@ export default async function ConversationsPage({
               visibleSenderIds={visibleContactIds}
               emailViews={emailViews}
               forwardedNames={forwardedNames}
+              personaName={personaName}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,
               })}
-              composer={
-                <EmailComposer
+              composer={composerFacts ? (
+                // key: a different thread is a different composer; its tab is that thread's server
+                // answer, never the last thread's (useState keeps its first value across re-renders).
+                <MessageComposer
+                  key={active.id}
                   contactId={active.contactId}
-                  action={sendEmailAction.bind(null, accountId)}
+                  modes={INBOX_MODES}
+                  initialMode={composerFacts.initialMode}
+                  contactHasEmail={composerFacts.contactHasEmail}
+                  contactHasPhone={composerFacts.contactHasPhone}
+                  smsGate={composerFacts.smsGate}
+                  smsBlockedLine={composerFacts.smsBlockedLine}
+                  emailNoticeLine={composerFacts.emailNoticeLine}
+                  emailAction={sendEmailAction.bind(null, accountId)}
+                  smsAction={sendSmsAction.bind(null, accountId)}
                 />
-              }
+              ) : null}
             />
           </div>
         ) : (

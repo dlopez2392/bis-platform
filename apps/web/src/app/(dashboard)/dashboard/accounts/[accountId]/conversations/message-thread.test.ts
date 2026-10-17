@@ -291,3 +291,89 @@ describe("MessageThread names who forwarded a filed email (S-06 part 2)", () => 
     expect(render([reply], "en")).not.toContain("data-forwarded");
   });
 });
+
+describe("web chat bubbles (S-06 part 3, spec §5, §5a; G26)", () => {
+  const at = "2026-10-17T15:00:00Z";
+  const CHAT_A = "11111111-1111-4111-8111-111111111111";
+  const CHAT_B = "22222222-2222-4222-8222-222222222222";
+  const chat = (id: string, chatId: string, index: number, direction: "inbound" | "outbound", body: string, matched: boolean) => ({
+    id, conversation_id: "c1", channel: "webchat", direction, status: "delivered", provider_message_id: `webchat:${chatId}:${index}`,
+    subject: null, body, error: null, created_at: at, author_kind: direction === "inbound" ? "customer" : "ai", author_id: null,
+    meta: { webchat: { chat_id: chatId, index, locale: "es", submission_id: "s1", matched_existing: matched } },
+  });
+  const text = { id: "t1", conversation_id: "c1", channel: "sms", direction: "outbound", status: "delivered", provider_message_id: null,
+    subject: null, body: "Le escribimos", error: null, created_at: at, author_kind: "person", author_id: "u1", meta: {} };
+  const THREAD = [chat("a0", CHAT_A, 0, "inbound", "¿Hacen bancas?", true), chat("a1", CHAT_A, 1, "outbound", "Sí, con gusto.", true),
+    chat("b0", CHAT_B, 0, "inbound", "Hola otra vez", false), text];
+  const render = (locale: "en" | "es", personaName: string | null = "Rosa") => renderToStaticMarkup(createElement(MessageThread, {
+    messages: THREAD as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: "en", ...THREAD_PROPS, locale, personaName,
+  }));
+  const footers = (html: string) => [...html.matchAll(/<p lang="(en|es)" class="mt-1[^"]*">([\s\S]*?)<\/p>/g)].map((x) => [x[1], renderedText(x[2]!).replace(/^.*? · /, "")]);
+
+  it("each footer names Web chat and the mark, never a status word; a text keeps its status (mutation: show MESSAGE_STATUS for chat rows → 'Delivered', FAILS; drop the mark → FAILS)", () => {
+    expect(footers(render("en"))).toEqual([["en", "Web chat · Customer"], ["en", "Web chat · Rosa · AI"], ["en", "Web chat · Customer"], ["en", "Text · Delivered"]]);
+  });
+
+  it("in Spanish for a Spanish-speaking teammate, every footer, the text's too (G26; mutation: messageChannelLabel without the locale → 'Web chat', FAILS)", () => {
+    expect(footers(render("es"))).toEqual([["es", "Chat web · Cliente"], ["es", "Chat web · Rosa · IA"], ["es", "Chat web · Cliente"], ["es", "Texto · Entregado"]]);
+  });
+
+  it("a chat bubble's words carry the language they chatted in, both sides, whatever the contact's (mutation: use contactLanguage → lang=\"en\" on the visitor's line, FAILS)", () => {
+    const html = render("en");
+    expect(html).toMatch(/<p lang="es"[^>]*>¿Hacen bancas\?<\/p>/);
+    expect(html).toMatch(/<p lang="es"[^>]*>Sí, con gusto\.<\/p>/);
+    expect(html).not.toMatch(/<p lang="es"[^>]*>Le escribimos<\/p>/);
+  });
+
+  it("the footer's date is in the teammate's language too, against the literal the fixture instant renders to (G26; mutation: drop formatDateTimeInZone's locale → the Spanish date reads English, FAILS)", () => {
+    const whole = (html: string) => [...html.matchAll(/<p lang="(en|es)" class="mt-1[^"]*">([\s\S]*?)<\/p>/g)].map((x) => renderedText(x[2]!).replace(/[\u202f\u00a0]/g, " "));
+    // ICU builds differ on the space before the day period (U+202F or a plain space); either is the same date.
+    expect(whole(render("en"))[0]).toBe("Oct 17, 2026, 3:00 PM · Web chat · Customer");
+    expect(whole(render("es"))[0]).toBe("17 oct 2026, 3:00 p.m. · Chat web · Cliente");
+  });
+
+  it("a web chat row is the chat's whatever its meta: no status word, the AI mark, no row hook and no line when the meta is missing (M-5; mutation: key the mark on readWebchatMeta → ' · Delivered', FAILS)", () => {
+    const bare = { ...chat("z1", CHAT_A, 0, "outbound", "Hola", true), meta: {} };
+    const html = renderToStaticMarkup(createElement(MessageThread, {
+      messages: [bare] as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: "en", ...THREAD_PROPS, locale: "en", personaName: "Rosa",
+    }));
+    expect(footers(html)).toEqual([["en", "Web chat · Rosa · AI"]]);
+    expect(html).not.toContain("data-webchat-row");
+    expect(html).not.toContain("data-webchat-unconfirmed");
+  });
+
+  it("no persona name: Sofía (author-mark.ts's own fallback; mutation: print an empty name → ' · AI', FAILS)", () => {
+    expect(footers(render("en", null))[1]).toEqual(["en", "Web chat · Sofía · AI"]);
+  });
+
+  it("ONE unconfirmed line per matched chat, directly above its first row, in the teammate's language; none for a chat that made the customer (spec §5a; mutation: render it on every row → three, FAILS; drop lang → FAILS)", () => {
+    const en = render("en");
+    expect(en.match(/data-webchat-unconfirmed/g)).toHaveLength(1);
+    expect(en).toMatch(/<p lang="en" data-webchat-unconfirmed=""[^>]*>Matched by the phone or email they typed; not confirmed\.<\/p><div[^>]*data-webchat-row="0"/);
+    expect(render("es")).toMatch(/<p lang="es" data-webchat-unconfirmed=""[^>]*>Lo relacionamos por el teléfono o el correo que escribió; no está confirmado\.<\/p>/);
+  });
+
+  it("the footer wraps rather than overflows a narrow bubble (DoD: long Spanish and pseudo copy; mutation: whitespace-nowrap → FAILS)", () => {
+    const classes = [...render("es").matchAll(/<p lang="es" class="(mt-1[^"]*)">/g)].map((x) => x[1]!);
+    // Every bubble's footer, so the loop below can never pass on zero matches.
+    expect(classes).toHaveLength(4);
+    for (const cls of classes) {
+      expect(cls).toContain("break-words");
+      expect(cls).not.toMatch(/nowrap|truncate/);
+    }
+  });
+});
+
+describe("a bubble never widens the thread at phone width (CI e2e phone-width.spec.ts)", () => {
+  it("the subject and body break a long unbroken word inside the bubble (mutation: drop break-words from the body → FAILS)", () => {
+    const long = { id: "w1", conversation_id: "c1", channel: "email", direction: "inbound", status: "delivered", provider_message_id: null,
+      subject: "https://example.com/a-very-long-link-with-no-spaces-at-all", body: "https://example.com/another-very-long-link-with-no-spaces", error: null, created_at: "2026-10-17T15:00:00Z", meta: {} };
+    const html = renderToStaticMarkup(createElement(MessageThread, {
+      messages: [long] as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: null, ...THREAD_PROPS,
+    }));
+    const subject = html.match(/<p lang=""[^>]*class="([^"]*)">https:\/\/example\.com\/a-very/)?.[1] ?? "";
+    const body = html.match(/<p lang=""[^>]*class="([^"]*)">https:\/\/example\.com\/another/)?.[1] ?? "";
+    expect(subject.split(" ")).toContain("break-words");
+    expect(body.split(" ")).toContain("break-words");
+  });
+});

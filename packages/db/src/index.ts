@@ -52,7 +52,8 @@ export { ensureConversation, createMessage, updateMessageStatus,
          listContactMessages, incrementUnreadCount, clearUnreadCount,
          type MessageStatus, type NewMessage, type ConversationSummary,
          type ConversationCursor, type FailedOutboundSms, type TextbackWindow,
-         sumUnreadCount, searchConversations } from "./messaging";
+         sumUnreadCount, searchConversations,
+         fileWebchatTurns, type WebchatFileResult } from "./messaging";
 export { recipientLanguage, chooseBody, spanishIsStale, nextSpanishBox, type RecipientLanguage, type BodyDefaults } from "./messaging";
 // NOTE: searchCalls needs no line here — voice is `export * from "./voice"` below.
 export { newPublicId, createForm, listForms, getForm, getPublishedFormByPublicId,
@@ -168,6 +169,12 @@ export {
 } from "./call-proposals";
 export * from "./voice-web-sessions";
 export * from "./concierge";
+// S-06 part 3: a lead's website chat on the customer's thread. See ./webchat.ts and ./webchat-plan.ts.
+export { resolveWebchatThread, listWebchatKeys, syncWebchatTurns, type WebchatThread, type WebchatSyncResult } from "./webchat";
+export {
+  planWebchatRows, matchedExistingCustomer, webchatKey, parseWebchatKey, WEBCHAT_ACTOR_ID, WEBCHAT_KEY_PREFIX,
+  WEBCHAT_MAX_ROWS_PER_CHAT, type WebchatTurn, type WebchatKey, type WebchatRowMeta, type PlannedWebchatRow,
+} from "./webchat-plan";
 export * from "./profile-ready";
 
 // The account-teardown cascade. Exported not for the app — nothing in
@@ -328,7 +335,7 @@ export {
   type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
   type ContactNextUp, type NextUpTask,
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
-  type TimelineMessage, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
+  type TimelineMessage, type TimelineChat, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
   type ContactMessageRow,
   // S-03 part 2b: the household and business page reads its members as one set.
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,

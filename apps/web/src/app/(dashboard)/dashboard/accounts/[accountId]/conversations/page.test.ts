@@ -70,6 +70,10 @@ vi.mock("@bis/db", () => ({
   countHeldInboundEmails: async () => { if (held.countThrows) throw new Error("count failed"); return held.count; },
   getInboundSettings: async () => ({ mode: held.mode, domain: null }),
   listHeldInboundEmails: async () => { if (held.listThrows) throw new Error("list failed"); return held.items; },
+  // S-06 part 3: the composer's customer read answers null (the customer could not be read: the composer
+  // opens with nothing ready); no thread here holds a chat, so the persona is never read.
+  getContact: async () => null,
+  getVoiceProfile: async () => null,
 }));
 
 const { default: ConversationsPage } = await import("./page");

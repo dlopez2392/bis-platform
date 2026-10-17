@@ -5,9 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 // Imported at module scope by the composer; never called during a server render.
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-import { MessageComposer, composeModeFromHash, smsFormBlock } from "./message-composer";
+import { MessageComposer, composeModeFromHash, smsFormBlock, tabSwitch, modeAfterSend, hashTargetFor, resolveInitialMode } from "./message-composer";
 import { m } from "@/lib/messages";
 import { LocaleProvider } from "@/components/locale-provider";
+import { renderedText } from "@/lib/rendered-text";
 
 /**
  * D-015. Same defect as the Conversations EmailComposer
@@ -105,5 +106,75 @@ describe("the composer in Spanish (S-03 1b, spec §10.2)", () => {
       noteAction: async () => {}, emailAction: async () => {}, smsAction: async () => {},
     } as never)));
     for (const word of [">Nota<", ">Correo<", ">Texto<"]) expect(html).toContain(word);
+  });
+});
+
+function inbox(initialMode: "sms" | "email", over: Record<string, unknown> = {}, locale: "en" | "es" = "en"): string {
+  return renderToStaticMarkup(createElement(LocaleProvider, { locale } as never, createElement(MessageComposer, {
+    contactId: "c1", contactHasEmail: true, contactHasPhone: true,
+    smsGate: { ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] }, smsBlockedLine: null, emailNoticeLine: null,
+    emailAction: async () => {}, smsAction: async () => {},
+    modes: ["sms", "email"], initialMode, ...over,
+  } as never)));
+}
+const tabs = (html: string) => [...html.matchAll(/<button[^>]*aria-pressed="(true|false)"[^>]*>([^<]*)<\/button>/g)].map((x) => [x[2], x[1]]);
+
+describe("the inbox's Text | Email composer (S-06 part 3, spec §6, G9, G31)", () => {
+  it("two tabs, Text then Email, no Note, opening on the server's channel (mutation: ignore initialMode → Note-less first tab pressed, FAILS)", () => {
+    expect(tabs(inbox("email"))).toEqual([["Text", "false"], ["Email", "true"]]);
+    expect(tabs(inbox("sms"))).toEqual([["Text", "true"], ["Email", "false"]]);
+    expect(inbox("email")).toContain('placeholder="Subject"');
+  });
+  it("the tab group says what it is, in the staff member's language (mutation: drop role=group → FAILS)", () => {
+    expect(inbox("sms")).toMatch(/<div[^>]*role="group"[^>]*aria-label="Reply by"/);
+    expect(inbox("sms", {}, "es")).toMatch(/<div[^>]*role="group"[^>]*aria-label="Responder por"/);
+    expect(tabs(inbox("sms", {}, "es")).map(([label]) => label)).toEqual(["Texto", "Correo"]);
+  });
+  it("the tab group carries lang so a screen reader announces its label correctly (mutation: drop lang={locale} → FAILS)", () => {
+    expect(inbox("sms")).toMatch(/<div[^>]*role="group"[^>]*lang="en"/);
+    expect(inbox("sms", {}, "es")).toMatch(/<div[^>]*role="group"[^>]*lang="es"/);
+  });
+  it("opening on Text shows today's blocked line in place of the form (mutation: render the form anyway → FAILS)", () => {
+    expect(renderedText(inbox("sms", { smsBlockedLine: "They stopped texts from you." }))).toContain("They stopped texts from you.");
+    expect(inbox("sms", { smsBlockedLine: "They stopped texts from you." })).not.toContain("<textarea");
+  });
+  it("the record page's composer is unchanged: three tabs, Note first and pressed, no group label (mutation: default modes without note → FAILS)", () => {
+    expect(tabs(render()).map(([label, pressed]) => [label, pressed])).toEqual([["Note", "true"], ["Email", "false"], ["Text", "false"]]);
+    expect(render()).not.toContain('role="group"');
+  });
+});
+
+describe("one tap switches, for this message only (spec §6 'Not sticky')", () => {
+  it("tabSwitch: a different tab switches, the same tab does nothing, only the Note boundary clears the draft (mutation: clear on every switch → FAILS)", () => {
+    expect(tabSwitch("sms", "email")).toEqual({ mode: "email", clearBody: false });
+    expect(tabSwitch("sms", "sms")).toBeNull();
+    expect(tabSwitch("note", "email")).toEqual({ mode: "email", clearBody: true });
+  });
+  it("modeAfterSend: back to the server's channel when one was given (the inbox), unchanged otherwise (the record) (G31; mutation: always initialMode ?? 'note' → the record jumps to Note, FAILS)", () => {
+    expect(modeAfterSend("email", "sms")).toBe("sms");
+    expect(modeAfterSend("email", undefined)).toBe("email");
+  });
+});
+
+describe("hashTargetFor: the record header's deep links, gated to the tabs actually on screen (fix round 1)", () => {
+  it("answers the hash's channel only when it is one of modes (mutation: drop the modes.includes gate → FAILS)", () => {
+    expect(hashTargetFor("#compose-sms", ["note", "email", "sms"])).toBe("sms");
+    expect(hashTargetFor("#compose-sms", ["email"])).toBeNull();
+    expect(hashTargetFor("#compose-email", ["sms", "email"])).toBe("email");
+    expect(hashTargetFor("#record-who", ["note", "email", "sms"])).toBeNull();
+  });
+});
+
+describe("resolveInitialMode: the starting tab, clamped to what's actually on screen (fix round 1)", () => {
+  it("keeps initialMode when it is one of modes (mutation: ignore initialMode entirely → FAILS)", () => {
+    expect(resolveInitialMode(["sms", "email"], "email")).toBe("email");
+  });
+  it("falls back to Note when modes holds it and initialMode is absent or foreign (mutation: fall back to modes[0] even with note present → FAILS)", () => {
+    expect(resolveInitialMode(["note", "email", "sms"], undefined)).toBe("note");
+    expect(resolveInitialMode(["note", "email", "sms"], "sms" as never)).toBe("sms");
+  });
+  it("falls back to modes[0] when Note is not on screen and initialMode is foreign to modes (mutation: fall back to 'note' unconditionally → FAILS)", () => {
+    expect(resolveInitialMode(["sms", "email"], undefined)).toBe("sms");
+    expect(resolveInitialMode(["sms", "email"], "note" as never)).toBe("sms");
   });
 });

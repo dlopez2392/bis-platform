@@ -1472,9 +1472,15 @@ export const m = {
 
   "conversations.unread": "unread",
   "conversations.channel.form": "Form submission",
+  "conversations.channel.form.es": "Formulario",
   "conversations.channel.email": "Email",
+  "conversations.channel.email.es": "Correo",
   "conversations.channel.voice": "Call",
+  "conversations.channel.voice.es": "Llamada",
   "conversations.channel.sms": "Text",
+  "conversations.channel.sms.es": "Texto",
+  "conversations.channel.webchat": "Web chat",
+  "conversations.channel.webchat.es": "Chat web",
   // "{channel}" is the house placeholder convention (see shell.presence.idle).
   // Filled from MESSAGE_CHANNEL_LABEL (lib/labels.ts) so the timeline reads
   // "Email sent"/"Text sent"/etc. from the real channel instead of a
@@ -4806,6 +4812,24 @@ export const m = {
   "neverLog.full.es": "La lista está llena (200). Quite una para agregar otra.",
   "neverLog.failed": "That didn't save. Try again.",
   "neverLog.failed.es": "No se guardó. Inténtelo de nuevo.",
+
+  // S-06 part 3: web chat in the inbox and on the record (plan Task 1).
+  "conversations.compose.via": "Reply by",
+  "conversations.compose.via.es": "Responder por",
+  "conversations.webchat.unconfirmed": "Matched by the phone or email they typed; not confirmed.",
+  "conversations.webchat.unconfirmed.es": "Lo relacionamos por el teléfono o el correo que escribió; no está confirmado.",
+  "timeline.webchat": "chatted with {name} on your website",
+  "timeline.webchat.es": "conversó con {name} en su sitio web",
+  "timeline.webchatCount": "{count} messages",
+  "timeline.webchatCount.es": "{count} mensajes",
+  "timeline.webchatCountOne": "1 message",
+  "timeline.webchatCountOne.es": "1 mensaje",
+  "timeline.what.chats": "website chats",
+  "timeline.what.chats.es": "chats del sitio web",
+  "timeline.openChat": "Open chat",
+  "timeline.openChat.es": "Ver chat",
+  "record.facts.channel.chat": "website chat",
+  "record.facts.channel.chat.es": "chat del sitio web",
 } as const;
 
 export type MessageKey = keyof typeof m;

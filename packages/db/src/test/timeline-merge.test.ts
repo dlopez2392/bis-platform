@@ -158,9 +158,35 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     const { db } = fakeDb(sevenSources(), { throwOn: ["calls"], errorOn: ["messages"] });
     const errors: string[] = [];
     const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
-    expect(page.failed).toEqual(["messages", "calls"]);
-    expect([...errors].sort()).toEqual(["calls", "messages"]);
+    // S-06 part 3: the chats source reads messages too, so it fails with it.
+    expect(page.failed).toEqual(["messages", "calls", "chats"]);
+    expect([...errors].sort()).toEqual(["calls", "chats", "messages"]);
     expect(page.items.map((i) => i.kind)).toEqual(["booking", "submission", "deal", "task", "note"]);
+  });
+
+  it("the chats source's COUNT read refused, its anchor read fine: chats is named in `failed`, never a chat row with a made-up count (Task 7 M1; mutation: swallow the count read's error -> a chat row counted 1 and failed [], FAILS)", async () => {
+    const anchor: Row = { id: u(50), conversation_id: CONV, channel: "webchat", created_at: day(5),
+      meta: { webchat: { chat_id: u(51), index: 0, matched_existing: false } } };
+    const tables = { conversations: [{ id: CONV, contact_id: u(99) }], messages: [anchor] };
+    // Control: with every read answering, the anchor IS a chat row, so the case below tests the count read.
+    const ok = await listContactTimelinePage(fakeDb(tables).db, u(100), u(99));
+    expect([ok.failed, ok.items.map((i) => i.kind)]).toEqual([[], ["chat"]]);
+    // Only the count read (its select is `chat_id:meta->webchat->>chat_id`) answers an error.
+    const base = fakeDb(tables).db as unknown as { from: (t: string) => Record<string, (...a: unknown[]) => unknown> };
+    const refused: unknown = new Proxy({}, { get: (_t, p) => (p === "then"
+      ? (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve({ data: null, error: { message: "counts refused" } }).then(res, rej)
+      : () => refused) });
+    const db = { from: (t: string) => {
+      const b = base.from(t);
+      if (t !== "messages") return b;
+      const select = b.select!;
+      return { ...b, select: (cols: unknown) => (String(cols).startsWith("chat_id:") ? refused : select(cols)) };
+    } } as unknown as SupabaseClient;
+    const errors: string[] = [];
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
+    expect(page.failed).toEqual(["chats"]);
+    expect(errors).toEqual(["chats"]);
+    expect(page.items.filter((i) => i.kind === "chat")).toEqual([]);
   });
 
   it("every source failing is still a page, not a throw (mutation: Promise.all without the per-source catch -> rejects, FAILS)", async () => {

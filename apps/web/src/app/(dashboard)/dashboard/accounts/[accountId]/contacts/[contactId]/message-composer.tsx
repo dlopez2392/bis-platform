@@ -18,11 +18,41 @@ import type { SmsGate } from "@/lib/sms/sender";
 export type ComposeMode = "note" | "email" | "sms";
 type Mode = ComposeMode;
 
+/** The record page's three tabs, in today's order. The inbox passes ["sms", "email"] (S-06 part 3, G9). */
+export const DEFAULT_MODES: readonly ComposeMode[] = ["note", "email", "sms"];
+
+/** One tap on a tab (spec §6: one tap switches, for this message only). Only the Note boundary clears the
+ *  draft (a note typed then sent as a text was the hazard the old inline handler guarded). */
+export function tabSwitch(current: ComposeMode, tapped: ComposeMode): { mode: ComposeMode; clearBody: boolean } | null {
+  if (tapped === current) return null;
+  return { mode: tapped, clearBody: current === "note" || tapped === "note" };
+}
+
+/** After a successful send (spec §6, not sticky; plan G31): back to the server's channel when the caller
+ *  gave one (the inbox); the record page gives none and stays where it is, as today. */
+export function modeAfterSend(current: ComposeMode, initialMode: ComposeMode | undefined): ComposeMode {
+  return initialMode ?? current;
+}
+
+/** The starting tab, clamped to what's actually on screen: the caller's `initialMode` when it is one of
+ *  `modes`, else Note when `modes` carries it, else the first of `modes` (fix round 1). */
+export function resolveInitialMode(modes: readonly ComposeMode[], initialMode: ComposeMode | undefined): ComposeMode {
+  if (initialMode && modes.includes(initialMode)) return initialMode;
+  return modes.includes("note") ? "note" : modes[0]!;
+}
+
 /** The record header's Text/Email links (S-03 part 1, spec §9.1): `#compose-sms`, `#compose-email`. */
 export function composeModeFromHash(hash: string): "email" | "sms" | null {
   if (hash === "#compose-sms") return "sms";
   if (hash === "#compose-email") return "email";
   return null;
+}
+
+/** `composeModeFromHash`, gated to the tabs actually on screen (fix round 1): a stray fragment must
+ *  never select a channel the inbox didn't give it a tab for. */
+export function hashTargetFor(hash: string, modes: readonly ComposeMode[]): "email" | "sms" | null {
+  const target = composeModeFromHash(hash);
+  return target && modes.includes(target) ? target : null;
 }
 
 /** The line the Text tab shows in place of its form, in today's order; null when the form shows.
@@ -46,6 +76,8 @@ export function MessageComposer({
   noteAction,
   emailAction,
   smsAction,
+  modes = DEFAULT_MODES,
+  initialMode,
 }: {
   contactId: string;
   contactHasEmail: boolean;
@@ -69,13 +101,18 @@ export function MessageComposer({
   // contact's email is stopped. The form STILL shows — a person replying
   // about their own matter is not automated mail.
   emailNoticeLine: string | null;
-  noteAction: (formData: FormData) => Promise<void>;
+  /** Required whenever modes holds "note" (the record page). */
+  noteAction?: (formData: FormData) => Promise<void>;
   emailAction: (formData: FormData) => Promise<void>;
   smsAction: (formData: FormData) => Promise<void>;
+  /** S-06 part 3 (G9): which tabs, in this order; default the record's three. */
+  modes?: readonly ComposeMode[];
+  /** S-06 part 3 (spec §6): the channel the server decided; absent = Note (or the first of modes). */
+  initialMode?: ComposeMode;
 }) {
   const locale = useLocale();
   const tx = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
-  const [mode, setMode] = useState<Mode>("note");
+  const [mode, setMode] = useState<Mode>(resolveInitialMode(modes, initialMode));
   // Controlled, not a plain uncontrolled Input, so the segment counter below
   // can recompute on every keystroke.
   const [body, setBody] = useState("");
@@ -89,7 +126,7 @@ export function MessageComposer({
   // link twice (no hashchange then). Only the note boundary clears the draft, as the tabs do.
   useEffect(() => {
     const open = (hash: string) => {
-      const target = composeModeFromHash(hash);
+      const target = hashTargetFor(hash, modes);
       if (!target) return;
       const current = modeRef.current;
       if (target !== current) {
@@ -121,7 +158,7 @@ export function MessageComposer({
 
   const { pending, onSubmit } = useFormSubmit(async (formData, form) => {
     try {
-      await (isEmail ? emailAction : isSms ? smsAction : noteAction)(formData);
+      await (isEmail ? emailAction : isSms ? smsAction : (noteAction ?? (async () => { throw new Error("no note action"); })))(formData);
       if (isEmail) toast.success(tx("compose.sent"));
       if (isSms) toast.success(tx("compose.smsSent"));
       // Clear for the next message — what React's reset used to do, now
@@ -132,6 +169,8 @@ export function MessageComposer({
         form.reset();
         setBody("");
       }
+      const next = modeAfterSend(mode, initialMode);
+      if (next !== mode) setMode(next);
     } catch (e) {
       if (isSms) {
         // Carries the ACTUAL reason sendSmsAction produced (already curated,
@@ -156,8 +195,8 @@ export function MessageComposer({
     <div className="w-full space-y-2">
       <span id="compose-sms" className="block scroll-mt-24" aria-hidden />
       <span id="compose-email" className="block scroll-mt-24" aria-hidden />
-      <div className="flex gap-1">
-        {(["note", "email", "sms"] as const).map((value) => (
+      <div className="flex gap-1" {...(modes.includes("note") ? {} : { role: "group", "aria-label": tx("conversations.compose.via"), lang: locale })}>
+        {modes.map((value) => (
           <button
             key={value}
             type="button"
@@ -166,16 +205,10 @@ export function MessageComposer({
             // place of the form below, rather than a disabled tab that hides
             // it entirely.
             onClick={() => {
-              if (value === mode) return;
-              setMode(value);
-              // A controlled body survives an uncontrolled `key={mode}`
-              // remount — without this, an internal note typed, then a
-              // switch to Text, sends the note's text as the outbound SMS.
-              // Only the note boundary is the hazard: clear when a note is
-              // entered or left, not on every tab switch (that would wipe an
-              // in-progress email/SMS draft on a zero-intent re-click or a
-              // switch between the two send modes).
-              if (mode === "note" || value === "note") setBody("");
+              const step = tabSwitch(mode, value);
+              if (!step) return;
+              setMode(step.mode);
+              if (step.clearBody) setBody("");
             }}
             aria-pressed={mode === value}
             className={cn(

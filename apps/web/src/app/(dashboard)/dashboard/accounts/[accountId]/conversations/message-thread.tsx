@@ -1,12 +1,15 @@
+import { Fragment } from "react";
 import type { listMessages } from "@bis/db";
 import type { EmailView } from "@/lib/consent/email-view";
 import { formatDateTimeInZone } from "@/lib/format";
-import { MESSAGE_STATUS_LABEL, messageChannelLabel } from "@/lib/labels";
+import { messageChannelLabel } from "@/lib/labels";
 import { messageFailureReason } from "@/lib/email/failure-reason";
 import { cn } from "@/lib/utils";
 import type { Locale } from "@/lib/i18n/locale";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
+import { authorLabel } from "@/lib/record/author-mark";
+import { makeTr } from "@/lib/record/copy";
 // Fix round 1 (UI review, critical): `readInboundMeta` moved to the plain `./inbound-meta`
 // module. This file is a SERVER component — `inbound-notice.tsx` is `"use client"`, and
 // calling a non-component export of a client module from server code throws at runtime
@@ -16,8 +19,16 @@ import { t } from "@/lib/i18n/t";
 import { readInboundMeta } from "./inbound-meta";
 import { InboundNotice } from "./inbound-notice";
 import { currentStopState } from "./inbound-notice-state";
+import { readWebchatMeta, firstWebchatRows } from "./webchat-meta";
 
 type Message = Awaited<ReturnType<typeof listMessages>>[number];
+
+/** G26: the status word in the staff member's language (conversations.status.* carry .es); a value outside
+ *  the six prints as itself, as MESSAGE_STATUS_LABEL's `?? message.status` did. */
+const STATUS_KEY: Readonly<Record<string, MessageKey>> = {
+  queued: "conversations.status.queued", sent: "conversations.status.sent", delivered: "conversations.status.delivered",
+  opened: "conversations.status.opened", bounced: "conversations.status.bounced", failed: "conversations.status.failed",
+};
 
 export function MessageThread({
   messages,
@@ -32,6 +43,7 @@ export function MessageThread({
   visibleSenderIds,
   emailViews,
   forwardedNames,
+  personaName,
 }: {
   messages: Message[];
   contactName: string;
@@ -78,7 +90,12 @@ export function MessageThread({
    *  `page.tsx` with `listPeopleNames` on the REQUEST client, so a person the reader cannot see
    *  stays unnamed. A missing id (or a forward with none) reads "someone on the team". */
   forwardedNames: ReadonlyMap<string, string>;
+  /** S-06 part 3 (spec §5): the receptionist's name on her web chat bubbles, read by page.tsx only when the thread holds one; null or absent reads "Sofía" (authorLabel's own fallback). */
+  personaName?: string | null;
 }) {
+  const tr = makeTr(locale);
+  const firstChatRows = firstWebchatRows(messages);
+  const statusWord = (s: string) => (Object.hasOwn(STATUS_KEY, s) ? t(m, STATUS_KEY[s]!, locale) : s);
   return (
     // The thread pane is bounded to the viewport (topbar h-14 = 56px + the
     // title-only PageHeader here = 69px + the conversations grid's p-6 top/
@@ -94,98 +111,112 @@ export function MessageThread({
         <p className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            // Ladder step 2 inbound, `--accent-dim` outbound — the selection
-            // colour the rest of the app uses. NEVER glass: there can be
-            // hundreds of these in one thread. Outbound used to carry a raw
-            // 10% alpha of the brand colour, which no token names.
-            className={cn(
-              "max-w-[75%] rounded-[var(--radius-ctl)] px-3 py-2",
-              message.direction === "outbound"
-                ? "ml-auto bg-[var(--accent-dim)]"
-                : "bg-[var(--surface-2)]",
-            )}
-          >
-            {/* S-09 §9: what the CUSTOMER wrote (inbound, never the voice channel's AI summary) carries
-                their language; with none it is typed text of unknown language. Outbound is unchanged. */}
-            {(() => {
-              const typedLang = message.direction === "inbound" && message.channel !== "voice" ? (contactLanguage ?? "") : undefined;
-              return (
-                <>
-                  {message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{message.subject}</p> : null}
-                  <p lang={typedLang} className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
-                </>
-              );
-            })()}
-            <p className="mt-1 text-xs text-muted-foreground">
-              {formatDateTimeInZone(message.created_at, timezone)}
-              {message.channel !== "email" ? (
-                // `message.channel` is a raw DB string (untyped Supabase
-                // client, no generated schema types) — messageChannelLabel
-                // (lib/labels.ts) is the one place that widens it against the
-                // exhaustive channel map, with a fallback for anything
-                // outside it (e.g. "note", never actually written to this
-                // table; see messaging.ts).
-                <> · {messageChannelLabel(message.channel)}</>
+        {messages.map((message) => {
+          // S-06 part 3 (spec §5): a lead's website chat turn. Its words carry the language they CHATTED in
+          // (one message, one language); its footer names the channel and the mark (one mark set with the
+          // record, DESIGN.md Provenance) and never a status word: no one on the team sent it. The CHANNEL
+          // makes it a chat row (fix round 1, M-5); the meta only adds its language, its index and the match.
+          const isChat = message.channel === "webchat";
+          const chat = isChat ? readWebchatMeta(message.meta) : null;
+          // S-09 §9: what the CUSTOMER wrote (inbound, never the voice channel's AI summary) carries
+          // their language; with none it is typed text of unknown language. Outbound is unchanged.
+          const typedLang = chat ? chat.locale
+            : message.direction === "inbound" && message.channel !== "voice" ? (contactLanguage ?? "") : undefined;
+          const mark = isChat
+            ? authorLabel(message.author_kind === "ai" ? "ai" : "customer", null, { viewerId: null, names: {}, personaName: personaName ?? null, tr })
+            : null;
+          return (
+            <Fragment key={message.id}>
+              {/* §5a: ONE line per chat matched to an existing customer, above its first row, in the staff
+                  member's language. A fact about the match, not a status: no dot. */}
+              {chat?.matchedExisting && firstChatRows.has(message.id) ? (
+                <p lang={locale} data-webchat-unconfirmed="" className="text-xs text-muted-foreground">
+                  {t(m, "conversations.webchat.unconfirmed", locale)}
+                </p>
               ) : null}
-              {message.direction === "outbound" ? (
-                <> · {MESSAGE_STATUS_LABEL[message.status] ?? message.status}</>
-              ) : null}
-            </p>
-            {/* D-017: the thread recorded WHY an outbound message bounced or
-                failed (messages.error) and never showed it — the dot-and-word
-                status alone told an operator something went wrong, never
-                what to tell the customer. Plain language only
-                (messageFailureReason never echoes the raw, provider-worded
-                column). */}
-            {message.direction === "outbound" && messageFailureReason(message) ? (
-              <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(message)}</p>
-            ) : null}
-            {/* Task 11 (S-06 part 1): who sent it, how many attachments, the
-                emailed stop or the May-want-to-stop chip — only for an
-                inbound email that `file.ts` actually filed as one. */}
-            {(() => {
-              const meta = message.direction === "inbound" && message.channel === "email" ? readInboundMeta(message.meta) : null;
-              if (!meta) return null;
-              const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
-              const effectiveContactId = senderId ?? contactId;
-              // No sender at all means this bubble's address IS the thread's own contact —
-              // already proven visible by page.tsx before any message loaded. A sender
-              // (a household member) must be in the viewer's own visible set.
-              const canAct = !senderId || visibleSenderIds.has(senderId);
-              // Fix round 1 (important #2): the notice reflects the address's CURRENT
-              // consent state, not this message's own filing-time snapshot.
-              const { stopIsCurrent, initiallyExpired, chipActionable } =
-                currentStopState(meta.consent, emailViews.get(effectiveContactId));
-              return (
-                <>
-                  {/* S-06 part 2: in the STAFF member's language (lang={locale}), because the
-                      body above carries the customer's. */}
-                  {meta.forwarded ? (
-                    <p lang={locale} data-forwarded="" className="mt-1 text-xs text-muted-foreground">
-                      {meta.forwarded.byId && forwardedNames.get(meta.forwarded.byId)
-                        ? t(m, "conversations.forward.by", locale, { name: forwardedNames.get(meta.forwarded.byId)! })
-                        : t(m, "conversations.forward.bySomeone", locale)}
-                    </p>
+              <div
+                data-webchat-row={chat ? String(chat.index) : undefined}
+                // Ladder step 2 inbound, `--accent-dim` outbound — the selection
+                // colour the rest of the app uses. NEVER glass: there can be
+                // hundreds of these in one thread. Outbound used to carry a raw
+                // 10% alpha of the brand colour, which no token names.
+                className={cn(
+                  "max-w-[75%] rounded-[var(--radius-ctl)] px-3 py-2",
+                  message.direction === "outbound"
+                    ? "ml-auto bg-[var(--accent-dim)]"
+                    : "bg-[var(--surface-2)]",
+                )}
+              >
+                {message.subject ? <p lang={typedLang} className="break-words text-sm font-medium text-card-foreground">{message.subject}</p> : null}
+                <p lang={typedLang} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{message.body}</p>
+                {/* G26: the footer in the STAFF member's language, every bubble's. */}
+                <p lang={locale} className="mt-1 break-words text-xs text-muted-foreground">
+                  {formatDateTimeInZone(message.created_at, timezone, locale)}
+                  {message.channel !== "email" ? (
+                    // `message.channel` is a raw DB string (untyped Supabase
+                    // client, no generated schema types) — messageChannelLabel
+                    // (lib/labels.ts) is the one place that widens it against the
+                    // exhaustive channel map, with a fallback for anything
+                    // outside it (e.g. "note", never actually written to this
+                    // table; see messaging.ts).
+                    <> · {messageChannelLabel(message.channel, locale)}</>
                   ) : null}
-                  <InboundNotice
-                    meta={meta}
-                    accountId={accountId}
-                    conversationId={conversationId}
-                    contactId={effectiveContactId}
-                    locale={locale}
-                    canAct={canAct}
-                    stopIsCurrent={stopIsCurrent}
-                    initiallyExpired={initiallyExpired}
-                    chipActionable={chipActionable}
-                  />
-                </>
-              );
-            })()}
-          </div>
-        ))}
+                  {mark ? <> · {mark}</> : message.direction === "outbound" ? <> · {statusWord(message.status)}</> : null}
+                </p>
+                {/* D-017: the thread recorded WHY an outbound message bounced or
+                    failed (messages.error) and never showed it — the dot-and-word
+                    status alone told an operator something went wrong, never
+                    what to tell the customer. Plain language only
+                    (messageFailureReason never echoes the raw, provider-worded
+                    column). A chat row has no delivery to fail. */}
+                {!isChat && message.direction === "outbound" && messageFailureReason(message) ? (
+                  <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(message)}</p>
+                ) : null}
+                {/* Task 11 (S-06 part 1): who sent it, how many attachments, the
+                    emailed stop or the May-want-to-stop chip — only for an
+                    inbound email that `file.ts` actually filed as one. */}
+                {(() => {
+                  const meta = message.direction === "inbound" && message.channel === "email" ? readInboundMeta(message.meta) : null;
+                  if (!meta) return null;
+                  const senderId = (message.meta as { sender?: { contact_id?: string } } | null)?.sender?.contact_id;
+                  const effectiveContactId = senderId ?? contactId;
+                  // No sender at all means this bubble's address IS the thread's own contact —
+                  // already proven visible by page.tsx before any message loaded. A sender
+                  // (a household member) must be in the viewer's own visible set.
+                  const canAct = !senderId || visibleSenderIds.has(senderId);
+                  // Fix round 1 (important #2): the notice reflects the address's CURRENT
+                  // consent state, not this message's own filing-time snapshot.
+                  const { stopIsCurrent, initiallyExpired, chipActionable } =
+                    currentStopState(meta.consent, emailViews.get(effectiveContactId));
+                  return (
+                    <>
+                      {/* S-06 part 2: in the STAFF member's language (lang={locale}), because the
+                          body above carries the customer's. */}
+                      {meta.forwarded ? (
+                        <p lang={locale} data-forwarded="" className="mt-1 text-xs text-muted-foreground">
+                          {meta.forwarded.byId && forwardedNames.get(meta.forwarded.byId)
+                            ? t(m, "conversations.forward.by", locale, { name: forwardedNames.get(meta.forwarded.byId)! })
+                            : t(m, "conversations.forward.bySomeone", locale)}
+                        </p>
+                      ) : null}
+                      <InboundNotice
+                        meta={meta}
+                        accountId={accountId}
+                        conversationId={conversationId}
+                        contactId={effectiveContactId}
+                        locale={locale}
+                        canAct={canAct}
+                        stopIsCurrent={stopIsCurrent}
+                        initiallyExpired={initiallyExpired}
+                        chipActionable={chipActionable}
+                      />
+                    </>
+                  );
+                })()}
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
       <div className="border-t border-[var(--row-line)] p-4">{composer}</div>
     </div>

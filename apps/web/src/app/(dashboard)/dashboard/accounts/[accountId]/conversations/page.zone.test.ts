@@ -60,6 +60,10 @@ vi.mock("@bis/db", () => ({
     status: "received", provider_message_id: null, subject: null, body: "hi",
     error: null, created_at: "2026-10-08T15:30:00.000Z",
   }],
+  // S-06 part 3: the composer's customer read answers null (the customer could not be read: the composer
+  // opens with nothing ready); no thread here holds a chat, so the persona is never read.
+  getContact: async () => null,
+  getVoiceProfile: async () => null,
 }));
 
 const { default: ConversationsPage } = await import("./page");

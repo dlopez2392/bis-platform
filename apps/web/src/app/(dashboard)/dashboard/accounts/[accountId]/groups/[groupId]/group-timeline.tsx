@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -193,5 +193,16 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
         </TimelineItem>
       );
     }
+    // S-06 part 3 (spec §7; G20, G25): as ActivityTimeline's chat row: the customer's mark, an "Open chat"
+    // ghost link to its thread in the inbox and, on a chat matched to an existing customer, §5a's line.
+    case "chat":
+      return (
+        <TimelineItem {...head} icon={MessagesSquare} action={
+          <Link href={`/dashboard/accounts/${accountId}/conversations?c=${e.chat.conversationId}`} data-timeline-open-chat
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8")}>{tr.text("timeline.openChat")}</Link>
+        }>
+          {row.note ? <p lang={row.note.lang} data-webchat-unconfirmed="" className="text-xs text-muted-foreground">{row.note.text}</p> : null}
+        </TimelineItem>
+      );
   }
 }

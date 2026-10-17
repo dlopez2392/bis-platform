@@ -1,5 +1,7 @@
 import type { NewMessage } from "@bis/db";
-import { m } from "./messages";
+import type { Locale } from "./i18n/locale";
+import { t } from "./i18n/t";
+import { m, type MessageKey } from "./messages";
 
 /** Opportunity `status` column -> display label. Shared so the pipeline drawer,
  *  contact detail page, and activity timeline never drift on wording (the raw
@@ -34,6 +36,17 @@ export const FORM_STATUS_LABEL: Record<string, string> = {
   archived: m["forms.status.archived"],
 };
 
+/** Message `channel` column -> its catalogue key (S-06 part 3, spec G8), so a label can be read in
+ *  either language; exhaustive over the union for the same reason as the map below. */
+const CHANNEL_KEY: Record<NewMessage["channel"], MessageKey> = {
+  email: "conversations.channel.email",
+  form: "conversations.channel.form",
+  voice: "conversations.channel.voice",
+  sms: "conversations.channel.sms",
+  // S-06 part 3: a lead's website chat on the thread.
+  webchat: "conversations.channel.webchat",
+};
+
 /** Message `channel` column -> display label. A form submission must never be
  *  labelled "Note": the words are the contact's own, not the operator's.
  *
@@ -42,12 +55,14 @@ export const FORM_STATUS_LABEL: Record<string, string> = {
  *  render the raw DB value (e.g. the literal string "sms") for any channel
  *  missing an entry here, with no compiler check that every channel has
  *  one. Dropping a key now is a compile error instead of a silent runtime
- *  gap. */
+ *  gap. S-06 part 3: these are the English labels; a reader in another
+ *  language goes through `messageChannelLabel(channel, locale)`. */
 export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
   email: m["conversations.channel.email"],
   form: m["conversations.channel.form"],
   voice: m["conversations.channel.voice"],
   sms: m["conversations.channel.sms"],
+  webchat: m["conversations.channel.webchat"],
 };
 
 /** The one place that widens an untyped DB `channel` string against
@@ -58,7 +73,8 @@ export const MESSAGE_CHANNEL_LABEL: Record<NewMessage["channel"], string> = {
  *  second copy). One helper means the widening — and its fallback to the raw
  *  value for anything outside the known union — happens exactly once, while
  *  MESSAGE_CHANNEL_LABEL itself stays exhaustively typed and a dropped key is
- *  still a compile error. */
-export function messageChannelLabel(channel: string): string {
-  return MESSAGE_CHANNEL_LABEL[channel as NewMessage["channel"]] ?? channel;
+ *  still a compile error. S-06 part 3 (spec G8): in the reader's `locale` (English by default, so
+ *  every existing caller reads exactly what it did), through the catalogue's `.es` twins. */
+export function messageChannelLabel(channel: string, locale: Locale = "en"): string {
+  return Object.hasOwn(CHANNEL_KEY, channel) ? t(m, CHANNEL_KEY[channel as NewMessage["channel"]], locale) : channel;
 }

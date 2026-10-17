@@ -134,6 +134,17 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     });
   });
 
+  it("a website chat row (S-06 part 3) parses and is kept, its unconfirmed line with it (mutation: drop chat from ROW_KINDS -> the row is dropped, FAILS)", () => {
+    const body = clone();
+    const chat = { key: "chat-m0", kind: "chat", mark: { kind: "customer", label: "Customer" }, verb: "chatted with Sofía on your website",
+      status: null, detail: "12 messages", time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z",
+      excerpt: { text: "Matched by the phone or email they typed; not confirmed.", lang: "en", done: false } };
+    (body.recent as { rows: unknown[] }).rows = [chat];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [chat], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("a recent row whose excerpt carries the contact's language ('es') parses (mutation: keep lang === \"\" || lang === \"en\" -> the row is malformed -> FAILS)", () => {
     const body = clone();
     (body.recent as { rows: unknown[] }).rows = [{ ...ROW, excerpt: { text: "Hola", lang: "es", done: false } }];

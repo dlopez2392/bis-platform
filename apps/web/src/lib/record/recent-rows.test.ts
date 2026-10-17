@@ -140,3 +140,17 @@ describe("a required-document skip in the drawer's Recent (S-07 2c)", () => {
     ]);
   });
 });
+
+describe("a website chat in the drawer's Recent (S-06 part 3, G18, G25)", () => {
+  const chat = (matchedExisting: boolean): TimelineEntry => ({ kind: "chat", id: "m0", at: AT, contactId: "c1",
+    chat: { conversationId: "cv1", count: 12, matchedExisting } });
+  it("a matched chat's excerpt is the unconfirmed line in the page's language; an unmatched one has none (mutation: excerpt null always -> FAILS)", () => {
+    const [matched, fresh] = view([chat(true), chat(false)]);
+    expect(matched!.kind).toBe("chat");
+    expect(matched!.verb).toBe("chatted with Sofía on your website");
+    expect(matched!.detail).toBe("12 messages");
+    expect(matched!.excerpt).toEqual({ text: "Matched by the phone or email they typed; not confirmed.", lang: "en", done: false });
+    expect(fresh!.excerpt).toBeNull();
+    expect(Object.keys(matched!).sort()).toEqual(["dateTime", "detail", "excerpt", "key", "kind", "mark", "status", "time", "verb"]);
+  });
+});

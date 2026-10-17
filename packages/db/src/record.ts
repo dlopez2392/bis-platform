@@ -9,7 +9,8 @@ import { listContactOpportunities } from "./opportunities";
 import { listContactSubmissions } from "./forms";
 import { listContactMessages } from "./messaging";
 import { countGroupMembers, GROUP_ACTIVITY_CAP, type GroupPerson } from "./client-groups";
-import { forContacts, instantKey, TIMELINE_PAGE_SIZE, type TimelineCursor } from "./timeline-cursor";
+import { forContacts, instantKey, withTimelinePage, TIMELINE_PAGE_SIZE, type TimelineCursor, type TimelinePageOpts } from "./timeline-cursor";
+import { WEBCHAT_MAX_ROWS_PER_CHAT } from "./webchat-plan";
 import type { AuthorKind } from "./provenance";
 import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTimeline, type TimelineDocument, type TimelineDocumentVersion, type TimelineDocumentScan } from "./documents";
 import { listDocumentRequestTimeline, type TimelineDocumentRequest } from "./document-requests";
@@ -30,7 +31,12 @@ export { TIMELINE_PAGE_SIZE } from "./timeline-cursor";
  * `{ error: null, count: null }` (status 204), so `count ?? 0` would report a failure as "none".
  */
 export type Fact<T> = { ok: true; value: T } | { ok: false };
-export type LastTalkedChannel = "text" | "email" | "call";
+export type LastTalkedChannel = "text" | "email" | "call" | "chat";
+/** The conversation rows that count as talking (spec §7, S-06 part 3: a website chat counts, Sofía's turns
+ *  included). `form` and `voice` stay out: they are the inbox's copies of a submission and a call (C4). */
+const TALKED_CHANNELS = ["email", "sms", "webchat"] as const;
+type TalkedChannel = (typeof TALKED_CHANNELS)[number];
+const talkedChannel = (c: TalkedChannel): LastTalkedChannel => (c === "sms" ? "text" : c === "webchat" ? "chat" : "email");
 export type LastTalked = { at: string; channel: LastTalkedChannel };
 export type OpenDeals = { count: number; amount: number | null };
 export type ContactFacts = { bookingsMade: Fact<number>; lastTalked: Fact<LastTalked | null>; openDeals: Fact<OpenDeals> };
@@ -48,8 +54,8 @@ async function settle<T>(name: FactName, read: () => Promise<T>, onError?: (name
   }
 }
 
-/** The newest email or text with this customer that did not fail. `form` and `voice` rows are the
- *  inbox's copies of a submission, a booking change or a call (spec C4); they are not talking. */
+/** The newest email, text or website chat with this customer that did not fail. `form` and `voice` rows are
+ *  the inbox's copies of a submission, a booking change or a call (spec C4); they are not talking. */
 async function newestConversationMessage(db: SupabaseClient, accountId: string, contactId: string): Promise<LastTalked | null> {
   const { data: convo, error } = await db.from("conversations").select("id")
     .eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
@@ -57,11 +63,11 @@ async function newestConversationMessage(db: SupabaseClient, accountId: string, 
   if (!convo) return null;
   const { data, error: mErr } = await db.from("messages").select("channel, created_at")
     .eq("account_id", accountId).eq("conversation_id", (convo as { id: string }).id)
-    .in("channel", ["email", "sms"]).not("status", "in", "(failed,bounced)")
+    .in("channel", [...TALKED_CHANNELS]).not("status", "in", "(failed,bounced)")
     .order("created_at", { ascending: false }).limit(1);
   if (mErr) throw new Error(`newestConversationMessage failed: ${mErr.message}`);
-  const row = ((data ?? []) as { channel: "email" | "sms"; created_at: string }[])[0];
-  return row ? { at: row.created_at, channel: row.channel === "sms" ? "text" : "email" } : null;
+  const row = ((data ?? []) as { channel: TalkedChannel; created_at: string }[])[0];
+  return row ? { at: row.created_at, channel: talkedChannel(row.channel) } : null;
 }
 
 async function lastTalked(db: SupabaseClient, accountId: string, contactId: string): Promise<LastTalked | null> {
@@ -107,7 +113,7 @@ export async function contactFacts(
 export type GroupLastTalked = LastTalked & { contactId: string };
 export type GroupFacts = { bookingsMade: Fact<number>; lastTalked: Fact<GroupLastTalked | null> };
 
-/** The newest email or text that did not fail, across every conversation of the set (C4's filters,
+/** The newest email, text or website chat that did not fail, across every conversation of the set (C4's filters,
  *  `newestConversationMessage`'s), with the member whose conversation carried it. */
 async function newestSetMessage(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<GroupLastTalked | null> {
   const { data: convos, error } = await forContacts(
@@ -118,12 +124,12 @@ async function newestSetMessage(db: SupabaseClient, accountId: string, contactId
   const owner = new Map(list.map((c) => [c.id, c.contact_id]));
   const { data, error: mErr } = await db.from("messages").select("conversation_id, channel, created_at")
     .eq("account_id", accountId).in("conversation_id", list.map((c) => c.id))
-    .in("channel", ["email", "sms"]).not("status", "in", "(failed,bounced)")
+    .in("channel", [...TALKED_CHANNELS]).not("status", "in", "(failed,bounced)")
     .order("created_at", { ascending: false }).limit(1);
   if (mErr) throw new Error(`newestSetMessage failed: ${mErr.message}`);
-  const row = ((data ?? []) as { conversation_id: string; channel: "email" | "sms"; created_at: string }[])[0];
+  const row = ((data ?? []) as { conversation_id: string; channel: TalkedChannel; created_at: string }[])[0];
   const contactId = row ? owner.get(row.conversation_id) : undefined;
-  return row && contactId ? { at: row.created_at, channel: row.channel === "sms" ? "text" : "email", contactId } : null;
+  return row && contactId ? { at: row.created_at, channel: talkedChannel(row.channel), contactId } : null;
 }
 
 async function setLastTalked(db: SupabaseClient, accountId: string, contactIds: readonly string[]): Promise<GroupLastTalked | null> {
@@ -262,8 +268,8 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents";
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats";
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
 
 export type TimelineNote = { id: string; body: string; author_id: string | null; created_at: string };
 export type TimelineTask = {
@@ -286,6 +292,8 @@ export type TimelineMessage = {
    *  closed the column). */
   author_kind: AuthorKind; author_id: string | null;
 };
+/** S-06 part 3 (spec §7): one website chat on the customer's thread. */
+export type TimelineChat = { conversationId: string; count: number; matchedExisting: boolean };
 /** Every variant names its member (`contactId`, S-03 part 2b): the group page's merged timeline says
  *  whose row it is. On the contact page it is always that page's contact. */
 export type TimelineEntry =
@@ -294,6 +302,8 @@ export type TimelineEntry =
   | { kind: "deal"; id: string; at: string; contactId: string; deal: TimelineDeal }
   | { kind: "submission"; id: string; at: string; contactId: string; submission: TimelineSubmission }
   | { kind: "message"; id: string; at: string; contactId: string; message: TimelineMessage }
+  /** S-06 part 3 (spec §7, G22): one row per website chat, at its index-0 row (its START), so later turns never move it. */
+  | { kind: "chat"; id: string; at: string; contactId: string; chat: TimelineChat }
   | { kind: "booking"; id: string; at: string; contactId: string; booking: ContactBookingRow }
   | { kind: "call"; id: string; at: string; contactId: string; call: ContactCallRow }
   /** S-07 (plan deviation 3): one row per listed document, read from `documents` so RLS decides. A group's own file has contactId "". */
@@ -321,9 +331,56 @@ export function compareTimelineEntries(a: TimelineEntry, b: TimelineEntry): numb
   return ia === ib ? 0 : ia < ib ? 1 : -1;
 }
 
+/** How many chats one count read covers: 20 × 48 rows stays under PostgREST's 1000-row cap. */
+const CHAT_COUNT_CHUNK = 20;
+
+/**
+ * S-06 part 3 (spec §7, G22): the `chats` source. The anchor read is each chat's index-0 row (the first
+ * row a sync writes, webchat.ts), paged on created_at like every source; then, for the chats on this
+ * page only, a count read of every row of each chat on these conversations, both sides. On the caller's
+ * client: RLS and 0068's Technician fence decide. An anchor without a chat id is not a chat's anchor and
+ * is not a row. THROWS on a read error (listTimelinePage's settle).
+ */
+async function listContactChats(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
+): Promise<TimelineEntry[]> {
+  const { data: convos, error } = await forContacts(
+    db.from("conversations").select("id, contact_id").eq("account_id", accountId), "contact_id", who);
+  if (error) throw new Error(`listContactChats failed: ${error.message}`);
+  const list = (convos ?? []) as { id: string; contact_id: string }[];
+  if (list.length === 0) return [];
+  const owner = new Map(list.map((c) => [c.id, c.contact_id]));
+  const ids = list.map((c) => c.id);
+  const { data, error: aErr } = await withTimelinePage(
+    db.from("messages").select("id, conversation_id, created_at, meta").eq("account_id", accountId)
+      .in("conversation_id", ids).eq("channel", "webchat").eq("meta->webchat->>index", "0"),
+    "created_at", page);
+  if (aErr) throw new Error(`listContactChats anchors failed: ${aErr.message}`);
+  type Anchor = { id: string; conversation_id: string; created_at: string; meta: { webchat?: { chat_id?: unknown; matched_existing?: unknown } } | null };
+  const anchors = ((data ?? []) as Anchor[]).flatMap((a) => {
+    const chatId = a.meta?.webchat?.chat_id;
+    return typeof chatId === "string" && chatId.length > 0 ? [{ ...a, chatId }] : [];
+  });
+  const chatIds = [...new Set(anchors.map((a) => a.chatId))];
+  const counts = new Map<string, number>();
+  for (let i = 0; i < chatIds.length; i += CHAT_COUNT_CHUNK) {
+    const chunk = chatIds.slice(i, i + CHAT_COUNT_CHUNK);
+    const { data: rows, error: cErr } = await db.from("messages").select("chat_id:meta->webchat->>chat_id")
+      .eq("account_id", accountId).in("conversation_id", ids).eq("channel", "webchat")
+      .in("meta->webchat->>chat_id", chunk).limit(chunk.length * WEBCHAT_MAX_ROWS_PER_CHAT);
+    if (cErr) throw new Error(`listContactChats counts failed: ${cErr.message}`);
+    for (const r of (rows ?? []) as { chat_id: string | null }[]) if (r.chat_id) counts.set(r.chat_id, (counts.get(r.chat_id) ?? 0) + 1);
+  }
+  return anchors.map((a): TimelineEntry => ({
+    kind: "chat", id: a.id, at: a.created_at, contactId: owner.get(a.conversation_id) ?? "",
+    // The anchor is itself a row of its chat, so a chat counts at least one.
+    chat: { conversationId: a.conversation_id, count: Math.max(1, counts.get(a.chatId) ?? 0), matchedExisting: a.meta?.webchat?.matched_existing === true },
+  }));
+}
+
 /**
  * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3), for one person or (2b, C6) a
- * household's set, each entry naming its member. Eight sources (S-07 added documents; a group page
+ * household's set, each entry naming its member. Nine sources (S-07 added documents, S-06 part 3 added chats; a group page
  * passes `opts.groupId` so the group's OWN files are read too), each read on the
  * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
  * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
@@ -401,6 +458,8 @@ export async function listTimelinePage(
         ...skips.unskips.map((s): TimelineEntry => ({ kind: "documentUnskip", id: s.id, at: s.unskipped_at!, contactId: s.contact_id, skip: s })),
       ];
     }),
+    // S-06 part 3 (spec §7): one row per website chat.
+    settle("chats", () => listContactChats(db, accountId, who, page)),
   ]);
   const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
   const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);

@@ -162,3 +162,14 @@ describe("required-documents skip marks (S-07 2c)", () => {
     expect([authorOf(a), authorOf(b)]).toEqual([{ kind: "person", personId: "u_ana" }, { kind: "person", personId: "u_bo" }]);
   });
 });
+
+describe("a website chat row's author (S-06 part 3, G20)", () => {
+  const chat = { kind: "chat", id: "m0", at: "2026-10-17T15:00:00Z", contactId: "k1",
+    chat: { conversationId: "cv1", count: 12, matchedExisting: false } } as TimelineEntry;
+  it("is the customer reaching the business, named Customer / Cliente, and asks the names read for nobody (mutation: kind 'ai' -> FAILS)", () => {
+    expect(authorOf(chat)).toEqual({ kind: "customer", personId: null });
+    expect(authorMark(chat, ctx()).label).toBe("Customer");
+    expect(authorMark(chat, ctx({ tr: makeTr("es") })).label).toBe("Cliente");
+    expect(personIdsOf([chat])).toEqual([]);
+  });
+});
