@@ -20,15 +20,15 @@ addresses").
   (`senderAuthenticated`); otherwise it is **held** in the inbox's Needs a look.
 - So today a forward from the Owner or staff to a customer's address is always held
   (`not_on_record`): the sender is a teammate, not the customer.
-- `users.email` and `memberships (account_id, user_id, role)` exist; agency staff are users with
-  the agency role.
+- `users.email` and `memberships (account_id, user_id, role)` exist. BIS agency staff have no
+  `users` row (the Clerk webhook skips them) and no membership in an account.
 
 ## Decisions (danlo, 2026-10-17)
 
 | # | Decision |
 |---|---|
 | 1 | The forwarding address IS the customer's existing reply address (same token); no new token. |
-| 2 | A forward is filed automatically when the sender is on the account's team (anyone who signs in to the account, BIS agency staff, or the account's own reply-to address) and the forgery check passes. Anyone else is held, as in part 1. |
+| 2 | A forward is filed automatically when the sender is on the account's team (anyone with a membership in the account, any role, or the account's own reply-to address) and the forgery check passes. Anyone else, BIS agency staff included, is held, as in part 1. (Amended 2026-10-17, plan ruling G1: the agency is not on the team.) |
 | 3 | Automatic mail (out-of-office, auto-responders, bounces) is dropped, never stored. |
 | 4 | Each account has a **Never record** list of addresses or whole domains whose mail is dropped, never stored, even when the sender matches a customer. The agency and the account's Owners edit it. |
 
@@ -58,7 +58,13 @@ anything:
    present; `Precedence: auto_reply`, `bulk` or `junk`; a `Content-Type` of `multipart/report`
    with `report-type=delivery-status`; or a sender local part of `mailer-daemon` or `postmaster`.
    Answer 200 dropped, log only the account id and the word "automatic". No raw headers (null):
-   not treated as automatic (the message proceeds and, lacking authentication, is held anyway).
+   the header rules do not apply (the message proceeds and, lacking authentication, is held
+   anyway); the `mailer-daemon` / `postmaster` rule still does (plan G9).
+   **Exception (amended 2026-10-17, plan ruling G10):** when the ONLY marker is
+   `Auto-Submitted: auto-forwarded` (a mail client's automatic forwarding rule), the message is
+   dropped only when the sender is NOT on the team (§3, looked up here, before anything is
+   stored); a teammate's forwarding rule proceeds to the steps below and files normally. Any
+   other marker beside it still drops. A failed team lookup here answers 503.
 2. **Never record → dropped.** The sender's address (`bareAddress` of the From) matches an entry in
    the account's never-record list: an address entry matches its `email_key` exactly; a domain
    entry matches that domain and any subdomain of it. 200 dropped, log the account id and
@@ -74,8 +80,10 @@ A dropped message stores no `inbound_emails` row; a Resend retry of it is droppe
 
 The sender's `email_key` (part 1's normalisation) equals the `email_key` of ANY of:
 - a user with a membership in this account (any role, including Technician);
-- a user with the agency role;
 - the account's `reply_to_email`.
+
+BIS agency staff are NOT the team (amended 2026-10-17, plan ruling G1): their forwards are held
+in Needs a look like any other non-team sender's.
 
 Resolved by one `@bis/db` function reading on the service client (the webhook has no session),
 scoped to the account; it answers `{ userId } | { mailbox: true } | null`.
@@ -141,8 +149,9 @@ scoped to the account; it answers `{ userId } | { mailbox: true } | null`.
 - Unit: the automatic-mail detector (each header case, a normal Gmail reply is not automatic,
   null headers); never-record matching (address, domain, subdomain, a lookalike domain like
   `notsupplier.com` must NOT match `supplier.com`, unparseable From); pattern validation.
-- Route/pipeline: automatic → dropped, nothing stored; listed sender → dropped even when a
-  customer; team member (member, agency, reply_to mailbox) + authenticated → filed as a forward
+- Route/pipeline: automatic → dropped, nothing stored; a lone auto-forward from a team member
+  files, from anyone else dropped; listed sender → dropped even when a customer; agency staff →
+  held; team member (member, reply_to mailbox) + authenticated → filed as a forward
   with the person mark, unread not raised, no owner copy, no stop; team member unauthenticated →
   held; a customer still files exactly as part 1.
 - db/RLS: the table's grants, member read, Technician no read, agency read, unique pattern,

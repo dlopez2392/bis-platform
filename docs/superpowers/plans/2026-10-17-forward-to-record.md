@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Every customer's existing reply address doubles as a **forwarding address**, shown on the record's "who they are" column with Copy; mail a teammate forwards to it (an account member, BIS agency staff, or the account's own reply-to mailbox, AND Resend's forgery check passing) files on that customer's thread as the teammate's message (the person mark, "Forwarded by Maria · team", no unread, no owner copy, no stop); automatic mail (out-of-office, auto-responders, bounces) and mail from an account's **Never record** list (addresses or whole domains, edited by the agency on Settings and by Owners on Branding, Add/Remove with Undo) is dropped before anything is stored.
+**Goal:** Every customer's existing reply address doubles as a **forwarding address**, shown on the record's "who they are" column with Copy; mail a teammate forwards to it (anyone with a membership in the account, any role, or the account's own reply-to mailbox, AND Resend's forgery check passing; BIS agency staff are NOT the team, owner ruling G1) files on that customer's thread as the teammate's message (the person mark, "Forwarded by Maria · team", no unread, no owner copy, no stop); automatic mail (out-of-office, auto-responders, bounces; a teammate's automatic forwarding rule excepted, ruling G10) and mail from an account's **Never record** list (addresses or whole domains, edited by the agency on Settings and by Owners on Branding, Add/Remove with Undo) is dropped before anything is stored.
 
-**Architecture:** One migration, **0083**: a server-written `inbound_never_log` table (members read, agency all, a Technician nothing). `@bis/db` gains `never-log.ts` (list, add, remove), a pure subpath module `never-log-rules.ts` (parse a pattern, match a sender), `matchTeamSender` in `inbound-email.ts` (account members and the reply-to mailbox), and an explicit `author` override on `createMessage`. The web adds a pure automatic-mail detector, an agency-staff lookup through Clerk (agency staff have no `users` row, gap G1), three new steps in the part 1 pipeline (automatic → dropped, never record → dropped, team → the forward path) with `file.ts` learning the forward path, two shared server actions with a plain handler module, one shared client list component rendered in Settings' Sending address card and in its own card on Branding, a Forwarding address row in the record's Details card, and a "Forwarded by" line on the thread's bubble.
+**Architecture:** One migration, **0083**: a server-written `inbound_never_log` table (members read, agency all, a Technician nothing). `@bis/db` gains `never-log.ts` (list, add, remove), a pure subpath module `never-log-rules.ts` (parse a pattern, match a sender), `matchTeamSender` in `inbound-email.ts` (account members and the reply-to mailbox), and an explicit `author` override on `createMessage`. The web adds a pure automatic-mail detector (with a class for a lone `Auto-Submitted: auto-forwarded`, ruling G10), three new steps in the part 1 pipeline (automatic → dropped unless it is a teammate's forwarding rule, never record → dropped, team → the forward path) with `file.ts` learning the forward path, two shared server actions with a plain handler module, one shared client list component rendered in Settings' Sending address card and in its own card on Branding, a Forwarding address row in the record's Details card, and a "Forwarded by" line on the thread's bubble.
 
-**Tech Stack:** Postgres 17 (Supabase) migration; supabase-js; `@clerk/nextjs` 7 server (`clerkClient().users.getUserList`, `@clerk/backend` 3.13.x, read in `node_modules`, see "External facts"); Next.js 16 App Router (route handler, server actions, server components); React 19; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); sonner toasts; the `@bis/db` suites on a local PG18 replica (plus a local PostgREST for service-client functions) and CI `verify`; Playwright on the per-run fixture account.
+**Tech Stack:** Postgres 17 (Supabase) migration; supabase-js; Next.js 16 App Router (server actions, server components); React 19; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); sonner toasts; the `@bis/db` suites on a local PG18 replica (plus a local PostgREST for service-client functions) and CI `verify`; Playwright on the per-run fixture account.
 
 **Spec:** `docs/superpowers/specs/2026-10-17-forward-to-record-design.md` (approved 2026-10-17, commit `fa6e48b0`; the source of truth; this plan does not re-decide it, and every place the code forces a choice the spec does not make is a row in "Spec gaps" below, for the owner). Part 1's plan, merged as #264: `docs/superpowers/plans/2026-10-16-inbound-email.md`. Base: branch `feat/s06-forward-to-record` at `fa6e48b0` (on `main` at `09496978`, #265; migrations through **0082** are on `main`; **0082 is applied on bis-ci and production: never re-apply**). Every file:line below was read off this worktree at `fa6e48b0`; anything not read is labelled **ASSUMPTION**.
 
@@ -15,7 +15,7 @@
 ## External facts and assumptions (read before any task)
 
 **Read in the code at `fa6e48b0`:**
-- Agency staff are NOT in `public.users`. The Clerk webhook skips them: `apps/web/src/app/api/webhooks/clerk/route.ts:70-72` ("an agency user (app_role: "agency_admin") is never synced into a client team's `users` row"), and no code writes a `memberships` row with `scope = 'agency'` (`grep -rn "scope: \"agency\"" packages/db/src apps/web/src` → nothing; `team.ts:109` writes `scope: "account"` only). Agency identity is the Clerk `public_metadata.app_role === "agency_admin"` (`packages/db/src/team.ts:75`, `isAgencyMetadata`, exported from `@bis/db`, `index.ts:228`). This is gap **G1**.
+- Agency staff are NOT in `public.users`. The Clerk webhook skips them: `apps/web/src/app/api/webhooks/clerk/route.ts:70-72` ("an agency user (app_role: "agency_admin") is never synced into a client team's `users` row"), and no code writes a `memberships` row with `scope = 'agency'` (`grep -rn "scope: \"agency\"" packages/db/src apps/web/src` → nothing; `team.ts:109` writes `scope: "account"` only). Agency identity is the Clerk `public_metadata.app_role === "agency_admin"` (`packages/db/src/team.ts:75`, `isAgencyMetadata`). This was gap **G1**; the owner RULED 2026-10-17 that the agency is not "the team", so nothing in this plan looks agency staff up.
 - Every person column stores the **Clerk user id**, not `users.id`: `apps/web/src/lib/record/author-mark.ts:6-7` ("`viewerId` is the signed-in person's Clerk id … the same id every person column stores"); `listPeopleNames(db, clerkUserIds)` (`packages/db/src/record.ts:426-441`) names them from `users` (gap **G2**).
 - `messageAuthor(actorType, actorId, direction)` (`packages/db/src/provenance.ts:19-24`) answers `customer` for EVERY inbound message; `createMessage` (`packages/db/src/messaging.ts:136-158`) always uses it (gap **G3**). 0073's CHECK `messages_author_id_person` allows `author_id` only with `author_kind = 'person'` (`0073_record_provenance.sql:56-57`); 0074 made `author_kind` NOT NULL.
 - The inbox thread reads `listMessages` with `MESSAGE_COLS` (`messaging.ts:75-76`), which carries `meta` and no author columns (gap **G4**).
@@ -27,36 +27,33 @@
 - The pipeline already parses the raw header block (`pipeline.ts:176`, `parseHeaderBlock(email.rawHeaders ?? "")`), which is the TOP-LEVEL header block only (`auth-results.ts:9-23` stops at the first blank line), so the top-level `Content-Type` is in it.
 - **Production's `RESEND_API_KEY` is a Full access key** (confirmed by the 2026-10-17 production smoke and #265's runbook change; part 1's A1/A2 both verified on a real Gmail reply). This part fetches nothing new from Resend.
 
-**Verified in the installed package:** `@clerk/backend@3.13.1` (`node_modules/.pnpm/@clerk+backend@3.13.1_react_39f22466c950269908058b41fd229550/node_modules/@clerk/backend/dist/api/endpoints/UserApi.d.ts`): `getUserList(params?: UserListParams): Promise<PaginatedResourceResponse<User[]>>` (`:363`), and `UserListParams.emailAddress?: string[]` documented as "Filters users with the specified email addresses. Accepts up to 100 email addresses." (`:24-26`). The lockfile also carries `3.13.2` (`pnpm-lock.yaml:234`); Task 4 step 1 re-reads the version `@clerk/nextjs` resolves to.
-
 **ASSUMPTIONS (each has a named check):**
-- **A1** `getUserList({ emailAddress: [a] })` answers the users whose address equals `a` (case-insensitive, exact, not a partial match like the COUNT endpoint's doc at `UserApi.d.ts:8`). Defence in the code: the lookup re-checks every returned user's addresses by `emailKey` and their `publicMetadata` itself, so a broader answer can never file a stranger; a narrower one (a `+tag` the agency wrote) only holds the forward. Check: Task 12 step 7 (danlo forwards from his own agency address; the ledger records filed or held).
-- **A2** A hand forward from Gmail or Outlook carries none of the automatic markers at its top level (`Auto-Submitted`, `X-Autoreply`/`X-Autorespond`/`X-Autoresponse`, `Precedence: auto_reply|bulk|junk`, `multipart/report; report-type=delivery-status`). Check: Task 12 step 7 (the forward files, not dropped).
-- **A3** A Gmail vacation reply carries `Auto-Submitted: auto-replied` (RFC 3834). Check: Task 12 step 7, optional (a vacation responder on a test mailbox, its reply dropped with the "automatic" log line).
-- **A4** A teammate's forward passes part 1's `senderAuthenticated` exactly as a customer's reply does (their own domain's DMARC, or `dmarc=none` with SPF and DKIM on the From domain). Check: Task 12 step 7; a teammate on a domain with neither is held `unverified` (spec failure table, "as part 1"), which is safe.
+- **A1** A hand forward from Gmail or Outlook carries none of the automatic markers at its top level (`Auto-Submitted`, `X-Autoreply`/`X-Autorespond`/`X-Autoresponse`, `Precedence: auto_reply|bulk|junk`, `multipart/report; report-type=delivery-status`). Check: Task 12 step 8 (the forward files, not dropped).
+- **A2** A Gmail vacation reply carries `Auto-Submitted: auto-replied` (RFC 3834), and an Outlook/Exchange automatic forwarding rule carries `Auto-Submitted: auto-forwarded` and nothing else from the automatic list (the basis of ruling G10). Check: Task 12 step 8, optional (a vacation responder on a test mailbox, its reply dropped with the "automatic" log line; a member's forwarding rule, filed).
+- **A3** A teammate's forward passes part 1's `senderAuthenticated` exactly as a customer's reply does (their own domain's DMARC, or `dmarc=none` with SPF and DKIM on the From domain). Check: Task 12 step 8; a teammate on a domain with neither is held `unverified` (spec failure table, "as part 1"), which is safe.
 
-## Spec gaps and contradictions (for the owner, danlo; Task 0 step 3 records each ruling; implementers do not re-ask)
+## Spec gaps and contradictions (RULED by the owner, danlo, 2026-10-17, tiles: G1 and G10 CHANGED as their rows say; G2–G9 and G11–G18 ACCEPTED as proposed; the spec is amended to match; implementers do not re-ask)
 
-| # | What the spec says / omits | What the code says | This plan proposes |
+| # | What the spec said / omitted | What the code says | Ruled 2026-10-17 |
 |---|---|---|---|
-| G1 | "a user with the agency role … Resolved by one `@bis/db` function reading on the service client" (§3) | Agency staff have no `users` row and no `memberships` row (above); the database cannot say who is agency staff | The `@bis/db` function `matchTeamSender` answers account members and the reply-to mailbox (the spec's shape, `{ userId } \| { mailbox: true } \| null`). The agency half is a web lookup through Clerk (`lib/email/inbound/agency-staff.ts`: `getUserList({ emailAddress })`, then `isAgencyMetadata` and an `emailKey` re-check on each returned user, 5 s timeout), injected into the pipeline as `agencyStaff`; its failure is a 503 like the spec's "team lookup fails". Consequence: an agency forward's `author_id` is the agency person's Clerk id, which no reader can name (no `users` row), so it reads "Forwarded by someone on the team" for everyone, the DESIGN.md "a person the reader cannot name" rule. Alternative for the owner: drop the agency from "the team" (their forwards held). |
-| G2 | "`author_id` = the matched user's id" | Person columns hold the Clerk id (above) | `author_id` = `users.clerk_user_id` (members) or the agency's Clerk id (G1); null for the reply-to mailbox, as the spec says. |
-| G3 | "`author_kind='person'`" on an inbound message | `createMessage` maps every inbound to `customer` | `NewMessage` gains an optional `author: { kind: "person"; id: string \| null }`; when set, `createMessage` writes it instead of `messageAuthor`'s answer. Only `file.ts`'s forward path sets it; every other writer is unchanged, and `messageAuthor`'s SQL twin (`provenance-parity.test.ts`) is untouched. |
-| G4 | the bubble reads "Forwarded by Maria · team" | the thread's reader has no author column | `meta.forwarded = true` (the spec) PLUS `meta.forwarded_by = <Clerk id or null>`, so the inbox keeps `MESSAGE_COLS` (pinned) and names the forwarder with ONE `listPeopleNames` read on the request client. The record timeline needs nothing new: its author mark already names a person row from `author_id`. |
-| G5 | "a Resend retry … (stateless)" for drops; silent on a retried FORWARD | part 1's resume path (`pipeline.ts:37-65`) re-files a recorded row as a customer reply: unread raised, owner copy sent, the stop rule run | A webhook-filed forward's `inbound_emails.decided_by` is `"email-inbound-forward"` (no schema change; `decided_by` is free text, `0082`'s coherence CHECK only pairs it with `decided_at`). A retry reads that marker, re-runs the team lookup for the author (null if the person has since left), and files it as a forward. |
-| G6 | Branding: the list sits "below the 'where your customers' replies go' line" | that line is inside the branding `<form>`; a form inside a form is invalid HTML and Enter in the Add input would submit Save branding | On Branding the list is its own card directly BELOW the Branding panel (outside its form). On Settings it sits inside the Sending address card below the Replies row, as the spec says (already outside that card's form). |
-| G7 | RLS "members of the account read … no Technician read (a restrictive policy using `app.sees_all_customers`)"; UI "staff without the Owner role cannot see or edit it" | `sees_all_customers` is true for staff | 0083 follows the spec's RLS literally: staff CAN read the rows through the API; no page shows them to staff and both actions refuse them (`requireAccountOwner`). Alternative for the owner: an Owner-only restrictive policy (`app.is_account_owner(account_id)`, 0066). |
-| G8 | "Owners may add and remove on their own account; … staff … cannot see or edit it" | the Branding page admits staff | The Branding card (and its read) renders only when `access.canManage` (agency or Owner). |
-| G9 | "No raw headers (null): not treated as automatic" AND "a sender local part of `mailer-daemon` or `postmaster`" | the From comes from the API, not the raw block | The header rules need the raw block; the `mailer-daemon` / `postmaster` rule reads the API's `from` and applies even when the raw block is null. |
-| G10 | "`Auto-Submitted` present and not `no`" → dropped | RFC 3834's `auto-forwarded` value is what an Outlook/Exchange automatic-forward RULE stamps | Literal: an Owner's automatic forwarding rule is dropped as automatic; only a hand forward files. The runbook line says so. Alternative: exempt `auto-forwarded` when the sender is on the team. |
-| G11 | "At most 200 entries per account" | — | Enforced in `addNeverLog` (count, then insert); two concurrent adds at 199 can land 201. The pipeline reads up to 1000 so every stored entry still drops. No DB trigger. |
-| G12 | "the Copy button toasts 'Copied'" | the clipboard API can refuse (permissions, an insecure context) | A refused copy toasts "Couldn't copy. Select the address and copy it by hand." (new key), and the address is plain selectable text. |
-| G13 | "else team member + authenticated → the forward path" | — | The team lookups (database, then Clerk) run only when the forgery check passed and the sender is not the customer; an unauthenticated sender is held `unverified` without them (the same outcome, and no Clerk call per stranger). |
-| G14 | "Shown to Owners in their language" | the Branding page is English-only today (`branding/page.tsx:79`, `m[...]`) | The new card resolves the reader's locale (`requestLocale`, as the record page does) and sets `lang`; the rest of Branding stays as it is. Settings stays English (part 1 G14). |
-| G15 | "The token is created lazily (`ensureReplyToken`) when the page renders the row" | this writes a conversation and a token on a page GET, through the service client | As the spec says, only while Replies is not off; the record page's `getContact` on the request client has already proved the customer is the viewer's. A failed read or write is the row's own error state (new key), never the card's or the page's. |
-| G16 | (silent) a Never record entry added between a delivery and its Resend retry | part 1 resumes an already-recorded row before anything else (`pipeline.ts:150-166`) | The drops run only for a message with no stored row; an already-stored row resumes. A drop is never retroactive. |
-| G17 | "Index on `account_id`" | the unique `(account_id, pattern)` index leads with `account_id` | No second index (the unique index serves every `account_id` read). Task 1 pins the unique index's column order. |
-| G18 | (silent) a held team forward that staff then file by hand from Needs a look | part 1's manual File files it as the customer's message (author `customer`) | Unchanged in this PR (part 1's path); named in the PR body as a follow-up. |
+| G1 | "a user with the agency role" is on the team (§3) | Agency staff have no `users` row and no `memberships` row (above); only Clerk knows who they are | **RULED: the agency is NOT on the team.** The team is anyone with a membership in the account (any role) plus the account's `reply_to_email` mailbox, answered by `matchTeamSender` alone (`{ userId } \| { mailbox: true } \| null`). No Clerk lookup, no timeout, no extra 503. A forward from BIS agency staff is held in Needs a look (`not_on_record`, or `unverified` when the forgery check fails) like any non-team sender. Spec Decision 2 and §3 amended. |
+| G2 | "`author_id` = the matched user's id" | Person columns hold the Clerk id (above) | **Accepted:** `author_id` = the member's `users.clerk_user_id`; null for the reply-to mailbox, as the spec says. |
+| G3 | "`author_kind='person'`" on an inbound message | `createMessage` maps every inbound to `customer` | **Accepted.** `NewMessage` gains an optional `author: { kind: "person"; id: string \| null }`; when set, `createMessage` writes it instead of `messageAuthor`'s answer. Only `file.ts`'s forward path sets it; every other writer is unchanged, and `messageAuthor`'s SQL twin (`provenance-parity.test.ts`) is untouched. |
+| G4 | the bubble reads "Forwarded by Maria · team" | the thread's reader has no author column | **Accepted.** `meta.forwarded = true` (the spec) PLUS `meta.forwarded_by = <Clerk id or null>`, so the inbox keeps `MESSAGE_COLS` (pinned) and names the forwarder with ONE `listPeopleNames` read on the request client. The record timeline needs nothing new: its author mark already names a person row from `author_id`. |
+| G5 | "a Resend retry … (stateless)" for drops; silent on a retried FORWARD | part 1's resume path (`pipeline.ts:37-65`) re-files a recorded row as a customer reply: unread raised, owner copy sent, the stop rule run | **Accepted.** A webhook-filed forward's `inbound_emails.decided_by` is `"email-inbound-forward"` (no schema change; `decided_by` is free text, `0082`'s coherence CHECK only pairs it with `decided_at`). A retry reads that marker, re-runs the team lookup for the author (null if the person has since left), and files it as a forward. |
+| G6 | Branding: the list sits "below the 'where your customers' replies go' line" | that line is inside the branding `<form>`; a form inside a form is invalid HTML and Enter in the Add input would submit Save branding | **Accepted.** On Branding the list is its own card directly BELOW the Branding panel (outside its form). On Settings it sits inside the Sending address card below the Replies row, as the spec says (already outside that card's form). |
+| G7 | RLS "members of the account read … no Technician read (a restrictive policy using `app.sees_all_customers`)"; UI "staff without the Owner role cannot see or edit it" | `sees_all_customers` is true for staff | **Accepted.** 0083 follows the spec's RLS literally: staff CAN read the rows through the API; no page shows them to staff and both actions refuse them (`requireAccountOwner`). Alternative for the owner: an Owner-only restrictive policy (`app.is_account_owner(account_id)`, 0066). |
+| G8 | "Owners may add and remove on their own account; … staff … cannot see or edit it" | the Branding page admits staff | **Accepted.** The Branding card (and its read) renders only when `access.canManage` (agency or Owner). |
+| G9 | "No raw headers (null): not treated as automatic" AND "a sender local part of `mailer-daemon` or `postmaster`" | the From comes from the API, not the raw block | **Accepted.** The header rules need the raw block; the `mailer-daemon` / `postmaster` rule reads the API's `from` and applies even when the raw block is null. |
+| G10 | "`Auto-Submitted` present and not `no`" → dropped | RFC 3834's `auto-forwarded` value is what an Outlook/Exchange automatic-forward RULE stamps | **RULED: a TEAM sender's `Auto-Submitted: auto-forwarded` is NOT dropped** (a teammate's forwarding rule files normally, through the usual sender check); from anyone else it is dropped as automatic. The detector answers a third class, `"auto_forwarded"`, only when that is the sole marker (any other marker beside it is `"automatic"`); the pipeline then asks the team lookup BEFORE anything is stored (a read only) and drops when the sender is not on the team. A failed lookup answers 503. Spec §2 step 1 amended. |
+| G11 | "At most 200 entries per account" | — | **Accepted.** Enforced in `addNeverLog` (count, then insert); two concurrent adds at 199 can land 201. The pipeline reads up to 1000 so every stored entry still drops. No DB trigger. |
+| G12 | "the Copy button toasts 'Copied'" | the clipboard API can refuse (permissions, an insecure context) | **Accepted.** A refused copy toasts "Couldn't copy. Select the address and copy it by hand." (new key), and the address is plain selectable text. |
+| G13 | "else team member + authenticated → the forward path" | — | **Accepted:** the team lookup runs for the sender check only when the forgery check passed and the sender is not the customer; an unauthenticated sender is held `unverified` without it (the same outcome). The one other caller is G10's auto-forwarded exemption, and the two share one memoised lookup. |
+| G14 | "Shown to Owners in their language" | the Branding page is English-only today (`branding/page.tsx:79`, `m[...]`) | **Accepted.** The new card resolves the reader's locale (`requestLocale`, as the record page does) and sets `lang`; the rest of Branding stays as it is. Settings stays English (part 1 G14). |
+| G15 | "The token is created lazily (`ensureReplyToken`) when the page renders the row" | this writes a conversation and a token on a page GET, through the service client | **Accepted.** As the spec says, only while Replies is not off; the record page's `getContact` on the request client has already proved the customer is the viewer's. A failed read or write is the row's own error state (new key), never the card's or the page's. |
+| G16 | (silent) a Never record entry added between a delivery and its Resend retry | part 1 resumes an already-recorded row before anything else (`pipeline.ts:150-166`) | **Accepted.** The drops run only for a message with no stored row; an already-stored row resumes. A drop is never retroactive. |
+| G17 | "Index on `account_id`" | the unique `(account_id, pattern)` index leads with `account_id` | **Accepted.** No second index (the unique index serves every `account_id` read). Task 1 pins the unique index's column order. |
+| G18 | (silent) a held team forward that staff then file by hand from Needs a look | part 1's manual File files it as the customer's message (author `customer`) | **Accepted.** Unchanged in this PR (part 1's path); named in the PR body as a follow-up. |
 
 ## Global Constraints
 
@@ -64,7 +61,7 @@
 - **0083 is written and proven by Task 1 and APPLIED only by the orchestrator, once: bis-ci first (`ci-project-setup.yml`, `push-dry-run` then `push`), then production (MCP `apply_migration`, once), then the parity check (Task 12).** No other task applies anything anywhere. 0083 is purely additive (one new table) and safe for the build before it, so it may reach production BEFORE the merge; the code must not ship before it (every inbound email would 503 on the Never record read, and Settings and Branding would lose their list to the error state).
 - **No `@bis/db` vitest runs against bis-ci until Task 12 step 2 has applied 0083 there.** `@bis/db` suites run only on the replica kit below, or in CI `verify` (its own Supabase stack). In `packages/db`, run vitest as `node node_modules/vitest/vitest.mjs run <files>`; capture the exit code to a file with nothing after the command and judge by vitest's summary block (the `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` trailer lies). The kit exports `PGCLIENTENCODING=UTF8` (part 1 finding: without it `voice_profiles`' default reads as mojibake on the kit only).
 - **Agents run only the affected tests, by path:** `pnpm --filter web exec vitest run "<path>" …`, `pnpm --filter web typecheck`, `pnpm --filter web exec eslint "<touched files>"`. Never the gates (`pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`) and never Playwright runs: the orchestrator runs them, one at a time (memory "Agent test scope"). Never pass the folder `…/acct/` to vitest (it holds a live test).
-- **Never production Supabase (`tlbkbmlrfafquucsmsmm`), never a production credential anywhere, never create or edit `.env*`, never set a Vercel secret.** No new environment variable: the Clerk lookup uses the `CLERK_SECRET_KEY` `@clerk/nextjs` already reads. **No test calls Clerk, Resend or DNS: the agency lookup takes an injected port, and the pipeline takes the lookup as a dependency.**
+- **Never production Supabase (`tlbkbmlrfafquucsmsmm`), never a production credential anywhere, never create or edit `.env*`, never set a Vercel secret.** No new environment variable. **No test calls Clerk, Resend or DNS** (G1 as ruled: nothing in this PR calls Clerk at all).
 - **0053, server-only writes.** `authenticated` gets SELECT on `inbound_never_log` and nothing else. Every new action file that touches `serviceDb` is added to `…/acct/in-account-service-reads.test.ts`'s `ALLOWED` with its reason. **No new file under `apps/web/src/lib` contains the token `serviceDb` or `ledgerDb`, not even in a comment** (that test's `ROOTS` include `lib`): lib functions take the caller's client, or a thunk, as a parameter; pages and actions pass `serviceDb()`.
 - **Bind every browser-supplied id to an RLS-proven target before any service write** (part 1, Task 11a). The two actions take `accountId` from the route-bound argument, prove it with `requireAccountOwner(accountId)` (Clerk session + the caller's own account) BEFORE any database call, and every service read or write is scoped `.eq("account_id", accountId)`; an entry id is never trusted alone. The record page's token write comes after `getContact` on the REQUEST client found the contact.
 - **Never a token, an address, a pattern, a subject or a body in any log line.** The two new drops log exactly `inbound email: dropped (automatic) account=<id>` and `inbound email: dropped (never record) account=<id>`. The actions log the account id and `loggableError(e)` (kind, code and status only, `lib/loggable-error.ts:18-24`), never the input. The forwarding view logs a fixed sentence plus the account id.
@@ -82,7 +79,7 @@
 ## Ownership (no task edits a file its owner does not own)
 
 - **bis-db-schema:** `packages/db/supabase/migrations/0083_inbound_never_log.sql` (new), `packages/db/src/test/inbound-never-log-schema.test.ts` (new), `<SCRATCH>/s06b-kit/*` (Task 1).
-- **bis-comms:** `apps/web/src/lib/messages.ts` + one new `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `packages/db/src/{never-log,never-log-rules,inbound-email,messaging,index}.ts`, `packages/db/package.json` (one `exports` line), `packages/db/src/test/never-log.test.ts` (new), `apps/web/src/lib/email/inbound/never-log-rules.test.ts` (new) (Task 3); `apps/web/src/lib/email/inbound/{automatic,agency-staff}.ts` + tests (Task 4); `apps/web/src/lib/email/inbound/{pipeline,file}.ts` + tests, `apps/web/src/app/api/webhooks/resend/{route,route.test}.ts`, `docs/runbooks/inbound-email.md` (Task 5); `…/acct/never-log-actions.ts` + test, `apps/web/src/components/never-log-handlers.ts` + test, one `ALLOWED` line (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 9, regenerated, never hand-edited).
+- **bis-comms:** `apps/web/src/lib/messages.ts` + one new `describe` in `apps/web/src/lib/messages.test.ts` (**Task 2 only**); `packages/db/src/{never-log,never-log-rules,inbound-email,messaging,index}.ts`, `packages/db/package.json` (one `exports` line), `packages/db/src/test/never-log.test.ts` (new), `apps/web/src/lib/email/inbound/never-log-rules.test.ts` (new) (Task 3); `apps/web/src/lib/email/inbound/automatic.ts` + test (Task 4); `apps/web/src/lib/email/inbound/{pipeline,file}.ts` + tests, `docs/runbooks/inbound-email.md` (Task 5); `…/acct/never-log-actions.ts` + test, `apps/web/src/components/never-log-handlers.ts` + test, one `ALLOWED` line (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 9, regenerated, never hand-edited).
 - **bis-frontend:** `apps/web/src/components/never-log-list.tsx` + test, `…/settings/{sending-address-card.tsx,sending-address-card.test.ts,page.tsx,page.test.ts}`, `…/acct/branding/{page.tsx,page.test.ts}`, `…/styleguide/never-log-demo.tsx` + test and one line in `…/styleguide/page.tsx` (Task 7); `apps/web/src/lib/email/inbound/forwarding-view.ts` + test, `…/record/{forwarding-address-row.tsx,forwarding-copy.ts}` + tests, `…/record/contact-fields-panel.tsx` (one prop, one row), `…/record/page.tsx` (one read, one prop) + `page.test.ts`, `…/conv/{inbound-meta.ts,message-thread.tsx,page.tsx}` + tests, `…/styleguide/forwarding-demo.tsx` + test and one line in `…/styleguide/page.tsx` (Task 8, AFTER Task 7's styleguide commit).
 - **bis-e2e-qa:** `apps/web/e2e/never-record.spec.ts` (new) (Task 10).
 - **Orchestrator:** Task 0's confirmations and the owner's rulings on G1–G18, the ledger, the bis-ci and production applies, the parity check, the gates, the PR, the merge, the roadmap tracker row (Task 12).
@@ -110,8 +107,8 @@ Paste both values; stop if they differ. On `post` the digest must be UNCHANGED (
 
 ## Pinned tests this PR changes (stated outright)
 
-- `apps/web/src/lib/email/inbound/pipeline.test.ts:3-7`: the hoisted `db` mock gains `matchTeamSender` and `listNeverLog`; `deps` (`:39`) gains `agencyStaff`; `beforeEach` gives `listNeverLog` `[]`, `matchTeamSender` `null`, `agencyStaff` `null` (the states a customer reply really meets: no list, sender not on the team). Every existing case keeps its assertions (Task 5).
-- `apps/web/src/app/api/webhooks/resend/route.test.ts`: a NEW `vi.mock("@/lib/email/inbound/agency-staff", …)` beside the existing pipeline mock (`:15`) and forward mock (`:22`); one new case asserting the route passes an `agencyStaff` function. The existing cases stay as they are (Task 5).
+- `apps/web/src/lib/email/inbound/pipeline.test.ts:3-7`: the hoisted `db` mock gains `matchTeamSender` and `listNeverLog`; `deps` is unchanged; `beforeEach` gives `listNeverLog` `[]` and `matchTeamSender` `null` (the states a customer reply really meets: no list, sender not on the team). Every existing case keeps its assertions (Task 5).
+- `apps/web/src/app/api/webhooks/resend/route.ts` and `route.test.ts`: **unchanged** (G1 as ruled: the pipeline gains no dependency); Task 5 step 8 runs the route test to prove it.
 - `apps/web/src/lib/email/inbound/file.test.ts`: new cases only; the existing `createMessage` call assertions (`:31-37`) stay byte-for-byte (a customer reply's insert has no `author`) (Task 5).
 - `…/acct/in-account-service-reads.test.ts`: `ALLOWED` gains `"app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions.ts": "owner-only"` (Task 6). The record page (`:79`, `proven-target`), Settings (`:122`, `agency-only`) and Branding (`:68`, `configuration`) are already listed; their reasons still hold (Tasks 7, 8 add reads there, each behind the same guard).
 - `…/conv/inbound-meta.test.ts`: new cases for `forwarded`; the existing ones unchanged (Task 8).
@@ -129,8 +126,7 @@ Paste both values; stop if they differ. On `post` the digest must be UNCHANGED (
 | `packages/db/src/never-log-rules.ts` | bis-comms | pure: parse an entry, match a sender, the cap (subpath `@bis/db/never-log-rules`) |
 | `packages/db/src/never-log.ts` (+ `test/never-log.test.ts`) | bis-comms | list, add (duplicate, full), remove, on the caller's client |
 | `apps/web/src/lib/email/inbound/never-log-rules.test.ts` | bis-comms | the pure rules, without a database |
-| `apps/web/src/lib/email/inbound/automatic.ts` (+ test) | bis-comms | is this automatic mail |
-| `apps/web/src/lib/email/inbound/agency-staff.ts` (+ test) | bis-comms | is this address BIS agency staff (Clerk, injected port) |
+| `apps/web/src/lib/email/inbound/automatic.ts` (+ test) | bis-comms | is this automatic mail, or a lone auto-forward (G10) |
 | `…/acct/never-log-actions.ts` (+ test) | bis-comms | Add and Remove, Owner or agency, account-bound |
 | `apps/web/src/components/never-log-handlers.ts` (+ test) | bis-comms | every client call into those actions, Undo included, crash-safe |
 | `apps/web/src/components/never-log-list.tsx` (+ test) | bis-frontend | the list: entries, empty, error, Add, Remove |
@@ -139,7 +135,7 @@ Paste both values; stop if they differ. On `post` the digest must be UNCHANGED (
 | `…/styleguide/never-log-demo.tsx`, `…/styleguide/forwarding-demo.tsx` (+ tests) | bis-frontend | the two demos |
 | `apps/web/e2e/never-record.spec.ts` | bis-e2e-qa | add an entry, see it, Undo it; remove, Undo |
 
-**Modified:** `packages/db/src/{inbound-email,messaging,index}.ts`, `packages/db/package.json`; `apps/web/src/lib/messages.ts`, `messages.test.ts`; `apps/web/src/lib/email/inbound/{pipeline,file}.ts` and tests; `apps/web/src/app/api/webhooks/resend/{route,route.test}.ts`; `…/settings/{sending-address-card,page}.tsx` and tests; `…/acct/branding/page.tsx` and test; `…/record/{contact-fields-panel,page}.tsx` and `page.test.ts`; `…/conv/{inbound-meta.ts,message-thread.tsx,page.tsx}` and tests; `…/acct/in-account-service-reads.test.ts`; `…/styleguide/page.tsx`; `docs/runbooks/inbound-email.md`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
+**Modified:** `packages/db/src/{inbound-email,messaging,index}.ts`, `packages/db/package.json`; `apps/web/src/lib/messages.ts`, `messages.test.ts`; `apps/web/src/lib/email/inbound/{pipeline,file}.ts` and tests; `…/settings/{sending-address-card,page}.tsx` and tests; `…/acct/branding/page.tsx` and test; `…/record/{contact-fields-panel,page}.tsx` and `page.test.ts`; `…/conv/{inbound-meta.ts,message-thread.tsx,page.tsx}` and tests; `…/acct/in-account-service-reads.test.ts`; `…/styleguide/page.tsx`; `docs/runbooks/inbound-email.md`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
 
 ## Task list, owners, order
 
@@ -149,7 +145,7 @@ Paste both values; stop if they differ. On `post` the digest must be UNCHANGED (
 | 1 | Migration 0083 and its proof on the replica; the kit | bis-db-schema | **opus** | 0 |
 | 2 | Every key (**messages.ts, the only writer**) | bis-comms | sonnet | 0 |
 | 3 | `@bis/db`: the never-record module and rules, `matchTeamSender`, `createMessage`'s author | bis-comms | **opus** | 1 |
-| 4 | Pure web modules: the automatic-mail detector; the agency-staff lookup | bis-comms | **opus** | 0 |
+| 4 | The automatic-mail detector | bis-comms | **opus** | 0 |
 | 5 | The pipeline's three new steps, the forward path in `file.ts`, the route, the runbook | bis-comms | **opus** | 3, 4 |
 | 6 | The Never record actions and their crash-safe handlers | bis-comms | **opus** | 2, 3 |
 | 7 | The Never record list on Settings and Branding; its demo | bis-frontend | **opus** | 2, 6 |
@@ -184,8 +180,8 @@ Disjointness: T4 shares no file with T1–T3. T5 and T6 share no file (T5: `lib/
   - `grep -n '<form' apps/web/src/components/branding-panel.tsx` → `231:` only; `grep -n 'data-replies-line' apps/web/src/components/branding-panel.tsx` → `283:` (G6).
   - `grep -n '^} as const;' apps/web/src/lib/messages.ts` → `4749:`; `wc -l < apps/web/src/lib/messages.test.ts` → `611`.
   - `ls "<SCRATCH>/s06-kit/replica.sh" "<SCRATCH>/s06-kit/pgrst.sh" "/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl/postgrest.exe"` → all three exist.
-  - Read-only, MCP `execute_sql` on production and `pnpm --filter @bis/db ci:sql` on bis-ci: `select max(version) from supabase_migrations.schema_migrations` names the 0082 apply on both (production `20261016231609`); `select scope, count(*) from public.memberships group by scope` → no `agency` row (G1's premise; if an `agency` row exists, STOP and report: G1's proposal changes).
-- [ ] **Step 3. The owner's rulings.** Ask danlo G1–G18 with choice tiles, the proposal first (memory "Choice tiles"). Record each ruling in the ledger and in this table's row ("Ruled 2026-10-…: as proposed" or the change); amend the spec in the same commit where a ruling changes it. A ruling that differs from a proposal re-opens every task that names that row before the task starts.
+  - Read-only, MCP `execute_sql` on production and `pnpm --filter @bis/db ci:sql` on bis-ci: `select max(version) from supabase_migrations.schema_migrations` names the 0082 apply on both (production `20261016231609`).
+- [x] **Step 3. RULED 2026-10-17 (danlo, tiles):** G1 CHANGED (the agency is not on the team: members of the account, any role, plus its `reply_to_email` mailbox; no Clerk lookup; an agency forward is held in Needs a look like any non-team sender). G10 CHANGED (a team sender's lone `Auto-Submitted: auto-forwarded` is not dropped; anyone else's is). G2–G9 and G11–G18 ACCEPTED as proposed. The spec's Decision 2, §2 step 1, §3 and "Tests" were amended in the same commit as this plan; each gap row reads its ruling. Record the rulings in the ledger; no implementer re-asks.
 
 ---
 
@@ -820,8 +816,9 @@ export async function removeNeverLog(db: SupabaseClient, accountId: string, id: 
 - [ ] **Step 7: Append `matchTeamSender` to `packages/db/src/inbound-email.ts`:**
 
 ```ts
-/** S-06 part 2 (spec §3, plan G1, G2): the account's own team, by email key. The agency is the web's
- *  Clerk lookup (agency staff have no users row). userId is the Clerk id every person column stores. */
+/** S-06 part 2 (spec §3; G1 as ruled 2026-10-17, G2): the team is the account's members (any role) and
+ *  its reply-to mailbox, by email key. BIS agency staff are NOT the team. userId is the Clerk id every
+ *  person column stores. */
 export type TeamSender = { userId: string } | { mailbox: true };
 
 export async function matchTeamSender(db: SupabaseClient, accountId: string, fromEmail: string): Promise<TeamSender | null> {
@@ -866,26 +863,25 @@ and in `createMessage` replace `const author = messageAuthor(actorType, actorId,
 
 ---
 
-## Task 4: Pure web modules: the automatic-mail detector; the agency-staff lookup (bis-comms)
+## Task 4: The automatic-mail detector (bis-comms)
 
 **Review:** opus (a drop is irreversible: a false positive loses a customer's email for good). **Runs beside:** Tasks 1, 2.
 
 **Files**
 - Create: `apps/web/src/lib/email/inbound/automatic.ts` (+ `automatic.test.ts`)
-- Create: `apps/web/src/lib/email/inbound/agency-staff.ts` (+ `agency-staff.test.ts`)
 
 **Interfaces**
-- Consumes: `HeaderList` from `./auth-results` (`auth-results.ts:7`); `isAgencyMetadata` from `@bis/db` (`index.ts:228`); `emailKey` from `@bis/db/never-log-rules` (Task 3; until Task 3 lands, this task's `agency-staff.ts` imports `emailKey` from that subpath and its test stays red on the import only. Run Task 4's agency half after Task 3 merges into the branch, or have the orchestrator sequence it).
-- Produces: `isAutomaticMail(headers: HeaderList | null, fromAddress: string | null): boolean`; `type AgencyStaffLookup = (address: string) => Promise<{ userId: string } | null>`; `type ClerkUsersPort = { listByEmail: (address: string) => Promise<{ id: string; publicMetadata: unknown; emails: string[] }[]> }`; `agencyStaffLookup(port?: ClerkUsersPort, timeoutMs?: number): AgencyStaffLookup`; `AGENCY_LOOKUP_TIMEOUT_MS = 5000`.
+- Consumes: `HeaderList` from `./auth-results` (`auth-results.ts:7`).
+- Produces: `type AutomaticClass = "none" | "automatic" | "auto_forwarded"`; `classifyAutomatic(headers: HeaderList | null, fromAddress: string | null): AutomaticClass`. `"auto_forwarded"` means the ONLY marker is `Auto-Submitted: auto-forwarded` (G10 as ruled: the pipeline files it when the sender is on the team and drops it otherwise); any other marker, alone or beside it, is `"automatic"`.
 
-- [ ] **Step 1: Read before writing.** `sed -n 1,30p apps/web/src/lib/email/inbound/auth-results.ts`, `sed -n 70,80p packages/db/src/team.ts`, `sed -n 40,80p apps/web/src/lib/team/clerk-team.ts` (the live Clerk port shape). Then `grep -n '"@clerk/backend"' -r node_modules/@clerk/nextjs/package.json` and read `getUserList` and `User`'s `emailAddresses` / `publicMetadata` in that version's `dist/api/endpoints/UserApi.d.ts` and `dist/api/resources/User.d.ts`; paste the lines.
+- [ ] **Step 1: Read before writing.** `sed -n 1,30p apps/web/src/lib/email/inbound/auth-results.ts`.
 
-- [ ] **Step 2: Write the failing detector test** `automatic.test.ts`:
+- [ ] **Step 2: Write the failing test** `automatic.test.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
 import { parseHeaderBlock } from "./auth-results";
-import { isAutomaticMail } from "./automatic";
+import { classifyAutomatic } from "./automatic";
 
 /** S-06 part 2, spec "Pipeline order" 1 and "Tests". Real header blocks through the real parser. */
 const H = (block: string) => parseHeaderBlock(block);
@@ -898,97 +894,58 @@ const GMAIL_REPLY = H([
   "body",
 ].join("\r\n"));
 
-describe("isAutomaticMail", () => {
-  it("a normal Gmail reply is not automatic (mutation: treat any Content-Type multipart as a report → FAILS)", () => {
-    expect(isAutomaticMail(GMAIL_REPLY, "ana@gmail.com")).toBe(false);
+describe("classifyAutomatic", () => {
+  it("a normal Gmail reply is none (mutation: treat any Content-Type multipart as a report → FAILS)", () => {
+    expect(classifyAutomatic(GMAIL_REPLY, "ana@gmail.com")).toBe("none");
   });
 
-  it("Auto-Submitted present and not 'no' is automatic, any value or case; 'no' is not (mutation: only 'auto-replied' → auto-generated passes, FAILS)", () => {
-    expect(isAutomaticMail(H("Auto-Submitted: auto-replied\r\n"), "ana@gmail.com")).toBe(true);
-    expect(isAutomaticMail(H("auto-submitted: Auto-Generated\r\n"), "ana@gmail.com")).toBe(true);
-    expect(isAutomaticMail(H("Auto-Submitted: auto-forwarded\r\n"), "ana@gmail.com")).toBe(true);   // plan G10
-    expect(isAutomaticMail(H("Auto-Submitted: auto-replied; owner-email=\"a@b.com\"\r\n"), "ana@gmail.com")).toBe(true);
-    expect(isAutomaticMail(H("Auto-Submitted: No\r\n"), "ana@gmail.com")).toBe(false);
-    expect(isAutomaticMail(H("Auto-Submitted: no (a person wrote this)\r\n"), "ana@gmail.com")).toBe(false);
+  it("Auto-Submitted present and not 'no' is automatic, any value or case; 'no' is none (mutation: only 'auto-replied' → auto-generated passes, FAILS)", () => {
+    expect(classifyAutomatic(H("Auto-Submitted: auto-replied\r\n"), "ana@gmail.com")).toBe("automatic");
+    expect(classifyAutomatic(H("auto-submitted: Auto-Generated\r\n"), "ana@gmail.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Auto-Submitted: auto-replied; owner-email=\"a@b.com\"\r\n"), "ana@gmail.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Auto-Submitted: No\r\n"), "ana@gmail.com")).toBe("none");
+    expect(classifyAutomatic(H("Auto-Submitted: no (a person wrote this)\r\n"), "ana@gmail.com")).toBe("none");
+  });
+
+  it("auto-forwarded alone is its own class; beside any other marker it is automatic (G10 as ruled; mutation: answer automatic for auto-forwarded → a teammate's rule drops, FAILS; let auto-forwarded win over Precedence: bulk → a forwarded newsletter files, FAILS)", () => {
+    expect(classifyAutomatic(H("Auto-Submitted: Auto-Forwarded\r\n"), "maria@rio.com")).toBe("auto_forwarded");
+    expect(classifyAutomatic(H("Auto-Submitted: auto-forwarded\r\nPrecedence: bulk\r\n"), "maria@rio.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Precedence: bulk\r\nAuto-Submitted: auto-forwarded\r\n"), "maria@rio.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Auto-Submitted: auto-forwarded\r\n"), "mailer-daemon@rio.com")).toBe("automatic");
   });
 
   it("X-Autoreply, X-Autorespond or X-Autoresponse present is automatic (mutation: drop X-Autorespond → FAILS)", () => {
-    for (const h of ["X-Autoreply: yes", "X-Autorespond: on", "X-AutoResponse: 1"]) expect(isAutomaticMail(H(`${h}\r\n`), "ana@gmail.com"), h).toBe(true);
+    for (const h of ["X-Autoreply: yes", "X-Autorespond: on", "X-AutoResponse: 1"]) expect(classifyAutomatic(H(`${h}\r\n`), "ana@gmail.com"), h).toBe("automatic");
   });
 
-  it("Precedence auto_reply, bulk or junk is automatic; list is not (mutation: add list → a mailing-list reply drops, FAILS)", () => {
-    for (const v of ["auto_reply", "bulk", "Junk"]) expect(isAutomaticMail(H(`Precedence: ${v}\r\n`), "ana@gmail.com"), v).toBe(true);
-    expect(isAutomaticMail(H("Precedence: list\r\n"), "ana@gmail.com")).toBe(false);
+  it("Precedence auto_reply, bulk or junk is automatic; list is none (mutation: add list → a mailing-list reply drops, FAILS)", () => {
+    for (const v of ["auto_reply", "bulk", "Junk"]) expect(classifyAutomatic(H(`Precedence: ${v}\r\n`), "ana@gmail.com"), v).toBe("automatic");
+    expect(classifyAutomatic(H("Precedence: list\r\n"), "ana@gmail.com")).toBe("none");
   });
 
-  it("a delivery-status report is automatic; another multipart/report is not (mutation: match multipart/report alone → a read receipt drops, FAILS)", () => {
-    expect(isAutomaticMail(H("Content-Type: multipart/report; report-type=delivery-status; boundary=\"b\"\r\n"), "x@example.com")).toBe(true);
-    expect(isAutomaticMail(H("Content-Type: Multipart/Report; boundary=\"b\"; report-type=\"delivery-status\"\r\n"), "x@example.com")).toBe(true);
-    expect(isAutomaticMail(H("Content-Type: multipart/report; report-type=disposition-notification; boundary=\"b\"\r\n"), "x@example.com")).toBe(false);
+  it("a delivery-status report is automatic; another multipart/report is none (mutation: match multipart/report alone → a read receipt drops, FAILS)", () => {
+    expect(classifyAutomatic(H("Content-Type: multipart/report; report-type=delivery-status; boundary=\"b\"\r\n"), "x@example.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Content-Type: Multipart/Report; boundary=\"b\"; report-type=\"delivery-status\"\r\n"), "x@example.com")).toBe("automatic");
+    expect(classifyAutomatic(H("Content-Type: multipart/report; report-type=disposition-notification; boundary=\"b\"\r\n"), "x@example.com")).toBe("none");
   });
 
-  it("a mailer-daemon or postmaster sender is automatic, even with no raw headers (plan G9; mutation: return false when headers are null before the From check → FAILS)", () => {
-    expect(isAutomaticMail(null, "mailer-daemon@googlemail.com")).toBe(true);
-    expect(isAutomaticMail(GMAIL_REPLY, "postmaster@example.com")).toBe(true);
-    expect(isAutomaticMail(null, "ana@gmail.com")).toBe(false);
-    expect(isAutomaticMail(null, null)).toBe(false);
-    expect(isAutomaticMail(GMAIL_REPLY, "mailer-daemon.fan@example.com")).toBe(false);
+  it("a mailer-daemon or postmaster sender is automatic, even with no raw headers (G9; mutation: return none when headers are null before the From check → FAILS)", () => {
+    expect(classifyAutomatic(null, "mailer-daemon@googlemail.com")).toBe("automatic");
+    expect(classifyAutomatic(GMAIL_REPLY, "postmaster@example.com")).toBe("automatic");
+    expect(classifyAutomatic(null, "ana@gmail.com")).toBe("none");
+    expect(classifyAutomatic(null, null)).toBe("none");
+    expect(classifyAutomatic(GMAIL_REPLY, "mailer-daemon.fan@example.com")).toBe("none");
   });
 
   it("a marker below the top-level block (inside the body) is not read (mutation: scan the whole raw text → FAILS)", () => {
-    expect(isAutomaticMail(H("From: a@b.com\r\n\r\nAuto-Submitted: auto-replied\r\n"), "a@b.com")).toBe(false);
+    expect(classifyAutomatic(H("From: a@b.com\r\n\r\nAuto-Submitted: auto-replied\r\n"), "a@b.com")).toBe("none");
   });
 });
 ```
 
-- [ ] **Step 3: Write the failing lookup test** `agency-staff.test.ts`:
+- [ ] **Step 3: Run it to see it fail** (no module). Paste the summary.
 
-```ts
-import { describe, it, expect, vi } from "vitest";
-
-const db = vi.hoisted(() => ({ isAgencyMetadata: (m: unknown) => (m as { app_role?: string } | null)?.app_role === "agency_admin" }));
-vi.mock("@bis/db", () => db);   // the real isAgencyMetadata is this one line (team.ts:75); copied, not reimplemented differently
-vi.mock("@clerk/nextjs/server", () => ({ clerkClient: () => { throw new Error("no live Clerk in tests"); } }));
-import { agencyStaffLookup, type ClerkUsersPort } from "./agency-staff";
-
-const AGENCY = { app_role: "agency_admin" };
-const port = (users: Awaited<ReturnType<ClerkUsersPort["listByEmail"]>>): ClerkUsersPort & { asked: string[] } => {
-  const asked: string[] = [];
-  return { asked, listByEmail: async (a) => { asked.push(a); return users; } };
-};
-
-describe("agencyStaffLookup (plan G1)", () => {
-  it("answers the Clerk id of an agency user whose own address matches by email key (mutation: skip the metadata check → a client user matches, FAILS)", async () => {
-    const p = port([{ id: "user_dan", publicMetadata: AGENCY, emails: ["Dan@BIS-rgv.com"] }]);
-    expect(await agencyStaffLookup(p)("dan@bis-rgv.com")).toEqual({ userId: "user_dan" });
-    expect(p.asked).toEqual(["dan@bis-rgv.com"]);
-  });
-
-  it("a client user with the same address is not agency staff (mutation: drop isAgencyMetadata → FAILS)", async () => {
-    expect(await agencyStaffLookup(port([{ id: "user_ana", publicMetadata: {}, emails: ["dan@bis-rgv.com"] }]))("dan@bis-rgv.com")).toBeNull();
-  });
-
-  it("re-checks the answer: a returned agency user whose addresses do not include the sender's is ignored (assumption A1's defence; mutation: trust Clerk's filter → FAILS)", async () => {
-    expect(await agencyStaffLookup(port([{ id: "user_dan", publicMetadata: AGENCY, emails: ["dan.other@bis-rgv.com"] }]))("dan@bis-rgv.com")).toBeNull();
-  });
-
-  it("two matches answer the lowest id, so a retry names the same person (mutation: take the first → order-dependent, FAILS)", async () => {
-    const p = port([{ id: "user_z", publicMetadata: AGENCY, emails: ["ops@bis-rgv.com"] }, { id: "user_a", publicMetadata: AGENCY, emails: ["ops@bis-rgv.com"] }]);
-    expect(await agencyStaffLookup(p)("ops@bis-rgv.com")).toEqual({ userId: "user_a" });
-  });
-
-  it("a Clerk failure and a timeout both THROW (the pipeline answers 503; mutation: catch and return null → a teammate's forward is held for good, FAILS)", async () => {
-    await expect(agencyStaffLookup({ listByEmail: async () => { throw new Error("clerk 500"); } })("dan@bis-rgv.com")).rejects.toThrow();
-    await expect(agencyStaffLookup({ listByEmail: () => new Promise(() => {}) }, 20)("dan@bis-rgv.com")).rejects.toThrow("agency lookup: timeout");
-  });
-});
-```
-
-(The `@bis/db` mock carries exactly the one function this module imports from it; `emailKey` comes from the real subpath. A mock of `isAgencyMetadata` that differed from `team.ts:75` would be a mock answering a state production cannot reach: the reviewer diffs the two lines.)
-
-- [ ] **Step 4: Run both to see them fail** (no modules). Paste the summary.
-
-- [ ] **Step 5: Write `automatic.ts`:**
+- [ ] **Step 4: Write `automatic.ts`:**
 
 ```ts
 import type { HeaderList } from "./auth-results";
@@ -996,10 +953,13 @@ import type { HeaderList } from "./auth-results";
 /**
  * S-06 part 2, spec "Pipeline order" 1: automatic mail (out-of-office, auto-responders, bounces) is
  * dropped before anything is stored. Reads only the TOP-LEVEL header block (parseHeaderBlock stops at
- * the first blank line), never the body. Plan G9: the mailer-daemon / postmaster rule reads the From
- * the API gives, so it applies even when the raw block is missing; every header rule needs the block.
- * Plan G10: `Auto-Submitted: auto-forwarded` is automatic too (the spec's "present and not no").
+ * the first blank line), never the body. G9: the mailer-daemon / postmaster rule reads the From the
+ * API gives, so it applies even when the raw block is missing; every header rule needs the block.
+ * G10 (ruled 2026-10-17): `Auto-Submitted: auto-forwarded` as the ONLY marker is "auto_forwarded"; the
+ * pipeline files it for a team sender (a teammate's forwarding rule) and drops it for anyone else.
  */
+export type AutomaticClass = "none" | "automatic" | "auto_forwarded";
+
 const AUTO_REPLY_HEADERS = new Set(["x-autoreply", "x-autorespond", "x-autoresponse"]);
 const PRECEDENCE = new Set(["auto_reply", "bulk", "junk"]);
 const DAEMONS = new Set(["mailer-daemon", "postmaster"]);
@@ -1010,99 +970,53 @@ function isDeliveryReport(contentType: string): boolean {
   return parts.slice(1).some((p) => p.replace(/\s+/g, "").replace(/"/g, "") === "report-type=delivery-status");
 }
 
-export function isAutomaticMail(headers: HeaderList | null, fromAddress: string | null): boolean {
+export function classifyAutomatic(headers: HeaderList | null, fromAddress: string | null): AutomaticClass {
   const at = fromAddress ? fromAddress.lastIndexOf("@") : -1;
-  if (fromAddress && at > 0 && DAEMONS.has(fromAddress.slice(0, at).toLowerCase())) return true;
-  if (!headers) return false;
+  if (fromAddress && at > 0 && DAEMONS.has(fromAddress.slice(0, at).toLowerCase())) return "automatic";
+  if (!headers) return "none";
+  let autoForwarded = false;
   for (const [name, value] of headers) {
     if (name === "auto-submitted") {
       const v = value.toLowerCase().split(/[;(]/)[0]!.trim();
-      if (v !== "no") return true;
+      if (v === "auto-forwarded") autoForwarded = true;
+      else if (v !== "no") return "automatic";
     } else if (AUTO_REPLY_HEADERS.has(name)) {
-      return true;
+      return "automatic";
     } else if (name === "precedence" && PRECEDENCE.has(value.trim().toLowerCase())) {
-      return true;
+      return "automatic";
     } else if (name === "content-type" && isDeliveryReport(value)) {
-      return true;
+      return "automatic";
     }
   }
-  return false;
+  return autoForwarded ? "auto_forwarded" : "none";
 }
 ```
 
-- [ ] **Step 6: Write `agency-staff.ts`:**
-
-```ts
-import { clerkClient } from "@clerk/nextjs/server";
-import { isAgencyMetadata } from "@bis/db";
-import { emailKey } from "@bis/db/never-log-rules";
-
-/**
- * S-06 part 2 (plan G1): is this address BIS agency staff? Agency people have no users row (the Clerk
- * webhook skips them), so Clerk is the only source. The answer is RE-CHECKED here (metadata and the
- * address by email key) whatever Clerk's filter returns (assumption A1). THROWS on a Clerk failure or
- * a timeout: the pipeline answers 503 and Resend retries. Never logs the address.
- */
-export type AgencyStaffLookup = (address: string) => Promise<{ userId: string } | null>;
-export type ClerkUsersPort = { listByEmail: (address: string) => Promise<{ id: string; publicMetadata: unknown; emails: string[] }[]> };
-export const AGENCY_LOOKUP_TIMEOUT_MS = 5000;
-
-function liveClerkUsers(): ClerkUsersPort {
-  return {
-    listByEmail: async (address) => {
-      const clerk = await clerkClient();
-      const { data } = await clerk.users.getUserList({ emailAddress: [address], limit: 10 });
-      return data.map((u) => ({ id: u.id, publicMetadata: u.publicMetadata, emails: u.emailAddresses.map((e) => e.emailAddress) }));
-    },
-  };
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([p, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("agency lookup: timeout")), ms); })]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-export function agencyStaffLookup(port: ClerkUsersPort = liveClerkUsers(), timeoutMs = AGENCY_LOOKUP_TIMEOUT_MS): AgencyStaffLookup {
-  return async (address) => {
-    const key = emailKey(address);
-    const users = await withTimeout(port.listByEmail(address), timeoutMs);
-    const hit = users
-      .filter((u) => isAgencyMetadata(u.publicMetadata) && u.emails.some((e) => emailKey(e) === key))
-      .map((u) => u.id).sort()[0];
-    return hit ? { userId: hit } : null;
-  };
-}
-```
-
-If Step 1's read shows `getUserList`'s answer is not `{ data }` in the resolved version, or `User` names the fields differently, follow the type definitions and say so.
-
-- [ ] **Step 7: Run to pass**; `pnpm --filter web typecheck`; `pnpm --filter web exec eslint src/lib/email/inbound/automatic.ts src/lib/email/inbound/agency-staff.ts`. Also `src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts` → PASS (no `serviceDb` in either new lib file).
-- [ ] **Step 8: Probes, each by name, edited back:** (a) `isDeliveryReport` returning `parts[0] === "multipart/report"` → the read-receipt case FAILS; (b) `if (!headers) return false;` moved above the daemon check → the null-headers case FAILS; (c) `v !== "no"` → `v === "auto-replied"` → the auto-generated case FAILS; (d) `agencyStaffLookup` without `isAgencyMetadata` → the client-user case FAILS; (e) without the `emailKey` re-check → the re-check case FAILS. Paste each failing line.
-- [ ] **Step 9: Commit** `-- apps/web/src/lib/email/inbound/automatic.ts apps/web/src/lib/email/inbound/automatic.test.ts apps/web/src/lib/email/inbound/agency-staff.ts apps/web/src/lib/email/inbound/agency-staff.test.ts`, message "inbound email: the automatic-mail detector and the agency-staff lookup (S-06 part 2)".
+- [ ] **Step 5: Run to pass**; `pnpm --filter web typecheck`; `pnpm --filter web exec eslint src/lib/email/inbound/automatic.ts`; `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` → PASS (no `serviceDb` in the new lib file).
+- [ ] **Step 6: Probes, each by name, edited back:** (a) `isDeliveryReport` returning `parts[0] === "multipart/report"` → the read-receipt case FAILS; (b) `if (!headers) return "none";` moved above the daemon check → the null-headers case FAILS; (c) `v !== "no"` → `v === "auto-replied"` → the auto-generated case FAILS; (d) `auto-forwarded` answering `"automatic"` → the auto-forwarded case FAILS; (e) answering `"auto_forwarded"` the moment it is seen → the `Precedence: bulk` after it case FAILS. Paste each failing line.
+- [ ] **Step 7: Commit** `-- apps/web/src/lib/email/inbound/automatic.ts apps/web/src/lib/email/inbound/automatic.test.ts`, message "inbound email: the automatic-mail detector, with the team forwarding-rule class (S-06 part 2)".
 
 ---
 
-## Task 5: The pipeline's three new steps, the forward path in `file.ts`, the route, the runbook (bis-comms)
+## Task 5: The pipeline's three new steps, the forward path in `file.ts`, the runbook (bis-comms)
 
 **Review:** opus. **After:** Tasks 3, 4.
 
 **Files**
 - Modify: `apps/web/src/lib/email/inbound/pipeline.ts` (+ `pipeline.test.ts`)
 - Modify: `apps/web/src/lib/email/inbound/file.ts` (+ `file.test.ts`)
-- Modify: `apps/web/src/app/api/webhooks/resend/route.ts:134-137` (+ `route.test.ts`)
 - Modify: `docs/runbooks/inbound-email.md` (one new section)
+- Unchanged: `apps/web/src/app/api/webhooks/resend/route.ts` (no new dependency: G1 as ruled removed the agency lookup) and `route.test.ts`; Step 8 runs `route.test.ts` to prove it.
 
 **Interfaces**
-- Consumes: `listNeverLog`, `matchTeamSender` (`@bis/db`, Task 3); `neverLogMatches` (`@bis/db/never-log-rules`, Task 3); `isAutomaticMail` (Task 4); `agencyStaffLookup`, `type AgencyStaffLookup` (Task 4); `createMessage`'s `author` (Task 3).
-- Produces: `PipelineDeps.agencyStaff: AgencyStaffLookup`; `PipelineOutcome`'s 503 results gain `"lookup_failed"`; `FORWARD_ACTOR_ID = "email-inbound-forward"` (exported from `pipeline.ts`); `FileInput.forward?: { authorId: string | null }`; a forwarded message's `meta` is `{ inbound_email_id, attachment_count, forwarded: true, forwarded_by: <Clerk id or null>, consent: { kind: "none" } }` (Task 8 reads `forwarded` and `forwarded_by`).
+- Consumes: `listNeverLog`, `matchTeamSender` (`@bis/db`, Task 3); `neverLogMatches` (`@bis/db/never-log-rules`, Task 3); `classifyAutomatic` (Task 4); `createMessage`'s `author` (Task 3).
+- Produces: `PipelineOutcome`'s 503 results gain `"lookup_failed"` (`PipelineDeps` is unchanged); `FORWARD_ACTOR_ID = "email-inbound-forward"` (exported from `pipeline.ts`); `FileInput.forward?: { authorId: string | null }`; a forwarded message's `meta` is `{ inbound_email_id, attachment_count, forwarded: true, forwarded_by: <Clerk id or null>, consent: { kind: "none" } }` (Task 8 reads `forwarded` and `forwarded_by`).
 
-- [ ] **Step 1: Read before writing.** `pipeline.ts` whole, `file.ts` whole, `sed -n 1,60p apps/web/src/lib/email/inbound/pipeline.test.ts`, `sed -n 1,40p apps/web/src/lib/email/inbound/file.test.ts`, `sed -n 1,40p apps/web/src/app/api/webhooks/resend/route.test.ts`, `sed -n 120,145p apps/web/src/app/api/webhooks/resend/route.ts`, `docs/runbooks/inbound-email.md` (its section list).
+**The order (spec "Pipeline order", G10 as ruled):** after the part 1 steps that resolve the thread and resume a stored row: (1) `classifyAutomatic` → `"automatic"` is dropped; `"auto_forwarded"` asks the team lookup FIRST (a read, nothing stored) and is dropped unless the sender is on the team; (2) Never record → dropped; (3) the sender check: the customer + authenticated → part 1's filed path; else the team + authenticated → the forward path; else held. The team answer is looked up at most once per delivery (memoised), so an auto-forwarded teammate's mail does not pay for it twice.
 
-- [ ] **Step 2: Write the failing pipeline tests.** In `pipeline.test.ts`: the hoisted `db` (`:3-7`) gains `matchTeamSender: vi.fn(), listNeverLog: vi.fn()`; add `const agencyStaff = vi.fn();` beside `forward`/`log`, include it in the `beforeEach` reset list, set `deps = { …, agencyStaff }`, and in `beforeEach` add `db.listNeverLog.mockResolvedValue([]); db.matchTeamSender.mockResolvedValue(null); agencyStaff.mockResolvedValue(null);`. Then append:
+- [ ] **Step 1: Read before writing.** `pipeline.ts` whole, `file.ts` whole, `sed -n 1,60p apps/web/src/lib/email/inbound/pipeline.test.ts`, `sed -n 1,40p apps/web/src/lib/email/inbound/file.test.ts`, `docs/runbooks/inbound-email.md` (its section list).
+
+- [ ] **Step 2: Write the failing pipeline tests.** In `pipeline.test.ts`: the hoisted `db` (`:3-7`) gains `matchTeamSender: vi.fn(), listNeverLog: vi.fn()`, and `beforeEach` adds `db.listNeverLog.mockResolvedValue([]); db.matchTeamSender.mockResolvedValue(null);` (the states a customer reply really meets: an empty list, a sender not on the team). Then append:
 
 ```ts
 describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline order', 'Failure behaviour')", () => {
@@ -1117,12 +1031,38 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
     expect(db.listNeverLog).not.toHaveBeenCalled();
+    expect(db.matchTeamSender).not.toHaveBeenCalled();
     expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: dropped (automatic) account=acc"]);
   });
 
-  it("a bounce from mailer-daemon with no raw headers is dropped (plan G9; mutation: skip the detector when rawHeaders is null → it is held, FAILS)", async () => {
+  it("a bounce from mailer-daemon with no raw headers is dropped (G9; mutation: skip the detector when rawHeaders is null → it is held, FAILS)", async () => {
     fetchEmail.mockResolvedValue(EMAIL({ from: "Mail Delivery Subsystem <mailer-daemon@googlemail.com>", rawHeaders: null }));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+    expect(db.recordInboundEmail).not.toHaveBeenCalled();
+  });
+
+  it("auto-forwarded mail from a teammate is NOT dropped: it files as their forward (G10 as ruled; mutation: drop every auto_forwarded → FAILS)", async () => {
+    fetchEmail.mockResolvedValue(TEAM({ rawHeaders: `Auto-Submitted: auto-forwarded\r\n${SES_OK.replace(/gmail\.com/g, "rio.com")}` }));
+    db.matchSender.mockResolvedValue(null);
+    db.matchTeamSender.mockResolvedValue({ userId: "user_maria" });
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
+    expect(db.matchTeamSender).toHaveBeenCalledTimes(1);   // memoised: asked once for the exemption, reused for the sender check
+    expect(file.fileInboundEmail.mock.calls[0]![1]).toMatchObject({ raiseUnread: false, forward: { authorId: "user_maria" } });
+  });
+
+  it("auto-forwarded mail from anyone not on the team is dropped as automatic, before the list read (G10 as ruled; mutation: exempt every auto_forwarded → the customer's own forwarding rule files, FAILS)", async () => {
+    fetchEmail.mockResolvedValue(EMAIL({ rawHeaders: `Auto-Submitted: auto-forwarded\r\n${SES_OK}` }));
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "dropped" });
+    expect(db.matchTeamSender).toHaveBeenCalledWith(deps.db, "acc", "ana@gmail.com");
+    expect(db.listNeverLog).not.toHaveBeenCalled();
+    expect(db.recordInboundEmail).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: dropped (automatic) account=acc"]);
+  });
+
+  it("the team lookup failing for an auto-forwarded message answers 503, nothing stored (spec failure table; mutation: treat a failed lookup as not-team → dropped, FAILS)", async () => {
+    fetchEmail.mockResolvedValue(TEAM({ rawHeaders: `Auto-Submitted: auto-forwarded\r\n${SES_OK.replace(/gmail\.com/g, "rio.com")}` }));
+    db.matchTeamSender.mockRejectedValue(new Error("db"));
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
   });
 
@@ -1155,24 +1095,18 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "filed" });
     expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({ status: "filed", holdReason: null, decidedBy: "email-inbound-forward", fromEmail: "maria@rio.com", text: MARIA_FWD });
     expect(file.fileInboundEmail.mock.calls[0]![1]).toMatchObject({ raiseUnread: false, sender: null, forward: { authorId: "user_maria" } });
-    expect(agencyStaff).not.toHaveBeenCalled();
     expect(forward).not.toHaveBeenCalled();
   });
 
-  it("the reply-to mailbox files with no author id; agency staff with theirs (spec §3; mutation: skip the agency lookup → held, FAILS)", async () => {
+  it("the reply-to mailbox files with no author id (spec §3; mutation: default the id → FAILS)", async () => {
     fetchEmail.mockResolvedValue(TEAM());
     db.matchSender.mockResolvedValue(null);
     db.matchTeamSender.mockResolvedValue({ mailbox: true });
     await handleReceivedEmail(deps, { email_id: "re_1" });
     expect(file.fileInboundEmail.mock.calls[0]![1].forward).toEqual({ authorId: null });
-    db.matchTeamSender.mockResolvedValue(null);
-    agencyStaff.mockResolvedValue({ userId: "user_dan" });
-    await handleReceivedEmail(deps, { email_id: "re_1" });
-    expect(agencyStaff).toHaveBeenCalledWith("maria@rio.com");
-    expect(file.fileInboundEmail.mock.calls[1]![1].forward).toEqual({ authorId: "user_dan" });
   });
 
-  it("an unauthenticated teammate is held unverified with no team lookup (plan G13; mutation: file a team match without authentication → FAILS)", async () => {
+  it("an unauthenticated teammate is held unverified with no team lookup (G13; mutation: file a team match without authentication → FAILS)", async () => {
     fetchEmail.mockResolvedValue(TEAM({ rawHeaders: null }));
     db.matchSender.mockResolvedValue(null);
     db.matchTeamSender.mockResolvedValue({ userId: "user_maria" });
@@ -1182,11 +1116,12 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     expect(file.fileInboundEmail).not.toHaveBeenCalled();
   });
 
-  it("an authenticated stranger, not the customer and not the team, is held not_on_record as in part 1 (mutation: file any authenticated sender → FAILS)", async () => {
-    fetchEmail.mockResolvedValue(TEAM());
+  it("an authenticated sender who is neither the customer nor the team (a stranger, or BIS agency staff: G1 as ruled) is held not_on_record as in part 1 (mutation: file any authenticated sender → FAILS)", async () => {
+    fetchEmail.mockResolvedValue(TEAM({ from: "Dan <dan@bis-rgv.com>", rawHeaders: SES_OK.replace(/gmail\.com/g, "bis-rgv.com") }));
     db.matchSender.mockResolvedValue(null);
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "held" });
     expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({ status: "held", holdReason: "not_on_record" });
+    expect(file.fileInboundEmail).not.toHaveBeenCalled();
   });
 
   it("the customer still files exactly as part 1, and the team is never asked (mutation: check the team first → a customer who is also staff files as a forward, FAILS)", async () => {
@@ -1203,13 +1138,10 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     db.matchSender.mockResolvedValue(null);
     db.matchTeamSender.mockRejectedValue(new Error("db"));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
-    db.matchTeamSender.mockResolvedValue(null);
-    agencyStaff.mockRejectedValue(new Error("clerk"));
-    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
   });
 
-  it("a retried forward (row recorded, never linked) re-files as a forward with a fresh author lookup, still no unread and no owner copy (plan G5; mutation: resume ignoring decided_by → raiseUnread true and an owner copy, FAILS)", async () => {
+  it("a retried forward (row recorded, never linked) re-files as a forward with a fresh author lookup, still no unread and no owner copy (G5; mutation: resume ignoring decided_by → raiseUnread true and an owner copy, FAILS)", async () => {
     db.findInboundEmailByProviderId.mockResolvedValue({
       id: "ie_1", accountId: "acc", conversationId: "conv", status: "filed", holdReason: null, messageId: null,
       decidedBy: "email-inbound-forward", fromEmail: "maria@rio.com", fromName: "Maria Lopez", attachmentCount: 0, text: MARIA_FWD,
@@ -1222,7 +1154,7 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     expect(forward).not.toHaveBeenCalled();
   });
 
-  it("an entry added after the first delivery does not drop a row already stored (plan G16; mutation: run the drops before the existing-row branch → dropped, FAILS)", async () => {
+  it("an entry added after the first delivery does not drop a row already stored (G16; mutation: run the drops before the existing-row branch → dropped, FAILS)", async () => {
     db.findInboundEmailByProviderId.mockResolvedValue({ id: "ie_1", accountId: "acc", conversationId: "conv", status: "held", holdReason: "not_on_record", messageId: null, decidedBy: null, fromEmail: "ana@gmail.com", attachmentCount: 0, text: "x" });
     db.listNeverLog.mockResolvedValue([{ id: "n1", pattern: "gmail.com", kind: "domain", addedBy: "u", createdAt: "x" }]);
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 200, result: "duplicate" });
@@ -1230,7 +1162,7 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
 });
 ```
 
-(Every `listNeverLog` answer above is a list for THE thread's account `acc`, the only state production's account-scoped read can reach. `findInboundEmailByProviderId`'s rows carry the columns `resumeExisting` reads.)
+(Every `listNeverLog` and `matchTeamSender` answer above is for THE thread's account `acc`, the only state production's account-scoped reads can reach. `findInboundEmailByProviderId`'s rows carry the columns `resumeExisting` reads.)
 
 - [ ] **Step 3: Write the failing `file.ts` tests**, appended to `file.test.ts`:
 
@@ -1265,11 +1197,9 @@ describe("S-06 part 2: a team forward (spec §4)", () => {
 });
 ```
 
-- [ ] **Step 4: Write the failing route test.** In `route.test.ts`, beside `:15` and `:22`: `const agencyMock = vi.hoisted(() => vi.fn(() => async () => null)); vi.mock("@/lib/email/inbound/agency-staff", () => ({ agencyStaffLookup: agencyMock }));` and append one case, in the file's existing `email.received` describe, that sends a valid `email.received` event (copy the existing `email.received` case's request builder) and asserts `typeof pipelineMock.mock.calls[0]![0].agencyStaff === "function"` and `agencyMock` was called once (mutation: drop `agencyStaff` from the route's deps → FAILS; typecheck fails too).
+- [ ] **Step 4: Run to see them fail.** `pnpm --filter web exec vitest run src/lib/email/inbound/pipeline.test.ts src/lib/email/inbound/file.test.ts` → the new cases FAIL, the existing ones PASS. Paste the summary.
 
-- [ ] **Step 5: Run to see them fail.** `pnpm --filter web exec vitest run src/lib/email/inbound/pipeline.test.ts src/lib/email/inbound/file.test.ts src/app/api/webhooks/resend/route.test.ts` → the new cases FAIL, the existing ones PASS. Paste the summary.
-
-- [ ] **Step 6: Implement `file.ts`.** `FileInput` gains `forward?: { authorId: string | null };` with the comment "S-06 part 2: a teammate's forward (spec §4). The whole text, the person mark, no stop, no unread." In `fileInboundEmail`, after the `row.messageId !== null` early return:
+- [ ] **Step 5: Implement `file.ts`.** `FileInput` gains `forward?: { authorId: string | null };` with the comment "S-06 part 2: a teammate's forward (spec §4). The whole text, the person mark, no stop, no unread." In `fileInboundEmail`, after the `row.messageId !== null` early return:
 
 ```ts
   const forward = i.forward ?? null;
@@ -1281,13 +1211,13 @@ describe("S-06 part 2: a team forward (spec §4)", () => {
   }
 ```
 
-Move the existing lines from `const stopFor = …` through the `else if (cls.kind === "unclear" || cls.kind === "clear") { … }` block inside that `if`, unchanged. In the `else` branch that creates the message:
+Move the existing lines from `const stopFor = …` through the `else if (cls.kind === "unclear" || cls.kind === "clear") { … }` block inside that `if`, unchanged (delete the old `let consent` line they declared). In the `else` branch that creates the message:
 
 ```ts
     const meta: Record<string, unknown> = { inbound_email_id: row.providerEmailId, attachment_count: i.attachmentCount };
     if (forward) {
       meta.forwarded = true;
-      meta.forwarded_by = forward.authorId;   // plan G4: the inbox names the forwarder from this
+      meta.forwarded_by = forward.authorId;   // G4: the inbox names the forwarder from this
     } else if (i.sender?.viaGroup) {
       meta.sender = { contact_id: i.sender.contactId, first_name: i.sender.firstName, last_name: i.sender.lastName };
     }
@@ -1301,23 +1231,17 @@ Move the existing lines from `const stopFor = …` through the `else if (cls.kin
 
 and change the unread line to `if (i.raiseUnread && !forward) await incrementUnreadCount(db, row.accountId, row.conversationId);`.
 
-- [ ] **Step 7: Implement `pipeline.ts`.**
-  - Imports: add `listNeverLog, matchTeamSender` to the `@bis/db` import; `import { neverLogMatches } from "@bis/db/never-log-rules";`; `import { isAutomaticMail } from "./automatic";`; `import type { AgencyStaffLookup } from "./agency-staff";`.
-  - `PipelineDeps` gains `agencyStaff: AgencyStaffLookup;`. `PipelineOutcome`'s 503 union becomes `"fetch_failed" | "write_failed" | "lookup_failed"`.
+- [ ] **Step 6: Implement `pipeline.ts`.**
+  - Imports: add `listNeverLog, matchTeamSender, type TeamSender` to the `@bis/db` import; `import { neverLogMatches } from "@bis/db/never-log-rules";`; `import { classifyAutomatic } from "./automatic";`.
+  - `PipelineOutcome`'s 503 union becomes `"fetch_failed" | "write_failed" | "lookup_failed"`. `PipelineDeps` is unchanged.
   - After `const ACTOR = …`:
 
 ```ts
-/** S-06 part 2 (plan G5): the decided_by of a webhook-filed team forward, the durable marker a retry reads. */
+/** S-06 part 2 (G5): the decided_by of a webhook-filed team forward, the durable marker a retry reads. */
 export const FORWARD_ACTOR_ID = "email-inbound-forward";
 type Filing = { kind: "customer"; sender: SenderMatch | null } | { kind: "forward"; authorId: string | null };
-
-/** Spec §3: the account's members and mailbox, then BIS agency staff. THROWS on either lookup's failure. */
-async function teamSenderOf(deps: PipelineDeps, accountId: string, fromEmail: string): Promise<{ authorId: string | null } | null> {
-  const team = await matchTeamSender(deps.db, accountId, fromEmail);
-  if (team) return { authorId: "userId" in team ? team.userId : null };
-  const agency = await deps.agencyStaff(fromEmail);
-  return agency ? { authorId: agency.userId } : null;
-}
+/** Spec §3 (G1 as ruled): the account's members (any role) and its reply-to mailbox; never the agency. */
+const authorOf = (t: TeamSender): string | null => ("userId" in t ? t.userId : null);
 ```
 
   - `resumeExisting`'s last parameter becomes `precomputed?: Filing`, and its `try` body becomes:
@@ -1328,7 +1252,8 @@ async function teamSenderOf(deps: PipelineDeps, accountId: string, fromEmail: st
     else if (row.decidedBy === FORWARD_ACTOR_ID) {
       // A retry of a forward: the author is looked up again (null if the person has since left).
       const bare = row.messageId === null ? bareAddress(row.fromEmail) : null;
-      filing = { kind: "forward", authorId: bare ? (await teamSenderOf(deps, row.accountId, bare))?.authorId ?? null : null };
+      const t = bare ? await matchTeamSender(deps.db, row.accountId, bare) : null;
+      filing = { kind: "forward", authorId: t ? authorOf(t) : null };
     } else {
       filing = { kind: "customer", sender: row.messageId !== null ? null : await matchSender(deps.db, row.accountId, contactId, row.fromEmail) };
     }
@@ -1344,13 +1269,28 @@ async function teamSenderOf(deps: PipelineDeps, accountId: string, fromEmail: st
     return { status: 200, result: result.created ? "filed" : "duplicate" };
 ```
 
-  - After the `if (existingRow) { … }` block and BEFORE `let row: InboundEmailRow;`, the two drops:
+  - After the `if (existingRow) { … }` block and BEFORE `let row: InboundEmailRow;`, the drops:
 
 ```ts
   // S-06 part 2, spec "Pipeline order" 1 and 2: dropped before anything is stored, stateless (a Resend
-  // retry is dropped again). Plan G16: a row already stored resumed above; a drop is never retroactive.
+  // retry is dropped again). G16: a row already stored resumed above; a drop is never retroactive.
   const fromEmail = bareAddress(email.from);
-  if (isAutomaticMail(email.rawHeaders ? parseHeaderBlock(email.rawHeaders) : null, fromEmail)) {
+  // The team answer, looked up at most once per delivery (the auto-forwarded exemption and the sender
+  // check share it). THROWS on a read failure: each caller answers 503.
+  let teamMemo: Promise<TeamSender | null> | null = null;
+  const teamOf = () => (teamMemo ??= fromEmail ? matchTeamSender(deps.db, thread.accountId, fromEmail) : Promise.resolve(null));
+  const auto = classifyAutomatic(email.rawHeaders ? parseHeaderBlock(email.rawHeaders) : null, fromEmail);
+  let autoDrop = auto === "automatic";
+  if (auto === "auto_forwarded") {
+    // G10 as ruled: a teammate's forwarding rule files normally; anyone else's is automatic mail.
+    try {
+      autoDrop = (await teamOf()) === null;
+    } catch {
+      deps.log("inbound email: the team lookup failed; 503 so Resend retries");
+      return { status: 503, result: "lookup_failed" };
+    }
+  }
+  if (autoDrop) {
     deps.log(`inbound email: dropped (automatic) account=${thread.accountId}`);
     return { status: 200, result: "dropped" };
   }
@@ -1370,12 +1310,13 @@ async function teamSenderOf(deps: PipelineDeps, accountId: string, fromEmail: st
   - Inside the existing `try`: delete its own `const fromEmail = bareAddress(email.from);` (now above); rename `firstRunMatch` to `firstRunFiling: Filing | undefined`; after `const match = …`:
 
 ```ts
-    // Spec "Pipeline order" 3 and plan G13: the team only when the customer did not match and the
-    // forgery check passed; an unauthenticated sender is held unverified without a lookup.
+    // Spec "Pipeline order" 3 and G13: the team only when the customer did not match and the forgery
+    // check passed; an unauthenticated sender is held unverified without a lookup.
     let team: { authorId: string | null } | null = null;
     if (authenticated && match === null && fromEmail) {
       try {
-        team = await teamSenderOf(deps, thread.accountId, fromEmail);
+        const t = await teamOf();
+        team = t ? { authorId: authorOf(t) } : null;
       } catch {
         deps.log("inbound email: the team lookup failed; 503 so Resend retries");
         return { status: 503, result: "lookup_failed" };
@@ -1390,15 +1331,13 @@ async function teamSenderOf(deps: PipelineDeps, accountId: string, fromEmail: st
 
     and in the `recordInboundEmail` call `decidedBy: filed ? (team ? FORWARD_ACTOR_ID : ACTOR.id) : null`. The final line becomes `return await resumeExisting(deps, row, thread.contactId, rowCreated ? firstRunFiling : undefined);`.
 
-- [ ] **Step 8: The route.** `route.ts:134-137` gains `agencyStaff: agencyStaffLookup(),` in the deps object, and `import { agencyStaffLookup } from "@/lib/email/inbound/agency-staff";` at the top. Nothing else in the route changes (`outcome.result` already flows to the heartbeat and the response).
+- [ ] **Step 7: The runbook.** Append to `docs/runbooks/inbound-email.md` a section "Forwarding to a record, and Never record (S-06 part 2)": the forwarding address is the customer's reply address, shown on their record; who counts as the team (anyone with a membership in the account, any role, and the account's reply-to mailbox; NOT BIS agency staff, whose forwards wait in Needs a look like any other sender) and that the forgery check still applies; automatic mail and Never record senders are dropped and never stored, with the two log lines verbatim; a teammate's automatic forwarding rule (`Auto-Submitted: auto-forwarded`) files normally, anyone else's is dropped; the 503 cases (the list read, the team lookup); how to read a dropped message (Resend's dashboard still has it; BIS stores nothing).
 
-- [ ] **Step 9: The runbook.** Append to `docs/runbooks/inbound-email.md` a section "Forwarding to a record, and Never record (S-06 part 2)": the forwarding address is the customer's reply address, shown on their record; who counts as the team (members, BIS agency staff through Clerk, the account's reply-to mailbox) and that the forgery check still applies; automatic mail and Never record senders are dropped and never stored, with the two log lines verbatim; an Owner's automatic forwarding RULE is dropped as automatic (G10, as ruled) so forward by hand; the 503 cases (list read, team lookup, Clerk); how to read a dropped message (Resend's dashboard still has it; BIS stores nothing).
+- [ ] **Step 8: Run to pass**: the two test files, plus `src/lib/email/inbound/` whole by path (`pnpm --filter web exec vitest run src/lib/email/inbound`) and `src/app/api/webhooks/resend/route.test.ts` (unchanged, still green), `pnpm --filter web typecheck`, eslint on the touched files. Paste the summary (the run count must equal the files' case count).
 
-- [ ] **Step 10: Run to pass**: the three test files, plus `src/lib/email/inbound/` whole by path (`pnpm --filter web exec vitest run src/lib/email/inbound`), `pnpm --filter web typecheck`, eslint on the touched files. Paste the summary (the run count must equal the files' case count).
+- [ ] **Step 9: Probes, each by name, edited back:** (a) the drops moved below `recordInboundEmail` → the automatic case FAILS; (b) `neverLogMatches` call removed → the listed-customer case FAILS; (c) `team` computed without `authenticated &&` → the unverified-teammate case FAILS; (d) `raiseUnread: !isForward` → `true` → the member-forward case FAILS; (e) `resumeExisting` ignoring `FORWARD_ACTOR_ID` → the retry case FAILS; (f) `file.ts`'s classification run on a forward → the stop case FAILS; (g) the `listNeverLog` catch returning `[]` → the 503 case FAILS; (h) `autoDrop = auto !== "none"` (no exemption) → the teammate auto-forwarded case FAILS; (i) `teamOf` without the memo → the `toHaveBeenCalledTimes(1)` assertion FAILS. Paste each failing line.
 
-- [ ] **Step 11: Probes, each by name, edited back:** (a) the drops moved below `recordInboundEmail` → the automatic case FAILS; (b) `neverLogMatches` call removed → the listed-customer case FAILS; (c) `team` computed without `authenticated &&` → the unverified-teammate case FAILS; (d) `raiseUnread: !isForward` → `true` → the member-forward case FAILS; (e) `resumeExisting` ignoring `FORWARD_ACTOR_ID` → the retry case FAILS; (f) `file.ts`'s classification run on a forward → the stop case FAILS; (g) the `listNeverLog` catch returning `[]` → the 503 case FAILS. Paste each failing line.
-
-- [ ] **Step 12: Commit** `-- apps/web/src/lib/email/inbound/pipeline.ts apps/web/src/lib/email/inbound/pipeline.test.ts apps/web/src/lib/email/inbound/file.ts apps/web/src/lib/email/inbound/file.test.ts apps/web/src/app/api/webhooks/resend/route.ts apps/web/src/app/api/webhooks/resend/route.test.ts docs/runbooks/inbound-email.md`, message "inbound email: automatic mail and Never record senders dropped, the team's forwards filed on the record (S-06 part 2)".
+- [ ] **Step 10: Commit** `-- apps/web/src/lib/email/inbound/pipeline.ts apps/web/src/lib/email/inbound/pipeline.test.ts apps/web/src/lib/email/inbound/file.ts apps/web/src/lib/email/inbound/file.test.ts docs/runbooks/inbound-email.md`, message "inbound email: automatic mail and Never record senders dropped, the team's forwards filed on the record (S-06 part 2)".
 
 ---
 
@@ -2263,7 +2202,7 @@ test("removing an entry takes it off at once; Undo puts it back", async ({ page 
 
 - [ ] **Step 1.** Read the spec whole, this plan's G1–G18 AS RULED in Task 0, then `git diff 09496978...HEAD` in `<WT>`; walk "Spec coverage" below row by row against the diff.
 - [ ] **Step 2.** Web tests by path: every test file Tasks 2–8 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/i18n/request-locale-callers.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `src/lib/consent/scans.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/lib/email/inbound` (the folder); `pnpm --filter web typecheck`. The db suites on a replica of your own: `inbound-never-log-schema.test.ts`, `schema-grants-guard.test.ts`, `inbound-email-schema.test.ts` on `post`; `never-log.test.ts`, `inbound-email.test.ts`, `provenance-parity.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name.
-- [ ] **Step 3.** Hunt specifically: (a) any path that FILES mail without the forgery check, or files a forward from a sender who is neither a member, the mailbox nor agency staff; (b) a drop that stores anything, or a drop AFTER `recordInboundEmail`; a stored row dropped on retry; (c) the matcher mocked anywhere it decides a test's outcome; a lookalike domain that matches; (d) an address, a pattern, a token, a subject or a body in any log line (grep every new `console.error` and `deps.log`); (e) a forward that raises unread, sends the owner's copy, runs the stop rule, strips the quoted text, or carries a `customer` author; a retried forward that loses any of those; (f) a team or Clerk lookup failure that answers 200; (g) an action that reads or writes before `requireAccountOwner`, or a write not scoped to the proved account; (h) `serviceDb`/`ledgerDb` in any new file under `lib/`; (i) a server component calling a value from a `"use client"` module (`grep -rn "from \"./forwarding-address-row\"\|never-log-list\"" apps/web/src --include=page.tsx`, then read each import); (j) 0083's ASCII rule, `lock_timeout` first, RLS on, SELECT-only grant, the restrictive policy; (k) rule 8 (the Sending address card's one primary; no primary in the list), rule 5 (each list and row state), rule 6 (Add, Remove and both Undos), `lang` on the list and the thread line; staff never sees the Branding card; (l) a Spanish assertion against `t()`'s output, a test that cannot fail, a mock answering a state production cannot reach; (m) the e2e spec touching anything but the fixture account, a locator that can match a toast and an entry at once, or a table it deletes from that afterAll does not re-read.
+- [ ] **Step 3.** Hunt specifically: (a) any path that FILES mail without the forgery check, or files a forward from a sender who is neither a member of the account nor its mailbox (an agency sender must be held, G1 as ruled); an `Auto-Submitted: auto-forwarded` message from a non-team sender that is not dropped, or a teammate's that is (G10 as ruled); (b) a drop that stores anything, or a drop AFTER `recordInboundEmail`; a stored row dropped on retry; (c) the matcher mocked anywhere it decides a test's outcome; a lookalike domain that matches; (d) an address, a pattern, a token, a subject or a body in any log line (grep every new `console.error` and `deps.log`); (e) a forward that raises unread, sends the owner's copy, runs the stop rule, strips the quoted text, or carries a `customer` author; a retried forward that loses any of those; (f) a team lookup failure that answers 200; (g) an action that reads or writes before `requireAccountOwner`, or a write not scoped to the proved account; (h) `serviceDb`/`ledgerDb` in any new file under `lib/`; (i) a server component calling a value from a `"use client"` module (`grep -rn "from \"./forwarding-address-row\"\|never-log-list\"" apps/web/src --include=page.tsx`, then read each import); (j) 0083's ASCII rule, `lock_timeout` first, RLS on, SELECT-only grant, the restrictive policy; (k) rule 8 (the Sending address card's one primary; no primary in the list), rule 5 (each list and row state), rule 6 (Add, Remove and both Undos), `lang` on the list and the thread line; staff never sees the Branding card; (l) a Spanish assertion against `t()`'s output, a test that cannot fail, a mock answering a state production cannot reach; (m) the e2e spec touching anything but the fixture account, a locator that can match a toast and an entry at once, or a table it deletes from that afterAll does not re-read.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent; a re-review follows every fix round.
 
 ---
@@ -2276,8 +2215,8 @@ test("removing an entry takes it off at once; Undo puts it back", async ({ page 
 - [ ] **Step 4. Production** (MCP on `tlbkbmlrfafquucsmsmm`): read-only pre-flight `select max(version) from supabase_migrations.schema_migrations` → `20261016231609` (0082) and `select to_regclass('public.inbound_never_log')` → null; then `apply_migration` (name `inbound_never_log`) with 0083's exact text, ONCE (md5 equals Task 1 step 6's). `notify pgrst, 'reload schema'`. Ledger line: `0083 APPLIED TO PRODUCTION <date> (version <v>) — NEVER RE-APPLY`.
 - [ ] **Step 5. Parity and the advisor.** `docs/runbooks/ci-supabase-project.md` §5: the table's columns, CHECKs (`pg_get_constraintdef`), the unique index, both policies (`pg_policy` `polqual` md5) and the grants equal on both projects; the client-write digest equal on both. MCP `get_advisors` (security): no new finding naming `inbound_never_log`.
 - [ ] **Step 6. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first).
-- [ ] **Step 7. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 11's findings are closed; auto-merge on green, memory "Speed process"). The PR body names: G1–G18 and their rulings; ASSUMPTIONS A1–A4 and how each is checked; the pinned tests this PR changes; "Not in this PR"; that an Owner's automatic forwarding rule is dropped as automatic (G10, as ruled); that agency forwards read "someone on the team" (G1); that a held teammate forward filed by hand files as the customer's (G18); the 0083 apply lines.
-- [ ] **Step 8. After the deploy:** on BIS's own production account only (Replies already `bis` since the part 1 smoke): open a test customer's record, Copy the Forwarding address; from danlo's agency mailbox forward a mail to it → it files on the thread with "Forwarded by someone on the team" (A1, A2, A4 for the agency); from an account member's mailbox (if one exists on that account) → "Forwarded by <name> · team"; add the sender's domain to Never record on Settings, send again → nothing new on the thread, the log shows `dropped (never record) account=<id>`, then remove it; optionally a vacation responder's reply → `dropped (automatic)` (A3). Record each outcome in the ledger. If the agency forward held `unverified` or `not_on_record`, stop and report before telling clients about forwarding. Tracker: item 7 / S-06 row updated to "part 2 (forward to a record, Never record) shipped #<n>" (memory "Roadmap tracker").
+- [ ] **Step 7. Merge** (squash, through the PR, after the head SHA's `verify` and `e2e` are green and Task 11's findings are closed; auto-merge on green, memory "Speed process"). The PR body names: G1–G18 and their rulings; ASSUMPTIONS A1–A3 and how each is checked; the pinned tests this PR changes; "Not in this PR"; that a teammate's automatic forwarding rule files and anyone else's is dropped (G10, as ruled); that a forward from BIS agency staff waits in Needs a look (G1, as ruled); that a held teammate forward filed by hand files as the customer's (G18); the 0083 apply lines.
+- [ ] **Step 8. After the deploy:** on BIS's own production account only (Replies already `bis` since the part 1 smoke): open a test customer's record, Copy the Forwarding address; from the account's own reply-to mailbox forward a mail to it → it files on the thread with "Forwarded by someone on the team" (A1, A3); from an account member's mailbox (if one exists on that account) → "Forwarded by <name> · team"; from danlo's agency mailbox → it waits in Needs a look (G1 as ruled); add the sender's domain to Never record on Settings, send again → nothing new on the thread, the log shows `dropped (never record) account=<id>`, then remove it; optionally a vacation responder's reply → `dropped (automatic)`, and a member's automatic forwarding rule → filed (A2). Record each outcome in the ledger. If the mailbox's or a member's forward held `unverified` or `not_on_record`, stop and report before telling clients about forwarding. Tracker: item 7 / S-06 row updated to "part 2 (forward to a record, Never record) shipped #<n>" (memory "Roadmap tracker").
 
 ---
 
@@ -2295,8 +2234,8 @@ test("removing an entry takes it off at once; Undo puts it back", async ({ page 
 | Spec section / requirement | Task |
 |---|---|
 | Decision 1: the forwarding address IS the reply address (same token) | 8 (`loadForwardingView` uses `ensureReplyToken` + `replyAddressFor`) |
-| Decision 2 + §3: team = members (any role), agency staff, the reply-to mailbox; authenticated; else held | 3 (`matchTeamSender`), 4 (agency lookup, G1), 5 (pipeline, G13) |
-| Decision 3 + Pipeline 1: automatic mail dropped, every header case, null headers, mailer-daemon/postmaster, log account + "automatic" | 4 (`isAutomaticMail`, G9, G10), 5 |
+| Decision 2 + §3 (as amended): team = members (any role) and the reply-to mailbox, never the agency; authenticated; else held | 3 (`matchTeamSender`, G1), 5 (pipeline, G13) |
+| Decision 3 + Pipeline 1 (as amended): automatic mail dropped, every header case, null headers, mailer-daemon/postmaster, a team sender's lone auto-forward kept, log account + "automatic" | 4 (`classifyAutomatic`, G9, G10), 5 |
 | Decision 4 + Pipeline 2: Never record dropped even for a customer; address by email key, domain + subdomain, lookalike, unparseable From; log account + "never record" | 3 (rules), 5 |
 | Pipeline 3: customer first (part 1 unchanged), then team, else held | 5 |
 | §1: the Forwarding row, Copy + "Copied", the hint, lazily made token, the domain follows the mode, off → agency hint / others nothing, Technician by the page's own scope, not in the drawer, EN + ES | 8, 2 (G12, G15) |
@@ -2309,5 +2248,5 @@ test("removing an entry takes it off at once; Undo puts it back", async ({ page 
 
 ## Self-review notes (the writer's own pass, 2026-10-17)
 
-- Counts read off this file: G1–G18 is eighteen rows; A1–A4 is four; Task 2's `WANT` holds 28 English keys and 28 `.es` twins (56 entries), and its second case asserts 28; Task 10's spec lists three tests; Task 12 has eight steps; Task 1's probes are (a)–(g), seven; the task table has thirteen rows (0–12).
-- Names checked across tasks: `parseNeverLogPattern`, `neverLogMatches`, `NEVER_LOG_MAX` (Tasks 3, 5, 6); `listNeverLog`, `addNeverLog`, `removeNeverLog` (Tasks 3, 5, 6, 7, 10's table); `matchTeamSender` → `{ userId } | { mailbox: true } | null` (Tasks 3, 5); `agencyStaffLookup` / `AgencyStaffLookup` (Tasks 4, 5); `FORWARD_ACTOR_ID = "email-inbound-forward"` (Task 5, G5); `FileInput.forward: { authorId }` and meta `forwarded` / `forwarded_by` (Tasks 5, 8); `NewMessage.author` (Tasks 3, 5); `NeverLogView`, `AddNeverLogActionResult`, `RemoveNeverLogActionResult`, `runAddNeverLog`, `runRemoveNeverLog` (Tasks 6, 7); `ForwardingView`, `loadForwardingView` (Task 8); `data-never-log`, `data-never-log-entry`, `data-never-log-empty`, `data-never-log-error` (Tasks 7, 10).
+- Counts read off this file: G1–G18 is eighteen rows (G1 and G10 changed by the owner, the other sixteen accepted); A1–A3 is three; Task 2's `WANT` holds 28 English keys and 28 `.es` twins (56 entries), and its second case asserts 28; Task 10's spec lists three tests; Task 12 has eight steps; Task 1's probes are (a)–(g), seven; the task table has thirteen rows (0–12).
+- Names checked across tasks: `parseNeverLogPattern`, `neverLogMatches`, `NEVER_LOG_MAX` (Tasks 3, 5, 6); `listNeverLog`, `addNeverLog`, `removeNeverLog` (Tasks 3, 5, 6, 7, 10's table); `matchTeamSender` → `{ userId } | { mailbox: true } | null` (Tasks 3, 5); `classifyAutomatic` → `"none" | "automatic" | "auto_forwarded"` (Tasks 4, 5); `FORWARD_ACTOR_ID = "email-inbound-forward"` (Task 5, G5); `FileInput.forward: { authorId }` and meta `forwarded` / `forwarded_by` (Tasks 5, 8); `NewMessage.author` (Tasks 3, 5); `NeverLogView`, `AddNeverLogActionResult`, `RemoveNeverLogActionResult`, `runAddNeverLog`, `runRemoveNeverLog` (Tasks 6, 7); `ForwardingView`, `loadForwardingView` (Task 8); `data-never-log`, `data-never-log-entry`, `data-never-log-empty`, `data-never-log-error` (Tasks 7, 10).
