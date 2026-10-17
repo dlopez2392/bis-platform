@@ -38,6 +38,7 @@ function message(status: string, error: string | null) {
 const THREAD_PROPS = {
   accountId: "a1", conversationId: "c1", contactId: "k1", locale: "en" as const,
   visibleSenderIds: new Set<string>(), emailViews: new Map<string, EmailView>(),
+  forwardedNames: new Map<string, string>() as ReadonlyMap<string, string>,
 };
 
 function html(status: string, error: string | null, timezone = "UTC"): string {
@@ -235,5 +236,58 @@ describe("MessageThread reflects the stop's CURRENT state via emailViews", () =>
 
   it("a DIFFERENT event is now the newest row (this one was superseded): no stop notice at all", () => {
     expect(render(currentReplyView("ev_9"))).not.toContain("data-reply-stopped");
+  });
+});
+
+/**
+ * S-06 part 2 (spec §1, G4): a forward filed on the record says who on the team forwarded it. The
+ * name is the page's (listPeopleNames on the REQUEST client); an id it could not name, or a forward
+ * from the account's own reply-to mailbox, reads "someone on the team" (DESIGN.md provenance). The
+ * line is in the STAFF member's language while the body keeps the customer's.
+ */
+describe("MessageThread names who forwarded a filed email (S-06 part 2)", () => {
+  const at = "2026-10-09T16:12:00Z";
+  const forward = (forwardedBy: string | null) => ({
+    id: "m1", direction: "inbound", channel: "email", body: "Hola, necesito una cita", subject: null, status: "delivered",
+    error: null, created_at: at,
+    meta: { inbound_email_id: "re_1", attachment_count: 0, consent: { kind: "none" }, forwarded: true, forwarded_by: forwardedBy },
+  });
+  const reply = {
+    id: "m2", direction: "inbound", channel: "email", body: "Thanks!", subject: null, status: "delivered", error: null, created_at: at,
+    meta: { inbound_email_id: "re_2", attachment_count: 0, consent: { kind: "none" } },
+  };
+  const NAMES: ReadonlyMap<string, string> = new Map([["user_maria", "Maria Lopez"]]);
+  const render = (msgs: unknown[], locale: "en" | "es", names: ReadonlyMap<string, string> = NAMES) => renderToStaticMarkup(createElement(MessageThread, {
+    messages: msgs as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: "es",
+    ...THREAD_PROPS, locale, forwardedNames: names,
+  }));
+  const line = (html: string) => html.match(/<p[^>]*data-forwarded=""[^>]*>[^<]*<\/p>/)?.[0] ?? "";
+
+  it("a named forwarder, English: the line in the staff member's lang, the body in the customer's (mutation: drop lang={locale} -> FAILS)", () => {
+    const html = render([forward("user_maria")], "en");
+    expect(renderedText(line(html)).trim()).toBe("Forwarded by Maria Lopez · team");
+    expect(line(html)).toMatch(/^<p lang="en"/);
+    expect(html).toMatch(/<p lang="es"[^>]*>Hola, necesito una cita<\/p>/);
+  });
+
+  it("a named forwarder, Spanish (mutation: hard-code English -> FAILS)", () => {
+    const html = render([forward("user_maria")], "es");
+    expect(renderedText(line(html)).trim()).toBe("Reenviado por Maria Lopez · equipo");
+    expect(line(html)).toMatch(/^<p lang="es"/);
+  });
+
+  it("an id the reader cannot name, and the reply-to mailbox's own forward, read someone on the team, in both languages (mutation: print the raw id -> FAILS)", () => {
+    for (const html of [render([forward("user_gone")], "en"), render([forward(null)], "en")]) {
+      expect(renderedText(line(html)).trim()).toBe("Forwarded by someone on the team");
+      expect(html).not.toContain("user_gone");
+    }
+    expect(renderedText(line(render([forward("user_gone")], "es"))).trim()).toBe("Reenviado por alguien del equipo");
+    expect(renderedText(line(render([forward(null)], "es"))).trim()).toBe("Reenviado por alguien del equipo");
+  });
+
+  it("a customer's own reply carries no forwarded line (mutation: render the line for every inbound email -> FAILS)", () => {
+    const html = render([reply, forward("user_maria")], "en");
+    expect(html.match(/data-forwarded=""/g)).toHaveLength(1);
+    expect(render([reply], "en")).not.toContain("data-forwarded");
   });
 });

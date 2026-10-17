@@ -37,6 +37,8 @@ import { ContactAssigneeField } from "@/components/assign/assignee-field";
 import type { AssignMember } from "@/lib/assign/view";
 import type { LanguageView } from "@/lib/contacts/language";
 import { LanguageField } from "../language-field";
+import type { ForwardingView } from "@/lib/email/inbound/forwarding-view";
+import { ForwardingAddressRow } from "./forwarding-address-row";
 
 type Contact = NonNullable<Awaited<ReturnType<typeof getContact>>>;
 type Tag = Awaited<ReturnType<typeof listContactTags>>[number];
@@ -60,10 +62,12 @@ type DetailsProps = {
   viewerId?: string | null;
   /** S-09: the Language line, built on the server by languageView (page.tsx); absent, no line. */
   language?: LanguageView;
+  /** S-06 part 2: the Forwarding address row, decided on the server (page.tsx). Absent = not shown. */
+  forwarding?: ForwardingView;
 };
 
 /** The record page's "Contact Details" card body (S-03 §8): moved in unchanged, minus its Card. */
-export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null, language }: DetailsProps) {
+export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, email, texts, canAssign = false, members = [], viewerId = null, language, forwarding }: DetailsProps) {
   const router = useRouter();
   const locale = useLocale();
   const custom = (contact.custom ?? {}) as Record<string, unknown>;
@@ -129,6 +133,7 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
             />
           </dd>
         </div>
+        {forwarding ? <ForwardingAddressRow view={forwarding} /> : null}
       </dl>
 
       <TextsRow

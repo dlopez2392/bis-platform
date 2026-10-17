@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 /**
  * The full contact page's zone read (#123 m4b) — the one read this page makes
@@ -73,7 +75,17 @@ const EMPTY_PAGE = { items: [], older: null, failed: [] };
 const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
+// S-06 part 2 (spec §1): the Forwarding address row's two reads. Replies off by default, the state
+// a new account starts in; a test that wants an address turns them on.
+const SERVICE = vi.hoisted(() => ({ tag: "service-db" }));
+const getInboundSettingsMock = vi.fn(async (..._a: unknown[]): Promise<{ mode: "off" | "bis" | "own_domain"; domain: string | null }> =>
+  ({ mode: "off", domain: null }));
+const ensureReplyTokenMock = vi.fn(async (..._a: unknown[]): Promise<{ conversationId: string; token: string }> =>
+  ({ conversationId: "cv1", token: "0123456789abcdef01234567" }));
 vi.mock("@bis/db", () => ({
+  getInboundSettings: (...a: unknown[]) => getInboundSettingsMock(...a),
+  ensureReplyToken: (...a: unknown[]) => ensureReplyTokenMock(...a),
+  serviceDb: () => SERVICE,
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
@@ -255,6 +267,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
       listContactTimelinePage: listContactTimelinePageMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
       listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
+      getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock,
     };
     for (const r of Object.values(reads)) r.mockClear();
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
@@ -1038,5 +1051,87 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
     expect(timelineProps.mock.calls.at(-1)![0]).toMatchObject({
       smsBlockedLine: m["compose.smsStateUnknown"], emailNoticeLine: m["compose.emailStateUnknown"],
     });
+  });
+});
+
+/**
+ * S-06 part 2 (spec §1, plan G15): the Forwarding address row in Details. Decided on the server, from
+ * the account's Replies setting; the token is made on the service client, and only after getContact on
+ * the REQUEST client found the customer (RLS answers null for a customer the viewer may not see).
+ */
+describe("the record page's Forwarding address row (S-06 part 2)", () => {
+  const OWNER = { userId: "u1", isAgency: false, role: "owner" as const, canManage: true };
+  const TECH = { userId: "u1", isAgency: false, role: "technician" as const, canManage: false };
+  const TOKEN = "0123456789abcdef01234567";
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    listCustomFieldsMock.mockReset().mockResolvedValue([]);
+    getInboundSettingsMock.mockReset().mockResolvedValue({ mode: "off", domain: null });
+    ensureReplyTokenMock.mockReset().mockResolvedValue({ conversationId: "cv1", token: TOKEN });
+  });
+  const details = (html: string) => cardHtml(html, "details");
+
+  it("Replies on: the customer's own address in the Details card, the token made on the service client for THIS customer (mutation: drop the forwarding prop -> FAILS)", async () => {
+    getInboundSettingsMock.mockResolvedValue({ mode: "bis", domain: null });
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    const html = await render();
+    expect(details(html)).toContain('data-forwarding-row="address"');
+    expect(renderedText(details(html))).toContain(`r-${TOKEN}@reply.bis-rgv.com`);
+    expect(getInboundSettingsMock).toHaveBeenCalledWith(SERVICE, "acct1");
+    expect(ensureReplyTokenMock).toHaveBeenCalledWith(SERVICE, "acct1", "ct1", "record-page");
+  });
+
+  it("Replies off, an Owner: no row at all and no token made (mutation: make the token before the mode check -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce(OWNER);
+    const html = await render();
+    expect(html).toMatch(/data-record-card="details" data-state="ready"/);
+    expect(html).not.toContain("data-forwarding-row");
+    expect(ensureReplyTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("Replies off, the agency: the turn-on line (mutation: pass isAgency false always -> FAILS)", async () => {
+    const html = await render();
+    expect(details(html)).toContain('data-forwarding-row="turnOn"');
+    expect(renderedText(details(html))).toContain("Turn on Replies in Settings to get a forwarding address");
+    expect(ensureReplyTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed token write is the row's error, and the Details card and the page still stand, logged without the token (rule 5 per card; mutation: let it throw -> FAILS)", async () => {
+    getInboundSettingsMock.mockResolvedValue({ mode: "bis", domain: null });
+    ensureReplyTokenMock.mockRejectedValue(new Error(`write failed ${TOKEN}`));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = await render();
+      expect(html).toMatch(/data-record-card="details" data-state="ready"/);
+      expect(details(html)).toContain('data-forwarding-row="failed"');
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("contact page: account acct1 the forwarding address could not be made");
+      expect(logged).not.toContain(TOKEN);
+    } finally { errors.mockRestore(); }
+  });
+
+  it("a customer RLS hides (getContact answers null, as it does for a Technician's not-theirs): the page 404s and no token is ever made (mutation: run the forwarding read before getContact -> FAILS)", async () => {
+    getInboundSettingsMock.mockResolvedValue({ mode: "bis", domain: null });
+    requireAccountAccessMock.mockResolvedValueOnce(TECH);
+    getContactMock.mockResolvedValue(null);
+    await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
+    expect(getInboundSettingsMock).not.toHaveBeenCalled();
+    expect(ensureReplyTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("the import site: the page takes loadForwardingView from the plain module, never from the \"use client\" row file, and the row file exports no loader (part 1 Task 11b; mutation: export the loader from the row file -> FAILS)", () => {
+    const page = readFileSync(path.resolve(__dirname, "./page.tsx"), "utf8");
+    expect(page).toMatch(/import\s*\{[^}]*\bloadForwardingView\b[^}]*\}\s*from\s*"@\/lib\/email\/inbound\/forwarding-view"/);
+    expect(page).not.toMatch(/from\s*"\.\/forwarding-address-row"/);
+    const row = readFileSync(path.resolve(__dirname, "./forwarding-address-row.tsx"), "utf8");
+    expect(row).toMatch(/^"use client";/);
+    expect([...row.matchAll(/export\s+(?:async\s+)?(?:function|const|let)\s+(\w+)/g)].map((x) => x[1])).toEqual(["ForwardingAddressRow"]);
+    expect(row).not.toMatch(/export\s*\{/);
+    const plain = readFileSync(path.resolve(__dirname, "../../../../../../../lib/email/inbound/forwarding-view.ts"), "utf8");
+    expect(plain).not.toMatch(/^\s*["']use (client|server)["']/m);
   });
 });

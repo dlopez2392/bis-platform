@@ -53,6 +53,8 @@ const conversationsFixture = [
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
   readPersonId: async () => null,
+  // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
+  listPeopleNames: async () => ({}),
   listMessages: async () => [{
     id: "m1", conversation_id: "convo1", channel: "sms", direction: "inbound",
     status: "received", provider_message_id: null, subject: null, body: "hi",

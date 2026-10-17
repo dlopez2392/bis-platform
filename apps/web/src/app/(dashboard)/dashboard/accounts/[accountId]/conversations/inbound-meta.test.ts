@@ -39,13 +39,13 @@ describe("readInboundMeta", () => {
       inbound_email_id: "re_1", attachment_count: 2,
       sender: { contact_id: "l", first_name: "Luis", last_name: "Ruiz" },
       consent: { kind: "stopped", eventId: "ev_1" },
-    })).toEqual({ attachmentCount: 2, sender: { name: "Luis Ruiz" }, consent: { kind: "stopped", eventId: "ev_1" } });
+    })).toEqual({ attachmentCount: 2, sender: { name: "Luis Ruiz" }, consent: { kind: "stopped", eventId: "ev_1" }, forwarded: null });
     expect(readInboundMeta({})).toBeNull();
     expect(readInboundMeta(null)).toBeNull();
     expect(readInboundMeta(undefined)).toBeNull();
     expect(readInboundMeta({
       inbound_email_id: "re_1", attachment_count: 0, consent: { kind: "maybe", phrase: "remove me" },
-    })).toEqual({ attachmentCount: 0, sender: null, consent: { kind: "maybe" } });
+    })).toEqual({ attachmentCount: 0, sender: null, consent: { kind: "maybe" }, forwarded: null });
   });
 
   it("a sender with no stored name reads as an empty name string, not a crash (the component supplies the localized noName fallback)", () => {
@@ -53,6 +53,25 @@ describe("readInboundMeta", () => {
       inbound_email_id: "re_1", attachment_count: 0,
       sender: { contact_id: "l", first_name: null, last_name: null },
       consent: { kind: "none" },
-    })).toEqual({ attachmentCount: 0, sender: { name: "" }, consent: { kind: "none" } });
+    })).toEqual({ attachmentCount: 0, sender: { name: "" }, consent: { kind: "none" }, forwarded: null });
+  });
+});
+
+describe("readInboundMeta: a team member's forward (S-06 part 2, file.ts stamps forwarded + forwarded_by)", () => {
+  const base = { inbound_email_id: "re_1", attachment_count: 0, consent: { kind: "none" } };
+  it("a forward names who forwarded it (mutation: drop forwarded_by -> FAILS)", () => {
+    expect(readInboundMeta({ ...base, forwarded: true, forwarded_by: "user_maria" })?.forwarded).toEqual({ byId: "user_maria" });
+  });
+  it("a forward from the account's own reply-to mailbox (forwarded_by null) has no one to name", () => {
+    expect(readInboundMeta({ ...base, forwarded: true, forwarded_by: null })?.forwarded).toEqual({ byId: null });
+    expect(readInboundMeta({ ...base, forwarded: true, forwarded_by: "" })?.forwarded).toEqual({ byId: null });
+    expect(readInboundMeta({ ...base, forwarded: true })?.forwarded).toEqual({ byId: null });
+  });
+  it("a customer's own reply is not a forward", () => {
+    expect(readInboundMeta(base)?.forwarded).toBeNull();
+  });
+  it("only a real true is a forward, never a truthy look-alike (mutation: a truthy check -> FAILS)", () => {
+    expect(readInboundMeta({ ...base, forwarded: "yes", forwarded_by: "user_maria" })?.forwarded).toBeNull();
+    expect(readInboundMeta({ ...base, forwarded: 1, forwarded_by: "user_maria" })?.forwarded).toBeNull();
   });
 });

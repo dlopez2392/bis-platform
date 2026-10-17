@@ -3,7 +3,7 @@ import Link from "next/link";
 import { MessagesSquare } from "lucide-react";
 import {
   listConversations, getConversationSummary, listMessages, getContact,
-  listHeldInboundEmails, countHeldInboundEmails, getInboundSettings,
+  listHeldInboundEmails, countHeldInboundEmails, getInboundSettings, listPeopleNames,
   type SupabaseClient,
 } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
@@ -250,6 +250,19 @@ export default async function ConversationsPage({
       ?? (await getConversationSummary(db, accountId, c)) ?? undefined)
     : undefined;
   const messages = active ? await listMessages(db, accountId, active.id) : [];
+  // S-06 part 2 (spec §1, G4): who on the team forwarded a filed forward. One read, on the REQUEST
+  // client, so RLS decides who this reader may name; an id it does not answer for — and a failed
+  // read, which costs only the names, never the thread — reads "someone on the team".
+  const forwarderIds = [...new Set(messages.flatMap((msg) => {
+    const f = msg.direction === "inbound" && msg.channel === "email" ? readInboundMeta(msg.meta)?.forwarded : null;
+    return f?.byId ? [f.byId] : [];
+  }))];
+  const forwardedNames = new Map(Object.entries(forwarderIds.length
+    ? await listPeopleNames(db, forwarderIds).catch((e: unknown): Record<string, string> => {
+      console.error(`conversations: account ${accountId} forwarder names read failed: ${loggableError(e)}`);
+      return {};
+    })
+    : {}));
   // Fix round 1 (UI review, important #2), consolidated in fix round 2 (one visibility path,
   // review item 3): the notice must reflect the stop's CURRENT state, not the filing-time
   // snapshot `meta.consent` carries — a staff Undo, a later event, or the 7-day staff-Undo
@@ -336,6 +349,7 @@ export default async function ConversationsPage({
               locale={locale}
               visibleSenderIds={visibleContactIds}
               emailViews={emailViews}
+              forwardedNames={forwardedNames}
               contactName={contactDisplayName({
                 first_name: active.contactFirstName,
                 last_name: active.contactLastName,

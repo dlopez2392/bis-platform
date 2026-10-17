@@ -44,6 +44,8 @@ vi.mock("@bis/db", () => ({
   listConversations: (...args: unknown[]) => listConversationsMock(...args),
   getConversationSummary: (...args: unknown[]) => getConversationSummaryMock(...args),
   listMessages: async () => [],
+  // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
+  listPeopleNames: async () => ({}),
   readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
 }));
 

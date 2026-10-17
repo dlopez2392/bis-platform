@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
-import { getContact } from "@bis/db";
+import { getContact, getInboundSettings, ensureReplyToken, serviceDb } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -46,6 +46,7 @@ import { loggableError } from "@/lib/loggable-error";
 import { composerStateLine, composerEmailNotice } from "@/lib/consent/composer-state";
 import { renderZone } from "@/lib/zone";
 import { languageView, type ContactLanguageFacts } from "@/lib/contacts/language";
+import { loadForwardingView } from "@/lib/email/inbound/forwarding-view";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +88,7 @@ export default async function ContactDetailPage({
   // client proved the contact is the caller's to see: that read is the authorisation.
   const ledger = ledgerDb();
   const now = new Date();
-  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places] = await Promise.all([
+  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places, forwarding] = await Promise.all([
     getPersonPrefs(),
     loadTags(db, accountId, contactId),
     loadFieldDefs(db, accountId),
@@ -107,6 +108,13 @@ export default async function ContactDetailPage({
     loadTimeline(db, ledger, accountId, contactId, before),
     loadDeals(db, accountId, contactId),
     loadHeaderPlaces(db, accountId, contactId),
+    // S-06 part 2 (spec §1, plan G15): the Forwarding address. getContact above, on the request client,
+    // proved this customer is the viewer's; only then is the token made, on the service client.
+    loadForwardingView({
+      settings: () => getInboundSettings(serviceDb(), accountId),
+      token: () => ensureReplyToken(serviceDb(), accountId, contactId, "record-page"),
+      log: (line) => console.error(`contact page: account ${accountId} ${line}`),
+    }, { isAgency: access.isAgency }),
   ]);
   // The email composer's read (consent spec §6, choice 22). Never throws.
   const emailRecipient = await emailRecipientState(ledger, accountId, contact);
@@ -252,7 +260,7 @@ export default async function ContactDetailPage({
         node: (
           <ContactDetailsBody accountId={accountId} contactId={contactId} contact={contact} fieldDefs={fieldDefs.fieldDefs}
             email={email} texts={texts} canAssign={assign.canAssign} members={assign.members} viewerId={assign.personId}
-            language={language} />
+            language={language} forwarding={forwarding} />
         ),
       }
       : cardFailed("contact.details"),
