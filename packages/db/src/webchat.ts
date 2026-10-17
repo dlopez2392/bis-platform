@@ -61,6 +61,11 @@ export async function syncWebchatTurns(
   // getConciergeConversation is not account-scoped (concierge.ts:238): the account is checked here.
   if (!chat || chat.account_id !== accountId || !chat.submission_id) return { outcome: "no_lead" };
   const submissionId = chat.submission_id;
+  // Every key from here on is the STORED id, never the caller's `chatId` (Task 3 review, fix round 1):
+  // `.eq("id", chatId)` matches any spelling Postgres accepts for the same uuid (upper case, no
+  // hyphens, braces), and the turn route passes the visitor's own string. Keyed on that spelling, the
+  // keys read would find nothing and the whole chat would be copied again under new keys.
+  const storedChatId = chat.id;
   let thread: WebchatThread | null;
   try {
     thread = await resolveWebchatThread(db, accountId, submissionId);
@@ -70,7 +75,7 @@ export async function syncWebchatTurns(
   if (!thread) return { outcome: "no_customer" };
   let existing: WebchatKey[];
   try {
-    existing = await listWebchatKeys(db, accountId, thread.conversationId, chatId);
+    existing = await listWebchatKeys(db, accountId, thread.conversationId, storedChatId);
   } catch {
     return { outcome: "failed", stage: "keys" };
   }
@@ -79,7 +84,7 @@ export async function syncWebchatTurns(
   // toISOString before the planner runs. Either is a failed write, never a throw out of the sync.
   try {
     const rows = planWebchatRows({
-      chatId, transcript: chat.transcript, existing, locale: chat.locale, submissionId,
+      chatId: storedChatId, transcript: chat.transcript, existing, locale: chat.locale, submissionId,
       matchedExisting: thread.matchedExisting, leadAt: thread.leadAt, now: (opts.now ?? new Date()).toISOString(),
     });
     if (rows.length === 0) return { outcome: "nothing_new" };

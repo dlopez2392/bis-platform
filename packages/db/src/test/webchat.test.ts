@@ -162,6 +162,55 @@ describe("syncWebchatTurns never throws (spec 'Failure behaviour')", () => {
   });
 });
 
+describe("the chat's own id, never the caller's spelling of it (Task 3 review, fix round 1)", () => {
+  it("a sync asked with another spelling of the same uuid (upper case, no hyphens) copies nothing again and raises nothing again: every key is the stored chat.id (mutation: key on the chatId parameter → the whole chat is re-copied under new keys and unread rises, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seedLead(db, accountId, { existing: false, turns: turns(4, (i) => SOON(i)) });
+      expect(await syncWebchatTurns(db, accountId, s.chatId, { raiseUnread: true }))
+        .toEqual({ outcome: "filed", result: { inserted: 4, visitorInserted: 2, unreadRaised: 2, stoppedAt: null, failedSteps: [] } });
+      for (const spelling of [s.chatId.toUpperCase(), s.chatId.replaceAll("-", "")]) {
+        expect(spelling).not.toBe(s.chatId);
+        expect(await syncWebchatTurns(db, accountId, spelling, { raiseUnread: true })).toEqual({ outcome: "nothing_new" });
+      }
+      const { count, error } = await db.from("messages").select("id", { count: "exact", head: true })
+        .eq("account_id", accountId).eq("channel", "webchat");
+      expect(error).toBeNull();
+      if (count === null) throw new Error("no count returned");
+      expect(count).toBe(4);
+      expect((await chatRows(db, accountId, s.conversationId)).map((x) => x.provider_message_id))
+        .toEqual([0, 1, 2, 3].map((i) => webchatKey(s.chatId, i)));
+      expect((await convo(db, s.conversationId)).unread_count).toBe(2);
+      expect(await filedEvents(db, accountId)).toHaveLength(1);
+    });
+  });
+});
+
+describe("a step after the inserts fails: the rows stand (spec failure table; plan G28)", () => {
+  it("the event insert fails: failedSteps names it, every row is on the thread, unread is still raised (mutation: drop the emit's try/catch → fileWebchatTurns THROWS, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const s = await seedLead(db, accountId, { existing: false, turns: turns(2, () => SOON(0)) });
+      // The service client with ONE table broken: `events` answers an error, everything else is real.
+      const brokenEvents = new Proxy(db, {
+        get(target, prop) {
+          if (prop === "from") {
+            return (table: string) => (table === "events"
+              ? { insert: async () => ({ data: null, error: { message: "events unavailable", code: "XX000" } }) }
+              : target.from(table));
+          }
+          const v = Reflect.get(target, prop);
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      }) as SupabaseClient;
+      expect(await fileWebchatTurns(brokenEvents, accountId, s.conversationId, await planFor(db, accountId, s), { raiseUnread: true }))
+        .toEqual({ inserted: 2, visitorInserted: 1, unreadRaised: 1, stoppedAt: null, failedSteps: ["event"] });
+      expect((await chatRows(db, accountId, s.conversationId)).map((x) => x.provider_message_id))
+        .toEqual([webchatKey(s.chatId, 0), webchatKey(s.chatId, 1)]);
+      expect((await convo(db, s.conversationId)).unread_count).toBe(1);
+      expect(await filedEvents(db, accountId)).toHaveLength(0);
+    });
+  });
+});
+
 describe("which thread, through the lead only (spec §1, §5a)", () => {
   it("a customer on file before the lead is marked matched; one the lead created is not (G19; mutation: matched_existing always false → FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
@@ -176,7 +225,7 @@ describe("which thread, through the lead only (spec §1, §5a)", () => {
     });
   });
 
-  it("the lead's customer gone, no lead, or another account's chat: nothing is written anywhere and nobody else is looked up (mutations: drop the account check → B's sync files A's chat, FAILS; create a contact when contact_id is null → rows land, FAILS)", async () => {
+  it("the lead's customer gone, no lead, or another account's chat: nothing is written anywhere and nobody else is looked up (mutations: drop the account check → B's sync answers no_customer instead of no_lead, FAILS: the boundary is guarded twice, resolveWebchatThread's own account filter still stops the copy, so this is never a leak; create a contact when contact_id is null → rows land, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (_db, other) => {
         const s = await seedLead(db, accountId, { existing: false, turns: turns(2, () => PAST(0)) });
