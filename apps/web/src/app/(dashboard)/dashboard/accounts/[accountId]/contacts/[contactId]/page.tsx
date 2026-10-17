@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
-import { getContact, getInboundSettings, ensureReplyToken, serviceDb } from "@bis/db";
+import { getContact, getInboundSettings, readReplyToken, serviceDb } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -108,11 +108,12 @@ export default async function ContactDetailPage({
     loadTimeline(db, ledger, accountId, contactId, before),
     loadDeals(db, accountId, contactId),
     loadHeaderPlaces(db, accountId, contactId),
-    // S-06 part 2 (spec §1, plan G15): the Forwarding address. getContact above, on the request client,
-    // proved this customer is the viewer's; only then is the token made, on the service client.
+    // S-06 part 2 (spec §1, plan G15 as amended 2026-10-17): the Forwarding address. getContact above, on
+    // the request client, proved this customer is the viewer's; only then is the token READ, on the
+    // service client. A page view never makes one: "Get forwarding address" does (forwarding-actions.ts).
     loadForwardingView({
       settings: () => getInboundSettings(serviceDb(), accountId),
-      token: () => ensureReplyToken(serviceDb(), accountId, contactId, "record-page"),
+      token: () => readReplyToken(serviceDb(), accountId, contactId),
       log: (line) => console.error(`contact page: account ${accountId} ${line}`),
     }, { isAgency: access.isAgency }),
   ]);

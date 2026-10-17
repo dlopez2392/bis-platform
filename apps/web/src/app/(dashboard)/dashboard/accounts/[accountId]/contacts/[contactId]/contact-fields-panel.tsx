@@ -133,7 +133,7 @@ export function ContactDetailsBody({ accountId, contactId, contact, fieldDefs, e
             />
           </dd>
         </div>
-        {forwarding ? <ForwardingAddressRow view={forwarding} /> : null}
+        {forwarding ? <ForwardingAddressRow view={forwarding} accountId={accountId} contactId={contactId} /> : null}
       </dl>
 
       <TextsRow

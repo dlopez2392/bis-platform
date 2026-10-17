@@ -75,6 +75,10 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/checklist/actions.ts": "agency-only",
   // completeTaskAction's hold check: ledgerDb, beside a task write on the request client.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/actions.ts": "proven-target",
+  // S-06 part 2 (owner ruling 2026-10-17): "Get forwarding address" makes the reply token on the service
+  // client only after requireAccountAccess and getContact on the request client found the customer,
+  // scoped to the route's own account and contact.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/forwarding-actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/[contactId]/page.tsx": "proven-target",
   // setContactBusinessAction / undoContactBusinessAction: the group writes run on the service client

@@ -8,13 +8,16 @@ import type { Locale } from "@/lib/i18n/locale";
 import type { ForwardingView } from "@/lib/email/inbound/forwarding-view";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+// "use server": never imported into vitest unmocked (constraints §16). The row only wires it.
+vi.mock("./forwarding-actions", () => ({ getForwardingAddressAction: vi.fn() }));
 
 const { LocaleProvider } = await import("@/components/locale-provider");
 const { ForwardingAddressRow } = await import("./forwarding-address-row");
 
 const ADDRESS = "r-0123456789abcdef01234567@reply.bis-rgv.com";
 const render = (view: ForwardingView, locale: Locale) =>
-  renderToStaticMarkup(createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>, createElement(ForwardingAddressRow, { view })));
+  renderToStaticMarkup(createElement(LocaleProvider, { locale } as ComponentProps<typeof LocaleProvider>,
+    createElement(ForwardingAddressRow, { view, accountId: "a1", contactId: "c1" })));
 
 describe("ForwardingAddressRow (S-06 part 2, spec §1): one row in Details, every state the server decided", () => {
   it("address, English: the label, the address, a ghost Copy and the hint (mutation: render the hint only for es → FAILS)", () => {
@@ -47,7 +50,32 @@ describe("ForwardingAddressRow (S-06 part 2, spec §1): one row in Details, ever
     expect(en).toContain('data-forwarding-row="turnOn"');
     expect(renderedText(en)).toContain("Turn on Replies in Settings to get a forwarding address");
     expect(en).not.toContain('data-slot="button"');
-    expect(renderedText(render({ kind: "turnOn" }, "es"))).toContain("Active Respuestas en Configuración para obtener una dirección para reenviar");
+    const es = renderedText(render({ kind: "turnOn" }, "es"));
+    expect(es).toContain("Active Respuestas en Ajustes para obtener una dirección para reenviar");
+    // "Configuración" is Setup in this app; Settings is "Ajustes" (review).
+    expect(es).not.toContain("Configuración");
+  });
+
+  it("get: no address yet, so one ghost button makes it, in both languages, and nothing is shown as an address (owner ruling 2026-10-17; mutation: render the address kind's hint here -> FAILS)", () => {
+    const en = render({ kind: "get" }, "en");
+    expect(en).toContain('data-forwarding-row="get"');
+    expect(renderedText(en)).toContain("Forwarding address");
+    expect(renderedText(en)).toContain("Get forwarding address");
+    expect(en).toMatch(/data-slot="button" data-variant="ghost"/);
+    expect(en).not.toContain('data-variant="default"');
+    expect(en).toContain("min-h-11 md:min-h-8");
+    expect(en).not.toContain("@");
+    expect(renderedText(en)).not.toContain("Forward an email here to save it on this customer.");
+    expect(renderedText(render({ kind: "get" }, "es"))).toContain("Obtener dirección para reenviar");
+  });
+
+  it("get's wiring: the button runs the crash-safe handler with the record's own action for THIS account and customer, then shows the address (constraints §13; mutation: call the action directly -> FAILS)", () => {
+    const src = readFileSync(path.resolve(__dirname, "./forwarding-address-row.tsx"), "utf8");
+    expect(src).toMatch(/import\s*\{[^}]*\bgetForwardingAddress\b[^}]*\}\s*from\s*"\.\/forwarding-copy"/);
+    expect(src).toMatch(/getForwardingAddress\(\s*\(\)\s*=>\s*getForwardingAddressAction\(accountId, contactId\)/);
+    // The action is reached ONLY through the handler: exactly one call site, inside it.
+    expect(src.match(/getForwardingAddressAction\(/g)).toHaveLength(1);
+    expect(src).toMatch(/setAddress\(/);
   });
 
   it("failed: an alert that says what to do, in both languages (rule 5's error state)", () => {

@@ -625,7 +625,11 @@ describe("S-06 part 2: forward to a record and Never record keys, English and Sp
     "contact.forwarding.copyFailed": "Couldn't copy. Select the address and copy it by hand.",
     "contact.forwarding.copyFailed.es": "No se pudo copiar. Seleccione la dirección y cópiela a mano.",
     "contact.forwarding.turnOn": "Turn on Replies in Settings to get a forwarding address",
-    "contact.forwarding.turnOn.es": "Active Respuestas en Configuración para obtener una dirección para reenviar",
+    "contact.forwarding.turnOn.es": "Active Respuestas en Ajustes para obtener una dirección para reenviar",
+    "contact.forwarding.get": "Get forwarding address",
+    "contact.forwarding.get.es": "Obtener dirección para reenviar",
+    "contact.forwarding.getFailed": "We couldn't make the forwarding address. Try again.",
+    "contact.forwarding.getFailed.es": "No pudimos crear la dirección para reenviar. Inténtelo de nuevo.",
     "contact.forwarding.failed": "We couldn't load the forwarding address. Reload the page to try again.",
     "contact.forwarding.failed.es": "No pudimos cargar la dirección para reenviar. Vuelva a cargar la página para intentarlo de nuevo.",
     "conversations.forward.by": "Forwarded by {name} · team",
@@ -674,9 +678,9 @@ describe("S-06 part 2: forward to a record and Never record keys, English and Sp
     for (const [k, v] of Object.entries(WANT)) expect((m as Record<string, string>)[k], k).toBe(v);
   });
 
-  it("is 28 English keys, each with its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
+  it("is 30 English keys, each with its .es twin on the very next line (mutation: move a twin → FAILS)", () => {
     const en = Object.keys(WANT).filter((x) => !x.endsWith(".es"));
-    expect(en).toHaveLength(28);
+    expect(en).toHaveLength(30);
     const src = readFileSync(join(__dirname, "messages.ts"), "utf8").split("\n");
     for (const k of en) {
       const i = src.findIndex((l) => l.trimStart().startsWith(`"${k}":`));
