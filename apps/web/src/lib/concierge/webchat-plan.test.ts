@@ -14,12 +14,14 @@ const plan = (transcript: WebchatTurn[], over: Partial<Parameters<typeof planWeb
     leadAt: "2026-10-17T16:00:00+00:00", now: T(999_999), ...over });
 
 describe("planWebchatRows: what a sync still has to write", () => {
-  it("only the indices the thread does not hold, in index order, each keyed webchat:<chat>:<index> (mutation: plan every index → FAILS; key by text → FAILS)", () => {
+  it("only the indices the thread does not hold, in index order, each keyed webchat:<chat>:<index> (mutation: plan every index → FAILS; key by text → FAILS; seed the time floor from every written row, not only the earlier ones → index 0 lands after index 2, FAILS)", () => {
     const tr = [turn("visitor", "hola", T(0)), turn("assistant", "¿En qué le ayudo?", T(0)), turn("visitor", "una mesa", T(9_000)), turn("assistant", "Claro", T(9_000))];
     const rows = plan(tr, { existing: [{ index: 1, createdAt: T(1) }, { index: 2, createdAt: T(9_000) }] });
     expect(rows.map((r) => [r.index, r.providerMessageId, r.body])).toEqual([
       [0, `webchat:${CHAT}:0`, "hola"], [3, `webchat:${CHAT}:3`, "Claro"],
     ]);
+    // Index 0 keeps its own time; only index 3 is floored by the written index 2 (a tie, so +1 ms).
+    expect(rows.map((r) => r.createdAt)).toEqual([T(0), T(9_001)]);
   });
 
   it("a retried POST's duplicated pair is two more indices, planned like any other (G2; mutation: skip a turn whose text equals an earlier one → FAILS)", () => {
@@ -27,7 +29,7 @@ describe("planWebchatRows: what a sync still has to write", () => {
     expect(plan(tr).map((r) => r.index)).toEqual([0, 1, 2, 3]);
   });
 
-  it("times strictly increase in index order: +1 ms on a tie, and never at or before an earlier row already written (G5; mutation: createdAt = at → the tie stays, FAILS; ignore `existing` → row 2 sorts before row 1, FAILS)", () => {
+  it("times strictly increase in index order, given the thread holds a prefix of the transcript: +1 ms on a tie, and never at or before an earlier row already written (G5; mutation: createdAt = at → the tie stays, FAILS; ignore `existing` → row 2 sorts before row 1, FAILS)", () => {
     const tied = plan([turn("visitor", "a", T(0)), turn("assistant", "b", T(0))]);
     expect(tied.map((r) => r.createdAt)).toEqual([T(0), T(1)]);
     // Two tabs: index 2's own `at` is EARLIER than the row already written at index 1.
@@ -56,6 +58,17 @@ describe("planWebchatRows: what a sync still has to write", () => {
     expect(rows.map((r) => r.countsUnread)).toEqual([false, false, true, false]);
   });
 
+  it("unread reads the turn's OWN time, never the healed one: two tabs push a pre-lead visitor turn's row past the lead, and it still does not count (G27; mutation: compare the planned createdAt → [false, false, true, false], FAILS)", () => {
+    const L = Date.parse("2026-10-17T16:00:00.000Z");
+    const at = (ms: number) => new Date(L + ms).toISOString();
+    const rows = plan([turn("visitor", "a", at(-1)), turn("assistant", "b", at(3_000)), turn("visitor", "c", at(-500)), turn("assistant", "d", at(4_000))]);
+    expect(rows.map((r) => r.countsUnread)).toEqual([false, false, false, false]);
+  });
+
+  it("a lead time that does not parse counts nothing", () => {
+    expect(plan([turn("visitor", "x", T(0))], { leadAt: "not a time" })[0]!.countsUnread).toBe(false);
+  });
+
   it("a visitor turn stamped at the lead's own instant does not count; one millisecond later does, even against a microsecond lead (G27 'later than'; mutation: `at >= leadAt` → the equal turn counts, FAILS)", () => {
     const at = (leadAt: string, visitorAt: string) => plan([turn("visitor", "x", visitorAt)], { leadAt })[0]!.countsUnread;
     expect(at("2026-10-17T16:00:00.000+00:00", "2026-10-17T16:00:00.000Z")).toBe(false);
@@ -67,6 +80,9 @@ describe("planWebchatRows: what a sync still has to write", () => {
     expect(plan([turn("visitor", "a", T(0)), turn("assistant", "b", "garbage")]).map((r) => r.createdAt)).toEqual([T(0), T(1)]);
     expect(plan([turn("visitor", "a", "garbage")])[0]!.createdAt).toBe(T(999_999));
     expect(plan([turn("visitor", "a", "garbage")])[0]!.countsUnread).toBe(false);
+    // `now` an hour after the lead: the row's fallback time is post-lead, its own `at` is unknown, so it still does not count
+    // (mutation: fall back to the planned time for unread → true, FAILS).
+    expect(plan([turn("visitor", "a", "garbage")], { now: "2026-10-17T17:00:00.000Z" })[0]!.countsUnread).toBe(false);
   });
 });
 
