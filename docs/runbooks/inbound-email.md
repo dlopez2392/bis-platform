@@ -48,6 +48,25 @@ Edit, do not add: a new webhook gets a new signing secret, and production verifi
 event against `RESEND_WEBHOOK_SECRET`. The webhook carries only metadata; the app fetches
 the body and headers from Resend's Received emails API.
 
+**The production key must be Full access.** That fetch uses production's `RESEND_API_KEY`,
+and a Resend key with **Sending access** can send mail but cannot read received mail. With
+a Sending access key every reply fails: the webhook answers `503 fetch_failed`, Resend keeps
+retrying, and nothing reaches BIS. Check it in Resend → **API keys** → the key's
+**Permission** column. To fix it (found and fixed in production on 2026-10-17):
+
+1. Resend → **API keys** → **Create API key**, permission **Full access**, all domains.
+   Copy the `re_…` value (shown once).
+2. Vercel → bis-platform → **Settings** → **Environment Variables** → `RESEND_API_KEY`
+   (Production) → **⋯** → **Edit** → paste → **Save**.
+3. Vercel → **Deployments** → the current Production deployment → **⋯** → **Redeploy**.
+4. Resend → **Webhooks** → the webhook → the failed `email.received` event → **Replay**.
+   It should now answer `200 filed` (or `held`).
+5. Delete the old Sending access key in Resend once the replay succeeds.
+
+How to tell this failure apart from others: in Resend → **Webhooks** → the event, every
+attempt shows `HTTP 503` with the response body `fetch_failed`, and production's logs say
+"the received email could not be fetched".
+
 ## 6. Turn replies on, one account at a time
 
 Account → Settings → Sending address → **Replies** → **BIS address**. Start with BIS's
