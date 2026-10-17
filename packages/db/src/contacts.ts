@@ -1024,10 +1024,27 @@ export async function listTags(
  * S-06 part 2 (owner ruling 2026-10-17): an EMPTY conversation (no message and no inbound email; the
  * record page made one on view before the ruling, and a forwarding address can make one) no longer
  * blocks. 0053 gives no client a delete on conversations, so the caller passes the SERVICE client as
- * `conversationsDb`: it reads which of the conversations the request client found have anything in
- * them, and deletes the empty ones of exactly the contacts about to go, scoped by account, after the
- * proof and the purge. `messages.conversation_id` is NO ACTION, so a message landing in between makes
- * that delete fail rather than lose the message. Without `conversationsDb` every conversation blocks.
+ * `conversationsDb`, and the empty ones are cleared FIRST, through `delete_empty_conversations`
+ * (migration 0083 section 3) — the database's own check-then-delete, in ONE statement. That is load-
+ * bearing, not stylistic: review found the prior shape (read every messages/inbound_emails row for
+ * the whole batch on the request client, THEN delete) unsafe two ways. CRITICAL: PostgREST caps a
+ * read at `max_rows` (1000); a talked-to customer whose messages alone cross that cap was judged
+ * empty, `beforeDelete` ran (the irreversible documents purge), and only then did the conversations
+ * delete hit `messages_conversation_id_fkey` and throw — the files were already gone, the customer
+ * was not. Reproduced on the replica (a 1001-message customer and a 1-message customer, both
+ * supposedly "chatty" but misjudged by the truncated read). IMPORTANT: `inbound_emails.conversation_id`
+ * is ON DELETE CASCADE (0082:93-94), so a held email arriving in the GAP between a separate check and
+ * a separate delete would be silently destroyed. A single SQL statement has no such gap: the
+ * database proves "no message, no inbound email" and deletes atomically, so no row can land between
+ * the two. Without `conversationsDb` every conversation still blocks, exactly as before this ruling.
+ * Whatever conversation survives that first step (because it had a message or an inbound email, or
+ * `conversationsDb` was not given) is read and blocked exactly like opportunities/bookings below.
+ * `conversations.contact_id` is a plain (NO ACTION) FK, same as opportunities/bookings: if a NEW
+ * conversation is created for a `go` contact in the gap between THIS read and the final `contacts`
+ * delete below (the record page, a forwarding address, or an inbound email can all make one), that
+ * one row's FK violation aborts the whole batch delete and `deleteContacts` throws — no customer is
+ * half-deleted and no conversation is silently lost, but the caller sees every contact in that call
+ * fail together, same as the pre-existing race on opportunities/bookings.
  */
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
@@ -1035,11 +1052,19 @@ export async function deleteContacts(
     /** Runs on the deletable ids (blocked ones already removed) BEFORE any contact row is deleted; answers
      *  the ids it could not clear, which are then kept. The document vault's purge (0077, deviation 2). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
-    /** The SERVICE client that may read a conversation's contents and delete an empty one (see above). */
+    /** The SERVICE client that may run delete_empty_conversations (see above). */
     conversationsDb?: SupabaseClient;
   } = {},
 ): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }> {
   if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0, skippedFiles: 0 };
+  // Empty conversations go FIRST, atomically, on the service client — before any blocker is
+  // computed and before beforeDelete's purge. This never reads a messages/inbound_emails row in
+  // this process at all: the one DELETE statement proves emptiness and removes the row itself.
+  if (opts.conversationsDb) {
+    const { error: emptyError } = await opts.conversationsDb
+      .rpc("delete_empty_conversations", { p_account_id: accountId, p_contact_ids: contactIds });
+    if (emptyError) throw new Error(`deleteContacts delete_empty_conversations failed: ${emptyError.message}`);
+  }
   const blocked = new Set<string>();
   for (const table of ["opportunities", "bookings"] as const) {
     const { data, error } = await db.from(table).select("contact_id")
@@ -1047,29 +1072,12 @@ export async function deleteContacts(
     if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
     for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
   }
-  // Conversations: read on the request client, as the other blockers are; only with conversationsDb
-  // can an empty one stop blocking (its contents are read there, keyed by the ids read here).
-  const { data: convRows, error: convError } = await db.from("conversations").select("id, contact_id")
+  // Conversations: whatever is left after the cleanup above (or everything, if conversationsDb was
+  // not given) still blocks, same as opportunities/bookings — it has a message or an inbound email.
+  const { data: convRows, error: convError } = await db.from("conversations").select("contact_id")
     .eq("account_id", accountId).in("contact_id", contactIds);
   if (convError) throw new Error(`deleteContacts conversations pre-read failed: ${convError.message}`);
-  const convs = (convRows ?? []) as { id: string; contact_id: string }[];
-  const emptyConvs = new Map<string, string>(); // conversation id -> contact id
-  if (opts.conversationsDb && convs.length > 0) {
-    const ids = convs.map((c) => c.id);
-    const used = new Set<string>();
-    for (const table of ["messages", "inbound_emails"] as const) {
-      const { data, error } = await opts.conversationsDb.from(table).select("conversation_id")
-        .eq("account_id", accountId).in("conversation_id", ids);
-      if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
-      for (const r of data ?? []) if (r.conversation_id) used.add(r.conversation_id as string);
-    }
-    for (const c of convs) {
-      if (used.has(c.id)) blocked.add(c.contact_id);
-      else emptyConvs.set(c.id, c.contact_id);
-    }
-  } else {
-    for (const c of convs) blocked.add(c.contact_id);
-  }
+  for (const r of convRows ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
   // The proof (review I1): only ids this client READS as this account's contacts go on. The ids come
   // from the browser, and beforeDelete hands them to a service-role purge, so a filter there alone is
   // not enough; on a request client RLS decides this read too.
@@ -1081,13 +1089,6 @@ export async function deleteContacts(
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { deleted: 0, skippedBlocked: blocked.size, skippedFiles: kept.size };
-  const goSet = new Set(go);
-  const emptyGoing = [...emptyConvs].filter(([, contactId]) => goSet.has(contactId)).map(([id]) => id);
-  if (opts.conversationsDb && emptyGoing.length > 0) {
-    const { error: delConvError } = await opts.conversationsDb.from("conversations").delete()
-      .eq("account_id", accountId).in("contact_id", go).in("id", emptyGoing);
-    if (delConvError) throw new Error(`deleteContacts empty conversations delete failed: ${delConvError.message}`);
-  }
   const { data, error } = await db.from("contacts").delete()
     .eq("account_id", accountId).in("id", go).select("id");
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);

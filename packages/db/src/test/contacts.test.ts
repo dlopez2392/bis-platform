@@ -1056,7 +1056,7 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       expect(await convs(db, accountId, c)).toHaveLength(1);
     }));
 
-  it("only the empty conversation of a customer who GOES is removed; one who stays (a deal blocks them, or the purge keeps them) keeps theirs (mutation: delete every candidate's empty conversation -> FAILS)", () =>
+  it("an empty conversation is cleared for every candidate up front, before a deal or the purge decides who stays — a deal still blocks the CONTACT (and the purge still keeps one), but an empty shell is never kept for its own sake (owner ruling 2026-10-17, review CRITICAL fix: delete_empty_conversations runs on the whole candidate list BEFORE blockers, not only on the final survivors; mutation: skip the cleanup for blocked/kept ids -> dealt/kept's empty conversation survives, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const dealt = (await createContact(db, accountId, { firstName: "Dealt" }, "user_t")).id;
       const kept = (await createContact(db, accountId, { firstName: "Kept" }, "user_t")).id;
@@ -1074,10 +1074,14 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       if (o.error) throw o.error;
       const r = await deleteContacts(db, accountId, [dealt, kept, gone], { conversationsDb: db, beforeDelete: async () => [kept] });
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1 });
+      // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept) — an empty
+      // conversation carries nothing, so neither needed theirs kept for the contact to survive.
+      expect(await getContact(db, accountId, dealt)).not.toBeNull();
+      expect(await getContact(db, accountId, kept)).not.toBeNull();
       expect(await getContact(db, accountId, gone)).toBeNull();
       expect(await convs(db, accountId, gone)).toEqual([]);
-      expect(await convs(db, accountId, dealt)).toHaveLength(1);
-      expect(await convs(db, accountId, kept)).toHaveLength(1);
+      expect(await convs(db, accountId, dealt)).toEqual([]);
+      expect(await convs(db, accountId, kept)).toEqual([]);
     }));
 
   it("another account's customer and its empty conversation are never touched (defence in depth: the request-client contacts proof AND the account filter on the conversations read AND on their delete each stop it alone, so no single mutation fails this; the probe drops all three -> FAILS)", () =>
@@ -1090,4 +1094,56 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
         expect(await getContact(dbB, accountB, b)).not.toBeNull();
         expect(await convs(dbB, accountB, b)).toHaveLength(1);
       })));
+
+  /**
+   * S-06 part 2, review CRITICAL (reproduced, then fixed): the ORIGINAL shape read every
+   * messages/inbound_emails row for the whole batch, unordered, on the request client. PostgREST's
+   * db-max-rows (1000 — see <SCRATCH>/s06b-kit/pgrst.sh) truncated that read, so a customer with
+   * 1001 messages had none of them counted and was judged empty: beforeDelete (the irreversible
+   * documents purge) ran, then the conversations delete hit messages_conversation_id_fkey and
+   * threw — files gone, customer kept. delete_empty_conversations (0083 section 3) replaces that
+   * read-then-decide with one atomic statement that never reads a messages/inbound_emails row into
+   * this process at all, so this is no longer reachable — the chatty customer here is blocked
+   * exactly like the one-message customer, and beforeDelete (tracked via a spy) never sees either.
+   */
+  it("a customer with 1001 messages and a customer with 1 message are both blocked, and beforeDelete never sees either (mutation: go back to the pre-fix read-then-decide shape -> PostgREST's db-max-rows=1000 drops the quiet customer's one message row from the sorted read, their conversation is wrongly judged empty, and the quiet customer's purge runs and their conversation delete throws on messages_conversation_id_fkey, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const chatty = (await createContact(db, accountId, { firstName: "Chatty" }, "user_t")).id;
+      const quiet = (await createContact(db, accountId, { firstName: "Quiet" }, "user_t")).id;
+      // Explicit ids, chosen so chattyConvId sorts BEFORE quietConvId: the pre-fix read has no
+      // ORDER BY, but the planner satisfies account_id/conversation_id/created_at via the
+      // messages_thread index, which returns rows sorted by conversation_id first. With 1001
+      // chatty rows and 1 quiet row (1002 total) capped at 1000 by PostgREST's db-max-rows, the
+      // chatty block (sorting first) fills the cap entirely, and the quiet customer's ONE row —
+      // the only evidence that they are not empty — is the row left out.
+      const chattyConvId = "00000000-0000-0000-0000-000000000001";
+      const quietConvId = "ffffffff-ffff-ffff-ffff-fffffffffffe";
+      const mkConv = async (id: string, contactId: string) => {
+        const { error } = await db.from("conversations").insert({ id, account_id: accountId, contact_id: contactId });
+        if (error) throw error;
+      };
+      await mkConv(chattyConvId, chatty);
+      await mkConv(quietConvId, quiet);
+      // One bulk insert, no .select() — nothing is read back, so PostgREST's db-max-rows=1000
+      // response cap (the thing that misjudges a customer "empty" on the pre-fix READ) never
+      // applies to this WRITE.
+      const rows = Array.from({ length: 1001 }, (_, i) => ({
+        account_id: accountId, conversation_id: chattyConvId, channel: "sms" as const,
+        direction: "outbound" as const, body: `msg ${i}`, author_kind: "person" as const,
+      }));
+      const { error: bulkError } = await db.from("messages").insert(rows);
+      if (bulkError) throw bulkError;
+      await createMessage(db, accountId, { conversationId: quietConvId, channel: "sms", direction: "outbound", body: "hi" }, "user_t");
+      const beforeDeleteIds: string[][] = [];
+      const r = await deleteContacts(db, accountId, [chatty, quiet], {
+        conversationsDb: db,
+        beforeDelete: async (ids) => { beforeDeleteIds.push([...ids].sort()); return []; },
+      });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 2, skippedFiles: 0 });
+      expect(beforeDeleteIds).toEqual([]);
+      expect(await getContact(db, accountId, chatty)).not.toBeNull();
+      expect(await getContact(db, accountId, quiet)).not.toBeNull();
+      expect(await convs(db, accountId, chatty)).toHaveLength(1);
+      expect(await convs(db, accountId, quiet)).toHaveLength(1);
+    }), 30_000);
 });

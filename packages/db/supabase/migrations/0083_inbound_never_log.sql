@@ -54,3 +54,39 @@ create policy inbound_never_log_no_technician on public.inbound_never_log as res
 revoke all on public.inbound_never_log from anon, authenticated;
 grant select on public.inbound_never_log to authenticated;
 grant select, insert, update, delete on public.inbound_never_log to service_role;
+
+-- 3. deleteContacts' empty-conversation cleanup (owner ruling 2026-10-17, amending G15 before
+--    apply): a conversation with no message and no inbound email must not block deleting its
+--    contact, and the check-then-delete must be ONE statement, or a row written between the two
+--    (a 1001st message past PostgREST's max_rows=1000, or a held email landing in the gap) is
+--    either misjudged empty or silently lost. messages.conversation_id has no ON DELETE action
+--    (NO ACTION/RESTRICT), so a conversation that still has one is never touched by this delete,
+--    not even partially. inbound_emails.conversation_id IS ON DELETE CASCADE (0082:93-94), which
+--    is exactly why a row landing in a check-then-delete GAP was unsafe; inside one statement
+--    there is no gap. calls.conversation_id is ON DELETE SET NULL (0019:49): a call never blocks
+--    and never stops a conversation from being judged empty.
+--    Scoped by account_id and the caller's already-proven contact ids; never called with a
+--    bare id. Service role only: no client ever deletes a conversation (0053).
+create function public.delete_empty_conversations(p_account_id uuid, p_contact_ids uuid[])
+returns table(id uuid)
+language sql
+security invoker
+set search_path = ''
+as $$
+  delete from public.conversations c
+   where c.account_id = p_account_id
+     and c.contact_id = any(p_contact_ids)
+     and not exists (
+       select 1 from public.messages m
+        where m.account_id = p_account_id and m.conversation_id = c.id)
+     and not exists (
+       select 1 from public.inbound_emails e
+        where e.account_id = p_account_id and e.conversation_id = c.id)
+  returning c.id;
+$$;
+comment on function public.delete_empty_conversations(uuid, uuid[]) is
+  'deleteContacts'' empty-conversation cleanup (S-06 part 2, owner ruling 2026-10-17): deletes, in one
+   statement, the conversations of the given contacts in the given account that have no message and
+   no inbound email, returning the deleted ids. Service role only.';
+revoke all on function public.delete_empty_conversations(uuid, uuid[]) from public, anon, authenticated, service_role;
+grant execute on function public.delete_empty_conversations(uuid, uuid[]) to service_role;
