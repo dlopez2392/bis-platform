@@ -7,6 +7,11 @@ import { join, relative, sep } from "node:path";
  * source file that reads or writes `messages`, how many times, and what a web chat row does to it. A new
  * reader fails BY NAME until someone writes down what a chat row (channel 'webchat', Sofía's outbound with
  * status 'delivered') does to it — the question no sender may skip.
+ *
+ * This guard counts CALL SITES only: it cannot see a filter. Dropping `.neq("channel", "webchat")` from
+ * the delivery webhook's read (G29), or `.eq("channel", "sms")` from the text-back cooldown or its
+ * release, leaves every count here unchanged. Those regressions are pinned on the replica by
+ * packages/db/src/test/webchat.test.ts, "nothing reads a chat row as a text or a send" (~274-286).
  */
 const REPO = join(__dirname, "../../../..");
 const ROOTS = ["apps/web/src", "packages/db/src"];
@@ -15,7 +20,7 @@ const READERS: Readonly<Record<string, { count: number; why: string }>> = {
   "packages/db/src/automations.ts": { count: 3, why: "reactivation (any row keeps a customer out of 'it's been a while') and quote follow-up heard-back (inbound, any channel: a visitor turn is hearing back)" },
   "packages/db/src/booking.ts": { count: 3, why: "discards a QUEUED outbound EMAIL only; a notice's status by id; re-sorts after a discard (G30)" },
   "packages/db/src/inbound-email.ts": { count: 2, why: "deletes an inbound EMAIL by its Resend id; re-sorts after an unfile (G30)" },
-  "packages/db/src/messaging.ts": { count: 13, why: "createMessage/fileWebchatTurns write; status by id; delivery webhook (outbound, never webchat: G29); inbound dedupe by provider id; text-back cooldown and failed texts (sms only); preview; thread; the record's email/sms page; search" },
+  "packages/db/src/messaging.ts": { count: 14, why: "createMessage/fileWebchatTurns write; status by id; delivery webhook (outbound, never webchat: G29); inbound dedupe by provider id; text-back cooldown and failed texts (sms only); preview; thread; the record's email/sms page; listContactMessages' no-page read (MESSAGE_COLS; no production caller; pinned by messaging-author-shape.test.ts); search" },
   "packages/db/src/record.ts": { count: 4, why: "Last talked (email, sms, webchat) for one and for a set; the chats source's anchor and count reads" },
   "packages/db/src/voice.ts": { count: 1, why: "callerInTouchSince: inbound SMS only (G17: a chat does not release a held text-back)" },
   "packages/db/src/webchat.ts": { count: 1, why: "listWebchatKeys: one chat's own keys" },
