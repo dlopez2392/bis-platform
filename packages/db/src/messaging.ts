@@ -36,6 +36,9 @@ export type NewMessage = {
   /** S-06 part 1: an inbound email's own facts (meta.inbound_email_id, meta.attachment_count,
    *  meta.sender, meta.consent). Unset for every other writer, which keeps the column default {}. */
   meta?: Record<string, unknown>;
+  /** S-06 part 2 (plan G3): the author when it is not the default mapping. Only the inbound pipeline's
+   *  team forward sets it (an inbound message a teammate sent); every other writer leaves it unset. */
+  author?: { kind: "person"; id: string | null };
 };
 
 export type ConversationSummary = {
@@ -139,7 +142,9 @@ export async function createMessage(
 ): Promise<{ id: string }> {
   // Who wrote it (0073, spec §5.2): from the actor the caller already passes, one mapping for all
   // fourteen writers (provenance.ts; the backfill's SQL twin is pinned by provenance-parity.test.ts).
-  const author = messageAuthor(actorType, actorId, input.direction);
+  const author = input.author
+    ? { authorKind: "person" as const, authorId: input.author.id?.trim() || null }
+    : messageAuthor(actorType, actorId, input.direction);
   const { data, error } = await db.from("messages")
     .insert({
       account_id: accountId,

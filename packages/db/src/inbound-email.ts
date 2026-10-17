@@ -326,3 +326,23 @@ export async function matchSender(db: SupabaseClient, accountId: string, contact
   const hit = ((members ?? []) as unknown as { contact_id: string; contacts: { first_name: string | null; last_name: string | null } }[])[0];
   return hit ? { contactId: hit.contact_id, firstName: hit.contacts.first_name, lastName: hit.contacts.last_name, viaGroup: true } : null;
 }
+
+/** S-06 part 2 (spec §3; G1 as ruled 2026-10-17, G2): the team is the account's members (any role) and
+ *  its reply-to mailbox, by email key. BIS agency staff are NOT the team. userId is the Clerk id every
+ *  person column stores. */
+export type TeamSender = { userId: string } | { mailbox: true };
+
+export async function matchTeamSender(db: SupabaseClient, accountId: string, fromEmail: string): Promise<TeamSender | null> {
+  const key = emailKey(fromEmail);
+  if (!key || !key.includes("@")) return null;
+  const { data, error } = await db.from("memberships").select("users!inner(clerk_user_id, email)")
+    .eq("scope", "account").eq("account_id", accountId);
+  if (error) throw new Error(`matchTeamSender members read failed: ${error.message}`);
+  const hit = ((data ?? []) as unknown as { users: { clerk_user_id: string; email: string } }[])
+    .filter((r) => emailKey(r.users.email) === key).map((r) => r.users.clerk_user_id).sort()[0];
+  if (hit) return { userId: hit };
+  const { data: acct, error: aErr } = await db.from("accounts").select("reply_to_email").eq("id", accountId).maybeSingle();
+  if (aErr) throw new Error(`matchTeamSender mailbox read failed: ${aErr.message}`);
+  const mailbox = (acct as { reply_to_email: string | null } | null)?.reply_to_email ?? null;
+  return mailbox && emailKey(mailbox) === key ? { mailbox: true } : null;
+}
