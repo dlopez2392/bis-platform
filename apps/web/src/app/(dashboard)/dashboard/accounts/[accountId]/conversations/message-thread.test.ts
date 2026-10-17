@@ -291,3 +291,58 @@ describe("MessageThread names who forwarded a filed email (S-06 part 2)", () => 
     expect(render([reply], "en")).not.toContain("data-forwarded");
   });
 });
+
+describe("web chat bubbles (S-06 part 3, spec §5, §5a; G26)", () => {
+  const at = "2026-10-17T15:00:00Z";
+  const CHAT_A = "11111111-1111-4111-8111-111111111111";
+  const CHAT_B = "22222222-2222-4222-8222-222222222222";
+  const chat = (id: string, chatId: string, index: number, direction: "inbound" | "outbound", body: string, matched: boolean) => ({
+    id, conversation_id: "c1", channel: "webchat", direction, status: "delivered", provider_message_id: `webchat:${chatId}:${index}`,
+    subject: null, body, error: null, created_at: at, author_kind: direction === "inbound" ? "customer" : "ai", author_id: null,
+    meta: { webchat: { chat_id: chatId, index, locale: "es", submission_id: "s1", matched_existing: matched } },
+  });
+  const text = { id: "t1", conversation_id: "c1", channel: "sms", direction: "outbound", status: "delivered", provider_message_id: null,
+    subject: null, body: "Le escribimos", error: null, created_at: at, author_kind: "person", author_id: "u1", meta: {} };
+  const THREAD = [chat("a0", CHAT_A, 0, "inbound", "¿Hacen bancas?", true), chat("a1", CHAT_A, 1, "outbound", "Sí, con gusto.", true),
+    chat("b0", CHAT_B, 0, "inbound", "Hola otra vez", false), text];
+  const render = (locale: "en" | "es", personaName: string | null = "Rosa") => renderToStaticMarkup(createElement(MessageThread, {
+    messages: THREAD as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: "en", ...THREAD_PROPS, locale, personaName,
+  }));
+  const footers = (html: string) => [...html.matchAll(/<p lang="(en|es)" class="mt-1[^"]*">([\s\S]*?)<\/p>/g)].map((x) => [x[1], renderedText(x[2]!).replace(/^.*? · /, "")]);
+
+  it("each footer names Web chat and the mark, never a status word; a text keeps its status (mutation: show MESSAGE_STATUS for chat rows → 'Delivered', FAILS; drop the mark → FAILS)", () => {
+    expect(footers(render("en"))).toEqual([["en", "Web chat · Customer"], ["en", "Web chat · Rosa · AI"], ["en", "Web chat · Customer"], ["en", "Text · Delivered"]]);
+  });
+
+  it("in Spanish for a Spanish-speaking teammate, every footer, the text's too (G26; mutation: messageChannelLabel without the locale → 'Web chat', FAILS)", () => {
+    expect(footers(render("es"))).toEqual([["es", "Chat web · Cliente"], ["es", "Chat web · Rosa · IA"], ["es", "Chat web · Cliente"], ["es", "Texto · Entregado"]]);
+  });
+
+  it("a chat bubble's words carry the language they chatted in, both sides, whatever the contact's (mutation: use contactLanguage → lang=\"en\" on the visitor's line, FAILS)", () => {
+    const html = render("en");
+    expect(html).toMatch(/<p lang="es"[^>]*>¿Hacen bancas\?<\/p>/);
+    expect(html).toMatch(/<p lang="es"[^>]*>Sí, con gusto\.<\/p>/);
+    expect(html).not.toMatch(/<p lang="es"[^>]*>Le escribimos<\/p>/);
+  });
+
+  it("no persona name: Sofía (author-mark.ts's own fallback; mutation: print an empty name → ' · AI', FAILS)", () => {
+    expect(footers(render("en", null))[1]).toEqual(["en", "Web chat · Sofía · AI"]);
+  });
+
+  it("ONE unconfirmed line per matched chat, directly above its first row, in the teammate's language; none for a chat that made the customer (spec §5a; mutation: render it on every row → three, FAILS; drop lang → FAILS)", () => {
+    const en = render("en");
+    expect(en.match(/data-webchat-unconfirmed/g)).toHaveLength(1);
+    expect(en).toMatch(/<p lang="en" data-webchat-unconfirmed=""[^>]*>Matched by the phone or email they typed; not confirmed\.<\/p><div[^>]*data-webchat-row="0"/);
+    expect(render("es")).toMatch(/<p lang="es" data-webchat-unconfirmed=""[^>]*>Lo relacionamos por el teléfono o el correo que escribió; no está confirmado\.<\/p>/);
+  });
+
+  it("the footer wraps rather than overflows a narrow bubble (DoD: long Spanish and pseudo copy; mutation: whitespace-nowrap → FAILS)", () => {
+    const classes = [...render("es").matchAll(/<p lang="es" class="(mt-1[^"]*)">/g)].map((x) => x[1]!);
+    // Every bubble's footer, so the loop below can never pass on zero matches.
+    expect(classes).toHaveLength(4);
+    for (const cls of classes) {
+      expect(cls).toContain("break-words");
+      expect(cls).not.toMatch(/nowrap|truncate/);
+    }
+  });
+});

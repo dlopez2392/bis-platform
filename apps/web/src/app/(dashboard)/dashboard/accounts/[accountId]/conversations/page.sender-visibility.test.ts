@@ -112,7 +112,8 @@ describe("ConversationsPage's visibility, now a SINGLE path through getContact (
 
   it("calls getContact scoped to THIS account, for the exact household-member id the thread named (mutation: drop the accountId argument → FAILS)", async () => {
     await ConversationsPage(route("convo1"));
-    expect(getContactCalls).toEqual([{ accountId: "acct1", id: "luis" }]);
+    // "ana": the composer's readiness read of the thread's own customer (S-06 part 3, spec §6), after the consent block.
+    expect(getContactCalls).toEqual([{ accountId: "acct1", id: "luis" }, { accountId: "acct1", id: "ana" }]);
   });
 
   it("the sender IS visible: the stop notice and its Undo button both render", async () => {

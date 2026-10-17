@@ -51,6 +51,7 @@ import { DocumentsDemo } from "./documents-demo";
 import { HeldEmailsDemo } from "./held-emails-demo";
 import { NeverLogDemo } from "./never-log-demo";
 import { ForwardingDemo } from "./forwarding-demo";
+import { WebchatDemo } from "./webchat-demo";
 import { RecordDemo } from "./record-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
@@ -284,6 +285,11 @@ export default async function StyleguidePage({
             Spanish), the agency's turn-on line, the error, and none, which draws nothing. */}
         <Section title={t(m, "contact.forwarding.label", "en")} file="accounts/[accountId]/contacts/[contactId]/forwarding-address-row.tsx">
           <ForwardingDemo />
+        </Section>
+
+        {/* S-06 part 3: a lead's website chat on the thread (both marks, both languages, the unconfirmed line) and its one record row. */}
+        <Section title={t(m, "conversations.channel.webchat", "en")} file="accounts/[accountId]/conversations/message-thread.tsx">
+          <WebchatDemo />
         </Section>
 
         {/* S-03 part 1 (spec §15): the record kit: layout at both widths, header with all and no
