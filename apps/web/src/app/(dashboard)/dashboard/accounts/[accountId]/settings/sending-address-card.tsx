@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { InboundMode } from "@bis/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -186,7 +186,7 @@ function RepliesRow({
  * returns a result and this renders it.
  */
 export function SendingAddressCard({
-  fromEmail, action, replies, setReplies, checkDns,
+  fromEmail, action, replies, setReplies, checkDns, neverLog,
 }: {
   fromEmail: string | null;
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
@@ -194,6 +194,8 @@ export function SendingAddressCard({
   replies: { mode: InboundMode; domain: string | null };
   setReplies: (next: { mode: InboundMode; domain: string | null }) => Promise<InboundModeResult>;
   checkDns: (domain: string) => Promise<DnsCheckResult>;
+  /** S-06 part 2: the Never record list, below the Replies row; outside the card's form. */
+  neverLog?: ReactNode;
 }) {
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
     await notifyActionResult(() => action(formData), toast, {
@@ -251,6 +253,7 @@ export function SendingAddressCard({
         </form>
 
         <RepliesRow replies={replies} setReplies={setReplies} checkDns={checkDns} />
+        {neverLog ? <div className="mt-6 border-t border-[var(--line)] pt-4">{neverLog}</div> : null}
       </CardContent>
     </Card>
   );
