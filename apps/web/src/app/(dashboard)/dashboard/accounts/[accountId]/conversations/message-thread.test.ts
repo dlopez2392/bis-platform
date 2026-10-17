@@ -363,3 +363,17 @@ describe("web chat bubbles (S-06 part 3, spec §5, §5a; G26)", () => {
     }
   });
 });
+
+describe("a bubble never widens the thread at phone width (CI e2e phone-width.spec.ts)", () => {
+  it("the subject and body break a long unbroken word inside the bubble (mutation: drop break-words from the body → FAILS)", () => {
+    const long = { id: "w1", conversation_id: "c1", channel: "email", direction: "inbound", status: "delivered", provider_message_id: null,
+      subject: "https://example.com/a-very-long-link-with-no-spaces-at-all", body: "https://example.com/another-very-long-link-with-no-spaces", error: null, created_at: "2026-10-17T15:00:00Z", meta: {} };
+    const html = renderToStaticMarkup(createElement(MessageThread, {
+      messages: [long] as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: null, ...THREAD_PROPS,
+    }));
+    const subject = html.match(/<p lang=""[^>]*class="([^"]*)">https:\/\/example\.com\/a-very/)?.[1] ?? "";
+    const body = html.match(/<p lang=""[^>]*class="([^"]*)">https:\/\/example\.com\/another/)?.[1] ?? "";
+    expect(subject.split(" ")).toContain("break-words");
+    expect(body.split(" ")).toContain("break-words");
+  });
+});

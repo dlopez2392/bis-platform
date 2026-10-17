@@ -23,3 +23,15 @@ describe("styleguide: the web chat bubble and the chat row (DoD: /styleguide gai
     expect(renderedText(html)).toContain("Open chat");
   });
 });
+
+describe("styleguide: the web chat demo fits a phone (CI e2e phone-width.spec.ts at 375px and 320px)", () => {
+  const html = renderToStaticMarkup(createElement(WebchatDemo));
+  it("one column below md, every grid shrinkable, and no fixed pixel width anywhere (mutation: put back w-[520px] on the row → FAILS; drop grid-cols-1 → FAILS)", () => {
+    const root = html.match(/<div class="([^"]*)" data-testid="styleguide-webchat"/)?.[1] ?? "";
+    expect(root.split(" ")).toEqual(expect.arrayContaining(["grid", "grid-cols-1", "min-w-0", "w-full"]));
+    const grids = [...html.matchAll(/class="([^"]*\bgrid\b[^"]*)"/g)].map((x) => x[1]!).filter((c) => c.split(" ").includes("grid"));
+    expect(grids.length).toBeGreaterThanOrEqual(2);
+    for (const c of grids) expect(c.split(" "), c).toContain("grid-cols-1");
+    expect(html).not.toMatch(/\bw-\[\d+px\]/);
+  });
+});

@@ -147,8 +147,8 @@ export function MessageThread({
                     : "bg-[var(--surface-2)]",
                 )}
               >
-                {message.subject ? <p lang={typedLang} className="text-sm font-medium text-card-foreground">{message.subject}</p> : null}
-                <p lang={typedLang} className="whitespace-pre-wrap text-sm text-card-foreground">{message.body}</p>
+                {message.subject ? <p lang={typedLang} className="break-words text-sm font-medium text-card-foreground">{message.subject}</p> : null}
+                <p lang={typedLang} className="whitespace-pre-wrap break-words text-sm text-card-foreground">{message.body}</p>
                 {/* G26: the footer in the STAFF member's language, every bubble's. */}
                 <p lang={locale} className="mt-1 break-words text-xs text-muted-foreground">
                   {formatDateTimeInZone(message.created_at, timezone, locale)}

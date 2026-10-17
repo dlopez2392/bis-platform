@@ -46,8 +46,10 @@ const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 export function WebchatDemo() {
   return (
-    <div className="grid w-full gap-4" data-testid="styleguide-webchat">
-      <div className="grid gap-4 md:grid-cols-2">
+    // CI fix (phone-width.spec.ts): CardContent is a wrapping flex row, so this root's min-content width is
+    // its widest child's. One shrinkable column below md, and no fixed pixel width, keep it inside 320px.
+    <div className="grid w-full min-w-0 grid-cols-1 gap-4" data-testid="styleguide-webchat">
+      <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
         {(["en", "es"] as const).map((locale) => (
           <div key={locale} lang={locale} data-webchat-demo={locale} className="min-w-0">
             <MessageThread
@@ -68,7 +70,7 @@ export function WebchatDemo() {
           </div>
         ))}
       </div>
-      <div data-sg-webchat-row className="w-[520px] max-w-full rounded-xl border border-border bg-card glass px-4 py-2">
+      <div data-sg-webchat-row className="w-full min-w-0 max-w-lg rounded-xl border border-border bg-card glass px-4 py-2">
         <TimelineItem
           kind="chat"
           icon={MessagesSquare}
