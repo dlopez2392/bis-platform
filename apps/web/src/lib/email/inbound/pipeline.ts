@@ -247,8 +247,12 @@ export async function handleReceivedEmail(deps: PipelineDeps, data: { email_id?:
     // Final review M2: an empty or whitespace-only text part is absent, not the reply — some clients
     // send `text: ""` beside the real HTML, which used to file a blank message no stop could be read in.
     const whole = email.text?.trim() ? email.text : (email.html ? htmlToText(email.html) : "");
-    // Spec §4: a forward keeps the whole text (the customer's original is the point of it).
-    const text = team ? whole.trim() : newText(whole);
+    // Spec §4: a forward keeps the whole text (the customer's original is the point of it). Final
+    // review I1 (owner ruling 2026-10-17, "keep whole text if held"): so does EVERY sender who is not
+    // the customer — an unverified teammate, BIS agency staff, a stranger — because what they send is
+    // usually a forward, and Needs a look (then a hand File) needs the original, not the marker line.
+    // Only the customer's own reply, filed or held, has its quoted history stripped.
+    const text = match === null ? whole.trim() : newText(whole);
     // Carried past the narrower try/catch below for step 5/7, which needs the filing only when this
     // call is the one that just inserted the row (the retry path re-reads it itself).
     firstRunFiling = team ? { kind: "forward", authorId: team.authorId } : { kind: "customer", sender: match };

@@ -335,6 +335,7 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     db.matchTeamSender.mockRejectedValue(new Error("db"));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: the team lookup failed; 503 so Resend retries"]);
   });
 
   it("a listed sender is dropped even when the sender IS the customer, logging no address or pattern (mutation: check the list after the customer match → the customer files, FAILS)", async () => {
@@ -357,6 +358,7 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     db.listNeverLog.mockRejectedValue(new Error("db down"));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: reading the never record list failed; 503 so Resend retries"]);
   });
 
   it("a member's authenticated forward is filed as a forward: the whole text, the forward marker, no unread, no owner copy, the member's Clerk id (mutation: raiseUnread true → FAILS; strip the quote → the customer's original is lost, FAILS)", async () => {
@@ -410,6 +412,47 @@ describe("S-06 part 2: drops, Never record, the team's forwards (spec 'Pipeline 
     db.matchTeamSender.mockRejectedValue(new Error("db"));
     expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "lookup_failed" });
     expect(db.recordInboundEmail).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: the team lookup failed; 503 so Resend retries"]);
+  });
+
+  it("a retried forward whose fresh author lookup fails answers 503 and files nothing, so Resend retries (final review M1; mutation: .catch(() => null) on the lookup → filed with no author, FAILS)", async () => {
+    db.findInboundEmailByProviderId.mockResolvedValue({
+      id: "ie_1", accountId: "acc", conversationId: "conv", status: "filed", holdReason: null, messageId: null,
+      decidedBy: "email-inbound-forward", fromEmail: "maria@rio.com", fromName: "Maria Lopez", attachmentCount: 0, text: MARIA_FWD,
+    });
+    db.matchTeamSender.mockRejectedValue(new Error("db"));
+    expect(await handleReceivedEmail(deps, { email_id: "re_1" })).toEqual({ status: 503, result: "write_failed" });
+    expect(db.matchTeamSender).toHaveBeenCalledWith(deps.db, "acc", "maria@rio.com");
+    expect(file.fileInboundEmail).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+    expect(log.mock.calls.map((c) => c[0])).toEqual(["inbound email: filing the message failed; 503 so Resend retries"]);
+  });
+
+  it("a held forward keeps the whole text, the customer's original included, for a BIS agency sender, a stranger and an unverified teammate (final review I1, owner ruling 2026-10-17; mutation: newText for every non-team sender → only the marker line is stored, FAILS)", async () => {
+    const GMAIL_FWD = "FYI see below\n\n---------- Forwarded message ---------\nFrom: Ana Ruiz <ana@gmail.com>\nDate: Tue, Oct 14, 2026\nSubject: Leak\n\nThe roof is leaking again over the kitchen.";
+    db.matchSender.mockResolvedValue(null);
+    const senders: [string, Record<string, unknown>, string][] = [
+      ["agency", { from: "Dan <dan@bis-rgv.com>", rawHeaders: SES_OK.replace(/gmail\.com/g, "bis-rgv.com") }, "not_on_record"],
+      ["stranger", { from: "Bo <bo@else.com>", rawHeaders: SES_OK.replace(/gmail\.com/g, "else.com") }, "not_on_record"],
+      ["unverified teammate", { rawHeaders: null }, "unverified"],
+    ];
+    for (const [name, over, holdReason] of senders) {
+      db.recordInboundEmail.mockClear();
+      fetchEmail.mockResolvedValue(TEAM({ text: GMAIL_FWD, ...over }));
+      expect(await handleReceivedEmail(deps, { email_id: "re_1" }), name).toEqual({ status: 200, result: "held" });
+      const stored = db.recordInboundEmail.mock.calls[0]![1] as { text: string; holdReason: string };
+      expect(stored.holdReason, name).toBe(holdReason);
+      expect(stored.text, name).toBe(GMAIL_FWD);
+      expect(stored.text, name).toContain("The roof is leaking again over the kitchen.");
+    }
+  });
+
+  it("a customer's own reply still has its quoted history stripped, filed or held unverified (final review I1; mutation: keep the whole text for every sender → the quote is stored, FAILS)", async () => {
+    await handleReceivedEmail(deps, { email_id: "re_1" });
+    expect(db.recordInboundEmail.mock.calls[0]![1]).toMatchObject({ status: "filed", text: "Sounds good" });
+    fetchEmail.mockResolvedValue(EMAIL({ rawHeaders: null }));
+    await handleReceivedEmail(deps, { email_id: "re_1" });
+    expect(db.recordInboundEmail.mock.calls[1]![1]).toMatchObject({ status: "held", holdReason: "unverified", text: "Sounds good" });
   });
 
   it("a retried forward (row recorded, never linked) re-files as a forward with a fresh author lookup, still no unread and no owner copy (G5; mutation: resume ignoring decided_by → raiseUnread true and an owner copy, FAILS)", async () => {
