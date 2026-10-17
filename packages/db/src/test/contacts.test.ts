@@ -17,7 +17,7 @@ import { setContactsBusiness } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, purgeContactDocuments, getDocument } from "../documents";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ensureConversation, createMessage } from "../messaging";
-import { ensureReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN } from "../inbound-email";
+import { ensureReplyToken, readReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN } from "../inbound-email";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -1056,14 +1056,16 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       expect(await convs(db, accountId, c)).toHaveLength(1);
     }));
 
-  it("an empty conversation is cleared for every candidate up front, before a deal or the purge decides who stays — a deal still blocks the CONTACT (and the purge still keeps one), but an empty shell is never kept for its own sake (owner ruling 2026-10-17, review CRITICAL fix: delete_empty_conversations runs on the whole candidate list BEFORE blockers, not only on the final survivors; mutation: skip the cleanup for blocked/kept ids -> dealt/kept's empty conversation survives, FAILS)", () =>
+  it("a deal blocks the CONTACT and its conversation, token and all — delete_empty_conversations never runs for it; the purge-kept one has no such reason and its empty shell still goes (owner ruling 2026-10-17, SECOND review fix: delete_empty_conversations runs only on contacts otherwise deletable — ours and not blocked by a deal/booking — never on the raw candidate batch, because an empty conversation with nothing but a reply token on it is exactly what exists once a teammate clicks \"Get forwarding address\" on a customer who then turns out to be blocked; mutation: call delete_empty_conversations before the opportunities/bookings blockers are known -> dealt's conversation AND its reply token are gone, FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const dealt = (await createContact(db, accountId, { firstName: "Dealt" }, "user_t")).id;
       const kept = (await createContact(db, accountId, { firstName: "Kept" }, "user_t")).id;
       // A customer who does go, so the conversation delete actually runs in this case.
       const gone = (await createContact(db, accountId, { firstName: "Gone" }, "user_t")).id;
       await ensureConversation(db, accountId, gone, "user_t");
-      await ensureConversation(db, accountId, dealt, "user_t");
+      // dealt already has a reply token — a teammate clicked "Get forwarding address" on this
+      // customer before the deal blocked them. The token must survive untouched.
+      const { token: dealtToken } = await ensureReplyToken(db, accountId, dealt, "user_t", undefined, "user");
       await ensureConversation(db, accountId, kept, "user_t");
       const { data: pipe } = await db.from("pipelines").insert({ account_id: accountId, name: "P" }).select("id").single();
       const { data: stage } = await db.from("pipeline_stages")
@@ -1074,13 +1076,18 @@ describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
       if (o.error) throw o.error;
       const r = await deleteContacts(db, accountId, [dealt, kept, gone], { conversationsDb: db, beforeDelete: async () => [kept] });
       expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1 });
-      // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept) — an empty
-      // conversation carries nothing, so neither needed theirs kept for the contact to survive.
+      // dealt and kept both still exist (the deal blocks dealt; the purge keeps kept).
       expect(await getContact(db, accountId, dealt)).not.toBeNull();
       expect(await getContact(db, accountId, kept)).not.toBeNull();
       expect(await getContact(db, accountId, gone)).toBeNull();
       expect(await convs(db, accountId, gone)).toEqual([]);
-      expect(await convs(db, accountId, dealt)).toEqual([]);
+      // dealt was blocked BEFORE delete_empty_conversations ever ran for it: the conversation, and
+      // the reply token already sitting on it, are untouched.
+      expect(await convs(db, accountId, dealt)).toHaveLength(1);
+      expect(await readReplyToken(db, accountId, dealt)).toEqual({ token: dealtToken });
+      // kept has no such reason: the opportunities/bookings check never blocked kept, so
+      // delete_empty_conversations ran for kept too (before beforeDelete decided to keep the
+      // contact for its files) and its empty shell is gone, same as before this second fix.
       expect(await convs(db, accountId, kept)).toEqual([]);
     }));
 
