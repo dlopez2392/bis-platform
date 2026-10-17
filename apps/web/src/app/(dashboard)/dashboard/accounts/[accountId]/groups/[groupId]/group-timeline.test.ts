@@ -196,3 +196,46 @@ describe("a required-document skip and un-skip on the group page (S-07 2c)", () 
     }
   });
 });
+
+const { renderedText } = await import("@/lib/rendered-text");
+const { buttonVariants } = await import("@/components/ui/button");
+const { cn } = await import("@/lib/utils");
+describe("a website chat row on the group page (S-06 part 3, spec §7; G18, G20, G23, G25)", () => {
+  const chatRow = (matchedExisting: boolean, locale: "en" | "es") => {
+    const tr = makeTr(locale);
+    const entries: TimelineEntry[] = [{ kind: "chat", id: "m0", at: AT, contactId: "c-ana", chat: { conversationId: "cv1", count: 12, matchedExisting } }];
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Rosa", tr } });
+    return rowHtml(render({ rows, tr }, locale), "chat");
+  };
+  const openChat = (row: string) => row.match(/<a [^>]*data-timeline-open-chat[^>]*>[^<]*<\/a>/)?.[0] ?? "";
+
+  it("renders its member, the customer's mark, the verb and the count, and an Open chat ghost link to its thread in the inbox (mutation: link to the record -> FAILS)", () => {
+    for (const [locale, words, open] of [
+      ["en", ["Ana García", "Customer", "chatted with Rosa on your website", "12 messages"], "Open chat"],
+      ["es", ["Ana García", "Cliente", "conversó con Rosa en su sitio web", "12 mensajes"], "Ver chat"],
+    ] as const) {
+      const row = chatRow(false, locale);
+      const text = renderedText(row).replace(/\s+/g, " ");
+      for (const w of words) expect(text).toContain(w);
+      expect(row).toMatch(/data-author-mark="customer"/);
+      expect(row).toContain("lucide-messages-square");
+      const link = openChat(row);
+      expect(link).toMatch(/href="\/dashboard\/accounts\/a1\/conversations\?c=cv1"/);
+      expect(renderedText(link).trim()).toBe(open);
+      // The Open call link's own classes: the ghost variant at sm, then the 44px touch target (rule 8).
+      expect(renderedText(link.match(/class="([^"]*)"/)?.[1] ?? "")).toBe(cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8"));
+      expect(row).not.toContain("data-webchat-unconfirmed");
+    }
+  });
+
+  it("a chat matched to an existing customer carries the unconfirmed line, lang set to the page's language (G18; mutation: drop lang -> FAILS)", () => {
+    for (const [locale, line] of [
+      ["en", "Matched by the phone or email they typed; not confirmed."],
+      ["es", "Lo relacionamos por el teléfono o el correo que escribió; no está confirmado."],
+    ] as const) {
+      const p = chatRow(true, locale).match(/<p [^>]*data-webchat-unconfirmed=""[^>]*>[^<]*<\/p>/)?.[0] ?? "";
+      expect(p).toMatch(new RegExp(`^<p (?=[^>]*lang="${locale}")`));
+      expect(renderedText(p).trim()).toBe(line);
+    }
+  });
+});

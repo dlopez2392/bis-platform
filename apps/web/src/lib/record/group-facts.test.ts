@@ -81,3 +81,12 @@ describe("the cap line when the exact count failed (review of Task 16)", () => {
       .toBe("Showing activity for 50 of 73 people. Open a person to see theirs.");
   });
 });
+
+describe("Last talked on a website chat across a household (S-06 part 3, spec §7)", () => {
+  it("names the member and says 'website chat' / 'chat del sitio web' (mutation: word a chat as a text -> FAILS)", () => {
+    const facts: GroupFacts = { bookingsMade: ok(0), lastTalked: ok({ at: "2026-10-11T15:00:00Z", channel: "chat", contactId: "c1" }) };
+    expect(groupFactsView({ total: ok(3), narrow: false, facts, names: { c1: "Ana" } }, ctx).line[1]).toBe("Last talked yesterday with Ana (website chat)");
+    expect(groupFactsView({ total: ok(3), narrow: false, facts, names: { c1: "Ana" } }, { zone: ZONE, now: NOW, tr: makeTr("es") }).line[1])
+      .toBe("Última conversación ayer con Ana (chat del sitio web)");
+  });
+});

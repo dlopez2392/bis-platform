@@ -50,12 +50,16 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "documentRequest": return null;
     // S-07 2c: a skip or an un-skip is its head only; the category is already in it.
     case "documentSkip": case "documentUnskip": return null;
+    // S-06 part 3: the head already says who chatted and how much; the unconfirmed line comes from the row.
+    case "chat": return null;
   }
 }
 
 export function recentRowsView(rows: readonly TimelineRow[], customerLang: "" | "en" | "es" = ""): RecentRowView[] {
   return rows.map((r) => ({
     key: r.key, kind: r.entry.kind, mark: r.mark, verb: r.verb, status: r.status, detail: r.detail,
-    time: r.time, dateTime: r.entry.at, excerpt: excerptOf(r.entry, customerLang),
+    time: r.time, dateTime: r.entry.at,
+    // S-06 part 3 (G18): a matched chat's excerpt is its unconfirmed line, in the page's language.
+    excerpt: r.entry.kind === "chat" ? (r.note ? { text: r.note.text, lang: r.note.lang, done: false } : null) : excerptOf(r.entry, customerLang),
   }));
 }

@@ -233,3 +233,44 @@ describe("required-documents skip rows (S-07 2c)", () => {
     expect(new Set(en.map((r) => r.key)).size).toBe(2);
   });
 });
+
+describe("a website chat row (S-06 part 3, spec §7, G18, G23, G24)", () => {
+  const chat = (count: number, matchedExisting: boolean): TimelineEntry => ({ kind: "chat", id: "m0", at: "2026-10-17T15:00:00Z", contactId: "k1",
+    chat: { conversationId: "cv1", count, matchedExisting } });
+  const one = (e: TimelineEntry, locale: "en" | "es" = "en", personaName: string | null = "Rosa", pseudo = false) => {
+    const tr = makeTr(locale, pseudo);
+    return timelineRows([e], { zone: "America/Chicago", tr, author: { viewerId: null, names: {}, personaName, tr } })[0]!;
+  };
+  it("names the account's persona, counts the messages, has no status and, for a new customer, no line (mutations: hard-code Sofía -> FAILS; the line on every chat -> FAILS)", () => {
+    const r = one(chat(12, false));
+    expect([r.verb, r.detail, r.status]).toEqual(["chatted with Rosa on your website", "12 messages", null]);
+    expect(r.mark).toEqual({ kind: "customer", label: "Customer" });
+    expect("note" in r).toBe(false);
+    expect(one(chat(1, false)).detail).toBe("1 message");
+    expect(one(chat(12, false), "en", null).verb).toBe("chatted with Sofía on your website");
+    expect(one(chat(12, false), "en", "  ").verb).toBe("chatted with Sofía on your website");
+  });
+  it("in Spanish (mutation: read the words from m[...] -> English, FAILS)", () => {
+    const r = one(chat(12, false), "es");
+    expect([r.verb, r.detail]).toEqual(["conversó con Rosa en su sitio web", "12 mensajes"]);
+    expect(one(chat(1, false), "es").detail).toBe("1 mensaje");
+  });
+  it("a chat matched to an existing customer carries the unconfirmed line in the page's language (G18; mutation: drop the note -> FAILS)", () => {
+    expect(one(chat(3, true)).note).toEqual({ text: "Matched by the phone or email they typed; not confirmed.", lang: "en" });
+    expect(one(chat(3, true), "es").note).toEqual({ text: "Lo relacionamos por el teléfono o el correo que escribió; no está confirmado.", lang: "es" });
+  });
+  it("no other kind carries a note key at all (mutation: note: undefined on every row -> FAILS)", () => {
+    const r = one({ kind: "note", id: "n1", at: "2026-10-17T15:00:00Z", contactId: "k1", note: { id: "n1", body: "x", author_id: null, created_at: "2026-10-17T15:00:00Z" } });
+    expect("note" in r).toBe(false);
+  });
+  it("a failed chats source is named (G24)", () => {
+    expect(timelineFailedText(["chats"], makeTr("en"))).toBe("Couldn't load website chats.");
+    expect(timelineFailedText(["chats"], makeTr("es"))).toBe("No se pudo cargar: chats del sitio web.");
+  });
+  it("the pseudo-locale reaches the row's words (mutation: build the verb without tr -> the plain string, FAILS)", () => {
+    const r = one(chat(12, true), "en", "Rosa", true);
+    expect(r.verb).not.toBe("chatted with Rosa on your website");
+    expect(r.detail).not.toBe("12 messages");
+    expect(r.note!.text).not.toBe("Matched by the phone or email they typed; not confirmed.");
+  });
+});

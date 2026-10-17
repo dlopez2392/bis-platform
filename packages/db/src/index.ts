@@ -335,7 +335,7 @@ export {
   type Fact, type ContactFacts, type LastTalked, type LastTalkedChannel, type OpenDeals, type FactName,
   type ContactNextUp, type NextUpTask,
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
-  type TimelineMessage, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
+  type TimelineMessage, type TimelineChat, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
   type ContactMessageRow,
   // S-03 part 2b: the household and business page reads its members as one set.
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,

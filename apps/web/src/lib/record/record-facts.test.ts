@@ -67,3 +67,10 @@ describe("the summary's fact line (spec §9.2)", () => {
     expect(view({}, "en", "not a date").line).toEqual([]);
   });
 });
+
+describe("Last talked on a website chat (S-06 part 3, spec §7)", () => {
+  it("says 'website chat' / 'chat del sitio web' (mutation: word a chat as a text -> FAILS)", () => {
+    expect(view({ lastTalked: ok({ at: "2026-10-12T13:00:00Z", channel: "chat" }) }).line[1]).toBe("Last talked today (website chat)");
+    expect(view({ lastTalked: ok({ at: "2026-10-12T13:00:00Z", channel: "chat" }) }, "es").line[1]).toBe("Última conversación hoy (chat del sitio web)");
+  });
+});

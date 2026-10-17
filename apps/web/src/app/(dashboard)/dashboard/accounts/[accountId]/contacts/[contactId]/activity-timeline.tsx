@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -262,5 +262,16 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
         </TimelineItem>
       );
     }
+    // S-06 part 3 (spec §7; G20, G25): one row per website chat, the customer's mark; "Open chat" opens its
+    // thread in the inbox, the "Open call" pattern. A chat matched to an existing customer carries §5a's line.
+    case "chat":
+      return (
+        <TimelineItem {...head} icon={MessagesSquare} action={
+          <Link href={`/dashboard/accounts/${accountId}/conversations?c=${e.chat.conversationId}`} data-timeline-open-chat
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8")}>{tr.text("timeline.openChat")}</Link>
+        }>
+          {row.note ? <p lang={row.note.lang} data-webchat-unconfirmed="" className="text-xs text-muted-foreground">{row.note.text}</p> : null}
+        </TimelineItem>
+      );
   }
 }

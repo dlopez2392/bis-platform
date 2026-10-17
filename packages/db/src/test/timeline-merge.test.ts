@@ -158,8 +158,9 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     const { db } = fakeDb(sevenSources(), { throwOn: ["calls"], errorOn: ["messages"] });
     const errors: string[] = [];
     const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
-    expect(page.failed).toEqual(["messages", "calls"]);
-    expect([...errors].sort()).toEqual(["calls", "messages"]);
+    // S-06 part 3: the chats source reads messages too, so it fails with it.
+    expect(page.failed).toEqual(["messages", "calls", "chats"]);
+    expect([...errors].sort()).toEqual(["calls", "chats", "messages"]);
     expect(page.items.map((i) => i.kind)).toEqual(["booking", "submission", "deal", "task", "note"]);
   });
 

@@ -3,6 +3,7 @@ import { removedReason } from "@bis/db/document-rules";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
+import type { Locale } from "@/lib/i18n/locale";
 import { authorMark, type AuthorCtx, type AuthorMarkView } from "./author-mark";
 import type { Tr } from "./copy";
 
@@ -14,6 +15,8 @@ export type TimelineRow = {
   /** The member the row is about, on the group page (S-03 part 2b, C6); null on the contact page,
    *  and for a member the page holds no name for. Never replaces the author mark. */
   subject: { label: string; href: string } | null;
+  /** S-06 part 3 (§5a, G18): a staff-language line under the row, on a chat matched to an existing customer only. */
+  note?: { text: string; lang: Locale };
 };
 export type TimelineSubjects = Readonly<Record<string, { label: string; href: string }>>;
 
@@ -37,7 +40,7 @@ const DEAL_STATUS: StatusMap = {
 const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
-  documents: "timeline.what.documents",
+  documents: "timeline.what.documents", chats: "timeline.what.chats",
 };
 
 /** A deal's amount, or null when it has none: 0 and null are not an amount anyone entered
@@ -60,7 +63,7 @@ function whenText(iso: string, zone: string, tr: Tr): string {
   }).format(new Date(iso));
 }
 
-function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr): Pick<TimelineRow, "verb" | "status" | "detail"> {
+function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr, persona: string): Pick<TimelineRow, "verb" | "status" | "detail"> {
   switch (entry.kind) {
     case "note": return { verb: tr.text("timeline.note"), status: null, detail: null };
     case "task": return { verb: tr.text(entry.task.call_id ? "timeline.callbackTodo" : "timeline.todo"), status: null, detail: null };
@@ -89,6 +92,10 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       verb: tr.text("timeline.answeredCall"),
       status: statusOf(CALL_OUTCOME, entry.call.outcome, tr),
       detail: entry.call.duration_secs ? tr.text("timeline.minutes", { count: Math.max(1, Math.round(entry.call.duration_secs / 60)) }) : null,
+    };
+    // S-06 part 3 (spec §7, G23): "chatted with Sofía on your website", the count as its detail; no status.
+    case "chat": return {
+      verb: tr.text("timeline.webchat", { name: persona }), status: null, detail: tr.count("timeline.webchatCount", entry.chat.count),
     };
     // S-07: a file the camera took reads as a photo; a trashed one is still listed, with "In the trash"
     // as a dot and a word (rule 3). The category is the detail, in the page's language.
@@ -140,13 +147,17 @@ export function timelineRows(
   entries: readonly TimelineEntry[], ctx: { zone: string; tr: Tr; author: AuthorCtx; subjects?: TimelineSubjects },
 ): TimelineRow[] {
   let previousDay: string | null = null;
+  // The AI mark's own rule (author-mark.ts's authorLabel): the account's persona, else Sofía.
+  const persona = ctx.author.personaName?.trim() || "Sofía";
   return entries.map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {
       key: `${entry.kind}-${entry.id}`, entry, day, showDay: day !== previousDay,
-      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr),
+      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr, persona),
       subject: ctx.subjects && Object.hasOwn(ctx.subjects, entry.contactId) ? ctx.subjects[entry.contactId]! : null,
+      ...(entry.kind === "chat" && entry.chat.matchedExisting
+        ? { note: { text: ctx.tr.text("conversations.webchat.unconfirmed"), lang: ctx.tr.locale } } : {}),
     };
     previousDay = day;
     return row;
