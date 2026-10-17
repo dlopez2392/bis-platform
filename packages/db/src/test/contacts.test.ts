@@ -16,6 +16,8 @@ import { createContact, updateContact, listContacts, getContact,
 import { setContactsBusiness } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, purgeContactDocuments, getDocument } from "../documents";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { ensureConversation, createMessage } from "../messaging";
+import { ensureReplyToken, recordInboundEmail, BIS_REPLY_DOMAIN } from "../inbound-email";
 
 /** Seed helper: inserts a contact row directly, bypassing createContact's
  *  dedupe + event emission — this suite exercises listContacts/countContacts,
@@ -991,4 +993,101 @@ describe("deleteContacts and a customer's files (0077, deviation 2)", () => {
       await expect(deleteContacts(db, accountId, [c])).rejects.toThrow(/documents_contact_fkey|foreign key/);
       expect(await getContact(db, accountId, c)).not.toBeNull();
     }));
+});
+
+/**
+ * S-06 part 2 (owner ruling 2026-10-17): a conversation with nothing in it no longer blocks a delete.
+ * Before the ruling the record page made one on view; old empty ones remain. 0053: no client deletes
+ * a conversation, so the caller hands the SERVICE client as `conversationsDb`; without it every
+ * conversation still blocks, as before. Here the suite's own client plays both parts.
+ */
+describe("deleteContacts and an empty conversation (S-06 part 2)", () => {
+  const convs = async (db: SupabaseClient, accountId: string, contactId: string) => {
+    const { data, error } = await db.from("conversations").select("id").eq("account_id", accountId).eq("contact_id", contactId);
+    if (error) throw error;
+    return data ?? [];
+  };
+
+  it("a customer whose only conversation is empty (a forwarding token, no message) is deleted, and the empty conversation with it (mutation: keep every conversation a blocker -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Viewed" }, "user_t")).id;
+      await ensureReplyToken(db, accountId, c, "user_t");
+      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 0, skippedFiles: 0 });
+      expect(await getContact(db, accountId, c)).toBeNull();
+      expect(await convs(db, accountId, c)).toEqual([]);
+    }));
+
+  it("a conversation with a message still blocks, and it and its message stay (mutation: treat every conversation as empty -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Talked" }, "user_t")).id;
+      const conv = await ensureConversation(db, accountId, c, "user_t");
+      await createMessage(db, accountId, { conversationId: conv.id, channel: "email", direction: "outbound", body: "hi" }, "user_t");
+      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
+      expect(await getContact(db, accountId, c)).not.toBeNull();
+      expect(await convs(db, accountId, c)).toHaveLength(1);
+      const { data: msgs, error } = await db.from("messages").select("id").eq("account_id", accountId).eq("conversation_id", conv.id);
+      if (error) throw error;
+      expect(msgs).toHaveLength(1);
+    }));
+
+  it("a conversation holding an inbound email but no message still blocks (held mail is never thrown away; mutation: count messages only -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Held" }, "user_t")).id;
+      const conv = await ensureConversation(db, accountId, c, "user_t");
+      await recordInboundEmail(db, {
+        accountId, conversationId: conv.id, providerEmailId: `re_del_${Math.random().toString(36).slice(2, 10)}`,
+        fromEmail: "held@example.com", fromName: null, toEmail: `r-x@${BIS_REPLY_DOMAIN}`, subject: null, text: "hello",
+        auth: { spf: "pass", dkim: "pass", dmarc: "pass", spam: "PASS", virus: "PASS" }, attachmentCount: 0,
+        status: "held", holdReason: "unverified", decidedBy: null, receivedAt: new Date().toISOString(),
+      });
+      const r = await deleteContacts(db, accountId, [c], { conversationsDb: db });
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
+      expect(await convs(db, accountId, c)).toHaveLength(1);
+    }));
+
+  it("without conversationsDb an empty conversation still blocks, as before (mutation: delete empties on the request client -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = (await createContact(db, accountId, { firstName: "Old caller" }, "user_t")).id;
+      await ensureConversation(db, accountId, c, "user_t");
+      const r = await deleteContacts(db, accountId, [c]);
+      expect(r).toEqual({ deleted: 0, skippedBlocked: 1, skippedFiles: 0 });
+      expect(await convs(db, accountId, c)).toHaveLength(1);
+    }));
+
+  it("only the empty conversation of a customer who GOES is removed; one who stays (a deal blocks them, or the purge keeps them) keeps theirs (mutation: delete every candidate's empty conversation -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const dealt = (await createContact(db, accountId, { firstName: "Dealt" }, "user_t")).id;
+      const kept = (await createContact(db, accountId, { firstName: "Kept" }, "user_t")).id;
+      // A customer who does go, so the conversation delete actually runs in this case.
+      const gone = (await createContact(db, accountId, { firstName: "Gone" }, "user_t")).id;
+      await ensureConversation(db, accountId, gone, "user_t");
+      await ensureConversation(db, accountId, dealt, "user_t");
+      await ensureConversation(db, accountId, kept, "user_t");
+      const { data: pipe } = await db.from("pipelines").insert({ account_id: accountId, name: "P" }).select("id").single();
+      const { data: stage } = await db.from("pipeline_stages")
+        .insert({ account_id: accountId, pipeline_id: pipe!.id, name: "S", position: 1 }).select("id").single();
+      const o = await db.from("opportunities").insert({
+        account_id: accountId, contact_id: dealt, pipeline_id: pipe!.id, stage_id: stage!.id, name: "Deal", monetary_value: 0, status: "open",
+      });
+      if (o.error) throw o.error;
+      const r = await deleteContacts(db, accountId, [dealt, kept, gone], { conversationsDb: db, beforeDelete: async () => [kept] });
+      expect(r).toEqual({ deleted: 1, skippedBlocked: 1, skippedFiles: 1 });
+      expect(await getContact(db, accountId, gone)).toBeNull();
+      expect(await convs(db, accountId, gone)).toEqual([]);
+      expect(await convs(db, accountId, dealt)).toHaveLength(1);
+      expect(await convs(db, accountId, kept)).toHaveLength(1);
+    }));
+
+  it("another account's customer and its empty conversation are never touched (defence in depth: the request-client contacts proof AND the account filter on the conversations read AND on their delete each stop it alone, so no single mutation fails this; the probe drops all three -> FAILS)", () =>
+    withTestAccount(async (dbB, accountB) =>
+      withTestAccount(async (db, accountA) => {
+        const b = (await createContact(dbB, accountB, { firstName: "Bo" }, "user_t")).id;
+        await ensureConversation(dbB, accountB, b, "user_t");
+        const r = await deleteContacts(db, accountA, [b], { conversationsDb: db });
+        expect(r).toEqual({ deleted: 0, skippedBlocked: 0, skippedFiles: 0 });
+        expect(await getContact(dbB, accountB, b)).not.toBeNull();
+        expect(await convs(dbB, accountB, b)).toHaveLength(1);
+      })));
 });

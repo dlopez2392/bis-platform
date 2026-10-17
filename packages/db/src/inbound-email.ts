@@ -95,6 +95,21 @@ export async function ensureReplyToken(
   throw new Error(`ensureReplyToken: still revoked after ${ENSURE_REPLY_TOKEN_MAX_ROUNDS} rounds`);
 }
 
+/**
+ * S-06 part 2 (owner ruling 2026-10-17, amending G15): the customer's LIVE reply token, read only. A
+ * page view never writes, so the record page reads the token this way and makes one only when a
+ * person asks (ensureReplyToken, from the record's "Get forwarding address"). Null when the customer
+ * has no conversation, the conversation has no token yet, or its token was revoked. THROWS on a read
+ * error. Scoped by account and contact.
+ */
+export async function readReplyToken(db: SupabaseClient, accountId: string, contactId: string): Promise<{ token: string } | null> {
+  const { data, error } = await db.from("conversations").select("reply_token, reply_token_revoked_at")
+    .eq("account_id", accountId).eq("contact_id", contactId).maybeSingle();
+  if (error) throw new Error(`readReplyToken failed: ${error.message}`);
+  const r = data as { reply_token: string | null; reply_token_revoked_at: string | null } | null;
+  return r?.reply_token && r.reply_token_revoked_at === null ? { token: r.reply_token } : null;
+}
+
 export type ReplyThread = { conversationId: string; accountId: string; contactId: string; revoked: boolean; inboundDomain: string | null };
 
 export async function findReplyThread(db: SupabaseClient, token: string): Promise<ReplyThread | null> {

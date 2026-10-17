@@ -1020,6 +1020,14 @@ export async function listTags(
  * 2026-10-13), and the FK refuses the delete of any contact a purge did not
  * clear, so no stored object is ever stranded. Documents never BLOCK: they
  * are not in the pre-read below.
+ *
+ * S-06 part 2 (owner ruling 2026-10-17): an EMPTY conversation (no message and no inbound email; the
+ * record page made one on view before the ruling, and a forwarding address can make one) no longer
+ * blocks. 0053 gives no client a delete on conversations, so the caller passes the SERVICE client as
+ * `conversationsDb`: it reads which of the conversations the request client found have anything in
+ * them, and deletes the empty ones of exactly the contacts about to go, scoped by account, after the
+ * proof and the purge. `messages.conversation_id` is NO ACTION, so a message landing in between makes
+ * that delete fail rather than lose the message. Without `conversationsDb` every conversation blocks.
  */
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],
@@ -1027,15 +1035,40 @@ export async function deleteContacts(
     /** Runs on the deletable ids (blocked ones already removed) BEFORE any contact row is deleted; answers
      *  the ids it could not clear, which are then kept. The document vault's purge (0077, deviation 2). */
     beforeDelete?: (deletable: string[]) => Promise<string[]>;
+    /** The SERVICE client that may read a conversation's contents and delete an empty one (see above). */
+    conversationsDb?: SupabaseClient;
   } = {},
 ): Promise<{ deleted: number; skippedBlocked: number; skippedFiles: number }> {
   if (contactIds.length === 0) return { deleted: 0, skippedBlocked: 0, skippedFiles: 0 };
   const blocked = new Set<string>();
-  for (const table of ["opportunities", "conversations", "bookings"] as const) {
+  for (const table of ["opportunities", "bookings"] as const) {
     const { data, error } = await db.from(table).select("contact_id")
       .eq("account_id", accountId).in("contact_id", contactIds);
     if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
     for (const r of data ?? []) if (r.contact_id) blocked.add(r.contact_id as string);
+  }
+  // Conversations: read on the request client, as the other blockers are; only with conversationsDb
+  // can an empty one stop blocking (its contents are read there, keyed by the ids read here).
+  const { data: convRows, error: convError } = await db.from("conversations").select("id, contact_id")
+    .eq("account_id", accountId).in("contact_id", contactIds);
+  if (convError) throw new Error(`deleteContacts conversations pre-read failed: ${convError.message}`);
+  const convs = (convRows ?? []) as { id: string; contact_id: string }[];
+  const emptyConvs = new Map<string, string>(); // conversation id -> contact id
+  if (opts.conversationsDb && convs.length > 0) {
+    const ids = convs.map((c) => c.id);
+    const used = new Set<string>();
+    for (const table of ["messages", "inbound_emails"] as const) {
+      const { data, error } = await opts.conversationsDb.from(table).select("conversation_id")
+        .eq("account_id", accountId).in("conversation_id", ids);
+      if (error) throw new Error(`deleteContacts ${table} pre-read failed: ${error.message}`);
+      for (const r of data ?? []) if (r.conversation_id) used.add(r.conversation_id as string);
+    }
+    for (const c of convs) {
+      if (used.has(c.id)) blocked.add(c.contact_id);
+      else emptyConvs.set(c.id, c.contact_id);
+    }
+  } else {
+    for (const c of convs) blocked.add(c.contact_id);
   }
   // The proof (review I1): only ids this client READS as this account's contacts go on. The ids come
   // from the browser, and beforeDelete hands them to a service-role purge, so a filter there alone is
@@ -1048,6 +1081,13 @@ export async function deleteContacts(
   const kept = new Set(deletable.length > 0 && opts.beforeDelete ? await opts.beforeDelete(deletable) : []);
   const go = deletable.filter((id) => !kept.has(id));
   if (go.length === 0) return { deleted: 0, skippedBlocked: blocked.size, skippedFiles: kept.size };
+  const goSet = new Set(go);
+  const emptyGoing = [...emptyConvs].filter(([, contactId]) => goSet.has(contactId)).map(([id]) => id);
+  if (opts.conversationsDb && emptyGoing.length > 0) {
+    const { error: delConvError } = await opts.conversationsDb.from("conversations").delete()
+      .eq("account_id", accountId).in("contact_id", go).in("id", emptyGoing);
+    if (delConvError) throw new Error(`deleteContacts empty conversations delete failed: ${delConvError.message}`);
+  }
   const { data, error } = await db.from("contacts").delete()
     .eq("account_id", accountId).in("id", go).select("id");
   if (error) throw new Error(`deleteContacts failed: ${error.message}`);

@@ -7,7 +7,7 @@ import { createAccount } from "../accounts";
 import { deleteAccountCascade } from "../account-teardown";
 import {
   BIS_REPLY_DOMAIN, REPLY_TOKEN_PATTERN, newReplyToken, getInboundSettings, setInboundSettings,
-  ensureReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage,
+  ensureReplyToken, readReplyToken, findReplyThread, recordInboundEmail, getInboundEmail, setInboundMessage,
   decideInboundEmail, unfileInboundEmail, listHeldInboundEmails, countHeldInboundEmails, matchSender,
   findInboundEmailByProviderId, deleteInboundMessageByProviderId,
   type NewInboundEmail,
@@ -426,6 +426,38 @@ describe("Task 12 fix round 1, item 2: deleteInboundMessageByProviderId", () => 
       expect(await listMessages(db, accountId, t.conversationId)).toEqual([]);
       expect(await deleteInboundMessageByProviderId(db, accountId, held.providerEmailId)).toBe(false);
       expect(await deleteInboundMessageByProviderId(db, accountId, "re_never_existed")).toBe(false);
+    });
+  });
+});
+
+describe("readReplyToken (S-06 part 2, owner ruling: a page view never writes)", () => {
+  it("answers the customer's live token, and null for no conversation, a conversation with no token, and a revoked token — creating nothing (mutation: call ensureReplyToken inside -> a conversation appears, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const { id: contactId } = await createContact(db, accountId, { firstName: "Read", email: "read@example.com" }, ACTOR);
+      expect(await readReplyToken(db, accountId, contactId)).toBeNull();
+      const none = await db.from("conversations").select("id").eq("account_id", accountId).eq("contact_id", contactId);
+      if (none.error) throw none.error;
+      expect(none.data).toEqual([]);
+      const { data: ev0, error: e0 } = await db.from("events").select("id").eq("account_id", accountId).eq("type", "conversation.created");
+      if (e0) throw e0;
+      expect(ev0).toEqual([]);
+      await ensureConversation(db, accountId, contactId, ACTOR);
+      expect(await readReplyToken(db, accountId, contactId)).toBeNull();
+      const t = await ensureReplyToken(db, accountId, contactId, ACTOR);
+      expect(await readReplyToken(db, accountId, contactId)).toEqual({ token: t.token });
+      const rv = await db.from("conversations").update({ reply_token_revoked_at: new Date().toISOString() }).eq("id", t.conversationId);
+      if (rv.error) throw rv.error;
+      expect(await readReplyToken(db, accountId, contactId)).toBeNull();
+    });
+  });
+
+  it("is scoped to the account: another account's id never reads this customer's token (mutation: drop the account_id filter -> FAILS)", async () => {
+    await withTestAccount(async (dbB, accountB) => {
+      await withTestAccount(async (db, accountA) => {
+        const { id: contactId } = await createContact(db, accountA, { firstName: "Scoped", email: "scoped@example.com" }, ACTOR);
+        await ensureReplyToken(db, accountA, contactId, ACTOR);
+        expect(await readReplyToken(dbB, accountB, contactId)).toBeNull();
+      });
     });
   });
 });
