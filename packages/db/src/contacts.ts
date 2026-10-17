@@ -1025,18 +1025,20 @@ export async function listTags(
  * record page made one on view before the ruling, and a forwarding address can make one) no longer
  * blocks. 0053 gives no client a delete on conversations, so the caller passes the SERVICE client as
  * `conversationsDb`, and the empty ones are cleared through `delete_empty_conversations` (migration
- * 0083 section 3) — the database's own check-then-delete, in ONE statement. That is load-bearing,
- * not stylistic: review found the prior shape (read every messages/inbound_emails row for the whole
- * batch on the request client, THEN delete) unsafe two ways. CRITICAL: PostgREST caps a read at
- * `max_rows` (1000); a talked-to customer whose messages alone cross that cap was judged empty,
- * `beforeDelete` ran (the irreversible documents purge), and only then did the conversations delete
- * hit `messages_conversation_id_fkey` and throw — the files were already gone, the customer was not.
- * Reproduced on the replica (a 1001-message customer and a 1-message customer, both supposedly
- * "chatty" but misjudged by the truncated read). IMPORTANT: `inbound_emails.conversation_id` is ON
- * DELETE CASCADE (0082:93-94), so a held email arriving in the GAP between a separate check and a
- * separate delete would be silently destroyed. A single SQL statement has no such gap: the database
- * proves "no message, no inbound email" and deletes atomically, so no row can land between the two.
- * Without `conversationsDb` every conversation still blocks, exactly as before this ruling.
+ * 0083 section 3) — the database's own check-then-delete, now TWO statements internally (lock and
+ * wait, then a fresh-snapshot delete; re-review found a single-statement DELETE's NOT EXISTS checks
+ * can miss a row that committed while the delete was blocked on that very row's lock). That ordering
+ * is load-bearing, not stylistic: review found the prior shape (read every messages/inbound_emails
+ * row for the whole batch on the request client, THEN delete) unsafe two ways. CRITICAL: PostgREST
+ * caps a read at `max_rows` (1000); a talked-to customer whose messages alone cross that cap was
+ * judged empty, `beforeDelete` ran (the irreversible documents purge), and only then did the
+ * conversations delete hit `messages_conversation_id_fkey` and throw — the files were already gone,
+ * the customer was not. Reproduced on the replica (a 1001-message customer and a 1-message customer,
+ * both supposedly "chatty" but misjudged by the truncated read). IMPORTANT: `inbound_emails.
+ * conversation_id` is ON DELETE CASCADE (0082:93-94), so a held email arriving in the GAP between a
+ * separate check and a separate delete would be silently destroyed — see 0083 section 3's own
+ * comment for how the function itself closes that gap now. Without `conversationsDb` every
+ * conversation still blocks, exactly as before this ruling.
  *
  * SECOND review fix (2026-10-17, this call's own order): `delete_empty_conversations` runs ONLY on
  * the contacts that are otherwise deletable — ours, and not blocked by opportunities/bookings —
@@ -1054,6 +1056,18 @@ export async function listTags(
  * one), that one row's FK violation aborts the whole batch delete and `deleteContacts` throws — no
  * customer is half-deleted and no conversation is silently lost, but the caller sees every contact
  * in that call fail together, same as the pre-existing race on opportunities/bookings.
+ *
+ * ACCEPTED (re-review, not narrowed further): `beforeDelete`'s own "kept" outcome — a customer
+ * `purgeContactDocuments` could not fully clear ("files could not be cleared") — is NOT knowable
+ * before `beforeDelete` actually runs (it depends on a runtime storage-removal result, not
+ * anything this function could pre-read), and `delete_empty_conversations` has, by this point,
+ * already run for that contact (it was never blocked by opportunities/bookings). So a customer
+ * `beforeDelete` ends up keeping for files reasons has ALSO lost their empty conversation and any
+ * reply token on it, same as a customer who actually goes. Narrowing this would mean calling
+ * `beforeDelete` BEFORE the cleanup, which would also run the irreversible purge on contacts the
+ * conversation-emptiness check has not yet filtered — a strictly worse trade. Opportunities and
+ * bookings are the only blockers knowable before the purge runs; a files-kept customer's lost
+ * token is accepted.
  */
 export async function deleteContacts(
   db: SupabaseClient, accountId: string, contactIds: string[],

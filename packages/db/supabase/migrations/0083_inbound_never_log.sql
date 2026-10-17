@@ -57,36 +57,59 @@ grant select, insert, update, delete on public.inbound_never_log to service_role
 
 -- 3. deleteContacts' empty-conversation cleanup (owner ruling 2026-10-17, amending G15 before
 --    apply): a conversation with no message and no inbound email must not block deleting its
---    contact, and the check-then-delete must be ONE statement, or a row written between the two
---    (a 1001st message past PostgREST's max_rows=1000, or a held email landing in the gap) is
---    either misjudged empty or silently lost. messages.conversation_id has no ON DELETE action
---    (NO ACTION/RESTRICT), so a conversation that still has one is never touched by this delete,
---    not even partially. inbound_emails.conversation_id IS ON DELETE CASCADE (0082:93-94), which
---    is exactly why a row landing in a check-then-delete GAP was unsafe; inside one statement
---    there is no gap. calls.conversation_id is ON DELETE SET NULL (0019:49): a call never blocks
---    and never stops a conversation from being judged empty.
+--    contact. messages.conversation_id has no ON DELETE action (NO ACTION/RESTRICT), so a
+--    conversation that still has one is never touched by this delete, not even partially.
+--    inbound_emails.conversation_id IS ON DELETE CASCADE (0082:93-94): a held email must never be
+--    able to land in a gap between "checked empty" and "deleted". calls.conversation_id is ON
+--    DELETE SET NULL (0019:49): a call never blocks and never stops a conversation from being
+--    judged empty.
+--    Two statements, not one (re-review): a single SQL DELETE's NOT EXISTS subqueries are NOT
+--    guaranteed to see a row that committed WHILE this statement was waiting on a lock the new
+--    row's own insert took (a message/inbound_emails FK insert takes a FOR KEY SHARE lock on the
+--    conversation row it references). EvalPlanQual's re-check on a newly-unblocked row reuses the
+--    ORIGINAL statement's snapshot for subqueries over other tables, not a fresh one -- proved with
+--    two sessions: a held inbound_emails row committed exactly while the delete waited was
+--    cascade-deleted anyway (inbound_emails left: 0). The fix is to make the wait happen in its
+--    OWN statement first (`for update`, no DELETE in it), so that by the time the SECOND
+--    statement's DELETE takes its own fresh snapshot, every blocking inserter has already
+--    committed or rolled back and the NOT EXISTS checks see the truth. Each statement in a
+--    plpgsql function under READ COMMITTED takes its own fresh snapshot; a single multi-clause SQL
+--    statement does not get a second one mid-execution.
 --    Scoped by account_id and the caller's already-proven contact ids; never called with a
 --    bare id. Service role only: no client ever deletes a conversation (0053).
 create function public.delete_empty_conversations(p_account_id uuid, p_contact_ids uuid[])
 returns table(id uuid)
-language sql
+language plpgsql
 security invoker
 set search_path = ''
 as $$
-  delete from public.conversations c
-   where c.account_id = p_account_id
-     and c.contact_id = any(p_contact_ids)
-     and not exists (
-       select 1 from public.messages m
-        where m.account_id = p_account_id and m.conversation_id = c.id)
-     and not exists (
-       select 1 from public.inbound_emails e
-        where e.account_id = p_account_id and e.conversation_id = c.id)
-  returning c.id;
+begin
+  -- Statement 1: lock and wait only. A concurrent FK insert (a message or a held inbound email)
+  -- holding a FOR KEY SHARE lock on one of these rows blocks here until it commits or rolls back.
+  perform 1 from public.conversations c
+   where c.account_id = p_account_id and c.contact_id = any(p_contact_ids)
+   for update;
+
+  -- Statement 2: a FRESH snapshot (every blocking inserter above has already resolved), so the
+  -- NOT EXISTS checks here see any row a statement-1 wait was waiting on.
+  return query
+    delete from public.conversations c
+     where c.account_id = p_account_id
+       and c.contact_id = any(p_contact_ids)
+       and not exists (
+         select 1 from public.messages m
+          where m.account_id = p_account_id and m.conversation_id = c.id)
+       and not exists (
+         select 1 from public.inbound_emails e
+          where e.account_id = p_account_id and e.conversation_id = c.id)
+    returning c.id;
+end;
 $$;
 comment on function public.delete_empty_conversations(uuid, uuid[]) is
-  'deleteContacts'' empty-conversation cleanup (S-06 part 2, owner ruling 2026-10-17): deletes, in one
-   statement, the conversations of the given contacts in the given account that have no message and
-   no inbound email, returning the deleted ids. Service role only.';
+  'deleteContacts'' empty-conversation cleanup (S-06 part 2, owner ruling 2026-10-17): deletes the
+   conversations of the given contacts in the given account that have no message and no inbound
+   email, returning the deleted ids. Two statements (lock-and-wait, then a fresh-snapshot delete),
+   not one: a single-statement NOT EXISTS can miss a row that committed while the delete waited on
+   that row''s own lock (proved with two sessions). Service role only.';
 revoke all on function public.delete_empty_conversations(uuid, uuid[]) from public, anon, authenticated, service_role;
 grant execute on function public.delete_empty_conversations(uuid, uuid[]) to service_role;

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { Client } from "pg";
+import { Client } from "pg";
+import "dotenv/config";
 import { withRollback, actAs } from "./db";
 
 /**
@@ -194,4 +195,89 @@ describe("0083: delete_empty_conversations", () => {
       expect(await code(attempt(c, "select id from delete_empty_conversations($1, $2::uuid[])", [s.acct, [s.empty]]))).toBe("42501");
     });
   });
+});
+
+/**
+ * 0083 section 3 (re-review): a single-statement DELETE's NOT EXISTS checks are not guaranteed to
+ * see a row that commits WHILE the delete is blocked on a lock that row's own insert took. Proven
+ * with two real sessions (not withRollback, which shares one transaction): session A opens a held
+ * inbound_emails row (its FK insert takes a FOR KEY SHARE lock on the conversation it references)
+ * and does NOT commit; session B calls delete_empty_conversations for the same conversation. B's
+ * own "for update" wait is confirmed via pg_locks (polled, not slept, so this cannot flake on
+ * timing) before A commits — proving B is genuinely blocked on A's open row, not merely running
+ * after A happened to finish first. Once A commits, B's call resolves: the function's SECOND
+ * statement takes a fresh snapshot that now sees A's committed row, so the conversation is NOT
+ * deleted and the email survives.
+ */
+describe("0083: delete_empty_conversations and a row that commits while it waits", () => {
+  const RUN3 = Math.random().toString(36).slice(2, 10);
+  const conn = () => new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
+
+  /** Polls pg_locks for backendPid waiting (not granted) on a relation lock, up to ~2s. Throws (never
+   *  silently passes) if B never shows as waiting — a flake-proof substitute for a fixed sleep. */
+  async function waitUntilBlocked(probe: Client, backendPid: number): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      const { rows } = await probe.query<{ n: number }>(
+        "select count(*)::int as n from pg_locks where pid = $1 and not granted", [backendPid]);
+      if (rows[0]!.n > 0) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error("waitUntilBlocked: session B never showed as waiting in pg_locks within 2s");
+  }
+
+  it("a held inbound_emails row that commits while delete_empty_conversations is waiting on it survives, and the conversation is not deleted (mutation: go back to language sql, one statement -> the email is cascade-deleted, FAILS)", async () => {
+    const seedC = conn(); const a = conn(); const b = conn(); const probe = conn();
+    await Promise.all([seedC.connect(), a.connect(), b.connect(), probe.connect()]);
+    let acct: string | null = null;
+    try {
+      const { rows: [agency] } = await seedC.query<{ id: string }>("select id from agencies limit 1");
+      acct = (await seedC.query<{ id: string }>(
+        "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'DEC Race') returning id",
+        [agency!.id, `org_decrace_${RUN3}`])).rows[0]!.id;
+      const contact = (await seedC.query<{ id: string }>(
+        "insert into contacts (account_id, first_name) values ($1,'Race') returning id", [acct])).rows[0]!.id;
+      const conv = (await seedC.query<{ id: string }>(
+        "insert into conversations (account_id, contact_id) values ($1,$2) returning id", [acct, contact])).rows[0]!.id;
+
+      const { rows: [bPid] } = await b.query<{ pid: number }>("select pg_backend_pid() as pid");
+
+      // A: open a held inbound email on this conversation, uncommitted. The FK insert takes a FOR
+      // KEY SHARE lock on the conversations row it references.
+      await a.query("begin");
+      await a.query(
+        `insert into inbound_emails (account_id, conversation_id, provider_email_id, from_email, to_email, text, status, hold_reason, received_at)
+         values ($1,$2,$3,'x@example.com','r-x@reply.bis-rgv.com','hi','held','not_on_record',now())`,
+        [acct, conv, `re_decrace_${RUN3}`]);
+
+      // B: call the function. Its first statement (select ... for update) blocks on A's lock.
+      await b.query("begin");
+      const bPromise = b.query<{ id: string }>("select id from delete_empty_conversations($1, $2::uuid[])", [acct, [contact]]);
+
+      // Confirm B is ACTUALLY waiting on A's row, via pg_locks, before committing A — not a sleep.
+      await waitUntilBlocked(probe, bPid!.pid);
+
+      // Only now does A commit — releasing the lock B has genuinely been waiting on the whole time.
+      await a.query("commit");
+
+      const bResult = await bPromise;
+      expect(bResult.rows).toEqual([]); // the conversation was NOT judged empty: nothing deleted.
+      await b.query("commit");
+
+      const { rows: convRows } = await seedC.query("select id from conversations where id = $1", [conv]);
+      expect(convRows).toEqual([{ id: conv }]); // the conversation survives.
+      const { rows: emailRows } = await seedC.query(
+        "select id from inbound_emails where account_id = $1 and conversation_id = $2", [acct, conv]);
+      expect(emailRows).toHaveLength(1); // the held email was never cascade-deleted.
+    } finally {
+      await a.query("rollback").catch(() => {});
+      await b.query("rollback").catch(() => {});
+      if (acct) {
+        await seedC.query("delete from inbound_emails where account_id = $1", [acct]).catch(() => {});
+        await seedC.query("delete from conversations where account_id = $1", [acct]).catch(() => {});
+        await seedC.query("delete from contacts where account_id = $1", [acct]).catch(() => {});
+        await seedC.query("delete from accounts where id = $1", [acct]).catch(() => {});
+      }
+      await Promise.all([seedC.end(), a.end(), b.end(), probe.end()]);
+    }
+  }, 20_000);
 });
