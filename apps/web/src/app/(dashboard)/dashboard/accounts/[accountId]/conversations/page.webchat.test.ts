@@ -34,19 +34,28 @@ vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 vi.mock("@/lib/zone", () => ({
   renderZone: async () => ({ zone: "UTC", guessed: false, label: "UTC", source: "account" as const }),
 }));
-vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ({}) }));
+/** The ledger client, by identity: the two recipient states must take THIS one, never the request client. */
+const LEDGER = vi.hoisted(() => ({ ledger: true }));
+vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => LEDGER }));
 vi.mock("@/lib/consent/email-view", () => ({ readEmailView: vi.fn() }));
 
 const gate = vi.hoisted(() => ({ value: { ok: true, from: "+19565550000", ownedNumbers: ["+19565550000"] } as unknown }));
 const sms = vi.hoisted(() => ({ value: { kind: "ok" } as unknown }));
 vi.mock("@/lib/record/loaders", () => ({ softSmsGate: async () => gate.value }));
-vi.mock("@/lib/consent/recipient-state", () => ({ smsRecipientState: async () => sms.value, emailRecipientState: async () => ({ kind: "ok" }) }));
+/** Each recipient-state read's client, in call order. */
+const stateClients = vi.hoisted(() => ({ sms: [] as unknown[], email: [] as unknown[] }));
+vi.mock("@/lib/consent/recipient-state", () => ({
+  smsRecipientState: async (db: unknown) => { stateClients.sms.push(db); return sms.value; },
+  emailRecipientState: async (db: unknown) => { stateClients.email.push(db); return { kind: "ok" }; },
+}));
 
 const conversationsFixture = [
   { id: "convo1", contactId: "ana", contactFirstName: "Ana", contactLastName: "Gomez", lastMessageAt: "2026-10-17T15:00:00Z", lastMessagePreview: "hi", unreadCount: 0, contactLanguage: null },
 ];
 const listMessages = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const getVoiceProfile = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ persona_name: "Rosa" }));
+/** The thread's own customer, what RLS answers an Owner on the request client. */
+const getContact = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({ id: "ana", phone: "(956) 555-0100", email: "ana@example.com", phone_country_unconfirmed: false }));
 
 vi.mock("@bis/db", () => ({
   listConversations: async () => conversationsFixture,
@@ -55,7 +64,7 @@ vi.mock("@bis/db", () => ({
   // S-06 part 2: the forwarders' names (reached only for a thread holding a forward; none here).
   listPeopleNames: async () => ({}),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfile(...a),
-  getContact: async () => ({ id: "ana", phone: "(956) 555-0100", email: "ana@example.com", phone_country_unconfirmed: false }),
+  getContact: (...a: unknown[]) => getContact(...a),
   // The "Needs a look" count and the Replies setting the header reads: a quiet inbox.
   countHeldInboundEmails: async () => 0,
   getInboundSettings: async () => ({ mode: "bis", domain: null }),
@@ -75,7 +84,22 @@ const chatRow = (id: string, index: number, direction: string) => row(id, "webch
 const pressed = (h: string) => [...h.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([^<]*)<\/button>/g)].map((x) => x[1]);
 
 describe("ConversationsPage with a web chat thread (S-06 part 3, spec §5, §6)", () => {
-  afterEach(() => { listMessages.mockReset().mockResolvedValue([]); getVoiceProfile.mockClear(); sms.value = { kind: "ok" }; });
+  afterEach(() => {
+    listMessages.mockReset().mockResolvedValue([]); getVoiceProfile.mockClear(); getContact.mockClear(); sms.value = { kind: "ok" };
+    stateClients.sms.length = 0; stateClients.email.length = 0;
+  });
+
+  it("the composer proves the customer with getContact on the REQUEST client, then reads both recipient states on the LEDGER client (mutation: getContact on ledgerDb() → FAILS; a recipient state on db → FAILS)", async () => {
+    listMessages.mockResolvedValue([row("t1", "sms", "inbound", "customer")]);
+    await html();
+    expect(getContact.mock.calls).toHaveLength(1);
+    expect(getContact.mock.calls[0]![0]).toBe(REQUEST);
+    expect(getContact.mock.calls[0]!.slice(1)).toEqual(["acct1", "ana"]);
+    expect(stateClients.sms).toEqual([LEDGER]);
+    expect(stateClients.email).toEqual([LEDGER]);
+    expect(stateClients.sms[0]).not.toBe(REQUEST);
+    expect(stateClients.email[0]).not.toBe(REQUEST);
+  });
 
   it("a thread holding a chat reads the persona ONCE, on the request client, and Sofía's bubble names her; a thread with none never reads it (mutation: read always → called for the text thread, FAILS)", async () => {
     listMessages.mockResolvedValue([chatRow("a0", 0, "inbound"), chatRow("a1", 1, "outbound")]);

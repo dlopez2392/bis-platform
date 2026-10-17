@@ -114,13 +114,15 @@ export function MessageThread({
         {messages.map((message) => {
           // S-06 part 3 (spec §5): a lead's website chat turn. Its words carry the language they CHATTED in
           // (one message, one language); its footer names the channel and the mark (one mark set with the
-          // record, DESIGN.md Provenance) and never a status word: no one on the team sent it.
-          const chat = message.channel === "webchat" ? readWebchatMeta(message.meta) : null;
+          // record, DESIGN.md Provenance) and never a status word: no one on the team sent it. The CHANNEL
+          // makes it a chat row (fix round 1, M-5); the meta only adds its language, its index and the match.
+          const isChat = message.channel === "webchat";
+          const chat = isChat ? readWebchatMeta(message.meta) : null;
           // S-09 §9: what the CUSTOMER wrote (inbound, never the voice channel's AI summary) carries
           // their language; with none it is typed text of unknown language. Outbound is unchanged.
           const typedLang = chat ? chat.locale
             : message.direction === "inbound" && message.channel !== "voice" ? (contactLanguage ?? "") : undefined;
-          const mark = chat
+          const mark = isChat
             ? authorLabel(message.author_kind === "ai" ? "ai" : "customer", null, { viewerId: null, names: {}, personaName: personaName ?? null, tr })
             : null;
           return (
@@ -167,7 +169,7 @@ export function MessageThread({
                     what to tell the customer. Plain language only
                     (messageFailureReason never echoes the raw, provider-worded
                     column). A chat row has no delivery to fail. */}
-                {!chat && message.direction === "outbound" && messageFailureReason(message) ? (
+                {!isChat && message.direction === "outbound" && messageFailureReason(message) ? (
                   <p className="mt-1 text-xs text-[var(--crit)]">{messageFailureReason(message)}</p>
                 ) : null}
                 {/* Task 11 (S-06 part 1): who sent it, how many attachments, the

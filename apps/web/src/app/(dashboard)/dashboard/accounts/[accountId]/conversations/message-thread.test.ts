@@ -325,6 +325,23 @@ describe("web chat bubbles (S-06 part 3, spec §5, §5a; G26)", () => {
     expect(html).not.toMatch(/<p lang="es"[^>]*>Le escribimos<\/p>/);
   });
 
+  it("the footer's date is in the teammate's language too, against the literal the fixture instant renders to (G26; mutation: drop formatDateTimeInZone's locale → the Spanish date reads English, FAILS)", () => {
+    const whole = (html: string) => [...html.matchAll(/<p lang="(en|es)" class="mt-1[^"]*">([\s\S]*?)<\/p>/g)].map((x) => renderedText(x[2]!).replace(/[\u202f\u00a0]/g, " "));
+    // ICU builds differ on the space before the day period (U+202F or a plain space); either is the same date.
+    expect(whole(render("en"))[0]).toBe("Oct 17, 2026, 3:00 PM · Web chat · Customer");
+    expect(whole(render("es"))[0]).toBe("17 oct 2026, 3:00 p.m. · Chat web · Cliente");
+  });
+
+  it("a web chat row is the chat's whatever its meta: no status word, the AI mark, no row hook and no line when the meta is missing (M-5; mutation: key the mark on readWebchatMeta → ' · Delivered', FAILS)", () => {
+    const bare = { ...chat("z1", CHAT_A, 0, "outbound", "Hola", true), meta: {} };
+    const html = renderToStaticMarkup(createElement(MessageThread, {
+      messages: [bare] as never, contactName: "Ana", composer: null, timezone: "UTC", contactLanguage: "en", ...THREAD_PROPS, locale: "en", personaName: "Rosa",
+    }));
+    expect(footers(html)).toEqual([["en", "Web chat · Rosa · AI"]]);
+    expect(html).not.toContain("data-webchat-row");
+    expect(html).not.toContain("data-webchat-unconfirmed");
+  });
+
   it("no persona name: Sofía (author-mark.ts's own fallback; mutation: print an empty name → ' · AI', FAILS)", () => {
     expect(footers(render("en", null))[1]).toEqual(["en", "Web chat · Sofía · AI"]);
   });

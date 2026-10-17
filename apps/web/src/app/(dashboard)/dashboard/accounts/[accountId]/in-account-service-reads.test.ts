@@ -122,7 +122,9 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/inbound-actions.ts": "proven-target",
   // Fix round 1 (Task 11 UI review): the thread's own inbound-email notice needs each involved
   // contact's CURRENT email-consent state — ledgerDb, only after getContact on the request
-  // client proved that contact (0068's own RLS scope), same pattern as the contact page.
+  // client proved that contact (0068's own RLS scope), same pattern as the contact page. S-06 part 3:
+  // the composer's two recipient states (smsRecipientState, emailRecipientState) read on ledgerDb only
+  // inside loadInboxComposer, after getContact on the request client proved the thread's own customer.
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/page.tsx": "proven-target",
   // The Never record list's Add/Remove (S-06 part 2): requireAccountOwner (the agency or this
   // account's own Owner) proves the caller before any service write, every write scoped by account_id.
