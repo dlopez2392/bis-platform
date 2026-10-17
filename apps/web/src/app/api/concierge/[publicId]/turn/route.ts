@@ -12,7 +12,7 @@
 // This bounds how many turns and how many conversations. It claims nothing
 // about duration, because text has none to claim.
 //
-// THREE PROPERTIES THIS ROUTE DOES NOT HAVE, stated so the next reader does
+// FOUR PROPERTIES THIS ROUTE DOES NOT HAVE, stated so the next reader does
 // not assume them:
 //
 //   1. The transcript is atomic but NOT ORDERED. `concierge_append_turns`
@@ -529,10 +529,6 @@ export async function POST(
     // starts from the row's own `submission_id`: a lead already on file from
     // an earlier turn is genuinely captured, even on a turn that does not
     // call the tool again.
-    // S-06 part 3 (spec §4, G7): whether the lead was on file when this turn STARTED, the unread rule for
-    // this turn's visitor line. Turn 1's row is built with none (above); a lead filed by this turn, or by
-    // another tab during it, was not on file at the start.
-    const leadAtStart = !!conversation.submission_id;
     let filed = !!conversation.submission_id;
     // What the tool result tells the model when it did NOT file (D-047): a
     // capture with no usable name is a different thing to say to the visitor
@@ -726,7 +722,9 @@ export async function POST(
       const accountId = profile.account_id;
       after(async () => {
         try {
-          const r = await syncWebchatTurns(db, accountId, conversationId, { raiseUnread: leadAtStart });
+          // No unread flag (final review P1): the sync raises unread per ROW, for each post-lead visitor
+          // turn it actually inserts, so whichever tab's sync copies a turn counts it exactly once.
+          const r = await syncWebchatTurns(db, accountId, conversationId);
           if (r.outcome === "failed") log("webchat sync failed", { accountId, stage: r.stage });
           else if (r.outcome === "no_customer") log("webchat sync dropped", { accountId, reason: "no customer" });
           else if (r.outcome === "filed" && (r.result.stoppedAt !== null || r.result.failedSteps.length > 0)) {

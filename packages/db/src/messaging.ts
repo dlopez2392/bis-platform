@@ -960,12 +960,14 @@ export type WebchatFileResult = {
  * ("concierge", "ai") → ai. 23505 on the provider id = that row is already there (another tab's sync,
  * a retry): skipped, not counted. Any other error stops the batch. Then ONCE, only if something was
  * inserted: the touch (only for a VISITOR row: Sofía's never move the thread), one `webchat.filed`
- * event, and the unread raise for inserted visitor rows that count (`countsUnread`) when the caller
- * says the lead was on file when the turn started.
+ * event, and +1 unread for every visitor row THIS batch inserted whose planner flag `countsUnread` is
+ * set (the turn's own `at` is later than the lead's). The rule is per ROW, never per caller (final
+ * review P1): whichever tab's sync happens to insert a post-lead visitor turn raises its unread, so a
+ * race between two tabs can neither lose that unread nor count it twice (the row inserts once).
  */
 export async function fileWebchatTurns(
   db: SupabaseClient, accountId: string, conversationId: string,
-  rows: readonly PlannedWebchatRow[], opts: { raiseUnread: boolean },
+  rows: readonly PlannedWebchatRow[],
 ): Promise<WebchatFileResult> {
   const result: WebchatFileResult = { inserted: 0, visitorInserted: 0, unreadRaised: 0, stoppedAt: null, failedSteps: [] };
   let toRaise = 0;
@@ -1000,15 +1002,13 @@ export async function fileWebchatTurns(
   } catch {
     result.failedSteps.push("event");
   }
-  if (opts.raiseUnread) {
-    for (let i = 0; i < toRaise; i++) {
-      try {
-        await incrementUnreadCount(db, accountId, conversationId);
-        result.unreadRaised += 1;
-      } catch {
-        result.failedSteps.push("unread");
-        break;
-      }
+  for (let i = 0; i < toRaise; i++) {
+    try {
+      await incrementUnreadCount(db, accountId, conversationId);
+      result.unreadRaised += 1;
+    } catch {
+      result.failedSteps.push("unread");
+      break;
     }
   }
   return result;

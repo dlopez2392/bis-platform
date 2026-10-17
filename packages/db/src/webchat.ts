@@ -50,7 +50,7 @@ export async function listWebchatKeys(db: SupabaseClient, accountId: string, con
 }
 
 export async function syncWebchatTurns(
-  db: SupabaseClient, accountId: string, chatId: string, opts: { raiseUnread: boolean; now?: Date },
+  db: SupabaseClient, accountId: string, chatId: string, opts: { now?: Date } = {},
 ): Promise<WebchatSyncResult> {
   let chat: Awaited<ReturnType<typeof getConciergeConversation>>;
   try {
@@ -88,7 +88,7 @@ export async function syncWebchatTurns(
       matchedExisting: thread.matchedExisting, leadAt: thread.leadAt, now: (opts.now ?? new Date()).toISOString(),
     });
     if (rows.length === 0) return { outcome: "nothing_new" };
-    return { outcome: "filed", result: await fileWebchatTurns(db, accountId, thread.conversationId, rows, { raiseUnread: opts.raiseUnread }) };
+    return { outcome: "filed", result: await fileWebchatTurns(db, accountId, thread.conversationId, rows) };
   } catch {
     return { outcome: "failed", stage: "write" };
   }

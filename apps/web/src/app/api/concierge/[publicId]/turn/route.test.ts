@@ -1259,24 +1259,24 @@ describe("POST /api/concierge/[publicId]/turn — a lead's chat files on the cus
   const LEAD = { fullName: "Ana", phone: "9565550100", need: "a table" };
   const filedEarlier = () => dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, submission_id: "s0" });
 
-  it("a turn that files the lead schedules ONE sync in after(), for this account and chat, without unread (the lead was not on file when the turn started) (mutation: drop the sync → not called, FAILS; raiseUnread: filed → true, FAILS)", async () => {
+  it("a turn that files the lead schedules ONE sync in after(), for this account and chat, with no unread flag: the sync decides unread per row (final review P1; mutation: drop the sync → not called, FAILS; pass a caller flag again → a fourth argument, FAILS)", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
     const res = await laterTurn();
     expect(res.status).toBe(200);
     expect(dbFns.syncWebchatTurns).not.toHaveBeenCalled();
     await flushAfter();
     expect(dbFns.syncWebchatTurns).toHaveBeenCalledTimes(1);
-    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1", { raiseUnread: false });
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
   });
 
-  it("a lead filed on an earlier turn: every later turn syncs, with unread allowed (spec §4; mutation: sync only when filed THIS turn → not called, FAILS)", async () => {
+  it("a lead filed on an earlier turn: every later turn syncs, the same three arguments (spec §4; mutation: sync only when filed THIS turn → not called, FAILS)", async () => {
     filedEarlier();
     await laterTurn();
     await flushAfter();
-    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1", { raiseUnread: true });
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
   });
 
-  it("another tab filed it first: this turn syncs too, without unread (route.ts:567-568; mutation: sync on outcome 'filed' only → not called, FAILS)", async () => {
+  it("another tab filed it first: this turn syncs too (route.ts:567-568; mutation: sync on outcome 'filed' only → not called, FAILS)", async () => {
     dbFns.setConciergeSubmission.mockResolvedValue(false);
     dbFns.getConciergeConversation
       .mockResolvedValueOnce({ ...CONVERSATION })
@@ -1284,7 +1284,7 @@ describe("POST /api/concierge/[publicId]/turn — a lead's chat files on the cus
     fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
     await laterTurn();
     await flushAfter();
-    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1", { raiseUnread: false });
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", "c1");
   });
 
   it("no lead on file, or a held capture: no sync (decision 1; mutation: sync on every answered turn → FAILS)", async () => {
@@ -1356,6 +1356,21 @@ describe("POST /api/concierge/[publicId]/turn — a lead's chat files on the cus
     expect(dbFns.claimConciergeTurn).toHaveBeenCalledWith(expect.anything(), STORED, CONCIERGE_MAX_TURNS);
     expect(dbFns.appendConciergeTurns).toHaveBeenCalledWith(expect.anything(), STORED, expect.any(Array));
     await flushAfter();
-    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED, { raiseUnread: true });
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED);
+  });
+
+  it("the same spelling on the chat's first answered turn, which also files the lead: the usage ledger's source and the lead's claimed slot carry the STORED id too (Task 4 M1; mutations: sourceRef from priorId → 'conversation:0B7E…', FAILS; fileLead's conversationId from priorId → setConciergeSubmission gets the upper-case spelling, FAILS)", async () => {
+    const STORED = "0b7e3c2a-9f41-4d6e-8a52-3c1d9e7f6a10";
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, id: STORED });
+    fetchMock.mockResolvedValue(modelCallsCaptureLead(LEAD));
+    const res = await laterTurn({ conversationId: STORED.toUpperCase() });
+    expect(res.status).toBe(200);
+    // fileLead is the real one (lib/concierge/lead.ts): the slot it claims is keyed on the id it was given.
+    expect(dbFns.setConciergeSubmission).toHaveBeenCalledTimes(1);
+    expect(dbFns.setConciergeSubmission).toHaveBeenCalledWith(expect.anything(), STORED, expect.any(String));
+    await flushAfter();
+    expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
+    expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ meter: "ai_chats", sourceRef: `conversation:${STORED}` }));
+    expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED);
   });
 });

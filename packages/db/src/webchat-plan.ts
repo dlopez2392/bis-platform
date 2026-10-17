@@ -18,9 +18,16 @@ export type PlannedWebchatRow = {
   createdAt: string;
   providerMessageId: string;
   meta: { webchat: WebchatRowMeta };
-  /** Plan G27: a VISITOR turn that arrived after the lead was on file (its `at` is later than the
-   *  submission's created_at). The writer raises unread for it only when the route also says the lead
-   *  was on file when the turn started (spec §4, G7). Sofía's turns never count. */
+  /** Plan G27, final review P1: a VISITOR turn that arrived after the lead was on file (its `at` is
+   *  later than the submission's created_at). This flag ALONE decides unread: the writer raises +1 for
+   *  every such row it actually inserts, whichever tab's sync inserts it. Sofía's turns never count.
+   *  Clock assumption: `at` is the APP's clock (the turn route stamps the visitor line at the request's
+   *  arrival) and created_at is Postgres's now(). The filing turn's line is stamped BEFORE the
+   *  capture_lead model call, so it precedes the submission by at least that call (seconds); a later
+   *  turn starts after the lead is filed. Both margins hold while the two clocks agree to well under a
+   *  second, which hosted NTP on both sides gives (milliseconds). Skew beyond the model call's length
+   *  would mis-count a filing-turn line as post-lead (one extra unread) or a quick next turn as pre-lead
+   *  (one missed). */
   countsUnread: boolean;
 };
 

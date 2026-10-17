@@ -315,7 +315,7 @@ describe("the chats source and Last talked (S-06 part 3, spec §7, G20-G22)", ()
     const sub = await createSubmission(db, accountId, form.id, { answers: [], authorKind: "ai" });
     await linkSubmissionContact(db, accountId, sub.id, contactId);
     expect(await setConciergeSubmission(db, chat.id, sub.id)).toBe(true);
-    expect((await syncWebchatTurns(db, accountId, chat.id, { raiseUnread: false })).outcome).toBe("filed");
+    expect((await syncWebchatTurns(db, accountId, chat.id)).outcome).toBe("filed");
     return chat.id;
   }
   const chatsOf = (items: TimelineEntry[]) => items.flatMap((i) => (i.kind === "chat" ? [i] : []));
@@ -330,7 +330,7 @@ describe("the chats source and Last talked (S-06 part 3, spec §7, G20-G22)", ()
       expect(first[0]!.chat.matchedExisting).toBe(true);
       expect(Date.parse(first[0]!.at)).toBe(Date.parse(SOON(0)));
       await appendConciergeTurns(db, chatId, chatTurns(2, 50));
-      await syncWebchatTurns(db, accountId, chatId, { raiseUnread: true });
+      await syncWebchatTurns(db, accountId, chatId);
       const later = chatsOf((await listContactTimelinePage(db, accountId, ana)).items);
       expect(later.map((e) => [e.id, e.at, e.chat.count])).toEqual([[first[0]!.id, first[0]!.at, 8]]);
     }));
