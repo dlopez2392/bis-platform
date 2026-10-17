@@ -15,9 +15,14 @@
 -- APPLY ORDER: CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
 -- apply_migration, once), then the parity check, then merge. Purely additive: safe for the build
 -- before it, which never reads this table. The app that reads it must not run before this file
--- (every inbound email would answer 503 on the list read).
+-- (every inbound email would answer 503 on the list read). Without this file every contact
+-- delete that reaches the empty-conversation cleanup also fails, and fails safely: the
+-- delete_empty_conversations RPC (section 3) errors, deleteContacts throws, and that happens
+-- BEFORE any file purge or contact delete runs, so nothing is lost; the customer stays.
 --
--- Rollback (by hand; revert the app first): drop table public.inbound_never_log;
+-- Rollback (by hand; revert the app first):
+--   drop function public.delete_empty_conversations(uuid, uuid[]);
+--   drop table public.inbound_never_log;
 --   Lost: every account's Never record entries.
 --
 -- ASCII only, no backslash anywhere.
