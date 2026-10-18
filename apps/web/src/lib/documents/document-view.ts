@@ -26,9 +26,12 @@ export async function documentsClock(db: SupabaseClient, accountId: string, now:
 
 /**
  * The author's Clerk id never leaves the server: the card gets "you", a name, or null ("Someone on the
- * team"). `addedOn` is the day the file was added, in the account's `zone`.
+ * team"). `addedOn` is the day the file was added, in the account's `zone`. `shareExpiresAt` (S-07 3b) is
+ * the latest expiry of the file's live share links; the view carries `share` ONLY when there is one.
  */
-export function documentView(d: ListedDocument, viewerId: string, names: Readonly<Record<string, string>>, zone: string): DocumentView {
+export function documentView(
+  d: ListedDocument, viewerId: string, names: Readonly<Record<string, string>>, zone: string, shareExpiresAt: string | null = null,
+): DocumentView {
   const you = d.created_by === viewerId;
   // S-07 2a (plan deviation 1): what opens is the newest CLEAN version (d.versions is newest first);
   // with none clean, the row describes the newest ready version and its state.
@@ -42,6 +45,7 @@ export function documentView(d: ListedDocument, viewerId: string, names: Readonl
     versions: d.versions.map((v) => ({
       id: v.id, contentType: v.content_type, bytes: v.bytes, createdAt: v.created_at, addedOn: dayKeyInZone(new Date(v.created_at), zone), scan: viewScan(v),
     })),
+    ...(shareExpiresAt ? { share: { expiresAt: shareExpiresAt } } : {}),
   };
 }
 

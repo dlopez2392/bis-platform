@@ -103,6 +103,8 @@ const ALLOWED: Record<string, Reason> = {
   // readGroup / getDocumentRequest under 0080's RLS); the target and the channels on offer are read there too,
   // ledgerDb for the consent state only after that proof, and only then the service client's writes.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requests-actions.ts": "proven-target",
+  // S-07 3b: share links; the document is read on the request client first.
+  "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-shares-actions.ts": "proven-target",
   // The required-documents checklist (S-07 2c): every skip write follows a request-client read of the contact,
   // the account's list and the skip row (0081's RLS), and a role check; the Undo is the actor's own.
   "app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-requirements-actions.ts": "proven-target",
