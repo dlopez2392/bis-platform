@@ -41,16 +41,18 @@ export async function createDocumentShare(db: SupabaseClient, a: {
   }).select(SHARE_COLS).single();
   if (error) throw new Error(`createDocumentShare failed: ${error.message}`);
   const row = data as DocumentShareRow;
-  const drop = async () => {
+  /** `cause`: the failure that made the withdraw necessary, kept on a failed withdraw's error. */
+  const drop = async (cause?: Error) => {
     const { error: delErr } = await db.from("document_shares").delete().eq("account_id", a.accountId).eq("id", row.id);
-    if (delErr) throw new Error(`createDocumentShare (withdraw ${row.id}) failed: ${delErr.message}`);
+    if (delErr) throw new Error(`createDocumentShare (withdraw ${row.id}) failed: ${delErr.message}`, cause ? { cause } : undefined);
   };
   const { data: still, error: checkErr } = await db.from("documents").select("id")
     .eq("account_id", a.accountId).eq("id", a.documentId).eq("owners_only", a.ownersOnly).is("deleted_at", null).maybeSingle();
   if (checkErr) {
     // The link never leaves this function unproved: withdraw it before failing.
-    await drop();
-    throw new Error(`createDocumentShare (check) failed: ${checkErr.message}`);
+    const failed = new Error(`createDocumentShare (check) failed: ${checkErr.message}`);
+    await drop(failed);
+    throw failed;
   }
   if (!still) {
     await drop();
@@ -165,17 +167,18 @@ export async function restoreDocumentShares(db: SupabaseClient, a: {
   if (error) throw new Error(`restoreDocumentShares failed: ${error.message}`);
   const restored = ((data ?? []) as { id: string }[]).map((r) => r.id);
   if (restored.length === 0) return { status: "restored", count: 0 };
-  const reRevoke = async () => {
+  /** `cause`: the failure that made the re-revoke necessary, kept on a failed re-revoke's error. */
+  const reRevoke = async (cause?: Error) => {
     const { error: backErr } = await db.from("document_shares").update({ revoked_at: a.revokedAt, revoked_by: a.actorId })
       .eq("account_id", a.accountId).eq("document_id", a.documentId).in("id", restored).is("revoked_at", null);
-    if (backErr) throw new Error(`restoreDocumentShares (re-revoke) failed: ${backErr.message}`);
+    if (backErr) throw new Error(`restoreDocumentShares (re-revoke) failed: ${backErr.message}`, cause ? { cause } : undefined);
   };
   let holds: boolean;
   try {
     holds = await fileHolds("after");
   } catch (e) {
     // Unproved: stop them again before failing.
-    await reRevoke();
+    await reRevoke(e as Error);
     throw e;
   }
   if (!holds) {
@@ -195,7 +198,8 @@ export async function claimDocumentShareDownload(db: SupabaseClient, a: {
     p_account_id: a.accountId, p_share_id: a.shareId, p_ip_hash: a.ipHash, p_max: a.max, p_window_seconds: a.windowSeconds, p_link_max: a.linkMax,
   });
   if (error) throw new Error(`claimDocumentShareDownload failed: ${error.message}`);
-  const r = data as { status: string; first?: unknown };
+  const r = data as { status: string; first?: unknown } | null;
+  if (r === null || typeof r !== "object") throw new Error(`claimDocumentShareDownload: unexpected answer ${JSON.stringify(r)}`);
   if (r.status === "ok" && typeof r.first === "boolean") return { status: "ok", first: r.first };
   if (r.status === "not_found" || r.status === "closed" || r.status === "rate_limited") return { status: r.status };
   throw new Error(`claimDocumentShareDownload: unexpected answer ${JSON.stringify(r.status)}`);
@@ -206,6 +210,7 @@ export type ReadyVersionScan = { id: string; scan_status: ScanStatus; created_at
 export async function listReadyVersionScans(db: SupabaseClient, accountId: string, documentId: string): Promise<ReadyVersionScan[]> {
   const { data, error } = await db.from("document_versions").select("id, scan_status, created_at")
     .eq("account_id", accountId).eq("document_id", documentId).eq("status", "ready")
+    // 200 matches documentView only for a document with at most 200 ready versions (unreachable today).
     .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(200);
   if (error) throw new Error(`listReadyVersionScans failed: ${error.message}`);
   return (data ?? []) as ReadyVersionScan[];

@@ -76,36 +76,44 @@ function queriesOn(db: SupabaseClient, table: string) {
   return { db: wrapped, calls: () => n };
 }
 /** Wraps a query builder so that awaiting it first runs `hook`; every chained call stays wrapped. */
-function hooked<T extends object>(b: T, hook: () => Promise<void>): T {
+function hooked<T extends object>(b: T, hook: () => Promise<void>, answer?: unknown): T {
   return new Proxy(b, {
     get(target, prop, receiver) {
       const v = Reflect.get(target, prop, receiver) as unknown;
       if (prop === "then") {
+        if (answer !== undefined) return (ok: (x: unknown) => unknown) => Promise.resolve(answer).then(ok);
         return (ok: (x: unknown) => unknown, bad: (e: unknown) => unknown) =>
           hook().then(() => (target as unknown as PromiseLike<unknown>).then(ok, bad), bad);
       }
       if (typeof v !== "function") return v;
       return (...args: unknown[]) => {
         const out = (v as (...a: unknown[]) => unknown).apply(target, args);
-        return out !== null && typeof out === "object" ? hooked(out as object, hook) : out;
+        return out !== null && typeof out === "object" ? hooked(out as object, hook, answer) : out;
       };
     },
   });
 }
-/** A client whose FIRST query on `table` runs `hook` just before it is sent: a write that lands in between. */
-function beforeFirstQueryOn(db: SupabaseClient, table: string, hook: () => Promise<void>): SupabaseClient {
-  let used = false;
+/** A client whose Nth query (1-based) on `table` is replaced by `wrap`; every other query passes through. */
+function onNthQuery(db: SupabaseClient, table: string, nth: number, wrap: (b: object) => object): SupabaseClient {
+  let n = 0;
   return new Proxy(db, {
     get(target, prop, receiver) {
       if (prop !== "from") return Reflect.get(target, prop, receiver);
       return (t: string) => {
-        if (t !== table || used) return target.from(t);
-        used = true;
-        return hooked(target.from(t), hook);
+        if (t !== table) return target.from(t);
+        n += 1;
+        return n === nth ? wrap(target.from(t)) : target.from(t);
       };
     },
   });
 }
+/** The Nth query on `table` runs `hook` just before it is sent: a write that lands in between. */
+const beforeNthQueryOn = (db: SupabaseClient, table: string, nth: number, hook: () => Promise<void>) =>
+  onNthQuery(db, table, nth, (b) => hooked(b, hook));
+const beforeFirstQueryOn = (db: SupabaseClient, table: string, hook: () => Promise<void>) => beforeNthQueryOn(db, table, 1, hook);
+/** The Nth query on `table` is never sent and answers PostgREST's error shape. */
+const failNthQueryOn = (db: SupabaseClient, table: string, nth: number) =>
+  onNthQuery(db, table, nth, (b) => hooked(b, async () => { throw new Error("unreachable"); }, { data: null, error: { message: "injected failure" } }));
 
 describe("document-shares: create and find (spec 4.1)", () => {
   it("stores the hash, expires exactly 24 h on, and finds the row by that hash only (mutation: store tokenHash.toUpperCase() -> the insert FAILS the shape check)", () =>
@@ -122,23 +130,25 @@ describe("document-shares: create and find (spec 4.1)", () => {
       expect(await findDocumentShareByTokenHash(db, hash())).toBeNull();
     }));
 
-  it("refuses to store a share when the document's Owners-only setting is no longer what the action read, and stores nothing (O2 race; mutation: drop the post-insert check -> FAILS)", () =>
+  it("refuses to store a share when the document's Owners-only setting is no longer what the action read, and stores nothing, leaving the file's other links alone (O2 race; mutations: drop the post-insert check; withdraw by document_id, not the row id -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const d = await cleanDoc(db, accountId);
+      // Another link of the same file, already stored: withdrawing the refused one must not touch it.
+      const sibling = await share(db, accountId, d);
       // An Owner switched the file to Owners only after the Staff action's read (which saw false).
       expect(await setDocumentOwnersOnly(db, accountId, d.documentId, true)).toBe("updated");
       const r = await createDocumentShare(db, {
         accountId, documentId: d.documentId, versionId: d.versionId, tokenHash: hash(), createdBy: ACTOR, ownersOnly: false, now: new Date(),
       });
       expect(r).toEqual({ status: "changed" });
-      expect(await storedShares(db, accountId, d.documentId)).toEqual([]);
+      expect(await storedShares(db, accountId, d.documentId)).toEqual([sibling.id]);
       // The value the action read still holds: stored.
       const ok = await createDocumentShare(db, {
         accountId, documentId: d.documentId, versionId: d.versionId, tokenHash: hash(), createdBy: ACTOR, ownersOnly: true, now: new Date(),
       });
       expect(ok.status).toBe("ok");
       if (ok.status !== "ok") return;
-      expect(await storedShares(db, accountId, d.documentId)).toEqual([ok.share.id]);
+      expect((await storedShares(db, accountId, d.documentId)).sort()).toEqual([sibling.id, ok.share.id].sort());
     }));
 
   it("refuses to store a share of a document that went to the trash after the action's read (mutation: drop .is('deleted_at', null) from the check -> FAILS)", () =>
@@ -150,6 +160,57 @@ describe("document-shares: create and find (spec 4.1)", () => {
       });
       expect(r).toEqual({ status: "changed" });
       expect(await storedShares(db, accountId, d.documentId)).toEqual([]);
+    }));
+});
+
+describe("document-shares: the compensations when a check itself fails (fail closed)", () => {
+  it("create: a failed check withdraws the new share before throwing (mutation: drop the withdraw in the check-error branch -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      const broken = failNthQueryOn(db, "documents", 1);
+      await expect(createDocumentShare(broken, {
+        accountId, documentId: d.documentId, versionId: d.versionId, tokenHash: hash(), createdBy: ACTOR, ownersOnly: false, now: new Date(),
+      })).rejects.toThrow("createDocumentShare (check) failed: injected failure");
+      expect(await storedShares(db, accountId, d.documentId)).toEqual([]);
+    }));
+
+  it("create: when the withdraw ALSO fails, the error names both and keeps the check's as its cause (mutation: throw only the check's error -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      // document_shares query 1 is the insert, 2 is the withdraw.
+      const broken = failNthQueryOn(failNthQueryOn(db, "documents", 1), "document_shares", 2);
+      const e = await createDocumentShare(broken, {
+        accountId, documentId: d.documentId, versionId: d.versionId, tokenHash: hash(), createdBy: ACTOR, ownersOnly: false, now: new Date(),
+      }).then(() => null, (x: unknown) => x as Error);
+      expect(e?.message).toMatch(/^createDocumentShare \(withdraw [0-9a-f-]{36}\) failed: injected failure$/);
+      expect((e?.cause as Error | undefined)?.message).toBe("createDocumentShare (check) failed: injected failure");
+    }));
+
+  it("restore: a failed check after the restore revokes the restored rows again before throwing (mutation: drop the re-revoke in the catch -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      // documents query 1 is the check before, 2 the check after.
+      const broken = failNthQueryOn(db, "documents", 2);
+      await expect(restoreDocumentShares(broken, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      })).rejects.toThrow("restoreDocumentShares (check after) failed: injected failure");
+      expect(await revokedPairs(db, r.ids)).toEqual([[Date.parse(r.revokedAt), ACTOR]]);
+    }));
+
+  it("restore: when the re-revoke ALSO fails, the error names both and keeps the check's as its cause (mutation: throw only the check's error -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      // document_shares query 1 is the restore, 2 the re-revoke.
+      const broken = failNthQueryOn(failNthQueryOn(db, "documents", 2), "document_shares", 2);
+      const e = await restoreDocumentShares(broken, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      }).then(() => null, (x: unknown) => x as Error);
+      expect(e?.message).toBe("restoreDocumentShares (re-revoke) failed: injected failure");
+      expect((e?.cause as Error | undefined)?.message).toBe("restoreDocumentShares (check after) failed: injected failure");
     }));
 });
 
@@ -197,7 +258,7 @@ describe("document-shares: the shared target (spec 6)", () => {
 });
 
 describe("document-shares: the card's live line, stop and undo (spec 4.1; plan deviation 3)", () => {
-  it("answers each file's LATER live expiry; revoked, expired and another contact's shares are absent (mutation: drop .is('revoked_at', null) -> FAILS)", () =>
+  it("answers each file's LATER live expiry; revoked, expired, trashed and another contact's shares are absent (mutations: drop .is('revoked_at', null); drop .is('deleted_at', null) -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const now = new Date();
       const d = await cleanDoc(db, accountId);
@@ -211,6 +272,10 @@ describe("document-shares: the card's live line, stop and undo (spec 4.1; plan d
       expect((await revokeDocumentShares(db, accountId, quiet.documentId, ACTOR, now))?.ids).toHaveLength(1);
       const theirs = await cleanDoc(db, accountId);
       await share(db, accountId, theirs);
+      // A third file of the same contact, with a live share, in the trash.
+      const binned = await cleanDoc(db, accountId, { contactId: d.contactId });
+      await share(db, accountId, binned);
+      expect((await trashDocument(db, accountId, binned.documentId, ACTOR)).status).toBe("trashed");
       expect(await listLiveDocumentShares(db, accountId, { kind: "contact", id: d.contactId }, now))
         .toEqual({ [d.documentId]: late.expires_at });
     }));
@@ -286,22 +351,43 @@ describe("document-shares: the card's live line, stop and undo (spec 4.1; plan d
       expect(await revokedPairs(db, r.ids)).toEqual([[Date.parse(r.revokedAt), ACTOR]]);
     }));
 
-  it("re-revokes exactly the rows it restored when the file goes Owners only DURING the Undo (the race; mutation: drop the check after the restore -> FAILS)", () =>
+  it("re-revokes exactly the rows it restored when the file goes Owners only DURING the Undo (the race; mutations: drop the check after the restore; re-revoke a.ids, not the restored rows -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const d = await cleanDoc(db, accountId);
       await share(db, accountId, d);
       await share(db, accountId, d);
       const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      // An id in the Undo's list that this restore does not restore (a link live since): never touched.
+      const untouched = await share(db, accountId, d);
       // The Owner's switch commits after the Undo's first check passed and before its restore is sent.
       const raced = beforeFirstQueryOn(db, "document_shares", async () => {
         expect(await setDocumentOwnersOnly(db, accountId, d.documentId, true)).toBe("updated");
       });
       expect(await restoreDocumentShares(raced, {
-        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+        accountId, documentId: d.documentId, ids: [...r.ids, untouched.id], revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
       })).toEqual({ status: "changed" });
       const at = Date.parse(r.revokedAt);
       expect(await revokedPairs(db, r.ids)).toEqual([[at, ACTOR], [at, ACTOR]]);
-      expect(await listLiveDocumentShares(db, accountId, { kind: "contact", id: d.contactId }, new Date())).toEqual({});
+      expect(await revokedPairs(db, [untouched.id])).toEqual([[null, null]]);
+    }));
+
+  it("keeps the Owner's own stop when the Owner's switch AND revoke land between the restore and the check after it (mutation: re-revoke without .is('revoked_at', null) -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      const OWNER = "user_owner";
+      const owner: { stop: { ids: string[]; revokedAt: string } | null } = { stop: null };
+      // documents query 2 is the check after the restore: O2's action (switch, then revoke) commits just before it.
+      const raced = beforeNthQueryOn(db, "documents", 2, async () => {
+        expect(await setDocumentOwnersOnly(db, accountId, d.documentId, true)).toBe("updated");
+        owner.stop = await revokeDocumentShares(db, accountId, d.documentId, OWNER, new Date(Date.parse(r.revokedAt) + 1000));
+      });
+      expect(await restoreDocumentShares(raced, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      })).toEqual({ status: "changed" });
+      expect(owner.stop!.ids).toEqual(r.ids);
+      expect(await revokedPairs(db, r.ids)).toEqual([[Date.parse(owner.stop!.revokedAt), OWNER]]);
     }));
 
   it("restores the links of a file an Owner shared while it was ALREADY Owners only (spec 4.1 lets Owners share such a file; mutation: refuse every Owners-only file -> FAILS)", () =>
@@ -335,6 +421,14 @@ describe("document-shares: the download claim (0085; spec 4.2, 4.3)", () => {
       await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date());
       expect(await claim(IP_A)).toEqual({ status: "closed" });
     }));
+
+  it("throws its own error when the RPC answers no data (mutation: read r.status without the guard -> a TypeError FAILS)", async () => {
+    const nullRpc = new Proxy({} as SupabaseClient, {
+      get: (_t, prop) => (prop === "rpc" ? async () => ({ data: null, error: null }) : undefined),
+    });
+    await expect(claimDocumentShareDownload(nullRpc, { accountId: crypto.randomUUID(), shareId: crypto.randomUUID(), ipHash: IP_A, ...LIMITS }))
+      .rejects.toThrow("claimDocumentShareDownload: unexpected answer null");
+  });
 
   it("passes the per-address window: max 1 refuses a second download from the same address (mutation: send p_max: 5 always -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
