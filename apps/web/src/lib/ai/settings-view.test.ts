@@ -1,0 +1,79 @@
+import { describe, it, expect } from "vitest";
+import { aiCardView, isConfirmWord, parseBudgetDollars } from "./settings-view";
+
+/** Spec 3.6; plan deviations 15, 17. Intl outputs read with node (plan, "Read, not assumed"). */
+const NOW = new Date("2026-10-18T15:00:00Z");
+const ZONE = "America/Chicago";
+const settings = (o: Partial<Parameters<typeof aiCardView>[0]["settings"]> = {}) =>
+  ({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 0, globalEnabled: true, ...o });
+
+describe("parseBudgetDollars (plan deviation 17)", () => {
+  it.each([["10", 1000], ["$25", 2500], [" 1000 ", 100000], ["0", 0], ["$ 7", 700]])("%j -> %i cents", (raw, cents) => {
+    expect(parseBudgetDollars(raw)).toBe(cents);
+  });
+  it.each(["", "abc", "1001", "-5", "10.50", "1e3", "12345", null, 25])("%j -> refused (mutation: allow cents or drop the 1000 cap -> FAILS)", (raw) => {
+    expect(parseBudgetDollars(raw)).toBeNull();
+  });
+});
+
+describe("isConfirmWord (choice I12)", () => {
+  it("OFF or APAGAR, trimmed, any case; nothing else (mutation: accept any non-empty text -> FAILS)", () => {
+    expect([isConfirmWord("OFF"), isConfirmWord(" off "), isConfirmWord("apagar"), isConfirmWord("of"), isConfirmWord(""), isConfirmWord(undefined)])
+      .toEqual([true, true, true, false, false, false]);
+  });
+});
+
+describe("aiCardView (spec 3.6)", () => {
+  it("this month's spend in words, rounded up to the cent, in both languages (mutation: Math.floor -> $1.83 -> FAILS)", () => {
+    const v = (locale: "en" | "es") => aiCardView({ settings: settings({ monthSpendMicroUsd: 1_830_001 }), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale });
+    expect([v("en").spendLine, v("es").spendLine]).toEqual(["$1.84 of $10.00 this month, estimated", "$1.84 de $10.00 este mes, estimado"]);
+  });
+
+  it("no use this month is the empty state, even with spend stored for LAST month (mutation: ignore monthKey -> FAILS)", () => {
+    const v = aiCardView({ settings: settings({ monthKey: "2026-09", monthSpendMicroUsd: 5_000_000 }), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale: "en" });
+    expect([v.spendLine, v.reachedLine, v.skippedLine]).toEqual([null, null, null]);
+  });
+
+  it("budget reached names the day it happened and the 1st it resumes, in the account's zone (plan deviation 15; mutation: resume on the 1st in UTC -> FAILS)", () => {
+    const v = (locale: "en" | "es", at: string | null) => aiCardView({ settings: settings({ monthSpendMicroUsd: 10_000_000 }), refusals: 2, overBudgetAt: at, now: NOW, zone: ZONE, locale });
+    expect([v("en", "2026-10-14T15:00:00Z").reachedLine, v("es", "2026-10-14T15:00:00Z").reachedLine]).toEqual([
+      "Budget reached on Oct 14. AI is paused for this account until Nov 1.",
+      "Presupuesto alcanzado el 14 oct. La IA está en pausa en esta cuenta hasta el 1 nov.",
+    ]);
+    expect(v("en", null).reachedLine).toBe("Budget reached. AI is paused for this account until Nov 1.");
+  });
+
+  it("the resume day is the 1st of next month even where that 1st has no local midnight, and across a year end (review M4; mutation: the old monthStartInZone(+32 days) arithmetic printed in the zone -> FAILS on Asuncion)", () => {
+    const resume = (now: string, zone: string) =>
+      aiCardView({ settings: settings({ monthKey: null, monthSpendMicroUsd: 0, monthlyBudgetCents: 0 }), refusals: 0, overBudgetAt: null, now: new Date(now), zone, locale: "en" }).reachedLine;
+    // America/Asuncion sprang forward AT local midnight on 2023-10-01 (00:00 -> 01:00, read with node 24): that
+    // day's midnight does not exist, which is what the old arithmetic tripped on.
+    expect(resume("2023-09-15T12:00:00Z", "America/Asuncion")).toBe("Budget reached. AI is paused for this account until Oct 1.");
+    // America/Santiago's 2026 changes fall on Apr 4/5 and Sep 5/6 (not on a 1st): kept as ordinary-month rows.
+    expect(resume("2026-09-05T12:00:00Z", "America/Santiago")).toBe("Budget reached. AI is paused for this account until Oct 1.");
+    expect(resume("2026-04-04T12:00:00Z", "America/Santiago")).toBe("Budget reached. AI is paused for this account until May 1.");
+    // Year end: 21:00 on Dec 31 in Chicago is already January in UTC, so a resume built from the UTC month would
+    // read Feb 1; the account's own month says Jan 1 (mutation: build the resume from periodKeys(now, "UTC") -> FAILS).
+    expect(resume("2027-01-01T03:00:00Z", ZONE)).toBe("Budget reached. AI is paused for this account until Jan 1.");
+    // Year end where the zone is still December and the resume must not read as the same year's January.
+    expect(resume("2026-12-15T12:00:00Z", "America/Asuncion")).toBe("Budget reached. AI is paused for this account until Jan 1.");
+  });
+
+  it("one micro-dollar under the budget is not reached (mutation: `>` -> `>=` on budget - 1 -> FAILS)", () => {
+    expect(aiCardView({ settings: settings({ monthSpendMicroUsd: 9_999_999 }), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale: "en" }).reachedLine).toBeNull();
+  });
+
+  it("how often AI was skipped, once and many (choice I10; mutation: drop the One form -> FAILS)", () => {
+    const v = (n: number, locale: "en" | "es") => aiCardView({ settings: settings(), refusals: n, overBudgetAt: null, now: NOW, zone: ZONE, locale }).skippedLine;
+    expect([v(1, "en"), v(3, "es"), v(0, "en")]).toEqual([
+      "AI was skipped once this month because it was off or over budget.",
+      "La IA se omitió 3 veces este mes porque estaba apagada o sin presupuesto.",
+      null,
+    ]);
+  });
+
+  it("the switches and the budget as the field shows it (mutation: budgetDollars in cents -> FAILS)", () => {
+    const v = aiCardView({ settings: settings({ accountEnabled: false, monthlyBudgetCents: 2500, globalEnabled: false }), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale: "en" });
+    expect([v.accountEnabled, v.budgetDollars, v.globalEnabled]).toEqual([false, "25", false]);
+  });
+});

@@ -134,6 +134,7 @@ const ALLOWED: Record<string, Reason> = {
   // account's own Owner) proves the caller before any service write, every write scoped by account_id.
   "app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/actions.ts": "agency-only",
+  "app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-actions.ts": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-section.tsx": "agency-only",
   // The required-documents list (S-07 2c): an Owner or the agency only (canManage), one account column.
