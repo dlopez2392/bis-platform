@@ -89,8 +89,9 @@ export default async function DocumentsPage({ params, searchParams }: {
     filedOn: filedOnView(accountId, d, noName),
   }));
   const pager = documentsPagerHrefs(base, q, hasMore, page[page.length - 1]);
+  const anyTypeHref = documentsHref(base, { show: q.show, category: null });
   const categories = [
-    { value: "", label: tr.text("documents.page.category.any"), href: documentsHref(base, { show: q.show, category: null }) },
+    { value: "", label: tr.text("documents.page.category.any"), href: anyTypeHref },
     ...DOCUMENT_CATEGORIES.map((c: DocumentCategory) => ({
       value: c, label: tr.text(`documents.category.${c}` as MessageKey), href: documentsHref(base, { show: q.show, category: c }),
     })),
@@ -130,8 +131,17 @@ export default async function DocumentsPage({ params, searchParams }: {
         ) : null}
         {page.length === 0 && !q.cursor ? (
           // The cold start: page one with nothing on it. A cursored zero is real history with nothing past the
-          // cursor: no empty state, just the start link below (contacts/page.tsx's rule).
-          <EmptyState icon={FolderOpen} title={tr.text(empty.title)} body={empty.body ? tr.text(empty.body) : undefined} />
+          // cursor: no empty state, just the start link below (contacts/page.tsx's rule). With a category
+          // chosen, every show says the same thing: nothing of that type, and the way back to Any type.
+          q.category ? (
+            <EmptyState icon={FolderOpen} title={tr.text("documents.page.empty.category")} action={
+              <Link href={anyTypeHref} className={cn(buttonVariants({ variant: "outline", size: "sm" }), "min-h-11 md:min-h-8")}>
+                {tr.text("documents.page.empty.categoryAction")}
+              </Link>
+            } />
+          ) : (
+            <EmptyState icon={FolderOpen} title={tr.text(empty.title)} body={empty.body ? tr.text(empty.body) : undefined} />
+          )
         ) : (
           <DocumentsList accountId={accountId} locale={locale} today={clock.today} now={new Date().toISOString()} rows={views} />
         )}

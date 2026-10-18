@@ -136,6 +136,38 @@ describe("the Documents page (spec 3.1)", () => {
     expect(text).toContain(title);
     if (body) expect(text).toContain(body);
     expect(html).not.toContain("data-list-mock");
+    // No category chosen: never the category sentence (mutation: show it whatever the category -> FAILS).
+    expect(text).not.toContain("Nothing of this type here.");
+  });
+
+  it.each(["expiring", "expired", "all"] as const)("an empty cold start on %s WITH a category says so once and links to Any type (mutation: drop the category check -> the show's own empty state -> FAILS)", async (show) => {
+    listAccountDocuments.mockResolvedValue([]);
+    countAccountDocuments.mockResolvedValue(0);
+    const html = await render({ show, category: "permit" });
+    const text = renderedText(html);
+    expect(text).toContain("Nothing of this type here.");
+    expect(linkHref(html, "Choose Any type to see every file.")).toBe(`/dashboard/accounts/a1/documents?show=${show}`);
+    for (const other of ["Nothing expires in the next 30 days.", "Nothing has expired.", "Files you upload to a customer or household show up here."]) {
+      expect(text).not.toContain(other);
+    }
+    expect(html).not.toContain("data-list-mock");
+  });
+
+  it("the category empty state reads Spanish when the reader does, with the same Any type href", async () => {
+    prefs.mockResolvedValue({ language: "es" });
+    listAccountDocuments.mockResolvedValue([]);
+    countAccountDocuments.mockResolvedValue(0);
+    const html = await render({ show: "expired", category: "insurance" });
+    expect(renderedText(html)).toContain("No hay nada de este tipo aquí.");
+    expect(linkHref(html, "Elija Cualquier tipo para ver todos los archivos.")).toBe("/dashboard/accounts/a1/documents?show=expired");
+    expect(renderedText(html)).not.toContain("Nothing of this type here.");
+  });
+
+  it("a cursored empty page with a category shows the start link and NO empty state", async () => {
+    listAccountDocuments.mockResolvedValue([]);
+    countAccountDocuments.mockResolvedValue(3);
+    const html = await render({ show: "all", category: "permit", before: encodeCursor({ v: "2030-01-01T00:00:00.000Z", id: ID }) });
+    expect(renderedText(html)).not.toContain("Nothing of this type here.");
   });
 
   it("a cursored empty page shows the start link and NO empty state", async () => {

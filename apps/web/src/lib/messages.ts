@@ -4154,6 +4154,10 @@ export const m = {
   "documents.page.empty.expiringBody.es": "Los archivos con fecha de vencimiento aparecen aquí un mes antes.",
   "documents.page.empty.expired": "Nothing has expired.",
   "documents.page.empty.expired.es": "Nada ha vencido.",
+  "documents.page.empty.category": "Nothing of this type here.",
+  "documents.page.empty.category.es": "No hay nada de este tipo aquí.",
+  "documents.page.empty.categoryAction": "Choose Any type to see every file.",
+  "documents.page.empty.categoryAction.es": "Elija Cualquier tipo para ver todos los archivos.",
   "documents.page.loadFailed": "Couldn't load the documents list. Check your connection, then try again.",
   "documents.page.loadFailed.es": "No se pudo cargar la lista de documentos. Revise su conexión e intente de nuevo.",
   // S-07 3a: the expiry To-do's title, in the ACCOUNT's language (spec 3.2). {name} is the customer or the household.
