@@ -421,6 +421,13 @@ describe("what the model is given (spec 4.3; I6)", () => {
     expect(redactName("José Núñez llamó; la familia Nuñez otra vez", "José", "Núñez")).toBe("José llamó; la familia [name] otra vez");
   });
 
+  it("a straight and a curly apostrophe in a name are one character: stored O'Brien matches O’Brien and the other way round (final review M-c; mutation: escape the apostrophe as itself -> FAILS)", () => {
+    expect(redactName("Sean O’Brien called; Mrs. O’Brien later; the O’BRIEN family", "Sean", "O'Brien"))
+      .toBe("Sean called; Mrs. [name] later; the [name] family");
+    expect(redactName("Sean O'Brien called; Mrs. O'Brien later; O'Brien's fence", "Sean", "O’Brien"))
+      .toBe("Sean called; Mrs. [name] later; [name]'s fence");
+  });
+
   it("a compound last name: the whole, its final part, and the first of two parts, each in the cue positions (mutations: drop the final part -> 'Sr. Garza' FAILS; drop the first of two -> 'Sr. García' FAILS)", () => {
     expect(redactName("Ana de la Garza called; Sr. Garza later; the Garza family", "Ana", "de la Garza")).toBe("Ana called; Sr. [name] later; the [name] family");
     expect(redactName("Mrs. de la Garza's yard", null, "de la Garza")).toBe("Mrs. [name]'s yard");

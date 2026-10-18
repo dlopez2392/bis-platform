@@ -53,14 +53,17 @@ export function redactContactDetails(text: string): string {
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Accents off ("García" -> "Garcia"), so a stored name and a typed one match either way round. */
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{M}/gu, "");
-/** A name as a pattern: accent-folded, escaped, any run of spaces between its words. */
-const namePattern = (s: string): string => escapeRe(fold(s)).replace(/\s+/g, "\\s+");
+/** A straight and a curly apostrophe are one character in a name: stored O'Brien is typed O’Brien, and back. */
+const APOSTROPHE = "['’]";
+/** A name as a pattern: accent-folded, escaped, either apostrophe, any run of spaces between its words. */
+const namePattern = (s: string): string => escapeRe(fold(s)).replace(/['’]/g, APOSTROPHE).replace(/\s+/g, "\\s+");
 /** A name as an any-case pattern, accent-folded: "Ana María" -> "[aA][nN][aA]\s+[mM][aA][rR][iI][aA]". Spelled
  *  out rather than the `i` flag, because the patterns that use it also need a case-SENSITIVE `\p{Lu}`. */
 const anyCase = (s: string): string => fold(s).trim().split(/\s+/)
   .map((w) => [...w].map((ch) => {
     const lo = ch.toLowerCase();
     const up = ch.toUpperCase();
+    if (ch === "'" || ch === "’") return APOSTROPHE;
     return lo !== up && [...lo].length === 1 && [...up].length === 1 ? `[${lo}${up}]` : escapeRe(ch);
   }).join(""))
   .join("\\s+");
