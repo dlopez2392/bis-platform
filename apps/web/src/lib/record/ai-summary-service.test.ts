@@ -155,6 +155,12 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
     expect(calls.slice(-2)).toEqual([`save L1 SENTINEL-OUTPUT-7f3 booked. true ${NOW.toISOString()}`, "release L1"]);
     expect(logs).toEqual(["save failed; showing this answer, not storing it: Error: db down"]);
   });
+  it("a save AND its release that both throw: both are logged, and the paid answer is still ready (final review M-g; mutations: swallow the release error unlogged -> FAILS; let it reach the outer catch -> failed -> FAILS)", async () => {
+    const { d, calls, logs } = deps({ save: async () => { throw new Error("db down"); }, release: async () => { throw new Error("release down"); } });
+    expect(await serve(d)).toEqual({ state: "ready", text: "SENTINEL-OUTPUT-7f3 booked.", generatedAt: NOW.toISOString(), language: "es", stamp: `stamp ${NOW.toISOString()}` });
+    expect(calls.slice(-2)).toEqual([`save L1 SENTINEL-OUTPUT-7f3 booked. true ${NOW.toISOString()}`, "release L1"]);
+    expect(logs).toEqual(["save failed; showing this answer, not storing it: Error: db down", "lease release failed: Error: release down"]);
+  });
   it("a throw while the lease is held releases it in the outer catch, and a failed release there is logged (review I-2, M-1; probe m: drop the outer release -> FAILS)", async () => {
     const held = deps({ complete: async () => { throw new Error("boom"); } });
     expect(await serve(held.d)).toEqual({ state: "failed" });
