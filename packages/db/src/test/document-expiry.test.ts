@@ -2,19 +2,31 @@ import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
+import { createGroupWithMember } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks } from "../document-expiry";
 import { shiftDay, DOCUMENT_EXPIRY_WINDOW_DAYS } from "../document-rules";
 
 /** The pass's reads and its one write (spec 3.2), on the service client, behind PostgREST on the replica. */
 const ACTOR = "user_dex_test";
-type FileOpts = { expiresOn: string | null; ownersOnly?: boolean; verdict?: "clean" | "pending"; trashed?: boolean; category?: "insurance" | "other" };
+type FileOpts = { expiresOn: string | null; ownersOnly?: boolean; verdict?: "clean" | "pending"; trashed?: boolean; category?: "insurance" | "other";
+  /** Filed on a group, or (a direct insert: the app files nothing on a place yet) on a place, instead of the contact. */
+  on?: { kind: "group" | "place"; id: string } };
 
 async function file(db: SupabaseClient, accountId: string, contactId: string, o: FileOpts): Promise<string> {
-  const id = await createDocument(db, {
-    accountId, record: { kind: "contact", id: contactId }, title: "Seguro", category: o.category ?? "insurance",
-    expiresOn: o.expiresOn, ownersOnly: o.ownersOnly ?? false, source: "upload", createdBy: ACTOR,
-  });
+  const id = o.on?.kind === "place"
+    ? await (async () => {
+      const { data, error } = await db.from("documents").insert({
+        account_id: accountId, place_id: o.on!.id, title: "Seguro", category: o.category ?? "insurance",
+        expires_on: o.expiresOn, owners_only: o.ownersOnly ?? false, source: "upload", created_by: ACTOR,
+      }).select("id").single();
+      if (error) throw new Error(error.message);
+      return (data as { id: string }).id;
+    })()
+    : await createDocument(db, {
+      accountId, record: o.on?.kind === "group" ? { kind: "group", id: o.on.id } : { kind: "contact", id: contactId }, title: "Seguro",
+      category: o.category ?? "insurance", expiresOn: o.expiresOn, ownersOnly: o.ownersOnly ?? false, source: "upload", createdBy: ACTOR,
+    });
   const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 10, contentType: "application/pdf", originalName: "a.pdf", uploadedBy: ACTOR });
   if (r.status !== "ok") throw new Error(r.status);
   expect(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: 10, sha256: "a".repeat(64), actorId: ACTOR })).toBe(true);
@@ -29,18 +41,34 @@ const FROM = "2030-03-01";
 const TO = shiftDay(FROM, DOCUMENT_EXPIRY_WINDOW_DAYS);
 
 describe("document-rules: shiftDay", () => {
-  it("is calendar arithmetic across a month and a leap day (mutation: add 86_400_000 ms per day in local time -> FAILS on a DST-zone runner; drop the padding -> FAILS)", () => {
-    expect(shiftDay("2028-02-28", 1)).toBe("2028-02-29");
-    expect(shiftDay("2026-10-17", 30)).toBe("2026-11-16");
-    expect(shiftDay("2026-11-16", -7)).toBe("2026-11-09");
-    expect(shiftDay("2027-01-01", -1)).toBe("2026-12-31");
+  it("is calendar arithmetic across a month, a leap day and a DST change (mutation: add 86_400_000 ms per day in local time -> FAILS, on any runner: TZ is pinned to a DST zone here)", () => {
+    // CI runners are UTC, where local-time arithmetic is exact; America/Chicago leaves CDT on 2026-11-01,
+    // so 2026-10-17 + 30 days of milliseconds lands on Nov 15 23:00 local there.
+    const tz = process.env.TZ;
+    process.env.TZ = "America/Chicago";
+    try {
+      expect(shiftDay("2028-02-28", 1)).toBe("2028-02-29");
+      expect(shiftDay("2026-10-17", 30)).toBe("2026-11-16");
+      expect(shiftDay("2026-11-16", -7)).toBe("2026-11-09");
+      expect(shiftDay("2027-01-01", -1)).toBe("2026-12-31");
+    } finally {
+      if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+    }
   });
 });
 
 describe("listExpiringDocuments (spec 3.2: who qualifies)", () => {
-  it("answers a live, not Owners-only, clean file in the range, with its account's zone and language; never one trashed, Owners only, still being checked or outside the range (mutations: drop .is('deleted_at', null), .eq('owners_only', false), the !inner scan filter, or either bound -> FAILS)", () =>
+  it("answers a live, not Owners-only, clean file in the range, with its account's zone and language; filed on a contact or a group; never one trashed, Owners only, still being checked, outside the range or filed on a place (mutations: drop .is('deleted_at', null), .eq('owners_only', false), the scan filter, either bound, or the place/opportunity filter -> FAILS; answer account_language null or from the zone -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
+      const { error: langErr } = await db.from("accounts").update({ language: "es" }).eq("id", accountId);
+      if (langErr) throw new Error(langErr.message);
       const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa", null, ACTOR);
+      if (g.status !== "ok") throw new Error(g.status);
+      const { data: place, error: placeErr } = await db.from("places").insert({ account_id: accountId, contact_id: ana, address: "1 Main St" }).select("id").single();
+      if (placeErr) throw new Error(placeErr.message);
+      const onGroup = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 15), on: { kind: "group", id: g.groupId } });
+      await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 15), on: { kind: "place", id: (place as { id: string }).id } });
       const ok = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 10) });
       const edgeLow = await file(db, accountId, ana, { expiresOn: FROM });
       const edgeHigh = await file(db, accountId, ana, { expiresOn: TO });
@@ -51,9 +79,10 @@ describe("listExpiringDocuments (spec 3.2: who qualifies)", () => {
       await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 5), verdict: "pending" });
       await file(db, accountId, ana, { expiresOn: null });
       const rows = await listExpiringDocuments(db, { fromDay: FROM, toDay: TO, limit: 50, accountId });
-      expect(rows.map((r) => r.id).sort()).toEqual([ok, edgeLow, edgeHigh].sort());
+      expect(rows.map((r) => r.id).sort()).toEqual([ok, edgeLow, edgeHigh, onGroup].sort());
       const row = rows.find((r) => r.id === ok)!;
-      expect(row).toMatchObject({ account_id: accountId, contact_id: ana, client_group_id: null, category: "insurance", expires_on: shiftDay(FROM, 10), owners_only: false, deleted_at: null, version_scan: "clean", account_timezone: "America/Chicago" });
+      expect(row).toMatchObject({ account_id: accountId, contact_id: ana, client_group_id: null, category: "insurance", expires_on: shiftDay(FROM, 10), owners_only: false, deleted_at: null, version_scan: "clean", account_timezone: "America/Chicago", account_language: "es" });
+      expect(rows.find((r) => r.id === onGroup)).toMatchObject({ contact_id: null, client_group_id: g.groupId, account_language: "es" });
       expect(rows.map((r) => r.expires_on)).toEqual([...rows.map((r) => r.expires_on)].sort().reverse());
     }));
 
