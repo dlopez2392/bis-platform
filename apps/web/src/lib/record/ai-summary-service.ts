@@ -11,7 +11,8 @@ import { RECORD_SUMMARY_DAILY_CAP, type AiSummaryResponse } from "./ai-summary-v
  * fresh cached paragraph (G6); an unreadable gate is none (I9). Then the cache (read under the reader's RLS):
  * an unchanged digest is served. Past the day's cap a fresh paragraph is served and anything else is capped.
  * Then one claim: one reader wins the lease and writes; the others answer generating. The gateway reads
- * the gate again and writes the ledger row; a refusal there releases the lease. Logs ids and state words
+ * the gate again and writes the ledger row; a refusal there releases the lease. A paid answer is shown even
+ * when its save is refused or throws (ruling M-2): it is just not stored. Logs ids and state words
  * only, never the inputs or the answer.
  */
 export type SummaryDeps = {
@@ -51,8 +52,11 @@ export async function serveRecordSummary(
     const claim = await deps.claim(digest, a.force);
     if (claim.status === "busy") return { state: "generating" };
     if (claim.status === "fresh" || claim.status === "too_soon") {
-      const now = servable(await deps.cached()) ?? have;
-      return now ? ready(now.body, now.generatedAt) : { state: "generating" };
+      // Another writer may have just written it: serve the re-read row only on today's digest (review I-1); a
+      // missing or still-stale row is never served, so the reader asks again.
+      const again = await deps.cached();
+      const now = servable(again);
+      return now && again!.inputDigest === digest ? ready(now.body, now.generatedAt) : { state: "generating" };
     }
     lease = claim.leaseId;
     const answer = await deps.complete(summaryMessages(a.inputs, a.language));
@@ -70,13 +74,23 @@ export async function serveRecordSummary(
       return { state: quiet ? "none" : "failed" };
     }
     const generatedAt = deps.now().toISOString();
-    const saved = await deps.save({ leaseId: lease, body, digest, generatedAt });
+    let saved: boolean;
+    try {
+      saved = await deps.save({ leaseId: lease, body, digest, generatedAt });
+    } catch (e) {
+      // The answer is paid for (orchestrator ruling M-2): show it rather than fail and pay again on Retry.
+      deps.log(`save failed; showing this answer, not storing it: ${aiSafeError(e)}`);
+      const held = lease;
+      lease = null;
+      await deps.release(held).catch((r: unknown) => deps.log(`lease release failed: ${aiSafeError(r)}`));
+      return ready(body, generatedAt);
+    }
     lease = null;
     if (!saved) deps.log("lease lapsed before the save; showing this answer, not storing it");
     return ready(body, generatedAt);
   } catch (e) {
     deps.log(`summary failed: ${aiSafeError(e)}`);
-    if (lease) await deps.release(lease).catch(() => {});
+    if (lease) await deps.release(lease).catch((r: unknown) => deps.log(`lease release failed: ${aiSafeError(r)}`));
     return { state: "failed" };
   }
 }

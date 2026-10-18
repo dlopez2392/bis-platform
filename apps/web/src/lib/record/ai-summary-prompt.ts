@@ -25,6 +25,8 @@ const LANGUAGE_LINE = { en: "Write in English.", es: "Write in Spanish, addressi
  * (review T4-9; spec 4.3 "category label"), so "no_show" never reaches the paragraph as a code. English whatever
  * the reader's language: the rules are English and the language line asks for the reader's. A code the catalogue
  * does not name passes as itself. Only the model sees this: the digest covers the builder's stored codes.
+ * So a WORDING change to any key in the three families read here (calendar.bookings.status.*, calls.outcome.*,
+ * documents.category.*) needs a SUMMARY_PROMPT_VERSION bump, or cached paragraphs keep the old word (review M-3).
  */
 const label = (prefix: string, code: string): string => {
   const key = `${prefix}${code}`;

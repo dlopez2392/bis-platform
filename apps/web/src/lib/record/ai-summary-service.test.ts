@@ -71,6 +71,23 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
     expect(await serve(d, true)).toMatchObject({ state: "ready", text: "Cached paragraph." });
     expect(calls).not.toContain("complete");
   });
+  it("a fresh or too_soon claim serves the re-read row only when it matches today's digest (review I-1; probe n: serve the first read -> FAILS)", async () => {
+    // Our first read was stale; meanwhile another reader wrote the new paragraph, so the claim answers fresh.
+    let reads = 0;
+    const newer = { ...ROW(DIGEST), body: "Newer paragraph.", generatedAt: "2026-10-18T14:41:00.000Z" };
+    const won = deps({ cached: async () => (reads++ === 0 ? ROW(OLD) : newer), claim: async () => ({ status: "fresh" }) });
+    expect(await serve(won.d)).toMatchObject({ state: "ready", text: "Newer paragraph.", generatedAt: "2026-10-18T14:41:00.000Z" });
+    expect(won.calls).not.toContain("complete");
+    // The re-read finds nothing, or a row still on the old digest: never the stale paragraph, generating instead.
+    for (const second of [null, ROW(OLD)]) {
+      let n = 0;
+      const { d } = deps({ cached: async () => (n++ === 0 ? ROW(OLD) : second), claim: async () => ({ status: "fresh" }) });
+      expect(await serve(d)).toEqual({ state: "generating" });
+    }
+    let m = 0;
+    const gone = deps({ cached: async () => (m++ === 0 ? ROW(DIGEST) : null), claim: async () => ({ status: "too_soon" }) });
+    expect(await serve(gone.d, true)).toEqual({ state: "generating" });
+  });
   it("another reader holds the lease -> generating, no completion (I4; mutation: complete anyway -> FAILS)", async () => {
     const { d, calls } = deps({ claim: async () => ({ status: "busy" }) });
     expect(await serve(d)).toEqual({ state: "generating" });
@@ -127,8 +144,24 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
     expect(await serve(d)).toEqual({ state: "failed" });
     expect(calls).toContain("release L1");
   });
-  it("a lost lease still shows the paragraph it paid for (mutation: answer failed when save is false -> FAILS)", async () => {
-    expect((await serve(deps({ save: async () => false }).d)).state).toBe("ready");
+  it("a lost lease still shows the paragraph it paid for, and says so in the log (mutations: answer failed when save is false -> FAILS; drop the log -> FAILS)", async () => {
+    const { d, logs } = deps({ save: async () => false });
+    expect(await serve(d)).toEqual({ state: "ready", text: "SENTINEL-OUTPUT-7f3 booked.", generatedAt: NOW.toISOString(), language: "es", stamp: `stamp ${NOW.toISOString()}` });
+    expect(logs).toEqual(["lease lapsed before the save; showing this answer, not storing it"]);
+  });
+  it("a save that THROWS after a paid answer still shows it, releases the lease and logs (orchestrator ruling M-2; mutations: answer failed -> FAILS; skip the release -> FAILS)", async () => {
+    const { d, calls, logs } = deps({ save: async () => { throw new Error("db down"); } });
+    expect(await serve(d)).toEqual({ state: "ready", text: "SENTINEL-OUTPUT-7f3 booked.", generatedAt: NOW.toISOString(), language: "es", stamp: `stamp ${NOW.toISOString()}` });
+    expect(calls.slice(-2)).toEqual([`save L1 SENTINEL-OUTPUT-7f3 booked. true ${NOW.toISOString()}`, "release L1"]);
+    expect(logs).toEqual(["save failed; showing this answer, not storing it: Error: db down"]);
+  });
+  it("a throw while the lease is held releases it in the outer catch, and a failed release there is logged (review I-2, M-1; probe m: drop the outer release -> FAILS)", async () => {
+    const held = deps({ complete: async () => { throw new Error("boom"); } });
+    expect(await serve(held.d)).toEqual({ state: "failed" });
+    expect(held.calls.slice(-2)).toEqual(["complete", "release L1"]);
+    const both = deps({ complete: async () => { throw new Error("boom"); }, release: async () => { throw new Error("release down"); } });
+    expect(await serve(both.d)).toEqual({ state: "failed" });
+    expect(both.logs).toEqual(["summary failed: Error: boom", "lease release failed: Error: release down"]);
   });
   it("a throwing dependency is failed, never a throw (mutation: drop the outer try -> rejects -> FAILS)", async () => {
     await expect(serve(deps({ claim: async () => { throw new Error("db down"); } }).d)).resolves.toEqual({ state: "failed" });
@@ -136,8 +169,9 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
   });
   it("never logs the inputs or the answer (the never-logs probe; mutation: log the answer's text on a failed save -> FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { d, logs } = deps({ save: async () => { throw new Error("save failed"); } });
-    await serve(d);
+    const { d, calls, logs } = deps({ save: async () => { throw new Error("save failed"); } });
+    expect(await serve(d)).toMatchObject({ state: "ready" });
+    expect(calls).toContain("release L1");
     const all = [...logs, ...spy.mock.calls.flat().map(String)].join("\n");
     expect(all).not.toContain("SENTINEL-OUTPUT-7f3");
     expect(all).not.toContain("SENTINEL-NAME-7f3");
