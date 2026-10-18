@@ -8,29 +8,32 @@
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8 (`rpc`, `storage.createSignedUrl` through `signedDocumentReadUrl`); Next.js 16.3.6 App Router (server actions, route handlers, a public root layout, `next.config.ts` `headers()`); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); `node:crypto` (`randomBytes`, sha256, the forms `hashIp`); sonner toasts; lucide-react; the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it).
 
-**Spec:** `docs/superpowers/specs/2026-10-17-document-vault-part3-design.md` (owner-approved 2026-10-17): §4 whole (4.1–4.4), E3 in §2, and the 3b parts of §5, §6 and §7. NOT §3 (3a, shipped as #268). Owner-accepted implementer choices (2026-10-17): **the first open is counted on the first successful Download, not on the page load** (link previewers); **the first-open row's mark is the customer kind, worded as the link's recipient**, checked below against the closed author set (owner question O1). Templates: `docs/superpowers/plans/2026-10-17-document-vault-pr3a.md` (#268, the house shape) and `docs/superpowers/plans/2026-10-15-document-vault-pr2b.md` (#261, the public token route `/d/[token]`). Base: `main` at `38fc8776` (#268). **0077–0084 are on bis-ci and production: never re-apply.** Every file:line below was read off this worktree at `38fc8776`; anything not read is labelled **Assumption**.
+**Revision:** 2026-10-18, after the opus plan review of `10c7c5b5` (CHANGES REQUESTED): rulings O1–O3 and R-V below; findings F1, F2, F4–F7, F9–F12 applied where each is named; the spec carries matching "Amended 2026-10-18" lines (§4.1, §4.2).
+
+**Spec:** `docs/superpowers/specs/2026-10-17-document-vault-part3-design.md` (owner-approved 2026-10-17): §4 whole (4.1–4.4), E3 in §2, and the 3b parts of §5, §6 and §7. NOT §3 (3a, shipped as #268). Owner-accepted implementer choices (2026-10-17): **the first open is counted on the first successful Download, not on the page load** (link previewers); **the first-open row's mark is the customer kind, worded as the link's recipient**, checked below against the closed author set (ruling O1, 2026-10-18). Templates: `docs/superpowers/plans/2026-10-17-document-vault-pr3a.md` (#268, the house shape) and `docs/superpowers/plans/2026-10-15-document-vault-pr2b.md` (#261, the public token route `/d/[token]`). Base: `main` at `38fc8776` (#268). **0077–0084 are on bis-ci and production: never re-apply.** Every file:line below was read off this worktree at `38fc8776`; anything not read is labelled **Assumption**.
 
 `<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s07-3b` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s07-3b`), branch `feat/s07-vault-3b`. `<SCRATCH>` = `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\efc99fd8-2a23-42ec-987c-f80cb2c56ca1\scratchpad` (Git Bash: `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/efc99fd8-2a23-42ec-987c-f80cb2c56ca1/scratchpad`); write it out literally in every command. `<KIT3A>` = `<SCRATCH>/s07f-kit` (3a's kit, read 2026-10-18: `replica.sh` with `WT=…/worktrees/s07-3`, the `*0084_*` skip and the `0084_document_expiry_tasks.sql` post block; `pgrst.sh` with `PATH` naming PG18's bin and `SECRET="s07f-local-postgrest-jwt-secret-not-used-anywhere-real-0000"`, copying `postgrest.exe`, `make-jwt.js`, `proxy.mjs` from `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl`, all three present). `…/acct/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/`. `…/contacts/` = `…/acct/contacts/`. `…/documents/` = `…/acct/documents/`.
 
-## Owner questions (Task 0 puts them in front of the owner; none blocks Tasks 1–11, each is written as stated)
+## Owner and orchestrator rulings (2026-10-18, after the opus plan review)
 
-| # | Question | What this plan builds until the owner answers | If the owner says otherwise |
-|---|---|---|---|
-| O1 | **The first-open row's mark.** DESIGN.md "Provenance" has a closed set: a named person, "Sofía · AI", an automation, the customer, an import. The code types it (`apps/web/src/lib/record/author-mark.ts:10-13`, `KINDS`), and the customer kind's ONE word is `provenance.customer`, "Customer"/"Cliente" (`messages.ts:2668-2669`; `authorLabel`, `author-mark.ts:85`). "The link's recipient" is not that word, so the spec's wording does not fit the set **cleanly**: it needs a second label inside the customer kind. The precedent is "Someone on the team", a second label inside the PERSON kind ("still the person mark, never a sixth kind", DESIGN.md, decided 2026-10-12). Recommended: **(a)** the customer kind, labelled "The link's recipient" / "Quien recibió el enlace" on this one row, with a DESIGN.md Provenance line saying so (Task 12). Alternatives: **(b)** the plain customer mark, "Customer opened Seguro.pdf" (it asserts the opener is the customer, which the spec says is not known); **(c)** the automation mark, "Automation opened …" (wrong: nobody on our side did it). | (a): `authorOf` answers `customer`; `authorMark` swaps the label on `documentShareOpened` only (Task 4); key `provenance.linkRecipient` (Task 2); DESIGN.md line (Task 12, only after the owner's yes). | (b): Task 4 drops the label swap and Task 2 the key; Task 12 is skipped. (c): Task 4's `authorOf` case answers `automation`; the swap and the key go. |
-| O2 | **A file switched to Owners only while a link is live.** The spec is silent. | The link keeps working until it expires or someone stops it; Staff can no longer see the file or its "Shared" line (RLS), an Owner can and can Stop sharing. | Revoke every live link in `setOwnersOnlyAction` beside 3a's R1 delete (one more call to `revokeDocumentShares`; Task 6 adds it and its case). |
-| O3 | **Deviation 1 (a second table for the rate limit).** | Built as stated. | Drop `document_share_downloads` and limit per link only (`open_count` cap), losing the spec's "keyed on IP". |
+| # | Ruling | Where it lands |
+|---|---|---|
+| O1 | **(a).** The first-open row is the CUSTOMER kind labelled "The link's recipient" / "Quien recibió el enlace", a second word inside one kind as "Someone on the team" is inside the person kind (DESIGN.md, decided 2026-10-12), never a sixth kind. Why it needed a ruling: the closed set is typed (`apps/web/src/lib/record/author-mark.ts:10-13`, `KINDS`) and the customer kind's one word is `provenance.customer`, "Customer"/"Cliente" (`messages.ts:2668-2669`; `authorLabel`, `author-mark.ts:85`). | Task 2 (`provenance.linkRecipient`), Task 4 (`authorMark`'s one-row label swap), **Task 12 lands the DESIGN.md Provenance line (no longer conditional).** |
+| O2 | **Revoke.** Switching a file to Owners only stops every live share link on it at once: `revokeDocumentShares` beside 3a's R1 delete in `setOwnersOnlyAction` (`…/contacts/documents-actions.ts:308`), after the request-client read and the Owners-only write, on the service client, scoped to the account and the document, failing exactly as R1's call does there (inside the action's `try`: a throw answers `documents.error.failed`). An Undo that writes Owners only BACK (`undoOwnersOnlyAction` with `prior === true`) stops them the same way, beside R1's twin there. **Undoing Owners only does NOT un-revoke.** | Task 6 (both actions, tests, probes: remove the call; move it before the write). Spec §4.1 amended. |
+| O3 | **Keep `document_share_downloads`, and add a per-link total cap inside the claim: 100 downloads per link** (finding 8). Over the cap the claim answers `rate_limited`, records nothing. | Task 1 (0085's claim, `p_link_max`; tests and probe), Task 3 (`linkMax`), Task 5 (`SHARE_LINK_MAX_DOWNLOADS = 100`). |
+| R-V | **Orchestrator (finding 3; replaces old deviation 9):** a link shares the version the reader SEES, computed on the server exactly as `documentView` computes it (`lib/documents/document-view.ts:36-38`: the newest CLEAN ready version; with none clean, the current one), never from an id the browser sends. With no clean version the share is refused: "still being checked" when the current one is pending, "removed" when it is infected or unscannable. | Task 3 (`shareableVersion`, `listReadyVersionScans`), Task 6 (the action and its cases). Spec §4.1 amended. |
 
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
-1. **There is no shared "IP + token" limiter to reuse, so 0085 adds `document_share_downloads`.** Spec §4.2: "reuses the forms and upload-link limiter keyed on IP + token hash". The FORMS limiter is a pattern, not a module: `clientIp(h)` and `hashIp(ip)` (`apps/web/src/lib/forms/guards.ts:111-117`, `:128-130`, an HMAC of the address, 32 hex) plus `RATE_LIMIT_MAX = 5` per `RATE_LIMIT_WINDOW_MS = 600_000` (`:9-10`), applied by COUNTING the surface's own rows (`countRecentSubmissions(db, form.id, ipHash, windowStart)`, `app/f/[publicId]/actions.ts:150`; the booking move does the same on bookings, `app/b/[publicId]/move/[token]/actions.ts:117-121`). The UPLOAD-LINK limiter is not keyed on an address at all: it is 20 starts per request per UTC day inside 0080's start function (`0080_document_requests.sql:169`). This plan reuses `clientIp`, `hashIp`, `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS` exactly, keyed on (the share the token hash found, the address hash), which needs rows to count: `document_share_downloads` (account, share, `ip_hash`, `created_at`), service-only, going with its share (cascade). §4.4 lists one table; this is a second. Owner question O3.
+1. **There is no shared "IP + token" limiter to reuse, so 0085 adds `document_share_downloads`.** Spec §4.2: "reuses the forms and upload-link limiter keyed on IP + token hash". The FORMS limiter is a pattern, not a module: `clientIp(h)` and `hashIp(ip)` (`apps/web/src/lib/forms/guards.ts:111-117`, `:128-130`, an HMAC of the address, 32 hex) plus `RATE_LIMIT_MAX = 5` per `RATE_LIMIT_WINDOW_MS = 600_000` (`:9-10`), applied by COUNTING the surface's own rows (`countRecentSubmissions(db, form.id, ipHash, windowStart)`, `app/f/[publicId]/actions.ts:150`; the booking move does the same on bookings, `app/b/[publicId]/move/[token]/actions.ts:117-121`). The UPLOAD-LINK limiter is not keyed on an address at all: it is 20 starts per request per UTC day inside 0080's start function (`0080_document_requests.sql:169`). This plan reuses `clientIp`, `hashIp`, `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW_MS` exactly, keyed on (the share the token hash found, the address hash), which needs rows to count: `document_share_downloads` (account, share, `ip_hash`, `created_at`), service-only, going with its share (cascade). §4.4 lists one table; this is a second. Kept by ruling O3, which adds a per-link total cap of 100 downloads inside the same claim.
 2. **The Documents page has no row menu, so its "Copy share link" is the viewer's.** Spec §4.1: "in the document row menu (record card and Documents page) and in the viewer header". 3a's page rows are one open button and the filed-on link (`…/documents/documents-list.tsx:33-60`), no menu; adding one would be a new control on a list whose rule-4 row is a single target. The viewer is shared by the card and the page (`documents-list.tsx:66`, `documents-card.tsx:874`), so its header's **Copy share link** serves both; the record card ALSO gets it in the row menu, and **Stop sharing** lives on the card only (spec §4.1 places the "Shared" line and Stop sharing on the record's card).
 3. **Each Copy share link makes a NEW link.** Spec §4.1: "mints a random token, stores sha256(token)". With only a hash, an existing link cannot be shown again (2b's deviation 1 derived its token for that reason; the spec here chose random, and nothing needs a re-copy: the card offers Stop sharing, not Copy again). So a file can have several live links; the card shows the latest expiry; **Stop sharing stops every live link of that file** (one compare-and-set update); its Undo puts back exactly the links that stop wrote (`ids` and `revoked_at` from its own answer), only the actor's own, only while each is unexpired.
 4. **The timeline reads "{mark} shared {title}" and "{mark} opened {title}".** Spec §4.1: "Ana shared Seguro 2026.pdf"; §4.3: "Opened by the link's recipient". The timeline's grammar is "{mark} {verb}" (`apps/web/src/lib/record/timeline-rows.ts:66-138`; 2b deviation 5 made the same move). With O1 (a): "The link's recipient opened Seguro 2026.pdf" / "Quien recibió el enlace abrió Seguro 2026.pdf". Both rows come from ONE share row through the view `document_share_timeline` (0078 and 0079's pattern: a `security_invoker` view so the documents' RLS decides), as 2c's skip and un-skip rows come from one row (`document-requirements.ts:128-139`). `schema-grants-guard.test.ts:115`'s `rlsOff` list gains the view.
 5. **The first open is counted inside the claim, before the URL is minted.** The claim function locks the share and decides "first" under that lock, so concurrent downloads produce exactly one `first_opened_at` (spec §6). It runs before `signedDocumentReadUrl`, so a storage failure AFTER a won claim records an open whose URL never left (residual, named: rare, logged by share id, never the token). A page load never claims (the owner's choice: link previewers).
-6. **Every download refusal is the same answer.** `POST /api/s/<token>/download` answers `410 { "error": "unavailable" }` for a malformed, unknown, expired, revoked, trashed or removed token alike (spec §4.2: "The response never says whether a token exists"); `429 { "error": "rate_limited" }` and `503 { "error": "failed" }` only after the token proved open. The PAGE renders 200 for every state; its refusal pages name the business (spec §4.2), which only the holder of a real token can see; a malformed token and an unknown one render the same not-found page and read nothing past the shape check.
+6. **Every download refusal is the same answer.** `POST /api/s/<token>/download` answers `410 { "error": "unavailable" }` for a malformed, unknown, expired, revoked, trashed or removed token alike (spec §4.2 as amended 2026-10-18: "the download route answers every refusal identically, and an unknown token's page names no business"); `429 { "error": "rate_limited" }` and `503 { "error": "failed" }` only after the token proved open. The PAGE renders 200 for every state; its refusal pages name the business (spec §4.2), which only the holder of a real token can see; a malformed token and an unknown one render the same not-found page and read nothing past the shape check.
 7. **`Cache-Control: no-store` on the page comes from `dynamic = "force-dynamic"`, not from `next.config.ts`.** Next overrides a configured `Cache-Control` on pages in production (**Assumption A1**); a force-dynamic page answers `private, no-cache, no-store, max-age=0, must-revalidate`. `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex` come from `next.config.ts` `headers()` (the file has no `headers()` today, `apps/web/next.config.ts:1-23`) and, belt and braces, the page's metadata (`robots`, `referrer`), as `/d` does (`app/d/[token]/page.tsx:16-24`). The download route sets all three itself. The e2e reads the page's real headers (Task 11).
 8. **Refusal words in the staff action.** Spec §4.1: "This file is still being checked" or "This file was removed". Pending → `documents.error.scanning` ("This file is still being checked. Try again in a moment.", `messages.ts:4036`); infected or unscannable → `documents.error.removed` ("This file was removed and can't be opened.", `:4038`); a TRASHED file → `documents.error.trashed` ("This file is in the trash. Restore it first.", `:3979`), which tells staff what to do.
-9. **The shared version is `documents.current_version_id`.** The brief: "The share's version is the version current at share time." The card SHOWS the newest CLEAN version (`lib/documents/document-view.ts:36-38`, 2a deviation 1), which differs while a newer version is still being checked; then the share is refused with "still being checked" rather than silently sharing the older version.
+9. **The shared version is the one the reader sees (ruling R-V, replacing this plan's first draft).** The brief said "the version current at share time", but the card and the viewer SHOW the newest CLEAN version (`lib/documents/document-view.ts:36-38`, 2a deviation 1), which differs from `current_version_id` while a newer version is still being checked or was removed. The action computes it on the server the same way (`shareableVersion`, Task 3) from the document's ready versions read on the REQUEST client, never from a browser id: current infected + older clean → the older clean; current pending + older clean → the older clean; no clean version → refused (pending → "still being checked", infected/unscannable → "removed").
 10. **No events.** The spec names none; 2b made the same call for requests (2b deviation 7). Nothing reads a share event. (A public route never emits `"user"` holds trivially.)
 11. **The version link is same-account explicitly.** Spec §4.4: "version_id (composite FKs on account)". `document_versions` has `unique (document_id, id)` (`0077:94`) but no key with `account_id`; 0085 adds `document_versions_account_document_id_key unique (account_id, document_id, id)` (an index build on a live table, under `lock_timeout`) so the FK is `(account_id, document_id, version_id)`.
 12. **Teardown lists both tables** (spec §4.4) in `ACCOUNT_OWNED_TABLES` (`packages/db/src/account-teardown.ts:21-29`) before `documents`, although the cascades already carry them; the fixture sweep runs that same list (`apps/web/e2e/fixtures/sweep.ts:125`), so one edit covers both.
@@ -49,13 +52,13 @@
 
 - **NEVER `git stash`, `git reset`, `git restore`, `git checkout -- <file>`, `git commit --amend`, or any history rewrite** in the shared worktree. Another agent's uncommitted work lives in the same tree. To undo your own edit, edit it back. To see committed text, `git show HEAD:<path>`. Reviewers revert their probes BY HAND and prove it with `cmp` against `git show HEAD:<path> > <SCRATCH>/<dir>/orig` (`cmp` prints nothing). Never `rm -rf` anything under `<WT>` (memory "No rm -rf on worktrees"); scratch directories under `<SCRATCH>` are yours. Stage new files with `git add -- <new paths>`, then `git commit -m "…" -- <every path>`, never `-A` or `.`. If `.git/index.lock` exists, wait and retry; never delete it. Never push (the orchestrator pushes). Never touch `main`. Nobody merges or rebases but the orchestrator.
 - **Commits** carry the trailer lines `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and `Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p`.
-- **Every public link follows one rule** (study §3.4). The token is re-proved on EVERY request (shape, then the sha256 lookup, then open: not revoked, not expired, the document not trashed, the version ready and clean). Every later query uses the service client with explicit `.eq("account_id", share.account_id)` AND the document (`share.document_id`) AND, for a version, `share.version_id`, all from the TOKEN ROW, never from the request. The browser sends nothing but the token in the path. Answers never reveal whether a token exists (deviation 6). Every page and route answer carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex` (deviation 7). Nothing logs the token or the link: logs name the share id (or the account), never either.
+- **Every public link follows one rule** (study §3.4). The token is re-proved on EVERY request (shape, then the sha256 lookup, then open: not revoked, not expired, the document not trashed, the version ready and clean). Every later query uses the service client with explicit `.eq("account_id", share.account_id)` AND the document (`share.document_id`) AND, for a version, `share.version_id`, all from the TOKEN ROW, never from the request. The browser sends nothing but the token in the path. The download route answers every refusal identically, and an unknown token's page names no business (deviation 6). Every page and route answer carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and `X-Robots-Tag: noindex` (deviation 7). **Our code never logs the token or the link**: logs name the share id (or the account), never either. Named residual (as 2b's `token.ts` comment says for `/d`): the token is in the PATH, so Vercel's request log records `/s/<token>` and `/api/s/<token>/download` for every visit; that log is the platform's, not a column or a line of ours, and the link expires in 24 hours.
 - **0085 is NOT on bis-ci until Task 14 step 2.** Until then: **no `@bis/db` vitest and no live web test may run against bis-ci** (a schema without the tables would report environment failures as code failures, and a mutation probe could write there). Every `@bis/db` suite runs on YOUR local PG18 replica ("The replica kit"), or is left to CI `verify` (which builds its own stack from the branch's migrations). `packages/db/.env` does NOT exist on this machine: never `pnpm --filter @bis/db exec vitest` with the default env, and never `pnpm --filter @bis/db ci:sql`. bis-ci reads are the orchestrator's, through the Supabase MCP `execute_sql`, read-only, on project `odnobiodsftffphuuosz`.
 - **0085's byte and SQL rules.** ASCII only; no backslash anywhere; no `$` except the `$$` pairs that open and close a function body (so no `~ '…$'` anchors: shapes are written `char_length(x) = n and x !~ '[^0-9a-f]'`); every control byte for a positive control is written with `node`, never Git Bash `printf`. `set local lock_timeout = '5s'` is the first statement. RLS read through `exists`-shaped access on `documents` under the reader's own RLS (the restrictive `document_id in (select d.id from public.documents d)`, 0077's `document_versions_through_document` shape, `0077:149-150`); NO client write grant on either table; composite same-account FKs; the expiry CHECK; the coherent revoke pair; teardown and sweep list both tables; the rollback note in the header. A boolean from a nullable value is `coalesce(…, false)` (memory "plpgsql NULL guard"); the policies reuse 0077's helpers, which already coalesce.
 - **Writes are server-only, after the action's request-client read** (0053). Every staff action: `requireAccountAccess(accountId)`, then a REQUEST-client read (`dbForRequest()`) that returns the document under RLS, and only then the service client, scoped to the same account and document. The new actions file is added to `in-account-service-reads.test.ts`'s `ALLOWED` as `proven-target`. **No new file under `apps/web/src/lib` contains the token `serviceDb`, not even in a comment** (that test scans `lib`): lib functions take the caller's client.
 - **Ownership (tag on every task; no task edits a file its owner does not own).**
   - **bis-db-schema:** `packages/db/supabase/migrations/0085_document_shares.sql` (new), `packages/db/src/test/document-shares-schema.test.ts` (new), `packages/db/src/test/schema-grants-guard.test.ts` (`:115` only), `packages/db/src/account-teardown.ts` (`ACCOUNT_OWNED_TABLES` only), `<SCRATCH>/s07g-kit/*` (Task 1).
-  - **bis-crm:** `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 2 only); `packages/db/src/document-shares.ts`, `packages/db/src/index.ts`, `packages/db/src/test/document-shares.test.ts` (Task 3); `packages/db/src/record.ts`, `packages/db/src/test/{record,timeline-merge}.test.ts`, `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` (+ tests), `…/contacts/[contactId]/activity-timeline.tsx` (+ `activity-timeline.rows.test.ts`), `…/acct/groups/[groupId]/group-timeline.tsx` (+ test), `…/contacts/contact-drawer.tsx` (`ROW_ICON` only), `apps/web/src/lib/contacts/drawer-summary.ts` (`ROW_KINDS` only) (+ test), `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED` only) (Task 4); `apps/web/src/lib/document-shares/{share-token,public-share}.ts` (+ tests), `apps/web/src/app/api/s/[token]/download/route.ts` (+ test) (Task 5); `…/contacts/document-shares-actions.ts` (+ test), `apps/web/src/lib/documents/{document-view,documents-load}.ts` (+ `documents-load.test.ts`), the two documents GET routes `apps/web/src/app/api/accounts/[accountId]/{contacts/[contactId],groups/[groupId]}/documents/route.ts` (+ tests), one `ALLOWED` line in `…/acct/in-account-service-reads.test.ts` (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 10, regenerated, never hand-edited).
+  - **bis-crm:** `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 2 only); `packages/db/src/document-shares.ts`, `packages/db/src/index.ts`, `packages/db/src/test/document-shares.test.ts` (Task 3); `packages/db/src/record.ts`, `packages/db/src/test/{record,timeline-merge}.test.ts`, `apps/web/src/lib/record/{author-mark,timeline-rows,recent-rows}.ts` (+ tests), `…/contacts/[contactId]/activity-timeline.tsx` (+ `activity-timeline.rows.test.ts`), `…/acct/groups/[groupId]/group-timeline.tsx` (+ test), `…/contacts/contact-drawer.tsx` (`ROW_ICON` only), `apps/web/src/lib/contacts/drawer-summary.ts` (`ROW_KINDS` only) (+ test), `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED` only) (Task 4); `apps/web/src/lib/document-shares/{share-token,public-share}.ts` (+ tests), `apps/web/src/app/api/s/[token]/download/route.ts` (+ test) (Task 5); `…/contacts/document-shares-actions.ts` (+ test), O2's lines in `…/contacts/documents-actions.ts` (+ `documents-actions.test.ts`), `apps/web/src/lib/documents/{document-view,documents-load}.ts` (+ `documents-load.test.ts`), the two documents GET routes `apps/web/src/app/api/accounts/[accountId]/{contacts/[contactId],groups/[groupId]}/documents/route.ts` (+ tests), one `ALLOWED` line in `…/acct/in-account-service-reads.test.ts` (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 10, regenerated, never hand-edited).
   - **bis-platform:** `apps/web/src/proxy.ts` (+ `proxy.test.ts`), `apps/web/next.config.ts`, `apps/web/src/next-config.test.ts` (new) (Task 7).
   - **bis-frontend:** `…/contacts/{documents-card.tsx,documents-card-handlers.ts,document-viewer.tsx}` and their tests, `…/documents/documents-list.tsx` (+ test), `apps/web/src/app/(dashboard)/dashboard/styleguide/{documents-demo.tsx,documents-demo.test.ts}` (Task 8); `apps/web/src/app/s/**` (new) (Task 9).
   - **bis-e2e-qa:** `apps/web/e2e/document-shares.spec.ts` (new) (Task 11).
@@ -102,6 +105,7 @@ Paste both values; stop if they differ.
 - `…/contacts/documents-card.test.ts:191-194` and `:384`: a clean file's menu gains `"share"` after `"download"`: `["edit", "newVersion", "download", "share", "trash"]` and `[["edit", "documents.edit"], ["ownersOnly", "documents.makeOwnersOnly"], ["newVersion", "documents.newVersion"], ["download", "documents.download"], ["share", "documents.share"], ["trash", "documents.trash"]]`. `:382`, `:383`, `:402` (removed, pending, locked) are UNCHANGED (no share for a non-clean file) (Task 8).
 - `apps/web/src/proxy.test.ts`: the skip list (`:23-26`) gains `"/s/sometoken"` and `"/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"`; the run list (`:28-31`) gains `"/api/s/sometoken/download"`, `"/settings"`, `"/s"`; the drop-list mutation in the skip case's title names `s/`; the last case's title "only the five trees" becomes "only the six trees" and its list gains `"/sx"`, `"/support"` (Task 7).
 - `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/documents/route.test.ts:10-13` and the group route's test: the `db` mock gains `listLiveDocumentShares: vi.fn()` (set to `async () => ({})` in `beforeEach`); every existing `toEqual` on a document view stays EXACTLY equal (a view carries `share` ONLY when a live link exists); one new case each (Task 6).
+- `…/contacts/documents-actions.test.ts:13-25` (ruling O2): the `db` mock object gains `revokeDocumentShares: vi.fn()`; every existing case stays; new O2 cases (Task 6).
 - `…/acct/in-account-service-reads.test.ts`: `ALLOWED` gains `"app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-shares-actions.ts": "proven-target"` beside `:105` (Task 6).
 - `apps/web/src/app/(dashboard)/dashboard/styleguide/documents-demo.test.ts`: every existing exact count stays; one new count, `data-document-shared` = 1 (Task 8).
 - `apps/web/src/lib/messages.test.ts`: one new `describe` at the end (Task 2).
@@ -111,7 +115,7 @@ Paste both values; stop if they differ.
 
 - A configurable lifetime (fixed 24 h), multi-file or zip shares (spec §1).
 - Copying an existing link again (deviation 3), sending a link by text or email from the product, an event per share (deviation 10).
-- Revoking live links when a file goes Owners only or to the trash (O2; the trash refuses at download time and a restore brings the link back while it is unexpired).
+- Revoking live links when a file goes to the trash (the download refuses while it is trashed and a restore brings the link back while it is unexpired). Going Owners only DOES revoke them (ruling O2); undoing Owners only never un-revokes.
 - A sweep of old `document_shares` / `document_share_downloads` rows (they go with their document or account; volume is one row per link and per download).
 - A row menu on the Documents page (deviation 2).
 
@@ -138,7 +142,7 @@ Paste both values; stop if they differ.
 
 | # | Task | Suggested agent | Review | Depends on | Files |
 |---|---|---|---|---|---|
-| 0 | Confirm the base; the owner questions; bis-ci's digest | orchestrator | n/a | — | none |
+| 0 | Confirm the base; record the rulings; bis-ci's digest | orchestrator | n/a | — | none |
 | 1 | Migration 0085 and its proof on the replica; the kit; teardown; the grants guard | bis-db-schema | **opus** | 0 | the migration, `document-shares-schema.test.ts`, `schema-grants-guard.test.ts:115`, `account-teardown.ts`, `<SCRATCH>/s07g-kit/*` |
 | 2 | Every key (**messages.ts, the only writer**) | bis-crm | sonnet | 0 | `lib/messages.ts`, `lib/messages.test.ts` |
 | 3 | `@bis/db`: the share module and the barrel | bis-crm | **opus** | 1 | `document-shares.ts`, `index.ts`, its test |
@@ -150,12 +154,12 @@ Paste both values; stop if they differ.
 | 9 | The public page `/s/[token]` | bis-frontend | **opus** | 2, 5, 7 | `app/s/**` |
 | 10 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 4, 8, 9 | `lib/i18n/*-baseline.json` |
 | 11 | The e2e spec | bis-e2e-qa | sonnet | 4, 5, 6, 7, 8, 9, 10 | `e2e/document-shares.spec.ts` |
-| 12 | DESIGN.md Provenance line (only on O1 (a)) | orchestrator | n/a | 0 (the owner's answer) | `DESIGN.md` |
+| 12 | DESIGN.md Provenance line (ruling O1) | orchestrator | n/a | 0 | `DESIGN.md` |
 | 13 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–12 | none |
 | 14 | Rollout (orchestrator; LAST) | orchestrator | n/a | 13 | none in the repo |
 
 ```
-Wave A (three lanes):  T1 (bis-db-schema)        T2 (bis-crm)                 T7 (bis-platform)          (T12 when the owner answers O1)
+Wave A (three lanes):  T1 (bis-db-schema)        T2 (bis-crm)                 T7 (bis-platform)          T12 (orchestrator, DESIGN.md)
 Wave B:                T3 (bis-crm, after T1)
 Wave C (three lanes):  T4 (bis-crm, after T2,T3) T5 (bis-crm 2nd, after T2,T3) T6 (bis-crm 3rd, after T2,T3)
 Wave D (two lanes):    T8 (bis-frontend, after T6)                            T9 (bis-frontend 2nd, after T5, T7)
@@ -168,7 +172,7 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the two timelines, `contact-drawe
 
 ---
 
-## Task 0: Confirm the base; the owner questions; bis-ci's digest (orchestrator)
+## Task 0: Confirm the base; record the rulings; bis-ci's digest (orchestrator)
 
 - [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `38fc8776 A Documents page shows every file expiring soon …`. `git fetch origin && git log --oneline origin/main -1`; if `main` moved past `38fc8776`, read what moved it; if it touched any file in "File Structure", `git merge origin/main` into `<WT>` ONCE now (never rebase), before any lane starts.
 - [ ] **Step 1b.** `pnpm install --frozen-lockfile` in `<WT>` (read 2026-10-18: this worktree has no `node_modules`). `git status --short` shows no lockfile change.
@@ -182,7 +186,7 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the two timelines, `contact-drawe
   - `grep -n '"record.facts.channel.chat.es"' apps/web/src/lib/messages.ts` → `4911:` (the catalogue's last key); `wc -l < apps/web/src/lib/messages.test.ts` → `818`.
   - `ls "<KIT3A>/replica.sh" "<KIT3A>/pgrst.sh"` and the three files `pgrst.sh` copies → all exist.
   - Read-only, MCP `execute_sql`: on production (`tlbkbmlrfafquucsmsmm`) and bis-ci (`odnobiodsftffphuuosz`), `select max(version) from supabase_migrations.schema_migrations` names the 0084 apply on both. On bis-ci, the Faithfulness query above: record its value for Task 1's brief.
-- [ ] **Step 3.** Put O1–O3 in front of the owner (AskUserQuestion tiles, the recommended option first) with the PR's first CI reading at the latest; record the answers in the ledger. On O1 (a), run Task 12. On any other answer, re-open the named task with the named change.
+- [ ] **Step 3.** Record the rulings O1–O3 and R-V (2026-10-18) in the ledger. Run Task 12 in Wave A.
 
 ---
 
@@ -202,7 +206,7 @@ Disjointness: T4 (`record.ts`, `lib/record/*`, the two timelines, `contact-drawe
   - `document_versions_account_document_id_key unique (account_id, document_id, id)`.
   - `public.document_shares (id, account_id, document_id, version_id, token_hash, created_by, created_at, expires_at, revoked_at, revoked_by, first_opened_at, open_count)` with constraints `document_shares_token_hash_key`, `document_shares_token_hash_check`, `document_shares_created_by_check`, `document_shares_open_count_check`, `document_shares_expiry`, `document_shares_revoke_coherent`, `document_shares_opened_coherent`, `document_shares_document_fkey`, `document_shares_version_fkey`, `document_shares_account_id_id_key`; index `document_shares_by_document`; policies `document_shares_member_read`, `document_shares_through_document`.
   - `public.document_share_downloads (id, account_id, share_id, ip_hash, created_at)`, `document_share_downloads_share_fkey`, index `document_share_downloads_recent`.
-  - `public.claim_document_share_download(p_account_id uuid, p_share_id uuid, p_ip_hash text, p_max integer, p_window_seconds integer) returns jsonb`: `{status:'ok', first:boolean}` | `{status:'not_found'}` | `{status:'closed'}` | `{status:'rate_limited'}`; service_role only.
+  - `public.claim_document_share_download(p_account_id uuid, p_share_id uuid, p_ip_hash text, p_max integer, p_window_seconds integer, p_link_max integer) returns jsonb`: `{status:'ok', first:boolean}` | `{status:'not_found'}` | `{status:'closed'}` | `{status:'rate_limited'}` (the address limit in the window, OR the link's total `open_count >= p_link_max`, ruling O3); service_role only.
   - `public.document_share_timeline` (security_invoker): `id, account_id, document_id, created_by, created_at, expires_at, revoked_at, first_opened_at, title, category, contact_id, client_group_id, deleted_at`.
   - `ACCOUNT_OWNED_TABLES` gains `"document_share_downloads", "document_shares"` right before `"documents"`.
 
@@ -268,7 +272,8 @@ async function cleanVersion(c: Client, acct: string, doc: string): Promise<strin
   const { rows: [r] } = await c.query<{ r: { version_id: string } }>(
     "select public.reserve_document_version($1, $2, 10, 'application/pdf', 'x.pdf', 'user_seed') as r", [acct, doc]);
   const v = r!.r.version_id;
-  await c.query("update document_versions set status = 'ready', sha256 = repeat('a', 64), scan_status = 'clean' where id = $1", [v]);
+  // 0079's document_versions_scan_coherent: a non-pending scan has its scanned_at (review F2).
+  await c.query("update document_versions set status = 'ready', sha256 = repeat('a', 64), scan_status = 'clean', scanned_at = now() where id = $1", [v]);
   await c.query("update documents set current_version_id = $2 where id = $1", [doc, v]);
   return v;
 }
@@ -277,9 +282,9 @@ const share = (c: Client, acct: string, doc: string, ver: string, o: { hash?: st
     `insert into document_shares (account_id, document_id, version_id, token_hash, created_by, created_at, expires_at)
      values ($1, $2, $3, $4, 'user_seed', $5::timestamptz, $5::timestamptz + make_interval(hours => $6)) returning id`,
     [acct, doc, ver, o.hash ?? hex(32), o.createdAt ?? new Date().toISOString(), o.hours ?? 24]);
-const claim = async (c: Client, acct: string, id: string, ip = IP, max = 5, windowSeconds = 600) =>
+const claim = async (c: Client, acct: string, id: string, ip = IP, max = 5, windowSeconds = 600, linkMax = 100) =>
   (await c.query<{ r: { status: string; first?: boolean } }>(
-    "select public.claim_document_share_download($1, $2, $3, $4, $5) as r", [acct, id, ip, max, windowSeconds])).rows[0]!.r;
+    "select public.claim_document_share_download($1, $2, $3, $4, $5, $6) as r", [acct, id, ip, max, windowSeconds, linkMax])).rows[0]!.r;
 
 async function seed(c: Client) {
   const { rows: [agency] } = await c.query<{ id: string }>("select id from agencies limit 1");
@@ -340,7 +345,7 @@ describe("0085: the share's own rules (spec 4.4)", () => {
       await expect(share(c, s.acct, s.docs.mine, s.vers.theirs)).rejects.toMatchObject({ code: "23503", constraint: "document_shares_version_fkey" });
     }));
 
-  it("deleting the document deletes its shares and their downloads (mutation: no cascade on either FK -> the delete FAILS 23503)", () =>
+  it("deleting the document deletes its shares and their downloads (mutations: no cascade on BOTH share FKs, document_fkey and version_fkey (one alone still cascades through the other path) -> the delete FAILS 23503; no cascade on document_share_downloads_share_fkey -> FAILS 23503)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       expect((await claim(c, s.acct, s.shares.mine)).status).toBe("ok");
@@ -408,8 +413,8 @@ describe("0085: the client role writes nothing (spec 4.4)", () => {
       expect([has("authenticated", "document_shares", "SELECT"), has("authenticated", "document_share_downloads", "SELECT"), has("anon", "document_shares", "SELECT")]).toEqual([true, false, false]);
       for (const p of ["SELECT", "INSERT", "UPDATE", "DELETE"]) expect(has("service_role", "document_shares", p) && has("service_role", "document_share_downloads", p)).toBe(true);
       const { rows: [fx] } = await c.query<{ a: boolean; s: boolean }>(
-        `select has_function_privilege('authenticated', 'public.claim_document_share_download(uuid, uuid, text, integer, integer)', 'execute') as a,
-                has_function_privilege('service_role', 'public.claim_document_share_download(uuid, uuid, text, integer, integer)', 'execute') as s`);
+        `select has_function_privilege('authenticated', 'public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)', 'execute') as a,
+                has_function_privilege('service_role', 'public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)', 'execute') as s`);
       expect(fx).toEqual({ a: false, s: true });
     }));
 
@@ -468,6 +473,17 @@ describe("0085: claim_document_share_download (spec 4.2, 4.3; plan deviations 1,
       expect(n!.n).toBe(3);
     }));
 
+  it("a link is downloaded at most p_link_max times in all, from any address; over it the claim records nothing (ruling O3; mutation: drop the open_count cap line -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      expect((await claim(c, s.acct, s.shares.mine, "1".repeat(32), 5, 600, 2)).status).toBe("ok");
+      expect((await claim(c, s.acct, s.shares.mine, "2".repeat(32), 5, 600, 2)).status).toBe("ok");
+      expect(await claim(c, s.acct, s.shares.mine, "3".repeat(32), 5, 600, 2)).toEqual({ status: "rate_limited" });
+      const { rows: [n] } = await c.query<{ n: number; d: string }>(
+        "select open_count as n, (select count(*) from document_share_downloads where share_id = $1)::text as d from document_shares where id = $1", [s.shares.mine]);
+      expect(n).toEqual({ n: 2, d: "2" });
+    }));
+
   it("a download older than the window no longer counts (mutation: ignore created_at -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -479,38 +495,56 @@ describe("0085: claim_document_share_download (spec 4.2, 4.3; plan deviations 1,
   it("an address hash is 32 lower-case hex (mutation: drop document_share_downloads_ip_hash_check -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
-      await expect(attempt(c, "select public.claim_document_share_download($1, $2, 'not-a-hash', 5, 600)", [s.acct, s.shares.mine]))
+      await expect(attempt(c, "select public.claim_document_share_download($1, $2, 'not-a-hash', 5, 600, 100)", [s.acct, s.shares.mine]))
         .rejects.toMatchObject({ code: "23514" });
     }));
 });
 
-describe("0085: the first open is decided under the share's lock (spec 6)", () => {
-  it("a second claim waits for the first (mutation: drop `for update` from the share read -> FAILS)", async () => {
-    const conn = () => new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
+describe("0085: the first open is decided under the share's lock (spec 6; review F1)", () => {
+  // An OUTCOME test, not a lock-timeout test: without `for update`, session B would still block (on the
+  // row update and the downloads FK's key-share lock) but would have read the share and the window count
+  // BEFORE A committed, so it answers { ok, first: true } where the lock makes it see A's open.
+  const conn = () => new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
+  /** Polls until `pid` is waiting on a lock; throws after ~5 s so a run that never blocks fails loudly. */
+  async function waitUntilBlocked(watch: Client, pid: number): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+      const { rows } = await watch.query<{ w: string | null }>("select wait_event_type as w from pg_stat_activity where pid = $1", [pid]);
+      if (rows[0]?.w === "Lock") return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`session ${pid} never waited on a lock`);
+  }
+  const SHARE_SQL = `insert into document_shares (account_id, document_id, version_id, token_hash, created_by, created_at, expires_at)
+                     values ($1, $2, $3, $4, 'user_lock', now(), now() + interval '24 hours') returning id`;
+
+  // [address limit, what the waiting claim must answer, the mutation that fails it]
+  const cases: [number, Record<string, unknown>, string][] = [
+    [1, { status: "rate_limited" }, "drop `for update` -> B counted 0 downloads -> { ok, first: true } -> FAILS"],
+    [5, { status: "ok", first: false }, "drop `for update` -> B read first_opened_at unset -> first: true -> FAILS"],
+  ];
+  it.each(cases)("with an address limit of %i, a claim that waited for another answers %j (mutation: %s)", async (max, want) => {
     const seedC = conn(); const a = conn(); const b = conn();
     await Promise.all([seedC.connect(), a.connect(), b.connect()]);
     let acct: string | null = null;
     try {
       const { rows: [agency] } = await seedC.query<{ id: string }>("select id from agencies limit 1");
-      acct = await one(seedC, "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'DSH Lock') returning id", [agency!.id, `${TEST_ORG_ID_PREFIX}dshlock_${RUN}`]);
+      acct = await one(seedC, "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'DSH Lock') returning id", [agency!.id, `${TEST_ORG_ID_PREFIX}dshlock${max}_${RUN}`]);
       const contact = await one(seedC, "insert into contacts (account_id, first_name) values ($1,'Lock') returning id", [acct]);
       const doc = await one(seedC, "insert into documents (account_id, contact_id, title, category, source, created_by) values ($1,$2,'Lock','other','upload','user_lock') returning id", [acct, contact]);
       const ver = await cleanVersion(seedC, acct, doc);
-      const id = (await share(seedC, acct, doc, ver)).rows[0]!.id;
+      const id = await one(seedC, SHARE_SQL, [acct, doc, ver, hex(32)]);
+      const { rows: [pb] } = await b.query<{ pid: number }>("select pg_backend_pid() as pid");
 
       await a.query("begin");
-      expect(await claim(a, acct, id)).toEqual({ status: "ok", first: true });
-      await b.query("begin");
-      await b.query("set local lock_timeout = '300ms'");
-      await expect(b.query("select public.claim_document_share_download($1, $2, $3, 5, 600)", [acct, id, IP])).rejects.toMatchObject({ code: "55P03" });
-      await b.query("rollback");
+      expect(await claim(a, acct, id, IP, max)).toEqual({ status: "ok", first: true });
+      const waiting = claim(b, acct, id, IP, max); // no lock_timeout: B waits as long as A holds the row
+      await waitUntilBlocked(seedC, pb!.pid);
       await a.query("commit");
-      expect(await claim(b, acct, id)).toEqual({ status: "ok", first: false });
+      expect(await waiting).toEqual(want);
     } finally {
       await a.query("rollback").catch(() => {});
-      await b.query("rollback").catch(() => {});
       if (acct) {
-        await seedC.query("delete from documents where account_id = $1", [acct]);
+        await seedC.query("delete from documents where account_id = $1", [acct]); // shares and downloads cascade
         await seedC.query("delete from contacts where account_id = $1", [acct]);
         await seedC.query("delete from accounts where id = $1", [acct]);
       }
@@ -520,7 +554,7 @@ describe("0085: the first open is decided under the share's lock (spec 6)", () =
 });
 ```
 
-(`seed`'s `share()` runs inside `attempt`, whose savepoint needs a transaction: on the committed `seedC` connection outside a transaction, `savepoint` fails. In the lock test, call the INSERT directly on `seedC` without `attempt`: inline the same SQL as `share()`. Keep both forms reading the same literal SQL; do not weaken any assertion.)
+(The lock test seeds on a committed connection, so it inserts its share with `SHARE_SQL` directly, never through `share()`'s `attempt`, whose savepoint needs a transaction.)
 
 - [ ] **Step 4: Run it on `post` to see it fail** (no 0085 yet). In `packages/db`, with `SUPABASE_DB_URL=postgresql://postgres@localhost:55640/post`: `node node_modules/vitest/vitest.mjs run src/test/document-shares-schema.test.ts > "$S/s07g-t1-impl/red.txt" 2>&1; echo $? > "$S/s07g-t1-impl/red.exit"`. Expected: every case FAILS (`relation "document_shares" does not exist`, or the teardown case's `expected -1 to be greater than -1`). Paste one failing assertion line.
 
@@ -540,8 +574,9 @@ describe("0085: the first open is decided under the share's lock (spec 6)", () =
 -- read its document (the restrictive policy's subquery runs under documents' own policies: the
 -- tenant, the Technician fence, Owners only) and writes nothing. One service-only function claims
 -- a download: it locks the share, re-proves it open (not revoked, not expired, the document not in
--- the trash, the version ready and clean), counts this address's downloads of this link inside the
--- window (the forms limiter's numbers, passed by the app), records the download, and sets
+-- the trash, the version ready and clean), refuses past the link's total cap (p_link_max), counts this
+-- address's downloads of this link inside the window (the forms limiter's numbers, passed by the app),
+-- records the download, and sets
 -- first_opened_at only the first time: under the lock, exactly one claim sees it unset.
 -- document_share_downloads keeps an HMAC of the address (lib/forms/guards.ts hashIp), never the
 -- address. A security_invoker view feeds the record's timeline (a share made, its first open).
@@ -553,7 +588,7 @@ describe("0085: the first open is decided under the share's lock (spec 6)", () =
 --
 -- Rollback (by hand, in this order; revert the app first):
 --   drop view public.document_share_timeline;
---   drop function public.claim_document_share_download(uuid, uuid, text, integer, integer);
+--   drop function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer);
 --   drop table public.document_share_downloads;
 --   drop table public.document_shares;
 --   alter table public.document_versions drop constraint document_versions_account_document_id_key;
@@ -627,11 +662,11 @@ create policy document_shares_through_document on public.document_shares as rest
 -- 5. The one claim of a download (spec 4.2, 4.3). Locks the share row, so concurrent claims queue
 --    and exactly one sees first_opened_at unset.
 create function public.claim_document_share_download(
-  p_account_id uuid, p_share_id uuid, p_ip_hash text, p_max integer, p_window_seconds integer)
+  p_account_id uuid, p_share_id uuid, p_ip_hash text, p_max integer, p_window_seconds integer, p_link_max integer)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_share public.document_shares%rowtype; v_recent integer;
 begin
-  if p_account_id is null or p_share_id is null or p_ip_hash is null or p_max is null or p_window_seconds is null then
+  if p_account_id is null or p_share_id is null or p_ip_hash is null or p_max is null or p_window_seconds is null or p_link_max is null then
     raise exception 'claim_document_share_download: a required argument is null' using errcode = '22004';
   end if;
   select * into v_share from public.document_shares
@@ -646,6 +681,8 @@ begin
    where d.account_id = p_account_id and d.id = v_share.document_id and v.id = v_share.version_id
      and d.deleted_at is null and v.status = 'ready' and v.scan_status = 'clean';
   if not found then return jsonb_build_object('status', 'closed'); end if;
+  -- Ruling O3: a link is downloaded at most p_link_max times in all, from any address.
+  if v_share.open_count >= p_link_max then return jsonb_build_object('status', 'rate_limited'); end if;
   select count(*) into v_recent from public.document_share_downloads
    where share_id = p_share_id and ip_hash = p_ip_hash
      and created_at > now() - make_interval(secs => p_window_seconds);
@@ -656,8 +693,8 @@ begin
    where account_id = p_account_id and id = p_share_id;
   return jsonb_build_object('status', 'ok', 'first', v_share.first_opened_at is null);
 end $$;
-revoke all on function public.claim_document_share_download(uuid, uuid, text, integer, integer) from public, anon, authenticated, service_role;
-grant execute on function public.claim_document_share_download(uuid, uuid, text, integer, integer) to service_role;
+revoke all on function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer) from public, anon, authenticated, service_role;
+grant execute on function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer) to service_role;
 
 -- 6. The record's timeline (plan deviation 4): a share made (created_at) and its first open
 --    (first_opened_at), one row each, read from this view. security_invoker: the view runs with the
@@ -697,7 +734,7 @@ Expected: `{"nonAscii":0,"backslash":0,"loneDollar":0}`, then the control `{"non
 
 - [ ] **Step 7: Apply and run green.** `bash "$S/s07g-kit/replica.sh" 55640 "$S/s07g-t1-impl"` again → `post = pre + 0085`. Run `document-shares-schema.test.ts`, `schema-grants-guard.test.ts`, `document-vault-schema.test.ts`, `document-vault-rls.test.ts`, `document-space-used.test.ts`, `document-vault-reserve-lock.test.ts` on `post` (exit code to a file, nothing after it). Paste each summary line. Expected: all PASS.
 
-- [ ] **Step 8: Probes, by name** (each a temporary edit of the migration, re-applied with `replica.sh`, reverted by hand and `cmp`-checked): (a) drop `for update` → "a second claim waits for the first" FAILS; (b) drop the `perform 1 from public.documents d …` block → "refuses a revoked, an expired, a trashed and a not-clean link" FAILS; (c) `document_shares_through_document` dropped → the staff/tech cases FAIL; (d) the document FK as `foreign key (document_id) references public.documents (id)` (no account; `id` is the primary key) → the cross-account insert is then caught by the version FK instead, so the case FAILS on its constraint name (`document_shares_version_fkey` where it expects `document_shares_document_fkey`); (d2) the version FK as `foreign key (version_id) references public.document_versions (id)` → the cross-document insert succeeds and the case FAILS; (e) `count by share alone` (drop `and ip_hash = p_ip_hash`) → the rate case FAILS on "another address still downloads"; (f) `grant insert on public.document_shares to authenticated` → both write-surface cases FAIL; (g) the view without `security_invoker` → the view case FAILS. Paste each failing line.
+- [ ] **Step 8: Probes, by name** (each a temporary edit of the migration, re-applied with `replica.sh`, reverted by hand and `cmp`-checked): (a) drop `for update` → BOTH cases of "with an address limit of …, a claim that waited for another answers …" FAIL (B answers `{ ok, first: true }`); the run also proves B really waited (`waitUntilBlocked` returned) in both builds; (b) drop the `perform 1 from public.documents d …` block → "refuses a revoked, an expired, a trashed and a not-clean link" FAILS; (c) `document_shares_through_document` dropped → the staff/tech cases FAIL; (d) (it rests on the RI triggers firing in creation order, so the document FK's error is reported first; the probe run settles it, and if the unmutated build reports `document_shares_version_fkey` for this insert the reviewer reports that instead of weakening the case) the document FK as `foreign key (document_id) references public.documents (id)` (no account; `id` is the primary key) → the cross-account insert is then caught by the version FK instead, so the case FAILS on its constraint name (`document_shares_version_fkey` where it expects `document_shares_document_fkey`); (d2) the version FK as `foreign key (version_id) references public.document_versions (id)` → the cross-document insert succeeds and the case FAILS; (e) the address count by share alone (drop `and ip_hash = p_ip_hash`) → "counts this link and this address in the window" FAILS on "another address still downloads"; (e2) drop the `open_count >= p_link_max` line → "a link is downloaded at most p_link_max times" FAILS; (f) `grant insert on public.document_shares to authenticated` → both write-surface cases FAIL; (g) the view without `security_invoker` → the view case FAILS. Paste each failing line.
 - [ ] **Step 9: Stop your kit.** **Commit** `git add -- packages/db/supabase/migrations/0085_document_shares.sql packages/db/src/test/document-shares-schema.test.ts` then `git commit -m "db: 0085 share links: a revocable 24-hour link to one clean version, read exactly as its document, claimed once per download under a lock (S-07 3b)" -- packages/db/supabase/migrations/0085_document_shares.sql packages/db/src/test/document-shares-schema.test.ts packages/db/src/test/schema-grants-guard.test.ts packages/db/src/account-teardown.ts` (with the trailers).
 
 ---
@@ -723,6 +760,7 @@ Expected: `{"nonAscii":0,"backslash":0,"loneDollar":0}`, then the control `{"non
 | `documents.share.ownersOnlyRole` | Only an Owner can share a file marked Owners only. | Solo un dueño puede compartir un archivo marcado Solo dueños. |
 | `documents.share.notShared` | This file has no link to stop. | Este archivo no tiene un enlace que detener. |
 | `documents.share.ended` | That link has already ended, so nothing was undone. | Ese enlace ya terminó, así que no se deshizo nada. |
+| `documents.share.refused` | You can't share that file. | No puede compartir ese archivo. |
 | `timeline.documentShared` | shared {title} | compartió {title} |
 | `timeline.documentShareOpened` | opened {title} | abrió {title} |
 | `provenance.linkRecipient` | The link's recipient | Quien recibió el enlace |
@@ -734,15 +772,13 @@ Expected: `{"nonAscii":0,"backslash":0,"loneDollar":0}`, then the control `{"non
 | `sharePage.download` | Download | Descargar |
 | `sharePage.limit` | Too many downloads from here. Try again in a few minutes. | Demasiadas descargas desde aquí. Intente de nuevo en unos minutos. |
 | `sharePage.failed` | The download didn't start. Try again. | La descarga no empezó. Intente de nuevo. |
-| `sharePage.expired` | This link has expired. | Este enlace ya venció. |
 | `sharePage.revoked` | This link was turned off. | Este enlace se desactivó. |
 | `sharePage.trashed` | This file isn't available any more. | Este archivo ya no está disponible. |
 | `sharePage.removed` | This file was removed for safety. | Este archivo se quitó por seguridad. |
-| `sharePage.notFound` | This link doesn't work. | Este enlace no funciona. |
 | `sharePage.ask` | Ask {business} to send it again. | Pida a {business} que se lo envíe de nuevo. |
 | `sharePage.askNoName` | Ask the business that sent it to send it again. | Pida al negocio que se lo envió que lo mande de nuevo. |
 
-Reused, not added (read 2026-10-18): `documents.error.scanning` (`:4036`), `documents.error.removed` (`:4038`), `documents.error.trashed` (`:3979`), `documents.error.refused` (`:3936`), `documents.request.copyFailed` (`:4088`), `common.undo` (`:298`), `customerDocs.call`, `customerDocs.callNoPhone`, `customerDocs.callNoName`, `customerDocs.callNoPhoneNoName` (`:4334-4343`), `customerDocs.poweredBy` (`:4346`), `customerDocs.error.title`, `customerDocs.error.body`, `customerDocs.error.retry` (`:4348-4353`).
+Reused, not added (read 2026-10-18; review F10: the public page's expired and not-found sentences are 2b's own, `customerDocs.expired` "This link has expired." / "Este enlace venció." and `customerDocs.notFound` "This link doesn't work." / "Este enlace no funciona.", `messages.ts:4326-4331`, so the two customer pages say the same thing; a refused SHARE says `documents.share.refused`, never `documents.error.refused`'s "You can't change that file."): `documents.error.scanning` (`:4036`), `documents.error.removed` (`:4038`), `documents.error.trashed` (`:3979`), `documents.error.refused` (`:3936`), `documents.request.copyFailed` (`:4088`), `common.undo` (`:298`), `customerDocs.call`, `customerDocs.callNoPhone`, `customerDocs.callNoName`, `customerDocs.callNoPhoneNoName` (`:4334-4343`), `customerDocs.poweredBy` (`:4346`), `customerDocs.error.title`, `customerDocs.error.body`, `customerDocs.error.retry` (`:4348-4353`).
 
 - [ ] **Step 1: Read** `messages.ts:2660-2672` (the provenance block), `:3880-3940` and `:4030-4040` (the `documents.*` block), `:4330-4370` (`customerDocs.*`, `timeline.*`), the end of the file (`:4905-4914`), and `messages.test.ts`' last two `describe`s (the shape to copy, incl. its imports of `m` and `t`).
 
@@ -752,11 +788,11 @@ Reused, not added (read 2026-10-18): `documents.error.scanning` (`:4036`), `docu
 describe("S-07 3b: share links (plan Task 2)", () => {
   const KEYS_3B = [
     "documents.share", "documents.share.copied", "documents.share.live", "documents.share.stop", "documents.share.stopped",
-    "documents.share.failed", "documents.share.ownersOnlyRole", "documents.share.notShared", "documents.share.ended",
+    "documents.share.failed", "documents.share.ownersOnlyRole", "documents.share.notShared", "documents.share.ended", "documents.share.refused",
     "timeline.documentShared", "timeline.documentShareOpened", "provenance.linkRecipient",
     "sharePage.pageTitle", "sharePage.pageTitleNoName", "sharePage.heading", "sharePage.headingNoName", "sharePage.details",
-    "sharePage.download", "sharePage.limit", "sharePage.failed", "sharePage.expired", "sharePage.revoked", "sharePage.trashed",
-    "sharePage.removed", "sharePage.notFound", "sharePage.ask", "sharePage.askNoName",
+    "sharePage.download", "sharePage.limit", "sharePage.failed", "sharePage.revoked", "sharePage.trashed",
+    "sharePage.removed", "sharePage.ask", "sharePage.askNoName",
   ] as const;
 
   it("every key has a Spanish twin (mutation: delete any one .es line -> FAILS naming it)", () => {
@@ -819,7 +855,11 @@ export function listLiveDocumentShares(db: SupabaseClient, accountId: string, re
 export function revokeDocumentShares(db: SupabaseClient, accountId: string, documentId: string, actorId: string, now: Date): Promise<{ ids: string[]; revokedAt: string } | null>;
 export function restoreDocumentShares(db: SupabaseClient, a: { accountId: string; documentId: string; ids: readonly string[]; revokedAt: string; actorId: string; now: Date }): Promise<number>;
 export type ShareClaim = { status: "ok"; first: boolean } | { status: "not_found" | "closed" | "rate_limited" };
-export function claimDocumentShareDownload(db: SupabaseClient, a: { accountId: string; shareId: string; ipHash: string; max: number; windowSeconds: number }): Promise<ShareClaim>;
+export function claimDocumentShareDownload(db: SupabaseClient, a: { accountId: string; shareId: string; ipHash: string; max: number; windowSeconds: number; linkMax: number }): Promise<ShareClaim>;
+export type ReadyVersionScan = { id: string; scan_status: ScanStatus; created_at: string };
+export function listReadyVersionScans(db: SupabaseClient, accountId: string, documentId: string): Promise<ReadyVersionScan[]>;
+export type Shareable = { kind: "clean"; versionId: string } | { kind: "pending" | "removed" };
+export function shareableVersion(versions: readonly ReadyVersionScan[], currentVersionId: string | null): Shareable;
 export type TimelineDocumentShare = { id: string; document_id: string; title: string; category: DocumentCategory; created_by: string; created_at: string; first_opened_at: string | null; contact_id: string | null; client_group_id: string | null; deleted_at: string | null };
 export function listDocumentShareTimeline(db: SupabaseClient, accountId: string, who: string | readonly string[], groupId: string | null, page: TimelinePageOpts): Promise<{ shares: TimelineDocumentShare[]; opens: TimelineDocumentShare[] }>;
 ```
@@ -834,6 +874,9 @@ export function listDocumentShareTimeline(db: SupabaseClient, accountId: string,
   5. `revokeDocumentShares` revokes every live share of THAT document and answers their ids and the stored `revoked_at`; a second call answers `null`; another document's live share is untouched (mutation: drop `.eq("document_id", …)` → FAILS).
   6. `restoreDocumentShares` with those ids and that `revokedAt` and the same actor puts them back (answers 2, both read live again); with another actor answers 0; with a `revokedAt` one millisecond off answers 0; for an expired share answers 0 (Assumption A6; mutations: drop the actor filter; drop the `expires_at` filter → FAILS).
   7. `claimDocumentShareDownload` answers `{ status: "ok", first: true }`, then `first: false`; for a revoked share `{ status: "closed" }`; throws on an RPC error (call it with `ipHash: "nope"`: the check refuses, `rejects.toThrow("claimDocumentShareDownload failed")`).
+  9. `shareableVersion` (pure, no db; ruling R-V): `[clean v2, clean v1]` → `v2`; current `infected` v3 + older clean v1 (`[infected v3, clean v1]`, current v3) → `v1`; current `pending` v3 + older clean v1 → `v1`; `[pending v1]` → `pending`; `[infected v1]` and `[unscannable v1]` → `removed`; `[]` → `pending` (mutations: always the current version → the infected and pending cases FAIL; the OLDEST clean → the first case FAILS).
+  10. `listReadyVersionScans` answers only READY versions of THAT document, newest first: with an uploading reservation and a second document's version present, it answers exactly the two ready ids in order (mutations: drop `.eq("status", "ready")`; drop `.eq("document_id", …)` → FAILS).
+  7b. `claimDocumentShareDownload` passes `linkMax`: with `linkMax: 1` the second claim from another address answers `{ status: "rate_limited" }` (mutation: omit `p_link_max` from the RPC call → the RPC errors and the call throws → FAILS).
   8. `listDocumentShareTimeline(db, accountId, contactId, null, { limit: 31 })`: one share made and opened once reads ONE `shares` row and ONE `opens` row, both the share's id, `opens[0].first_opened_at` set; a share never opened adds a `shares` row only (mutation: drop `.not("first_opened_at", "is", null)` → FAILS).
 
 - [ ] **Step 3: Run them to see them fail** on set A: `bash "$S/s07g-kit/replica.sh" 55642 "$S/s07g-t3-impl" && bash "$S/s07g-kit/pgrst.sh" 55642 55643 55644 "$S/s07g-t3-impl"`, then in `packages/db`: `source "$S/s07g-t3-impl/env-run.sh"; node node_modules/vitest/vitest.mjs run src/test/document-shares.test.ts > "$S/s07g-t3-impl/red.txt" 2>&1; echo $? > "$S/s07g-t3-impl/red.exit"`. Expected: FAIL (`Cannot find module '../document-shares'`).
@@ -956,16 +999,39 @@ export async function restoreDocumentShares(db: SupabaseClient, a: {
 export type ShareClaim = { status: "ok"; first: boolean } | { status: "not_found" | "closed" | "rate_limited" };
 /** Service client: public.claim_document_share_download (0085). THROWS on an RPC error or an answer it does not know. */
 export async function claimDocumentShareDownload(db: SupabaseClient, a: {
-  accountId: string; shareId: string; ipHash: string; max: number; windowSeconds: number;
+  accountId: string; shareId: string; ipHash: string; max: number; windowSeconds: number; linkMax: number;
 }): Promise<ShareClaim> {
   const { data, error } = await db.rpc("claim_document_share_download", {
-    p_account_id: a.accountId, p_share_id: a.shareId, p_ip_hash: a.ipHash, p_max: a.max, p_window_seconds: a.windowSeconds,
+    p_account_id: a.accountId, p_share_id: a.shareId, p_ip_hash: a.ipHash, p_max: a.max, p_window_seconds: a.windowSeconds, p_link_max: a.linkMax,
   });
   if (error) throw new Error(`claimDocumentShareDownload failed: ${error.message}`);
   const r = data as { status: string; first?: unknown };
   if (r.status === "ok" && typeof r.first === "boolean") return { status: "ok", first: r.first };
   if (r.status === "not_found" || r.status === "closed" || r.status === "rate_limited") return { status: r.status };
   throw new Error(`claimDocumentShareDownload: unexpected answer ${JSON.stringify(r.status)}`);
+}
+
+export type ReadyVersionScan = { id: string; scan_status: ScanStatus; created_at: string };
+/** Every READY version of one document, newest first (created_at, then id), on the CALLER's client (RLS decides). */
+export async function listReadyVersionScans(db: SupabaseClient, accountId: string, documentId: string): Promise<ReadyVersionScan[]> {
+  const { data, error } = await db.from("document_versions").select("id, scan_status, created_at")
+    .eq("account_id", accountId).eq("document_id", documentId).eq("status", "ready")
+    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(200);
+  if (error) throw new Error(`listReadyVersionScans failed: ${error.message}`);
+  return (data ?? []) as ReadyVersionScan[];
+}
+
+export type Shareable = { kind: "clean"; versionId: string } | { kind: "pending" | "removed" };
+/**
+ * Ruling R-V: the version a link shares is the one the reader SEES, by documentView's own rule
+ * (apps/web/src/lib/documents/document-view.ts:36-38): the newest clean ready version; with none clean,
+ * the current version decides the refusal (pending -> still being checked, else removed). Pure.
+ */
+export function shareableVersion(versions: readonly ReadyVersionScan[], currentVersionId: string | null): Shareable {
+  const clean = versions.find((v) => v.scan_status === "clean");
+  if (clean) return { kind: "clean", versionId: clean.id };
+  const current = versions.find((v) => v.id === currentVersionId) ?? versions[0];
+  return !current || current.scan_status === "pending" ? { kind: "pending" } : { kind: "removed" };
 }
 
 export type TimelineDocumentShare = {
@@ -1006,12 +1072,13 @@ export async function listDocumentShareTimeline(
 export {
   DOCUMENT_SHARE_HOURS, createDocumentShare, findDocumentShareByTokenHash, documentShareState, getShareTarget,
   listLiveDocumentShares, revokeDocumentShares, restoreDocumentShares, claimDocumentShareDownload, listDocumentShareTimeline,
+  listReadyVersionScans, shareableVersion, type ReadyVersionScan, type Shareable,
   type DocumentShareRow, type DocumentShareLife, type ShareTarget, type ShareClaim, type TimelineDocumentShare,
 } from "./document-shares";
 ```
 
 - [ ] **Step 5: Run green** on set A: `document-shares.test.ts`, `documents.test.ts`, `document-requests.test.ts`; `pnpm --filter @bis/db exec tsc --noEmit` is NOT run (pnpm exec trailer): run `node node_modules/typescript/bin/tsc --noEmit -p .` in `packages/db`, and `pnpm --filter web typecheck`. Paste every summary line.
-- [ ] **Step 6: Probes, by name** (each reverted by hand, `cmp`-checked): (a) `getShareTarget`'s version read without `.eq("document_id", …)` → case 3 FAILS; (b) `revokeDocumentShares` without `.eq("document_id", …)` → case 5 FAILS; (c) `restoreDocumentShares` without `.eq("revoked_by", …)` → case 6 FAILS; (d) `listDocumentShareTimeline`'s `opened()` as `base()` → case 8 FAILS; (e) `documentShareState` with `<` → case 2 FAILS. Paste each.
+- [ ] **Step 6: Probes, by name** (each reverted by hand, `cmp`-checked): (a) `getShareTarget`'s version read without `.eq("document_id", …)` → case 3 FAILS; (b) `revokeDocumentShares` without `.eq("document_id", …)` → case 5 FAILS; (c) `restoreDocumentShares` without `.eq("revoked_by", …)` → case 6 FAILS; (d) `listDocumentShareTimeline`'s `opened()` as `base()` → case 8 FAILS; (e) `documentShareState` with `<` → case 2 FAILS; (f) `shareableVersion` returning the current version first → case 9 FAILS. Paste each.
 - [ ] **Step 7: Stop your kit. Commit** `git add -- packages/db/src/document-shares.ts packages/db/src/test/document-shares.test.ts` then `git commit -m "db: share links' reads and writes, each scoped to the token row's account, document and version (S-07 3b)" -- packages/db/src/document-shares.ts packages/db/src/test/document-shares.test.ts packages/db/src/index.ts`.
 
 ---
@@ -1064,7 +1131,7 @@ export {
 ```
   (Read 2026-10-18: `documents.category.insurance` is "Insurance" (`messages.ts:3870`), `documents.status.trashed` "In the trash" (`:3930`).)
   - `recent-rows.test.ts`: a `documentShared` and a `documentShareOpened` entry each read with `excerpt` `null` and their verb (mutation: return the title as the excerpt → FAILS). `drawer-summary.test.ts`: `ROW_KINDS` accepts `"documentShared"` and `"documentShareOpened"` (copy the skip case at `:126`; mutation: drop either → FAILS). Both timelines' row tests: `documentShared` wears the `Link2` icon and `documentShareOpened` the `Download` icon (follow the `documentSkip` case's icon assertion; mutations: return null; wear the Paperclip → FAILS).
-  - `packages/db/src/test/record.test.ts` (behind PostgREST): a contact whose clean file was shared and then downloaded once (`claimDocumentShareDownload` with `ipHash: "a".repeat(32), max: 5, windowSeconds: 600`) reads exactly TWO share entries, `documentShareOpened` (its `at` = `first_opened_at`) then `documentShared` (its `at` = `created_at`), both the share's id (mutation: drop the opens read from `record.ts` → FAILS).
+  - `packages/db/src/test/record.test.ts` (behind PostgREST): a contact whose clean file was shared and then downloaded once (`claimDocumentShareDownload` with `ipHash: "a".repeat(32), max: 5, windowSeconds: 600, linkMax: 100`) reads exactly TWO share entries, `documentShareOpened` (its `at` = `first_opened_at`) then `documentShared` (its `at` = `created_at`), both the share's id (mutation: drop the opens read from `record.ts` → FAILS).
   - `timeline-merge.test.ts`: `:145-147`'s comment adds "and 0085's two document_share_timeline reads (a share at created_at, an open at first_opened_at), so there are seven reads more than there are sources" and the line becomes `expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 7).fill(TIMELINE_PAGE_SIZE + 1));`; after `:149` add `expect(paged.filter((r) => r.table === "document_share_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);`. A new case beside `:215`: a refused `document_share_timeline` read fails the `documents` source (copy the `document_requirement_skips` case with the relation name changed).
 
 - [ ] **Step 3: Run them to see them fail** (web by path; db on set A). Expected: each new case FAILS; typecheck errors on the new kinds.
@@ -1127,7 +1194,7 @@ export function authorMark(entry: TimelineEntry, ctx: AuthorCtx): AuthorMarkView
 - Consumes: Task 3's module; `isTokenShape`, `tokenHash` (`lib/document-requests/token.ts:23-24`); `formatPhone` (`lib/document-requests/customer-state.ts`); `extensionForType`, `formatMb` (`lib/documents/rules.ts:26`, `:48`); `clientIp`, `hashIp`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS` (`lib/forms/guards.ts:9-10`, `:111`, `:128`); `signedDocumentReadUrl`, `getBranding`, `brandLogoUrl`, `listPhoneNumbersForAccount` (`@bis/db`); `loggableError`.
 - Produces:
   - `share-token.ts` (server-only): `newShareToken(): string` (43 base64url characters from 32 random bytes); `shareUrl(origin: string, token: string): string` (`<origin>/s/<token>`).
-  - `public-share.ts` (server-only; takes the caller's client): `SHARE_URL_SECONDS = 120`; `type ShareState = "open" | "expired" | "revoked" | "trashed" | "removed" | "not_found"`; `type ResolvedShare = { state: Exclude<ShareState, "not_found">; share: DocumentShareRow; target: ShareTarget } | { state: "not_found" }`; `resolveShare(db, token: string, now: Date): Promise<ResolvedShare>`; `type SharePage = { state: ShareState; language: "en" | "es"; branding: Branding | null; logoUrl: string | null; phone: string | null; file: { title: string; type: string; size: string } | null }`; `sharePage(db, token, now): Promise<SharePage>`; `shareSize(bytes: number, language: "en" | "es"): string`; `shareFileName(title: string, contentType: DocumentContentType): string`; `type RouteAnswer = { status: number; body: Record<string, unknown> }`; `shareDownload(db, token: string, ipHash: string, now: Date): Promise<RouteAnswer>`.
+  - `public-share.ts` (server-only; takes the caller's client): `SHARE_URL_SECONDS = 120`; `SHARE_LINK_MAX_DOWNLOADS = 100`; `type ShareState = "open" | "expired" | "revoked" | "trashed" | "removed" | "not_found"`; `type ResolvedShare = { state: Exclude<ShareState, "not_found">; share: DocumentShareRow; target: ShareTarget } | { state: "not_found" }`; `resolveShare(db, token: string, now: Date): Promise<ResolvedShare>`; `type SharePage = { state: ShareState; language: "en" | "es"; branding: Branding | null; logoUrl: string | null; phone: string | null; file: { title: string; type: string; size: string } | null }`; `sharePage(db, token, now): Promise<SharePage>`; `shareSize(bytes: number, language: "en" | "es"): string`; `shareFileName(title: string, contentType: DocumentContentType): string`; `type RouteAnswer = { status: number; body: Record<string, unknown> }`; `shareDownload(db, token: string, ipHash: string, now: Date): Promise<RouteAnswer>`.
   - The route: `POST /api/s/<token>/download` → `200 { url }` | `410 { error: "unavailable" }` | `429 { error: "rate_limited" }` | `503 { error: "failed" }`, every answer with the three headers.
 
 - [ ] **Step 1: Read** `apps/web/src/lib/document-requests/token.ts`, `customer-upload.ts` whole (the shape this copies), `customer-state.ts` (`formatPhone`), `apps/web/src/app/api/d/[token]/start/route.ts` and its `route.test.ts`, `apps/web/src/lib/forms/guards.ts:1-130`, `packages/db/src/documents.ts:520-557` (`signedDocumentReadUrl`), `packages/db/src/branding.ts:160-170`, `:340-420`, `packages/db/src/voice.ts:840-860` (`listPhoneNumbersForAccount`'s row fields).
@@ -1137,10 +1204,11 @@ export function authorMark(entry: TimelineEntry, ctx: AuthorCtx): AuthorMarkView
   - `public-share.test.ts` (`vi.mock("@bis/db", async (orig) => ({ ...(await orig()), findDocumentShareByTokenHash: vi.fn(), getShareTarget: vi.fn(), claimDocumentShareDownload: vi.fn(), signedDocumentReadUrl: vi.fn(), getBranding: vi.fn(), listPhoneNumbersForAccount: vi.fn() }))`; `vi.stubEnv("FORM_TOKEN_SECRET", "unit-only-form-secret")` in `beforeEach`, `vi.unstubAllEnvs()` after; a fake `db` whose `from("accounts").select("language").eq("id", id).maybeSingle()` answers `{ data: { language: "es" }, error: null }` and RECORDS the id; the token `TOK = "A".repeat(43)`; `SHARE` a row with `account_id: ACC`, `document_id: DOC`, `version_id: VER`, `expires_at` an hour after `NOW`; `TARGET` clean, ready, not trashed):
     1. A malformed token (`"short"`, `"A".repeat(44)`, `"A".repeat(42) + "="`) → `resolveShare` answers `not_found` and NO `@bis/db` function was called (mutation: look it up anyway → FAILS).
     2. `findDocumentShareByTokenHash` is called with `tokenHash(TOK)` (64 hex), never with the token (mutation: pass the token → FAILS).
-    3. **Isolation:** `getShareTarget` is called with an object whose `account_id`, `document_id`, `version_id` are EXACTLY the share row's (send a fake whose answer differs by account to prove nothing else is passed); `claimDocumentShareDownload` receives `{ accountId: ACC, shareId: SHARE.id, ipHash, max: 5, windowSeconds: 600 }`; `signedDocumentReadUrl` receives `(db, ACC, VER, { seconds: 120, download: "Seguro 2026.pdf" })` for a target titled `Seguro 2026` with `content_type: "application/pdf"` — the SHARED version, even when the fixture's document says another version is current (mutation: mint for a version id read from anywhere but the share row → FAILS); the language read's recorded id is `ACC`.
+    3. **Isolation:** `getShareTarget` is called with an object whose `account_id`, `document_id`, `version_id` are EXACTLY the share row's (send a fake whose answer differs by account to prove nothing else is passed); `claimDocumentShareDownload` receives `{ accountId: ACC, shareId: SHARE.id, ipHash, max: 5, windowSeconds: 600, linkMax: 100 }`; `signedDocumentReadUrl` receives `(db, ACC, VER, { seconds: 120, download: "Seguro 2026.pdf" })` for a target titled `Seguro 2026` with `content_type: "application/pdf"` — the SHARED version, even when the fixture's document says another version is current (review F6: the `getShareTarget` mock answers a `version.id` DIFFERENT from `SHARE.version_id`, so minting with `r.target.version.id` fails this case; mutation: mint with `r.target.version.id` → FAILS); the language read's recorded id is `ACC`.
     4. States: revoked → `revoked`; expired (`expires_at = NOW`) → `expired`; a trashed target → `trashed`; a `pending`, an `infected`, an `unscannable` and an `uploading` version → `removed`; `getShareTarget` answering null → `not_found` (mutations: drop any one check → FAILS).
     5. **Uniform refusals:** `shareDownload` answers EXACTLY `{ status: 410, body: { error: "unavailable" } }` for a malformed token, an unknown token, and each of revoked, expired, trashed, removed; and for a claim answering `not_found` or `closed`; and for `signedDocumentReadUrl` answering `pending`, `removed`, `not_ready`, `not_found` (`it.each`; mutation: answer `410 { error: "revoked" }` for a revoked link → FAILS). `claimDocumentShareDownload` is NOT called for any refused state (mutation: claim first → FAILS).
     6. A `rate_limited` claim → `429 { error: "rate_limited" }` and NO mint (mutation: mint anyway → FAILS); an `ok` claim and an `ok` mint → `200 { url }`.
+    6b. **The first open is logged by id (review F7: the claim's `first` is used, not dropped):** with `console.info` spied, a claim answering `{ ok, first: true }` logs exactly one line, `document share <SHARE.id>: first opened`, containing neither `TOK` nor the title; a claim answering `first: false` logs nothing (mutation: log on every download → FAILS; log the title → FAILS).
     7. **Nothing logs the token:** with `console.error` spied, a `claimDocumentShareDownload` that throws answers `503 { error: "failed" }` and no logged string contains `TOK` (mutation: log the token → FAILS); the logged line names `SHARE.id`.
     8. `sharePage`: an open share answers `{ state: "open", language: "es", phone: "(956) 555-0123", file: { title: "Seguro 2026", type: "PDF", size: "1.2 MB" } }` for 1 258 291 bytes in Spanish (read 2026-10-18: `formatMb` formats with `es-US`, whose decimal mark is a period: `1.2`), `logoUrl` from `brandLogoUrl` when the branding has a logo path; a revoked share answers `file: null` with the branding and phone still read (the refusal page names the business); a branding read that throws still answers the page (`branding: null`); an unknown token answers the not-found page with NO branding, phone or language read (mutation: read the branding first → FAILS).
     9. `shareSize(10, "en")` → `"1 KB"`; `shareSize(512_000, "en")` → `"500 KB"`; `shareSize(1_258_291, "en")` → `"1.2 MB"` (mutation: always `formatMb` → "0 MB" → FAILS).
@@ -1156,7 +1224,10 @@ import { randomBytes } from "node:crypto";
 /**
  * A share link's token (spec 4.1): 32 random bytes, base64url, 43 characters (2b's shape, so
  * isTokenShape and tokenHash in ../document-requests/token.ts serve both). Only sha256(token) is
- * stored; the link exists once, in the toast and the clipboard. Server only.
+ * stored; the link exists once, in the toast and the clipboard. Our code never logs it; the link
+ * itself travels wherever staff send it, and Vercel's request log records /s/<token> and
+ * /api/s/<token>/download for every visit (review F9; 2b's token.ts names the same residual for /d).
+ * Server only.
  */
 export const newShareToken = (): string => randomBytes(32).toString("base64url");
 export const shareUrl = (origin: string, token: string): string => `${origin.replace(/\/+$/, "")}/s/${token}`;
@@ -1186,6 +1257,8 @@ import { loggableError } from "@/lib/loggable-error";
  * service client of its own. The one mint is signedDocumentReadUrl, 2a's gate.
  */
 export const SHARE_URL_SECONDS = 120;
+/** Ruling O3: a link is downloaded at most this many times in all, from any address (0085's p_link_max). */
+export const SHARE_LINK_MAX_DOWNLOADS = 100;
 export type ShareState = "open" | "expired" | "revoked" | "trashed" | "removed" | "not_found";
 export type ResolvedShare = { state: Exclude<ShareState, "not_found">; share: DocumentShareRow; target: ShareTarget } | { state: "not_found" };
 
@@ -1278,9 +1351,12 @@ export async function shareDownload(db: SupabaseClient, token: string, ipHash: s
     shareId = r.share.id;
     const claim = await claimDocumentShareDownload(db, {
       accountId: r.share.account_id, shareId: r.share.id, ipHash, max: RATE_LIMIT_MAX, windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+      linkMax: SHARE_LINK_MAX_DOWNLOADS,
     });
     if (claim.status === "rate_limited") return { status: 429, body: { error: "rate_limited" } };
     if (claim.status !== "ok") return unavailable();
+    // Review F7: the one moment the timeline gains its "opened" row; ids only, never the token or the title.
+    if (claim.first) console.info(`document share ${r.share.id}: first opened`);
     const signed = await signedDocumentReadUrl(db, r.share.account_id, r.share.version_id, {
       seconds: SHARE_URL_SECONDS, download: shareFileName(r.target.document.title, r.target.version.content_type),
     });
@@ -1327,21 +1403,22 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 ```
 
 - [ ] **Step 7: Run** the three new test files plus `src/lib/documents/read-gate.test.ts` and `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` (no `serviceDb` in `lib`; the route is outside its roots); `pnpm --filter web typecheck`; eslint on the new files. All PASS.
-- [ ] **Step 8: Probes, by name:** (a) `resolveShare` without the trashed check → case 4 FAILS; (b) the download minting `r.target.version.id`'s sibling `current` (edit the call to read the version id from a second `getShareTarget` field you add, then revert) → case 3 FAILS; (c) a revoked link answering `410 { error: "revoked" }` → case 5 FAILS; (d) the catch logging `token` → case 7 FAILS; (e) the route without `X-Robots-Tag` → the route case FAILS. Paste each.
+- [ ] **Step 8: Probes, by name:** (a) `resolveShare` without the trashed check → case 4 FAILS; (b) the mint using `r.target.version.id` instead of `r.share.version_id` → case 3 FAILS (its mock answers a different version id, review F6); (c) a revoked link answering `410 { error: "revoked" }` → case 5 FAILS; (d) the catch logging `token` → case 7 FAILS; (d2) the first-open line on every download → case 6b FAILS; (e) the route without `X-Robots-Tag` → the route case FAILS. Paste each.
 - [ ] **Step 9: Commit** `git add --` the six new files, then `git commit -m "documents: share links' public rule and the one download route, re-proving the token on every request and minting only the shared version (S-07 3b)" -- <the six files>`.
 
 ---
 
-## Task 6: Staff actions; the card's read carries the live link (bis-crm)
+## Task 6: Staff actions; Owners only stops live links (O2); the card's read carries the live link (bis-crm)
 
 **Review:** opus. **Runs beside:** Tasks 4 and 5.
 
 **Files**
 - Create: `…/contacts/document-shares-actions.ts` (+ `document-shares-actions.test.ts`)
+- Modify (ruling O2): `…/contacts/documents-actions.ts` (`setOwnersOnlyAction` `:297-314`, `undoOwnersOnlyAction` `:316-331`, one import) (+ `documents-actions.test.ts`: its `db` mock object `:13-25` gains `revokeDocumentShares: vi.fn()`)
 - Modify: `apps/web/src/lib/documents/documents-load.ts` (`DocumentView`, `isView`) (+ `documents-load.test.ts`); `apps/web/src/lib/documents/document-view.ts` (`documentView`); `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/documents/route.ts` and `…/groups/[groupId]/documents/route.ts` (+ both `route.test.ts`); `…/acct/in-account-service-reads.test.ts` (one `ALLOWED` line)
 
 **Interfaces**
-- Consumes: `getDocument`, `getDocumentVersion`, `createDocumentShare`, `revokeDocumentShares`, `restoreDocumentShares`, `listLiveDocumentShares` (`@bis/db`); `newShareToken`, `shareUrl` (Task 5); `tokenHash`; `originFrom`; `DocFail` (`documents-actions.ts:31`); keys from Task 2.
+- Consumes: `getDocument`, `listReadyVersionScans`, `shareableVersion` (Task 3; ruling R-V), `createDocumentShare`, `revokeDocumentShares`, `restoreDocumentShares`, `listLiveDocumentShares` (`@bis/db`); `newShareToken`, `shareUrl` (Task 5); `tokenHash`; `originFrom`; `DocFail` (`documents-actions.ts:31`); keys from Task 2.
 - Produces:
   - `createDocumentShareAction(accountId: string, documentId: string): Promise<{ ok: true; url: string } | DocFail>`
   - `stopSharingAction(accountId: string, documentId: string): Promise<{ ok: true; ids: string[]; revokedAt: string } | DocFail>`
@@ -1351,13 +1428,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ token: 
 - [ ] **Step 1: Read** `…/contacts/documents-actions.ts:1-70` (the proof shape, `fail`, `log`), `…/contacts/document-requests-actions.ts:1-60`, `:110-170` (link, revoke, undo), their two test files' mock headers, `apps/web/src/lib/documents/documents-load.ts` whole, `apps/web/src/lib/documents/document-view.ts:1-60`, both documents routes and their tests (`route.test.ts:1-60`).
 
 - [ ] **Step 2: Failing tests.**
-  - `document-shares-actions.test.ts` (mocks: `@/lib/auth` → `requireAccountAccess: vi.fn(async () => access)` with `access = { userId: "u_ana", isAgency: false, role: "staff", canManage: false }` per case; `@/lib/db` → `dbForRequest: async () => REQUEST`; `@bis/db` → `serviceDb: () => SERVICE`, `getDocument`, `getDocumentVersion`, `createDocumentShare`, `revokeDocumentShares`, `restoreDocumentShares` as `vi.fn`; `next/headers` → `headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" })`; `@/lib/document-shares/share-token` → `{ newShareToken: () => "T".repeat(43), shareUrl: (o: string, t: string) => \`${o}/s/${t}\` }`):
-    1. A clean, live, team file: `getDocument` is called with `(REQUEST, ACC, DOC)` BEFORE `createDocumentShare` (check `mock.invocationCallOrder`), `getDocumentVersion` with `(REQUEST, ACC, doc.current_version_id)`, and `createDocumentShare` with `(SERVICE, { accountId: ACC, documentId: DOC, versionId: VER, tokenHash: tokenHash("T".repeat(43)), createdBy: "u_ana", now: expect.any(Date) })`; the answer is `{ ok: true, url: "https://app.example.com/s/TTTT…" }` (mutations: write on the request client; write before the read; store the token → FAILS).
-    2. Refusals, each with NO write: a non-uuid id → `documents.error.refused`; `getDocument` null → `documents.error.refused`; trashed → `documents.error.trashed`; no current version, an uploading version, a version of another document → `documents.error.scanning`; `pending` → `documents.error.scanning`; `infected`, `unscannable` → `documents.error.removed`; Owners only for Staff (`canManage: false`) → `documents.share.ownersOnlyRole`, and for an Owner (`canManage: true`) it shares (mutation: drop the role check → the Staff case writes → FAILS).
+  - `document-shares-actions.test.ts` (mocks: `@/lib/auth` → `requireAccountAccess: vi.fn(async () => access)` with `access = { userId: "u_ana", isAgency: false, role: "staff", canManage: false }` per case; `@/lib/db` → `dbForRequest: async () => REQUEST`; `@bis/db` → `async (orig) => ({ ...(await orig()), serviceDb: () => SERVICE, getDocument: vi.fn(), listReadyVersionScans: vi.fn(), createDocumentShare: vi.fn(), revokeDocumentShares: vi.fn(), restoreDocumentShares: vi.fn() })` (the real `shareableVersion` stays); `next/headers` → `headers: async () => new Headers({ host: "app.example.com", "x-forwarded-proto": "https" })`; `@/lib/document-shares/share-token` → `{ newShareToken: () => "T".repeat(43), shareUrl: (o: string, t: string) => \`${o}/s/${t}\` }`):
+    1. A clean, live, team file: `getDocument` is called with `(REQUEST, ACC, DOC)` BEFORE `createDocumentShare` (check `mock.invocationCallOrder`), `listReadyVersionScans` with `(REQUEST, ACC, DOC)`, `shareableVersion` is the REAL one (the `@bis/db` mock spreads `importOriginal` for it), and `createDocumentShare` with `(SERVICE, { accountId: ACC, documentId: DOC, versionId: VER, tokenHash: tokenHash("T".repeat(43)), createdBy: "u_ana", now: expect.any(Date) })`; the answer is `{ ok: true, url: "https://app.example.com/s/TTTT…" }` (mutations: write on the request client; write before the read; store the token → FAILS).
+    1b. **Ruling R-V, the version the reader sees:** current `infected` v3 + older clean v1 → shares `v1`; current `pending` v3 + older clean v1 → shares `v1` (`createDocumentShare`'s `versionId`; mutations: share `doc.current_version_id`; refuse whenever the current one is not clean → FAILS). No version comes from the browser: the action takes only `documentId`.
+    2. Refusals, each with NO write: a non-uuid id → `documents.share.refused`; `getDocument` null → `documents.share.refused` (review F10: never `documents.error.refused`'s "You can't change that file."); trashed → `documents.error.trashed`; no ready version, or only a `pending` current one → `documents.error.scanning`; only `infected` or `unscannable` → `documents.error.removed`; Owners only for Staff (`canManage: false`) → `documents.share.ownersOnlyRole`, and for an Owner (`canManage: true`) it shares (mutation: drop the role check → the Staff case writes → FAILS).
     3. No origin (`headers` with no `host`, `APP_ORIGIN` unset) → `documents.share.failed` and NO share row (mutation: write first → FAILS).
     4. `createDocumentShare` throwing → `documents.share.failed`; `console.error` was called with a line naming the account and the document id and NOT containing `"T".repeat(43)` (mutation: log the url → FAILS).
     5. `stopSharingAction`: proves on the request client, then `revokeDocumentShares(SERVICE, ACC, DOC, "u_ana", expect.any(Date))`; answers `{ ok: true, ids, revokedAt }`; `null` → `documents.share.notShared`; Owners only for Staff → `documents.share.ownersOnlyRole`, no write.
-    6. `undoStopSharingAction`: `restoreDocumentShares(SERVICE, { accountId: ACC, documentId: DOC, ids: ["<lowercased>"], revokedAt, actorId: "u_ana", now: expect.any(Date) })` after the request-client proof; `0` → `documents.share.ended`; ids not an array, empty, 51 long, or holding a non-uuid, or a `revokedAt` that is not an instant → `documents.error.refused` with no read (mutations: accept 51 ids; skip the proof → FAILS).
+    6. `undoStopSharingAction`: `restoreDocumentShares(SERVICE, { accountId: ACC, documentId: DOC, ids: ["<lowercased>"], revokedAt, actorId: "u_ana", now: expect.any(Date) })` after the request-client proof; `0` → `documents.share.ended`; ids not an array, empty, 51 long, or holding a non-uuid, or a `revokedAt` that is not an instant → `documents.share.refused` with no read (mutations: accept 51 ids; skip the proof → FAILS).
+  - `documents-actions.test.ts` (ruling O2): `setOwnersOnlyAction(ACC, DOC, true)` on a visible file calls `revokeDocumentShares(SERVICE, ACC, DOC, "u_ana", expect.any(Date))` once, AFTER `setDocumentOwnersOnly` (`mock.invocationCallOrder`) and after the request-client read; `value: false` never calls it; a `"changed"` write never calls it; `revokeDocumentShares` throwing answers `documents.error.failed`, exactly as R1's `deleteOpenExpiryTasks` throwing does there (mutations: remove the call → FAILS; move it before `setDocumentOwnersOnly` → the order assertion FAILS). `undoOwnersOnlyAction(ACC, DOC, true, false)` (an Undo writing Owners only BACK) calls it once after its write; `undoOwnersOnlyAction(ACC, DOC, false, true)` (undoing a switch TO Owners only) calls neither `revokeDocumentShares` nor `restoreDocumentShares` (mutation: un-revoke on undo → FAILS).
   - `documents-load.test.ts`: a view with `share: { expiresAt: "2026-10-19T12:00:00Z" }` parses ready; a view without `share` parses ready; `share: { expiresAt: "soon" }` and `share: "x"` answer `error` (mutation: accept any `share` → FAILS).
   - Both documents route tests: the `db` mock gains `listLiveDocumentShares: vi.fn()`, set in `beforeEach` to `async () => ({})`. New case: with `listLiveDocumentShares` answering `{ d1: "2026-10-19T12:00:00Z" }`, `body.live[0].share` equals `{ expiresAt: "2026-10-19T12:00:00Z" }`, the other rows have NO `share` key (`"share" in row` is false), and the call was `(REQUEST, ACC, { kind: "contact", id: C }, expect.any(Date))` (the group route: `{ kind: "group", id: G }`); with it throwing, the response is still 200, no row has `share`, and `console.error` names the account (mutations: `share: null` on every row → the existing exact `toEqual` at `:53` FAILS; let the throw fail the route → FAILS).
 
@@ -1372,7 +1451,8 @@ import { headers } from "next/headers";
 import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import {
-  serviceDb, getDocument, getDocumentVersion, createDocumentShare, revokeDocumentShares, restoreDocumentShares, type DocumentRow,
+  serviceDb, getDocument, listReadyVersionScans, shareableVersion, createDocumentShare, revokeDocumentShares, restoreDocumentShares,
+  type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
 import { loggableError } from "@/lib/loggable-error";
@@ -1386,12 +1466,12 @@ import type { DocFail } from "./documents-actions";
  * document (RLS: the record's visibility, the Technician fence, Owners only), and only then the service
  * client, scoped to the same account and document (0053; listed proven-target in
  * in-account-service-reads.test.ts). An Owners-only file is shared or stopped by an Owner or the agency
- * only (E3), checked here as well as by RLS. The shared version is the document's CURRENT one, and only
- * when it is ready and clean (plan deviation 9). The link is built once and never stored or logged:
- * only its sha256 is kept. Answers are messages.ts keys.
+ * only (E3), checked here as well as by RLS. The shared version is the one the reader SEES, computed here
+ * by documentView's rule (ruling R-V: the newest clean ready version), never taken from the browser. The
+ * link is built once and never stored or logged: only its sha256 is kept. Answers are messages.ts keys.
  */
 const fail = (error: string): DocFail => ({ ok: false, error });
-const REFUSED = "documents.error.refused";
+const REFUSED = "documents.share.refused";
 const FAILED = "documents.share.failed";
 const ROLE = "documents.share.ownersOnlyRole";
 const MAX_UNDO_IDS = 50;
@@ -1416,17 +1496,15 @@ export async function createDocumentShareAction(accountId: string, documentId: s
     const doc = await provenDocument(accountId, docId, access.canManage);
     if (typeof doc === "string") return fail(doc);
     if (doc.deleted_at !== null) return fail("documents.error.trashed");
-    if (!doc.current_version_id) return fail("documents.error.scanning");
-    const version = await getDocumentVersion(await dbForRequest(), accountId, doc.current_version_id);
-    if (!version || version.document_id !== doc.id || version.status !== "ready" || version.scan_status === "pending") {
-      return fail("documents.error.scanning");
-    }
-    if (version.scan_status !== "clean") return fail("documents.error.removed");
+    // Ruling R-V: the version the reader sees, read on the request client, by documentView's own rule.
+    const pick = shareableVersion(await listReadyVersionScans(await dbForRequest(), accountId, doc.id), doc.current_version_id);
+    if (pick.kind === "pending") return fail("documents.error.scanning");
+    if (pick.kind === "removed") return fail("documents.error.removed");
     const origin = originFrom(await headers());
     if (!origin) return fail(FAILED);
     const token = newShareToken();
     await createDocumentShare(serviceDb(), {
-      accountId, documentId: doc.id, versionId: version.id, tokenHash: tokenHash(token), createdBy: access.userId, now: new Date(),
+      accountId, documentId: doc.id, versionId: pick.versionId, tokenHash: tokenHash(token), createdBy: access.userId, now: new Date(),
     });
     return { ok: true, url: shareUrl(origin, token) };
   } catch (e) {
@@ -1473,6 +1551,17 @@ export async function undoStopSharingAction(accountId: string, documentId: strin
 }
 ```
 
+  **Ruling O2**, `…/contacts/documents-actions.ts`: import `revokeDocumentShares` from `@bis/db`; in `setOwnersOnlyAction`, right after R1's line (`:308`):
+
+```ts
+    // Ruling O2 (S-07 3b): an Owners-only file keeps no live share link. Service client, account and document
+    // scoped, after the read and the write; a throw fails the action exactly as R1's delete does. Switching
+    // back off holds nothing: a stopped link stays stopped.
+    if (r === "updated" && value) await revokeDocumentShares(serviceDb(), accountId, docId, access.userId, new Date());
+```
+
+    and in `undoOwnersOnlyAction`, right after R1's twin (`:325`): `if (r === "updated" && prior) await revokeDocumentShares(serviceDb(), accountId, docId, access.userId, new Date());` with the comment "Ruling O2: an Undo that writes Owners only back stops live links too; undoing Owners only never un-revokes." Nothing else in either action changes.
+
   `documents-load.ts`: `DocumentView` gains `/** S-07 3b: present ONLY while the file has a live share link (the latest expiry). */ share?: { expiresAt: string };`; `isView` gains `&& (v.share === undefined || (isObj(v.share) && instant(v.share.expiresAt)))`. `document-view.ts`: `documentView(d, viewerId, names, zone, shareExpiresAt: string | null = null)` returns `{ …, ...(shareExpiresAt ? { share: { expiresAt: shareExpiresAt } } : {}) }`. Each documents route: import `listLiveDocumentShares`; inside the `Promise.all`, add a fourth read:
 
 ```ts
@@ -1485,8 +1574,8 @@ export async function undoStopSharingAction(accountId: string, documentId: strin
   (the group route passes `{ kind: "group", id: groupId }`), destructured as `shares`, and the `live` map passes `shares[d.id] ?? null` as the fifth argument (trashed rows pass nothing). `in-account-service-reads.test.ts`: `ALLOWED` gains, after the `document-requests-actions.ts` line, `"app/(dashboard)/dashboard/accounts/[accountId]/contacts/document-shares-actions.ts": "proven-target",` with a comment `// S-07 3b: share links; the document is read on the request client first.`
 
 - [ ] **Step 5: Run** the new and modified tests plus `in-account-service-reads.test.ts`, `src/lib/documents/read-gate.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/documents/page.test.ts"` (the page calls `documentView` with four arguments: unchanged); `pnpm --filter web typecheck`; eslint. All PASS.
-- [ ] **Step 6: Probes:** (a) `createDocumentShareAction` without the Owners-only check → case 2 FAILS; (b) `undoStopSharingAction` without `MAX_UNDO_IDS` → case 6 FAILS; (c) `documentView` writing `share: null` always → the route's exact `toEqual` FAILS; (d) `ALLOWED` line removed → `in-account-service-reads.test.ts` FAILS. Paste each.
-- [ ] **Step 7: Commit** `git add -- <the two new files>` then `git commit -m "documents: Copy share link, Stop sharing and its Undo, proven on the reader's own view of the file; the card's read says when a link is live (S-07 3b)" -- <every path above>`.
+- [ ] **Step 6: Probes:** (a) `createDocumentShareAction` without the Owners-only check → case 2 FAILS; (a2) sharing `doc.current_version_id` → case 1b FAILS; (a3) O2's call removed → the Owners-only case FAILS; (a4) O2's call moved above `setDocumentOwnersOnly` → its order assertion FAILS; (b) `undoStopSharingAction` without `MAX_UNDO_IDS` → case 6 FAILS; (c) `documentView` writing `share: null` always → the route's exact `toEqual` FAILS; (d) `ALLOWED` line removed → `in-account-service-reads.test.ts` FAILS. Paste each.
+- [ ] **Step 7: Commit** `git add -- <the two new files>` then `git commit -m "documents: Copy share link (the version the reader sees), Stop sharing and its Undo; Owners only stops live links; the card's read says when a link is live (S-07 3b)" -- <every path above, including documents-actions.ts and its test>`.
 
 ---
 
@@ -1513,7 +1602,7 @@ describe("next.config.ts: a shared file's page (S-07 3b, spec 4.2; plan deviatio
   });
 });
 ```
-- [ ] **Step 3: Run them to see them fail** (`pnpm --filter web exec vitest run src/proxy.test.ts src/next-config.test.ts`).
+- [ ] **Step 3: Run them to see them fail** (`pnpm --filter web exec vitest run src/proxy.test.ts src/next-config.test.ts`). Review F11: `apps/web/src/lib/i18n/request-locale.test.ts:69-73` says next.config.ts "expects the Next.js build runtime" and is NOT safe to import from a vitest worker, which is why that test scans the file's text. The red run decides: if importing `../next.config` throws or warns for a reason other than the missing `headers`, STOP and switch `next-config.test.ts` to a text scan (read the file, assert it contains `source: "/s/:token"` with both header objects, with the same mutations), and say so in the report.
 - [ ] **Step 4: Implement.** `proxy.ts`: the matcher becomes `"/((?!_next|c/|f/|b/|u/|d/|s/|.*\\..*).*)"`; the comment's list of trees gains "and /s (share links)" and a paragraph: "`/s/<token>` (S-07 3b) is a shared file's page, opened by whoever got the link, with no sign-in, the same reason as `/d`. Its download route `/api/s/…` stays matched: the page calls it with `fetch`, which is not a document request, so Clerk never hands it a handshake." `next.config.ts` gains, after `experimental`:
 
 ```ts
@@ -1635,7 +1724,7 @@ export function DocumentViewerShare({ doc, locale, onShare }: { doc: DocumentVie
 
 - [ ] **Step 1: Read** `apps/web/src/app/d/[token]/*` whole (every file and test: this tree is its twin), `apps/web/src/components/public/public-html.tsx`, `apps/web/src/lib/branding/public-form-theme.ts` (its signature).
 - [ ] **Step 2: Failing tests** (copy `/d`'s test shapes; `vi.mock("./data")`, `vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }))`; `renderedText` for every copy assertion, the `<style>` stripped):
-  - `page.test.ts`: `dynamic === "force-dynamic"`; an open Spanish page with a themed branding: `<main class="bis-docreq-page" lang="es"`, `data-tenant-theme=""`, the logo through `PublicBrand`, the heading "Casa Verde compartió un archivo con usted", the title in an element with `lang=""`, "Archivo PDF · 1.2 MB", ONE `[data-share-download]` button reading "Descargar", the phone line "¿Preguntas? Llame a Casa Verde al (956) 555-0123." and "Con tecnología de BIS" (mutations: `lang` from the reader; the account name; a second primary → FAILS); each refusal (`expired`, `revoked`, `trashed`, `removed`) in English shows its own sentence (`it.each` with the four literals from Task 2's table), "Ask Casa Verde to send it again.", the phone line, NO download button and NO file title (mutation: render the title on a refusal → FAILS); with no brand name, "A file was shared with you" / "Ask the business that sent it to send it again." / "Questions? Call the business at …" (never "{business}" or "the business shared"); `not_found` shows "This link doesn't work." and NO phone line and NO business sentence; `generateMetadata` answers `robots: { index: false, follow: false }`, `referrer: "no-referrer"`, and the title "Un archivo de Casa Verde" for the Spanish page.
+  - `page.test.ts`: `dynamic === "force-dynamic"`; an open Spanish page with a themed branding: `<main class="bis-docreq-page" lang="es"`, `data-tenant-theme=""`, the logo through `PublicBrand`, the heading "Casa Verde compartió un archivo con usted", the title in an element with `lang=""`, "Archivo PDF · 1.2 MB", ONE `[data-share-download]` button reading "Descargar", the phone line "¿Preguntas? Llame a Casa Verde al (956) 555-0123." and "Con tecnología de BIS" (mutations: `lang` from the reader; the account name; a second primary → FAILS); each refusal (`expired`, `revoked`, `trashed`, `removed`) in English shows its own sentence (`it.each` with the four literals: "This link has expired." (`customerDocs.expired`) and Task 2's `sharePage.revoked`, `sharePage.trashed`, `sharePage.removed`), "Ask Casa Verde to send it again.", the phone line, NO download button and NO file title (mutation: render the title on a refusal → FAILS); with no brand name, "A file was shared with you" / "Ask the business that sent it to send it again." / "Questions? Call the business at …" (never "{business}" or "the business shared"); `not_found` shows "This link doesn't work." (`customerDocs.notFound`) and NO phone line and NO business sentence; `generateMetadata` answers `robots: { index: false, follow: false }`, `referrer: "no-referrer"`, and the title "Un archivo de Casa Verde" for the Spanish page.
   - `copy.test.ts`: `shareCopy("es", null)("sharePage.heading")` → "Se compartió un archivo con usted"; `shareCopy("en", "Casa Verde")("customerDocs.call", { phone: "(956) 555-0123" })` → "Questions? Call Casa Verde at (956) 555-0123." (mutation: drop a NO_NAME line → FAILS).
   - `share-download.test.ts`: `downloadOutcome(200, { url: "https://x.supabase.co/storage/v1/object/sign/documents/a?token=t&download=f" })` → `go`; `(200, { url: "http://127.0.0.1:54321/…" })` → `go` (the CI stack); `(200, { url: "javascript:alert(1)" })` → `failed`; `(200, {})` → `failed`; `(410, …)` → `refresh`; `(429, …)` → `limit`; `(503, …)` → `failed` (mutation: accept any string url → FAILS). The component renders one `bis-docreq-primary` button with its label (rule 8).
   - `layout.test.ts`: `<html lang>` is the page's language, `en` when `loadPageSafe` answers null (copy `/d`'s).
@@ -1758,8 +1847,9 @@ const UNBRANDED: Branding = {
   replyToEmail: null,
 };
 const REFUSAL: Record<Exclude<ShareState, "open">, MessageKey> = {
-  expired: "sharePage.expired", revoked: "sharePage.revoked", trashed: "sharePage.trashed",
-  removed: "sharePage.removed", not_found: "sharePage.notFound",
+  // Review F10: expired and not-found are 2b's own sentences (customerDocs.*), shared by both customer pages.
+  expired: "customerDocs.expired", revoked: "sharePage.revoked", trashed: "sharePage.trashed",
+  removed: "sharePage.removed", not_found: "customerDocs.notFound",
 };
 
 /** Never indexed, no Referer on; the title in the account's language (spec 4.2; plan deviation 7). */
@@ -1797,7 +1887,7 @@ export default async function SharedFilePage({ params }: { params: Promise<{ tok
     </>
   ) : (
     <>
-      <h1 className="bis-docreq-title" data-share-state={page.state}>{tt(page.state === "open" ? "sharePage.notFound" : REFUSAL[page.state])}</h1>
+      <h1 className="bis-docreq-title" data-share-state={page.state}>{tt(page.state === "open" ? "customerDocs.notFound" : REFUSAL[page.state])}</h1>
       {page.state === "not_found" ? null : <p className="bis-docreq-detail">{tt("sharePage.ask")}</p>}
     </>
   );
@@ -1857,7 +1947,7 @@ export default async function SharedFilePage({ params }: { params: Promise<{ tok
 
 ---
 
-## Task 12: DESIGN.md Provenance line (orchestrator; only on O1 (a))
+## Task 12: DESIGN.md Provenance line (orchestrator; ruling O1, Wave A)
 
 - [ ] **Step 1.** DESIGN.md, "Record page, documents and provenance" › **Provenance**, appended after the "Someone on the team" sentence:
 
@@ -1871,9 +1961,9 @@ export default async function SharedFilePage({ params }: { params: Promise<{ tok
 
 **Reviewer:** opus, fresh context. Runs after Tasks 1–12.
 
-- [ ] **Step 1.** Read spec §2 E3, §4, §5–§7 (3b parts), this plan's owner questions and deviations, then `git diff 38fc8776...HEAD` in `<WT>`; walk "Spec coverage" below row by row against the diff.
+- [ ] **Step 1.** Read spec §2 E3, §4, §5–§7 (3b parts), this plan's rulings (O1–O3, R-V) and deviations, then `git diff 38fc8776...HEAD` in `<WT>`; walk "Spec coverage" below row by row against the diff.
 - [ ] **Step 2.** Web tests by path: every test file Tasks 2 and 4–9 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `src/lib/documents/read-gate.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/proxy.test.ts`, `src/next-config.test.ts`; `pnpm --filter web typecheck`. The db suites on your own replica (Postgres `55641`, PostgREST `55648`, gateway `55649`): `document-shares-schema.test.ts`, `schema-grants-guard.test.ts`, `document-vault-schema.test.ts`, `document-vault-rls.test.ts` on `post`; `document-shares.test.ts`, `record.test.ts`, `timeline-merge.test.ts`, `documents.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name. Re-run Task 1's byte check and md5 (must equal Task 1's).
-- [ ] **Step 3.** Hunt specifically: (a) any public read or write that takes an id from the request instead of the token row, or misses `account_id`, the document or the version; (b) a refusal answer that differs by state, a token or link in any log line, an error body naming an id; (c) a page or route answer missing one of the three headers; a page state that reveals more than its sentence; the open page showing anything but title, type, size; (d) 0085: ASCII, no backslash, no lone `$`, `lock_timeout` first, both FKs composite and cascading, the expiry and coherence checks, no client write grant, the claim's lock, its clean/trash/expiry/revoke checks, the rate count keyed on share AND address, the view `security_invoker` and SELECT-only, the rollback order; (e) a staff write before the request-client read, or on the request client; Owners-only shared by Staff; the shared version not the CURRENT one; the Undo restoring someone else's stop or an expired link; (f) a page load that claims; "first" decided outside the lock; (g) the author mark a sixth kind, or the swap reaching any other row; (h) rule 6 (Stop sharing at once, Undo in the toast), rule 7 (no spinner), rule 8 (one primary on the card, the viewer, the public page), rule 9 (logo, colour, Powered by BIS), copy in tú, vendor words, `accounts.name` on the public page; (i) a test that cannot fail (memory "Vacuous test shapes"); (j) the e2e touching anything but the per-run fixture account.
+- [ ] **Step 3.** Hunt specifically: (a) any public read or write that takes an id from the request instead of the token row, or misses `account_id`, the document or the version; (b) a refusal answer that differs by state, a token or link in any log line, an error body naming an id; (c) a page or route answer missing one of the three headers; a page state that reveals more than its sentence; the open page showing anything but title, type, size; (d) 0085: ASCII, no backslash, no lone `$`, `lock_timeout` first, both FKs composite and cascading, the expiry and coherence checks, no client write grant, the claim's lock, its clean/trash/expiry/revoke checks, the rate count keyed on share AND address, the view `security_invoker` and SELECT-only, the rollback order; (e) a staff write before the request-client read, or on the request client; Owners-only shared by Staff; the shared version not the CURRENT one; the Undo restoring someone else's stop or an expired link; (f) a page load that claims; "first" decided outside the lock; (g) the author mark a sixth kind, or the swap reaching any other row; (h) rule 6 (Stop sharing at once, Undo in the toast), rule 7 (no spinner), rule 8 (one primary on the card, the viewer, the public page), rule 9 (logo, colour, Powered by BIS), copy in tú, vendor words, `accounts.name` on the public page; (i) a test that cannot fail (memory "Vacuous test shapes"); (j) the e2e touching anything but the per-run fixture account. (k) ruling R-V: a share whose version is not the one documentView shows, or a version id taken from the browser; (l) ruling O2: an Owners-only switch (or an Undo writing it back) that leaves a live link, a revoke before the write or on the request client, an Undo of Owners only that un-revokes; (m) ruling O3: the per-link cap missing, counted per address, or recording a download it refused.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent. **0085 goes to bis-ci only when this review approves it UNCHANGED.**
 
 ---
@@ -1882,14 +1972,14 @@ export default async function SharedFilePage({ params }: { params: Promise<{ tok
 
 Each step reads its own evidence; nothing is inferred from an earlier run.
 
-- [ ] **Step 1. The owner questions** O1–O3 are answered (Task 0 step 3); the ledger records them; any change they named has landed and been reviewed.
-- [ ] **Step 2. bis-ci** (only AFTER Task 13 approves 0085 unchanged): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/s07-vault-3b` → its log lists exactly `0085_document_shares.sql`; then `-f step=push`. Post-apply, read-only through MCP `execute_sql` on `odnobiodsftffphuuosz`: `select relname from pg_class where relname in ('document_shares','document_share_downloads','document_share_timeline') order by 1` → all three; `select conname from pg_constraint where conname in ('document_versions_account_document_id_key','document_shares_expiry','document_shares_version_fkey','document_shares_document_fkey') order by 1` → all four; `select has_function_privilege('authenticated','public.claim_document_share_download(uuid,uuid,text,integer,integer)','execute')` → `f`; the Faithfulness digest on bis-ci is UNCHANGED from Task 0 (0085 adds no client write). From here on the `@bis/db` suites may run against bis-ci again.
+- [ ] **Step 1. The rulings** O1–O3 and R-V (2026-10-18) are in the ledger, and every change they named has landed and been reviewed.
+- [ ] **Step 2. bis-ci** (only AFTER Task 13 approves 0085 unchanged): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/s07-vault-3b` → its log lists exactly `0085_document_shares.sql`; then `-f step=push`. Post-apply, read-only through MCP `execute_sql` on `odnobiodsftffphuuosz`: `select relname from pg_class where relname in ('document_shares','document_share_downloads','document_share_timeline') order by 1` → all three; `select conname from pg_constraint where conname in ('document_versions_account_document_id_key','document_shares_expiry','document_shares_version_fkey','document_shares_document_fkey') order by 1` → all four; `select has_function_privilege('authenticated','public.claim_document_share_download(uuid,uuid,text,integer,integer,integer)','execute')` → `f`; the Faithfulness digest on bis-ci is UNCHANGED from Task 0 (0085 adds no client write). From here on the `@bis/db` suites may run against bis-ci again.
 - [ ] **Step 3. Push and CI.** Until Step 2, `e2e` is red on its migration check by design (0085 not on bis-ci); after Step 2, re-run and read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). The e2e share spec must have run (spec §7). A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
 - [ ] **Step 4. Production** (MCP on `tlbkbmlrfafquucsmsmm`): read-only pre-flight `select max(version) from supabase_migrations.schema_migrations` → the 0084 apply; then `apply_migration` with 0085's exact text, ONCE (Task 1 step 6 proved no backslash and no lone `$`; the text's md5 equals Task 1's). Additive, and the code needs it, so it goes BEFORE the merge (spec §7: migration before code deploy). Ledger line: `0085 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
 - [ ] **Step 5. Parity.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both projects; the three relations, the constraints, the function's ACL and body, the view's definition and options, and the grants are equal; the client-write digest is equal on both.
 - [ ] **Step 6. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first).
 - [ ] **Step 7. Preview, by hand (owner and orchestrator together)**, on the branch's Preview (bis-ci), on a test account (never Test Client One): share a clean file from the card and from the Documents page's viewer; the "Shared · expires in 24 h" line; open the link in a private window (both themes of the tenant, a phone width, the Spanish account); Download; the timeline's two rows; Stop sharing and the revoked page; Undo. Delete what you made.
-- [ ] **Step 8. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 13's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>` (pinned to the reviewed head; never `--auto` without the pin). The PR body names: O1–O3 and the owner's answers; deviations 1–12; the pinned tests changed; "Not in this PR"; the Preview results; the 0085 apply lines.
+- [ ] **Step 8. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 13's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>` (pinned to the reviewed head; never `--auto` without the pin). The PR body names: the rulings O1–O3 and R-V; that repeated Copy share link on one file makes one link and one "shared" timeline row per press, accepted (review F12, deviation 3); deviations 1–12; the pinned tests changed; "Not in this PR"; the Preview results; the 0085 apply lines.
 - [ ] **Step 9. After the deploy** (spec §7, owed): the deploy reads READY on the merge SHA. **Production smoke on an AGENCY-owned record:** upload or pick a clean file; Copy share link; open it in a private window; Download; the record's timeline shows "You shared …" and "The link's recipient opened …"; Stop sharing; the private window's reload shows the revoked page. Tracker: item 6 / F-005 → `done`, "part 3b (share links) shipped #<n>".
 
 ---
@@ -1904,6 +1994,9 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 | §4.1 Copy share link in the row menu and the viewer header; Documents page | Task 8; deviation 2 (the page through the viewer) |
 | §4.1 RLS read through the request client first; Owners only for Owners and agency | Task 6 (`provenDocument`), Task 1 (RLS) |
 | §4.1 refused for trashed and not-clean, plain copy | Task 6; deviation 8 |
+| §4.1 amendment (R-V): the version the reader sees, computed on the server | Task 3 (`shareableVersion`, `listReadyVersionScans`), Task 6 (case 1b); deviation 9 |
+| §4.1 amendment (O2): Owners only stops every live link; undoing it never un-revokes | Task 6 (`setOwnersOnlyAction`, `undoOwnersOnlyAction`) |
+| O3: a per-link total cap of 100 downloads | Task 1 (`p_link_max`), Task 3 (`linkMax`), Task 5 (`SHARE_LINK_MAX_DOWNLOADS`) |
 | §4.1 random token, sha256 stored, `${APP_ORIGIN}/s/${token}`, toast "Link copied. It works for 24 hours." | Task 5 (`newShareToken`, `shareUrl`), Task 6 (`originFrom`, `tokenHash`), Tasks 2, 8 |
 | §4.1 "Shared · expires in 18 h" with Stop sharing; at once; Undo compare-and-set on `revoked_at` while unexpired | Tasks 3 (`revokeDocumentShares`, `restoreDocumentShares`), 6, 8; deviation 3 |
 | §4.1 timeline "Ana shared …" (person mark); revoking is not a row | Task 4; deviation 4 |
@@ -1913,7 +2006,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 | §4.2 Cache-Control no-store, Referrer-Policy no-referrer, X-Robots-Tag noindex | Task 5 (route), Task 7 (`next.config.ts`), Task 9 (`dynamic`, metadata); deviation 7; Task 11 test 2 |
 | §4.2 rate limiting reusing the forms/upload-link limiter keyed on IP + token hash; the plan names it | Task 1 (`document_share_downloads`, the claim), Task 5 (`clientIp`, `hashIp`, `RATE_LIMIT_MAX`, `RATE_LIMIT_WINDOW_MS`); deviation 1; O3 |
 | §4.3 first successful Download (not page load) sets `first_opened_at` by compare-and-set; that win adds the row; later downloads increment `open_count` | Task 1 (the claim under the lock), Task 5 (claim only on Download), Task 4 (the opened row); deviation 5 |
-| §4.3 the mark "the customer" kind worded as the recipient; checked against the closed set; raised to the owner | O1; Task 4; Task 12 |
+| §4.3 the mark "the customer" kind worded as the recipient; checked against the closed set; raised to the owner | ruling O1; Task 4; Task 12 |
 | §4.4 columns, composite FKs on account, `token_hash` unique, expiry CHECK, coherent revoke pair, `open_count` default 0 | Task 1; deviation 11 |
 | §4.4 RLS via documents under the reader's RLS; server-only writes; no client write grants | Task 1 |
 | §4.4 teardown and fixture sweep list the table | Task 1 step 5b; deviation 12 |
@@ -1926,8 +2019,9 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 ## Self-review notes (the writer's own pass, 2026-10-18)
 
-- **Spec coverage:** every §4 bullet maps to a row above. Where the code made the spec's words impossible or ambiguous: deviations 1–12, each with the file:line that decided it; the author mark is owner question O1, not an invented kind.
+- **Spec coverage:** every §4 bullet maps to a row above. Where the code made the spec's words impossible or ambiguous: deviations 1–12, each with the file:line that decided it; the author mark went to the owner and is ruling O1, not an invented kind.
 - **Placeholder scan:** no TBD/TODO. The values a test pins were read off the source on 2026-10-18 (author-mark.test.ts's `ctx`/`makeTr`, `:32-33`; `formatMb`'s es-US output `1.2`, run with node; "Insurance", "In the trash"). Two steps carry a read-then-adapt rule (`listPhoneNumbersForAccount`'s row field names; the documents list's viewer test, through a render or a structure pin), each keeping the assertion's meaning fixed. Task 1's lock test names the one place its seed must not use `attempt` (no transaction on a committed connection).
 - **Type consistency:** `DocumentShareRow`, `DocumentShareLife`, `documentShareState`, `ShareTarget`, `getShareTarget`, `createDocumentShare`, `findDocumentShareByTokenHash`, `listLiveDocumentShares(db, accountId, record, now)`, `revokeDocumentShares`, `restoreDocumentShares(db, { …, revokedAt, actorId, now })`, `claimDocumentShareDownload(db, { accountId, shareId, ipHash, max, windowSeconds })`, `ShareClaim`, `listDocumentShareTimeline`, `TimelineDocumentShare` (Task 3) → Tasks 4, 5, 6; `newShareToken`, `shareUrl`, `resolveShare`, `sharePage`, `SharePage`, `ShareState`, `shareDownload`, `shareSize`, `shareFileName`, `SHARE_URL_SECONDS` (Task 5) → Tasks 6, 9; `createDocumentShareAction`, `stopSharingAction`, `undoStopSharingAction`, `DocumentView.share`, `documentView(…, shareExpiresAt)` (Task 6) → Task 8; `copyShareLink`, `stopSharing`, `rowMenuItems(doc, canManage, now?)`, `shareHoursLeft`, `DocumentViewerShare`, `onShare` (Task 8) → Task 11's selectors; `documentShared`, `documentShareOpened`, `provenance.linkRecipient` (Tasks 2, 4) → Task 11; markers `data-document-shared`, `data-document-share`, `data-share-download`, `data-share-state`, `data-share-file`, `data-timeline-item="documentShareOpened"` → Task 11.
 - **Vacuity pass:** every prescribed test names its mutation; copy is asserted in both languages against literals; the isolation cases assert the exact ids passed, not "was called"; the uniform-refusal case compares whole answers; the lock is proven by a lock timeout, not by timing; Task 1's byte check has a positive control; the route's header case fails on any one header dropped.
+- **Revision 2026-10-18:** O1 (Task 12 unconditional), O2 (Task 6, `setOwnersOnlyAction`/`undoOwnersOnlyAction`), O3 (`p_link_max` = 100 through Tasks 1, 3, 5), R-V (Tasks 3, 6; deviation 9 replaced); F1 (the lock test is an outcome test: two concurrent claims, `pg_stat_activity` shows B waiting, B's answer checked at limits 1 and 5), F2 (`scanned_at = now()` in `cleanVersion`), F4 (cascade mutation names both FKs and the downloads FK), F5 (probe (d) rests on trigger order, the run settles it), F6 (Task 5 case 3's mock answers a different version id), F7 (the `first` flag logs one id-only line, case 6b), F9 (the Vercel request-log residual named in Global Constraints and `share-token.ts`), F10 (`customerDocs.expired`/`notFound` reused; `documents.share.refused` added), F11 (Task 7 step 3), F12 (the PR body).
 - **Not executed:** nothing in this plan was run; every name was read off `38fc8776` except where an Assumption says otherwise (A1–A6), each with its check.

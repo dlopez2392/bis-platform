@@ -116,6 +116,8 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
 - **Copy share link** goes in the document row menu (record card and Documents page) and in the viewer header.
   - Allowed for anyone who can read the document (an RLS read through the request client first), and only Owners and agency staff when the file is Owners only.
   - Refused for trashed files and for versions that are not scan-clean, with plain copy: "This file is still being checked" or "This file was removed".
+  - **Amended 2026-10-18 (orchestrator ruling, plan PR 3b review finding 3):** a link shares the version the reader SEES, computed on the server exactly as the card's view does (the newest scan-clean ready version; with none clean, the current version decides the refusal), never from an id the browser sends. A current infected or pending version with an older clean one shares the older clean one; with no clean version the share is refused ("still being checked" when pending, "removed" when infected or unscannable).
+  - **Amended 2026-10-18 (owner ruling O2):** switching a file to Owners only stops every live share link on it at once, on the server, in the same action, after the action's own read and write (beside 3a's expiry To-do delete). Undoing Owners only does not bring a stopped link back.
 - **What the server action does:**
   - mints a random token
   - stores `sha256(token)`
@@ -133,12 +135,12 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
   - one **Download** button, which calls `POST /api/s/[token]/download`. That route re-proves the token, then mints a 120 s signed URL for **the shared version** (not the current one).
   - no other customer data
   - "Powered by BIS" footer
-- **Refusal pages:** expired, revoked, trashed and infected-or-removed each get their own plain page that names the business and its phone number. The response never says whether a token exists.
+- **Refusal pages:** expired, revoked, trashed and infected-or-removed each get their own plain page that names the business and its phone number. **Amended 2026-10-18 (plan PR 3b review):** the download route answers every refusal identically, and an unknown token's page names no business.
 - **The page sends:**
   - `Cache-Control: no-store`
   - `Referrer-Policy: no-referrer`
   - `X-Robots-Tag: noindex`
-- **Rate limiting** reuses the forms and upload-link limiter keyed on IP + token hash. The plan names the existing limiter.
+- **Rate limiting** reuses the forms and upload-link limiter keyed on IP + token hash. The plan names the existing limiter. **Amended 2026-10-18 (owner ruling O3):** the forms limiter's numbers (`clientIp`, `hashIp`, 5 per 10 minutes) are counted per link and address in a `document_share_downloads` table that 0085 adds, and each link is downloaded at most 100 times in all.
 
 ### 4.3 View tracking
 
