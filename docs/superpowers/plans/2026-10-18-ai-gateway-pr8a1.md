@@ -24,6 +24,11 @@
 | I11 | No ledger pruning in 8a | "Not in this PR" |
 | I12 | The global switch is a singleton row toggled from every account's AI card behind a typed word, plus `AI_GATEWAY_OFF` | Tasks 1, 4, 7, 8 |
 | I14 | $10 a month and 200 a day, re-read from 8a-1's real ledger before 8a-2 ships | Task 13 step 9 |
+| Q1 (2026-10-18) | The typed word is OFF / APAGAR, either accepted by the server | Tasks 3, 7, 8 |
+| Q2 (2026-10-18) | Keep "AI was skipped N times this month", counting only `global_off`, `account_off`, `over_budget` (review I7: `countAiSkipsSince`) | Tasks 2, 7, 8 |
+| Q3 (2026-10-18) | Whole dollars in the budget field | Task 7 |
+| Q4 (2026-10-18) | A successful call is a ledger row and no log line | Task 4 |
+| M12 (2026-10-18) | The global switch's Undo restores an ALREADY-CONFIRMED state without retyping: after turning AI off (typed), Undo turns it on; after turning it on, Undo turns it off again by passing the reader's word itself (the server still checks it). Accepted | Task 8 (`aiCardHandlers.setGlobal`) |
 
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
@@ -31,12 +36,12 @@
 2. **`gate_unreadable` is an allowed ledger outcome.** Spec §3.3's outcome check lists `ok, account_off, global_off, over_budget, unknown_model, timeout, provider_error, no_key`, but §3.1 makes `gate_unreadable` a refusal of step 3 and says "Refusals in steps 2–4 write a ledger row too". The check carries all nine (the row will often fail to write when the database is the problem; the attempt is logged either way).
 3. **`aiComplete` takes the database client as its first argument.** Spec §3.1's input has no client. The gateway needs one for its two RPCs, and `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts:34` scans every file under `lib` for a value-level `serviceDb`, listing each with a reason; its own doc (`:22-30`) says a helper that TAKES a client is not listed, "the caller who chose to pass a service client is the one this scan lists". So `aiComplete(db, input)`, and the callers pass `finishCall`'s `ctx.db` (`lib/voice/finish-call.ts:48`, `db: ReturnType<typeof serviceDb>`). `generateSummary`'s `opts` gains `db` and `accountId` (spec: `accountId` only); `readCallForCard`'s `opts` gains `db`, `accountId` and `timezone`; `generateProposals` already has all three (`lib/proposals/generate.ts:247`, `:286`).
 4. **The input carries the account's zone.** Choice I7 makes the month the account's own; the RPCs take `p_month`/`p_day` (spec §3.3), so the gateway needs the zone. `AiInput.timezone` is required; `safeZone` (`lib/billing/billing-view.ts:58-60`, falls back to `America/Chicago`) cleans it. `finishCall` has `ctx.timezone` (`finish-call.ts:61`); `generateSummary`'s timezone stays optional and an absent one resolves through `safeZone("")`.
-5. **The two RPCs are time-bounded (3 s each).** supabase-js puts no timeout on an `rpc`; the gate check runs BEFORE the call row is durable (the summary is "first in finishCall, before anything is written", `app/api/voice/incoming/route.ts:408-409`). Both calls get `.abortSignal(AbortSignal.timeout(3_000))`; a gate timeout is `gate_unreadable` (fail closed), a ledger timeout is a logged failure that keeps the text. The incoming route's teardown budget comment (`route.ts:401-422`) is updated: each completion can now take 3 + 10 + 3 s, so the summary leg is 16 s, the row is durable "~44s in" (was ~38s), and the tail is 91 s (was 73 s); `maxDuration = 800` (`route.ts:102`) is unchanged.
+5. **The two RPCs are time-bounded (3 s each).** supabase-js puts no timeout on an `rpc`; the gate check runs BEFORE the call row is durable (the summary is "first in finishCall, before anything is written", `app/api/voice/incoming/route.ts:408-409`). Both calls get `.abortSignal(AbortSignal.timeout(3_000))`; a gate timeout is `gate_unreadable` (fail closed), a ledger timeout is a logged failure that keeps the text. Each completion can now take 3 + 10 + 3 s, so the post-cap tail grows from 73 s to 91 s, and the call cap's clamp, DERIVED from that tail (`route.ts:459`, `800 - 73 - 20 - 10 = 697`; `:491` `Math.min(Math.max(parsedOrDefault, 10), 697)`), is re-derived to `800 - 91 - 20 - 10 = 679` (review I1). A BEHAVIOUR change, not a comment: an operator who set `PHONE_MAX_CALL_SECONDS` above 679 now gets 679 (the default, 240, is untouched). The row is durable "~44s in" (was ~38s). `maxDuration = 800` (`route.ts:102`) is unchanged. Every place that names 697 or the 12 s text-back ceiling moves with it (Task 5 step 7 lists them).
 6. **The callers' own catch blocks must not log the model's words either.** Not in the spec's scope (§3.1 speaks of the library), but G3 and the brief forbid it, and the code does it today: `JSON.parse` on unparseable content throws a `SyntaxError` whose message quotes the input's first characters (run here with node 24: `SyntaxError: Unexpected token 'S', "SENTINEL-O"... is not valid JSON`), and both `generate.ts:623` (`console.error(\`generateProposals: failed for call ${input.callId}: ${String(e)}\`)`) and `call-card.ts:212` (`console.error(\`${label}: reading failed: ${String(e)}\`)`) log `String(e)`. Both switch to `aiSafeError(e)` (`lib/ai/log.ts`), which names a `SyntaxError` without its message. Named probes in Tasks 5 and 6.
 7. **`no_key` sits at the provider step, and the gateway owns its log line.** Spec §3.1 lists `no_key` without placing it. It is checked after the gate and the budget (so a switched-off account never logs a missing key) and writes a `no_key` ledger row. The callers' own missing-key lines (`generate.ts:331-335`, `call-card.ts:172-175`) are removed; the gateway logs one line per call, as today. `summary-service.ts` silently skipped a missing key (`:42-45`); it now gets the gateway's line too (production has the key).
 8. **Only failures are logged.** Spec §3.1: "What the library logs: account id, feature, outcome, latency …". The ledger records every call; the gateway's log carries only non-`ok` outcomes: `provider_error`, `timeout`, `no_key`, `unknown_model` and `gate_unreadable` on `console.error`, the three expected states (`global_off`, `account_off`, `over_budget`) on `console.log`, so a switched-off account does not raise an error line per call (the reasoning at `generate.ts:301-311`). An `ok` call logs nothing, which keeps `generate.test.ts:771-785` ("logs NOTHING when it simply returns no proposals") true.
 9. **A log line can name the call.** `AiInput.ref` (an id-only reference such as `call call1`) is appended to the gateway's line, because `generate.test.ts:771-780` pins that the failure line names the call, and `call-card.ts`'s `label` (`:167`, `finishCall ${meta.callRowId}`) already names it. `ref` never holds text from a transcript (the type says so; review checks every call site).
-10. **A provider answer with no text is `provider_error`, charged from its usage.** Spec §3.5 covers a missing `usage`, not missing content. Today `generate.ts:376-380` logs "model response had no content" and returns 0. The gateway returns `{ ok: false, reason: "provider_error" }` and records the tokens the answer reported (a paid answer is still paid); `generate.ts`'s now-unreachable content check is removed.
+10. **A provider answer with no text is `provider_error`, charged from its usage.** Spec §3.5 covers a missing `usage`, not missing content. Today `generate.ts:376-380` logs "model response had no content" and returns 0; the gateway's line keeps the words "no content" (`provider_error (no content in the answer)`), so `generate.test.ts:1006-1019` keeps passing on the gateway's one line. The gateway returns `{ ok: false, reason: "provider_error" }` and records the tokens the answer reported (a paid answer is still paid); `generate.ts`'s now-unreachable content check is removed.
 11. **The ledger's `model` column is capped at 64 characters, and every token and latency is checked non-negative.** Not in §3.3's column list; added so no column can hold a prompt (the spec's own aim, "There is no text column that could hold a prompt"). The gateway slices the model id to 64 before it writes.
 12. **A late row from an older period never rewinds the counters.** Spec §3.3: "adds `p_cost` to the month's spend (resetting it when the month changed)". Two function instances around midnight can record out of order; a `YYYY-MM` / `YYYY-MM-DD` key sorts as text, so `ai_ledger_record` adds when the key is equal, resets when it is NEWER, and leaves the counters alone (still writing the ledger row) when it is OLDER.
 13. **The global switch fails closed when its row is missing.** `ai_gate_check` reads `coalesce(enabled, false)` from the singleton (memory "plpgsql NULL guard"); an account with no settings row gets the defaults (on, $10), as §3.3 says.
@@ -44,7 +49,7 @@
 15. **"Budget reached on {date}" reads the first `over_budget` ledger row of the month.** The spec gives the sentence, not its source. With the spend at or over the budget and no such row yet (no call since the budget was lowered), the card says "Budget reached. AI is paused for this account until {resume}." (`aiSettings.reachedNoDate`).
 16. **The Settings page is English-only; the AI card is bilingual.** The page renders `m["…"]` directly (`…/settings/page.tsx:47`, `:139`, `:175`). Spec §3.6: "Every string is in the typed catalogue in English and Spanish (usted)." The card resolves the reader's locale itself, exactly as `branding/page.tsx:77`, `:115-116` does (`getPersonPrefs()`, `requestLocale({ account, isOperator, userLanguage })`, which `request-locale-callers.test.ts` requires), and renders every string through `t(m, key, locale)`.
 17. **The budget is entered in whole dollars.** The column holds cents (§3.3); the field takes `0`–`1000` dollars, an optional leading `$`, no cents. Simpler to read at 7 AM; the database still holds any cents value an operator sets by SQL.
-18. **Line drift, no meaning change.** Spec §3.2 cites `summary-service.ts:66-89` for the fetch (read: `:72-92`) and `call-card.ts:176` (read: the function at `:165`, its fetch at `:178`). `finish-call.ts:404` and `:928`, `generate.ts:239` and `:338` are as cited.
+18. **Line drift, no meaning change.** Spec §3.2 cites `summary-service.ts:66-89` for the fetch (read: `:72-92`) and `call-card.ts:176` (read: the function at `:162`, its fetch at `:176`). `finish-call.ts:404` and `:928`, `generate.ts:239` and `:338` are as cited.
 19. **No `/styleguide` demo.** The AI card is a Settings card, not a reusable component; DESIGN.md's definition of done asks for the styleguide only "if a new component/variant was added". The typed-word form reuses the purge dialog's shape (`…/contacts/document-purge-dialog.tsx`), not its component.
 
 ## Assumptions (not verified by reading; each has a named check)
@@ -53,6 +58,7 @@
 - **A2** `pg_proc.proconfig` for `set search_path = ''` reads `{search_path=""}` on PG17 and PG18. Check: Task 1's definer case on the replica (if PG renders it differently, the implementer pastes the real value and the reviewer confirms it is the empty path, never `public`).
 - **A3** A `jsonb` built by `jsonb_build_object` with a `bigint` arrives in supabase-js as a JS `number`. Check: Task 2's gate case.
 - **A4** OpenAI's chat completions answer carries `usage.prompt_tokens` and `usage.completion_tokens` as integers (the spec's §3.5 says so; no test here can call OpenAI). Check: the owner's production smoke (Task 13 step 9) reads non-null tokens on the ledger.
+- **A6** America/Santiago's 2026 clock changes fall at local midnight on Apr 4/5 and Sep 5/6 (the zone the M4 case uses because its DST changes at midnight). The case holds whatever the dates are (the resume day no longer depends on the zone's midnight); if the reviewer finds the zone's 2026 rules differ, the case still guards the year-end and the noon-UTC construction. Check: Task 7's run.
 - **A5** Node's `Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" })` formats `YYYY-MM-DD` on Node 22 (CI) as it does on node 24 here (run here: `2026-11-01T04:30Z` in `America/Chicago` → `2026-10-31`). Check: Task 4's period case on CI `verify`.
 - (Read, not assumed: `requireAgencyOnlyAccountAccess(accountId): Promise<{ userId: string }>` redirects a non-agency caller (`lib/auth.ts:98-104`); `requestLocale(input, searchParams?)` (`lib/i18n/request-locale.ts:35-47`); `getPersonPrefs` is `cache(async (): Promise<PersonPrefs>)` (`lib/preferences/person-prefs.ts:72`); `t(catalogue, key, locale, params?)` and `plural(…)` needing a `${key}One` twin (`lib/i18n/t.ts:36-53`); `safeZone`, `monthStartInZone(now, zone)` (`lib/billing/billing-view.ts:58-71`); `loggableError(e)` keeps 300 characters of the message with emails masked (`lib/loggable-error.ts:18-27`), so it is NOT safe for an error whose message may quote model output; `actAs(c, claims)` and `actAsMember(c, accountId, orgId, role)` (`packages/db/src/test/db.ts:22-41`); `withTestAccount(fn(db, accountId))` on `serviceDb()` (`packages/db/src/test/fixtures.ts:140-146`); `common.undo` / `common.undo.es` (`lib/messages.ts:298-299`); the e2e job's env holds `OPENAI_API_KEY` at `.github/workflows/ci.yml:320` and `BIS_I18N_QA: "1"` at `:350`; Playwright's webServer env at `apps/web/playwright.config.ts:249-260`. Intl outputs read with node 24: `Oct 14`, `14 oct`, `Nov 1`, `1 nov` (`month: "short", day: "numeric"`, en-US / es-US, America/Chicago); `$1.84`, `$10.00`, `$1,000.00` (`style: "currency", currency: "USD"`, en-US and es-US alike).)
 
@@ -70,13 +76,13 @@
   - **bis-db-schema:** `packages/db/supabase/migrations/0086_ai_gateway.sql`, `packages/db/src/test/ai-gateway-schema.test.ts`, `packages/db/src/account-teardown.ts` (`ACCOUNT_OWNED_TABLES` only), `<SCRATCH>/s15a-kit/*` (Task 1).
   - **bis-crm:** `packages/db/src/ai-gateway.ts`, `packages/db/src/index.ts` (one export block), `packages/db/src/test/ai-gateway.test.ts` (Task 2); `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 3); `apps/web/src/lib/proposals/generate.ts` (+ `generate.test.ts`, new `generate.fallback.test.ts`) (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 10, regenerated).
   - **bis-platform:** `apps/web/src/lib/ai/{gateway,prices,period,log}.ts`, `apps/web/src/lib/ai/providers/{types,openai,fake,select}.ts`, `apps/web/src/lib/ai/testing/open-gate.ts` and their tests, `apps/web/src/lib/ai/client-boundary.test.ts` (Task 4); `apps/web/src/lib/ai/settings-view.ts` (+ test), `…/settings/ai-actions.ts` (+ test), one `ALLOWED` line in `…/[accountId]/in-account-service-reads.test.ts` (Task 7); `.github/workflows/ci.yml` (e2e env only), `apps/web/ci/ci-workflow.test.ts` (one case), `apps/web/playwright.config.ts` (webServer env only), `apps/web/src/lib/ai/env-contract.test.ts` (Task 9).
-  - **bis-voice:** `apps/web/src/lib/voice/{summary-service,call-card,finish-call}.ts` and `summary-service.test.ts`, `call-card.test.ts`, `finish-call.test.ts`, new `summary-service.fallback.test.ts`, new `call-card.fallback.test.ts`, the teardown comment in `apps/web/src/app/api/voice/incoming/route.ts:401-422` (Task 5).
+  - **bis-voice:** `apps/web/src/lib/voice/{summary-service,call-card,finish-call}.ts` and `summary-service.test.ts`, `call-card.test.ts`, `finish-call.test.ts`, new `summary-service.fallback.test.ts`, new `call-card.fallback.test.ts`, the tail and the call-cap clamp in `apps/web/src/app/api/voice/incoming/route.ts` (697 → 679, review I1) and their pin `lifecycle.test.ts:627-680`, the comment in `…/calls/textback-window.ts:14-17` (Task 5).
   - **bis-frontend:** `…/settings/{ai-section,ai-card,ai-card-handlers}.tsx|ts` (+ tests), `…/settings/page.tsx` (one mount) + `page.test.ts` (one case and one mock line), `apps/web/src/lib/palette/registry.ts` (one `SETTINGS_SECTIONS` line) + `registry.test.ts` (one case) (Task 8).
   - **bis-e2e-qa:** `apps/web/e2e/ai-settings.spec.ts` (Task 11).
   - **Orchestrator:** Task 0, `.env.example` (Task 9 step 5), the ledger, the bis-ci and production applies of 0086, the parity check, the gates, the PR, the merge, the tracker (Task 13).
 - **Shared files, one task at a time.** `apps/web/src/lib/messages.ts`: **Task 3 only** (every key this plan uses is listed there; a later task that finds one missing STOPS and reports; the orchestrator re-opens Task 3). `packages/db/src/index.ts`: **Task 2 only**. `apps/web/src/lib/ai/gateway.ts`: **Task 4 only** (Tasks 5–7 consume it). `…/[accountId]/in-account-service-reads.test.ts`: **Task 7 only**. `apps/web/src/lib/i18n/*-baseline.json`: Task 10 only, after every copy-bearing task.
 - **Every test must be able to fail; the plan writer named each one's mutation, and the implementer RUNS it.** Run the probe, see the test fail BY NAME, paste the failing assertion line into the report, revert by editing back (and `cmp` it). A named mutation that does not fail its test is a finding: say so and substitute one that does. Shapes a reviewer rejects on sight (memory "Vacuous test shapes"): `toBeTruthy`/`toBeDefined` on content; a count-only guard where the content can be asserted; a WANT constant compared with a value built from the same constant (cost literals here are written as numbers worked out in the plan, never `costMicroUsd(…)` called in the assertion); an English-only assertion where a Spanish twin exists (assert BOTH, the Spanish against the literal string); a mock that satisfies itself (the caller fallback tests mock `aiComplete` to answer a refusal and assert the CALLER's output, never the mock's); an assertion another element on the page could satisfy (scope every e2e locator to `#ai` or a `data-ai-*` marker); a negative `not.toContain` on raw `renderToStaticMarkup` output for a string with an apostrophe (use `renderedText()` from `apps/web/src/lib/rendered-text.ts`). A `-t` filter that matches nothing passes silently: read the run count in vitest's summary block.
-- **DESIGN.md definition of done for the UI task (8):** tokens only (radii `rounded-[var(--radius-ctl)]`, pills `rounded-full`; no hex, no literal shadow); both themes via `.dark`; the blur fallback; rule 1 (the spend line names its period, "this month"); rule 3 (on/off is words, never colour alone); rule 5 (loaded, empty "No AI use yet this month.", error card, skeleton); rule 6 (turning AI off for the account and Save run at once with Undo in the toast; turning AI off for EVERY account is the one destructive-in-effect act and confirms by typing the word; turning it back on is immediate with Undo); rule 7 (no spinner: a busy Save is a disabled button with the same word); rule 8 (the card carries exactly ONE `data-variant="default"` button, Save; the global button is `outline`; the dialog's one primary is its destructive confirm); rule 11 (no `data-hero`); controls `min-h-11 md:min-h-8`; renders at 360 px with the pseudo-locale's +35%.
+- **DESIGN.md definition of done for the UI task (8):** tokens only (radii `rounded-[var(--radius-ctl)]`, pills `rounded-full`; no hex, no literal shadow); both themes via `.dark`; the blur fallback; rule 1 (the spend line names its period, "this month"); rule 3 (on/off is words, never colour alone); rule 5 (loaded, empty "No AI use yet this month.", error card, skeleton); rule 6 (turning AI off for the account and Save run at once with Undo in the toast; turning AI off for EVERY account is the one destructive-in-effect act and confirms by typing the word; turning it back on is immediate with Undo); rule 7 (no spinner: a busy Save is a disabled button with the same word); rule 8 (the card carries exactly ONE `data-variant="default"` button, Save; the global button is `outline`; the dialog's one primary is its destructive confirm); rule 11 (no `data-hero`); controls `min-h-11 md:min-h-8`; renders at 360 px in Spanish (the card takes no `?locale=` override, so the pseudo-locale does not reach it; review M8).
 - **Copy.** Every new string through `t(m, key, locale, params)` with an `.es` twin on the line under it, in the same commit (`apps/web/src/lib/i18n/ratchet.test.ts`). Spanish is **usted**. New `.tsx` code carries no JSX literal copy with a letter in it. No vendor or internal words in copy ("OpenAI", "token", "ledger", "gateway", "RPC", "microdollar", "model"). Deltas and amounts are words and dollars; never an arrow.
 - **Running tests.** Only the affected tests, by path: `pnpm --filter web exec vitest run "<path>" …`, **`pnpm --filter web typecheck` in EVERY task that touches a `.ts`/`.tsx` file, including the e2e spec** (it covers `e2e/`), `pnpm --filter web exec eslint "<touched files>"`. `@bis/db` suites only on your replica, run in `packages/db` as `node node_modules/vitest/vitest.mjs run <files>` after sourcing the kit's env, judged by vitest's summary block (capture the exit code to a file with nothing after the command in the same block; the pnpm `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` trailer lies). Never the gates (`pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`), never Playwright except `--list`: the orchestrator runs them, one at a time (memory "Agent test scope"). Never pass the folder `…/accounts/` to vitest (it holds a live test).
 - **Mutating e2e only on the per-run fixture account** (`readClientFixture()`, `apps/web/e2e/support.ts:103`), never `Test Client One`; the e2e never confirms the global switch off (a local run shares bis-ci with Preview); every row it writes is deleted in `afterAll`, each error checked, then re-read.
@@ -111,10 +117,14 @@ Paste both values; stop if they differ. 0086 must leave this digest UNCHANGED on
 - `apps/web/src/lib/voice/call-card.test.ts` (`:149-201`): every `readCallForCard(transcript, { … })` call gains `...GATE`; every assertion is UNCHANGED, including `AbortSignal.timeout` `toHaveBeenCalledWith(10_000)` (`:180-184`; the gateway's extra `timeout(3_000)` calls do not stop a `toHaveBeenCalledWith` match).
 - `apps/web/src/lib/voice/finish-call.test.ts:416-420` and `:1813`: the `objectContaining` objects gain `db: ctx.db, accountId: ctx.accountId` (read: the file calls `finishCall(s, ctx, meta)` at `:419`, and `ctx.db` is `{}` with account `"a1"`, `:1806`); the two mocks (`:72-73`, `:86-89`) are unchanged.
 - `apps/web/src/lib/proposals/generate.test.ts`: `fakeDb()` (`:67`) and `fakeDbAlwaysRefusing()` (`:116`) each gain `rpc: gateRpc().rpc`; every existing case and assertion is UNCHANGED (the missing-key case `:787-794` still sees exactly one `console.error`, now the gateway's; the HTTP 500 case `:736-752` still sees one line containing `HTTP 500`; the outright-failure case `:771-785` still sees one line containing `call1`).
+- `apps/web/src/lib/proposals/generate.test.ts:1006-1019` (review I3): its assertions are UNCHANGED (one `console.error`, containing "no content"), now satisfied by the gateway's line; its title's mutation becomes "(mutation: drop openai.ts's `typeof content !== \"string\"` branch -> the gateway answers ok with no text -> JSON.parse throws -> the one line reads 'SyntaxError (an answer that did not parse)' -> FAILS)" (Task 6).
 - `…/[accountId]/in-account-service-reads.test.ts`: `ALLOWED` gains `"app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.ts": "agency-only",` beside `:137` (Task 7). No `lib/` entry is added.
 - `…/settings/page.test.ts`: one `vi.mock("./ai-section", …)` beside the billing mock (`:110`), one new case after the Billing describe (`:202-213`) (Task 8).
-- `apps/web/src/lib/palette/registry.test.ts`: one new case beside `:119-127` (Task 8).
-- `apps/web/ci/ci-workflow.test.ts`: one new case (Task 9). `:209-217`'s secret list is UNCHANGED (`AI_PROVIDER` is a literal, not a secret).
+- `apps/web/src/lib/palette/registry.test.ts`: one new case beside `:119-127`, and `cardFiles` (`:235-245`, the "every settings anchor … is a REAL id" case) gains `"../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx"` (review I5) (Task 8).
+- `apps/web/ci/ci-workflow.test.ts`: one new case (Task 9).
+- `apps/web/vitest.config.ts:32`: `env` gains `AI_PROVIDER: "", AI_GATEWAY_OFF: ""` (Task 4, review M3).
+- `apps/web/src/app/api/voice/incoming/lifecycle.test.ts:627-680`: the clamp 697 → 679 (titles, `"698"` → `"680"`, `696_000` → `678_000`, `696_999` → `678_999`, the derivation comment) (Task 5, review I1).
+- `packages/db/src/test/demo-seed.test.ts:275-277`: the leftover count selects `account_id`, not `id`, and checks `error` (Task 1, review M7). `:209-217`'s secret list is UNCHANGED (`AI_PROVIDER` is a literal, not a secret).
 - `apps/web/src/lib/messages.test.ts`: one new `describe` at the end (Task 3).
 - `packages/db/src/account-teardown.ts:20-30`: `ACCOUNT_OWNED_TABLES` gains `"ai_ledger", "account_ai_settings"` as its first two entries (Task 1).
 - **Unchanged, checked:** `packages/db/src/test/schema-grants-guard.test.ts` (`:115` `rlsOff` and `EXPECTED_WRITES`: 0086 has no view, RLS on every table, no client write); `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED`: nothing in 8a-1 reads on the drawer's path); `apps/web/src/lib/i18n/request-locale-callers.test.ts` (the new caller passes `userLanguage`).
@@ -151,7 +161,7 @@ Paste both values; stop if they differ. 0086 must leave this digest UNCHANGED on
 | `apps/web/src/lib/ai/env-contract.test.ts` | bis-platform | `AI_PROVIDER` never set by `vercel.json` / `next.config.ts`; `.env.example` names both new vars |
 | `apps/web/e2e/ai-settings.spec.ts` | bis-e2e-qa | the card on the fixture account |
 
-**Modified:** `packages/db/src/{account-teardown,index}.ts`; `apps/web/src/lib/voice/{summary-service,call-card,finish-call}.ts` (+ tests); `apps/web/src/app/api/voice/incoming/route.ts` (comment only); `apps/web/src/lib/proposals/generate.ts` (+ test); `apps/web/src/lib/messages.ts` (+ test); `…/settings/page.tsx` (+ test); `apps/web/src/lib/palette/registry.ts` (+ test); `…/[accountId]/in-account-service-reads.test.ts`; `.env.example`; `.github/workflows/ci.yml`; `apps/web/ci/ci-workflow.test.ts`; `apps/web/playwright.config.ts`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
+**Modified:** `packages/db/src/{account-teardown,index}.ts`; `packages/db/src/test/demo-seed.test.ts`; `apps/web/vitest.config.ts`; `apps/web/src/app/api/voice/incoming/lifecycle.test.ts`; `…/calls/textback-window.ts`; `.claude/agents/bis-voice.md` (orchestrator); `apps/web/src/lib/voice/{summary-service,call-card,finish-call}.ts` (+ tests); `apps/web/src/app/api/voice/incoming/route.ts` (the clamp 697 → 679 and its comments); `apps/web/src/lib/proposals/generate.ts` (+ test); `apps/web/src/lib/messages.ts` (+ test); `…/settings/page.tsx` (+ test); `apps/web/src/lib/palette/registry.ts` (+ test); `…/[accountId]/in-account-service-reads.test.ts`; `.env.example`; `.github/workflows/ci.yml`; `apps/web/ci/ci-workflow.test.ts`; `apps/web/playwright.config.ts`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
 
 ## Task list, owners, order
 
@@ -198,7 +208,7 @@ Disjointness: T5 (`lib/voice/*`, the incoming route's comment), T6 (`lib/proposa
   - `grep -n 'generateSummary(state' apps/web/src/lib/voice/finish-call.ts` → `404:`; `grep -n 'readCallForCard(state.transcript' apps/web/src/lib/voice/finish-call.ts` → `837:`; `grep -n 'const r = await fetchImpl' apps/web/src/lib/proposals/generate.ts` → `338:`; `grep -n 'reading failed' apps/web/src/lib/voice/call-card.ts` → `212:`.
   - `grep -n '"site_traffic_breakdown", "site_traffic_daily", "sites",' packages/db/src/account-teardown.ts` → `21:`.
   - `grep -n 'settings/billing-actions.ts": "agency-only"' "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` → `137:`.
-  - `grep -n '"sharePage.askNoName.es"' apps/web/src/lib/messages.ts` → `4966:` (the catalogue's last key); `wc -l < apps/web/src/lib/messages.test.ts` → `854`.
+  - `grep -n '"sharePage.askNoName.es"' apps/web/src/lib/messages.ts` → `4965:` (the catalogue's last key); `wc -l < apps/web/src/lib/messages.test.ts` → `854`.
   - `grep -n 'anchor: "required-documents"' apps/web/src/lib/palette/registry.ts` → `50:`.
   - `ls "<KIT3B>/replica.sh" "<KIT3B>/pgrst.sh"` and the three files `pgrst.sh` copies → all exist.
   - Read-only, MCP `execute_sql`: on production (`tlbkbmlrfafquucsmsmm`) and bis-ci (`odnobiodsftffphuuosz`), `select max(version) from supabase_migrations.schema_migrations` names the 0085 apply on both. On bis-ci, the Faithfulness query above: record its value for Task 1's brief.
@@ -214,7 +224,7 @@ Disjointness: T5 (`lib/voice/*`, the incoming route's comment), T6 (`lib/proposa
 - Create: `<SCRATCH>/s15a-kit/replica.sh`, `<SCRATCH>/s15a-kit/pgrst.sh` (outside the repo)
 - Create: `packages/db/supabase/migrations/0086_ai_gateway.sql`
 - Create: `packages/db/src/test/ai-gateway-schema.test.ts`
-- Modify: `packages/db/src/account-teardown.ts:20-21`
+- Modify: `packages/db/src/account-teardown.ts:20-21`; `packages/db/src/test/demo-seed.test.ts:274-278` (review M7)
 
 **Interfaces**
 - Consumes (SQL): `public.accounts(id)`, `public.agencies(id)`, `app.is_agency()` (0085's policies use it).
@@ -504,14 +514,6 @@ describe("0086: ai_ledger_record (spec 3.1 step 6, 3.3; plan deviation 12)", () 
       expect(await counters(c, acct)).toMatchObject({ d: "2026-10-19", t: 1 });
     }));
 
-  it("a refusal is a zero-cost row that leaves the spend alone (spec choice I10)", () =>
-    withRollback(async (c) => {
-      const acct = await seed(c);
-      await record(c, acct, { cost: 27 });
-      await record(c, acct, { outcome: "over_budget", inTok: null, outTok: null, cost: 0 });
-      expect(await counters(c, acct)).toMatchObject({ s: "27" });
-    }));
-
   it("refuses a null argument (mutation: drop the null guard -> FAILS)", () =>
     withRollback(async (c) => {
       const acct = await seed(c);
@@ -682,6 +684,17 @@ grant execute on function public.ai_ledger_record(uuid, text, text, integer, int
   "site_traffic_breakdown", "site_traffic_daily", "sites",
 ```
 
+- [ ] **Step 5c: The demo-seed leftover count (review M7).** `demo-seed.test.ts:274-278` counts every `ACCOUNT_OWNED_TABLES` table with `.select("id", …)`; `account_ai_settings` has no `id` (its key is `account_id`), so that select errors, `count` is null, and the table is silently skipped. Change the loop body to:
+
+```ts
+        const { count: n, error } = await db.from(table)
+          .select("account_id", { count: "exact", head: true }).eq("account_id", accountId);
+        if (error) leftovers.push(`${table}: ${error.message}`);
+        else if (n) leftovers.push(`${table}: ${n}`);
+```
+
+Every table on the list has `account_id` (it is how the list deletes). This runs behind PostgREST only (it seeds a demo tenant), so Task 2's implementer runs it on set A after Task 1 commits: `demo-seed.test.ts` PASS; probe: put `.select("id", …)` back and add a row to `account_ai_settings` for the throwaway in the test by hand → the leftover is NOT reported (proving the old shape was blind), then with the fix it is.
+
 - [ ] **Step 6: The bytes.** Write the checker with a quoted heredoc (no shell expansion):
 
 ```bash
@@ -705,7 +718,7 @@ Expected: `{"nonAscii":0,"backslash":0,"loneDollar":0}`, then the control `{"non
 
 - [ ] **Step 8: Probes, by name** (each a temporary edit of the migration or of `account-teardown.ts`, re-applied with `replica.sh`, reverted by hand and `cmp`-checked): (a) add `prompt text,` after `model` in `ai_ledger` → "the ledger's columns are exactly these" FAILS; (b) `ai_ledger_agency_read` as `using (true)` → "the account's own Owner reads none of them" FAILS; (c) `account_ai_settings_agency_read` as `using (account_id = app.current_account_id())` → the same case FAILS on `s`; (d) `grant insert on public.ai_ledger to authenticated` after the revoke → both write cases FAIL; (e) `grant execute on function public.ai_gate_check(uuid, text, text) to authenticated` → the functions case FAILS; (f) `set search_path = public` on `ai_gate_check` → the functions case FAILS on `proconfig`; (g) `coalesce(v_global, true)` → "OFF when its row is missing" FAILS; (h) in `ai_ledger_record`, replace both `when s.month_key is null or s.month_key < p_month` arms by `else p_cost` / `else p_month` (no older branch) → "never rewinds on an older one" FAILS; (i) `v_inc` as `case when p_feature = 'record_summary' then 1 else 0 end` → "counts only a successful record_summary" FAILS; (j) remove `'gate_unreadable', ` from the outcome check → "features and outcomes are closed sets" FAILS; (k) drop `"account_ai_settings",` from the teardown list → the teardown case FAILS. Paste each failing line.
 
-- [ ] **Step 9: Stop your kit.** **Commit** `git add -- packages/db/supabase/migrations/0086_ai_gateway.sql packages/db/src/test/ai-gateway-schema.test.ts` then `git commit -m "db: 0086 the AI gateway: a ledger with no room for a prompt, the account's switch and budget, the switch for every account, read by the agency alone (item 8a-1)" -- packages/db/supabase/migrations/0086_ai_gateway.sql packages/db/src/test/ai-gateway-schema.test.ts packages/db/src/account-teardown.ts` (with the trailers).
+- [ ] **Step 9: Stop your kit.** **Commit** `git add -- packages/db/supabase/migrations/0086_ai_gateway.sql packages/db/src/test/ai-gateway-schema.test.ts` then `git commit -m "db: 0086 the AI gateway: a ledger with no room for a prompt, the account's switch and budget, the switch for every account, read by the agency alone (item 8a-1)" -- packages/db/supabase/migrations/0086_ai_gateway.sql packages/db/src/test/ai-gateway-schema.test.ts packages/db/src/account-teardown.ts packages/db/src/test/demo-seed.test.ts` (with the trailers).
 
 ---
 
@@ -727,7 +740,7 @@ Expected: `{"nonAscii":0,"backslash":0,"loneDollar":0}`, then the control `{"non
   - `type AiLedgerEntry = { accountId: string; feature: AiFeature; model: string; inputTokens: number | null; outputTokens: number | null; costMicroUsd: number; outcome: AiOutcome; latencyMs: number; monthKey: string; dayKey: string }`; `recordAiLedger(db, r: AiLedgerEntry & { signal?: AbortSignal }): Promise<void>` (throws).
   - `DEFAULT_MONTHLY_BUDGET_CENTS = 1000`, `MAX_MONTHLY_BUDGET_CENTS = 100000`.
   - `type AiSettingsRead = { accountEnabled: boolean; monthlyBudgetCents: number; monthKey: string | null; monthSpendMicroUsd: number; globalEnabled: boolean }`; `getAiSettings(db, accountId): Promise<AiSettingsRead>` (no account row → the defaults; no global row → `globalEnabled: false`; throws on a read error).
-  - `countAiRefusalsSince(db, accountId, sinceIso: string): Promise<number>` (every non-`ok` row at or after `sinceIso`; throws on a null count, memory "Head-count null").
+  - `countAiSkipsSince(db, accountId, sinceIso: string): Promise<number>` (only `global_off`, `account_off` and `over_budget` rows at or after `sinceIso`: the times AI was off or over budget, which is what the card's sentence says; a `timeout` or `provider_error` is not a skip; throws on a null count, memory "Head-count null").
   - `firstOverBudgetSince(db, accountId, sinceIso: string): Promise<string | null>` (the earliest `over_budget` row's `created_at`).
   - `setAccountAiSettings(db, accountId, s: { enabled: boolean; monthlyBudgetCents: number; actorId: string }): Promise<void>` (an upsert of exactly `account_id, enabled, monthly_budget_cents, updated_by, updated_at`: never the counters).
   - `setGlobalAiEnabled(db, s: { enabled: boolean; actorId: string }): Promise<void>` (updates the one row; throws when no row was updated).
@@ -742,7 +755,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import {
   aiGateCheck, recordAiLedger, getAiSettings, setAccountAiSettings, setGlobalAiEnabled,
-  countAiRefusalsSince, firstOverBudgetSince, AI_FEATURES, AI_OUTCOMES, type AiLedgerEntry,
+  countAiSkipsSince, firstOverBudgetSince, AI_FEATURES, AI_OUTCOMES, type AiLedgerEntry,
 } from "../ai-gateway";
 
 /** Item 8a-1 (spec 3.1, 3.3, 3.6): the wrappers over 0086, through PostgREST, on the service client. */
@@ -787,10 +800,13 @@ describe("aiGateCheck / recordAiLedger", () => {
     await expect(aiGateCheck(odd, { accountId: "a", ...KEYS })).rejects.toThrow(/unexpected answer/);
   });
 
-  it("the closed sets match 0086's checks (mutation: drop record_summary from AI_FEATURES -> FAILS)", () => {
-    expect(AI_FEATURES).toEqual(["call_summary", "call_proposals", "call_card", "record_summary"]);
-    expect(AI_OUTCOMES).toEqual(["ok", "global_off", "account_off", "over_budget", "unknown_model", "gate_unreadable", "no_key", "timeout", "provider_error"]);
-  });
+  it("every AI_FEATURES and AI_OUTCOMES value is one 0086 accepts, through recordAiLedger (review M5; mutation: add 'chat' to AI_FEATURES or 'maybe' to AI_OUTCOMES -> the check constraint refuses it -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      for (const feature of AI_FEATURES) await recordAiLedger(db, entry(accountId, { feature }));
+      for (const outcome of AI_OUTCOMES) await recordAiLedger(db, entry(accountId, { feature: "call_card", outcome }));
+      const { count, error } = await db.from("ai_ledger").select("id", { count: "exact", head: true }).eq("account_id", accountId);
+      expect([error, count]).toEqual([null, AI_FEATURES.length + AI_OUTCOMES.length]);
+    }));
 });
 
 describe("the card's reads and writes", () => {
@@ -804,28 +820,45 @@ describe("the card's reads and writes", () => {
       expect(data).toEqual({ updated_by: "user_test" });
     }));
 
-  it("the global switch writes the one row and reads back (mutation: setGlobalAiEnabled updates nothing -> FAILS)", () =>
-    withTestAccount(async (db, accountId) => {
-      try {
-        await setGlobalAiEnabled(db, { enabled: false, actorId: "user_test" });
-        expect((await getAiSettings(db, accountId)).globalEnabled).toBe(false);
-        expect((await aiGateCheck(db, { accountId, ...KEYS })).globalEnabled).toBe(false);
-      } finally {
-        await setGlobalAiEnabled(db, { enabled: true, actorId: "user_test" });
-      }
-      expect((await getAiSettings(db, accountId)).globalEnabled).toBe(true);
-    }));
+  // Review I9: the db suite NEVER writes ai_gateway_settings (one row shared by every account and every
+  // concurrent suite on the project). setGlobalAiEnabled and getAiSettings's missing-row answer are proved on a
+  // recording stub; the real row's behaviour (seeded on, a missing row reads off) is 0086's withRollback SQL tests.
+  function stubDb(answer: { data: unknown; error: { message: string } | null }) {
+    const seen: unknown[][] = [];
+    const chain = {
+      update: (v: unknown) => { seen.push(["update", v]); return chain; },
+      eq: (c: string, v: unknown) => { seen.push(["eq", c, v]); return chain; },
+      select: (c: string) => { seen.push(["select", c]); return chain; },
+      maybeSingle: async () => answer,
+      then: (ok: (v: unknown) => unknown) => Promise.resolve(answer).then(ok),
+    };
+    return { seen, db: { from: (t: string) => { seen.push(["from", t]); return chain; } } as unknown as SupabaseClient };
+  }
 
-  it("counts this month's refusals and finds the first over-budget row (mutations: drop .neq('outcome', 'ok'); order descending -> FAILS)", () =>
+  it("setGlobalAiEnabled updates exactly the one row by id, as the actor, and refuses when no row was updated (mutations: drop .eq('id', true); drop the length check -> FAILS)", async () => {
+    const ok = stubDb({ data: [{ id: true }], error: null });
+    await setGlobalAiEnabled(ok.db, { enabled: false, actorId: "user_test" });
+    expect(ok.seen.map((x) => x.slice(0, 2))).toEqual([["from", "ai_gateway_settings"], ["update", expect.objectContaining({ enabled: false, updated_by: "user_test" })], ["eq", "id"], ["select", "id"]]);
+    expect(ok.seen[2]).toEqual(["eq", "id", true]);
+    await expect(setGlobalAiEnabled(stubDb({ data: [], error: null }).db, { enabled: true, actorId: "user_test" })).rejects.toThrow("the switch row is missing");
+  });
+
+  it("getAiSettings reads a missing global row as OFF, as the gate does (plan deviation 13; mutation: g?.enabled ?? true -> FAILS)", async () => {
+    const none = stubDb({ data: null, error: null });
+    expect((await getAiSettings(none.db, "a1")).globalEnabled).toBe(false);
+  });
+
+  it("counts this month's skips (off or over budget, never a failed request) and finds the first over-budget row (mutations: .neq('outcome', 'ok') instead of .in(...) -> 4 -> FAILS; order descending -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       const refused = { inputTokens: null, outputTokens: null, costMicroUsd: 0 };
       await recordAiLedger(db, entry(accountId));
       await recordAiLedger(db, entry(accountId, { outcome: "account_off", ...refused }));
+      await recordAiLedger(db, entry(accountId, { outcome: "provider_error", ...refused }));   // a failure, not a skip: must not count
       await recordAiLedger(db, entry(accountId, { outcome: "over_budget", ...refused }));
       await recordAiLedger(db, entry(accountId, { outcome: "over_budget", ...refused }));
       const since = new Date(Date.now() - 60_000).toISOString();
-      expect(await countAiRefusalsSince(db, accountId, since)).toBe(3);
-      expect(await countAiRefusalsSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+      expect(await countAiSkipsSince(db, accountId, since)).toBe(3);
+      expect(await countAiSkipsSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
       const { data } = await db.from("ai_ledger").select("created_at").eq("account_id", accountId).eq("outcome", "over_budget").order("created_at");
       expect(data).toHaveLength(2);
       expect(await firstOverBudgetSince(db, accountId, since)).toBe(data![0]!.created_at);
@@ -912,12 +945,12 @@ export async function getAiSettings(db: SupabaseClient, accountId: string): Prom
   };
 }
 
-export async function countAiRefusalsSince(db: SupabaseClient, accountId: string, sinceIso: string): Promise<number> {
+export async function countAiSkipsSince(db: SupabaseClient, accountId: string, sinceIso: string): Promise<number> {
   const { count, error } = await db.from("ai_ledger").select("id", { count: "exact", head: true })
-    .eq("account_id", accountId).neq("outcome", "ok").gte("created_at", sinceIso);
-  if (error) throw new Error(`countAiRefusalsSince failed: ${error.message}`);
+    .eq("account_id", accountId).in("outcome", ["global_off", "account_off", "over_budget"]).gte("created_at", sinceIso);
+  if (error) throw new Error(`countAiSkipsSince failed: ${error.message}`);
   // memory "Head-count null": a failed head count can come back { count: null, error: null }.
-  if (count === null) throw new Error("countAiRefusalsSince: no count");
+  if (count === null) throw new Error("countAiSkipsSince: no count");
   return count;
 }
 
@@ -955,14 +988,14 @@ export async function setGlobalAiEnabled(db: SupabaseClient, s: { enabled: boole
 // Item 8a-1: the AI gateway's ledger, switches and budget. See ./ai-gateway.ts.
 export {
   AI_FEATURES, AI_OUTCOMES, DEFAULT_MONTHLY_BUDGET_CENTS, MAX_MONTHLY_BUDGET_CENTS,
-  aiGateCheck, recordAiLedger, getAiSettings, countAiRefusalsSince, firstOverBudgetSince, setAccountAiSettings, setGlobalAiEnabled,
+  aiGateCheck, recordAiLedger, getAiSettings, countAiSkipsSince, firstOverBudgetSince, setAccountAiSettings, setGlobalAiEnabled,
   type AiFeature, type AiOutcome, type AiGate, type AiLedgerEntry, type AiSettingsRead,
 } from "./ai-gateway";
 ```
 
-- [ ] **Step 6: Run green.** The same command → PASS (8 tests). `pnpm --filter @bis/db typecheck > "$S/s15a-t2-impl/tc.txt" 2>&1; echo $? > "$S/s15a-t2-impl/tc.exit"` → `0`. Paste both.
+- [ ] **Step 6: Run green.** The same command → PASS (9 tests; read the count off the summary). `pnpm --filter @bis/db typecheck > "$S/s15a-t2-impl/tc.txt" 2>&1; echo $? > "$S/s15a-t2-impl/tc.exit"` → `0`. Paste both.
 
-- [ ] **Step 7: Probes, by name:** (a) drop `if (a.signal) q = q.abortSignal(a.signal);` → "an aborted signal rejects" FAILS; (b) drop the shape check (return the fields cast) → "an answer of the wrong shape throws" FAILS; (c) the upsert payload gains `month_spend_microusd: 0` → "never resets the counters" FAILS; (d) drop `.neq("outcome", "ok")` → the refusal count is 4 → FAILS; (e) `ascending: false` → the first over-budget case FAILS; (f) `globalEnabled: g?.enabled ?? true` has no case that can fail it (the row is seeded): add "a missing global row reads off" (delete the row with `db.from("ai_gateway_settings").delete().eq("id", true)`, assert `globalEnabled: false`, re-insert `{ id: true, enabled: true }` in `finally`) and run the probe against it. Paste each failing line.
+- [ ] **Step 7: Probes, by name:** (a) drop `if (a.signal) q = q.abortSignal(a.signal);` → "an aborted signal rejects" FAILS; (b) drop the shape check (return the fields cast) → "an answer of the wrong shape throws" FAILS; (c) the upsert payload gains `month_spend_microusd: 0` → "never resets the counters" FAILS; (d) `.neq("outcome", "ok")` instead of the `.in(...)` → the skip count is 4 (the `provider_error` row) → FAILS; (e) `ascending: false` → the first over-budget case FAILS; (f) `globalEnabled: g?.enabled ?? true` → "getAiSettings reads a missing global row as OFF" FAILS (the stub, never the real row: review I9); (g) drop `.eq("id", true)` from `setGlobalAiEnabled` → its stub case FAILS; (h) add `"chat"` to `AI_FEATURES` → the closed-sets case FAILS on the check constraint. Paste each failing line.
 
 - [ ] **Step 8: Stop your kit.** **Commit** `git add -- packages/db/src/ai-gateway.ts packages/db/src/test/ai-gateway.test.ts` then `git commit -m "db: the AI gateway's gate, ledger and settings wrappers, through one module and the barrel (item 8a-1)" -- packages/db/src/ai-gateway.ts packages/db/src/test/ai-gateway.test.ts packages/db/src/index.ts`.
 
@@ -973,7 +1006,7 @@ export {
 **Review:** sonnet. **Runs beside:** Task 1.
 
 **Files**
-- Modify: `apps/web/src/lib/messages.ts` (keys appended after `"sharePage.askNoName.es"`, `:4966`, the catalogue's last key), `apps/web/src/lib/messages.test.ts` (one `describe` appended at the end)
+- Modify: `apps/web/src/lib/messages.ts` (keys appended after `"sharePage.askNoName.es"`, `:4965`, the catalogue's last key), `apps/web/src/lib/messages.test.ts` (one `describe` appended at the end)
 
 **Interfaces**
 - Produces (every key Tasks 7 and 8 use; each with its `.es` twin): `aiSettings.title`, `aiSettings.description`, `aiSettings.account.label`, `aiSettings.account.help`, `aiSettings.budget.label`, `aiSettings.budget.help`, `aiSettings.spend`, `aiSettings.empty`, `aiSettings.reached`, `aiSettings.reachedNoDate`, `aiSettings.skipped`, `aiSettings.skippedOne`, `aiSettings.save`, `aiSettings.saved`, `aiSettings.undone`, `aiSettings.error.budget`, `aiSettings.error.failed`, `aiSettings.crashed`, `aiSettings.loadError`, `aiSettings.global.label`, `aiSettings.global.onHelp`, `aiSettings.global.offHelp`, `aiSettings.global.turnOff`, `aiSettings.global.turnOn`, `aiSettings.global.confirmTitle`, `aiSettings.global.confirmBody`, `aiSettings.global.confirmWord`, `aiSettings.global.confirmLabel`, `aiSettings.global.cancel`, `aiSettings.global.turnedOff`, `aiSettings.global.turnedOn`, `aiSettings.global.wrongWord`, `palette.settings.ai` (33 keys).
@@ -1028,7 +1061,7 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
 
 - [ ] **Step 3: Run it to see it fail.** `pnpm --filter web exec vitest run src/lib/messages.test.ts` → FAIL in "every key has a Spanish twin" listing all 33 keys. Paste the line.
 
-- [ ] **Step 4: Append the keys** after `:4966`:
+- [ ] **Step 4: Append the keys** after `:4965`:
 
 ```ts
   // Item 8a-1: the agency's AI card on the account's Settings (spec 3.6). Agency-only; no vendor words.
@@ -1113,6 +1146,7 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
 **Files**
 - Create: `apps/web/src/lib/ai/prices.ts`, `period.ts`, `log.ts`, `gateway.ts`, `providers/types.ts`, `providers/openai.ts`, `providers/fake.ts`, `providers/select.ts`, `testing/open-gate.ts`
 - Test: `apps/web/src/lib/ai/{prices,period,log,gateway}.test.ts`, `apps/web/src/lib/ai/client-boundary.test.ts`
+- Modify: `apps/web/vitest.config.ts:32` (review M3): `env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "" }`, with the comment above it gaining "AI_PROVIDER / AI_GATEWAY_OFF: a developer's shell or .env.local must not switch every caller test to the fake or to off (item 8a-1)." Probe: run `AI_PROVIDER=fake`-in-shell equivalent by setting it in the config temporarily to `"fake"` → `summary-service.test.ts`'s first case FAILS (its fetch is never called); revert.
 
 **Interfaces**
 - Consumes: `aiGateCheck`, `recordAiLedger`, `AI_OUTCOMES`, `type AiFeature`, `type AiOutcome`, `type AiGate`, `type SupabaseClient` from `@bis/db` (Task 2; `SupabaseClient` is already re-exported, `…/settings/billing-actions.ts:21` imports it); `safeZone` (`lib/billing/billing-view.ts:59`); `loggableError` (`lib/loggable-error.ts:18`).
@@ -1122,7 +1156,7 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
   - `log.ts`: `errorName(e: unknown): string`, `aiSafeError(e: unknown): string`.
   - `providers/types.ts`: `ProviderRequest`, `ProviderAnswer`, `Provider`. `providers/select.ts`: `providerFor(env: Record<string, string | undefined>): Provider`. `providers/fake.ts`: `fakeProvider`, `FAKE_USAGE`. `providers/openai.ts`: `openAiProvider`, `OPENAI_CHAT_URL`.
   - `gateway.ts`: `type AiMessage = { role: "system" | "user"; content: string }`; `type AiRefusal = Exclude<AiOutcome, "ok">`; `AI_REFUSALS: readonly AiRefusal[]` (the eight, in `AI_OUTCOMES` order); `type AiUsage = { inputTokens: number | null; outputTokens: number | null; costMicroUsd: number }`; `type AiResult = { ok: true; text: string; usage: AiUsage } | { ok: false; reason: AiRefusal }`; `type AiInput = { accountId: string; feature: AiFeature; model: string; messages: AiMessage[]; responseFormat?: { type: "json_object" }; maxTokens?: number; timeoutMs: number; timezone: string; language?: "en" | "es"; ref?: string; fetchImpl?: typeof fetch; now?: Date }`; `GATE_TIMEOUT_MS = 3_000`; `LEDGER_TIMEOUT_MS = 3_000`; `aiComplete(db: SupabaseClient, input: AiInput): Promise<AiResult>` (never throws).
-  - `testing/open-gate.ts` (TEST-ONLY): `OPEN_GATE`, `type GateRpcCall = { fn: string; args: Record<string, unknown> }`, `type GateOver = { gate?: Partial<typeof OPEN_GATE> | "error"; ledger?: "error" }`, `gateRpc(over?: GateOver): { rpc; calls: GateRpcCall[] }`, `openGateDb(over?: GateOver): { db: SupabaseClient; calls: GateRpcCall[] }`.
+  - `testing/open-gate.ts` (TEST-ONLY): `OPEN_GATE`, `type GateRpcCall = { fn: string; args: Record<string, unknown>; signalled: boolean }`, `type GateOver = { gate?: Partial<typeof OPEN_GATE> | "error"; ledger?: "error" }`, `gateRpc(over?: GateOver): { rpc; calls: GateRpcCall[] }`, `openGateDb(over?: GateOver): { db: SupabaseClient; calls: GateRpcCall[] }`.
 
 - [ ] **Step 1: Read** `apps/web/src/lib/voice/summary-service.ts` whole (the fetch Task 5 replaces), `apps/web/src/lib/proposals/generate.ts:325-385`, `apps/web/src/lib/voice/call-card.ts:150-215`, `apps/web/src/lib/loggable-error.ts`, `apps/web/src/lib/billing/billing-view.ts:56-71`, `apps/web/src/lib/automations/imports.test.ts:1-45` (a source-scan test's shape), and Task 2's `packages/db/src/ai-gateway.ts`.
 
@@ -1268,7 +1302,7 @@ describe("aiComplete: an answer", () => {
     });
   });
 
-  it("sends the caller's model, messages, JSON mode, token cap and time limit; bounds the gate at 3 s (mutation: drop response_format -> FAILS; drop the gate's abortSignal -> FAILS)", async () => {
+  it("sends the caller's model, messages, JSON mode, token cap and time limit; 3 s, 10 s, 3 s in that order (mutations: drop response_format; timeoutMs 600_000 -> FAILS)", async () => {
     const { db } = openGateDb();
     const fetchImpl = answer("{}");
     const timeout = vi.spyOn(AbortSignal, "timeout");
@@ -1279,8 +1313,14 @@ describe("aiComplete: an answer", () => {
       model: "gpt-4o-mini", messages: base().messages, response_format: { type: "json_object" }, max_tokens: 2000,
     });
     expect(init.signal).toBeInstanceOf(AbortSignal);
-    expect(timeout).toHaveBeenCalledWith(10_000);
-    expect(timeout).toHaveBeenCalledWith(3_000);
+    // Review I2: the exact sequence (gate, completion, ledger), not "was called with" (which one call satisfies).
+    expect(timeout.mock.calls.map((c) => c[0])).toEqual([3_000, 10_000, 3_000]);
+  });
+
+  it("both RPCs are bounded: each was handed an abort signal (plan deviation 5; mutations: drop the gate's signal; drop the ledger's -> FAILS)", async () => {
+    const { db, calls } = openGateDb();
+    await aiComplete(db, base({ fetchImpl: answer("x") }));
+    expect(calls.map((c) => [c.fn, c.signalled])).toEqual([["ai_gate_check", true], ["ai_ledger_record", true]]);
   });
 
   it("with no usage in the answer, estimates the cost from the characters, never free (spec 3.5; mutation: cost 0 when usage is missing -> FAILS)", async () => {
@@ -1604,7 +1644,7 @@ export const openAiProvider: Provider = {
     const promptTokens = intOrNull(d?.usage?.prompt_tokens);
     const completionTokens = intOrNull(d?.usage?.completion_tokens);
     const content = d?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") return { kind: "provider_error", detail: " (no text in the answer)", promptTokens, completionTokens };
+    if (typeof content !== "string") return { kind: "provider_error", detail: " (no content in the answer)", promptTokens, completionTokens };
     return { kind: "ok", text: content, promptTokens, completionTokens };
   },
 };
@@ -1674,7 +1714,8 @@ import { providerFor } from "./providers/select";
  * class, and the latency. NEVER a message, a prompt, an answer, or an error message from the provider path.
  * Only non-ok outcomes log; the three expected states (switched off, over budget) on console.log so they never
  * read as alerts. Budget overshoot is bounded, not zero: concurrent calls that all passed the gate before any
- * recorded can overshoot by their own cost (spec 3.1).
+ * recorded can overshoot by their own cost (spec 3.1). A TIMED-OUT request is recorded at zero cost, but the
+ * provider may still have run it and may bill it: the ledger's estimate can undercount by those calls (review M11).
  */
 export type AiMessage = { role: "system" | "user"; content: string };
 export type AiRefusal = Exclude<AiOutcome, "ok">;
@@ -1794,7 +1835,7 @@ import type { SupabaseClient } from "@bis/db";
 export const OPEN_GATE = {
   global_enabled: true, account_enabled: true, budget_microusd: 10_000_000, month_spend_microusd: 0, record_summaries_today: 0,
 };
-export type GateRpcCall = { fn: string; args: Record<string, unknown> };
+export type GateRpcCall = { fn: string; args: Record<string, unknown>; signalled: boolean };
 export type GateOver = { gate?: Partial<typeof OPEN_GATE> | "error"; ledger?: "error" };
 
 export function gateRpc(over: GateOver = {}): { rpc: (fn: string, args: Record<string, unknown>) => unknown; calls: GateRpcCall[] } {
@@ -1807,9 +1848,11 @@ export function gateRpc(over: GateOver = {}): { rpc: (fn: string, args: Record<s
     return { data: null, error: { message: `unexpected rpc ${fn}` } };
   };
   const rpc = (fn: string, args: Record<string, unknown>) => {
-    calls.push({ fn, args });
+    // `signalled` records whether the caller bounded this RPC with .abortSignal() (review I2).
+    const call: GateRpcCall = { fn, args, signalled: false };
+    calls.push(call);
     const builder = {
-      abortSignal: () => builder,
+      abortSignal: () => { call.signalled = true; return builder; },
       then: <A, B>(ok?: (v: unknown) => A, no?: (e: unknown) => B) => Promise.resolve(result(fn)).then(ok, no),
     };
     return builder;
@@ -1827,7 +1870,7 @@ export function openGateDb(over: GateOver = {}): { db: SupabaseClient; calls: Ga
 
 - [ ] **Step 6: Probes, by name** (each a temporary edit, reverted by hand and `cmp`-checked): (a) drop the `AI_GATEWAY_OFF` block → "AI_GATEWAY_OFF=1 …" FAILS; (b) `>=` → `>` in the budget line → the `over_budget` row FAILS; (c) in the gate's catch, assign an open gate instead of returning → the `gate_unreadable` row FAILS; (d) in `openai.ts`, ``detail: ` HTTP ${r.status}: ${await r.text()}` `` → "a non-ok answer … body never read" FAILS on `text`, and the sentinel row "a 400 that echoes the prompt" FAILS; (e) in `openai.ts`'s first catch, ``detail: ` (${String(e)})` `` → the sentinel row "a network error whose message carries both" FAILS; (f) `providerFor` without `&& env.VERCEL_ENV !== "production"` → "is IGNORED in production" FAILS; (g) `isPricedModel` as `model in PRICES` → the prices case FAILS on `toString`; (h) `Math.round` in `costMicroUsd` → "rounds UP" FAILS; (i) `NO_USAGE` passed for an `ok` answer with no usage → the estimate case FAILS; (j) `periodKeys` with `timeZone: "UTC"` → both period cases and the first gateway case FAIL; (k) `console.error` for every refusal → "the three expected states log on console.log" FAILS; (l) an `if (!process.env.OPENAI_API_KEY)` `no_key` refusal placed before the gate read → "a switched-off account never reports a missing key" FAILS; (m) `QUIET.has(outcome) || outcome === "ok"` logging ok lines → "an ok call logs nothing" FAILS. Paste each failing line.
 
-- [ ] **Step 7: Commit** `git add -- apps/web/src/lib/ai/prices.ts apps/web/src/lib/ai/prices.test.ts apps/web/src/lib/ai/period.ts apps/web/src/lib/ai/period.test.ts apps/web/src/lib/ai/log.ts apps/web/src/lib/ai/log.test.ts apps/web/src/lib/ai/gateway.ts apps/web/src/lib/ai/gateway.test.ts apps/web/src/lib/ai/client-boundary.test.ts apps/web/src/lib/ai/providers/types.ts apps/web/src/lib/ai/providers/openai.ts apps/web/src/lib/ai/providers/fake.ts apps/web/src/lib/ai/providers/select.ts apps/web/src/lib/ai/testing/open-gate.ts` then `git commit -m "ai: one door for every completion: the gate, the budget, the ledger, the fake, and nothing a prompt could leak through (item 8a-1)" -- apps/web/src/lib/ai/prices.ts apps/web/src/lib/ai/prices.test.ts apps/web/src/lib/ai/period.ts apps/web/src/lib/ai/period.test.ts apps/web/src/lib/ai/log.ts apps/web/src/lib/ai/log.test.ts apps/web/src/lib/ai/gateway.ts apps/web/src/lib/ai/gateway.test.ts apps/web/src/lib/ai/client-boundary.test.ts apps/web/src/lib/ai/providers/types.ts apps/web/src/lib/ai/providers/openai.ts apps/web/src/lib/ai/providers/fake.ts apps/web/src/lib/ai/providers/select.ts apps/web/src/lib/ai/testing/open-gate.ts`.
+- [ ] **Step 7: Commit** `git add -- apps/web/src/lib/ai/prices.ts apps/web/src/lib/ai/prices.test.ts apps/web/src/lib/ai/period.ts apps/web/src/lib/ai/period.test.ts apps/web/src/lib/ai/log.ts apps/web/src/lib/ai/log.test.ts apps/web/src/lib/ai/gateway.ts apps/web/src/lib/ai/gateway.test.ts apps/web/src/lib/ai/client-boundary.test.ts apps/web/src/lib/ai/providers/types.ts apps/web/src/lib/ai/providers/openai.ts apps/web/src/lib/ai/providers/fake.ts apps/web/src/lib/ai/providers/select.ts apps/web/src/lib/ai/testing/open-gate.ts` then `git commit -m "ai: one door for every completion: the gate, the budget, the ledger, the fake, and nothing a prompt could leak through (item 8a-1)" -- apps/web/src/lib/ai/prices.ts apps/web/src/lib/ai/prices.test.ts apps/web/src/lib/ai/period.ts apps/web/src/lib/ai/period.test.ts apps/web/src/lib/ai/log.ts apps/web/src/lib/ai/log.test.ts apps/web/src/lib/ai/gateway.ts apps/web/src/lib/ai/gateway.test.ts apps/web/src/lib/ai/client-boundary.test.ts apps/web/src/lib/ai/providers/types.ts apps/web/src/lib/ai/providers/openai.ts apps/web/src/lib/ai/providers/fake.ts apps/web/src/lib/ai/providers/select.ts apps/web/src/lib/ai/testing/open-gate.ts apps/web/vitest.config.ts`.
 
 ---
 
@@ -1836,8 +1879,9 @@ export function openGateDb(over: GateOver = {}): { db: SupabaseClient; calls: Ga
 **Review:** opus. **Runs beside:** Tasks 6, 7, 9.
 
 **Files**
-- Modify: `apps/web/src/lib/voice/summary-service.ts:1-106`, `apps/web/src/lib/voice/call-card.ts:150-215`, `apps/web/src/lib/voice/finish-call.ts:404`, `:837`, `apps/web/src/app/api/voice/incoming/route.ts:401-422` (comment only)
-- Modify (tests): `apps/web/src/lib/voice/summary-service.test.ts`, `apps/web/src/lib/voice/call-card.test.ts`, `apps/web/src/lib/voice/finish-call.test.ts:416-420`, `:1813`
+- Modify: `apps/web/src/lib/voice/summary-service.ts:1-106`, `apps/web/src/lib/voice/call-card.ts:150-215`, `apps/web/src/lib/voice/finish-call.ts:380`, `:404`, `:575`, `:710`, `:837`, `apps/web/src/app/api/voice/incoming/route.ts:401-491`, `:533`, `:587` (the clamp 697 → 679 and every comment deriving it), `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/textback-window.ts:14-17` (comment)
+- Modify (tests): `apps/web/src/lib/voice/summary-service.test.ts`, `apps/web/src/lib/voice/call-card.test.ts`, `apps/web/src/lib/voice/finish-call.test.ts:416-420`, `:723` (comment), `:1813`, `apps/web/src/app/api/voice/incoming/lifecycle.test.ts:627-680`, `:1101` (comment)
+- Orchestrator (not the agent; `.env*` and `.claude/agents/*.md` are not bis-voice's): `.env.example:125-131` ("Clamped to 10-697 … The 697 ceiling … 73s of tail") and `.claude/agents/bis-voice.md:25` ("clamped 10–697") move to 679 / 91 s in the same PR, text given in Step 7.
 - Create: `apps/web/src/lib/voice/summary-service.fallback.test.ts`, `apps/web/src/lib/voice/call-card.fallback.test.ts`
 
 **Interfaces**
@@ -1991,7 +2035,7 @@ describe("readCallForCard on the gateway (spec 3.2, choice I1)", () => {
 
 and the `:416` title gains " and this call's client and account (mutation: drop db from the call -> FAILS)".
 
-- [ ] **Step 3: Run them to see them fail.** `pnpm --filter web exec vitest run src/lib/voice/summary-service.test.ts src/lib/voice/summary-service.fallback.test.ts src/lib/voice/call-card.test.ts src/lib/voice/call-card.fallback.test.ts src/lib/voice/finish-call.test.ts`. Expected: the fallback files FAIL (`expected [Function] to be called with …`: today's code never calls `aiComplete`), the two new summary cases FAIL (the fetch IS called; no ledger row), the card's SENTINEL case FAILS (`expected '…SENTINEL-O…' not to contain 'SENTINEL'`), the two finish-call cases FAIL (no `db`). Paste one line of each.
+- [ ] **Step 3: Run them to see them fail.** `pnpm --filter web exec vitest run src/lib/voice/summary-service.test.ts src/lib/voice/summary-service.fallback.test.ts src/lib/voice/call-card.test.ts src/lib/voice/call-card.fallback.test.ts src/lib/voice/finish-call.test.ts src/app/api/voice/incoming/lifecycle.test.ts`. (`lifecycle.test.ts` FAILS once its 679/680 edits are made and the route still clamps at 697: "expected false to be true" at 679 s.) Expected: the fallback files FAIL (`expected [Function] to be called with …`: today's code never calls `aiComplete`), the two new summary cases FAIL (the fetch IS called; no ledger row), the card's SENTINEL case FAILS (`expected '…SENTINEL-O…' not to contain 'SENTINEL'`), the two finish-call cases FAIL (no `db`). Paste one line of each.
 
 - [ ] **Step 4: Rewrite `generateSummary`** (`summary-service.ts:1-106`; the comment block is kept and amended as shown):
 
@@ -2089,7 +2133,7 @@ export async function generateSummary(
 }
 ```
 
-- [ ] **Step 5: `readCallForCard`** (`call-card.ts:157-215`): its doc's first paragraph gains "It goes through the one AI door (`lib/ai/gateway.ts`); every refusal is no reading." The signature and body down to the parse become:
+- [ ] **Step 5: `readCallForCard`** (`call-card.ts:153-215`): its doc's first paragraph gains "It goes through the one AI door (`lib/ai/gateway.ts`); every refusal is no reading." The signature and body down to the parse become:
 
 ```ts
 export async function readCallForCard(
@@ -2147,13 +2191,21 @@ Imports added at `:32-37`: `import type { CallCard, SupabaseClient, TranscriptEv
         ? await readCallForCard(state.transcript, { db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, label: `finishCall ${meta.callRowId}` })
 ```
 
-- [ ] **Step 7: The teardown budget comment** (`incoming/route.ts:408-422`; comment only, no code): the summary line becomes `//    16s  the summary reading (`generateSummary`): the gateway's gate read (3s), the completion (AbortSignal 10s), its ledger row (3s) — first in finishCall, before anything is written`; the card line `//    16s  the call card's reading (`readCallForCard`: gate 3s, 10s, ledger 3s), then its own update; the callback To do is a few ms before it`; the proposals line `//    16s  the proposals' reading (`generateProposals`: gate 3s, 10s, ledger 3s)`; "THE CALL ROW IS DURABLE HERE, ~38s in." becomes "~44s in."; the total `73s  tail (61s bounded …` becomes `91s  tail (79s bounded by timeouts; …` (each completion gained up to 6 s of bounded database time, item 8a-1). `maxDuration = 800` (`:102`) does not change. Read the lines around before editing: if any other line of the block sums these figures, update it in the same way and list it in the report.
+- [ ] **Step 7: The tail and the clamp, re-derived (review I1; a behaviour change).**
+  - `incoming/route.ts:408-422`, the tail table: the summary line becomes `//    16s  the summary reading (`generateSummary`): the gateway's gate read (3s), the completion (AbortSignal 10s), its ledger row (3s) — first in finishCall, before anything is written`; the card line `//    16s  the call card's reading (`readCallForCard`: gate 3s, 10s, ledger 3s), then its own update; the callback To do is a few ms before it`; the proposals line `//    16s  the proposals' reading (`generateProposals`: gate 3s, 10s, ledger 3s)`; "THE CALL ROW IS DURABLE HERE, ~38s in." → "~44s in."; the total `73s  tail (61s bounded …` → `91s  tail (79s bounded by timeouts; …` (each completion gained up to 6 s of bounded database time, item 8a-1).
+  - `:459`: `//   800 - 91 - 20 - 10 = 679, THE CLAMP BELOW.`; `:461`: "Pinned by lifecycle.test.ts ("cap-seconds clamp", at 900 and at 680)."; append to the tightening history (`:462-464`): "…, from 715 (no hangup …), and from 697 (item 8a-1: each AI completion gained a 3s gate read and a 3s ledger write)."; `:466`: "in the first ~44s of the tail".
+  - `:475`: "this 679 must be re-derived". `:491`: `const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 679);`. `:533`: "PHONE_MAX_CALL_SECONDS to <=679". `:587`: "the 679 clamp".
+  - `finish-call.ts:380`, `:575`, `:710` and `finish-call.test.ts:723`: "697s clamp" → "679s clamp". `lifecycle.test.ts:1101`: "cap ≤ 679".
+  - `lifecycle.test.ts:627-680`: titles "above 697 is clamped to 697" → "above 679 is clamped to 679"; "PHONE_MAX_CALL_SECONDS=698, one second past the clamp, is clamped to 697 (mutation: clamp at 698 or above → no goodbye at 697s, FAILS)" → "PHONE_MAX_CALL_SECONDS=680, one second past the clamp, is clamped to 679 (mutation: clamp at 680 or above → no goodbye at 679s, FAILS)"; `process.env.PHONE_MAX_CALL_SECONDS = "698"` → `"680"`; `advanceTimersByTimeAsync(696_000)` → `(678_000)`; `(696_999)` → `(678_999)`; the comment "Crossing 697s … 697 is 800 - 73 - 20 - 10 … a 73s timed post-cap tail (…, the summary reading, …)" → "Crossing 679s … 679 is 800 - 91 - 20 - 10 … a 91s timed post-cap tail (…, the summary reading with its gate and ledger, …, the call card's and the proposals' readings with theirs)", and the history line gains "697 predates the AI gateway's two bounded database calls per completion".
+  - `textback-window.ts:14-17`: "`generateSummary` first, which aborts hard at 10s (summary-service.ts)" → "`generateSummary` first, which can take 16s through the AI gateway (a 3s gate read, the 10s completion, a 3s ledger write; lib/ai/gateway.ts)"; "Twelve seconds is the realistic ceiling." → "About eighteen seconds is the realistic ceiling."; "Five minutes is ~25× that." → "Five minutes is ~16× that." (comment only; the window constant does not change).
+  - Orchestrator, same PR: `.env.example`'s PHONE_MAX_CALL_SECONDS comment: "Clamped to 10-679 … The 679 ceiling is DERIVED … 91s of tail after it fires, 79s of it bounded by timeouts and 12s estimated (…, the call summary with its gate and ledger, …)"; `.claude/agents/bis-voice.md:25`: "clamped 10–679".
+  - Before editing, `git grep -n '\b697\b' -- apps .claude .env.example` and list every hit in the report; after, the same grep returns nothing in those paths.
 
 - [ ] **Step 8: Run green.** The Step 3 command → all PASS; paste the summary line. `pnpm --filter web typecheck` → exit 0. `pnpm --filter web exec eslint src/lib/voice/summary-service.ts src/lib/voice/call-card.ts src/lib/voice/finish-call.ts "src/app/api/voice/incoming/route.ts"` → clean. `grep -n "OPENAI_API_KEY\|api.openai.com" apps/web/src/lib/voice/summary-service.ts apps/web/src/lib/voice/call-card.ts` → nothing.
 
-- [ ] **Step 9: Probes, by name:** (a) in `generateSummary`, `composeSummary(answer.ok ? answer.text : "AI unavailable.", state)` → every `it.each` row of the summary fallback FAILS; (b) move the spam check below `aiComplete` → "the spam skip makes no gateway call" FAILS; (c) `feature: "call_card"` in `generateSummary` → the two feature cases FAIL; (d) in `readCallForCard`'s catch, `String(e)` → the SENTINEL case FAILS; (e) drop `if (!answer.ok) return NO_READING;` (parse `""` instead) → the card fallback rows still pass via the catch: if they do, that proves the catch is the fallback, so instead mutate to `if (!answer.ok) return { reason: "", callerWords: null };` → the card fallback rows FAIL; (f) drop `db: ctx.db` at `:404` → the finish-call case FAILS. Paste each line.
+- [ ] **Step 9: Probes, by name:** (a) in `generateSummary`, `composeSummary(answer.ok ? answer.text : "AI unavailable.", state)` → every `it.each` row of the summary fallback FAILS; (b) move the spam check below `aiComplete` → "the spam skip makes no gateway call" FAILS; (c) `feature: "call_card"` in `generateSummary` → the two feature cases FAIL; (d) in `readCallForCard`'s catch, `String(e)` → the SENTINEL case FAILS; (e) drop `if (!answer.ok) return NO_READING;` (parse `""` instead) → the card fallback rows still pass via the catch: if they do, that proves the catch is the fallback, so instead mutate to `if (!answer.ok) return { reason: "", callerWords: null };` → the card fallback rows FAIL; (f) drop `db: ctx.db` at `:404` → the finish-call case FAILS; (g) the clamp at `680` in `route.ts:491` → "PHONE_MAX_CALL_SECONDS=680 … clamped to 679" FAILS (no goodbye at 679 s). Paste each line.
 
-- [ ] **Step 10: Commit** `git add -- apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts` then `git commit -m "voice: the call summary and the call card's reading go through the AI door; every refusal is the fact line or no reading, and no model word reaches a log (item 8a-1)" -- apps/web/src/lib/voice/summary-service.ts apps/web/src/lib/voice/summary-service.test.ts apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.ts apps/web/src/lib/voice/call-card.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts apps/web/src/lib/voice/finish-call.ts apps/web/src/lib/voice/finish-call.test.ts apps/web/src/app/api/voice/incoming/route.ts`.
+- [ ] **Step 10: Commit** `git add -- apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts` then `git commit -m "voice: the call summary and the call card's reading go through the AI door; every refusal is the fact line or no reading, and no model word reaches a log (item 8a-1)" -- apps/web/src/lib/voice/summary-service.ts apps/web/src/lib/voice/summary-service.test.ts apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.ts apps/web/src/lib/voice/call-card.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts apps/web/src/lib/voice/finish-call.ts apps/web/src/lib/voice/finish-call.test.ts apps/web/src/app/api/voice/incoming/route.ts apps/web/src/app/api/voice/incoming/lifecycle.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/textback-window.ts"`. The orchestrator commits the `.env.example` and `.claude/agents/bis-voice.md` lines (Step 7) separately: `git commit -m "docs: the call cap's ceiling is 679 after the AI gateway (item 8a-1)" -- .env.example .claude/agents/bis-voice.md`.
 
 ---
 
@@ -2334,7 +2386,7 @@ and the catch at `:618-624`:
 - Modify: `…/[accountId]/in-account-service-reads.test.ts` (one `ALLOWED` line beside `:137`)
 
 **Interfaces**
-- Consumes: `getAiSettings`, `setAccountAiSettings`, `setGlobalAiEnabled`, `MAX_MONTHLY_BUDGET_CENTS`, `type AiSettingsRead`, `serviceDb` (`@bis/db`, Task 2); `periodKeys` (Task 4); `monthStartInZone` (`lib/billing/billing-view.ts:64`); `t`, `plural` (`lib/i18n/t.ts`); the Task 3 keys; `requireAgencyOnlyAccountAccess` (`lib/auth.ts:98`); `loggableError`.
+- Consumes: `getAiSettings`, `setAccountAiSettings`, `setGlobalAiEnabled`, `MAX_MONTHLY_BUDGET_CENTS`, `type AiSettingsRead`, `serviceDb` (`@bis/db`, Task 2); `periodKeys` (Task 4); `t`, `plural` (`lib/i18n/t.ts`); the Task 3 keys; `requireAgencyOnlyAccountAccess` (`lib/auth.ts:98`); `loggableError`.
 - Produces:
   - `settings-view.ts`: `parseBudgetDollars(raw: unknown): number | null` (cents, or null); `isConfirmWord(raw: unknown): boolean` (`OFF` or `APAGAR`, trimmed, any case); `type AiCardView = { accountEnabled: boolean; budgetDollars: string; globalEnabled: boolean; spendLine: string | null; reachedLine: string | null; skippedLine: string | null }`; `aiCardView(i: { settings: AiSettingsRead; refusals: number; overBudgetAt: string | null; now: Date; zone: string; locale: Locale }): AiCardView`.
   - `ai-actions.ts` (`"use server"`): `type AiPrior = { enabled: boolean; monthlyBudgetCents: number }`; `type AiSaveResult = { ok: true; prior: AiPrior } | { ok: false; error: "aiSettings.error.budget" | "aiSettings.error.failed" }`; `type AiGlobalResult = { ok: true; prior: boolean } | { ok: false; error: "aiSettings.global.wrongWord" | "aiSettings.error.failed" }`; `saveAccountAiAction(accountId: string, input: { enabled: boolean; budget: string }): Promise<AiSaveResult>`; `undoAccountAiAction(accountId: string, prior: AiPrior): Promise<AiSaveResult>`; `setGlobalAiAction(accountId: string, input: { enabled: boolean; confirm?: string }): Promise<AiGlobalResult>`.
@@ -2389,6 +2441,14 @@ describe("aiCardView (spec 3.6)", () => {
       "Presupuesto alcanzado el 14 oct. La IA está en pausa en esta cuenta hasta el 1 nov.",
     ]);
     expect(v("en", null).reachedLine).toBe("Budget reached. AI is paused for this account until Nov 1.");
+  });
+
+  it("the resume day is the 1st of next month in a zone whose DST changes at midnight, and across a year end (review M4; assumption A6; mutation: the old monthStartInZone(+32 days) arithmetic -> FAILS if the zone's 1st has no local midnight)", () => {
+    const resume = (now: string, zone: string) =>
+      aiCardView({ settings: settings({ monthKey: null, monthSpendMicroUsd: 0, monthlyBudgetCents: 0 }), refusals: 0, overBudgetAt: null, now: new Date(now), zone, locale: "en" }).reachedLine;
+    expect(resume("2026-09-05T12:00:00Z", "America/Santiago")).toBe("Budget reached. AI is paused for this account until Oct 1.");
+    expect(resume("2026-04-04T12:00:00Z", "America/Santiago")).toBe("Budget reached. AI is paused for this account until May 1.");
+    expect(resume("2026-12-31T23:30:00Z", ZONE)).toBe("Budget reached. AI is paused for this account until Jan 1.");
   });
 
   it("one micro-dollar under the budget is not reached (mutation: `>` -> `>=` on budget - 1 -> FAILS)", () => {
@@ -2522,7 +2582,6 @@ In `in-account-service-reads.test.ts`, add beside `:137`:
 
 ```ts
 import { MAX_MONTHLY_BUDGET_CENTS, type AiSettingsRead } from "@bis/db";
-import { monthStartInZone } from "@/lib/billing/billing-view";
 import type { Locale } from "@/lib/i18n/locale";
 import { plural, t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
@@ -2565,8 +2624,11 @@ export function aiCardView(i: {
   const day = (d: Date) => plain(new Intl.DateTimeFormat(tag, { timeZone: i.zone, month: "short", day: "numeric" }).format(d));
   const s = i.settings;
   const spent = s.monthKey === periodKeys(i.now, i.zone).monthKey ? s.monthSpendMicroUsd : 0;
-  const monthStart = monthStartInZone(i.now, i.zone);
-  const resume = day(monthStartInZone(new Date(monthStart.getTime() + 32 * 86_400_000), i.zone));
+  // The 1st of next month, built from the account's own month key at NOON UTC and printed in UTC (review M4): a
+  // calendar date, so no zone's midnight (or a DST change at midnight) can move it to the 31st or the 2nd.
+  const [y, mo] = periodKeys(i.now, i.zone).monthKey.split("-").map(Number) as [number, number];
+  const resumeAt = new Date(Date.UTC(mo === 12 ? y + 1 : y, mo === 12 ? 0 : mo, 1, 12));
+  const resume = plain(new Intl.DateTimeFormat(tag, { timeZone: "UTC", month: "short", day: "numeric" }).format(resumeAt));
   const reached = spent >= s.monthlyBudgetCents * 10_000;
   return {
     accountEnabled: s.accountEnabled,
@@ -2654,7 +2716,7 @@ export async function setGlobalAiAction(accountId: string, input: { enabled: boo
 
 - [ ] **Step 5: Run green.** The Step 3 command → all PASS (paste the summary). `pnpm --filter web typecheck` → exit 0. `pnpm --filter web exec eslint src/lib/ai/settings-view.ts "src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.ts"` → clean.
 
-- [ ] **Step 6: Probes, by name:** (a) move `await requireAgencyOnlyAccountAccess(accountId)` below `serviceDb()` in `setGlobalAiAction` (read the guard's answer later) → the global row of "a non-agency caller is redirected" FAILS; (b) drop the `isConfirmWord` check → "needs the typed word" FAILS; (c) `parseBudgetDollars` accepting `^\d{1,4}(\.\d{2})?$` → "10.50" refused row FAILS; (d) `Math.floor` in the spend line → "rounded up to the cent" FAILS; (e) `spent = s.monthSpendMicroUsd` (ignore the month) → "even with spend stored for LAST month" FAILS; (f) the resume day computed with `timeZone: "UTC"` in `day` → the reached case FAILS; (g) remove the new `ALLOWED` line → `in-account-service-reads.test.ts` FAILS naming `ai-actions.ts`. Paste each line.
+- [ ] **Step 6: Probes, by name:** (a) move `await requireAgencyOnlyAccountAccess(accountId)` below `serviceDb()` in `setGlobalAiAction` (read the guard's answer later) → the global row of "a non-agency caller is redirected" FAILS; (b) drop the `isConfirmWord` check → "needs the typed word" FAILS; (c) `parseBudgetDollars` accepting `^\d{1,4}(\.\d{2})?$` → "10.50" refused row FAILS; (d) `Math.floor` in the spend line → "rounded up to the cent" FAILS; (e) `spent = s.monthSpendMicroUsd` (ignore the month) → "even with spend stored for LAST month" FAILS; (f) the resume day built as `monthStartInZone(new Date(monthStartInZone(i.now, i.zone).getTime() + 32 * 86_400_000), i.zone)` printed in the zone (the old arithmetic) → run the M4 case and paste whether it fails; if it passes, say so (the noon-UTC form is then defence, not a fix); (f2) `mo === 12 ? y + 1 : y` → `y` → the year-end row FAILS; (g) remove the new `ALLOWED` line → `in-account-service-reads.test.ts` FAILS naming `ai-actions.ts`. Paste each line.
 
 - [ ] **Step 7: Commit** `git add -- apps/web/src/lib/ai/settings-view.ts apps/web/src/lib/ai/settings-view.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.test.ts"` then `git commit -m "settings: the AI card's words and its three agency-only actions, guard first, each answering what Undo puts back (item 8a-1)" -- apps/web/src/lib/ai/settings-view.ts apps/web/src/lib/ai/settings-view.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-actions.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`.
 
@@ -2669,7 +2731,7 @@ export async function setGlobalAiAction(accountId: string, input: { enabled: boo
 - Modify: `…/settings/page.tsx` (import beside `:25`; the mount after the Billing boundary, `:207-209`), `…/settings/page.test.ts` (one `vi.mock` beside `:110`, one import, one case after `:202-213`), `apps/web/src/lib/palette/registry.ts:50` (one line after), `apps/web/src/lib/palette/registry.test.ts` (one case after `:127`)
 
 **Interfaces**
-- Consumes: `aiCardView`, `type AiCardView` (Task 7, TYPE-only in the client card); `saveAccountAiAction`, `undoAccountAiAction`, `setGlobalAiAction`, `type AiPrior`, `type AiSaveResult`, `type AiGlobalResult` (Task 7); `getAiSettings`, `countAiRefusalsSince`, `firstOverBudgetSince` (Task 2); `dbForRequest` (`lib/db`); `getPersonPrefs`; `requestLocale`; `safeZone`, `monthStartInZone`; Task 3's keys; `common.undo`.
+- Consumes: `aiCardView`, `type AiCardView` (Task 7, TYPE-only in the client card); `saveAccountAiAction`, `undoAccountAiAction`, `setGlobalAiAction`, `type AiPrior`, `type AiSaveResult`, `type AiGlobalResult` (Task 7); `getAiSettings`, `countAiSkipsSince`, `firstOverBudgetSince` (Task 2); `dbForRequest` (`lib/db`); `getPersonPrefs`; `requestLocale`; `safeZone`, `monthStartInZone`; Task 3's keys; `common.undo`.
 - Produces: `AiSection({ accountId })` (server), `AiCardSkeleton()`, `AiCardError({ locale })`, `AiCard(props)`, `AiGlobalConfirmForm(props)`, `confirmMatches(typed, word)`, `aiCardHandlers(deps)`; DOM markers `#ai` (the card, the palette's anchor), `data-ai-card`, `data-ai-spend`, `data-ai-empty`, `data-ai-reached`, `data-ai-skipped`, `data-ai-account`, `data-ai-budget`, `data-ai-save`, `data-ai-global`, `data-ai-global-off`, `data-ai-global-on`, `data-ai-confirm`, `data-ai-confirm-input`, `data-ai-confirm-off`, `data-ai-error`.
 
 - [ ] **Step 1: Read** `…/settings/billing-section.tsx`, `billing-card.tsx:340-390` (skeleton and error card), `weekly-report-card.tsx`, `…/contacts/document-purge-dialog.tsx` (the typed-word form, presentational for tests), `…/contacts/document-checklist-handlers.ts` (the Undo toast shape), `…/settings/page.tsx:190-215`, `page.test.ts:95-215`, `sections.test.ts:1-80` (calling a server component and walking its element), `branding/page.tsx:70-120` (the locale), `components/ui/{checkbox,notice,dialog,button}.tsx`, `lib/rendered-text.ts`, `lib/palette/registry.ts:36-51`, `registry.test.ts:86-128`.
@@ -2871,7 +2933,7 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   getAiSettings: async (db: { tag: string }) => { fx.reads.push(`settings:${db.tag}`); if (fx.fail) throw new Error("read failed"); return fx.settings; },
-  countAiRefusalsSince: async (db: { tag: string }) => { fx.reads.push(`refusals:${db.tag}`); return 0; },
+  countAiSkipsSince: async (db: { tag: string }) => { fx.reads.push(`refusals:${db.tag}`); return 0; },
   firstOverBudgetSince: async (db: { tag: string }) => { fx.reads.push(`overBudget:${db.tag}`); return null; },
 }));
 vi.mock("./ai-actions", () => ({ saveAccountAiAction: async () => ({}), undoAccountAiAction: async () => ({}), setGlobalAiAction: async () => ({}) }));
@@ -2902,6 +2964,15 @@ describe("AiSection (spec 3.6; plan deviations 14, 16)", () => {
     expect((el.props.view as { spendLine: string | null }).spendLine).toBe("$1.84 of $10.00 this month, estimated");
     expect(el.props.locale).toBe("en");
     expect([typeof el.props.save, typeof el.props.undo, typeof el.props.setGlobal]).toEqual(["function", "function", "function"]);
+  });
+
+  it("keys the card on the stored switch and budget, so a Save's or an Undo's refresh resets the form (review I8; mutation: drop the key -> FAILS)", async () => {
+    const first = (await AiSection({ accountId: "a1" })) as ReactElement;
+    expect(first.key).toBe("true:10");
+    fx.settings = { ...fx.settings, accountEnabled: false, monthlyBudgetCents: 2500 };
+    const after = (await AiSection({ accountId: "a1" })) as ReactElement;
+    expect(after.key).toBe("false:25");
+    fx.settings = { ...fx.settings, accountEnabled: true, monthlyBudgetCents: 1000 };
   });
 
   it("speaks the reader's own language (mutation: drop userLanguage from requestLocale -> FAILS)", async () => {
@@ -2947,7 +3018,7 @@ describe("settings page — the AI card", () => {
 });
 ```
 
-`registry.test.ts`, after `:127`:
+`registry.test.ts`: in the anchor-parity case's `cardFiles` (`:235-245`), add `"../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx",` after `billing-card.tsx` (without it, that case FAILS on `id="ai"` once the palette entry exists: run it that way first and paste the line). Then, after `:127`:
 
 ```ts
   it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
@@ -3175,7 +3246,7 @@ export function AiCardError({ locale }: { locale: Locale }) {
 `…/settings/ai-section.tsx`:
 
 ```tsx
-import { countAiRefusalsSince, firstOverBudgetSince, getAiSettings } from "@bis/db";
+import { countAiSkipsSince, firstOverBudgetSince, getAiSettings } from "@bis/db";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { aiCardView, type AiCardView } from "@/lib/ai/settings-view";
@@ -3210,12 +3281,14 @@ export async function AiSection({ accountId }: { accountId: string }) {
       }),
     ]);
     const language = account.language === "en" || account.language === "es" ? account.language : null;
-    locale = requestLocale({ account: { language }, isOperator: true, userLanguage: prefs.language });
+    // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces (branding/page.tsx:114-115).
+    const accountLanguage = { language };
+    locale = requestLocale({ account: accountLanguage, isOperator: true, userLanguage: prefs.language });
     const zone = safeZone(account.timezone);
     const now = new Date();
     const since = monthStartInZone(now, zone).toISOString();
     const [settings, refusals, overBudgetAt] = await Promise.all([
-      getAiSettings(db, accountId), countAiRefusalsSince(db, accountId, since), firstOverBudgetSince(db, accountId, since),
+      getAiSettings(db, accountId), countAiSkipsSince(db, accountId, since), firstOverBudgetSince(db, accountId, since),
     ]);
     view = aiCardView({ settings, refusals, overBudgetAt, now, zone, locale });
   } catch (e) {
@@ -3223,8 +3296,12 @@ export async function AiSection({ accountId }: { accountId: string }) {
     return <AiCardError locale={locale} />;
   }
   // accountId is bound here, server-side. It never travels as a form field.
+  // Keyed on the STORED switch and budget (review I8): after a Save or its Undo, router.refresh() re-renders this
+  // section with the new stored values, the key changes, and the form's local state starts again from them, so an
+  // Undo visibly puts the checkbox and the field back.
   return (
     <AiCard
+      key={`${view.accountEnabled}:${view.budgetDollars}`}
       view={view}
       locale={locale}
       save={saveAccountAiAction.bind(null, accountId)}
@@ -3257,7 +3334,7 @@ export async function AiSection({ accountId }: { accountId: string }) {
 
 - [ ] **Step 6: Probes, by name:** (a) the global button `variant="default"` → "exactly one primary button" FAILS; (b) `disabled={busy}` only on the confirm → "stays disabled until the word matches" FAILS; (c) `confirmMatches` without `.toUpperCase()` → the confirmMatches case FAILS; (d) move `await requireAgencyOnlyAccountAccess` inside the try → "guards first" FAILS (the redirect becomes the error card); (e) `requestLocale({ … })` without `userLanguage` → "speaks the reader's own language" FAILS (and `request-locale-callers.test.ts` too); (f) `common.actionCrashed` for `crashed` → the crash-sentence case FAILS; (g) the Undo calling `d.undo(input as never)` → "offers an Undo that writes back the prior values" FAILS; (h) mount `<AiSection>` without `<Suspense>` → the page case FAILS; (i) remove the palette entry → the registry case FAILS. Paste each line.
 
-- [ ] **Step 7: Design check (DESIGN.md definition of done).** Tokens only (`grep -nE "#[0-9a-fA-F]{3,8}\b|rgb\(|shadow-\[" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.tsx"` → nothing); dark and light (`.dark` class) by eye on `pnpm --filter web dev` is the orchestrator's, in Task 13 step 7; renders at 360 px and with the pseudo-locale (`?locale=pseudo` under `BIS_I18N_QA=1`, local only) — note in the report that it was not run by you.
+- [ ] **Step 7: Design check (DESIGN.md definition of done).** Tokens only (`grep -nE "#[0-9a-fA-F]{3,8}\b|rgb\(|shadow-\[" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.tsx"` → nothing); dark and light (`.dark` class) by eye on `pnpm --filter web dev` is the orchestrator's, in Task 13 step 7; renders at 360 px with a Spanish reader (the card passes no `searchParams` to `requestLocale`, so the `?locale=pseudo` QA override does not reach it; review M8: the +35% check is made with the Spanish copy, the longest real one) — note in the report that it was not run by you.
 
 - [ ] **Step 8: Commit** `git add -- "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card-handlers.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card-handlers.test.ts"` then `git commit -m "settings: the agency's AI card: this month's spend in words, the account's switch and budget with Undo, AI for every account behind a typed word; ⌘K finds it (item 8a-1)" -- "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-section.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card-handlers.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card-handlers.test.ts" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/page.tsx" "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/settings/page.test.ts" apps/web/src/lib/palette/registry.ts apps/web/src/lib/palette/registry.test.ts`.
 
@@ -3295,8 +3372,8 @@ describe("the AI gateway's env contract (spec 6)", () => {
     }
   });
 
-  it("no Vercel config and no Next config sets AI_PROVIDER (spec 6: production ignores it, and Preview never carries it; mutation: add it to apps/web/vercel.json -> FAILS)", () => {
-    for (const p of ["vercel.json", "apps/web/vercel.json", "apps/web/next.config.ts"]) expect([p, read(p).includes("AI_PROVIDER")]).toEqual([p, false]);
+  it("apps/web's Vercel config and Next config never set AI_PROVIDER (spec 6; the Root Directory is apps/web, so these two are the deployment's; mutation: add it to apps/web/vercel.json -> FAILS)", () => {
+    for (const p of ["apps/web/vercel.json", "apps/web/next.config.ts"]) expect([p, read(p).includes("AI_PROVIDER")]).toEqual([p, false]);
   });
 
   it("Playwright's app runs on the fake, so no e2e run makes a real model call (spec 8.1; mutation: drop the line -> FAILS)", () => {
@@ -3519,11 +3596,12 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 - [ ] **Step 2. bis-ci** (only AFTER Task 12 approves 0086 unchanged): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/item8a-gateway-summary` → its log lists exactly `0086_ai_gateway.sql`; then `-f step=push`. Post-apply, read-only through MCP `execute_sql` on `odnobiodsftffphuuosz`: `select relname from pg_class where relname in ('ai_ledger','account_ai_settings','ai_gateway_settings') order by 1` → all three; `select id, enabled from ai_gateway_settings` → `(true, true)`; `select has_function_privilege('authenticated','public.ai_gate_check(uuid,text,text)','execute'), has_function_privilege('authenticated','public.ai_ledger_record(uuid,text,text,integer,integer,bigint,text,integer,text,text)','execute')` → `f, f`; the Faithfulness digest on bis-ci is UNCHANGED from Task 0 (0086 adds no client write). From here on the `@bis/db` suites may run against bis-ci again.
 - [ ] **Step 3. Push and CI.** Until Step 2, `e2e` is red on its migration check by design (0086 not on bis-ci); after Step 2, re-run and read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). The e2e AI spec must have run (four tests). A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
 - [ ] **Step 4. Production** (MCP on `tlbkbmlrfafquucsmsmm`): read-only pre-flight `select max(version) from supabase_migrations.schema_migrations` → the 0085 apply; then `apply_migration` with 0086's exact text, ONCE (Task 1 step 6 proved no backslash and no lone `$`; the text's md5 equals Task 1's). Post-checks, read-only: the three relations; **`select id, enabled from ai_gateway_settings` → `(true, true)` (if it reads false or empty, every call summary in production becomes its fact line: STOP and fix before the merge)**; the two `has_function_privilege` reads → `f, f`. It goes BEFORE the merge (spec §10: migration before code; the gateway fails closed without it). Ledger line: `0086 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
+- [ ] **Step 4b. Runbook (review M10).** `docs/runbooks/ci-supabase-project.md` gains, in its migration-apply section, one line: "0086 seeds ONE row, `ai_gateway_settings (id true, enabled true)`. If it is ever missing on a project, every AI call there is off (the gate fails closed): recreate it with `insert into public.ai_gateway_settings (id, enabled) values (true, true);` through MCP `execute_sql`, then read it back." Commit `docs(runbooks): recreate the AI switch row (item 8a-1)` -- that file.
 - [ ] **Step 5. Parity.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both projects; the three relations, their constraints and policies, both functions' ACL, `prosecdef`, `proconfig` and body, the grants, and the seeded row are equal; the client-write digest is equal on both.
 - [ ] **Step 6. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first).
-- [ ] **Step 7. Preview, by hand (owner and orchestrator together)**, on the branch's Preview (bis-ci), on a test account (never Test Client One): the AI card in both themes, at 360 px, with a Spanish reader and with the pseudo-locale (local `BIS_I18N_QA=1` only); "No AI use yet this month."; turn the account off, Save, Undo; a refused budget. The global switch is flipped ONLY with the owner watching, turned back on at once, and `select enabled from ai_gateway_settings` on bis-ci reads `true` afterwards.
+- [ ] **Step 7. Preview, by hand (owner and orchestrator together)**, on the branch's Preview (bis-ci), on a test account (never Test Client One): the AI card in both themes, at 360 px, with a Spanish reader (no pseudo-locale: the card does not take `?locale=`, review M8); "No AI use yet this month."; turn the account off, Save, Undo; a refused budget. The global switch is flipped ONLY with the owner watching, turned back on at once, and `select enabled from ai_gateway_settings` on bis-ci reads `true` afterwards.
 - [ ] **Step 8. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 12's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>` (pinned to the reviewed head; read the PR state before any retry). The PR body names: the owner's I1–I14 acceptance; deviations 1–19; the pinned tests changed; "Not in this PR"; the Preview results; the 0086 apply lines; that `AI_PROVIDER`/`AI_GATEWAY_OFF` need no Vercel change.
-- [ ] **Step 9. After the deploy** (spec §10, owed): the deployment reads READY on the merge SHA and is aliased to `app.bis-rgv.com`; smokes `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404; the merged work's marker: the owner, signed in, opens an account's Settings and the served HTML carries `id="ai"` and `data-ai-card` (nothing public changed in 8a-1). **Owner smoke on the test account (memory "Smoke identities"; the agent never places a call):** one real call; then, read-only MCP on production, `select feature, model, input_tokens, output_tokens, cost_microusd, outcome, latency_ms from ai_ledger where account_id = '<test account id>' order by created_at desc limit 5` → one row per completion the call made (`call_summary`; `call_card` and `call_proposals` when the call qualified), outcome `ok`, NON-null tokens (assumption A4), and by construction no text; turn the account's AI off on Settings, call again → the call's summary is the fact line only and the new rows read `account_off`; turn it back on. **Then re-check the defaults before 8a-2 (choice I14):** from the real rows, the mean cost per completion against spec §3.4's 720 micro-dollars; report to the owner whether $10 a month and 200 a day stand, before 8a-2's plan is written. Tracker: item 8 row → "8a-1 (the AI gateway) shipped #<n>"; S-15 and F-020 stay open until 8a-2.
+- [ ] **Step 9. After the deploy** (spec §10, owed): the deployment reads READY on the merge SHA and is aliased to `app.bis-rgv.com`; smokes `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404; the merged work's marker: the owner, signed in, opens an account's Settings and the served HTML has an element matching `#ai[data-ai-card]` (review M9) (nothing public changed in 8a-1). **Owner smoke on the test account (memory "Smoke identities"; the agent never places a call):** one real call; then, read-only MCP on production, `select feature, model, input_tokens, output_tokens, cost_microusd, outcome, latency_ms from ai_ledger where account_id = '<test account id>' order by created_at desc limit 5` → one row per completion the call made (`call_summary`; `call_card` and `call_proposals` when the call qualified), outcome `ok`, NON-null tokens (assumption A4), and by construction no text; turn the account's AI off on Settings, call again → the call's summary is the fact line only and the new rows read `account_off`; turn it back on. **Then re-check the defaults before 8a-2 (choice I14):** from the real rows, the mean cost per completion against spec §3.4's 720 micro-dollars; report to the owner whether $10 a month and 200 a day stand, before 8a-2's plan is written. Tracker: item 8 row → "8a-1 (the AI gateway) shipped #<n>"; S-15 and F-020 stay open until 8a-2.
 
 ---
 
@@ -3557,17 +3635,14 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 | §9 I1–I14 | "Owner rulings" table; I2–I6, I13 are 8a-2's |
 | §10 0086 bis-ci → production → parity; migration before code; no Vercel change; the owner's production smoke | Task 13 |
 
-## Owner questions (none blocks execution; the plan proceeds on the answer written)
+## Owner questions
 
-1. **The typed word for "AI for every account" off:** `OFF` in English, `APAGAR` in Spanish, either accepted by the server. (Spec §3.6 says "a typed confirmation of the word in the button"; the button reads "Turn off everywhere" / "Apagar en todas", so the word is the button's verb.)
-2. **"AI was skipped N times this month"** is on the card (choice I10's reason, "so the agency can see on the card how often AI was off"; not in §3.6's list). Keep or drop.
-3. **Whole dollars** in the budget field (deviation 17).
-4. **Only failures are logged** (deviation 8): an `ok` completion leaves a ledger row and no log line.
+Answered 2026-10-18 (Q1–Q4 and M12, in the rulings table above). None open.
 
 ## Self-review notes (the writer's own pass, 2026-10-18)
 
 - **Spec coverage:** every §3 bullet maps to a row above. Where the code made the spec's words impossible or ambiguous: deviations 1–19, each with the file:line or the run that decided it.
 - **Placeholder scan:** no TBD/TODO. Every value a test pins was worked out in the plan (`720`, `36`, `27`, `10_000_000`) or read with node 24 here (Intl dates and money, `periodKeys`, the `SyntaxError` message). Three steps carry a read-then-confirm rule, each keeping the assertion's meaning fixed: A2 (`proconfig`'s rendering), Task 5 (d) (`modelReturning`'s encoding), Task 8's Radix `data-state`.
-- **Type consistency:** `AiFeature`, `AiOutcome`, `AiGate`, `AiLedgerEntry`, `AiSettingsRead`, `aiGateCheck(db, { accountId, monthKey, dayKey, signal? })`, `recordAiLedger(db, entry & { signal? })`, `getAiSettings`, `countAiRefusalsSince`, `firstOverBudgetSince`, `setAccountAiSettings(db, accountId, { enabled, monthlyBudgetCents, actorId })`, `setGlobalAiEnabled(db, { enabled, actorId })` (Task 2) → Tasks 4, 7, 8; `aiComplete(db, AiInput)`, `AiResult`, `AI_REFUSALS`, `openGateDb`, `gateRpc`, `periodKeys`, `aiSafeError` (Task 4) → Tasks 5, 6, 7, 11; `generateSummary(state, { db, accountId, timezone?, ref?, fetchImpl? })`, `readCallForCard(transcript, { db, accountId, timezone, fetchImpl?, label? })` (Task 5) → `finish-call.ts`; `aiCardView`, `AiCardView`, `parseBudgetDollars`, `isConfirmWord`, `saveAccountAiAction(accountId, { enabled, budget })`, `undoAccountAiAction(accountId, AiPrior)`, `setGlobalAiAction(accountId, { enabled, confirm? })` (Task 7) → Task 8; markers `#ai`, `data-ai-*` (Task 8) → Task 11; keys (Task 3) → Tasks 7, 8, 11.
+- **Type consistency:** `AiFeature`, `AiOutcome`, `AiGate`, `AiLedgerEntry`, `AiSettingsRead`, `aiGateCheck(db, { accountId, monthKey, dayKey, signal? })`, `recordAiLedger(db, entry & { signal? })`, `getAiSettings`, `countAiSkipsSince`, `firstOverBudgetSince`, `setAccountAiSettings(db, accountId, { enabled, monthlyBudgetCents, actorId })`, `setGlobalAiEnabled(db, { enabled, actorId })` (Task 2) → Tasks 4, 7, 8; `aiComplete(db, AiInput)`, `AiResult`, `AI_REFUSALS`, `openGateDb`, `gateRpc`, `periodKeys`, `aiSafeError` (Task 4) → Tasks 5, 6, 7, 11; `generateSummary(state, { db, accountId, timezone?, ref?, fetchImpl? })`, `readCallForCard(transcript, { db, accountId, timezone, fetchImpl?, label? })` (Task 5) → `finish-call.ts`; `aiCardView`, `AiCardView`, `parseBudgetDollars`, `isConfirmWord`, `saveAccountAiAction(accountId, { enabled, budget })`, `undoAccountAiAction(accountId, AiPrior)`, `setGlobalAiAction(accountId, { enabled, confirm? })` (Task 7) → Task 8; markers `#ai`, `data-ai-*` (Task 8) → Task 11; keys (Task 3) → Tasks 7, 8, 11.
 - **Vacuity pass:** every prescribed test names its mutation; copy is asserted in both languages against literals; the fallback tests assert the CALLER's output (the fact line, `0` with no table touched, `NO_READING`) for a mocked refusal, never the mock's; the sentinel probes cover four provider paths and the callers' parse paths; the byte check has a positive control; the e2e scopes every locator to `#ai` or a `data-ai-*` marker and reads the database to prove each write.
 - **Not executed:** nothing in this plan was run except the reads and the node one-liners named; every name was read off `c4c1f7e6` except where an Assumption says otherwise (A1–A5), each with its check.
