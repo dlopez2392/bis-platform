@@ -68,16 +68,29 @@ const anyCase = (s: string): string => fold(s).trim().split(/\s+/)
 const L_ = "[\\p{L}\\p{N}]";
 /** A capitalised word: a middle name, or a first name the stored record does not hold. */
 const CAP_WORD = "\\p{Lu}\\p{L}*";
-/** Honorifics before a name, in any case, with or without a period; accent-folded because matching runs on
- *  folded text ("Señora" is "senora", "Doña" is "dona"), and longest first, so "Señora" is never read as
- *  "Señor". Miss and Ms need their capital (round 3): "Don't miss Flores Road" and "the ms Mesa table" are not
- *  names. Each is its own word: "Dr" never matches the end of "Andr", and "Dra." is "dra", not "Dr" + "a". */
-const HONORIFIC = `(?:${[
-  ...["senorita", "senora", "senor", "licda", "sres", "sras", "srta", "prof", "dona", "lic", "ing", "dra", "sra", "mrs", "don", "mr", "mx", "dr", "sr"]
-    .map((h) => ({ len: h.length, re: anyCase(h) })),
-  { len: 4, re: `M${anyCase("iss")}` },
-  { len: 2, re: `M${anyCase("s")}` },
-].sort((a, b) => b.len - a.len).map((h) => h.re).join("|")})`;
+/** Honorifics before a name, in any case, accent-folded because matching runs on folded text ("Señora" is
+ *  "senora", "Doña" is "dona"). What keeps "Señora" from being read as "Señor" is the REQUIRED separator after
+ *  every honorific (a period or a space, never a letter), not the order of this list; it is kept longest first
+ *  only for readability. The same separator makes "Dra." the "dra" honorific, not "Dr" + "a", and keeps "Dr"
+ *  off the end of "Andr". Miss and Ms need their capital (round 3): "Don't miss Flores Road" and "the ms Mesa
+ *  table" are not names. */
+const LONG_HONORIFIC = `(?:${[
+  ...["senorita", "senora", "senor", "licda", "sres", "sras", "srta", "dona", "dra", "sra", "mrs", "don", "mr", "sr"].map(anyCase),
+  `M${anyCase("iss")}`,
+  `M${anyCase("s")}`,
+].join("|")})`;
+/** Short honorifics that are also ordinary words or abbreviations ("Prof Price list", "Oak dr", "Ing Flores"):
+ *  they need their period (round 4), except in all-capital text, where "DR FLORES" has no other reading. */
+const SHORT_HONORIFICS = ["prof", "lic", "ing", "mx", "dr"];
+const SHORT_HONORIFIC = `(?:${SHORT_HONORIFICS.map(anyCase).join("|")})`;
+const SHORT_HONORIFIC_CAPS = `(?:${SHORT_HONORIFICS.map((h) => h.toUpperCase()).join("|")})`;
+/** A name as it is written when it reads as a name: as stored or in full capitals (accents aside), never in
+ *  any other case. "price" and "pRICE" are words; "Price" and "PRICE" may be the customer. */
+const storedOrCaps = (c: string): string => {
+  const stored = namePattern(c);
+  const caps = namePattern(c.toUpperCase());
+  return stored === caps ? stored : `(?:${stored}|${caps})`;
+};
 const FAMILY = `(?:${anyCase("familia")}|${anyCase("family")})`;
 
 /** `re` runs on the accent-folded text; each match is replaced in the ORIGINAL text, so accents elsewhere
@@ -111,13 +124,19 @@ function replaceFolded(text: string, re: RegExp, by: string | ((m: RegExpExecArr
 /**
  * The customer's last name out of free text (review I1): the expiry pass writes "{first last}'s ID expires on
  * {date}" into To-do titles (lib/documents/expiry-task.ts). Owner ruling 2026-10-18, "only where it's a name":
- * - the full name (first + last, up to two middle names between), in any case and with or without accents,
- *   becomes its first name as written there ("Ana María Flores" -> "Ana María"), which the model is given anyway;
+ * - the full name becomes its first name as written there ("Ana María Flores" -> "Ana María"), which the model
+ *   is given anyway. The first name matches in any case; the last name only as stored or in full capitals
+ *   (orchestrator ruling, round 4), so "Will price the job" and "ana price check" stay. Up to two capitalised
+ *   middle names may sit between, but only when the last name is NOT followed by another capitalised word:
+ *   "Sra. Ana María Flores llamó" is a name, "Call Ana About Price Quote" and "Ana Fence Flores Road" are
+ *   Title Case text, and deleting a word from them would leave no mark (round 4). Residual: a title that ends
+ *   on the last name ("Call Ana About Price") still loses it.
  * - the last name on its own becomes "[name]" ONLY where it reads as a name: written as stored or in full
- *   capitals (accents aside) AND with a cue, an honorific before it (Mrs. Flores, la señora Flores, Sra. Ana
- *   Flores: up to two capitalised words between), a possessive after it (Flores's, the Flores' office) or
- *   "family"/"familia" beside it (the Flores family, familia Flores). So "a price for the fence", "Send Bill
- *   the bill" and "plantar flores" stay as they are.
+ *   capitals (accents aside) AND with a cue directly beside it: an honorific before it (Mrs. Flores, la señora
+ *   Flores, Prof. Flores, DR FLORES), a possessive after it (Flores's, the Flores' office) or "family"/"familia"
+ *   (the Flores family, familia Flores). So "a price for the fence", "Send Bill the bill" and "plantar flores"
+ *   stay as they are. No words between an honorific and the last name (round 4): "Mr. Smith Lawn Price list"
+ *   has the same shape as "Sra. Lupe María Flores", and the honorific-plus-first-name case is the full name's.
  * - a compound name ("de la Garza", "García López") is matched whole, by its final part, and (two parts
  *   only) by its first part, in those same cue positions; a lowercase particle ("de", "la") never alone.
  * ACCEPTED RESIDUAL (same ruling): a bare capitalised last name with no cue, such as "Flores called" at the
@@ -129,10 +148,12 @@ export function redactName(text: string, first: string | null, last: string | nu
   const f = (first ?? "").trim();
   let out = text;
   if (f) {
-    // Group 1 is the first name as written (the stored one whole, or its first word plus up to two middle
-    // names); it stays, and the last name after it goes.
+    // Group 1 is the first name as written (the stored one whole, or its first word plus one or two middle
+    // names); it stays, and the last name after it goes. Middle names only when no capitalised word follows.
     const firstWord = f.split(/\s+/)[0]!;
-    const full = new RegExp(`(?<!${L_})(${anyCase(f)}|${anyCase(firstWord)}(?:\\s+${CAP_WORD}){0,2})\\s+${anyCase(l)}(?!${L_})`, "gu");
+    const last = storedOrCaps(l);
+    const middles = `(?:\\s+${CAP_WORD}){1,2}(?=\\s+${last}(?!${L_})(?!\\s+\\p{Lu}))`;
+    const full = new RegExp(`(?<!${L_})(${anyCase(f)}|${anyCase(firstWord)}(?:${middles})?)\\s+${last}(?!${L_})`, "gu");
     out = replaceFolded(out, full, (m, orig) => orig(m.index, m.index + m[1]!.length));
   }
   const parts = l.split(/[\s-]+/).filter(Boolean);
@@ -143,11 +164,11 @@ export function redactName(text: string, first: string | null, last: string | nu
   const candidates = [...new Set([l, ...pieces])].sort((a, b) => b.length - a.length);
   for (const c of candidates) {
     // The stored form or full capitals, and nothing else: the capitalisation is half of "reads as a name".
-    const stored = namePattern(c);
-    const caps = namePattern(c.toUpperCase());
-    const n = stored === caps ? stored : `(?:${stored}|${caps})`;
+    const n = storedOrCaps(c);
     const cue = [
-      `(?<=(?<!${L_})${HONORIFIC}(?:\\.\\s*|\\s+)(?:${CAP_WORD}\\s+){0,2})${n}(?!${L_})`,
+      `(?<=(?<!${L_})${LONG_HONORIFIC}(?:\\.\\s*|\\s+))${n}(?!${L_})`,
+      `(?<=(?<!${L_})${SHORT_HONORIFIC}\\.\\s*)${n}(?!${L_})`,
+      `(?<=(?<!${L_})${SHORT_HONORIFIC_CAPS}\\s+)${namePattern(c.toUpperCase())}(?!${L_})`,
       `(?<!${L_})${n}(?=['’](?:[sS](?!${L_})|(?!${L_})))`,
       `(?<!${L_})${n}(?=\\s+${FAMILY}(?!${L_}))`,
       `(?<=(?<!${L_})${FAMILY}\\s+)${n}(?!${L_})`,

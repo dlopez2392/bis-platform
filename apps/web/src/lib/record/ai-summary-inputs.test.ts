@@ -299,7 +299,7 @@ describe("what the model is given (spec 4.3; I6)", () => {
       tasks: { data: [{ title: expiry("Ana Garcia", "en"), due_at: null }, { title: expiry("Ana Garcia", "es"), due_at: null }] },
       opportunities: { data: [{ name: "Deck for the Garcia family", monetary_value: "10", stage_id: "s1" }] },
       pipeline_stages: { data: [{ id: "s1", name: "New" }] },
-      documents: { data: [{ title: "ana garcia lease", category: "contract" }] },
+      documents: { data: [{ title: "ana Garcia lease", category: "contract" }] },
       calls: { data: [{ id: "k1", contact_id: C, started_at: "2026-10-17T20:00:00Z", outcome: "booked", duration_secs: 60, reason: null, summary: "Mrs. Garcia wants a quote.", language: "en" }] },
     });
     const i = await buildSummaryInputs(r.db, { accountId: A, contact: { ...CONTACT, source: "referral from the Garcia family" }, zone: ZONE, now: NOW });
@@ -330,12 +330,24 @@ describe("what the model is given (spec 4.3; I6)", () => {
     ["Cruz", "Lives on Santa Cruz Ave", "a street"],
     ["de la Garza", "Turn left on Garza Road", "a street"],
     ["Price", "Dr price called about mrs price", "a lowercase word after an honorific"],
+    // Round 4, item 1: Title Case text is not a middle name.
+    ["Price", "Call Ana About Price Quote", "a title-case run after the first name"],
+    ["Price", "Ana Tree price list", "a lowercase last name after a capitalised word"],
+    ["Stone", "Ana Front Yard Stone Wall Install", "two capitalised words, then the name, then another"],
+    ["Flores", "Ana Fence Flores Road", "a street after the first name"],
+    ["Price", "Mr. Smith Lawn Price list", "capitalised words between an honorific and the name"],
+    // Round 4, item 3: a short honorific with no period, not in capitals.
+    ["Price", "Prof Price list", "Prof with no period"],
+    ["Flores", "MX Flores Pro trimmer", "MX with no period before a name not in capitals"],
+    ["Garza", "Oak dr Garza Plaza", "dr with no period"],
+    ["Flores", "Ing Flores", "Ing with no period"],
+    ["Flores", "Lic Flores", "Lic with no period"],
   ])("leaves %s alone in %j (%s)", (last, text) => {
     expect(redactName(text, "Ana", last)).toBe(text);
   });
 
   it.each<[string, string | null, string, string]>([
-    ["an honorific", null, "Flores", "Mrs. Flores called; Sra Flores también; Dr Flores; Doña Flores"],
+    ["an honorific", null, "Flores", "Mrs. Flores called; Sra Flores también; Dr. Flores; Doña Flores"],
     ["a possessive", null, "Flores", "Flores's yard and Flores’s fence"],
     ["the family, either side", null, "Flores", "the Flores family; la familia Flores"],
   ])("redacts a last name where it reads as a name: %s (mutations: drop that cue -> FAILS)", (_cue, first, last, text) => {
@@ -346,9 +358,22 @@ describe("what the model is given (spec 4.3; I6)", () => {
   it.each([
     "La señora Flores llamó", "El señor Flores vino", "Señorita Flores", "Dra. Flores", "Lic. Flores", "Licda. Flores",
     "Ing. Flores", "los Sres. Flores", "las Sras. Flores", "Mx. Flores", "Prof. Flores", "Srta. Flores", "Sra Flores",
-    "Sr. Flores", "Mr. Flores", "Mrs. Flores", "Ms. Flores", "Miss Flores", "Dr Flores", "Don Flores", "Doña Flores",
+    "Sr. Flores", "Mr. Flores", "Mrs. Flores", "Ms. Flores", "Miss Flores", "Dr. Flores", "Don Flores", "Doña Flores", "Prof. Flores Jr", "Lic.Flores",
   ])("the honorific in %j redacts the name, and only the name (mutation: drop that honorific -> FAILS)", (text) => {
     expect(redactName(text, null, "Flores")).toBe(text.replace("Flores", "[name]"));
+  });
+
+  // Round 4, item 2 (orchestrator ruling): the first name in any case, the last name only as stored or in capitals.
+  it.each<[string, string, string]>([
+    ["Will", "Price", "Will price the job"],
+    ["Rosa", "Flores", "comprar rosa flores"],
+    ["Ana", "Price", "ana price check"],
+  ])("a full name needs its last name as stored or in capitals: %s %s in %j stays (mutation: last name in any case -> FAILS)", (first, last, text) => {
+    expect(redactName(text, first, last)).toBe(text);
+  });
+
+  it("a short honorific in capitals needs no period before a name in capitals (round 4, item 3; mutation: drop the capitals form -> FAILS)", () => {
+    expect(redactName("DR FLORES called; PROF FLORES; MX FLORES", null, "Flores")).toBe("DR [name] called; PROF [name]; MX [name]");
   });
 
   it("with a cue, the name in full capitals and the honorific in any case still redact (round 3, item 2a; mutations: stored form only -> FAILS; case-sensitive honorific -> FAILS)", () => {
@@ -363,12 +388,14 @@ describe("what the model is given (spec 4.3; I6)", () => {
     expect(redactName("the Flores' office and the Flores’ truck", null, "Flores")).toBe("the [name]' office and the [name]’ truck");
   });
 
-  it("middle names: the full name with up to two between, and an honorific with up to two capitalised words before the last name (round 3, item 2c; mutations: no middle words in the full name -> FAILS; none after the honorific -> FAILS)", () => {
+  it("middle names: the full name with up to two between, the last name as stored or in capitals and not followed by another capitalised word (round 3, item 2c; round 4; mutation: no middle words in the full name -> FAILS)", () => {
     expect(redactName("Sra. Ana María Flores llamó", "Ana", "Flores")).toBe("Sra. Ana María llamó");
     expect(redactName("Sra. Ana Flores llamó", "Ana María", "Flores")).toBe("Sra. Ana llamó");
-    expect(redactName("ana maría flores llamó", "Ana María", "Flores")).toBe("ana maría llamó");
+    expect(redactName("ana maría Flores llamó", "Ana María", "Flores")).toBe("ana maría llamó");
     expect(redactName("Ana Lucía María Flores llamó", "Ana", "Flores")).toBe("Ana Lucía María llamó");
-    expect(redactName("Sra. Lupe María Flores llamó", null, "Flores")).toBe("Sra. Lupe María [name] llamó");
+    // Round 4: words between an honorific and a last name are left to the full-name rule (with the stored first
+    // name); "Sra. Lupe María Flores" has the same shape as "Mr. Smith Lawn Price list", so it passes (residual).
+    expect(redactName("Sra. Lupe María Flores llamó", null, "Flores")).toBe("Sra. Lupe María Flores llamó");
   });
 
   it("each cue redacts only the name, never the cue word", () => {
@@ -396,7 +423,8 @@ describe("what the model is given (spec 4.3; I6)", () => {
   });
 
   it("the full name becomes the first name in any case; with no last name nothing changes; a bare capitalised name with no cue passes (accepted residual)", () => {
-    expect(redactName("ANA GARCIA called, then ana garcia again", "Ana", "Garcia")).toBe("ANA called, then ana again");
+    expect(redactName("ANA GARCIA called, then ana Garcia again", "Ana", "Garcia")).toBe("ANA called, then ana again");
+    expect(redactName("Ana Garcia called", "Ana", "Garcia")).toBe("Ana called");
     expect(redactName("Ana Garcia called", "Ana", null)).toBe("Ana Garcia called");
     expect(redactName("Garcia called", null, "Garcia")).toBe("Garcia called");
     expect(redactName("Garciaville's yard", null, "Garcia")).toBe("Garciaville's yard");
