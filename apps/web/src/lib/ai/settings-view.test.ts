@@ -5,7 +5,7 @@ import { aiCardView, isConfirmWord, parseBudgetDollars } from "./settings-view";
 const NOW = new Date("2026-10-18T15:00:00Z");
 const ZONE = "America/Chicago";
 const settings = (o: Partial<Parameters<typeof aiCardView>[0]["settings"]> = {}) =>
-  ({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 0, globalEnabled: true, ...o });
+  ({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 0, globalEnabled: true, dayKey: null, recordSummariesToday: 0, ...o });
 
 describe("parseBudgetDollars (plan deviation 17)", () => {
   it.each([["10", 1000], ["$25", 2500], [" 1000 ", 100000], ["0", 0], ["$ 7", 700]])("%j -> %i cents", (raw, cents) => {
