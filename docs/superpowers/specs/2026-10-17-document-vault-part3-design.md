@@ -86,6 +86,7 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
   - **Event:** `task.created` is emitted with `documentId`, actor `documents-expiry`, type `system`.
 - **The To-do links to the record's Documents card** with the document in focus. On the card, **Pedir al cliente** accepts a pre-selected category, carried in the URL (`?ask=insurance`). This is a small change to the 2b dialog's initial state.
 - **Owners only removes the To-do (amended 2026-10-17, owner ruling R1).** Switching a file to Owners only deletes its open expiry To-dos at once, on the server, in the same action, after the action's own visibility read: a To-do title names the file, and Staff read To-dos. A done To-do stays. Switching the file back off holds nothing, so the next pass run reopens the To-do for that file and date.
+- **The trash removes the To-do (amended 2026-10-17, owner ruling R4).** Moving a file to the trash (one file or a bulk move) deletes its open expiry To-dos at once, on the server, in the same action, after the action's own visibility read. A done To-do stays. Undo or restore puts the file back; the next pass run reopens the To-do if the file is still in its window.
 - **Failures** are logged by document id and account, never with the file title (`loggableError`). One document's failure never stops the pass. The pass has a per-run cap (200 To-dos), and a capped run logs that it was capped.
 
 ### 3.3 The Required documents card (Owner screen for the 2c checklist)
