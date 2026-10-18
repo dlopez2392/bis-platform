@@ -164,6 +164,8 @@ test("2. Open in a fresh context with no sign-in, download once, a double-click 
     expect(headers["referrer-policy"] ?? "").toBe("no-referrer");
     expect(headers["x-robots-tag"] ?? "").toContain("noindex");
 
+    // The title line has no data hook (page.tsx); [data-share-file] is the type/size line.
+    await expect(p.getByText(STAMP, { exact: false }).first()).toBeVisible();
     await expect(p.locator("[data-share-file]")).toBeVisible();
     await expect(p.locator("[data-share-download]")).toHaveCount(1);
     await expect(p.locator("main")).toHaveAttribute("lang", lang);
