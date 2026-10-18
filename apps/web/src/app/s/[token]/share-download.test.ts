@@ -7,7 +7,7 @@ import { renderedText } from "@/lib/rendered-text";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
-import { ShareDownload, downloadOutcome, requestDownload, SHARE_CSS } from "./share-download";
+import { ShareDownload, ShareDownloadView, downloadOutcome, requestDownload, settleDownload, SHARE_CSS, type DownloadDeps } from "./share-download";
 
 const SOURCE = readFileSync(fileURLToPath(new URL("./share-download.tsx", import.meta.url)), "utf8");
 const SIGNED = "https://x.supabase.co/storage/v1/object/sign/documents/a?token=t&download=f";
@@ -23,6 +23,7 @@ describe("downloadOutcome: the route's answer, as the button acts on it", () => 
   });
   it.each<[string, unknown]>([
     ["a javascript: URL", { url: "javascript:alert(1)" }],
+    ["a javascript: URL carrying an https URL inside it (the ^ anchor; review M1)", { url: "javascript:alert('https://x')" }],
     ["a data: URL", { url: "data:text/html,hi" }],
     ["a relative path", { url: "/api/s/x/download" }],
     ["no url", {}],
@@ -114,7 +115,8 @@ describe("ShareDownload: the page's one primary (rule 8), never a spinner (rule 
     expect(html.match(/<button\b/g)).toHaveLength(1);
     expect(html.match(/class="bis-docreq-primary"/g)).toHaveLength(1);
     expect(html).toMatch(/<button type="button" class="bis-docreq-primary" data-share-download="true"[^>]*>Descargar<\/button>/);
-    expect(html).not.toMatch(/<button[^>]*\bdisabled/);
+    expect(html).not.toMatch(/<button[^>]*\sdisabled/);
+    expect(html).toContain('aria-disabled="false"');
   });
   it("the note region stands empty at rest, as a polite live region, so a later sentence is announced", () => {
     expect(html).toMatch(/<p role="status" aria-live="polite" class="bis-docreq-detail" data-share-note="true"><\/p>/);
@@ -123,9 +125,52 @@ describe("ShareDownload: the page's one primary (rule 8), never a spinner (rule 
   it("never carries the token into the markup", () => {
     expect(html).not.toContain(TOKEN);
   });
-  it("a busy button reads as busy without a spinner: dimmed, not clickable-looking (its own CSS, no colour of its own)", () => {
+  it("a busy button reads as busy without a spinner: dimmed through aria-disabled, not clickable-looking (its own CSS, no colour of its own)", () => {
     expect(html).toContain(`<style>${SHARE_CSS}</style>`);
-    expect(SHARE_CSS).toMatch(/\.bis-docreq-primary:disabled \{ opacity: 0\.6; cursor: default; \}/);
+    expect(SHARE_CSS).toMatch(/\.bis-docreq-primary\[aria-disabled="true"\] \{ opacity: 0\.6; cursor: default; \}/);
+    expect(SHARE_CSS).not.toMatch(/:disabled/);
     expect(SHARE_CSS).not.toMatch(/#[0-9a-f]{3,8}\b|rgb|hsl|animation|@keyframes/i);
+  });
+  it("a late sentence stands 8px below the button only when it has words (review M4)", () => {
+    expect(SHARE_CSS).toMatch(/\.bis-docreq-detail\[data-share-note\]:not\(:empty\) \{ margin-top: 8px; \}/);
+  });
+});
+
+describe("ShareDownloadView: busy keeps the button focusable (review M3)", () => {
+  const view = (busy: boolean, note: string | null = null) =>
+    renderToStaticMarkup(createElement(ShareDownloadView, { label: "Download", busy, note, onClick: () => {} }));
+  it("busy: aria-disabled and aria-busy, never the disabled attribute, which would drop keyboard focus (mutation: disabled={busy} → FAILS)", () => {
+    const html = view(true);
+    expect(html).toMatch(/<button type="button" class="bis-docreq-primary" data-share-download="true" aria-disabled="true" aria-busy="true">Download<\/button>/);
+    expect(html).not.toMatch(/<button[^>]*\sdisabled/);
+  });
+  it("at rest: aria-disabled is false and there is no aria-busy", () => {
+    const html = view(false);
+    expect(html).toMatch(/<button type="button" class="bis-docreq-primary" data-share-download="true" aria-disabled="false">Download<\/button>/);
+  });
+  it("the note's words go in the live region", () => {
+    expect(view(false, "Too many downloads from here. Try again in a few minutes.")).toMatch(
+      /<p role="status" aria-live="polite" class="bis-docreq-detail" data-share-note="true">Too many downloads from here\. Try again in a few minutes\.<\/p>/,
+    );
+  });
+});
+
+describe("settleDownload: the answer's sentence, and busy cleared (review M2)", () => {
+  const WORDS = { limitText: "Too many downloads from here. Try again in a few minutes.", failedText: "The download didn't start. Try again." };
+  const press = async (f: DownloadDeps["fetch"], refresh = vi.fn()) => settleDownload(await requestDownload(TOKEN, { fetch: f, go: vi.fn(), refresh }), WORDS);
+  it("429: the rate-limit sentence (mutation: swap the two sentences → FAILS)", async () => {
+    expect(await press(fakeFetch(429, { error: "rate_limited" }))).toEqual({ busy: false, note: WORDS.limitText });
+  });
+  it("503 and a network failure: the retry sentence", async () => {
+    expect(await press(fakeFetch(503, { error: "failed" }))).toEqual({ busy: false, note: WORDS.failedText });
+    expect(await press(vi.fn(async () => { throw new TypeError("Failed to fetch"); }))).toEqual({ busy: false, note: WORDS.failedText });
+  });
+  it("410: the page re-reads, and no sentence", async () => {
+    const refresh = vi.fn();
+    expect(await press(fakeFetch(410, { error: "unavailable" }), refresh)).toEqual({ busy: false, note: null });
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+  it("200: the browser went on, no sentence", async () => {
+    expect(await press(fakeFetch(200, { url: SIGNED }))).toEqual({ busy: false, note: null });
   });
 });

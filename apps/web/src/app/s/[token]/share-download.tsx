@@ -41,8 +41,38 @@ export async function requestDownload(token: string, deps: DownloadDeps): Promis
   }
 }
 
-/** A busy Download is the same word, dimmed (rule 7: no spinner). No colour of its own: DOCREQ_CSS paints the button. */
-export const SHARE_CSS = `.bis-docreq-primary:disabled { opacity: 0.6; cursor: default; }`;
+/**
+ * A busy Download is the same word, dimmed (rule 7: no spinner), through aria-disabled rather than
+ * `disabled`, which would drop the keyboard's focus mid-press. A late sentence stands 8px below the
+ * button only when it has words. No colour of its own: DOCREQ_CSS paints the button.
+ */
+export const SHARE_CSS = `.bis-docreq-primary[aria-disabled="true"] { opacity: 0.6; cursor: default; }
+.bis-docreq-detail[data-share-note]:not(:empty) { margin-top: 8px; }`;
+
+export type DownloadWords = { limitText: string; failedText: string };
+
+/** After one press: busy clears, and the sentence the answer earns (none when the browser went on or the page re-reads). */
+export function settleDownload(kind: "limit" | "failed" | null, words: DownloadWords): { busy: false; note: string | null } {
+  return { busy: false, note: kind === "limit" ? words.limitText : kind === "failed" ? words.failedText : null };
+}
+
+/** The button and its live region, as rendered for a state. Busy keeps the button focusable (aria-disabled). */
+export function ShareDownloadView({ label, busy, note, onClick }: {
+  label: string; busy: boolean; note: string | null; onClick: () => void;
+}) {
+  return (
+    <>
+      <style>{SHARE_CSS}</style>
+      <div className="bis-docreq-actions">
+        <button type="button" className="bis-docreq-primary" data-share-download aria-disabled={busy} aria-busy={busy || undefined} onClick={onClick}>
+          {label}
+        </button>
+      </div>
+      {/* Always present, so a sentence that appears later is announced. */}
+      <p role="status" aria-live="polite" className="bis-docreq-detail" data-share-note>{note}</p>
+    </>
+  );
+}
 
 /** The page's one primary (rule 8). Only the token and the words cross to the browser. */
 export function ShareDownload({ token, label, limitText, failedText }: {
@@ -60,19 +90,9 @@ export function ShareDownload({ token, label, limitText, failedText }: {
       go: (url) => window.location.assign(url),
       refresh: () => router.refresh(),
     });
-    setNote(kind === "limit" ? limitText : kind === "failed" ? failedText : null);
-    setBusy(false);
+    const after = settleDownload(kind, { limitText, failedText });
+    setNote(after.note);
+    setBusy(after.busy);
   }
-  return (
-    <>
-      <style>{SHARE_CSS}</style>
-      <div className="bis-docreq-actions">
-        <button type="button" className="bis-docreq-primary" data-share-download disabled={busy} aria-busy={busy || undefined} onClick={() => void onClick()}>
-          {label}
-        </button>
-      </div>
-      {/* Always present, so a sentence that appears later is announced. */}
-      <p role="status" aria-live="polite" className="bis-docreq-detail" data-share-note>{note}</p>
-    </>
-  );
+  return <ShareDownloadView label={label} busy={busy} note={note} onClick={() => void onClick()} />;
 }
