@@ -129,16 +129,60 @@ export async function revokeDocumentShares(
   return rows.length === 0 ? null : { ids: rows.map((r) => r.id), revokedAt: rows[0]!.revoked_at };
 }
 
-/** Service client. Undo: exactly THOSE shares, THAT revoke (its stored time and author), each only while unexpired. */
+export type RestoreSharesOutcome = { status: "restored"; count: number } | { status: "changed" };
+
+/**
+ * Service client. Undo of Stop sharing: exactly THOSE shares, THAT revoke (its stored time and author),
+ * each only while unexpired. `ownersOnly` is the file's Owners-only value when the links were stopped
+ * (the Stop action's own read): an Owner may share a file that is already Owners only (spec 4.1), and
+ * its Undo still works. A file that has since gone Owners only, or to the trash, gets nothing back, for
+ * ANY caller (orchestrator ruling on Task 3's concern 4, following O2): the answer is "changed".
+ * Two checks, so no link is ever live on such a file outside a race:
+ *  - BEFORE the restore: a file that changed before the Undo is refused with no write at all, so its
+ *    links are never live, not even for a moment (a check-after alone would make them live for the
+ *    milliseconds until its re-revoke, in the common case).
+ *  - AFTER the restore: a switch that commits between the first check and the restore is seen here, and
+ *    exactly the rows just restored are revoked again with their original time and author. A switch
+ *    that commits after this check's snapshot is followed by O2's own revoke, whose snapshot includes
+ *    the restored rows. (A check-first alone would leave that race's links live for good.)
+ * The one remaining live window is that race's, a few milliseconds, on a token that left with the
+ * first share; closing it would take one SQL statement, which PostgREST cannot express without a function.
+ */
 export async function restoreDocumentShares(db: SupabaseClient, a: {
-  accountId: string; documentId: string; ids: readonly string[]; revokedAt: string; actorId: string; now: Date;
-}): Promise<number> {
-  if (a.ids.length === 0) return 0;
+  accountId: string; documentId: string; ids: readonly string[]; revokedAt: string; actorId: string; ownersOnly: boolean; now: Date;
+}): Promise<RestoreSharesOutcome> {
+  if (a.ids.length === 0) return { status: "restored", count: 0 };
+  const fileHolds = async (when: string): Promise<boolean> => {
+    const { data, error } = await db.from("documents").select("id")
+      .eq("account_id", a.accountId).eq("id", a.documentId).eq("owners_only", a.ownersOnly).is("deleted_at", null).maybeSingle();
+    if (error) throw new Error(`restoreDocumentShares (check ${when}) failed: ${error.message}`);
+    return data !== null;
+  };
+  if (!(await fileHolds("before"))) return { status: "changed" };
   const { data, error } = await db.from("document_shares").update({ revoked_at: null, revoked_by: null })
     .eq("account_id", a.accountId).eq("document_id", a.documentId).in("id", [...a.ids])
     .eq("revoked_at", a.revokedAt).eq("revoked_by", a.actorId).gt("expires_at", a.now.toISOString()).select("id");
   if (error) throw new Error(`restoreDocumentShares failed: ${error.message}`);
-  return (data ?? []).length;
+  const restored = ((data ?? []) as { id: string }[]).map((r) => r.id);
+  if (restored.length === 0) return { status: "restored", count: 0 };
+  const reRevoke = async () => {
+    const { error: backErr } = await db.from("document_shares").update({ revoked_at: a.revokedAt, revoked_by: a.actorId })
+      .eq("account_id", a.accountId).eq("document_id", a.documentId).in("id", restored).is("revoked_at", null);
+    if (backErr) throw new Error(`restoreDocumentShares (re-revoke) failed: ${backErr.message}`);
+  };
+  let holds: boolean;
+  try {
+    holds = await fileHolds("after");
+  } catch (e) {
+    // Unproved: stop them again before failing.
+    await reRevoke();
+    throw e;
+  }
+  if (!holds) {
+    await reRevoke();
+    return { status: "changed" };
+  }
+  return { status: "restored", count: restored.length };
 }
 
 /** 0085: past the link's total cap (p_link_max) the claim answers closed; rate_limited is the per-address window only. */

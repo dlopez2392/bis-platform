@@ -343,7 +343,7 @@ export {
 export {
   DOCUMENT_SHARE_HOURS, createDocumentShare, findDocumentShareByTokenHash, documentShareState, getShareTarget,
   listLiveDocumentShares, revokeDocumentShares, restoreDocumentShares, claimDocumentShareDownload, listDocumentShareTimeline,
-  listReadyVersionScans, shareableVersion, type ReadyVersionScan, type Shareable, type CreateShareOutcome,
+  listReadyVersionScans, shareableVersion, type ReadyVersionScan, type Shareable, type CreateShareOutcome, type RestoreSharesOutcome,
   type DocumentShareRow, type DocumentShareLife, type ShareTarget, type ShareClaim, type TimelineDocumentShare,
 } from "./document-shares";
 

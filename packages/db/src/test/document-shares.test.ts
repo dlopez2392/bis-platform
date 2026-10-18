@@ -57,6 +57,56 @@ async function storedShares(db: SupabaseClient, accountId: string, documentId: s
   return (data ?? []).map((r) => (r as { id: string }).id);
 }
 
+/** [revoked_at as epoch ms (or null), revoked_by] per id, in id order. */
+async function revokedPairs(db: SupabaseClient, ids: readonly string[]) {
+  const { data, error } = await db.from("document_shares").select("id, revoked_at, revoked_by").in("id", [...ids]).order("id");
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as { revoked_at: string | null; revoked_by: string | null }[])
+    .map((r) => [r.revoked_at === null ? null : Date.parse(r.revoked_at), r.revoked_by]);
+}
+/** A client that counts every query started on one table (each from() call) and passes everything through. */
+function queriesOn(db: SupabaseClient, table: string) {
+  let n = 0;
+  const wrapped = new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop !== "from") return Reflect.get(target, prop, receiver);
+      return (t: string) => { if (t === table) n += 1; return target.from(t); };
+    },
+  });
+  return { db: wrapped, calls: () => n };
+}
+/** Wraps a query builder so that awaiting it first runs `hook`; every chained call stays wrapped. */
+function hooked<T extends object>(b: T, hook: () => Promise<void>): T {
+  return new Proxy(b, {
+    get(target, prop, receiver) {
+      const v = Reflect.get(target, prop, receiver) as unknown;
+      if (prop === "then") {
+        return (ok: (x: unknown) => unknown, bad: (e: unknown) => unknown) =>
+          hook().then(() => (target as unknown as PromiseLike<unknown>).then(ok, bad), bad);
+      }
+      if (typeof v !== "function") return v;
+      return (...args: unknown[]) => {
+        const out = (v as (...a: unknown[]) => unknown).apply(target, args);
+        return out !== null && typeof out === "object" ? hooked(out as object, hook) : out;
+      };
+    },
+  });
+}
+/** A client whose FIRST query on `table` runs `hook` just before it is sent: a write that lands in between. */
+function beforeFirstQueryOn(db: SupabaseClient, table: string, hook: () => Promise<void>): SupabaseClient {
+  let used = false;
+  return new Proxy(db, {
+    get(target, prop, receiver) {
+      if (prop !== "from") return Reflect.get(target, prop, receiver);
+      return (t: string) => {
+        if (t !== table || used) return target.from(t);
+        used = true;
+        return hooked(target.from(t), hook);
+      };
+    },
+  });
+}
+
 describe("document-shares: create and find (spec 4.1)", () => {
   it("stores the hash, expires exactly 24 h on, and finds the row by that hash only (mutation: store tokenHash.toUpperCase() -> the insert FAILS the shape check)", () =>
     withTestAccount(async (db, accountId) => {
@@ -188,11 +238,11 @@ describe("document-shares: the card's live line, stop and undo (spec 4.1; plan d
       await share(db, accountId, d);
       await share(db, accountId, d);
       const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, now))!;
-      const base = { accountId, documentId: d.documentId, ids: r.ids, now };
-      expect(await restoreDocumentShares(db, { ...base, revokedAt: r.revokedAt, actorId: OTHER })).toBe(0);
+      const base = { accountId, documentId: d.documentId, ids: r.ids, ownersOnly: false, now };
+      expect(await restoreDocumentShares(db, { ...base, revokedAt: r.revokedAt, actorId: OTHER })).toEqual({ status: "restored", count: 0 });
       const offByOne = new Date(Date.parse(r.revokedAt) + 1).toISOString();
-      expect(await restoreDocumentShares(db, { ...base, revokedAt: offByOne, actorId: ACTOR })).toBe(0);
-      expect(await restoreDocumentShares(db, { ...base, revokedAt: r.revokedAt, actorId: ACTOR })).toBe(2);
+      expect(await restoreDocumentShares(db, { ...base, revokedAt: offByOne, actorId: ACTOR })).toEqual({ status: "restored", count: 0 });
+      expect(await restoreDocumentShares(db, { ...base, revokedAt: r.revokedAt, actorId: ACTOR })).toEqual({ status: "restored", count: 2 });
       expect(Object.keys(await listLiveDocumentShares(db, accountId, { kind: "contact", id: d.contactId }, now))).toEqual([d.documentId]);
       const { data: live } = await db.from("document_shares").select("revoked_at, revoked_by").in("id", r.ids);
       expect(live).toEqual([{ revoked_at: null, revoked_by: null }, { revoked_at: null, revoked_by: null }]);
@@ -204,7 +254,68 @@ describe("document-shares: the card's live line, stop and undo (spec 4.1; plan d
       expect(error).toBeNull();
       const { data: stored } = await db.from("document_shares").select("revoked_at").eq("id", old.id).single();
       const storedAt = (stored as { revoked_at: string }).revoked_at;
-      expect(await restoreDocumentShares(db, { ...base, ids: [old.id], revokedAt: storedAt, actorId: ACTOR })).toBe(0);
+      expect(await restoreDocumentShares(db, { ...base, ids: [old.id], revokedAt: storedAt, actorId: ACTOR })).toEqual({ status: "restored", count: 0 });
+    }));
+
+  it("never brings a link back on a file that went Owners only after Stop sharing, and writes nothing (ruling on concern 4; mutation: drop the check before the restore -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      expect(await setDocumentOwnersOnly(db, accountId, d.documentId, true)).toBe("updated");
+      const spy = queriesOn(db, "document_shares");
+      expect(await restoreDocumentShares(spy.db, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      })).toEqual({ status: "changed" });
+      // Refused BEFORE any write: the links were never live, not even for a moment.
+      expect(spy.calls()).toBe(0);
+      const at = Date.parse(r.revokedAt);
+      expect(await revokedPairs(db, r.ids)).toEqual([[at, ACTOR], [at, ACTOR]]);
+    }));
+
+  it("never brings a link back on a file that went to the trash after Stop sharing (mutation: drop .is('deleted_at', null) from the check -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      expect((await trashDocument(db, accountId, d.documentId, ACTOR)).status).toBe("trashed");
+      expect(await restoreDocumentShares(db, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      })).toEqual({ status: "changed" });
+      expect(await revokedPairs(db, r.ids)).toEqual([[Date.parse(r.revokedAt), ACTOR]]);
+    }));
+
+  it("re-revokes exactly the rows it restored when the file goes Owners only DURING the Undo (the race; mutation: drop the check after the restore -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId);
+      await share(db, accountId, d);
+      await share(db, accountId, d);
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      // The Owner's switch commits after the Undo's first check passed and before its restore is sent.
+      const raced = beforeFirstQueryOn(db, "document_shares", async () => {
+        expect(await setDocumentOwnersOnly(db, accountId, d.documentId, true)).toBe("updated");
+      });
+      expect(await restoreDocumentShares(raced, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: false, now: new Date(),
+      })).toEqual({ status: "changed" });
+      const at = Date.parse(r.revokedAt);
+      expect(await revokedPairs(db, r.ids)).toEqual([[at, ACTOR], [at, ACTOR]]);
+      expect(await listLiveDocumentShares(db, accountId, { kind: "contact", id: d.contactId }, new Date())).toEqual({});
+    }));
+
+  it("restores the links of a file an Owner shared while it was ALREADY Owners only (spec 4.1 lets Owners share such a file; mutation: refuse every Owners-only file -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const d = await cleanDoc(db, accountId, { ownersOnly: true });
+      const made = await createDocumentShare(db, {
+        accountId, documentId: d.documentId, versionId: d.versionId, tokenHash: hash(), createdBy: ACTOR, ownersOnly: true, now: new Date(),
+      });
+      expect(made.status).toBe("ok");
+      const r = (await revokeDocumentShares(db, accountId, d.documentId, ACTOR, new Date()))!;
+      expect(await restoreDocumentShares(db, {
+        accountId, documentId: d.documentId, ids: r.ids, revokedAt: r.revokedAt, actorId: ACTOR, ownersOnly: true, now: new Date(),
+      })).toEqual({ status: "restored", count: 1 });
+      expect(await revokedPairs(db, r.ids)).toEqual([[null, null]]);
     }));
 });
 
