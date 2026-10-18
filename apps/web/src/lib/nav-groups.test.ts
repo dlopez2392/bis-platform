@@ -49,15 +49,31 @@ describe("buildNavGroups", () => {
     ]);
   });
 
-  it("places Dashboard, Contacts/Opportunities, Conversations/Calls/Voice, Forms/Calendar per the brief's grouping map (agency)", () => {
+  it("places Dashboard, Contacts/Documents/Opportunities, Conversations/Calls/Voice, Forms/Calendar per the brief's grouping map (agency)", () => {
     const [overview, crm, comms, growth] = buildNavGroups(BASE, true, false);
     // Checklist joined OVERVIEW on 2026-09-05: the page hosts the A2P
     // registration panel that gates SMS, and nothing in the nav reached it.
     // Tasks joined directly under Dashboard on 2026-09-14 (Work Queue Task 3).
     expect(overview!.items.map((i) => i.labelKey)).toEqual(["nav.dashboard", "nav.tasks", "nav.website", "nav.checklist"]);
-    expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.opportunities"]);
+    expect(crm!.items.map((i) => i.labelKey)).toEqual(["nav.contacts", "nav.documents", "nav.opportunities"]);
     expect(comms!.items.map((i) => i.labelKey)).toEqual(["nav.conversations", "nav.calls", "nav.activity", "nav.voice"]);
     expect(growth!.items.map((i) => i.labelKey)).toEqual(["nav.forms", "nav.calendar", "nav.automations"]);
+  });
+
+  // S-07 3a (spec 3.1, decision E2; DESIGN.md's sidebar pattern amended
+  // 2026-10-17): Documents sits right after Contacts in CRM for every role,
+  // with its own icon.
+  it("Documents sits right after Contacts in CRM for every role, with its own icon (spec 3.1, E2; mutation: append it after Opportunities -> FAILS)", () => {
+    for (const groups of [
+      buildNavGroups(BASE, true, false),
+      buildNavGroups(BASE, false, true),
+      buildNavGroups(BASE, false, false),
+      buildNavGroups(BASE, false, false, true),
+    ]) {
+      const crm = groups.find((g) => g.label === "nav.group.crm")!;
+      expect(crm.items[0]).toEqual({ href: `${BASE}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" });
+      expect(crm.items[1]).toEqual({ href: `${BASE}/documents`, labelKey: "nav.documents", iconKey: "documents" });
+    }
   });
 
   it("shows Tasks and Website to both audiences, directly below Dashboard in that order", () => {
@@ -139,10 +155,10 @@ describe("buildNavGroups", () => {
 
   // F-085 part 1 (spec §9): a Technician works their own customers and
   // nothing else. Hiding is convenience; requireNotTechnician is the boundary.
-  it("a Technician sees exactly To do, Contacts, Conversations, Calls and Calendar, in the groups' order (mutation: leave Website in for a Technician -> FAILS)", () => {
+  it("a Technician sees exactly To do, Contacts, Documents, Conversations, Calls and Calendar, in the groups' order (mutation: leave Website in for a Technician -> FAILS)", () => {
     const groups = buildNavGroups(BASE, false, false, true);
     expect(hrefs(groups)).toEqual([
-      `${BASE}/tasks`, `${BASE}/contacts`, `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/calendar`,
+      `${BASE}/tasks`, `${BASE}/contacts`, `${BASE}/documents`, `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/calendar`,
     ]);
     expect(groups.map((g) => g.label)).toEqual([
       "nav.group.overview", "nav.group.crm", "nav.group.communications", "nav.group.growth",
@@ -151,17 +167,19 @@ describe("buildNavGroups", () => {
 
   // Snapshot of the hrefs taken from the code BEFORE the Technician
   // parameter existed: Owner, Staff and the agency must not move.
+  // S-07 3a added Documents after Contacts (comment, not just code) in
+  // every one of these snapshots.
   it("Owner, Staff and agency output is unchanged by the Technician parameter, whether passed false or omitted (mutation: apply the Technician list to Staff -> FAILS)", () => {
     const owner = [
       `${BASE}/dashboard`, `${BASE}/tasks`, `${BASE}/website`, `${BASE}/billing`,
-      `${BASE}/contacts`, `${BASE}/pipeline`,
+      `${BASE}/contacts`, `${BASE}/documents`, `${BASE}/pipeline`,
       `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/activity`,
       `${BASE}/forms`, `${BASE}/calendar`, `${BASE}/branding`,
     ];
     const staff = owner.filter((h) => h !== `${BASE}/billing`);
     const agency = [
       `${BASE}/dashboard`, `${BASE}/tasks`, `${BASE}/website`, `${BASE}/checklist`,
-      `${BASE}/contacts`, `${BASE}/pipeline`,
+      `${BASE}/contacts`, `${BASE}/documents`, `${BASE}/pipeline`,
       `${BASE}/conversations`, `${BASE}/calls`, `${BASE}/activity`, `${BASE}/voice`,
       `${BASE}/forms`, `${BASE}/calendar`, `${BASE}/automations`,
     ];

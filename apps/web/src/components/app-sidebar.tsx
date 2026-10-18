@@ -14,6 +14,7 @@ import {
   Settings,
   Building2,
   Layers, ListChecks, ListTodo,
+  FolderOpen,
   PanelLeftClose,
   PanelLeft,
   ArrowLeft,
@@ -74,6 +75,8 @@ const NAV_ICONS: Record<NavIconKey, LucideIcon> = {
   tasks: ListTodo,
   website: Globe,
   contacts: Users,
+  // `FolderOpen`, not `FileText`: Forms already has that.
+  documents: FolderOpen,
   opportunities: KanbanSquare,
   conversations: MessagesSquare,
   // `PhoneIncoming` rather than `Phone` so Calls stays distinguishable from

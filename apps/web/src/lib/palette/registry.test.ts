@@ -289,6 +289,28 @@ describe("filterEntries", () => {
   it("returns nothing for a query that matches nothing", () => {
     expect(filterEntries(entries, "zzzzqqq")).toEqual([]);
   });
+
+  // S-07 3a (spec 3.1, decision E2): the Documents page is findable by its
+  // own words, in both languages (mutation: no NAV_KEYWORDS entry -> FAILS).
+  it("the Documents page is findable by its words in both languages (mutation: no NAV_KEYWORDS entry -> FAILS)", () => {
+    const base = buildPaletteEntries(BASE, false, false);
+    expect(filterEntries(base, "vencen").some((e) => e.id === `nav:${BASE}/documents`)).toBe(true);
+    expect(filterEntries(base, "expiring").some((e) => e.id === `nav:${BASE}/documents`)).toBe(true);
+  });
+
+  // S-07 3a (spec 3.3): a client Owner's Required documents entry opens the
+  // Documents page's own card; Staff, a Technician and the agency get no
+  // such entry.
+  it("a client Owner's Required documents opens the Documents page's card; Staff, a Technician and the agency get no such entry (mutations: drop the isOwner check -> the Staff case FAILS; point it at settings -> FAILS)", () => {
+    const owner = buildPaletteEntries(BASE, false, true);
+    expect(owner).toContainEqual(
+      expect.objectContaining({ id: "nav:required-documents", href: `${BASE}/documents#required-documents`, agencyOnly: false, group: "navigation" }),
+    );
+    expect(buildPaletteEntries(BASE, false, false).some((e) => e.id === "nav:required-documents")).toBe(false);
+    expect(buildPaletteEntries(BASE, false, false, true).some((e) => e.id === "nav:required-documents")).toBe(false);
+    expect(buildPaletteEntries(BASE, true, false).some((e) => e.id === "nav:required-documents")).toBe(false);
+    expect(buildPaletteEntries(BASE, true, false).some((e) => e.id === "settings:required-documents")).toBe(true);
+  });
 });
 
 // F-085 part 1 (spec §9): the ⌘K index leaves out every route a Technician
@@ -305,9 +327,9 @@ describe("Technician", () => {
     expect(entries.some((e) => e.agencyOnly)).toBe(false);
   });
 
-  it("still offers their own five destinations and Preferences", () => {
+  it("still offers their own six destinations and Preferences", () => {
     const ids = buildPaletteEntries(BASE, false, false, true).map((e) => e.id);
-    for (const suffix of ["/tasks", "/contacts", "/conversations", "/calls", "/calendar"]) {
+    for (const suffix of ["/tasks", "/contacts", "/documents", "/conversations", "/calls", "/calendar"]) {
       expect(ids).toContain(`nav:${BASE}${suffix}`);
     }
     expect(ids).toContain("nav:preferences");
@@ -316,7 +338,7 @@ describe("Technician", () => {
   it("registers every Technician nav destination (the parity rule, fourth role)", () => {
     const navHrefs = buildNavGroups(BASE, false, false, true).flatMap((g) => g.items.map((i) => i.href));
     const entryHrefs = new Set(buildPaletteEntries(BASE, false, false, true).flatMap((e) => (e.kind === "href" ? [e.href] : [])));
-    expect(navHrefs.length).toBe(5);
+    expect(navHrefs.length).toBe(6);
     for (const href of navHrefs) expect(entryHrefs).toContain(href);
   });
 });
