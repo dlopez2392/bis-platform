@@ -146,14 +146,23 @@ describe("the builder reads only team-visible facts (spec 4.3)", () => {
     expect((await buildSummaryInputs(mine.db, { accountId: A, contact: CONTACT, zone: ZONE, now: NOW })).todos).toEqual([{ title: "Mine", due: null }]);
   });
 
-  it("documents: live files only, never Owners-only (G7; mutations: drop .eq('owners_only', false) -> FAILS; drop .is('deleted_at', null) -> FAILS)", async () => {
+  it("documents: live files with a ready version only, never Owners-only, as the card lists them (G7; final review I-2; mutations: drop .eq('owners_only', false) -> FAILS; drop .is('deleted_at', null) -> FAILS; drop .not('current_version_id', 'is', null) -> FAILS)", async () => {
     const { r, p } = build();
     await p;
     const doc = r.calls.find((c) => c.table === "documents")!;
     expect(doc.select).toBe("title, category");
-    expect(doc.filters).toContainEqual(["eq", ["owners_only", false]]);
-    expect(doc.filters).toContainEqual(["is", ["deleted_at", null]]);
-    expect(doc.filters).toContainEqual(["eq", ["contact_id", C]]);
+    // The exact chain, in order: a file whose upload never finished (no current version) is not on the card
+    // (packages/db/src/documents.ts listRecordDocuments), so it is not in the summary either.
+    expect(doc.filters).toEqual([
+      ["eq", ["account_id", A]],
+      ["eq", ["contact_id", C]],
+      ["not", ["current_version_id", "is", null]],
+      ["is", ["deleted_at", null]],
+      ["eq", ["owners_only", false]],
+      ["order", ["created_at", { ascending: false }]],
+      ["order", ["id", { ascending: false }]],
+      ["limit", [INPUT_LIMITS.documents]],
+    ]);
   });
 
   it("open To-dos only, open deals only (mutations: drop .is('completed_at', null) -> FAILS; drop .eq('status', 'open') -> FAILS)", async () => {

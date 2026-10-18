@@ -59,6 +59,8 @@ test.beforeAll(async () => {
   const { data: doc, error } = await db.from("documents").insert({
     account_id: accountId, contact_id: made.contact, title: `Insurance card ${stamp}`, category: "insurance", source: "upload", created_by: ACTOR,
   }).select("id").single();
+  // This document has no version, so it is on no screen and NOT in the summary's inputs (final review I-2):
+  // the booking above, 60 days out, is what gives the summary something to say.
   if (error) throw new Error(`record-summary e2e: document seed failed: ${error.message}`);
   made.document = (doc as { id: string }).id;
 });
@@ -116,6 +118,7 @@ test("the agency's AI card shows this month's spend and today's summaries", asyn
   const { data, error } = await serviceDb().from("account_ai_settings").select("record_summaries_today").eq("account_id", accountId).single();
   if (error) throw new Error(`record-summary e2e: settings read failed: ${error.message}`);
   const today = (data as { record_summaries_today: number }).record_summaries_today;
+  // A Regenerate on unchanged inputs still counts: the row's first forced claim wins, and its write is a successful record_summary row.
   expect(today).toBe(3); // English on open, English on Regenerate, Spanish on open
   await page.goto(`/dashboard/accounts/${accountId}/settings#ai`);
   const card = page.locator("#ai[data-ai-card]");

@@ -208,8 +208,10 @@ export async function buildSummaryInputs(
       .eq("status", "open").order("created_at", desc).order("id", desc).limit(L.deals),
     db.from("tasks").select("title, due_at").eq("account_id", accountId).eq("contact_id", contactId)
       .is("completed_at", null).order("created_at", desc).order("id", desc).limit(L.todos),
+    // Only a file with a ready version, as the Documents card lists it (packages/db/src/documents.ts):
+    // an upload that never finished is on no screen, so it is not in the summary (final review I-2).
     db.from("documents").select("title, category").eq("account_id", accountId).eq("contact_id", contactId)
-      .is("deleted_at", null).eq("owners_only", false).order("created_at", desc).order("id", desc).limit(L.documents),
+      .not("current_version_id", "is", null).is("deleted_at", null).eq("owners_only", false).order("created_at", desc).order("id", desc).limit(L.documents),
     listContactCalls(db, accountId, contactId, L.calls, { excludeSpam: true }),
   ]);
   // contactFacts never throws (record.ts:99-112): a fact that answers { ok: false } is a failed read (plan deviation 11),
