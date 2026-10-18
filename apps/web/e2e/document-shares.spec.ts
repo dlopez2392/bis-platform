@@ -141,6 +141,10 @@ test("1. Copy share link: the toast, the clipboard, the database row, the card's
 
   await expect(row(page).locator("[data-document-shared]")).toHaveText(tt("documents.share.live", { hours: "24" }));
 
+  // The timeline is server-rendered and the card's actions re-read only the card (documents-card.tsx's
+  // `reload` bumps the files read; nothing calls router.refresh), the same as upload, a new version and a
+  // request, whose specs reload before reading their rows (documents-versions.spec.ts, document-requests.spec.ts).
+  await page.reload();
   const shared = recordPage(page).locator('[data-timeline-item="documentShared"]');
   await expect(shared).toHaveCount(1);
   await expect(shared).toContainText(STAMP);
