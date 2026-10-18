@@ -5,11 +5,22 @@ export const POLL_EVERY_MS = 2_000;
 export const POLL_LIMIT = 15;
 type Fetch = (url: string, init?: RequestInit) => Promise<Response>;
 
+/** Waits `ms`, or ends at once when `signal` aborts, clearing its timer (final review M-h): a closed record
+ *  leaves no 2 s timer behind it. */
+export function abortableWait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
 export async function loadAiSummary(
   url: string, o: { force: boolean; fetchImpl?: Fetch; wait?: (ms: number) => Promise<void>; signal?: AbortSignal },
 ): Promise<AiSummaryResponse> {
   const f: Fetch = o.fetchImpl ?? ((u, init) => fetch(u, init));
-  const wait = o.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const wait = o.wait ?? ((ms: number) => abortableWait(ms, o.signal));
   const ask = async (method: "GET" | "POST"): Promise<AiSummaryResponse> => {
     try {
       const res = await f(url, { method, cache: "no-store", signal: o.signal });
