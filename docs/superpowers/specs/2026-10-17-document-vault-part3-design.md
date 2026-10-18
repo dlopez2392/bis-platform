@@ -102,7 +102,7 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
 - The two `tasks` columns, the check, the composite foreign key, the unique partial index, and the client-write trigger extension (3.2).
 - Three `documents` indexes (amended 2026-10-17; plan PR 3a deviation 4):
   - `(account_id, expires_on, id) where deleted_at is null and expires_on is not null` serves the page's expiring and expired filters;
-  - `(expires_on) where deleted_at is null and expires_on is not null and not owners_only` serves the pass, which reads across every account (a leading `account_id` cannot serve that on Postgres 17);
+  - `(expires_on) where deleted_at is null and expires_on is not null` serves the pass, which reads across every account (a leading `account_id` cannot serve that on Postgres 17);
   - `(account_id, created_at desc, id desc) where deleted_at is null` serves the All filter (0077 has no `created_at` index on `documents`).
 - The rollback note lives in the file's header.
 - Grants and RLS: no new table, so the existing `tasks` policies apply. **Amended 2026-10-17:** the grants guard test does not change (`tasks` already holds table-wide client grants); the control is the extended client-write trigger.

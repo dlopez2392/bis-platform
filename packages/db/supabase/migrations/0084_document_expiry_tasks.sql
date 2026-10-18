@@ -77,7 +77,7 @@ create index documents_by_expiry on public.documents (account_id, expires_on, id
   where deleted_at is null and expires_on is not null;
 
 -- 4. The pass's window, across every account (a leading account_id cannot serve it). No owners_only
---    clause: a parameterised owners_only = $1 under a generic plan cannot match a partial predicate,
+--    clause: a parameterised owners_only test under a generic plan cannot match a partial predicate,
 --    and the pass filters owners_only on the rows anyway.
 create index documents_expiry_window on public.documents (expires_on)
   where deleted_at is null and expires_on is not null;
