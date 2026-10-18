@@ -54,11 +54,12 @@ create table public.account_ai_settings (
   enabled boolean not null default true,
   monthly_budget_cents integer not null default 1000
     constraint account_ai_settings_budget_check check (monthly_budget_cents between 0 and 100000),
+  -- SIMILAR TO matches the WHOLE string, so these need no anchor characters (the byte rule).
   month_key text constraint account_ai_settings_month_key_check
-    check (month_key is null or (char_length(month_key) = 7 and month_key !~ '[^0-9-]')),
+    check (month_key is null or month_key similar to '[0-9]{4}-(0[1-9]|1[0-2])'),
   month_spend_microusd bigint not null default 0 constraint account_ai_settings_spend_check check (month_spend_microusd >= 0),
   day_key text constraint account_ai_settings_day_key_check
-    check (day_key is null or (char_length(day_key) = 10 and day_key !~ '[^0-9-]')),
+    check (day_key is null or day_key similar to '[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])'),
   record_summaries_today integer not null default 0 constraint account_ai_settings_today_check check (record_summaries_today >= 0),
   updated_by text,
   updated_at timestamptz
@@ -92,7 +93,10 @@ create policy ai_gateway_settings_agency_read on public.ai_gateway_settings for 
   using (coalesce(app.is_agency(), false));
 
 -- 5. The gate: both switches, the budget in micro-dollars, this month's spend and today's summaries
---    (zero when the stored key is another period). The global switch reads OFF when its row is gone.
+--    (zero when the stored key is an OLDER period; the stored values when it is a NEWER one, which
+--    is a lagging instance at a boundary: it must not read a fresh budget). The global switch reads
+--    OFF when its row is gone. A key that is not a real month, or a day outside it, is refused
+--    (22023): a bad key stored would freeze the counters and switch the budget off for good.
 create function public.ai_gate_check(p_account uuid, p_month text, p_day text)
 returns jsonb language plpgsql stable security definer set search_path = '' as $$
 declare v_global boolean; v_s public.account_ai_settings%rowtype;
@@ -100,14 +104,24 @@ begin
   if p_account is null or p_month is null or p_day is null then
     raise exception 'ai_gate_check: a required argument is null' using errcode = '22004';
   end if;
+  if not (p_month similar to '[0-9]{4}-(0[1-9]|1[0-2])') then
+    raise exception 'ai_gate_check: p_month is not a month (YYYY-MM)' using errcode = '22023';
+  end if;
+  if char_length(p_day) <> 10 or left(p_day, 8) <> p_month || '-'
+     or not (right(p_day, 2) similar to '(0[1-9]|[12][0-9]|3[01])') then
+    raise exception 'ai_gate_check: p_day is not a day of p_month (YYYY-MM-DD)' using errcode = '22023';
+  end if;
+  if right(p_day, 2)::integer > extract(day from (p_month || '-01')::date + interval '1 month' - interval '1 day') then
+    raise exception 'ai_gate_check: p_day is past the end of its month' using errcode = '22023';
+  end if;
   select g.enabled into v_global from public.ai_gateway_settings g where g.id;
   select * into v_s from public.account_ai_settings s where s.account_id = p_account;
   return jsonb_build_object(
     'global_enabled', coalesce(v_global, false),
     'account_enabled', coalesce(v_s.enabled, true),
     'budget_microusd', coalesce(v_s.monthly_budget_cents, 1000)::bigint * 10000,
-    'month_spend_microusd', case when v_s.month_key = p_month then v_s.month_spend_microusd else 0 end,
-    'record_summaries_today', case when v_s.day_key = p_day then v_s.record_summaries_today else 0 end);
+    'month_spend_microusd', case when v_s.month_key >= p_month then v_s.month_spend_microusd else 0 end,
+    'record_summaries_today', case when v_s.day_key >= p_day then v_s.record_summaries_today else 0 end);
 end $$;
 revoke all on function public.ai_gate_check(uuid, text, text) from public, anon, authenticated, service_role;
 grant execute on function public.ai_gate_check(uuid, text, text) to service_role;
@@ -124,6 +138,16 @@ begin
   if p_account is null or p_feature is null or p_model is null or p_cost is null or p_outcome is null
      or p_latency is null or p_month is null or p_day is null then
     raise exception 'ai_ledger_record: a required argument is null' using errcode = '22004';
+  end if;
+  if not (p_month similar to '[0-9]{4}-(0[1-9]|1[0-2])') then
+    raise exception 'ai_ledger_record: p_month is not a month (YYYY-MM)' using errcode = '22023';
+  end if;
+  if char_length(p_day) <> 10 or left(p_day, 8) <> p_month || '-'
+     or not (right(p_day, 2) similar to '(0[1-9]|[12][0-9]|3[01])') then
+    raise exception 'ai_ledger_record: p_day is not a day of p_month (YYYY-MM-DD)' using errcode = '22023';
+  end if;
+  if right(p_day, 2)::integer > extract(day from (p_month || '-01')::date + interval '1 month' - interval '1 day') then
+    raise exception 'ai_ledger_record: p_day is past the end of its month' using errcode = '22023';
   end if;
   v_inc := case when p_feature = 'record_summary' and p_outcome = 'ok' then 1 else 0 end;
   insert into public.ai_ledger (account_id, feature, model, input_tokens, output_tokens, cost_microusd, outcome, latency_ms)

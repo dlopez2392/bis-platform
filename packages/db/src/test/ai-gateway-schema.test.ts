@@ -41,6 +41,13 @@ const record = (c: Client, acct: string, o: Partial<Rec> = {}) => {
   return c.query("select public.ai_ledger_record($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     [acct, v.feature, v.model, v.inTok, v.outTok, v.cost, v.outcome, v.latency, v.month, v.day]);
 };
+/** [p_month, p_day] pairs both functions refuse with 22023: not a month, not a day, a day outside the month, a day past the month's end. */
+const BAD_PERIODS: [string, string][] = [
+  ["2026-13", "2026-13-01"], ["9999-99", "9999-99-01"], ["2026-1", "2026-1-01"], ["2026-10 ", "2026-10 -01"],
+  ["2026-10", "2026-10-32"], ["2026-10", "2026-10-3x"], ["2026-10", "2026-10-1"], ["2026-10", "2026-10-18 "], ["2026-10", "2026-10-00"],
+  ["2026-10", "2026-11-01"], ["2026-11", "2026-10-31"],
+  ["2026-02", "2026-02-30"], ["2026-02", "2026-02-29"], ["2026-04", "2026-04-31"],
+];
 const counters = async (c: Client, acct: string) =>
   (await c.query<{ m: string | null; s: string; d: string | null; t: number }>(
     "select month_key as m, month_spend_microusd::text as s, day_key as d, record_summaries_today as t from account_ai_settings where account_id = $1", [acct])).rows[0];
@@ -88,6 +95,18 @@ describe("0086: the tables (spec 3.3)", () => {
         .rejects.toMatchObject({ code: "23514", constraint: "account_ai_settings_budget_check" });
       await expect(attempt(c, "update account_ai_settings set monthly_budget_cents = -1 where account_id = $1", [acct]))
         .rejects.toMatchObject({ code: "23514", constraint: "account_ai_settings_budget_check" });
+    }));
+
+  it("a stored month or day key is a real month and day, never '2026-13' or '9999-99' (fix round; mutations: either check back to digits-and-hyphens only -> FAILS)", () =>
+    withRollback(async (c) => {
+      const acct = await seed(c);
+      await attempt(c, "insert into account_ai_settings (account_id, month_key, day_key) values ($1, '2026-12', '2026-12-31')", [acct]);
+      for (const m of ["2026-13", "9999-99", "2026-00"])
+        await expect(attempt(c, "update account_ai_settings set month_key = $2 where account_id = $1", [acct, m]))
+          .rejects.toMatchObject({ code: "23514", constraint: "account_ai_settings_month_key_check" });
+      for (const d of ["2026-10-32", "2026-13-01", "2026-10-00"])
+        await expect(attempt(c, "update account_ai_settings set day_key = $2 where account_id = $1", [acct, d]))
+          .rejects.toMatchObject({ code: "23514", constraint: "account_ai_settings_day_key_check" });
     }));
 
   it("the global switch is one row, seeded on (mutations: drop ai_gateway_settings_singleton -> FAILS; seed it off -> FAILS)", () =>
@@ -222,6 +241,22 @@ describe("0086: ai_gate_check (spec 3.1 step 3, 3.3; plan deviation 13)", () => 
     withRollback(async (c) => {
       await expect(attempt(c, "select public.ai_gate_check(null, '2026-10', '2026-10-18')")).rejects.toMatchObject({ code: "22004" });
     }));
+
+  it("refuses a month that is not real, a day that is not real, and a day outside the month, and takes a leap day (fix round; mutations: drop the month check; drop the day pattern; drop the day-in-month check; drop the real-day check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const acct = await seed(c);
+      for (const [m, d] of BAD_PERIODS)
+        await expect([m, d, await attempt(c, "select public.ai_gate_check($1, $2, $3)", [acct, m, d]).then(() => "accepted", (e) => e.code)])
+          .toEqual([m, d, "22023"]);
+      expect(await gate(c, acct, "2028-02", "2028-02-29")).toMatchObject({ month_spend_microusd: 0 });
+    }));
+
+  it("a lagging instance asking for an OLDER month than the stored one reads the stored spend and count, not zero (fix round; mutation: back to `month_key = p_month` -> reads 0 -> FAILS)", () =>
+    withRollback(async (c) => {
+      const acct = await seed(c);
+      await record(c, acct, { feature: "record_summary", cost: 5, month: "2026-11", day: "2026-11-01" });
+      expect(await gate(c, acct, "2026-10", "2026-10-31")).toMatchObject({ month_spend_microusd: 5, record_summaries_today: 1 });
+    }));
 });
 
 describe("0086: ai_ledger_record (spec 3.1 step 6, 3.3; plan deviation 12)", () => {
@@ -264,5 +299,16 @@ describe("0086: ai_ledger_record (spec 3.1 step 6, 3.3; plan deviation 12)", () 
       const acct = await seed(c);
       await expect(attempt(c, "select public.ai_ledger_record($1, 'call_card', 'gpt-4o-mini', 1, 1, null, 'ok', 1, '2026-10', '2026-10-18')", [acct]))
         .rejects.toMatchObject({ code: "22004" });
+    }));
+
+  it("refuses a month that is not real, a day that is not real, and a day outside the month, writing nothing; takes a leap day (fix round; mutations: drop the month check; drop the day pattern; drop the day-in-month check; drop the real-day check -> FAILS)", () =>
+    withRollback(async (c) => {
+      const acct = await seed(c);
+      for (const [m, d] of BAD_PERIODS)
+        await expect([m, d, await attempt(c, "select public.ai_ledger_record($1, 'call_card', 'gpt-4o-mini', 1, 1, 1, 'ok', 1, $2, $3)", [acct, m, d]).then(() => "accepted", (e) => e.code)])
+          .toEqual([m, d, "22023"]);
+      expect(await counters(c, acct)).toBeUndefined();
+      await record(c, acct, { month: "2028-02", day: "2028-02-29" });
+      expect(await counters(c, acct)).toMatchObject({ m: "2028-02", d: "2028-02-29" });
     }));
 });
