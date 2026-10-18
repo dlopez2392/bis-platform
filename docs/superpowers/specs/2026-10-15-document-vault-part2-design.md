@@ -126,6 +126,7 @@ A **Documents** section in Settings (Owners and agency edit; others read), regis
 
 - *Amended 2026-10-16 (owner ruling D8):* **eight** categories, not nine: **Other cannot be required.** Anything filed as Other would meet "Other", so it never names a particular document, and 2b's dialog needs a note for Other. `accounts.required_document_categories` and the skips' `category` accept only `id, contract, estimate, invoice, photo, permit, insurance, warranty`.
 - *Amended 2026-10-16 (owner ruling D6):* **for now only the AGENCY edits the list**, on the account's Settings page, which is agency-only (`requireAgencyOnlyAccountAccess`). An Owner screen comes later. Its save action already admits a client Owner, so that screen needs no database change. **Until it ships, P7's "Owners pick required categories in Settings" is not met for client Owners.** Staff and Technicians "read" the list as its effect on each customer's card.
+- **Amended 2026-10-17 (part 3, PR 3a):** a client Owner sets the list on the Documents page's Required documents card (spec part 3 §3.3); P7's Owner half and §8's "until an Owner opts in" are met from PR 3a.
 
 ### 5.3 What counts
 
