@@ -13,6 +13,11 @@ export type RecordSummaryClaim = { status: "won"; leaseId: string } | { status: 
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/**
+ * The cached row, or null when there is none. A claim creates the row before anything is written, so a
+ * claim that never saved (a failed generation, or one still running) leaves a row whose four fields are
+ * ALL null: callers treat `body === null` as "no paragraph", never as an empty one. THROWS on an error.
+ */
 export async function getRecordSummary(db: SupabaseClient, k: RecordSummaryKey): Promise<RecordSummaryRow | null> {
   const { data, error } = await db.from("record_summaries").select("body, input_digest, model, generated_at")
     .eq("account_id", k.accountId).eq("contact_id", k.contactId).eq("language", k.language).maybeSingle();
@@ -36,7 +41,12 @@ export async function claimRecordSummary(
   throw new Error("claimRecordSummary: unexpected answer");
 }
 
-/** The winner's write: only while its own lease still holds the row. False = another claim took it over. */
+/**
+ * The winner's write: only while its own lease still holds the row. False = another claim took it over.
+ * It is a compare-and-set on the lease id, not on the clock, by design: a save still writes after the
+ * 30-second lease has lapsed, as long as no newer claim has replaced the lease. A lapsed lease only lets
+ * the next claim win; once one does, this lease id no longer matches and the late save writes nothing.
+ */
 export async function saveRecordSummary(
   db: SupabaseClient, k: RecordSummaryKey & { leaseId: string; body: string; digest: string; model: string; generatedAt: string },
 ): Promise<boolean> {

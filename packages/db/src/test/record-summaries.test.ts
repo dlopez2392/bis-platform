@@ -48,6 +48,19 @@ describe("record summaries", () => {
         expect(await getRecordSummary(db, { accountId: otherId, contactId, language: "en" })).toBeNull();
       })));
 
+  it("another account's id with this account's real contact and live lease neither saves nor releases it (second-account case; mutations: drop saveRecordSummary's .eq('account_id') -> the save returns true -> FAILS; drop releaseRecordSummaryLease's .eq('account_id') -> the next claim wins -> FAILS)", () =>
+    withTestAccount(async (db, accountId) =>
+      withTestAccount(async (_db2, otherId) => {
+        const contactId = await person(db, accountId);
+        const k = { accountId, contactId, language: "en" as const };
+        const won = await claimRecordSummary(db, { ...k, digest: D1, force: false }) as { status: "won"; leaseId: string };
+        const wrong = { ...k, accountId: otherId, leaseId: won.leaseId };
+        expect(await saveRecordSummary(db, { ...wrong, body: "Not ours.", digest: D1, model: "gpt-4o-mini", generatedAt: AT })).toBe(false);
+        await releaseRecordSummaryLease(db, wrong);
+        expect(await claimRecordSummary(db, { ...k, digest: D1, force: false })).toEqual({ status: "busy" });
+        expect(await getRecordSummary(db, k)).toEqual({ body: null, inputDigest: null, model: null, generatedAt: null });
+      })));
+
   it("an answer of the wrong shape throws, never reads as won (mutation: accept any status -> FAILS)", async () => {
     const rpcAnswering = (data: unknown) => ({ rpc: () => Promise.resolve({ data, error: null }) }) as unknown as SupabaseClient;
     const k = { accountId: "a", contactId: "c", language: "en" as const, digest: D1, force: false };
