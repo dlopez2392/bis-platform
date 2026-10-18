@@ -254,6 +254,9 @@ export default defineConfig({
         // never reaches a Vercel deployment" block pins that vercel.json and
         // next.config.ts never set it.
         BIS_I18N_QA: "1",
+        // Item 8a-1 (spec 6, 8.1): the AI gateway answers from its fake provider, so a local or CI e2e run
+        // never makes a real model call. Ignored when VERCEL_ENV=production.
+        AI_PROVIDER: "fake",
         // The document vault's scanner (S-07 2a): points the app at the real
         // shim this config starts above, in front of the fake clamd.
         SCANNER_URL: `http://127.0.0.1:${SCANNER_PORT}`,

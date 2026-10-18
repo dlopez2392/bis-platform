@@ -262,6 +262,12 @@ describe("ci.yml points the gates at the CI Supabase project, never production's
     expect(ciEnv.STRIPE_SECRET_KEY).toBeUndefined();
   });
 
+  it("gives the e2e job — and only it — the AI gateway's fake provider as a literal (item 8a-1, spec 6; mutation: drop it, or move it to the top-level env -> FAILS)", () => {
+    expect(jobEnv(job("e2e")).AI_PROVIDER).toBe("fake");
+    expect(jobEnv(job("verify")).AI_PROVIDER).toBeUndefined();
+    expect(ciEnv.AI_PROVIDER).toBeUndefined();
+  });
+
   it("references secrets.CI_STRIPE_SECRET_KEY on exactly one non-comment line: e2e's own job-level env (mutation: also give a STEP inside verify its own `env: STRIPE_SECRET_KEY: ${{ secrets.CI_STRIPE_SECRET_KEY }}` — jobEnv only reads a job's 4-space env: block, so the two checks above stay green and this is the only one that FAILS)", () => {
     const matches = ciLines.filter((line) => line.includes("secrets.CI_STRIPE_SECRET_KEY"));
     expect(matches).toHaveLength(1);

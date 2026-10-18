@@ -348,6 +348,11 @@ jobs:
       # "BIS_I18N_QA never reaches a Vercel deployment" block pins that
       # vercel.json and next.config.ts never set it.
       BIS_I18N_QA: "1"
+      # NOT a secret: the AI gateway's fake provider (apps/web/src/lib/ai/providers/fake.ts) for the app this
+      # job builds, so no e2e run makes a real model call (item 8a-1, spec 6). The gateway IGNORES it when
+      # VERCEL_ENV=production. OPENAI_API_KEY above stays for the web chat's own test, which the gateway does
+      # not touch (spec 1).
+      AI_PROVIDER: fake
     steps:
       - uses: actions/checkout@v5
 
