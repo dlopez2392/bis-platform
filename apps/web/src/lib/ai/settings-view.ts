@@ -56,7 +56,10 @@ export function aiCardView(i: {
     spendLine: spent > 0 || i.refusals > 0
       ? t(m, "aiSettings.spend", i.locale, { spent: money(Math.ceil(spent / 10_000)), budget: money(s.monthlyBudgetCents) })
       : null,
+    // A $0 budget is reached by every spend, $0 included (the gate refuses spend >= budget), so it never resumes on
+    // the 1st: it stays off until someone raises the budget (fix round 3).
     reachedLine: !reached ? null
+      : s.monthlyBudgetCents === 0 ? t(m, "aiSettings.zeroBudget", i.locale)
       : i.overBudgetAt ? t(m, "aiSettings.reached", i.locale, { date: day(new Date(i.overBudgetAt)), resume })
       : t(m, "aiSettings.reachedNoDate", i.locale, { resume }),
     skippedLine: i.refusals > 0 ? plural(m, "aiSettings.skipped", i.refusals, i.locale, { count: i.refusals }) : null,

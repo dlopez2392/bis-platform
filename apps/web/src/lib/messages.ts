@@ -4985,6 +4985,8 @@ export const m = {
   "aiSettings.reached.es": "Presupuesto alcanzado el {date}. La IA está en pausa en esta cuenta hasta el {resume}.",
   "aiSettings.reachedNoDate": "Budget reached. AI is paused for this account until {resume}.",
   "aiSettings.reachedNoDate.es": "Presupuesto alcanzado. La IA está en pausa en esta cuenta hasta el {resume}.",
+  "aiSettings.zeroBudget": "Budget is $0. AI is off for this account until the budget is raised.",
+  "aiSettings.zeroBudget.es": "El presupuesto es $0. La IA está apagada en esta cuenta hasta que se suba el presupuesto.",
   "aiSettings.skipped": "AI was skipped {count} times this month because it was off or over budget.",
   "aiSettings.skipped.es": "La IA se omitió {count} veces este mes porque estaba apagada o sin presupuesto.",
   "aiSettings.skippedOne": "AI was skipped once this month because it was off or over budget.",

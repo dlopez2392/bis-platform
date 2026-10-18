@@ -862,7 +862,7 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
     "aiSettings.global.label", "aiSettings.global.onHelp", "aiSettings.global.offHelp", "aiSettings.global.turnOff",
     "aiSettings.global.turnOn", "aiSettings.global.confirmTitle", "aiSettings.global.confirmBody", "aiSettings.global.confirmWord",
     "aiSettings.global.confirmLabel", "aiSettings.global.cancel", "aiSettings.global.turnedOff", "aiSettings.global.turnedOn",
-    "aiSettings.global.wrongWord", "palette.settings.ai",
+    "aiSettings.global.wrongWord", "palette.settings.ai", "aiSettings.zeroBudget",
   ] as const;
 
   it("every key has a Spanish twin (mutation: delete any one .es line -> FAILS naming it)", () => {
@@ -874,6 +874,9 @@ describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
       .toEqual(["$1.84 of $10.00 this month, estimated", "$1.84 de $10.00 este mes, estimado"]);
     expect([t(m, "aiSettings.reached", "en", { date: "Oct 14", resume: "Nov 1" }), t(m, "aiSettings.reached", "es", { date: "14 oct", resume: "1 nov" })])
       .toEqual(["Budget reached on Oct 14. AI is paused for this account until Nov 1.", "Presupuesto alcanzado el 14 oct. La IA está en pausa en esta cuenta hasta el 1 nov."]);
+    // Task 7 fix round 3: a $0 budget is off until raised, never "resumes on the 1st" (the gate refuses spend >= budget).
+    expect([m["aiSettings.zeroBudget"], m["aiSettings.zeroBudget.es"]])
+      .toEqual(["Budget is $0. AI is off for this account until the budget is raised.", "El presupuesto es $0. La IA está apagada en esta cuenta hasta que se suba el presupuesto."]);
     expect([m["aiSettings.empty"], m["aiSettings.empty.es"]]).toEqual(["No AI use yet this month.", "Todavía no hay uso de IA este mes."]);
     expect([m["aiSettings.global.label"], m["aiSettings.global.label.es"]]).toEqual(["AI for every account", "IA para todas las cuentas"]);
     expect([m["aiSettings.account.label"], m["aiSettings.account.label.es"]]).toEqual(["AI for this account", "IA para esta cuenta"]);

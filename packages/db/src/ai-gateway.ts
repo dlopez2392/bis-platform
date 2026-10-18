@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { CasOutcome } from "./documents";
 
 /**
  * Item 8a-1 (spec 3.1, 3.3, 3.6): the reads and writes behind apps/web/src/lib/ai/gateway.ts and the
@@ -94,19 +95,41 @@ export async function firstOverBudgetSince(db: SupabaseClient, accountId: string
   return (data?.[0] as { created_at: string } | undefined)?.created_at ?? null;
 }
 
-/** The card's Save (and its Undo). Writes exactly these columns, so the counters ai_ledger_record keeps are never reset. */
-export async function setAccountAiSettings(db: SupabaseClient, accountId: string, s: { enabled: boolean; monthlyBudgetCents: number; actorId: string }): Promise<void> {
-  const { error } = await db.from("account_ai_settings").upsert({
-    account_id: accountId, enabled: s.enabled, monthly_budget_cents: s.monthlyBudgetCents,
-    updated_by: s.actorId, updated_at: new Date().toISOString(),
-  }, { onConflict: "account_id" });
+/**
+ * The card's Save (and its Undo). Writes exactly these columns, so the counters ai_ledger_record keeps are never reset.
+ * A Save passes no `expected` and upserts. An Undo passes `expected` = what its own Save wrote and becomes a
+ * compare-and-set (the repo's Undo convention, documents.ts's CasOutcome): it updates only while the row still holds
+ * exactly that, never inserts, and answers "changed" when someone wrote after the Save, so it never clobbers them.
+ */
+export async function setAccountAiSettings(
+  db: SupabaseClient, accountId: string, s: { enabled: boolean; monthlyBudgetCents: number; actorId: string },
+  expected?: { enabled: boolean; monthlyBudgetCents: number },
+): Promise<CasOutcome> {
+  const values = { enabled: s.enabled, monthly_budget_cents: s.monthlyBudgetCents, updated_by: s.actorId, updated_at: new Date().toISOString() };
+  if (expected) {
+    const { data, error } = await db.from("account_ai_settings").update(values)
+      .eq("account_id", accountId).eq("enabled", expected.enabled).eq("monthly_budget_cents", expected.monthlyBudgetCents)
+      .select("account_id");
+    if (error) throw new Error(`setAccountAiSettings failed: ${error.message}`);
+    return (data ?? []).length > 0 ? "updated" : "changed";
+  }
+  const { error } = await db.from("account_ai_settings").upsert({ account_id: accountId, ...values }, { onConflict: "account_id" });
   if (error) throw new Error(`setAccountAiSettings failed: ${error.message}`);
+  return "updated";
 }
 
-export async function setGlobalAiEnabled(db: SupabaseClient, s: { enabled: boolean; actorId: string }): Promise<void> {
-  const { data, error } = await db.from("ai_gateway_settings")
+/**
+ * The switch for every account. With `expected` (an Undo: the state its own action wrote) it is a compare-and-set
+ * that answers "changed" when the row moved on; without it, a missing row throws (the row is seeded by 0086).
+ */
+export async function setGlobalAiEnabled(db: SupabaseClient, s: { enabled: boolean; actorId: string }, expected?: boolean): Promise<CasOutcome> {
+  let q = db.from("ai_gateway_settings")
     .update({ enabled: s.enabled, updated_by: s.actorId, updated_at: new Date().toISOString() })
-    .eq("id", true).select("id");
+    .eq("id", true);
+  if (expected !== undefined) q = q.eq("enabled", expected);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(`setGlobalAiEnabled failed: ${error.message}`);
+  if (expected !== undefined) return (data ?? []).length === 1 ? "updated" : "changed";
   if (!data || data.length !== 1) throw new Error("setGlobalAiEnabled: the switch row is missing");
+  return "updated";
 }

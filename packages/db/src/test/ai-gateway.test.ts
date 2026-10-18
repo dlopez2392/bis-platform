@@ -104,6 +104,27 @@ describe("the card's reads and writes", () => {
       expect(await getAiSettings(db, other)).toEqual({ accountEnabled: true, monthlyBudgetCents: 7700, monthKey: "2026-10", monthSpendMicroUsd: 9_999, globalEnabled: true });
     })));
 
+  it("the account's Undo is a compare-and-set: it writes back only while the row still holds what its save wrote, else answers 'changed' and writes nothing (Task 7 fix round 4; mutations: drop the enabled filter; drop the budget filter; upsert when expected is given -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const undo = { enabled: true, monthlyBudgetCents: 1000, actorId: "user_test" };
+      const wrote = { enabled: false, monthlyBudgetCents: 2500 };
+      // No row yet: an Undo must not create one.
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      expect((await db.from("account_ai_settings").select("account_id").eq("account_id", accountId)).data).toEqual([]);
+      expect(await setAccountAiSettings(db, accountId, { ...wrote, actorId: "user_test" })).toBe("updated");
+      // Someone moved the BUDGET after the save (the switch still matches).
+      await setAccountAiSettings(db, accountId, { enabled: false, monthlyBudgetCents: 3000, actorId: "user_other" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      // Someone moved the SWITCH after the save (the budget matches again).
+      await setAccountAiSettings(db, accountId, { enabled: true, monthlyBudgetCents: 2500, actorId: "user_other" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      expect(await getAiSettings(db, accountId)).toMatchObject({ accountEnabled: true, monthlyBudgetCents: 2500 });
+      // Still exactly what the save wrote: the Undo writes.
+      await setAccountAiSettings(db, accountId, { ...wrote, actorId: "user_test" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("updated");
+      expect(await getAiSettings(db, accountId)).toMatchObject({ accountEnabled: true, monthlyBudgetCents: 1000 });
+    }));
+
   // Review I9: the db suite NEVER writes ai_gateway_settings (one row shared by every account and every
   // concurrent suite on the project). setGlobalAiEnabled and getAiSettings's missing-row answer are proved on a
   // recording stub; the real row's behaviour (seeded on, a missing row reads off) is 0086's withRollback SQL tests.
@@ -152,6 +173,17 @@ describe("the card's reads and writes", () => {
     expect(ok.seen.map((x) => x.slice(0, 2))).toEqual([["from", "ai_gateway_settings"], ["update", expect.objectContaining({ enabled: false, updated_by: "user_test" })], ["eq", "id"], ["select", "id"]]);
     expect(ok.seen[2]).toEqual(["eq", "id", true]);
     await expect(setGlobalAiEnabled(stubDb({ data: [], error: null }).db, { enabled: true, actorId: "user_test" })).rejects.toThrow("the switch row is missing");
+  });
+
+  it("setGlobalAiEnabled's Undo is a compare-and-set: it filters on the state its save wrote and answers 'changed' when the row moved on, never throws (Task 7 fix round 4; mutations: drop the expected filter; throw on zero rows when expected is given -> FAILS)", async () => {
+    const ok = stubDb({ data: [{ id: true }], error: null });
+    expect(await setGlobalAiEnabled(ok.db, { enabled: true, actorId: "user_test" }, false)).toBe("updated");
+    expect(ok.seen.filter((x) => x[0] === "eq")).toEqual([["eq", "id", true], ["eq", "enabled", false]]);
+    const moved = stubDb({ data: [], error: null });
+    expect(await setGlobalAiEnabled(moved.db, { enabled: true, actorId: "user_test" }, false)).toBe("changed");
+    const plain = stubDb({ data: [{ id: true }], error: null });
+    expect(await setGlobalAiEnabled(plain.db, { enabled: false, actorId: "user_test" })).toBe("updated");
+    expect(plain.seen.filter((x) => x[0] === "eq")).toEqual([["eq", "id", true]]);
   });
 
   it("getAiSettings reads a missing global row as OFF, as the gate does (plan deviation 13; mutation: g?.enabled ?? true -> FAILS)", async () => {
