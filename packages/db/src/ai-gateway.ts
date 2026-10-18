@@ -39,6 +39,12 @@ export type AiLedgerEntry = {
   costMicroUsd: number; outcome: AiOutcome; latencyMs: number; monthKey: string; dayKey: string;
 };
 
+/**
+ * One ledger row and the account's counters, in one server transaction. THROWS on an error or an aborted
+ * signal. A timeout (or any abort) does NOT mean the row was not written: the request may already have
+ * reached the database, which can still commit it after the client gave up. Never retry a failed call:
+ * a retry can write the row twice and count the cost twice. Log the failure and move on.
+ */
 export async function recordAiLedger(db: SupabaseClient, r: AiLedgerEntry & { signal?: AbortSignal }): Promise<void> {
   let q = db.rpc("ai_ledger_record", {
     p_account: r.accountId, p_feature: r.feature, p_model: r.model, p_in: r.inputTokens, p_out: r.outputTokens,
@@ -71,9 +77,10 @@ export async function getAiSettings(db: SupabaseClient, accountId: string): Prom
 }
 
 export async function countAiSkipsSince(db: SupabaseClient, accountId: string, sinceIso: string): Promise<number> {
-  const { count, error } = await db.from("ai_ledger").select("id", { count: "exact", head: true })
+  const { count, error, status } = await db.from("ai_ledger").select("id", { count: "exact", head: true })
     .eq("account_id", accountId).in("outcome", ["global_off", "account_off", "over_budget"]).gte("created_at", sinceIso);
-  if (error) throw new Error(`countAiSkipsSince failed: ${error.message}`);
+  // A HEAD answer has no body, so error.message is often empty: the code and the HTTP status say what failed.
+  if (error) throw new Error(`countAiSkipsSince failed: ${error.message} (code ${error.code}, HTTP ${status})`);
   // memory "Head-count null": a failed head count can come back { count: null, error: null }.
   if (count === null) throw new Error("countAiSkipsSince: no count");
   return count;
