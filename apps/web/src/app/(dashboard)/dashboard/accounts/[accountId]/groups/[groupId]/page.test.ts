@@ -94,7 +94,9 @@ const getVoiceProfileMock = vi.fn();
 const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
 // A desk: the two "have" cards render open, so their bodies and markers can be read.
-vi.mock("@/components/record/use-phone", () => ({ usePhone: () => false, PHONE_QUERY: "(max-width: 767px)" }));
+// S-07 3a: a case may switch to a phone (phoneMock.mockReturnValue(true)) and switches back in its finally.
+const phoneMock = vi.fn(() => false);
+vi.mock("@/components/record/use-phone", () => ({ usePhone: () => phoneMock(), PHONE_QUERY: "(max-width: 767px)" }));
 const renderZone = vi.fn(async (z: string | undefined) => (z
   ? { zone: z, guessed: false, label: z, source: "account" as const }
   : { zone: "UTC", guessed: true, label: "UTC", source: "fallback" as const }));
@@ -297,6 +299,21 @@ describe("the group record page: the cards (spec §8.2-8.5)", () => {
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
     expect(props).toEqual({ accountId: "acct1", record: { kind: "group", id: G }, canManage: false, emptyText: m["documents.empty.household"], name: "García",
       focus: { documentId: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" } });
+  });
+
+  it("on a phone, a To-do's link to a file opens the Documents card, and only it; with no file named it stays closed (S-07 3a review I2; mutations: never pass defaultOpen, or open it for ?ask= alone -> FAILS)", async () => {
+    phoneMock.mockReturnValue(true);
+    try {
+      const linked = await render({ document: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" });
+      expect(cardHtml(linked, "documents")).toContain('aria-expanded="true"');
+      expect(linked).toContain("data-documents-mock");
+      for (const id of ["properties", "deals"]) expect(cardHtml(linked, id)).toContain('aria-expanded="false"');
+      for (const over of [{}, { ask: "insurance" }, { document: "not-a-uuid" }]) {
+        const plain = await render(over);
+        expect(cardHtml(plain, "documents")).toContain('aria-expanded="false"');
+        expect(plain).not.toContain("data-documents-mock");
+      }
+    } finally { phoneMock.mockReturnValue(false); }
   });
 
   it("a business group gets the business's empty text, not the household's (mutation: use the household sentence for both -> FAILS)", async () => {

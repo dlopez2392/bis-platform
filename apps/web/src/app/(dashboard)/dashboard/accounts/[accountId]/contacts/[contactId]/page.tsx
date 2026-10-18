@@ -56,7 +56,8 @@ const READ_ONLY_ASSIGN: AssignView = {
   who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [],
 };
 
-type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
+/** `defaultOpen`: S-07 3a (review I2), a phone disclosure that starts open. */
+type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string; defaultOpen?: boolean };
 
 /**
  * The contact record page (S-03 part 1; spec §§8–9). Three columns on a desk (who they are |
@@ -257,6 +258,8 @@ export default async function ContactDetailPage({
         emptyText={tr.text("documents.empty.contact")} name={rawName}
         // S-07 2c (D1): everyone who sees the customer sees the required list; only the whole account's view changes it.
         checklist={{ canSkip: seesWholeAccount(access) }} {...(focus ? { focus } : {})} />,
+      // S-07 3a (review I2, orchestrator ruling): a link that names a file opens this card on a phone, so the file can be focused.
+      defaultOpen: Boolean(focus?.documentId),
     },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"
@@ -280,7 +283,7 @@ export default async function ContactDetailPage({
       const slot: Slot = slots[def.id];
       return (
         <RecordCard key={def.id} id={def.id} title={tr.text(def.titleKey)} collapsibleOnPhone={def.collapsibleOnPhone}
-          skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText}>
+          skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText} defaultOpen={slot.defaultOpen}>
           {slot.node}
         </RecordCard>
       );

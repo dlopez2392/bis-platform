@@ -40,7 +40,8 @@ import { GroupTimeline } from "./group-timeline";
 
 export const dynamic = "force-dynamic";
 
-type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
+/** `defaultOpen`: S-07 3a (review I2), a phone disclosure that starts open. */
+type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string; defaultOpen?: boolean };
 const KIND_KEY = { household: "groups.kind.household", business: "groups.kind.business" } as const satisfies Record<GroupKind, MessageKey>;
 const PEOPLE_EMPTY_KEY = {
   household: "groupPage.people.emptyHousehold", business: "groupPage.people.emptyBusiness",
@@ -231,6 +232,8 @@ export default async function GroupRecordPage({ params, searchParams }: {
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "group", id: group.id }} canManage={access.canManage}
         emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} name={group.name} {...(focus ? { focus } : {})} />,
+      // S-07 3a (review I2, orchestrator ruling): a link that names a file opens this card on a phone, so the file can be focused.
+      defaultOpen: Boolean(focus?.documentId),
     },
     people: people.status === "ready"
       ? {
@@ -254,7 +257,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
         const slot: Slot = slots[def.id];
         return (
           <RecordCard key={def.id} id={def.id} title={tr.text(def.titleKey)} collapsibleOnPhone={def.collapsibleOnPhone}
-            skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText}>
+            skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText} defaultOpen={slot.defaultOpen}>
             {slot.node}
           </RecordCard>
         );

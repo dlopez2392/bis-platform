@@ -76,6 +76,17 @@ describe("RecordCard (spec §8): one chrome, its own states, a phone disclosure"
     expect(open).toContain("fields");
   });
 
+  it("defaultOpen seeds a phone disclosure open, body mounted, still a disclosure that can close (S-07 3a review I2; mutation: useState(false) ignoring defaultOpen -> FAILS)", () => {
+    const body = vi.fn(() => createElement("p", null, "files"));
+    const html = renderToStaticMarkup(createElement(RecordCard, { id: "documents", title: "Documents", collapsibleOnPhone: true, defaultOpen: true }, createElement(body)));
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("files");
+    expect(body).toHaveBeenCalled();
+    const closed = renderToStaticMarkup(createElement(RecordCard, { id: "documents", title: "Documents", collapsibleOnPhone: true, defaultOpen: false }, createElement("p", null, "files")));
+    expect(closed).toContain('aria-expanded="false"');
+    expect(closed).not.toContain("files");
+  });
+
   it("RecordCard's own words come from the catalogue: the default error names the card", () => {
     const html = renderToStaticMarkup(createElement(RecordCard, { id: "deals", title: "Deals", state: "error" }));
     expect(html).toContain(m["record.card.failed"].replace("{title}", "Deals").replace("'", "&#x27;"));

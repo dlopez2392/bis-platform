@@ -132,15 +132,22 @@ describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; 
     expect(body).not.toContain("onAsk: () => openAsk(),");
   });
 
-  it("the focus effect runs once, only after the files are ready, only for a row it found, and sets no state (mutations: drop the once guard or the row check; a setState in the effect -> FAILS)", () => {
-    const from = body.indexOf("const focusedOnce = useRef(false);");
+  it("the focus reads the link's FILE and the files read's READY state (review I1; mutations: focusId from focus?.ask, or filesReady from load.status !== \"ready\" -> FAILS)", () => {
+    expect(body).toContain("const focusId = focus?.documentId ?? null;");
+    expect(body).toContain('const filesReady = load.status === "ready";');
+  });
+
+  it("the focus effect runs once per file, only after the files are ready, only for a row it found on this card, and sets no state (mutations: drop the per-file guard or the row check; the lookup without its row; a setState in the effect -> FAILS)", () => {
+    const from = body.indexOf("const focusedFor = useRef<string | null>(null);");
     const to = body.indexOf("}, [focusId, filesReady]);");
     expect(from).toBeGreaterThanOrEqual(0);
     expect(to).toBeGreaterThan(from);
     const effect = body.slice(from, to);
-    expect(effect).toContain("if (focusedOnce.current || !focusId || !filesReady) return;");
+    expect(effect).toContain("if (!focusDue(focusedFor.current, focusId, filesReady)) return;");
+    expect(effect).toContain("const button = focusTarget(document, focusId);");
+    expect(effect).not.toContain("querySelector");
     expect(effect).toContain("if (!button) return;");
-    expect(effect.indexOf("focusedOnce.current = true;")).toBeGreaterThan(effect.indexOf("if (!button) return;"));
+    expect(effect.indexOf("focusedFor.current = focusId;")).toBeGreaterThan(effect.indexOf("if (!button) return;"));
     expect(effect).not.toMatch(/\bset[A-Z]\w*\(/);
   });
 });

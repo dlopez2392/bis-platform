@@ -521,6 +521,23 @@ export function askPreset(focus: CardFocus | undefined): RequirableCategory[] {
   return focus?.ask ? [focus.ask] : [];
 }
 
+/**
+ * S-07 3a (review I1): the open button of the named file's LIVE row on this card, or null. Only a row
+ * (`data-document-row`) is searched, so a trashed file (`data-document-trashed`, no open button) and a file
+ * this card does not list are null, never another row's button.
+ */
+export function focusTarget(root: ParentNode, documentId: string): HTMLButtonElement | null {
+  for (const row of root.querySelectorAll("[data-document-row]")) {
+    if (row.getAttribute("data-document-row") === documentId) return row.querySelector<HTMLButtonElement>("[data-document-open]");
+  }
+  return null;
+}
+
+/** S-07 3a (review M1): focus is due once per FILE, and only once the files read is ready. */
+export function focusDue(focusedFor: string | null, focusId: string | null, filesReady: boolean): focusId is string {
+  return focusId !== null && filesReady && focusedFor !== focusId;
+}
+
 let panelSeq = 0;
 
 /**
@@ -700,15 +717,17 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
     ? requirementsState.load : { kind: "loading" };
 
   // S-07 3a (plan deviation 5): a To-do's link names a file. Once the files are read, its row is scrolled to and
-  // its open button focused, once; a file not on this card (trashed, or another record's) does nothing.
+  // its open button focused, once per file (review M1: a new ?document= on this mounted card focuses the new
+  // file; a ?before= pager change, a re-read or a Retry never jumps again); a file not on this card's live
+  // list (trashed, or another record's) does nothing.
   const focusId = focus?.documentId ?? null;
   const filesReady = load.status === "ready";
-  const focusedOnce = useRef(false);
+  const focusedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (focusedOnce.current || !focusId || !filesReady) return;
-    const button = document.querySelector<HTMLButtonElement>(`[data-document-row="${focusId}"] [data-document-open]`);
+    if (!focusDue(focusedFor.current, focusId, filesReady)) return;
+    const button = focusTarget(document, focusId);
     if (!button) return;
-    focusedOnce.current = true;
+    focusedFor.current = focusId;
     button.scrollIntoView({ block: "center" });
     button.focus({ preventScroll: true });
   }, [focusId, filesReady]);
