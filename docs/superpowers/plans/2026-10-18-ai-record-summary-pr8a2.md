@@ -28,6 +28,9 @@
 | I7 / I8 | The account's own calendar day; successful generations only (0086's counter, unchanged) | Tasks 5, 8 |
 | I13 | Over budget and switched off: the AI part is absent (no note); only the cap shows a note | Task 5, Task 7 |
 | I14 | **Settled 2026-10-18 (owner): keep $10 a month and 200 a day.** Decided on production's first real call (2026-10-18 18:56Z): `call_summary` 447 in / 35 out tokens, 89 micro-dollars; `call_card` 405 in / 26 out, 77 micro-dollars. No merge gate remains | Task 12 step 9 (compare spec §3.4's record-summary estimate, ~3,000 in / ~300 out, with the first real `record_summary` rows after deploy) |
+| Q1 (2026-10-18) | Anyone who can open the record may Regenerate (owner, as recommended) | Task 6 (no role check), Task 7 (the button for every reader) |
+| Q2 (2026-10-18) | The AI card's skipped count is calls only: record opens while AI is off write no ledger row (owner, as recommended) | Task 5 (the gate pre-check writes nothing); deviation 2 |
+| M7, M11 (2026-10-18, orchestrator) | `no_key` and `unknown_model` are `none`; a quiet refusal stays `none` when its release throws | Task 5; deviations 26, 27 |
 
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
@@ -35,7 +38,7 @@
 2. **The route checks the cap, not the gateway.** `aiComplete` refuses on the two switches and the budget only (`apps/web/src/lib/ai/gateway.ts:100-103`); it never reads `recordSummariesToday`. The route reads the gate itself first (`aiGateCheck` on the service client) and decides `none` / `capped` / proceed; `aiComplete` then reads the gate again for its own spend check. One extra RPC per open, and a capped or switched-off open writes **no ledger row** (it is not an attempted completion), so the Settings card's "AI was skipped N times" (0086's refusal rows) does not count record opens.
 3. **Switched off or over budget hides even a fresh cached paragraph** (G6, I13: "the record summary becomes the facts line"); **past the cap a fresh cached paragraph is still served** (§4.6). A gate that cannot be read is `none` (fail closed, I9).
 4. **Columns the spec does not list:** `lease_id uuid` (the lease's compare-and-set token: the winner's save and release match it, so a winner whose lease lapsed never overwrites a newer winner), `created_at`, coherence checks (`body`, `input_digest`, `model`, `generated_at` are all set or all null; `lease_id` and `generating_until` likewise), `body` 1–2000 characters (spec: ≤ 2000), `input_digest` exactly 64 lowercase hex, `model` 1–64 (0086's own cap).
-5. **The claim function answers a status word and owns the once-a-minute Regenerate.** `claim_record_summary(...)` returns `{status: "won", lease_id}`, `{status: "busy"}` (a live lease), `{status: "fresh"}` (not forced and the stored digest equals the caller's) or `{status: "too_soon"}` (forced within 60 s of the last forced win). The 30 s lease and the 60 s cool-down are constants in the SQL (spec §4.5, §4.6). The row lock (`for update`) is the one serialisation point.
+5. **The claim function answers a status word and owns the once-a-minute Regenerate.** `claim_record_summary(...)` returns `{status: "won", lease_id}`, `{status: "busy"}` (a live lease), `{status: "fresh"}` (not forced and the stored digest equals the caller's) or `{status: "too_soon"}` (forced on an UNCHANGED digest within 60 s of the last such forced win; a forced claim on a changed digest behaves like an unforced one, wins, and does not stamp `last_forced_at`, plan fix I6). The 30 s lease and the 60 s cool-down are constants in the SQL (spec §4.5, §4.6). The row lock (`for update`) is the one serialisation point.
 6. **Empty `search_path`** (`set search_path = ''`, every name schema-qualified), the house rule since 0085 and 8a-1's deviation 1; spec §3.3 wrote `public`.
 7. **The RLS fence is 0085's exact shape:** `contact_id in (select c.id from public.contacts c)` as a restrictive policy (`0085_document_shares.sql:99-100`); the spec calls it "an exists on contacts".
 8. **The builder's signature is `buildSummaryInputs(db, { accountId, contact, zone, now })`.** It takes the contact row the route already read through `getContact` (no second `contacts` read) and the account's zone (every date is local, §4.4). Spec: `(db, accountId, contactId, now)`.
@@ -51,18 +54,21 @@
 18. **One existing string changes:** `aiSettings.account.help` (`messages.ts:4974-4975`) now also says customer pages show no written summary when AI is off.
 19. **`source` goes to the model raw, cut to 60 characters** (the drawer shows the same raw column, `summary/route.ts:143`); spec: "source label".
 20. **A screen-reader line while loading** ("Writing the summary…", `role="status"`) inside the skeleton; the spec is silent.
-21. **Regenerate within the cool-down answers the current paragraph unchanged** (`too_soon` → the cached row as `ready`).
+21. **Regenerate within the cool-down answers the current paragraph unchanged** (`too_soon` → the cached row as `ready`). `too_soon` only ever comes back when the stored digest equals the caller's (plan fix I6), so the paragraph it serves is fresh; a Regenerate on changed inputs always writes.
 22. **The cap can be overshot by the generations in flight** (each passed the cap check before any recorded), bounded like the budget (§3.1).
-23. **The palette e2e stops calling the AI route on Test Client One.** `apps/web/e2e/palette.spec.ts:128-142` opens Test Client One's "Maria Garcia" record; with 8a-2 that open would write a cache row and a ledger row on Test Client One (on CI's own stack, and on bis-ci for a local run). The test aborts `…/ai-summary` before it opens the record (Task 10). Other e2e specs that open records do so on the per-run fixture account, where a fake paragraph is a derived row their teardown sweeps.
+23. **Two e2e tests stop calling the AI route on Test Client One.** `apps/web/e2e/palette.spec.ts:128-142` opens Test Client One's "Maria Garcia" record through ⌘K, and `apps/web/e2e/contact-detail.spec.ts:29-55` opens the first row of Test Client One's contact list (Maria Garcia, whose seed holds the open deal "Deck build") through the drawer's "Open full record". With 8a-2 either open would write a cache row and a ledger row on Test Client One (on CI's own stack, and on bis-ci for a local run, where Preview would then serve it). Both tests abort `…/ai-summary` before they navigate (Task 10). The reviewer grepped every spec: these two are the only record opens on a seeded account; every other spec that opens a record does so on the per-run fixture account, where a fake paragraph is a derived row its teardown sweeps.
 24. **The e2e turns AI back on with Save, not Undo.** The record page is opened in between, and the Settings toast with its Undo does not survive the navigation; the Undo itself is pinned by `apps/web/e2e/ai-settings.spec.ts:75-86` (8a-1).
+25. **The Regenerate cool-down is per row, so per language** (review M8, accepted): one customer can be force-regenerated once a minute in English AND once a minute in Spanish. The daily cap still bounds the total.
+26. **A missing key or an unpriced model shows nothing, not an error** (orchestrator ruling M7): `no_key` and `unknown_model` are configuration, not transient, so the service maps them to `none` beside `global_off`, `account_off` and `over_budget`. Only `timeout`, `provider_error` and `gate_unreadable` (and an empty answer, or a thrown dependency) are `failed`, with Retry.
+27. **A quiet refusal stays quiet even if its release throws** (orchestrator ruling M11): when the gateway answers one of the five `none` reasons and the lease release then fails, the answer is still `none` (the lease lapses on its own in 30 s); the failure is logged by id only.
 
 ## Assumptions (not verified by reading; each has a named check)
 
 - **A1** Node 22's ICU (CI `verify`) formats the four stamps in deviation 14 exactly as node 24 does here, after `\u00A0`/`\u202F` become spaces. Check: Task 5's stamp cases on CI `verify`. If CI differs, the reviewer pastes CI's output and the literal changes; the assertion's meaning does not.
 - **A2** `gen_random_uuid()` resolves inside a function with `set search_path = ''` (it lives in `pg_catalog`, which PostgreSQL always searches). Check: Task 1's claim cases on the replica.
 - **A3** OpenAI follows the language line and the plain-text rule. No test can check it (no real model call anywhere). Check: the owner's post-deploy smoke (Task 12 step 9).
-- **A4** Whether Vercel Preview holds `OPENAI_API_KEY`. If it does, opening a record on Preview spends real money against bis-ci accounts (bounded by each account's $10 a month). Check: the orchestrator lists Preview's env NAMES (never values) in Task 0 and records the answer; nothing in this PR changes Preview.
-- **A5** Clerk's session cookie is `SameSite=Lax`, so a cross-site page cannot POST Regenerate with the reader's session. Even if it could, the cool-down and the cap bound the cost. Check: none needed for safety; noted.
+- **A4 (resolved 2026-10-18 by the orchestrator, no longer an assumption)** Vercel's `OPENAI_API_KEY` targets PRODUCTION only; Preview holds none. On Preview every record summary is therefore `no_key`, which is `none` (orchestrator ruling M7): the AI part draws nothing, and Preview spends nothing. Task 0 has no step for it.
+- **A5** Clerk's session cookie is `SameSite=Lax`, which stops a cross-site page from POSTing Regenerate with the reader's session, but that is NOT the bound on spend (plan fix M10): a plain GET also writes when the inputs changed, and a signed-in reader can open records at will. The real bounds are the once-a-minute cool-down per row (deviation 25), the 200-a-day cap per account, the digest (an unchanged customer is served from the cache and spends nothing) and the $10 monthly budget. Check: none needed; noted.
 - (Read, not assumed: `aiComplete(db, input)` with `timezone`, `language`, `ref` (`gateway.ts:37-53`); `aiGateCheck(db, { accountId, monthKey, dayKey, signal? })` (`ai-gateway.ts:22`); `GATE_TIMEOUT_MS = 3_000` (`gateway.ts:55`); `periodKeys(now, zone)` (`lib/ai/period.ts:10`); the fake answers `[fake <language>] <8 hex>` with 100 in / 20 out (`providers/fake.ts:4`, `:16`), which `prices.ts` charges `ceil(100 × 150_000 / 1e6 + 20 × 600_000 / 1e6) = 27` micro-dollars; `AI_PROVIDER: fake` is already in the e2e job (`.github/workflows/ci.yml:355`) and Playwright's webServer env (`apps/web/playwright.config.ts:259`); `vitest.config.ts:34` blanks `AI_PROVIDER`; `requestLocale(input, searchParams?)` (`lib/i18n/request-locale.ts:35-60`); `makeTr(locale, pseudo)` (`lib/record/copy.ts:15`); `requestPseudoMode` (`request-locale.ts:74`); `getContact(db, accountId, contactId)` selects `first_name, source, created_at, language, …` (`packages/db/src/contacts.ts:58-59`, `:810`); `contactFacts` (`record.ts:100`); `listContactCalls(db, accountId, contactId, limit, { excludeSpam })` selects `summary` (`voice.ts:961-974`); `isUuid` (`lib/assign/action-guards.ts:11`); `RecordCardSkeleton`, `RecordCardRetry` (`components/record/record-card.tsx:18`, `:29`); `RecordCardBoundaryCore` (`components/record/record-card-boundary.tsx:10`); the mono label class `font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground` (12 uses in `components` and `app`); Playwright runs `workers: 1`, `fullyParallel: false` (`playwright.config.ts:166`, `:171`).)
 
 ## Global Constraints
@@ -81,11 +87,11 @@
   - **bis-crm:** `packages/db/src/record-summaries.ts`, `packages/db/src/test/record-summaries.test.ts`, `packages/db/src/ai-gateway.ts` (`getAiSettings` and `AiSettingsRead` only), `packages/db/src/test/ai-gateway.test.ts` (three `toEqual` lines), `packages/db/src/index.ts` (one export block) (Task 2); `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 3); `apps/web/src/lib/record/ai-summary-inputs.ts` (+ test) (Task 4); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 9).
   - **bis-platform:** `apps/web/src/lib/record/{ai-summary-prompt,ai-summary-view,ai-summary-service}.ts` (+ tests) (Task 5); `…/ai-summary/route.ts`, `route.test.ts`, `route.reads.test.ts`, one `ALLOWED` line in `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts` (Task 6).
   - **bis-frontend:** `…/[contactId]/{ai-summary.tsx,ai-summary-handlers.ts}` (+ tests), `…/[contactId]/page.tsx` (the summary slot and one URL line) + `page.test.ts` (one `describe`), `apps/web/src/app/(dashboard)/dashboard/styleguide/record-demo.tsx` (+ `record-demo.test.ts`, one case) (Task 7); `apps/web/src/lib/ai/settings-view.ts` (+ test), `…/settings/ai-card.tsx` (+ `ai-card.test.ts`), the `STORED`/`settings` literals in `…/settings/ai-actions.test.ts:21` and `…/settings/ai-section.test.ts:6` (Task 8; bis-frontend owns `settings-view.ts` for this PR only, because the line and its render are one change).
-  - **bis-e2e-qa:** `apps/web/e2e/record-summary.spec.ts`, `apps/web/e2e/palette.spec.ts` (one `page.route` line and its comment) (Task 10).
+  - **bis-e2e-qa:** `apps/web/e2e/record-summary.spec.ts`, `apps/web/e2e/palette.spec.ts` and `apps/web/e2e/contact-detail.spec.ts` (one `page.route` line and its comment each) (Task 10).
   - **Orchestrator:** Task 0, the ledger, the bis-ci and production applies of 0087, the parity check, the gates, the PR, the merge, the tracker (Task 12).
 - **Shared files, one task at a time.** `apps/web/src/lib/messages.ts`: **Task 3 only** (every key this plan uses is listed there; a later task that finds one missing STOPS and reports; the orchestrator re-opens Task 3, sequentially, never beside another catalogue edit). `packages/db/src/index.ts`: **Task 2 only**. `…/[accountId]/in-account-service-reads.test.ts`: **Task 6 only**. `apps/web/src/lib/i18n/*-baseline.json`: Task 9 only, after every copy-bearing task.
 - **Every test must be able to fail; the plan names each one's mutation, and the implementer RUNS it.** Run the probe, see the test fail BY NAME, paste the failing assertion line, revert by editing back (and `cmp` it). A named mutation that does not fail its test is a finding: say so and substitute one that does. Shapes a reviewer rejects on sight (memory "Vacuous test shapes"): `toBeTruthy`/`toBeDefined` on content; a count-only guard where content can be asserted; a WANT built from the function under test (the stamp literals are typed out, never `aiSummaryStamp(...)` in the assertion); an English-only assertion where a Spanish twin exists; a mock that satisfies itself (the route tests assert what the route passes to and does with its dependencies, never what a mock returns on its own); an e2e locator another element could satisfy (scope to `[data-record-card="summary"] [data-ai-summary]`); `not.toContain` on raw `renderToStaticMarkup` output for a string with an apostrophe (use `renderedText()` from `apps/web/src/lib/rendered-text.ts`). A `-t` filter that matches nothing passes silently: read the run count.
-- **Every account-scoped read has a second-account case** (named in each task): the schema's RLS (an Owner of account B reads none of A's rows), the `@bis/db` read (account B's id with A's contact answers null), the builder (every read carries `.eq("account_id", A)`), the route (account A in the URL, a contact of B: 404, no service call), the Settings read (`getAiSettings` of another account).
+- **Every account-scoped read has a second-account case** (named in each task): the schema's RLS (an Owner of account B reads none of A's rows), the `@bis/db` read (account B's id with A's contact answers null), the builder (every read carries `.eq("account_id", A)`), the route (`getContact` is called on the REQUEST client with the URL's account, `toHaveBeenCalledWith(REQUEST, A, C)`; an id it answers null for is a 404 with no service call), the Settings read (`getAiSettings` of another account).
 - **DESIGN.md definition of done for Tasks 7 and 8:** tokens only (`rounded-[var(--radius-ctl)]`, no hex, no literal shadow); both themes via `.dark`; the blur fallback (the part adds no blur); rule 3 not engaged (no status colour); rule 5 per part (loading, ready, none, capped, failed; the facts line is untouched in every state); rule 7 (the loading state is `RecordCardSkeleton`, never a spinner); rule 8 (Regenerate and Retry are `variant="ghost"`; the summary card has no primary); rule 11 (no `data-hero`; the paragraph is text-coloured); keyboard: both are `<button>`s with the visible focus ring; `lang` on the paragraph = the cache language; controls `min-h-11 md:min-h-8`; English, Spanish and the pseudo-locale at 360 px; `/styleguide` shows the five states.
 - **Copy.** Every new string through `tr.text(key, params)` (server) or `t(m, key, locale)` with an `.es` twin on the next line, in the same commit (`apps/web/src/lib/i18n/ratchet.test.ts`). Spanish is **usted**. New `.tsx` code carries no JSX literal copy with a letter in it. No vendor or plumbing words in copy ("OpenAI", "GPT", "token", "ledger", "gateway", "RPC", "model", "cache", "digest").
 - **Running tests.** Only the affected tests, by path: `pnpm --filter web exec vitest run "<path>" …`; **`pnpm --filter web typecheck` in EVERY task that touches a `.ts`/`.tsx` file, the e2e spec included**; `pnpm --filter web exec eslint "<touched files>"`. `@bis/db` suites only on your replica, in `packages/db` as `node node_modules/vitest/vitest.mjs run <files>` after sourcing the kit's env, judged by vitest's summary block (capture the exit code to a file with nothing after the command in the same block; the pnpm `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL` trailer lies). Never the gates (`pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e`), never Playwright except `--list` (the orchestrator runs them, one at a time; memory "Agent test scope").
@@ -117,7 +123,7 @@ Stop if `pre` differs from bis-ci. 0087 must leave it UNCHANGED on `post` (no cl
 
 ## Pinned tests this PR changes (stated outright)
 
-- `packages/db/src/test/ai-gateway.test.ts:98`, `:101`, `:104`: each `getAiSettings(...)` `toEqual` gains `dayKey: …, recordSummariesToday: …` (`null, 0` for the fresh account at `:98`; the stored values the case wrote for `:101` and `:104`, which the implementer reads off the case and states). No other line in that file changes (Task 2).
+- `packages/db/src/test/ai-gateway.test.ts:92-105`: `:96`'s ledger entry becomes a `record_summary`; two `record_summary` entries at zero cost are added after `:99`; the three `getAiSettings(...)` `toEqual`s gain `dayKey`/`recordSummariesToday` (`null, 0` at `:98`; `"2026-10-18", 2` at `:101`; `"2026-10-18", 1` at `:104`); the title names the new mutation. Every spend value is unchanged. No other line in that file changes (Task 2, plan fix M2).
 - `…/settings/ai-actions.test.ts:21` (`STORED`) and `…/settings/ai-section.test.ts:6` (`settings`): each literal gains `dayKey: null, recordSummariesToday: 0`; every assertion is UNCHANGED (Task 8).
 - `apps/web/src/lib/ai/settings-view.test.ts:8`: the `settings()` builder's default gains `dayKey: null, recordSummariesToday: 0`; existing cases UNCHANGED; new cases appended (Task 8).
 - `…/settings/ai-card.test.ts:11-12`: the `VIEW` type and literal gain `summariesLine: null`; existing cases UNCHANGED; one case appended (Task 8).
@@ -126,7 +132,7 @@ Stop if `pre` differs from bis-ci. 0087 must leave it UNCHANGED on `post` (no cl
 - `…/[contactId]/page.test.ts`: one `describe` appended; no existing case changes (Task 7).
 - `apps/web/src/app/(dashboard)/dashboard/styleguide/record-demo.test.ts`: one case appended (Task 7).
 - `apps/web/src/lib/messages.test.ts`: one `describe` appended at the end (`:897` is the file's last line, read 2026-10-18) (Task 3).
-- `apps/web/e2e/palette.spec.ts:128-142`: one `page.route` line before `openAccountByName` (Task 10).
+- `apps/web/e2e/palette.spec.ts:128-142`: one `page.route` line before `openAccountByName`; `apps/web/e2e/contact-detail.spec.ts:29-55`: one `page.route` line before its `page.goto` (Task 10). No assertion in either changes.
 - **Unchanged, checked:** `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts` (`MEASURED = 31`, `:72`: the drawer's fence must pass with NO edit; the proof that the AI work did not reach the drawer, spec §7); `…/[contactId]/summary-card.tsx` and its test (the drawer renders `SummaryBody` too, `summary-card.tsx:5`; it is not edited); `packages/db/src/test/schema-grants-guard.test.ts` (RLS on, no client write); `apps/web/src/lib/i18n/request-locale-callers.test.ts` (the route passes `userLanguage`); `apps/web/src/lib/ai/client-boundary.test.ts` (the client part imports no value from `lib/ai`); `apps/web/src/lib/record/record-cards.ts` (no card row changes).
 
 ## Not in this PR
@@ -155,7 +161,7 @@ Stop if `pre` differs from bis-ci. 0087 must leave it UNCHANGED on `post` (no cl
 | `…/[contactId]/ai-summary.tsx` (+ test) | bis-frontend | `AiSummaryView` (five states) and `AiSummary` (state, boundary) |
 | `apps/web/e2e/record-summary.spec.ts` | bis-e2e-qa | the part on the fixture account against the fake |
 
-**Modified:** `packages/db/src/{account-teardown,ai-gateway,index}.ts`; `packages/db/src/test/ai-gateway.test.ts`; `apps/web/src/lib/messages.ts` (+ test); `…/[accountId]/in-account-service-reads.test.ts`; `…/[contactId]/page.tsx` (+ test); `…/styleguide/record-demo.tsx` (+ test); `apps/web/src/lib/ai/settings-view.ts` (+ test); `…/settings/ai-card.tsx` (+ test); `…/settings/ai-actions.test.ts`; `…/settings/ai-section.test.ts`; `apps/web/e2e/palette.spec.ts`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
+**Modified:** `packages/db/src/{account-teardown,ai-gateway,index}.ts`; `packages/db/src/test/ai-gateway.test.ts`; `apps/web/src/lib/messages.ts` (+ test); `…/[accountId]/in-account-service-reads.test.ts`; `…/[contactId]/page.tsx` (+ test); `…/styleguide/record-demo.tsx` (+ test); `apps/web/src/lib/ai/settings-view.ts` (+ test); `…/settings/ai-card.tsx` (+ test); `…/settings/ai-actions.test.ts`; `…/settings/ai-section.test.ts`; `apps/web/e2e/palette.spec.ts`; `apps/web/e2e/contact-detail.spec.ts`; `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json`.
 
 ## Task list, owners, order
 
@@ -166,25 +172,26 @@ Stop if `pre` differs from bis-ci. 0087 must leave it UNCHANGED on `post` (no cl
 | 2 | `@bis/db`: the cache module, the Settings read's day counter, the barrel | bis-crm | **opus** | 1 | `record-summaries.ts` (+ test), `ai-gateway.ts`, its test, `index.ts` |
 | 3 | Every key (**messages.ts, the only writer**) | bis-crm | sonnet | 0 | `messages.ts`, `messages.test.ts` |
 | 4 | The inputs builder | bis-crm | **opus** | 0 | `lib/record/ai-summary-inputs*` |
-| 5 | The prompt, the view, the service | bis-platform | **opus** | 3, 4 (types) | `lib/record/ai-summary-{prompt,view,service}*` |
+| 5 | The prompt, the view, the service | bis-platform | **opus** | 2 (its types and barrel), 3, 4 | `lib/record/ai-summary-{prompt,view,service}*` |
 | 6 | The route and its two fences | bis-platform | **opus** | 2, 4, 5 | `…/ai-summary/*`, one `ALLOWED` line |
 | 7 | The part on the record page; the styleguide | bis-frontend | sonnet | 3, 5 | `…/[contactId]/ai-summary*`, `page.tsx`, `page.test.ts`, `record-demo*` |
 | 8 | The Settings card's day line | bis-frontend | sonnet | 2, 3, 5 | `lib/ai/settings-view*`, `…/settings/ai-card*`, two test literals |
 | 9 | Regenerate the i18n baselines | bis-crm | sonnet | 3, 7, 8 | `lib/i18n/*-baseline.json` |
-| 10 | The e2e spec; the palette spec's abort | bis-e2e-qa | sonnet | 6, 7, 8, 9 | `e2e/record-summary.spec.ts`, `e2e/palette.spec.ts` |
+| 10 | The e2e spec; the two Test Client One aborts | bis-e2e-qa | sonnet | 6, 7, 8, 9 | `e2e/record-summary.spec.ts`, `e2e/palette.spec.ts`, `e2e/contact-detail.spec.ts` |
 | 11 | Whole-branch final review (checkpoint) | reviewer (bis-reviewer) | **opus** | 1–10 | none |
 | 12 | Rollout (orchestrator; LAST) | orchestrator | n/a | 11 | none in the repo |
 
 ```
 Wave A (three lanes):  T1 (bis-db-schema)     T3 (bis-crm, messages.ts)     T4 (bis-crm, 2nd agent)
-Wave B (two lanes):    T2 (bis-crm, after T1)  T5 (bis-platform, after T3, T4)
-Wave C (three lanes):  T6 (bis-platform, after T2, T5)   T7 (bis-frontend, after T5)   T8 (bis-frontend 2nd, after T2, T5)
-Wave D:                T9 (after T7, T8), then T10
+Wave B:                T2 (bis-crm, after T1)
+Wave C:                T5 (bis-platform, after T2, T3, T4)
+Wave D (three lanes):  T6 (bis-platform, after T2, T5)   T7 (bis-frontend, after T5)   T8 (bis-frontend 2nd, after T2, T5)
+Wave E:                T9 (after T7, T8), then T10
 Checkpoint:            T11
 Rollout:               T12 (orchestrator, LAST)
 ```
 
-Disjointness: T1 (`packages/db/supabase/migrations/0087_*`, `packages/db/src/test/record-summaries-schema.test.ts`, `account-teardown.ts`), T3 (`lib/messages*`) and T4 (`lib/record/ai-summary-inputs*`) share no file. T2 (`packages/db/src/{record-summaries,ai-gateway,index}.ts` and two db tests) and T5 (`lib/record/ai-summary-{prompt,view,service}*`) share none. T6 (`…/ai-summary/*`, one `ALLOWED` line), T7 (`…/[contactId]/{ai-summary*,page.tsx,page.test.ts}`, `…/styleguide/record-demo*`) and T8 (`lib/ai/settings-view*`, `…/settings/{ai-card*,ai-actions.test.ts,ai-section.test.ts}`) share none. **Only Task 3 writes `messages.ts`**; a missing key re-opens Task 3 sequentially. **0087 goes to bis-ci only AFTER Task 11 approves it unchanged** (a finding that changes 0087 must not need a second migration). Until then the e2e job's migration check is red on every push, expected and named in each CI reading. 0087 is additive (one table, one function) and the code needs it (the route's cache read and claim fail without it, which the service turns into `failed`), so **the migration goes to production BEFORE the merge** (spec §10).
+Disjointness: T1 (`packages/db/supabase/migrations/0087_*`, `packages/db/src/test/record-summaries-schema.test.ts`, `account-teardown.ts`), T3 (`lib/messages*`) and T4 (`lib/record/ai-summary-inputs*`) share no file. T5 imports `RecordSummaryRow`, `RecordSummaryClaim` and `AiGate` as types from `@bis/db`, so it starts only on Task 2's commit (plan fix I3; `AiGate` is 8a-1's, the other two are Task 2's). If Task 2 runs long, it may land Step 4's module and Step 6's barrel as an early commit (`git commit -- packages/db/src/record-summaries.ts packages/db/src/index.ts`), reviewed with the rest, and Task 5 starts on that commit. T6 (`…/ai-summary/*`, one `ALLOWED` line), T7 (`…/[contactId]/{ai-summary*,page.tsx,page.test.ts}`, `…/styleguide/record-demo*`) and T8 (`lib/ai/settings-view*`, `…/settings/{ai-card*,ai-actions.test.ts,ai-section.test.ts}`) share none. **Only Task 3 writes `messages.ts`**; a missing key re-opens Task 3 sequentially. **0087 goes to bis-ci only AFTER Task 11 approves it unchanged** (a finding that changes 0087 must not need a second migration). Until then the e2e job's migration check is red on every push, expected and named in each CI reading. 0087 is additive (one table, one function) and the code needs it (the route's cache read and claim fail without it, which the service turns into `failed`), so **the migration goes to production BEFORE the merge** (spec §10).
 
 ---
 
@@ -205,7 +212,6 @@ Disjointness: T1 (`packages/db/supabase/migrations/0087_*`, `packages/db/src/tes
 - [ ] **Step 4. Read-only MCP** (the orchestrator; no agent reads a shared project):
   - On production (`tlbkbmlrfafquucsmsmm`) and bis-ci (`odnobiodsftffphuuosz`): `select max(version) from supabase_migrations.schema_migrations` names the **0086** apply on both; `select to_regclass('public.record_summaries')` → null on both.
   - On bis-ci: the Faithfulness query; record its value for Task 1's brief.
-  - Vercel (names only, never values): whether Preview holds `OPENAI_API_KEY` (Assumption A4); record the answer.
 - [ ] **Step 5.** Ledger line: "8a-2 plan executing; I2–I8, I13 accepted; I14 settled 2026-10-18 (keep $10 a month and 200 a day, on the first real call's rows); 0087 not yet on any project."
 
 ---
@@ -359,8 +365,12 @@ describe("0087: the table (spec 4.5)", () => {
 });
 
 describe("0087: who reads (spec 4.5, 8.3; G10)", () => {
-  it("Owner and Staff read every row in their account, a Technician only assigned customers', the agency every row, another account's Owner none of ours (mutations: drop record_summaries_through_contact -> the Technician reads Theirs -> FAILS; widen member_read to true -> ownerB reads ours -> FAILS)", () =>
+  it("Owner and Staff read every row in their account, a Technician only assigned customers', the agency every row, another account's Owner none of ours (mutation: drop record_summaries_through_contact -> the Technician reads Theirs -> FAILS)", () =>
     withRollback(async (c) => {
+      // The through-contact policy carries the ACCOUNT fence as well as the Technician's: it admits a row only
+      // when its customer is readable, contacts' own RLS admits only the reader's account, and the composite FK
+      // pins the row's account to its customer's. So widening member_read alone cannot let ownerB read ours,
+      // and no mutation of member_read is named here (plan fix I2). member_read stays as defence in depth.
       const s = await seed(c);
       const sorted = (xs: string[]) => [...xs].sort();
       expect(await readAs(c, "owner")).toEqual(sorted([s.mine, s.theirs]));
@@ -414,6 +424,16 @@ describe("0087: the claim (spec 4.5, 4.6; plan deviation 5)", () => {
       expect(await claim(c, s.acct, s.mine, D1, true)).toMatchObject({ status: "won" });
     }));
 
+  it("a forced claim on a CHANGED digest wins even inside the cool-down, and does not restart it (plan fix I6; mutations: drop `and v_same` from the too_soon test -> too_soon -> FAILS; stamp last_forced_at on every forced win -> the stamp moves -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await c.query("update record_summaries set last_forced_at = now() - interval '10 seconds' where contact_id = $1", [s.mine]);
+      const { rows: [before] } = await c.query<{ t: string }>("select last_forced_at::text as t from record_summaries where contact_id = $1", [s.mine]);
+      expect(await claim(c, s.acct, s.mine, D2, true)).toMatchObject({ status: "won" });
+      const { rows: [after] } = await c.query<{ t: string }>("select last_forced_at::text as t from record_summaries where contact_id = $1", [s.mine]);
+      expect(after!.t).toBe(before!.t);
+    }));
+
   it("refuses nulls, a third language, a malformed digest and another account's customer (mutations: drop any guard -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
@@ -425,8 +445,14 @@ describe("0087: the claim (spec 4.5, 4.6; plan deviation 5)", () => {
 });
 
 describe("0087: one lease under two sessions (spec 8.3; I4)", () => {
-  // An OUTCOME test, as document-shares-schema.test.ts's: without `for update`, session B reads the row
-  // before A commits (no lease yet), wins too, and answers won where the lock makes it see A's lease.
+  // An OUTCOME test, as document-shares-schema.test.ts's. A first takes the row's lock with a plain
+  // `select … for update` and does NOT claim yet; B's claim is then seen waiting; only then does A claim
+  // (inside the same transaction) and commit. With `for update` in the function, B waits at its own
+  // `select … for update`, then reads A's lease and answers busy. Without it, B's plain select reads the
+  // row as it was (no lease), B waits at its UPDATE instead, re-checks `s.id = v.id` after A commits, and
+  // answers won. (Plan fix I1, review 2026-10-18: the earlier shape, where A claimed BEFORE B started,
+  // passed with `for update` dropped, because B already queued behind A's INSERT … ON CONFLICT, which
+  // serialises that setup by itself. This shape takes the insert out of the race: the row already exists.)
   const conn = () => new Client({ connectionString: process.env.SUPABASE_DB_URL, connectionTimeoutMillis: 10_000 });
   async function waitUntilBlocked(watch: Client, pid: number): Promise<void> {
     for (let i = 0; i < 100; i++) {
@@ -447,9 +473,10 @@ describe("0087: one lease under two sessions (spec 8.3; I4)", () => {
       await write(seedC, acct, contact, "en", D1);
       const { rows: [pb] } = await b.query<{ pid: number }>("select pg_backend_pid() as pid");
       await a.query("begin");
-      expect(await claim(a, acct, contact, D2)).toMatchObject({ status: "won" });
-      const waiting = claim(b, acct, contact, D2);
+      await a.query("select 1 from record_summaries where account_id = $1 and contact_id = $2 and language = 'en' for update", [acct, contact]);
+      const waiting = claim(b, acct, contact, D2); // no lock_timeout: B waits as long as A holds the row
       await waitUntilBlocked(seedC, pb!.pid);
+      expect(await claim(a, acct, contact, D2)).toMatchObject({ status: "won" });
       await a.query("commit");
       expect(await waiting).toEqual({ status: "busy" });
     } finally {
@@ -482,8 +509,9 @@ describe("0087: one lease under two sessions (spec 8.3; I4)", () => {
 -- reader's own client. The client role reads a row exactly when it can read the customer (the
 -- restrictive policy's subquery runs under contacts' own policies, 0068's Technician fence included)
 -- and writes nothing. claim_record_summary (service_role only) creates the row if missing, locks it,
--- and answers busy (a live lease), fresh (not forced and the digest is unchanged), too_soon (forced
--- within a minute of the last forced claim) or won with a new lease_id the save must match.
+-- and answers busy (a live lease), fresh (not forced and the digest is unchanged), too_soon (forced,
+-- the digest unchanged, within a minute of the last such forced claim) or won with a new lease_id the
+-- save must match. A changed digest is never too_soon. The cool-down is per row, so per language.
 -- The daily cap is NOT here: 0086's ai_ledger_record already counts successful record_summary rows
 -- per account day, and ai_gate_check already returns the count. This migration does not touch 0086.
 --
@@ -544,7 +572,7 @@ create policy record_summaries_through_contact on public.record_summaries as res
 create function public.claim_record_summary(
   p_account uuid, p_contact uuid, p_language text, p_digest text, p_force boolean)
 returns jsonb language plpgsql security definer set search_path = '' as $$
-declare v public.record_summaries%rowtype; v_lease uuid;
+declare v public.record_summaries%rowtype; v_lease uuid; v_same boolean;
 begin
   if p_account is null or p_contact is null or p_language is null or p_digest is null or p_force is null then
     raise exception 'claim_record_summary: a required argument is null' using errcode = '22004';
@@ -563,17 +591,20 @@ begin
   if v.generating_until is not null and v.generating_until > now() then
     return jsonb_build_object('status', 'busy');
   end if;
-  if p_force then
+  -- A changed digest is stale whether or not the reader pressed Regenerate: it is never too_soon, and
+  -- it does not start the cool-down (plan fix I6). Only a forced claim on an UNCHANGED digest is limited.
+  v_same := v.body is not null and v.input_digest = p_digest;
+  if p_force and v_same then
     if v.last_forced_at is not null and v.last_forced_at > now() - interval '60 seconds' then
       return jsonb_build_object('status', 'too_soon');
     end if;
-  elsif v.body is not null and v.input_digest = p_digest then
+  elsif v_same then
     return jsonb_build_object('status', 'fresh');
   end if;
   v_lease := gen_random_uuid();
   update public.record_summaries s
     set generating_until = now() + interval '30 seconds', lease_id = v_lease,
-        last_forced_at = case when p_force then now() else s.last_forced_at end
+        last_forced_at = case when p_force and v_same then now() else s.last_forced_at end
     where s.id = v.id;
   return jsonb_build_object('status', 'won', 'lease_id', v_lease);
 end $$;
@@ -589,9 +620,9 @@ grant execute on function public.claim_record_summary(uuid, uuid, text, text, bo
   "record_summaries",
 ```
 
-- [ ] **Step 7: Rebuild and run green.** `bash "$S/s15b-kit/replica.sh" 55660 "$S/s15b-t1-impl"` → `post = pre + 0087`. Run the Step 4 command with `green.*` files → exit 0, all cases pass (read the count: 12 tests). Also `node node_modules/vitest/vitest.mjs run src/test/schema-grants-guard.test.ts src/test/ai-gateway-schema.test.ts` on `post` → pass UNCHANGED. The Faithfulness query on `post` → equals `pre`'s.
+- [ ] **Step 7: Rebuild and run green.** `bash "$S/s15b-kit/replica.sh" 55660 "$S/s15b-t1-impl"` → `post = pre + 0087`. Run the Step 4 command with `green.*` files → exit 0, all cases pass (read the count: 12 tests, counted off Step 3: 4 in "the table", 2 in "who reads", 5 in "the claim", 1 in "one lease"). Also `node node_modules/vitest/vitest.mjs run src/test/schema-grants-guard.test.ts src/test/ai-gateway-schema.test.ts` on `post` → pass UNCHANGED. The Faithfulness query on `post` → equals `pre`'s.
 - [ ] **Step 8: Byte check.** `node -e 'const b=require("fs").readFileSync(process.argv[1]);const bad=[...b].map((x,i)=>[x,i]).filter(([x])=>x>127||x===92);const txt=b.toString();const dollars=(txt.match(/\$/g)||[]).length;console.log(JSON.stringify({nonAsciiOrBackslash:bad.length,dollars,doubleDollar:(txt.match(/\$\$/g)||[]).length}))' packages/db/supabase/migrations/0087_record_summaries.sql` → `{"nonAsciiOrBackslash":0,"dollars":4,"doubleDollar":2}`; positive control: copy the file to `$S/s15b-t1-impl/ctl.sql`, append a byte `0x5c` with `node -e 'require("fs").appendFileSync(process.argv[1], Buffer.from([0x5c]))' "$S/s15b-t1-impl/ctl.sql"`, run the same check on it → `nonAsciiOrBackslash: 1`. `md5sum packages/db/supabase/migrations/0087_record_summaries.sql` → paste (Task 12 compares it).
-- [ ] **Step 9: Mutation probes** (each on a copy applied to a fresh `post`: edit the migration, rebuild the replica, run the one case by `-t`, read its count is 1 and it FAILS, edit back, `cmp` with `git show HEAD:` once committed or with your saved copy before): (a) drop `for update` → "a claim that waited for another answers busy" FAILS (B answers `won`); (b) drop `record_summaries_through_contact` → the who-reads case FAILS (tech reads Theirs); (c) `grant insert on public.record_summaries to authenticated` → the grants case FAILS; (d) drop the `elsif … input_digest = p_digest` branch → the fresh case FAILS (the unchanged digest answers won); (e) FK `references public.contacts (id)` with `contact_id` alone → the cross-account case FAILS; (f) move `"record_summaries"` after `"contacts"` in `ACCOUNT_OWNED_TABLES` → the teardown case FAILS. Paste each failing line.
+- [ ] **Step 9: Mutation probes** (each on a copy applied to a fresh `post`: edit the migration, rebuild the replica, run the one case by `-t`, read its count is 1 and it FAILS, edit back, `cmp` with `git show HEAD:` once committed or with your saved copy before): (a) drop `for update` from the function → "a claim that waited for another answers busy" FAILS (B, seen waiting at its UPDATE, answers `won`; the reviewer re-races it, since the earlier shape of this test could not fail); (b) drop `record_summaries_through_contact` → the who-reads case FAILS (tech reads Theirs); (c) `grant insert on public.record_summaries to authenticated` → the grants case FAILS; (d) drop the `elsif … input_digest = p_digest` branch → the fresh case FAILS (the unchanged digest answers won); (e) FK `references public.contacts (id)` with `contact_id` alone → the cross-account case FAILS; (f) move `"record_summaries"` after `"contacts"` in `ACCOUNT_OWNED_TABLES` → the teardown case FAILS; (g) `if p_force then` in place of `if p_force and v_same then` → the changed-digest case FAILS (too_soon); (h) `last_forced_at = case when p_force then now() …` → the changed-digest case FAILS (the stamp moves). Paste each failing line.
 - [ ] **Step 10: Commit** `git add -- packages/db/supabase/migrations/0087_record_summaries.sql packages/db/src/test/record-summaries-schema.test.ts` then `git commit -m "db: 0087 record_summaries, the record page's AI paragraph per customer per language, with a 30 s lease and a once-a-minute Regenerate (item 8a-2)" -- packages/db/supabase/migrations/0087_record_summaries.sql packages/db/src/test/record-summaries-schema.test.ts packages/db/src/account-teardown.ts`. **Never apply 0087 anywhere but your replica.**
 
 ---
@@ -753,7 +784,13 @@ export async function releaseRecordSummaryLease(db: SupabaseClient, k: RecordSum
 }
 ```
 
-- [ ] **Step 5: The Settings read's day counter.** In `packages/db/src/ai-gateway.ts`: `AiSettingsRead` (`:59`) gains `dayKey: string | null; recordSummariesToday: number`; `getAiSettings`'s account select (`:64`) becomes `"enabled, monthly_budget_cents, month_key, month_spend_microusd, day_key, record_summaries_today"`; its row type gains `day_key: string | null; record_summaries_today: number`; the return gains `dayKey: a?.day_key ?? null, recordSummariesToday: a?.record_summaries_today ?? 0`. In `packages/db/src/test/ai-gateway.test.ts`: `:98` → `… globalEnabled: true, dayKey: null, recordSummariesToday: 0 }`; `:101` and `:104` gain the `dayKey`/`recordSummariesToday` the case's own writes leave (read the case: if it records through `recordAiLedger` with `KEYS`, `dayKey: "2026-10-18"` and the count of its `record_summary`/`ok` rows; if it never records, `null, 0`), each stated in the report with the line it comes from. The second-account case is `:104` itself (another account's row never leaks in).
+- [ ] **Step 5: The Settings read's day counter.** In `packages/db/src/ai-gateway.ts`: `AiSettingsRead` (`:59`) gains `dayKey: string | null; recordSummariesToday: number`; `getAiSettings`'s account select (`:64`) becomes `"enabled, monthly_budget_cents, month_key, month_spend_microusd, day_key, record_summaries_today"`; its row type gains `day_key: string | null; record_summaries_today: number`; the return gains `dayKey: a?.day_key ?? null, recordSummariesToday: a?.record_summaries_today ?? 0`. In `packages/db/src/test/ai-gateway.test.ts`, the case at `:92-105` (read 2026-10-18: `entry()` defaults `feature` to `call_summary`, `:11-14`, so as written it records NO summary and a hard-coded 0 could not fail; plan fix M2), make each account record summaries, a DIFFERENT number each, so both the new column and the account filter on it are tested:
+  - `:96` `await recordAiLedger(db, entry(other, { costMicroUsd: 9_999 }));` → `await recordAiLedger(db, entry(other, { feature: "record_summary", costMicroUsd: 9_999 }));` (the other account: one summary today; its spend is unchanged).
+  - after `:99` (`entry(accountId, { costMicroUsd: 720 })`), add twice: `await recordAiLedger(db, entry(accountId, { feature: "record_summary", costMicroUsd: 0 }));` (this account: two summaries; its spend stays 720).
+  - `:98` → `… globalEnabled: true, dayKey: null, recordSummariesToday: 0 }` (nothing recorded for this account yet).
+  - `:101` → `… globalEnabled: true, dayKey: "2026-10-18", recordSummariesToday: 2 }`.
+  - `:104` → `… globalEnabled: true, dayKey: "2026-10-18", recordSummariesToday: 1 }`.
+  The title gains `; hard-code recordSummariesToday: 0 -> FAILS`. `:104` stays the second-account case.
 
 - [ ] **Step 6: The barrel.** After `packages/db/src/index.ts:354`:
 
@@ -766,7 +803,7 @@ export {
 ```
 
 - [ ] **Step 7: Run green** on set A: `record-summaries.test.ts` and `ai-gateway.test.ts` → all pass (read the counts). `pnpm --filter @bis/db typecheck` (or `pnpm --filter web typecheck`, which builds against the barrel) → exit 0.
-- [ ] **Step 8: Probes** (edit, run the one case, see it FAIL by name, edit back, `cmp`): (a) drop `.eq("lease_id", k.leaseId)` from `saveRecordSummary` → the first case FAILS (the wrong lease returns true); (b) drop `.eq("language", k.language)` from `getRecordSummary` → the first case FAILS (the es read answers the en row); (c) drop `.eq("account_id", k.accountId)` from `getRecordSummary` → the second-account case FAILS; (d) drop `.eq("lease_id", …)` from the release → the release case FAILS; (e) replace the shape check with `return r as RecordSummaryClaim` → the shape case FAILS; (f) `recordSummariesToday: 0` hard-coded in `getAiSettings` → the `:101`/`:104` case that recorded a summary FAILS (if neither case records one, add `await recordAiLedger(db, entry(accountId, { feature: "record_summary" }))` to the `:101` case first and say so). Paste each.
+- [ ] **Step 8: Probes** (edit, run the one case, see it FAIL by name, edit back, `cmp`): (a) drop `.eq("lease_id", k.leaseId)` from `saveRecordSummary` → the first case FAILS (the wrong lease returns true); (b) drop `.eq("language", k.language)` from `getRecordSummary` → the first case FAILS (the es read answers the en row); (c) drop `.eq("account_id", k.accountId)` from `getRecordSummary` → the second-account case FAILS; (d) drop `.eq("lease_id", …)` from the release → the release case FAILS; (e) replace the shape check with `return r as RecordSummaryClaim` → the shape case FAILS; (f) `recordSummariesToday: 0` hard-coded in `getAiSettings` → the `:92-105` case FAILS at `:101` (expects 2); (g) `getAiSettings` reading `record_summaries_today` from the wrong account (drop its `.eq("account_id", …)`) → the same case FAILS (1 and 2 cannot both hold). Paste each.
 - [ ] **Step 9: Commit** `git add -- packages/db/src/record-summaries.ts packages/db/src/test/record-summaries.test.ts` then `git commit -m "db: the record summary cache's reads and writes, and the AI card's read of today's summaries (item 8a-2)" -- packages/db/src/record-summaries.ts packages/db/src/test/record-summaries.test.ts packages/db/src/ai-gateway.ts packages/db/src/test/ai-gateway.test.ts packages/db/src/index.ts`. Stop your kit.
 
 ---
@@ -1000,6 +1037,19 @@ describe("what the model is given (spec 4.3; I6)", () => {
       .toBe("Call me at [number] or [number], or [email], on 2026-10-14 for $1,200 at 10:30. Ref 12345.");
   });
 
+  it("every free text is redacted, not only call summaries: To-do titles, deal names, document titles and the source (plan fix M4; mutation: redact only call summaries -> FAILS)", async () => {
+    const i = await build({
+      tasks: { data: [{ title: "Call back on 956-555-0100", due_at: null }] },
+      opportunities: { data: [{ name: "Quote for ana.g@example.com", monetary_value: "10", stage_id: "s1" }] },
+      pipeline_stages: { data: [{ id: "s1", name: "New" }] },
+      documents: { data: [{ title: "ID 956 555 0100", category: "id" }] },
+    }).p;
+    expect([i.todos[0]!.title, i.deals[0]!.name, i.documents[0]!.title]).toEqual(["Call back on [number]", "Quote for [email]", "ID [number]"]);
+    const r2 = recordingDb({ conversations: { data: { id: "v1" } } });
+    const j = await buildSummaryInputs(r2.db, { accountId: A, contact: { ...CONTACT, source: "referral from +1 956 555 0100" }, zone: ZONE, now: NOW });
+    expect(j.who.source).toBe("referral from [number]");
+  });
+
   it("local dates in the account's zone (mutation: format in UTC -> the 04:30Z due date reads 2026-10-19 -> FAILS)", () => {
     expect([localDay("2026-10-19T04:30:00Z", ZONE), localMinute("2026-10-20T15:00:00Z", ZONE)]).toEqual(["2026-10-18", "2026-10-20 10:00"]);
   });
@@ -1123,9 +1173,10 @@ export async function buildSummaryInputs(
   return {
     who: {
       firstName: cutOrNull(contact.first_name, L.short),
+      // Every free text a person typed goes through the redactor (plan fix M4), not only call summaries.
       language: contact.language === "en" || contact.language === "es" ? contact.language : null,
       since: localDay(contact.created_at, zone).slice(0, 7),
-      source: cutOrNull(contact.source, L.short),
+      source: cutOrNull(redactContactDetails(contact.source ?? ""), L.short),
     },
     facts: {
       bookingsMade: facts.bookingsMade.value,
@@ -1134,9 +1185,9 @@ export async function buildSummaryInputs(
     },
     bookings: must<{ starts_at: string; status: string }[]>("bookings", bookings).map(booking),
     nextBooking: nextRows[0] ? booking(nextRows[0]) : null,
-    deals: dealRows.map((d) => ({ name: cut(d.name, L.title), stage: cutOrNull(stages.get(d.stage_id), L.short), amount: Number(d.monetary_value) })),
-    todos: must<{ title: string; due_at: string | null }[]>("tasks", todos).map((t) => ({ title: cut(t.title, L.title), due: t.due_at ? localDay(t.due_at, zone) : null })),
-    documents: must<{ title: string; category: string }[]>("documents", documents).map((d) => ({ title: cut(d.title, L.title), category: d.category })),
+    deals: dealRows.map((d) => ({ name: cut(redactContactDetails(d.name), L.title), stage: cutOrNull(stages.get(d.stage_id), L.short), amount: Number(d.monetary_value) })),
+    todos: must<{ title: string; due_at: string | null }[]>("tasks", todos).map((t) => ({ title: cut(redactContactDetails(t.title), L.title), due: t.due_at ? localDay(t.due_at, zone) : null })),
+    documents: must<{ title: string; category: string }[]>("documents", documents).map((d) => ({ title: cut(redactContactDetails(d.title), L.title), category: d.category })),
     calls: calls.map((k) => ({ on: localDay(k.started_at, zone), outcome: k.outcome, summary: cut(redactContactDetails(k.summary ?? ""), L.summary) })),
   };
 }
@@ -1170,7 +1221,7 @@ export function inputDigest(i: SummaryInputs, version: number): string {
 
 ## Task 5: The prompt, the view, the service (bis-platform)
 
-**Review:** opus. **After:** Task 3 (keys) and Task 4 (types). **Web unit tests only.**
+**Review:** opus. **After:** Task 2's commit (the `RecordSummaryRow` and `RecordSummaryClaim` types and the barrel; plan fix I3), Task 3 (keys) and Task 4 (types). **Web unit tests only.**
 
 **Files**
 - Create: `apps/web/src/lib/record/ai-summary-prompt.ts` (+ `.test.ts`), `apps/web/src/lib/record/ai-summary-view.ts` (+ `.test.ts`), `apps/web/src/lib/record/ai-summary-service.ts` (+ `.test.ts`)
@@ -1381,13 +1432,31 @@ describe("serveRecordSummary (spec 4.2, 4.4-4.6; plan deviations 2, 3, 21)", () 
     const { d, calls } = deps({ gate: async () => ({ ...OPEN, recordSummariesToday: 199 }) });
     expect((await serve(d)).state).toBe("ready");
     expect(calls).toContain("complete");
-    expect((await serve(deps({ gate: async () => capped, cached: async () => ROW(DIGEST) }).d, true)).state).toBe("ready");
+    // Regenerate past the cap: the fresh paragraph unchanged, and NOTHING claimed or written (plan fix I5;
+    // mutation: check the cap after the claim -> "claim new true" and "complete" appear -> FAILS).
+    const forcedFresh = deps({ gate: async () => capped, cached: async () => ROW(DIGEST) });
+    expect(await serve(forcedFresh.d, true)).toMatchObject({ state: "ready", text: "Cached paragraph.", generatedAt: "2026-10-17T14:00:00.000Z" });
+    expect(forcedFresh.calls).toEqual(["gate"]);
+    const forcedStale = deps({ gate: async () => capped, cached: async () => ROW(OLD) });
+    expect(await serve(forcedStale.d, true)).toEqual({ state: "capped" });
+    expect(forcedStale.calls).toEqual(["gate"]);
   });
-  it.each(AI_REFUSALS)("a %s answer releases the lease and answers none or failed, never ready (G6; mutation: skip release -> FAILS)", async (reason) => {
+  // Orchestrator ruling M7: switched off, over budget, no key and an unpriced model are configuration, not
+  // transient: nothing is shown. Only a timeout, a provider error or an unreadable gate is "failed", with Retry.
+  const NONE_REASONS = ["global_off", "account_off", "over_budget", "no_key", "unknown_model"];
+  it.each(AI_REFUSALS)("a %s answer releases the lease and answers none or failed, never ready (G6, M7; mutations: skip release -> FAILS; drop no_key from QUIET -> its row answers failed -> FAILS)", async (reason) => {
     const { d, calls } = deps({ complete: async () => ({ ok: false, reason }) });
     const r = await serve(d);
-    expect(r).toEqual({ state: ["global_off", "account_off", "over_budget"].includes(reason) ? "none" : "failed" });
+    expect(r).toEqual({ state: NONE_REASONS.includes(reason) ? "none" : "failed" });
     expect(calls).toContain("release L1");
+  });
+  it("the failed set is exactly timeout, provider_error and gate_unreadable (M7; mutation: add a reason to QUIET -> FAILS)", () => {
+    expect(AI_REFUSALS.filter((r) => !NONE_REASONS.includes(r)).sort()).toEqual(["gate_unreadable", "provider_error", "timeout"]);
+  });
+  it.each(["global_off", "account_off", "over_budget"] as const)("a quiet %s stays none even when the release throws (orchestrator ruling M11; mutation: let the release error reach the outer catch -> failed -> FAILS)", async (reason) => {
+    const { d, logs } = deps({ complete: async () => ({ ok: false, reason }), release: async () => { throw new Error("release failed"); } });
+    expect(await serve(d)).toEqual({ state: "none" });
+    expect(logs.some((l) => l.includes("release failed"))).toBe(true);
   });
   it("an empty answer is failed and releases (mutation: save an empty body -> FAILS)", async () => {
     const { d, calls } = deps({ complete: async () => ({ ok: true, text: "  ", usage: { inputTokens: 1, outputTokens: 0, costMicroUsd: 1 } }) });
@@ -1529,7 +1598,8 @@ export type SummaryDeps = {
   now(): Date;
   log(line: string): void;
 };
-const QUIET = new Set(["global_off", "account_off", "over_budget"]);
+/** Configuration, not a fault (orchestrator ruling M7): nothing is shown. Everything else non-ok is "failed". */
+const QUIET = new Set(["global_off", "account_off", "over_budget", "no_key", "unknown_model"]);
 
 export async function serveRecordSummary(
   deps: SummaryDeps, a: { inputs: SummaryInputs; language: "en" | "es"; force: boolean; stamp: (iso: string) => string },
@@ -1564,8 +1634,14 @@ export async function serveRecordSummary(
     if (!answer.ok || body === null) {
       const held = lease;
       lease = null;
-      await deps.release(held);
-      return { state: !answer.ok && QUIET.has(answer.reason) ? "none" : "failed" };
+      const quiet = !answer.ok && QUIET.has(answer.reason);
+      // A release that throws never turns a quiet refusal into an error (ruling M11): the lease lapses in 30 s.
+      try {
+        await deps.release(held);
+      } catch (e) {
+        deps.log(`lease release failed: ${aiSafeError(e)}`);
+      }
+      return { state: quiet ? "none" : "failed" };
     }
     const generatedAt = deps.now().toISOString();
     const saved = await deps.save({ leaseId: lease, body, digest, generatedAt });
@@ -1583,7 +1659,7 @@ export async function serveRecordSummary(
 (A thrown `save` leaves `lease` set, so the catch releases it; the error message is a database's, which carries no model text, and `aiSafeError` names a `SyntaxError` without quoting it.)
 
 - [ ] **Step 5: Run green.** The Step 3 command → all pass (read the count; `it.each` gives 8 refusal rows). `pnpm --filter web typecheck` → 0; eslint on the six files.
-- [ ] **Step 6: Probes** (each fails its named case; paste): (a) in `serveRecordSummary`, return the fresh cache before the switch check → the switched-off case FAILS; (b) `>=` → `>` on the cap → the cap case FAILS (199 then 200); (c) drop `await deps.release(held)` → the `it.each` rows FAIL; (d) `return { state: "generating" }` for `too_soon` → the too-soon case FAILS; (e) `deps.log(\`save failed: ${body}\`)` in the catch → the never-logs probe FAILS; (f) move the inputs into the system message → the prompt case FAILS; (g) `aiSummaryStamp` with `timeZone: "UTC"` → the label case FAILS; (h) `parseAiSummary` returning `v as AiSummaryResponse` → the shape case FAILS; (i) `QUIET` empty → the `global_off`/`account_off`/`over_budget` rows FAIL.
+- [ ] **Step 6: Probes** (each fails its named case; paste): (a) in `serveRecordSummary`, return the fresh cache before the switch check → the switched-off case FAILS; (b) `>=` → `>` on the cap → the cap case FAILS (199 then 200); (c) drop `await deps.release(held)` → the `it.each` rows FAIL; (d) `return { state: "generating" }` for `too_soon` → the too-soon case FAILS; (e) `deps.log(\`save failed: ${body}\`)` in the catch → the never-logs probe FAILS; (f) move the inputs into the system message → the prompt case FAILS; (g) `aiSummaryStamp` with `timeZone: "UTC"` → the label case FAILS; (h) `parseAiSummary` returning `v as AiSummaryResponse` → the shape case FAILS; (i) `QUIET` empty → the `global_off`/`account_off`/`over_budget`/`no_key`/`unknown_model` rows FAIL; (j) drop the `try` around the quiet path's `release` → the three M11 rows FAIL (`failed`); (k) move the cap check after `deps.claim` → the cap case FAILS (`claim new true` appears).
 - [ ] **Step 7: Commit** `git add --` the six files, then `git commit -m "record: the AI summary's prompt, label and decisions: off or over budget is absent, the cap serves fresh, one writer per lease (item 8a-2)" --` the six files.
 
 ---
@@ -1640,7 +1716,9 @@ type Params = { params: Promise<{ accountId: string; contactId: string }> };
 async function answer(req: Request, { params }: Params, force: boolean): Promise<NextResponse> {
   const { accountId, contactId: raw } = await params;
   const access = await apiAccountAccess(accountId);
-  if (!access || !isUuid(raw)) return NextResponse.json({}, { status: 404 });
+  // Both ids are checked (plan fix M5): an agency session passes apiAccountAccess for ANY accountId string
+  // (lib/auth.ts:184), so a malformed one would otherwise reach the queries.
+  if (!access || !isUuid(accountId) || !isUuid(raw)) return NextResponse.json({}, { status: 404 });
   const contactId = raw.toLowerCase();
   const db = await dbForRequest(); // RLS-scoped: NEVER serviceDb before getContact proved the customer
   const failed = (where: string, e: unknown) => {
@@ -1756,6 +1834,9 @@ describe("the AI summary route (spec 4.2)", () => {
     expect((await call(GET)).status).toBe(404);
     fx.access = { userId: "u1", isAgency: false };
     expect((await call(GET, A, "not-a-uuid")).status).toBe(404);
+    fx.access = { userId: "u1", isAgency: true }; // an agency session passes apiAccountAccess for any account string (plan fix M5)
+    expect((await call(GET, "not-a-uuid", C)).status).toBe(404);
+    fx.access = { userId: "u1", isAgency: false };
     fx.contact = null;
     expect((await call(GET)).status).toBe(404);
     expect(serviceDbMock).not.toHaveBeenCalled();
@@ -1763,9 +1844,11 @@ describe("the AI summary route (spec 4.2)", () => {
     expect(getContactMock).toHaveBeenCalledWith(REQUEST, A, C);
   });
 
-  it("another account's customer is a 404 (second-account case: getContact on THIS account's id answers null)", async () => {
-    getContactMock.mockImplementationOnce(async (_db, accountId: unknown) => (accountId === A ? null : fx.contact));
-    expect((await call(GET, A, "33333333-3333-4333-8333-333333333333")).status).toBe(404);
+  it("a customer the request client does not answer for this account is a 404, and the account in the URL is the one asked (plan fix M6: the account fence itself is getContact on the REQUEST client, asserted with toHaveBeenCalledWith(REQUEST, A, C) in the first case; mutation: call getContact with a hard-coded account -> FAILS)", async () => {
+    const B = "44444444-4444-4444-8444-444444444444";
+    getContactMock.mockImplementationOnce(async () => null);
+    expect((await call(GET, B, C)).status).toBe(404);
+    expect(getContactMock).toHaveBeenCalledWith(REQUEST, B, C);
     expect(serveMock).not.toHaveBeenCalled();
   });
 
@@ -1921,7 +2004,7 @@ describe("reads per open of the record summary (spec 7: measured, not assumed)",
 
 Run `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"` → PASS (before the line: FAIL naming the route; paste that first). Also run, UNCHANGED: `"src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts"`, `src/lib/i18n/request-locale-callers.test.ts`, `src/lib/ai/client-boundary.test.ts` → PASS.
 - [ ] **Step 7: The bare-mock check.** `grep -rln 'vi.mock("@bis/db", () => ({' apps/web/src | xargs grep -ln "ai-summary"` → no output. `pnpm --filter web typecheck` → 0; eslint on the three route files.
-- [ ] **Step 8: Probes** (each fails its named case; paste): (a) move `const svc = serviceDb();` above `getContact` (and use it) → the 404 case FAILS; (b) `cached: () => getRecordSummary(svc, key)` → the wiring case and the full-path reads case FAIL; (c) `force: false` in POST → the POST case FAILS; (d) drop `isUuid(raw)` → the non-uuid case FAILS; (e) `feature: "call_summary"` → the wiring case FAILS; (f) move `hasSomethingToSay` after `serviceDb()` and the gate → the nothing-to-say case FAILS; (g) add `await db.from("notes").select("body").eq("account_id", accountId)` to the route → the reads fence FAILS on the count.
+- [ ] **Step 8: Probes** (each fails its named case; paste): (a) move `const svc = serviceDb();` above `getContact` (and use it) → the 404 case FAILS; (b) `cached: () => getRecordSummary(svc, key)` → the wiring case and the full-path reads case FAIL; (c) `force: false` in POST → the POST case FAILS; (d) drop `isUuid(raw)` or `isUuid(accountId)` → the non-uuid case FAILS; (e) `feature: "call_summary"` → the wiring case FAILS; (f) move `hasSomethingToSay` after `serviceDb()` and the gate → the nothing-to-say case FAILS; (g) add `await db.from("notes").select("body").eq("account_id", accountId)` to the route → the reads fence FAILS on the count.
 - [ ] **Step 9: Commit** `git add --` the three route files, then `git commit -m "api: the record's AI summary route: the customer proven on the reader's client first, GET serves or writes, POST regenerates; two read fences (item 8a-2)" --` the three route files and `in-account-service-reads.test.ts`.
 
 ---
@@ -2010,7 +2093,7 @@ describe("the AI part's five states (spec 4.8; G11)", () => {
       const html = view(s, "es");
       expect(html).toContain('data-state="loading"');
       expect(html.match(/data-record-skeleton/g)).toHaveLength(1);
-      expect(html.match(/data-slot="skeleton"|class="[^"]*animate-pulse/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(html.match(/data-slot="skeleton"/g)).toHaveLength(2);
       expect(renderedText(html)).toContain("Escribiendo el resumen…");
       expect(html).not.toMatch(/animate-spin|lucide-loader/);
     }
@@ -2051,7 +2134,7 @@ describe("the AI part's five states (spec 4.8; G11)", () => {
 });
 ```
 
-(Read `components/ui/skeleton.tsx` first: if its element carries `data-slot="skeleton"`, keep that alternative; if not, the `animate-pulse` alternative matches. The implementer states which one held.)
+(`components/ui/skeleton.tsx` renders `data-slot="skeleton"` on its element, read 2026-10-18, so the two-line skeleton is exactly two matches; plan fix M3.)
 
 `page.test.ts` (append one `describe`; reuse the file's own `render()`/`cardHtml` and its fixture switches):
 
@@ -2331,23 +2414,34 @@ describe("item 8a-2: today's customer summaries (spec 3.6, 4.6; plan deviation 1
 
 ---
 
-## Task 10: The e2e spec; the palette spec's abort (bis-e2e-qa)
+## Task 10: The e2e spec; the two Test Client One aborts (bis-e2e-qa)
 
 **Review:** sonnet. **Runs:** never by the agent beyond `--list` (the orchestrator runs Playwright: on CI's own stack, which has 0087 from the branch; a local run only after 0087 is on bis-ci).
 
 **Files**
 - Create: `apps/web/e2e/record-summary.spec.ts`
-- Modify: `apps/web/e2e/palette.spec.ts:128-129`
+- Modify: `apps/web/e2e/palette.spec.ts:128-129`, `apps/web/e2e/contact-detail.spec.ts:29-30`
 
 - [ ] **Step 1: Read** `apps/web/e2e/ai-settings.spec.ts` whole (the Settings card's markers, its cleanup of `ai_ledger`/`account_ai_settings`, its toasts), `apps/web/e2e/record-page.spec.ts:1-140` (a booking on the fixture account through `getOrCreateCalendar` + `createBooking`, 60 days out; the restrict order in `afterAll`), `apps/web/e2e/support.ts:100-140` (`readClientFixture`, `recordPage`), `apps/web/e2e/i18n-overflow.spec.ts:150-170` (the overflow measure), Task 7's markers and Task 3's keys.
 
-- [ ] **Step 2: The palette spec.** In `apps/web/e2e/palette.spec.ts`, as the first line of the test at `:128` ("typing a seeded contact returns it live and opens that contact"), before `openAccountByName`:
+- [ ] **Step 2: The two Test Client One aborts.** In `apps/web/e2e/palette.spec.ts`, as the first line of the test at `:128` ("typing a seeded contact returns it live and opens that contact"), before `openAccountByName`:
 
 ```ts
     // Item 8a-2: opening Test Client One's record would write an AI summary (a cache row and a ledger row) on
     // that live account. This test is about the palette; the record's AI part never runs here (plan deviation 23).
     await page.route(/\/ai-summary(\?|$)/, (route) => route.abort());
 ```
+
+And the same in `apps/web/e2e/contact-detail.spec.ts`, as the first line of the test at `:29` ("opening a contact from the table renders the detail screen"), before `page.goto("/dashboard/accounts")`:
+
+```ts
+  // Item 8a-2: this test opens Test Client One's first contact (Maria Garcia, who has an open deal in the seed),
+  // so the record's AI part would write a summary on that live account. It is about navigation; abort the AI route
+  // (plan deviation 23).
+  await page.route(/\/ai-summary(\?|$)/, (route) => route.abort());
+```
+
+(Every assertion below it is unchanged: the test checks the URL, the heading and the absence of not-found copy, none of which the AI part draws.)
 
 - [ ] **Step 3: Write the spec** `apps/web/e2e/record-summary.spec.ts`:
 
@@ -2510,8 +2604,8 @@ test("at 360 px in the pseudo-locale the part does not overflow", async ({ page 
 
 (Notes: the account's first AI-card test runs only after three generations at 27 micro-dollars each = 81, which the card rounds up to `$0.01`. The fixture account's other specs ran before this file and their own AI rows were cleared in `beforeAll`; Playwright runs one worker (`playwright.config.ts:171`), so nothing else writes in between. A `createBooking` with `ACTOR` as the actor is the "user" author kind: the default `actorType`, `booking.ts:274`. If the fixture account's zone puts `start` on a different local day than UTC, nothing here depends on it.)
 
-- [ ] **Step 4:** `pnpm --filter web exec playwright test --list e2e/record-summary.spec.ts e2e/palette.spec.ts` lists the six new tests and palette's tests (listing loads every import; if it fails, STOP and report). `pnpm --filter web typecheck` (covers `e2e/`). `pnpm --filter web exec eslint e2e/record-summary.spec.ts e2e/palette.spec.ts`.
-- [ ] **Step 5: Commit** `git add -- apps/web/e2e/record-summary.spec.ts` then `git commit -m "e2e: the record's AI summary on the fixture account against the fake: written, regenerated, Spanish, the card's day line, off and on, 360 px pseudo; the palette test never runs the AI part on Test Client One (item 8a-2)" -- apps/web/e2e/record-summary.spec.ts apps/web/e2e/palette.spec.ts`.
+- [ ] **Step 4:** `pnpm --filter web exec playwright test --list e2e/record-summary.spec.ts e2e/palette.spec.ts e2e/contact-detail.spec.ts` lists the six new tests and the other two files' tests (listing loads every import; if it fails, STOP and report). `pnpm --filter web typecheck` (covers `e2e/`). `pnpm --filter web exec eslint e2e/record-summary.spec.ts e2e/palette.spec.ts e2e/contact-detail.spec.ts`.
+- [ ] **Step 5: Commit** `git add -- apps/web/e2e/record-summary.spec.ts` then `git commit -m "e2e: the record's AI summary on the fixture account against the fake: written, regenerated, Spanish, the card's day line, off and on, 360 px pseudo; the palette and contact-detail tests never run the AI part on Test Client One (item 8a-2)" -- apps/web/e2e/record-summary.spec.ts apps/web/e2e/palette.spec.ts apps/web/e2e/contact-detail.spec.ts`.
 
 ---
 
@@ -2521,7 +2615,8 @@ test("at 360 px in the pseudo-locale the part does not overflow", async ({ page 
 
 - [ ] **Step 1.** Read spec §1, §2 (G6–G11), §4, §5, §7, §8 (8a-2), §9, §10; this plan's deviations and assumptions; then `git diff df0f8048...HEAD` in `<WT>`; walk "Spec coverage" below row by row against the diff.
 - [ ] **Step 2.** Web tests by path: every test file Tasks 3–8 and 10 touched (the e2e by `--list` only), plus `src/lib/i18n/ratchet.test.ts`, `src/lib/i18n/request-locale-callers.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `src/lib/ai/client-boundary.test.ts`, `src/components/ui/material.test.ts`, `"src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.reads.test.ts"` (**UNCHANGED, must pass at `MEASURED = 31`**); `pnpm --filter web typecheck`. The db suites on your own replica (Postgres `55661`, PostgREST `55668`, gateway `55669`): `record-summaries-schema.test.ts`, `schema-grants-guard.test.ts`, `ai-gateway-schema.test.ts` on `post`; `record-summaries.test.ts`, `ai-gateway.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name. Re-run Task 1's byte check and md5 (must equal Task 1's). Never a live test, never bis-ci.
-- [ ] **Step 3.** Hunt specifically: (a) any read of a message, email, chat, note body or transcript reaching the inputs; an Owners-only or trashed file in them; a phone, email, last name, address, custom field or tag in them; (b) any path where the inputs, a title, a name, a call summary or the model's answer reaches a log line (grep every `console.` and `log(` in `lib/record/ai-summary-*` and the route); (c) a service client built before `getContact` proved the customer; the cache read on the service client; an id from the browser used unchecked; (d) a fresh cached paragraph shown while AI is off or over budget; a generation past the cap; a capped Regenerate that spends; a lease never released on a failure; the gateway reached for a "nothing to say" customer; (e) 0087: ASCII, no backslash, `$` only in `$$`, `lock_timeout` first, RLS on, the two policies, no client write, the function service-only with `search_path = ''` and schema-qualified names, the null and value guards, `for update`, the rollback order; that 0087 touches nothing of 0086; (f) the UI: facts line first and unchanged; the drawer untouched (`contact-drawer.tsx`, `summary/route.ts`, `summary-card.tsx` not in the diff); one card, no primary; `lang`; tokens only; skeleton, not spinner; copy in tú; vendor words; (g) a bare `@bis/db` factory that now reaches the route or the service (`AI_OUTCOMES` at import time); `lib/` naming `serviceDb`; a `"use client"` file importing a value from `lib/ai`; (h) a test that cannot fail (memory "Vacuous test shapes"), especially a route test asserting a mock's own answer, a stamp asserted with `aiSummaryStamp(...)` itself, an English-only copy assertion; (i) the e2e touching anything but the fixture account; the palette spec still reaching `ai-summary` on Test Client One.
+- [ ] **Step 3.** Hunt specifically: (a) any read of a message, email, chat, note body or transcript reaching the inputs; an Owners-only or trashed file in them; a phone, email, last name, address, custom field or tag in them; (b) any path where the inputs, a title, a name, a call summary or the model's answer reaches a log line (grep every `console.` and `log(` in `lib/record/ai-summary-*` and the route); (c) a service client built before `getContact` proved the customer; the cache read on the service client; an id from the browser used unchecked; (d) a fresh cached paragraph shown while AI is off or over budget; a generation past the cap; a capped Regenerate that spends; a lease never released on a failure; the gateway reached for a "nothing to say" customer; (e) 0087: ASCII, no backslash, `$` only in `$$`, `lock_timeout` first, RLS on, the two policies, no client write, the function service-only with `search_path = ''` and schema-qualified names, the null and value guards, `for update`, the rollback order; that 0087 touches nothing of 0086; (f) the UI: facts line first and unchanged; the drawer untouched (`contact-drawer.tsx`, `summary/route.ts`, `summary-card.tsx` not in the diff); one card, no primary; `lang`; tokens only; skeleton, not spinner; copy in tú; vendor words; (g) a bare `@bis/db` factory that now reaches the route or the service (`AI_OUTCOMES` at import time); `lib/` naming `serviceDb`; a `"use client"` file importing a value from `lib/ai`; (h) a test that cannot fail (memory "Vacuous test shapes"), especially a route test asserting a mock's own answer, a stamp asserted with `aiSummaryStamp(...)` itself, an English-only copy assertion; (i) the e2e touching anything but the fixture account; the palette or contact-detail spec still reaching `ai-summary` on Test Client One, or any OTHER spec opening a seeded account's record (re-run the reviewer's grep).
+- [ ] **Step 3b. Deferred from the plan review.** The plan review of `a10bfbaf` deferred its finding **M9** to this review: the orchestrator pastes M9's text into this task's brief, and the reviewer checks it against the built code and reports it like any other finding.
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent. **0087 goes to bis-ci only when this review approves it UNCHANGED.**
 
 ---
@@ -2532,12 +2627,12 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 - [ ] **Step 1. Ledger.** Task 11's findings are closed and every change they named has landed and been reviewed. **No ledger gate:** choice I14 was settled by the owner on 2026-10-18 on production's first real call (`call_summary` 447 in / 35 out, 89 micro-dollars; `call_card` 405 in / 26 out, 77 micro-dollars): $10 a month (`DEFAULT_MONTHLY_BUDGET_CENTS`, `0086:55`) and 200 a day (`RECORD_SUMMARY_DAILY_CAP`) stay. Only the owner changes either number later; a change to 200 is one constant in `ai-summary-view.ts` (Task 5's tests pin 200 and 199 and change with it).
 - [ ] **Step 2. bis-ci** (only AFTER Task 11 approves 0087 unchanged): `gh workflow run ci-project-setup.yml -f step=push-dry-run --ref feat/item8a2-record-summary` → its log lists exactly `0087_record_summaries.sql`; then `-f step=push`. Post-apply, read-only MCP on `odnobiodsftffphuuosz`: `select to_regclass('public.record_summaries')` → the table; `select has_function_privilege('authenticated','public.claim_record_summary(uuid,uuid,text,text,boolean)','execute'), has_function_privilege('service_role','public.claim_record_summary(uuid,uuid,text,text,boolean)','execute')` → `f, t`; `select polname from pg_policy where polrelid = 'public.record_summaries'::regclass order by 1` → the two policies; the Faithfulness digest on bis-ci is UNCHANGED from Task 0. From here on the `@bis/db` suites and the three live web tests may run against bis-ci again.
-- [ ] **Step 3. Push and CI.** Until Step 2, `e2e` is red on its migration check by design; after it, re-run and read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). The e2e record-summary spec must have run (six tests) and `palette.spec.ts` passed. A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
+- [ ] **Step 3. Push and CI.** Until Step 2, `e2e` is red on its migration check by design; after it, re-run and read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). The e2e record-summary spec must have run (six tests) and `palette.spec.ts` and `contact-detail.spec.ts` passed. A CI-vs-local disagreement is an environment finding first (memory "CI vs local divergence").
 - [ ] **Step 4. Production** (MCP on `tlbkbmlrfafquucsmsmm`): read-only pre-flight `select max(version) from supabase_migrations.schema_migrations` → the 0086 apply; `apply_migration` with 0087's exact text, ONCE (its md5 equals Task 1's; memory "MCP SQL escapes": 0087 has no backslash). Post-checks, read-only: the table, the two policies, the two `has_function_privilege` reads → `f, t`. BEFORE the merge (spec §10). Ledger line: `0087 APPLIED <date> on bis-ci and production — NEVER RE-APPLY`.
 - [ ] **Step 5. Parity.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both projects; the table, its constraints and policies, the function's ACL, `prosecdef`, `proconfig` and body, the grants equal; the client-write digest equal.
 - [ ] **Step 6. Gates, one at a time:** `pnpm check`, `pnpm --filter web build`, `pnpm --filter web test:e2e` (check no `screenshots.yml` run is in progress first; a local e2e runs on bis-ci, so only after Step 2).
-- [ ] **Step 7. Preview, by hand (owner and orchestrator together)**, on the branch's Preview (bis-ci), on a test account (never Test Client One): a customer with a booking: the skeleton, then the paragraph (real provider only if Assumption A4 says Preview holds a key; otherwise the part is absent, `no_key`, and that is the expected Preview result); both themes; 360 px; a Spanish reader; Regenerate; a Technician on an assigned and an unassigned customer (the unassigned record is a 404, so no part); the Settings card's day line.
-- [ ] **Step 8. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 11's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>`. The PR body names: the owner's acceptance of I2–I8, I13, and the I14 decision (keep $10 and 200, 2026-10-18, on the first real call's rows); deviations 1–24; the pinned tests changed; "Not in this PR"; the Preview results; the 0087 apply lines; that no env var changes.
+- [ ] **Step 7. Preview, by hand (owner and orchestrator together)**, on the branch's Preview (bis-ci), on a test account (never Test Client One). Preview holds no `OPENAI_API_KEY` (A4, resolved), so every summary there is `no_key`, mapped to `none` (ruling M7): **the expected Preview result is that the AI part draws NOTHING under the facts line** (no skeleton left behind, no error, no Retry), in both themes, at 360 px and for a Spanish reader; a Technician on an assigned customer sees the same, and on an unassigned one gets a 404 (no record, no part); the Settings card shows no day line (zero summaries, deviation 17). The paragraph itself, the label and Regenerate are proven by the e2e against the fake (Task 10) and by the owner's production smoke (Step 9).
+- [ ] **Step 8. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 11's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>`. The PR body names: the owner's acceptance of I2–I8, I13, and the I14 decision (keep $10 and 200, 2026-10-18, on the first real call's rows); deviations 1–27; the pinned tests changed; "Not in this PR"; the Preview results; the 0087 apply lines; that no env var changes.
 - [ ] **Step 9. After the deploy** (spec §10, owed): the deployment reads READY on the merge SHA and is aliased to `app.bis-rgv.com`; smokes `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404, and an unauthenticated `GET /api/accounts/<any uuid>/contacts/<any uuid>/ai-summary` → 404. **Owner smoke:** open an agency-owned customer in English and in Spanish; check both paragraphs and their labels (Assumption A3: the Spanish one is Spanish and formal, plain text); Regenerate once; read the day's counter on the Settings card; read-only MCP: `select feature, outcome, input_tokens, output_tokens, cost_microusd from ai_ledger where feature = 'record_summary' order by created_at desc limit 5` → `ok` rows with non-null tokens. **Compare the estimate (owed, not a gate):** spec §3.4 assumed a record summary of about 3,000 input and 300 output tokens (≈ 630 micro-dollars at `prices.ts`'s rates); report the first real `record_summary` rows' tokens and cost against it to the owner, with the arithmetic and what 200 a day would then cost a month, so the owner can revisit the cap or the budget if the real number is far off. Tracker (memory "Roadmap tracker"): item 8's S-15 and F-020 (part) rows → `done`; S-14, F-019, F-022 stay open for 8b and 8c.
 
 ---
@@ -2574,13 +2669,15 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 ## Questions for the owner
 
-1. **Who may press Regenerate?** The spec gives Regenerate to the card and does not limit it by role. Each press spends a little of the account's budget and one of the day's 200. **Recommended default: everyone who can open the customer's record (Owners, Staff, Technicians on their assigned customers, the agency), limited to once a minute per customer and by the daily cap**, which is what this plan builds. The alternative, Owners and Staff only, would need a role check in the route and a hidden button for Technicians.
-2. **Should the AI card's "AI was skipped N times" count record pages opened while AI was off?** As planned, it does not (deviation 2: a page view while AI is off is not an attempted completion, and counting every open would make the number large and meaningless). **Recommended default: keep it as planned.**
+None open. **Both decided by the owner on 2026-10-18, each as recommended:**
+
+1. **Who may press Regenerate? DECIDED: anyone who can open the record** (Owners, Staff, Technicians on their assigned customers, the agency), limited by the once-a-minute cool-down per row and the daily cap. This is what the plan builds; there is no role check in the route.
+2. **Does the AI card's "AI was skipped N times" count record opens while AI is off? DECIDED: no, the skipped count is calls only** (deviation 2: a record open while AI is off writes no ledger row). This is what the plan builds.
 
 ## Self-review notes (the writer's own pass, 2026-10-18)
 
-- **Spec coverage:** every §4 bullet, the §3.6 day line, §5, §7, §8 and §10's 8a-2 lines map to a row above. Where the code made the spec's words impossible or ambiguous: deviations 1–24, each with the file:line that decided it (most importantly 1, 2 and 10).
+- **Spec coverage:** every §4 bullet, the §3.6 day line, §5, §7, §8 and §10's 8a-2 lines map to a row above. Where the code made the spec's words impossible or ambiguous: deviations 1–27, each with the file:line that decided it (most importantly 1, 2 and 10).
 - **Placeholder scan:** no TBD/TODO. The two reads-fence numbers (`MEASURED_EMPTY`, `MEASURED_FULL`) are set from the first run by design (the drawer's fence was set the same way, `summary/route.reads.test.ts:50`); their ORDER assertions are fixed here. Every other pinned value was worked out in the plan (27 micro-dollars per fake call, `$0.01`, 3 summaries) or read with node 24 here (the four stamps; the redactor's output on the pinned sentence). Steps that say "read the file's own helper" (page.test's `render`/`cardHtml`, ai-card.test's `card`) keep the assertion's meaning fixed.
 - **Type consistency:** `SummaryLanguage`, `RecordSummaryKey`, `RecordSummaryRow`, `RecordSummaryClaim`, `getRecordSummary`, `claimRecordSummary`, `saveRecordSummary`, `releaseRecordSummaryLease`, `AiSettingsRead.{dayKey, recordSummariesToday}` (Task 2) → Tasks 5, 6, 8; `SummaryContact`, `SummaryInputs`, `buildSummaryInputs(db, { accountId, contact, zone, now })`, `hasSomethingToSay`, `inputDigest(inputs, version)` (Task 4) → Tasks 5, 6; `SUMMARY_PROMPT_VERSION`, `SUMMARY_MODEL`, `SUMMARY_MAX_TOKENS`, `SUMMARY_TIMEOUT_MS`, `summaryMessages`, `cleanSummary`, `AiSummaryResponse`, `parseAiSummary`, `aiSummaryStamp(iso, { zone, now, tr })`, `RECORD_SUMMARY_DAILY_CAP`, `SummaryDeps`, `serveRecordSummary(deps, { inputs, language, force, stamp })` (Task 5) → Tasks 6, 7, 8; `loadAiSummary`, `AiSummaryView`, `AiSummary`, `AiSummaryLabels`, markers `data-ai-summary*`, `data-ai-regenerate`, `data-ai-retry` (Task 7) → Task 10; `summariesLine`, `data-ai-summaries` (Task 8) → Task 10; keys (Task 3) → Tasks 5, 7, 8, 10.
 - **Vacuity pass:** every prescribed test names its mutation; copy is asserted in both languages against literals; the route tests assert the CLIENT each dependency is handed and the arguments, not the mocks' answers; the service tests assert the call sequence a decision produces; the stamps are typed out; the sentinel probe covers the save-failure log path; the concurrency case is an outcome test that fails without `for update`; the e2e scopes every locator to `[data-record-card="summary"] [data-ai-summary]` or `#ai[data-ai-card]` and reads the database to prove each write.
-- **Not executed:** nothing in this plan was run except the reads, the greps and the node one-liners named (Intl stamps; the redactor). Every name was read off `df0f8048` except where an Assumption says otherwise (A1–A5).
+- **Not executed:** nothing in this plan was run except the reads, the greps and the node one-liners named (Intl stamps; the redactor). Every name was read off `df0f8048` except where an Assumption says otherwise (A1–A3 and A5; A4 was resolved by the orchestrator on 2026-10-18).
