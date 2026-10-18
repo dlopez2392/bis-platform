@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { generateProposals, isCallbackTitle } from "./generate";
 import type { TranscriptEvent } from "@bis/db";
+import { gateRpc } from "@/lib/ai/testing/open-gate";
 
 // Matches summary-service.test.ts's own pattern: generateProposals reads
 // OPENAI_API_KEY inside the function body (never at module scope), so tests
@@ -79,6 +80,7 @@ function fakeDb() {
   const seen = new Set<string>();
   const db: any = {
     rows, attempts, tablesTouched,
+    rpc: gateRpc().rpc,
     from: (table: string) => {
       tablesTouched.push(table);
       return {
@@ -117,6 +119,7 @@ function fakeDbAlwaysRefusing() {
   const attempts: any[] = [];
   const db: any = {
     attempts, rows: [] as any[],
+    rpc: gateRpc().rpc,
     from: () => ({
       insert: (row: any) => {
         attempts.push(row);
@@ -715,6 +718,7 @@ describe("generateProposals", () => {
     // preserves whatever already landed rather than reporting 0.
     let calls = 0;
     const db: any = {
+      rpc: gateRpc().rpc,
       from: () => ({
         insert: () => {
           calls++;
@@ -1006,7 +1010,7 @@ describe("generateProposals", () => {
   // (`message.content: null` with a `refusal` field) and the one a
   // truncated completion takes too. Every other log path in this file is
   // pinned by name; this one was not.
-  it("returns 0 and logs a specific message when the model returns no content, the shape of a real refusal (mutation: drop the typeof content !== \"string\" guard, or delete its console.error -> FAILS)", async () => {
+  it("returns 0 and logs a specific message when the model returns no content, the shape of a real refusal (mutation: drop openai.ts's `typeof content !== \"string\"` branch -> the gateway's own usage estimate reads the missing text's length and throws -> the one line reads 'unexpected TypeError', not 'no content' -> FAILS)", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const db = fakeDb();
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
@@ -1030,6 +1034,18 @@ describe("generateProposals", () => {
     const body = requestBodyOf(fetchImpl);
     expect(typeof body.max_tokens).toBe("number");
     expect(body.max_tokens).toBeGreaterThan(0);
+  });
+
+  it("a model answer that does not parse logs no word of it (plan deviation 6; mutation: log String(e) in the catch -> FAILS)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = fakeDb();
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "SENTINEL-OUTPUT-7f3 not json" } }],
+    }), { status: 200 })) as unknown as typeof fetch;
+    expect(await generateProposals({ ...base, db, fetchImpl })).toBe(0);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0]![0])).toBe("generateProposals: failed for call call1: SyntaxError (an answer that did not parse)");
+    errorSpy.mockRestore();
   });
 });
 
