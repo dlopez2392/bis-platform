@@ -26,6 +26,8 @@ export type DocumentView = {
   versions: DocumentVersionView[];
   /** A Delete forever began and did not finish (deviation 4): never restorable. */
   purging: boolean;
+  /** S-07 3b: present ONLY while the file has a live share link (the latest expiry). */
+  share?: { expiresAt: string };
 };
 export type DocumentsResponse = {
   today: string; now: string;
@@ -61,7 +63,8 @@ function isView(v: unknown, trashed: boolean): boolean {
     && isScan(v.version.scan) && instant(v.version.createdAt)
     && typeof v.purging === "boolean" && (trashed || v.purging === false)
     && Array.isArray(v.versions) && v.versions.length > 0 && v.versions.every(isVersionView)
-    && v.versions.some((x) => isObj(x) && x.id === (v.version as Obj).id);
+    && v.versions.some((x) => isObj(x) && x.id === (v.version as Obj).id)
+    && (v.share === undefined || (isObj(v.share) && instant(v.share.expiresAt)));
 }
 
 function isRecord(v: unknown): boolean {

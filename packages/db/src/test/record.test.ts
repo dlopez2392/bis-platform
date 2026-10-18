@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import "dotenv/config";
+import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact, recordLanguageSignal } from "../contacts";
@@ -14,6 +15,7 @@ import { createGroupWithMember, addContactToGroup, setGroupPrimaryContact } from
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
 import { createDocumentRequest } from "../document-requests";
 import { skipDocumentRequirement, unskipDocumentRequirement } from "../document-requirements";
+import { createDocumentShare, claimDocumentShareDownload } from "../document-shares";
 import { createConciergeConversation, appendConciergeTurns, setConciergeSubmission, type ConciergeTurn } from "../concierge";
 import { syncWebchatTurns } from "../webchat";
 import {
@@ -711,5 +713,27 @@ describe("the documents source's skip rows (S-07 2c)", () => {
       ]);
       expect(rows.map((i) => (i.kind === "documentSkip" || i.kind === "documentUnskip") && [i.skip.category, i.skip.skipped_by, i.skip.unskipped_by]))
         .toEqual([["insurance", "user_skipper", "user_unskipper"], ["insurance", "user_skipper", "user_unskipper"]]);
+    }));
+});
+
+describe("the documents source's share rows (S-07 3b)", () => {
+  it("a contact whose clean file was shared and then downloaded once reads two share entries, documentShareOpened at first_opened_at then documentShared at created_at, both the share's id (mutation: drop the opens read from record.ts -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_t")).id;
+      const id = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "Seguro 2026.pdf", category: "insurance", expiresOn: null, ownersOnly: false, source: "upload", createdBy: "user_asker" });
+      const r = await reserveDocumentVersion(db, { accountId, documentId: id, bytes: 5, contentType: "application/pdf", originalName: null, uploadedBy: "user_asker" });
+      if (r.status !== "ok") throw new Error(r.status);
+      if (!(await markDocumentVersionReady(db, { accountId, documentId: id, versionId: r.versionId, bytes: 5, sha256: "d".repeat(64), actorId: "user_asker" }))) throw new Error("not ready");
+      expect(await recordDocumentScan(db, { accountId, versionId: r.versionId, verdict: "clean", signature: null })).toMatchObject({ status: "ok" });
+      const tokenHash = randomBytes(32).toString("hex");
+      const created = await createDocumentShare(db, { accountId, documentId: id, versionId: r.versionId, tokenHash, createdBy: "user_asker", ownersOnly: false, now: new Date() });
+      if (created.status !== "ok") throw new Error("seed share failed");
+      const claim = await claimDocumentShareDownload(db, { accountId, shareId: created.share.id, ipHash: "a".repeat(32), max: 5, windowSeconds: 600, linkMax: 100 });
+      expect(claim).toEqual({ status: "ok", first: true });
+      const page = await listTimelinePage(db, accountId, [ana]);
+      expect(page.failed).toEqual([]);
+      const rows = page.items.filter((i) => i.kind === "documentShared" || i.kind === "documentShareOpened");
+      expect(rows.map((i) => i.kind)).toEqual(["documentShareOpened", "documentShared"]);
+      expect(rows.map((i) => i.id)).toEqual([created.share.id, created.share.id]);
     }));
 });

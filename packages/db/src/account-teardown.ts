@@ -23,7 +23,8 @@ export const ACCOUNT_OWNED_TABLES = [
   "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
   "checklist_items", "contact_tags", "notes", "tasks",
-  "documents", "opportunities", "pipeline_stages", "pipelines", "custom_fields",
+  // S-07 3b (0085): a share's downloads, then its share, before documents (both cascade too; spec 4.4 lists them).
+  "document_share_downloads", "document_shares", "documents", "opportunities", "pipeline_stages", "pipelines", "custom_fields",
   "custom_values", "tags", "equipment", "places", "contact_relationships", "client_group_members", "client_groups", "contacts",
   "voice_profiles", "phone_numbers", "automations",
 ] as const;

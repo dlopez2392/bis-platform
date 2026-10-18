@@ -255,6 +255,28 @@ describe("a required-document skip and un-skip (S-07 2c)", () => {
   });
 });
 
+describe("a share link and its first open (S-07 3b)", () => {
+  it("each renders as one: its verb, the sharer's or the recipient's mark and its own icon (mutations: return null for either case, or wear the Link2 icon on the open -> FAILS)", () => {
+    const share = { id: "s1", document_id: "d1", title: "Seguro 2026.pdf", category: "insurance", created_by: "user_me", created_at: AT, first_opened_at: AT, contact_id: "c1", client_group_id: null, deleted_at: null };
+    const entries = [
+      { kind: "documentShareOpened", id: "s1", at: AT, contactId: "c1", share },
+      { kind: "documentShared", id: "s1", at: AT, contactId: "c1", share },
+    ] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, author: { viewerId: "user_me", names: {}, personaName: null, tr } });
+    const base = legacyTimeline({ accountId: "a1", contactId: "c1", timezone: "America/Chicago", locale: "es", emailAction: async () => {}, smsAction: async () => {} });
+    const html = renderToStaticMarkup(createElement(ActivityTimeline, { ...base, rows, emptyText: null } as never));
+    const sharedRow = html.match(/<div data-timeline-item="documentShared"[\s\S]*?<\/li>/)?.[0] ?? "";
+    expect(sharedRow).toContain(">compartió Seguro 2026.pdf<");
+    expect(sharedRow).toContain(`>${m["provenance.you.es"]}<`);
+    expect(sharedRow).toContain("lucide-link-2");
+    const openedRow = html.match(/<div data-timeline-item="documentShareOpened"[\s\S]*?<\/li>/)?.[0] ?? "";
+    expect(openedRow).toContain(">abrió Seguro 2026.pdf<");
+    expect(openedRow).toContain(`>${m["provenance.linkRecipient.es"]}<`);
+    expect(openedRow).toContain("lucide-download");
+  });
+});
+
 const { renderedText } = await import("@/lib/rendered-text");
 const { buttonVariants } = await import("@/components/ui/button");
 const { cn } = await import("@/lib/utils");

@@ -11,6 +11,10 @@ const requestActions = vi.hoisted(() => ({
   createDocumentRequestAction: vi.fn(), documentRequestLinkAction: vi.fn(), revokeDocumentRequestAction: vi.fn(), undoRevokeDocumentRequestAction: vi.fn(),
 }));
 vi.mock("./document-requests-actions", () => requestActions);
+const shareActions = vi.hoisted(() => ({
+  createDocumentShareAction: vi.fn(), stopSharingAction: vi.fn(), undoStopSharingAction: vi.fn(),
+}));
+vi.mock("./document-shares-actions", () => shareActions);
 const { documentHandlers } = await import("./documents-card-handlers");
 const { m } = await import("@/lib/messages");
 
@@ -446,5 +450,93 @@ describe("Ask the customer, Copy link and Revoke (S-07 2b, spec 4.2; rule 6)", (
     expect(toast.error).toHaveBeenCalledWith(m["common.actionCrashed.es"]);
     expect(toast.error).not.toHaveBeenCalledWith(m["documents.request.failed.es"]);
     expect(reloadRequests).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Copy share link and Stop sharing (S-07 3b, spec 4.1; rule 6)", () => {
+  const SHARE_URL = "https://app.example/s/tok";
+  const withClipboard = async (writeText: ReturnType<typeof vi.fn> | null, run: () => Promise<unknown>) => {
+    vi.stubGlobal("navigator", writeText ? { clipboard: { writeText } } : {});
+    try { await run(); } finally { vi.unstubAllGlobals(); }
+  };
+
+  it("Copy share link makes a link, copies it, says it works for 24 hours, and reloads (mutation: toast documents.request.linkCopied's words -> FAILS; mutation: drop the reload -> FAILS)", async () => {
+    shareActions.createDocumentShareAction.mockResolvedValue({ ok: true, url: SHARE_URL });
+    const writeText = vi.fn(async () => {});
+    const reload = vi.fn();
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
+    await withClipboard(writeText, () => h.copyShareLink(DOC));
+    expect(shareActions.createDocumentShareAction).toHaveBeenCalledWith("acc", "d1");
+    expect(writeText).toHaveBeenCalledWith(SHARE_URL);
+    expect(toast.success).toHaveBeenCalledWith("Link copied. It works for 24 hours.");
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The Spanish reader sees the Spanish catalogue's own words, not the request path's.
+    vi.clearAllMocks();
+    await withClipboard(writeText, () => documentHandlers({ accountId: "acc", locale: "es", reload, reloadRequests: vi.fn() }).copyShareLink(DOC));
+    expect(toast.success).toHaveBeenCalledWith(m["documents.share.copied.es"]);
+  });
+
+  it("a refusal toasts its own words and writes nothing to the clipboard (mutation: write the clipboard before checking ok -> FAILS)", async () => {
+    shareActions.createDocumentShareAction.mockResolvedValue({ ok: false, error: "documents.error.scanning" });
+    const writeText = vi.fn(async () => {});
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
+    await withClipboard(writeText, () => h.copyShareLink(DOC));
+    expect(writeText).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith(m["documents.error.scanning.es"]);
+  });
+
+  it("a refused clipboard shows the copy-failed words with the link to copy by hand (billing-card's pattern; mutation: drop the description -> FAILS)", async () => {
+    shareActions.createDocumentShareAction.mockResolvedValue({ ok: true, url: SHARE_URL });
+    const writeText = vi.fn(async () => { throw new Error("denied"); });
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
+    await withClipboard(writeText, () => h.copyShareLink(DOC));
+    expect(toast.error).toHaveBeenCalledWith(m["documents.request.copyFailed"], { description: SHARE_URL, duration: Infinity, closeButton: true });
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("Stop sharing runs at once, reloads, and offers Undo whose action carries EXACTLY the stop's own answer (mutation: Undo with fresh ids -> FAILS)", async () => {
+    shareActions.stopSharingAction.mockResolvedValue({ ok: true, ids: ["s1", "s2"], revokedAt: "2026-10-18T15:00:00.123+00:00", ownersOnly: false });
+    shareActions.undoStopSharingAction.mockResolvedValue({ ok: true });
+    const reload = vi.fn();
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
+    await h.stopSharing(DOC);
+    expect(shareActions.stopSharingAction).toHaveBeenCalledWith("acc", "d1");
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(toast.success.mock.calls[0]![0]).toBe("Stopped sharing Lease.");
+    undoOf().onClick();
+    await flush();
+    expect(shareActions.undoStopSharingAction).toHaveBeenCalledWith("acc", "d1", ["s1", "s2"], "2026-10-18T15:00:00.123+00:00", false);
+    expect(reload).toHaveBeenCalledTimes(2);
+  });
+
+  it("an Undo answering 'already ended' toasts its own words, in the reader's language (mutation: swallow the undo error -> FAILS)", async () => {
+    shareActions.stopSharingAction.mockResolvedValue({ ok: true, ids: ["s1"], revokedAt: "t", ownersOnly: false });
+    shareActions.undoStopSharingAction.mockResolvedValue({ ok: false, error: "documents.share.ended" });
+    const h = documentHandlers({ accountId: "acc", locale: "es", reload: vi.fn(), reloadRequests: vi.fn() });
+    await h.stopSharing(DOC);
+    undoOf().onClick();
+    await flush();
+    expect(toast.error).toHaveBeenCalledWith(m["documents.share.ended.es"]);
+  });
+
+  it("a refused Stop sharing says why, offers no Undo, and still re-reads (mutation: toast success before checking ok -> FAILS)", async () => {
+    shareActions.stopSharingAction.mockResolvedValue({ ok: false, error: "documents.share.notShared" });
+    const reload = vi.fn();
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload, reloadRequests: vi.fn() });
+    await h.stopSharing(DOC);
+    expect(toast.error).toHaveBeenCalledWith(m["documents.share.notShared"]);
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second click while the first Stop sharing is in flight sends nothing (the once() lock; mutation: drop once() -> FAILS)", async () => {
+    let release!: (v: unknown) => void;
+    shareActions.stopSharingAction.mockReturnValue(new Promise((r) => { release = r; }));
+    const h = documentHandlers({ accountId: "acc", locale: "en", reload: vi.fn(), reloadRequests: vi.fn() });
+    const first = h.stopSharing(DOC);
+    const second = h.stopSharing(DOC);
+    release({ ok: true, ids: ["s1"], revokedAt: "t", ownersOnly: false });
+    await Promise.all([first, second]);
+    expect(shareActions.stopSharingAction).toHaveBeenCalledTimes(1);
   });
 });

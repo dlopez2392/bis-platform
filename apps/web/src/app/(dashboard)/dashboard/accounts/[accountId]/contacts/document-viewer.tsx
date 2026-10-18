@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Lock } from "lucide-react";
+import { Link2, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -184,10 +184,21 @@ export function DocumentViewerDownload({ doc, locale, onDownload }: { doc: Docum
   );
 }
 
-export function DocumentViewer({ accountId, doc, header, locale, onClose, onDownload, versionWhen, onDownloadVersion }: {
+/** S-07 3b (spec 4.1): the viewer's Copy share link, ghost (the dialog's one primary stays Download); only for a clean, live file. */
+export function DocumentViewerShare({ doc, locale, onShare }: { doc: DocumentView; locale: Locale; onShare?: (doc: DocumentView) => void }) {
+  if (!onShare || !canOpen(doc.version.scan) || doc.deletedAt !== null) return null;
+  return (
+    <Button type="button" variant="ghost" size="sm" data-document-share className="min-h-11 self-start md:min-h-8" onClick={() => onShare(doc)}>
+      <Link2 aria-hidden="true" />{t(m, "documents.share", locale)}
+    </Button>
+  );
+}
+
+export function DocumentViewer({ accountId, doc, header, locale, onClose, onDownload, versionWhen, onDownloadVersion, onShare }: {
   accountId: string; doc: DocumentView | null; header: { source: string; expiry: string | null }; locale: Locale;
   onClose: () => void; onDownload: (doc: DocumentView) => void;
   versionWhen: (addedOn: string) => string; onDownloadVersion: (doc: DocumentView, versionId: string) => void;
+  onShare?: (doc: DocumentView) => void;
 }) {
   // Loading is DERIVED, never set synchronously in the effect (react-hooks/set-state-in-effect):
   // `result` only ever updates from the promise's own callback, as slot-picker.tsx's `getSlots`
@@ -240,6 +251,7 @@ export function DocumentViewer({ accountId, doc, header, locale, onClose, onDown
                   <span className="inline-flex items-center gap-1"><Lock aria-hidden="true" className="size-3" />{tt("documents.ownersOnly")}</span>
                 ) : null}
               </DialogDescription>
+              <DocumentViewerShare doc={doc} locale={locale} onShare={onShare} />
             </DialogHeader>
             <DocumentViewerBody doc={doc} state={state} locale={locale} onRetry={mint} onImageError={onImageError} />
             <DocumentVersionsList doc={doc} locale={locale} when={versionWhen} onDownload={(id) => onDownloadVersion(doc, id)} />

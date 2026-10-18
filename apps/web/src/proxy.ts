@@ -7,9 +7,9 @@ export default clerkMiddleware(async (auth, req) => {
 });
 
 /**
- * Clerk never runs on the five public, stranger-facing trees: /c (the chat
- * widget), /f (forms), /b (booking), /u (unsubscribe) and /d (document
- * upload links). None of them reads auth — each has its own root layout with
+ * Clerk never runs on the six public, stranger-facing trees: /c (the chat
+ * widget), /f (forms), /b (booking), /u (unsubscribe), /d (document
+ * upload links) and /s (share links). None of them reads auth — each has its own root layout with
  * no ClerkProvider (see app/c/layout.tsx) — and Clerk running there is not
  * merely wasted work.
  *
@@ -29,7 +29,12 @@ export default clerkMiddleware(async (auth, req) => {
  *
  * `/d/<token>` (S-07 2b) is the customer's document upload page, reached
  * from a text or an email, with no sign-in, the same reason as `/u`.
+ *
+ * `/s/<token>` (S-07 3b) is a shared file's page, opened by whoever got the
+ * link, with no sign-in, the same reason as `/d`. Its download route
+ * `/api/s/…` stays matched: the page calls it with `fetch`, which is not a
+ * document request, so Clerk never hands it a handshake.
  */
 export const config = {
-  matcher: ["/((?!_next|c/|f/|b/|u/|d/|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|c/|f/|b/|u/|d/|s/|.*\\..*).*)", "/(api|trpc)(.*)"],
 };

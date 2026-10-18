@@ -154,3 +154,15 @@ describe("a website chat in the drawer's Recent (S-06 part 3, G18, G25)", () => 
     expect(Object.keys(matched!).sort()).toEqual(["dateTime", "detail", "excerpt", "key", "kind", "mark", "status", "time", "verb"]);
   });
 });
+
+describe("a share link in the drawer's Recent (S-07 3b)", () => {
+  it("a share and its first open are each their head only, no excerpt (mutation: return the title as the excerpt -> FAILS)", () => {
+    const share = { id: "s1", document_id: "d1", title: "Seguro 2026.pdf", category: "insurance", created_by: "u1", created_at: AT, first_opened_at: "2026-10-09T17:00:00Z", contact_id: "c1", client_group_id: null, deleted_at: null };
+    const rows = view([
+      { kind: "documentShareOpened", id: "s1", at: "2026-10-09T17:00:00Z", contactId: "c1", share },
+      { kind: "documentShared", id: "s1", at: AT, contactId: "c1", share },
+    ] as TimelineEntry[]);
+    expect(rows.map((d) => [d.kind, d.excerpt])).toEqual([["documentShareOpened", null], ["documentShared", null]]);
+    expect(rows.map((d) => d.verb)).toEqual(["opened Seguro 2026.pdf", "shared Seguro 2026.pdf"]);
+  });
+});

@@ -15,7 +15,7 @@ const db = {
   createDocument: vi.fn(), reserveDocumentVersion: vi.fn(), markDocumentVersionReady: vi.fn(), discardDocumentUpload: vi.fn(),
   updateDocumentField: vi.fn(), setDocumentOwnersOnly: vi.fn(), trashDocument: vi.fn(), restoreDocument: vi.fn(),
   listDocumentVersionStates: vi.fn(), claimDocumentForPurge: vi.fn(), deletePurgedDocument: vi.fn(), signedDocumentReadUrl: vi.fn(),
-  deleteOpenExpiryTasks: vi.fn(),
+  deleteOpenExpiryTasks: vi.fn(), revokeDocumentShares: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
 };
 vi.mock("@bis/db", async (importOriginal) => {
@@ -614,6 +614,47 @@ describe("owner ruling R1: a file made Owners only loses its open expiry To-dos 
     expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.failed" });
     expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: true, prior: false });
     expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ruling O2 (S-07 3b): a file made Owners only stops every live share link at once", () => {
+  beforeEach(() => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.setDocumentOwnersOnly.mockReset();
+    db.setDocumentOwnersOnly.mockResolvedValue("updated");
+    db.deleteOpenExpiryTasks.mockReset();
+    db.deleteOpenExpiryTasks.mockResolvedValue(1);
+    db.revokeDocumentShares.mockReset();
+    db.revokeDocumentShares.mockResolvedValue({ ids: ["s1"], revokedAt: "2026-10-18T12:00:00Z" });
+  });
+  it("switching ON stops them on the SERVICE client, after the request-client read and after the Owners-only write (mutations: remove the call -> FAILS; stop them before the write -> the order FAILS)", async () => {
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: true, prior: false });
+    expect(db.revokeDocumentShares.mock.calls).toEqual([[SERVICE, ACC, D, "user_owner", expect.any(Date)]]);
+    expect(db.getDocument.mock.calls[0]![0]).toBe(REQUEST);
+    expect(db.revokeDocumentShares.mock.invocationCallOrder[0]!).toBeGreaterThan(db.getDocument.mock.invocationCallOrder[0]!);
+    expect(db.revokeDocumentShares.mock.invocationCallOrder[0]!).toBeGreaterThan(db.setDocumentOwnersOnly.mock.invocationCallOrder[0]!);
+  });
+  it("switching OFF, or a write that changed nothing, stops nothing (mutation: stop on every call -> FAILS)", async () => {
+    await A.setOwnersOnlyAction(ACC, D, false);
+    db.setDocumentOwnersOnly.mockResolvedValueOnce("changed");
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(db.revokeDocumentShares).not.toHaveBeenCalled();
+  });
+  it("a failed stop answers failed, as R1's failed delete does (mutation: swallow it -> FAILS)", async () => {
+    db.revokeDocumentShares.mockRejectedValueOnce(new Error("boom"));
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.failed" });
+  });
+  it("a failed R1 delete never skips the stop: the links are stopped before the To-dos go (mutation: stop after R1's delete -> FAILS)", async () => {
+    db.deleteOpenExpiryTasks.mockRejectedValueOnce(new Error("boom"));
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.failed" });
+    expect(db.revokeDocumentShares).toHaveBeenCalledTimes(1);
+  });
+  it("an Undo that writes Owners only BACK stops them too, after its write; undoing a switch TO Owners only stops nothing and brings nothing back (mutations: ignore the undo path; un-revoke on undo -> the mock has no restore, the action answers failed -> FAILS)", async () => {
+    expect(await A.undoOwnersOnlyAction(ACC, D, true, false)).toEqual({ ok: true });
+    expect(db.revokeDocumentShares.mock.calls).toEqual([[SERVICE, ACC, D, "user_owner", expect.any(Date)]]);
+    expect(db.revokeDocumentShares.mock.invocationCallOrder[0]!).toBeGreaterThan(db.setDocumentOwnersOnly.mock.invocationCallOrder[0]!);
+    expect(await A.undoOwnersOnlyAction(ACC, D, false, true)).toEqual({ ok: true });
+    expect(db.revokeDocumentShares).toHaveBeenCalledTimes(1);
   });
 });
 

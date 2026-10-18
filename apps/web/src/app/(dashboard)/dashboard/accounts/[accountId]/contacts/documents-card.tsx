@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { FileText, Lock, MoreHorizontal } from "lucide-react";
+import { FileText, Link2, Lock, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InlineField } from "@/components/inline-field";
@@ -125,16 +125,26 @@ export function keepPurge(purgeId: string | null, load: DocumentsLoad): string |
  * The row menu (spec 4.1), as data: the component maps it one to one, and the test reads it (the menu's
  * content renders in a portal only while open). Owners only is the Owner's and the agency's.
  */
-export type RowMenuItem = { id: "edit" | "ownersOnly" | "newVersion" | "download" | "trash"; labelKey: MessageKey };
-export function rowMenuItems(doc: DocumentView, canManage: boolean): RowMenuItem[] {
+export type RowMenuItem = { id: "edit" | "ownersOnly" | "newVersion" | "download" | "share" | "stopSharing" | "trash"; labelKey: MessageKey };
+export function rowMenuItems(doc: DocumentView, canManage: boolean, now?: string): RowMenuItem[] {
   const items: RowMenuItem[] = [{ id: "edit", labelKey: "documents.edit" }];
   if (canManage) items.push({ id: "ownersOnly", labelKey: doc.ownersOnly ? "documents.makeTeam" : "documents.makeOwnersOnly" });
   items.push({ id: "newVersion", labelKey: "documents.newVersion" });
   // S-07 2a (I2): a file not yet scanned clean has nothing to download (the server's gate refuses too),
   // via the one predicate the viewer's own Download and fetch guard share (canOpen, document-viewer.tsx).
   if (canOpen(doc.version.scan)) items.push({ id: "download", labelKey: "documents.download" });
+  // S-07 3b (spec 4.1): a clean file can be shared; a live link can be stopped. canOpen is the one "clean" predicate.
+  if (canOpen(doc.version.scan)) items.push({ id: "share", labelKey: "documents.share" });
+  if (now && shareHoursLeft(doc, now) !== null) items.push({ id: "stopSharing", labelKey: "documents.share.stop" });
   items.push({ id: "trash", labelKey: "documents.trash" });
   return items;
+}
+
+/** S-07 3b: whole hours left on the file's live link, rounded UP (one minute left reads "1 h"); null when none is live. */
+export function shareHoursLeft(doc: Pick<DocumentView, "share">, now: string): number | null {
+  if (!doc.share) return null;
+  const ms = Date.parse(doc.share.expiresAt) - Date.parse(now);
+  return ms > 0 ? Math.ceil(ms / 3_600_000) : null;
 }
 
 /** A row's inline-edit callbacks, through the handlers (PR 1a review M6): the card never calls an edit action itself. */
@@ -209,8 +219,11 @@ function DocumentRow({ doc, today, now, canManage, locale, handlers, phase, onOp
     else if (item.id === "ownersOnly") void handlers.setOwnersOnly(doc, !doc.ownersOnly);
     else if (item.id === "newVersion") onNewVersion(doc);
     else if (item.id === "download") void handlers.download(doc);
+    else if (item.id === "share") void handlers.copyShareLink(doc);
+    else if (item.id === "stopSharing") void handlers.stopSharing(doc);
     else void handlers.trash(doc);
   };
+  const shareHours = shareHoursLeft(doc, now);
   const progress = phase?.kind === "uploading" ? tt("documents.progress.uploading", { percent: phase.percent })
     : phase?.kind === "checking" ? tt("documents.progress.checking") : null;
   return (
@@ -240,6 +253,11 @@ function DocumentRow({ doc, today, now, canManage, locale, handlers, phase, onOp
                 <Lock aria-hidden="true" className="size-3" />{tt("documents.ownersOnly")}
               </span>
             ) : null}
+            {shareHours !== null ? (
+              <span data-document-shared className="inline-flex items-center gap-1 tabular-nums">
+                <Link2 aria-hidden="true" className="size-3" />{tt("documents.share.live", { hours: shareHours })}
+              </span>
+            ) : null}
             {progress ? <span data-version-progress aria-live="polite" className="tabular-nums">{progress}</span> : null}
           </span>
         </button>
@@ -251,7 +269,7 @@ function DocumentRow({ doc, today, now, canManage, locale, handlers, phase, onOp
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {rowMenuItems(doc, canManage).map((item) => (
+            {rowMenuItems(doc, canManage, now).map((item) => (
               <DropdownMenuItem key={item.id} onSelect={() => choose(item)}>{tt(item.labelKey)}</DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -874,6 +892,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
       <DocumentViewer accountId={accountId} doc={open} locale={locale} onClose={() => setOpenId(null)}
         onDownload={(d) => void handlers.download(d)}
         onDownloadVersion={(d, versionId) => void handlers.download(d, versionId)}
+        onShare={(d) => void handlers.copyShareLink(d)}
         versionWhen={(day) => (ready ? addedWhen(day, ready.today, locale) : "")}
         header={{ source: open && ready ? sourceLine(open, ready.today, locale) : "", expiry: openExpiry ? expiryText(openExpiry, locale) : null }} />
       <DocumentPurgeDialog doc={purgeTarget} locale={locale} onClose={() => setPurgeId(null)} onConfirm={(d, typed) => handlers.purge(d, typed)} />

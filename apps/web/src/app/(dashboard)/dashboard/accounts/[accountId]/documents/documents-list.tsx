@@ -66,6 +66,7 @@ export function DocumentsList({ accountId, locale, today, now, rows }: {
       <DocumentViewer accountId={accountId} doc={open} locale={locale} onClose={() => setOpenId(null)}
         onDownload={(d) => void handlers.download(d)}
         onDownloadVersion={(d, versionId) => void handlers.download(d, versionId)}
+        onShare={(d) => void handlers.copyShareLink(d)}
         versionWhen={(day) => addedWhen(day, today, locale)}
         header={{ source: open ? sourceLine(open, today, locale) : "", expiry: openExpiry ? expiryText(openExpiry, locale) : null }} />
     </>

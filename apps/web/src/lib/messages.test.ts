@@ -816,3 +816,39 @@ describe("S-07 3a: the Documents page, the expiry To-dos and the Owner's Require
     for (const s of es) expect(s).not.toMatch(/\b(revisa|intenta|vuelve|abre|usa|tu|tus)\b/i);
   });
 });
+
+describe("S-07 3b: share links (plan Task 2)", () => {
+  const KEYS_3B = [
+    "documents.share", "documents.share.copied", "documents.share.live", "documents.share.stop", "documents.share.stopped",
+    "documents.share.failed", "documents.share.ownersOnlyRole", "documents.share.notShared", "documents.share.ended", "documents.share.refused",
+    "timeline.documentShared", "timeline.documentShareOpened", "provenance.linkRecipient",
+    "sharePage.pageTitle", "sharePage.pageTitleNoName", "sharePage.heading", "sharePage.headingNoName", "sharePage.details",
+    "sharePage.download", "sharePage.limit", "sharePage.failed", "sharePage.revoked", "sharePage.trashed",
+    "sharePage.removed", "sharePage.ask", "sharePage.askNoName",
+  ] as const;
+
+  it("every key has a Spanish twin (mutation: delete any one .es line -> FAILS naming it)", () => {
+    expect(KEYS_3B.filter((k) => !(k in m) || !(`${k}.es` in m))).toEqual([]);
+  });
+
+  it("the spec's sentences, in both languages (spec 4.1, 4.3; mutation: change either side of any pair -> FAILS)", () => {
+    expect([m["documents.share.copied"], m["documents.share.copied.es"]]).toEqual(["Link copied. It works for 24 hours.", "Enlace copiado. Funciona por 24 horas."]);
+    expect([t(m, "documents.share.live", "en", { hours: 18 }), t(m, "documents.share.live", "es", { hours: 18 })])
+      .toEqual(["Shared · expires in 18 h", "Compartido · vence en 18 h"]);
+    expect([m["provenance.linkRecipient"], m["provenance.linkRecipient.es"]]).toEqual(["The link's recipient", "Quien recibió el enlace"]);
+    expect([t(m, "timeline.documentShareOpened", "en", { title: "Seguro 2026.pdf" }), t(m, "timeline.documentShareOpened", "es", { title: "Seguro 2026.pdf" })])
+      .toEqual(["opened Seguro 2026.pdf", "abrió Seguro 2026.pdf"]);
+    expect([t(m, "sharePage.heading", "en", { business: "Casa Verde" }), t(m, "sharePage.heading", "es", { business: "Casa Verde" })])
+      .toEqual(["Casa Verde shared a file with you", "Casa Verde compartió un archivo con usted"]);
+  });
+
+  it("no copy says token, hash, link id or storage (mutation: 'token' in any value -> FAILS)", () => {
+    const all = KEYS_3B.flatMap((k) => [m[k], m[`${k}.es` as keyof typeof m] as string]);
+    for (const s of all) expect(s).not.toMatch(/\b(token|hash|storage|signed|supabase)\b/i);
+  });
+
+  it("Spanish is usted, never tu (mutation: 'Intenta' or 'tu' in any .es -> FAILS)", () => {
+    const es = KEYS_3B.map((k) => m[`${k}.es` as keyof typeof m] as string);
+    for (const s of es) expect(s).not.toMatch(/\b(intenta|pide|abre|usa|tu|tus|contigo)\b/i);
+  });
+});

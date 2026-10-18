@@ -67,6 +67,10 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // NOT NULL on a skip row that carries them; DESIGN.md "Provenance": always a person mark).
     case "documentSkip": return { kind: "person", personId: entry.skip.skipped_by };
     case "documentUnskip": return { kind: "person", personId: entry.skip.unskipped_by };
+    // S-07 3b: the link's maker. S-07 3b (O1): whoever holds the link is not known to be the
+    // customer; the customer mark, worded as the link's recipient (authorMark).
+    case "documentShared": return { kind: "person", personId: entry.share.created_by };
+    case "documentShareOpened": return { kind: "customer", personId: null };
   }
 }
 
@@ -89,6 +93,9 @@ export function authorLabel(kind: AuthorKind, personId: string | null, ctx: Auth
 
 export function authorMark(entry: TimelineEntry, ctx: AuthorCtx): AuthorMarkView {
   const { kind, personId } = authorOf(entry);
+  // S-07 3b (O1): the first open of a share link is the customer KIND, labelled as the link's recipient
+  // (the "Someone on the team" precedent: a second word inside one kind, never a sixth kind).
+  if (entry.kind === "documentShareOpened") return { kind, label: ctx.tr.text("provenance.linkRecipient") };
   return { kind, label: authorLabel(kind, personId, ctx) };
 }
 

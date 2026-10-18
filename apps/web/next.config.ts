@@ -19,6 +19,16 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "2mb",
     },
   },
+  /**
+   * S-07 3b (spec 4.2): a shared file's page is never indexed and never sends its address on. Cache-Control
+   * comes from the page itself (force-dynamic answers no-store; Next overrides a configured Cache-Control
+   * on pages in production), checked by the e2e spec (plan deviation 7, Assumption A1).
+   */
+  async headers() {
+    return [
+      { source: "/s/:token", headers: [{ key: "Referrer-Policy", value: "no-referrer" }, { key: "X-Robots-Tag", value: "noindex" }] },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -15,6 +15,7 @@ import type { AuthorKind } from "./provenance";
 import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTimeline, type TimelineDocument, type TimelineDocumentVersion, type TimelineDocumentScan } from "./documents";
 import { listDocumentRequestTimeline, type TimelineDocumentRequest } from "./document-requests";
 import { listDocumentSkipTimeline, type TimelineDocumentSkip } from "./document-requirements";
+import { listDocumentShareTimeline, type TimelineDocumentShare } from "./document-shares";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -319,7 +320,11 @@ export type TimelineEntry =
   /** S-07 2c (plan deviation 1): one row per skip, at its created_at, read from 0081's document_requirement_skips so RLS decides. `id` is the skip's. */
   | { kind: "documentSkip"; id: string; at: string; contactId: string; skip: TimelineDocumentSkip }
   /** S-07 2c: one row per un-skip, at its unskipped_at, from the same row. The kind keeps its key apart from the skip's. */
-  | { kind: "documentUnskip"; id: string; at: string; contactId: string; skip: TimelineDocumentSkip };
+  | { kind: "documentUnskip"; id: string; at: string; contactId: string; skip: TimelineDocumentSkip }
+  /** S-07 3b (plan deviation 4): one row per share link, at its created_at, from 0085's document_share_timeline so RLS decides. `id` is the share's. */
+  | { kind: "documentShared"; id: string; at: string; contactId: string; share: TimelineDocumentShare }
+  /** S-07 3b: the link's first download, at its first_opened_at, from the same row. The kind keeps its key apart from the share's. */
+  | { kind: "documentShareOpened"; id: string; at: string; contactId: string; share: TimelineDocumentShare };
 export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
@@ -437,19 +442,21 @@ export async function listTimelinePage(
       .map((booking): TimelineEntry => ({ kind: "booking", id: booking.id, at: booking.created_at, contactId: booking.contact_id, booking }))),
     settle("calls", async () => (await listContactCalls(db, accountId, who, page.limit, { before }))
       .map((call): TimelineEntry => ({ kind: "call", id: call.id, at: call.started_at, contactId: call.contact_id, call }))),
-    // S-07: one source, six kinds. A file's "added" row (from documents), each NEW version's row
+    // S-07: one source, eight kinds. A file's "added" row (from documents), each NEW version's row
     // (owner ruling R2, from 0078's view), each REMOVED version's row (spec 3.5, from 0079's view),
-    // each request for files (S-07 2b, plan deviation 6, from 0080's document_requests), and each
+    // each request for files (S-07 2b, plan deviation 6, from 0080's document_requests), each
     // skip and un-skip of a required document (S-07 2c, from 0081's document_requirement_skips; no
-    // group branch, a skip is always a contact's), all under the caller's RLS, all paged on (at, id);
-    // a failed read of any is the one "documents" failure.
+    // group branch, a skip is always a contact's), and each share link and its first open (S-07 3b,
+    // from 0085's document_share_timeline), all under the caller's RLS, all paged on (at, id); a
+    // failed read of any is the one "documents" failure.
     settle("documents", async () => {
-      const [docs, versions, removed, requests, skips] = await Promise.all([
+      const [docs, versions, removed, requests, skips, shares] = await Promise.all([
         listDocumentTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentVersionTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentScanTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentRequestTimeline(db, accountId, who, opts.groupId ?? null, page),
         listDocumentSkipTimeline(db, accountId, who, page),
+        listDocumentShareTimeline(db, accountId, who, opts.groupId ?? null, page),
       ]);
       return [
         ...docs.map((d): TimelineEntry => ({ kind: "document", id: d.id, at: d.created_at, contactId: d.contact_id ?? "", document: d })),
@@ -458,6 +465,8 @@ export async function listTimelinePage(
         ...requests.map((r): TimelineEntry => ({ kind: "documentRequest", id: r.id, at: r.created_at, contactId: r.contact_id ?? "", request: r })),
         ...skips.skips.map((s): TimelineEntry => ({ kind: "documentSkip", id: s.id, at: s.created_at, contactId: s.contact_id, skip: s })),
         ...skips.unskips.map((s): TimelineEntry => ({ kind: "documentUnskip", id: s.id, at: s.unskipped_at!, contactId: s.contact_id, skip: s })),
+        ...shares.shares.map((s): TimelineEntry => ({ kind: "documentShared", id: s.id, at: s.created_at, contactId: s.contact_id ?? "", share: s })),
+        ...shares.opens.map((s): TimelineEntry => ({ kind: "documentShareOpened", id: s.id, at: s.first_opened_at!, contactId: s.contact_id ?? "", share: s })),
       ];
     }),
     // S-06 part 3 (spec §7): one row per website chat.

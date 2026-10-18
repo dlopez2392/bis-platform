@@ -339,6 +339,13 @@ export {
   listAccountDocuments, countAccountDocuments, ACCOUNT_DOCUMENTS_SHOWS,
   type AccountDocumentsShow, type AccountDocumentsFilter, type AccountDocumentsCursor, type AccountDocument,
 } from "./account-documents";
+// S-07 3b: share links. See ./document-shares.ts.
+export {
+  DOCUMENT_SHARE_HOURS, createDocumentShare, findDocumentShareByTokenHash, documentShareState, getShareTarget,
+  listLiveDocumentShares, revokeDocumentShares, restoreDocumentShares, claimDocumentShareDownload, listDocumentShareTimeline,
+  listReadyVersionScans, shareableVersion, type ReadyVersionScan, type Shareable, type CreateShareOutcome, type RestoreSharesOutcome,
+  type DocumentShareRow, type DocumentShareLife, type ShareTarget, type ShareClaim, type TimelineDocumentShare,
+} from "./document-shares";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {

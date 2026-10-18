@@ -46,6 +46,15 @@ const estimateIds: string[] = [];
 
 const db = () => serviceDb();
 const base = () => `/dashboard/accounts/${accountId}/documents`;
+/**
+ * The rendered page. This route has a loading.tsx, so React 19.2 can leave a hidden copy of the whole page
+ * (the streamed `<div hidden id="S:n">`) outside <main> until its throttled reveal runs, which can be after
+ * `load` (support.ts's RECORD_PAGE note, its CONVENTION). Every PRESENCE check and every COUNT goes through
+ * <main>; an absence check (toHaveCount(0)) stays page-wide, the stricter reading, and portals (options,
+ * dialogs, toasts) stay page-wide by design. CI run 39129894931 met the parked copy here: docC's row
+ * "resolved to 2 elements", one listitem in <main>, one hidden outside it.
+ */
+const main = (page: Page) => page.locator("main");
 
 async function file(category: DocumentCategory, expiresOn: string | null, title: string): Promise<string> {
   const id = await createDocument(db(), {
@@ -62,7 +71,7 @@ async function file(category: DocumentCategory, expiresOn: string | null, title:
 
 /** The header's real total — "{count} files" / "{count} file", agency session is always English here. */
 async function pageTotal(page: Page): Promise<number> {
-  const text = await page.getByText(/^\d+ files?$/).first().innerText();
+  const text = await main(page).getByText(/^\d+ files?$/).first().innerText();
   const n = Number(text.match(/\d+/)?.[0]);
   if (Number.isNaN(n)) throw new Error(`pageTotal: unreadable header text "${text}"`);
   return n;
@@ -70,7 +79,7 @@ async function pageTotal(page: Page): Promise<number> {
 
 /** Row titles that are this spec's own (STAMP-prefixed), read off each row's open button's aria-label ("Open {title}"). */
 async function ourTitles(page: Page): Promise<string[]> {
-  const labels = await page.locator("[data-documents-page-row] [data-document-open]").evaluateAll(
+  const labels = await main(page).locator("[data-documents-page-row] [data-document-open]").evaluateAll(
     (els) => els.map((el) => el.getAttribute("aria-label") ?? ""),
   );
   return labels.map((l) => l.replace(/^Open /, "")).filter((t) => t.startsWith(STAMP));
@@ -145,27 +154,27 @@ test.afterAll(async () => {
 
 test("1. Filters: Expiring soon by default, Expired, and the category Select by mouse and by keyboard (mutation: arrowing inside the open Select committing instead of only Enter -> the mid-arrow URL check FAILS)", async ({ page }) => {
   await page.goto(base());
-  await expect(page.locator(`[data-documents-page-row="${docA}"]`)).toBeVisible();
+  await expect(main(page).locator(`[data-documents-page-row="${docA}"]`)).toBeVisible();
   await expect(page.locator(`[data-documents-page-row="${docB}"]`)).toHaveCount(0);
   await expect(page.locator(`[data-documents-page-row="${docC}"]`)).toHaveCount(0);
-  if (await page.locator("[data-documents-pager]").count() === 0) {
-    expect(await pageTotal(page)).toBe(await page.locator("[data-documents-page-row]").count());
+  if (await main(page).locator("[data-documents-pager]").count() === 0) {
+    expect(await pageTotal(page)).toBe(await main(page).locator("[data-documents-page-row]").count());
   }
 
   await page.getByRole("link", { name: m["documents.page.show.expired"], exact: true }).click();
   await expect(page).toHaveURL(/show=expired/);
-  await expect(page.locator(`[data-documents-page-row="${docB}"]`)).toBeVisible();
+  await expect(main(page).locator(`[data-documents-page-row="${docB}"]`)).toBeVisible();
   await expect(page.locator(`[data-documents-page-row="${docA}"]`)).toHaveCount(0);
-  if (await page.locator("[data-documents-pager]").count() === 0) {
-    expect(await pageTotal(page)).toBe(await page.locator("[data-documents-page-row]").count());
+  if (await main(page).locator("[data-documents-pager]").count() === 0) {
+    expect(await pageTotal(page)).toBe(await main(page).locator("[data-documents-page-row]").count());
   }
 
   await page.goto(`${base()}?show=all&category=photo`);
-  await expect(page.locator(`[data-documents-page-row="${docC}"]`)).toBeVisible();
+  await expect(main(page).locator(`[data-documents-page-row="${docC}"]`)).toBeVisible();
   await expect(page.locator(`[data-documents-page-row="${docA}"]`)).toHaveCount(0);
   await expect(page.locator(`[data-documents-page-row="${docB}"]`)).toHaveCount(0);
-  if (await page.locator("[data-documents-pager]").count() === 0) {
-    expect(await pageTotal(page)).toBe(await page.locator("[data-documents-page-row]").count());
+  if (await main(page).locator("[data-documents-pager]").count() === 0) {
+    expect(await pageTotal(page)).toBe(await main(page).locator("[data-documents-page-row]").count());
   }
 
   // The same destination, reached through the Radix Select by KEYBOARD alone: focus the trigger, open
@@ -184,7 +193,7 @@ test("1. Filters: Expiring soon by default, Expired, and the category Select by 
   }
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/category=photo/);
-  await expect(page.locator(`[data-documents-page-row="${docC}"]`)).toBeVisible();
+  await expect(main(page).locator(`[data-documents-page-row="${docC}"]`)).toBeVisible();
   await expect(page.locator(`[data-documents-page-row="${docA}"]`)).toHaveCount(0);
   await expect(page.locator(`[data-documents-page-row="${docB}"]`)).toHaveCount(0);
 });
@@ -195,15 +204,15 @@ test("2. Paging: exactly 50 rows, one pager, Next then Back to the start, no row
   const total = await pageTotal(page);
   expect(total).toBeGreaterThanOrEqual(ESTIMATE_COUNT);
   expect(total).toBeLessThanOrEqual(100);
-  await expect(page.locator("[data-documents-page-row]")).toHaveCount(50);
-  const pager = page.locator("[data-documents-pager]");
+  await expect(main(page).locator("[data-documents-page-row]")).toHaveCount(50);
+  const pager = main(page).locator("[data-documents-pager]");
   await expect(pager).toHaveCount(1);
   await expect(pager.getByRole("link", { name: m["documents.page.next"], exact: true })).toBeVisible();
   await expect(pager.getByRole("link", { name: m["documents.page.first"], exact: true })).toHaveCount(0);
   const page1 = await ourTitles(page);
 
   await pager.getByRole("link", { name: m["documents.page.next"], exact: true }).click();
-  await expect(page.locator("[data-documents-page-row]")).toHaveCount(total - 50);
+  await expect(main(page).locator("[data-documents-page-row]")).toHaveCount(total - 50);
   await expect(pager.getByRole("link", { name: m["documents.page.first"], exact: true })).toBeVisible();
   const page2 = await ourTitles(page);
 
@@ -215,12 +224,12 @@ test("2. Paging: exactly 50 rows, one pager, Next then Back to the start, no row
   }
 
   await pager.getByRole("link", { name: m["documents.page.first"], exact: true }).click();
-  await expect(page.locator("[data-documents-page-row]")).toHaveCount(50);
+  await expect(main(page).locator("[data-documents-page-row]")).toHaveCount(50);
 });
 
 test("3. The Owner card: the collapsed summary, a tick, Save with its own toast, and a compare-and-set Undo (mutation: Undo not restoring the exact prior list -> the post-Undo accounts re-read FAILS)", async ({ page }) => {
   await page.goto(base());
-  const requiredCard = page.locator("[data-required-documents]");
+  const requiredCard = main(page).locator("[data-required-documents]");
   await requiredCard.locator("summary").click();
   await requiredCard.getByRole("checkbox", { name: m["documents.category.warranty"], exact: true }).check();
   await requiredCard.getByRole("button", { name: m["common.save"], exact: true }).click();

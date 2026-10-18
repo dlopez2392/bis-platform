@@ -23,7 +23,8 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/c/b2swbbu52be8", "/c/b2swbbu52be8?locale=en&theme=dark",
     "/f/i994hbegzxng", "/b/7t36x3a3izen", "/u/sometoken", "/embed.js",
     "/d/sometoken", "/d/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  ])("%s skips the proxy, so a signed-in visitor's cookie can never turn the framed page into a Clerk handshake redirect (mutation: drop c/ f/ b/ u/ d/ from the matcher → FAILS)", (path) => {
+    "/s/sometoken", "/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  ])("%s skips the proxy, so a signed-in visitor's cookie can never turn the framed page into a Clerk handshake redirect (mutation: drop c/ f/ b/ u/ d/ s/ from the matcher → FAILS)", (path) => {
     expect(runs(path)).toBe(false);
   });
 
@@ -31,11 +32,12 @@ describe("proxy.ts — Clerk never runs on the public embeds (the 'This content 
     "/dashboard", "/dashboard/accounts/abc", "/sign-in", "/",
     "/api/concierge/b2swbbu52be8/turn", "/api/unsubscribe/tok", "/api/voice/texml",
     "/docs", "/dashboard/d", "/api/d/sometoken/start",
+    "/api/s/sometoken/download", "/settings", "/s",
   ])("%s still runs the proxy: the dashboard stays protected and every API keeps Clerk's request state (mutation: an over-broad exclusion → FAILS)", (path) => {
     expect(runs(path)).toBe(true);
   });
 
-  it("only the five trees are carved out — a dashboard path that merely starts with one of their letters still runs", () => {
-    for (const path of ["/calendar", "/forms", "/billing", "/users", "/dx"]) expect(runs(path)).toBe(true);
+  it("only the six trees are carved out — a dashboard path that merely starts with one of their letters still runs", () => {
+    for (const path of ["/calendar", "/forms", "/billing", "/users", "/dx", "/sx", "/support"]) expect(runs(path)).toBe(true);
   });
 });

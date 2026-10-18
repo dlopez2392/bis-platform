@@ -177,3 +177,15 @@ describe("a website chat row's author (S-06 part 3, G20)", () => {
     expect(personIdsOf([chat])).toEqual([]);
   });
 });
+
+describe("a share link's marks (S-07 3b, O1)", () => {
+  it("a share is the sharer's (a person); its first open is the customer kind, worded as the link's recipient in both languages (O1; mutations: the person mark for the open; the plain 'Customer' word; a sixth kind -> FAILS)", () => {
+    const share = { id: "s1", document_id: "d1", title: "Seguro 2026.pdf", category: "insurance", created_by: "u_ana", created_at: AT, first_opened_at: AT, contact_id: "c1", client_group_id: null, deleted_at: null };
+    const shared = { kind: "documentShared", id: "s1", at: AT, contactId: "c1", share } as TimelineEntry;
+    const opened = { kind: "documentShareOpened", id: "s1", at: AT, contactId: "c1", share } as TimelineEntry;
+    expect([authorOf(shared), authorOf(opened)]).toEqual([{ kind: "person", personId: "u_ana" }, { kind: "customer", personId: null }]);
+    expect(authorMark(opened, ctx())).toEqual({ kind: "customer", label: "The link's recipient" });
+    expect(authorMark(opened, ctx({ tr: makeTr("es") }))).toEqual({ kind: "customer", label: "Quien recibió el enlace" });
+    expect(authorMark({ kind: "chat", id: "x", at: AT, contactId: "c1", chat: { conversationId: "v", count: 1, matchedExisting: true } } as TimelineEntry, ctx()).label).toBe("Customer");
+  });
+});

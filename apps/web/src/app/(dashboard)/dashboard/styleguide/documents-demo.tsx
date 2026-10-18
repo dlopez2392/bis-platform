@@ -81,7 +81,15 @@ export const demoHandlers: DocumentHandlers = {
   purge: async () => false,
   changed: noop,
   askCustomer: async () => null, copyRequestLink: async () => {}, revokeRequest: async () => {},
+  copyShareLink: async () => {}, stopSharing: async () => {},
 };
+// S-07 3b: the loaded (English, with the checklist) card's contract has a live share link, 18 hours
+// from the demo's own `now` — built from that same constant, never a literal, so the two stay in step.
+const SHARE_EXPIRES = new Date(Date.parse(DATA.now) + 18 * 3_600_000).toISOString();
+const SHARED_DATA: Extract<DocumentsLoad, { status: "ready" }>["data"] = {
+  ...DATA, live: DATA.live.map((d, i) => (i === 0 ? { ...d, share: { expiresAt: SHARE_EXPIRES } } : d)),
+};
+const READY_SHARED: DocumentsLoad = { status: "ready", data: SHARED_DATA };
 const REQUESTS_NOW = "2026-10-15T15:00:00.000Z";
 /** Ready with nothing open: each card draws its "Ask the customer" and no list (the lists are drawn on their own below). */
 const NO_REQUESTS: DocumentRequestsLoad = { kind: "ready", data: { now: REQUESTS_NOW, channels: { text: true, email: true }, requests: [] } };
@@ -124,7 +132,7 @@ function PanelOpen() {
 export function DocumentsDemo() {
   return (
     <div className="grid w-full gap-4 md:grid-cols-2" data-testid="styleguide-documents">
-      <div className={box}><DocumentsCardView {...common} load={READY} emptyText={m["documents.empty.contact"]} locale="en" checklist={cardChecklist} /></div>
+      <div className={box}><DocumentsCardView {...common} load={READY_SHARED} emptyText={m["documents.empty.contact"]} locale="en" checklist={cardChecklist} /></div>
       <div className={box} lang="es"><DocumentsCardView {...common} load={READY} emptyText={m["documents.empty.contact.es"]} locale="es" /></div>
       <div className={box}><DocumentsCardView {...common} load={EMPTY} emptyText={m["documents.empty.contact"]} locale="en" /></div>
       <div className={box}><DocumentsCardView {...common} load={{ status: "loading" }} emptyText={m["documents.empty.contact"]} locale="en" /></div>

@@ -134,6 +134,18 @@ describe("parseDrawerSummary (S-03 part 3 §7.4): checked, not cast, one section
     });
   });
 
+  it("a share and its first open row (S-07 3b) each parse and are kept (mutation: drop documentShared or documentShareOpened from ROW_KINDS -> FAILS)", () => {
+    const body = clone();
+    const shared = { key: "documentShared-s1", kind: "documentShared", mark: { kind: "person", label: "Ana" }, verb: "shared Seguro 2026.pdf",
+      status: null, detail: "Insurance", time: "Oct 9, 2026, 11:12 AM", dateTime: "2026-10-09T16:12:00Z", excerpt: null };
+    const opened = { ...shared, key: "documentShareOpened-s1", kind: "documentShareOpened", mark: { kind: "customer", label: "The link's recipient" },
+      verb: "opened Seguro 2026.pdf", dateTime: "2026-10-09T17:12:00Z" };
+    (body.recent as { rows: unknown[] }).rows = [opened, shared];
+    expect(parseDrawerSummary(body)!.recent).toEqual({
+      status: "ready", rows: [opened, shared], failedText: null, emptyText: null, seeAllHref: "/dashboard/accounts/a1/contacts/c1#record-timeline",
+    });
+  });
+
   it("a website chat row (S-06 part 3) parses and is kept, its unconfirmed line with it (mutation: drop chat from ROW_KINDS -> the row is dropped, FAILS)", () => {
     const body = clone();
     const chat = { key: "chat-m0", kind: "chat", mark: { kind: "customer", label: "Customer" }, verb: "chatted with Sofía on your website",

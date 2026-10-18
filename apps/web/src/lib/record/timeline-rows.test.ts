@@ -234,6 +234,23 @@ describe("required-documents skip rows (S-07 2c)", () => {
   });
 });
 
+describe("a share link's rows (S-07 3b)", () => {
+  const AT = "2026-10-16T15:00:00.000Z";
+  it("a share reads 'shared <title>' and its first open 'opened <title>', both languages, the category as detail, a trashed file's status, distinct keys (mutations: one verb for both; no trashed status -> FAILS)", () => {
+    const share = { id: "s1", document_id: "d1", title: "Seguro 2026.pdf", category: "insurance", created_by: "u1", created_at: AT, first_opened_at: "2026-10-16T16:00:00.000Z", contact_id: "c1", client_group_id: null, deleted_at: "2026-10-17T10:00:00.000Z" };
+    const entries = [
+      { kind: "documentShareOpened", id: "s1", at: "2026-10-16T16:00:00.000Z", contactId: "c1", share },
+      { kind: "documentShared", id: "s1", at: AT, contactId: "c1", share },
+    ] as TimelineEntry[];
+    const en = timelineRows(entries, { zone: "America/Chicago", tr: makeTr("en"), author: author("en") });
+    expect(en.map((r) => [r.verb, r.detail, r.status?.word])).toEqual([
+      ["opened Seguro 2026.pdf", "Insurance", "In the trash"], ["shared Seguro 2026.pdf", "Insurance", "In the trash"]]);
+    const es = timelineRows(entries, { zone: "America/Chicago", tr: makeTr("es"), author: author("es") });
+    expect(es.map((r) => r.verb)).toEqual(["abrió Seguro 2026.pdf", "compartió Seguro 2026.pdf"]);
+    expect(new Set(en.map((r) => r.key)).size).toBe(2);
+  });
+});
+
 describe("a website chat row (S-06 part 3, spec §7, G18, G23, G24)", () => {
   const chat = (count: number, matchedExisting: boolean): TimelineEntry => ({ kind: "chat", id: "m0", at: "2026-10-17T15:00:00Z", contactId: "k1",
     chat: { conversationId: "cv1", count, matchedExisting } });

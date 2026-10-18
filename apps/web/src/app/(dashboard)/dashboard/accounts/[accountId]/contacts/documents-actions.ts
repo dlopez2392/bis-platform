@@ -5,7 +5,7 @@ import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
   reserveDocumentVersion, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
-  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, deleteOpenExpiryTasks, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
+  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, deleteOpenExpiryTasks, revokeDocumentShares, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -303,6 +303,11 @@ export async function setOwnersOnlyAction(accountId: string, documentId: string,
     const doc = await visibleDocument(accountId, docId, true);
     if (!doc) return fail(REFUSED);
     const r = await setDocumentOwnersOnly(serviceDb(), accountId, docId, value);
+    // Ruling O2 (S-07 3b): an Owners-only file keeps no live share link. Service client, account and document
+    // scoped, after the read and the write, and BEFORE R1's delete, so a failed delete never leaves a Staff
+    // link live; a throw fails the action exactly as R1's delete does. Switching back off holds nothing: a
+    // stopped link stays stopped.
+    if (r === "updated" && value) await revokeDocumentShares(serviceDb(), accountId, docId, access.userId, new Date());
     // Owner ruling R1 (S-07 3a): an Owners-only file keeps no open expiry To-do (its title would name the
     // file to Staff); switching it back off lets the next pass reopen one.
     if (r === "updated" && value) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
@@ -321,6 +326,8 @@ export async function undoOwnersOnlyAction(accountId: string, documentId: string
   try {
     if (!(await visibleDocument(accountId, docId, true))) return fail(REFUSED);
     const r = await setDocumentOwnersOnly(serviceDb(), accountId, docId, prior, written);
+    // Ruling O2: an Undo that writes Owners only back stops live links too; undoing Owners only never un-revokes.
+    if (r === "updated" && prior) await revokeDocumentShares(serviceDb(), accountId, docId, access.userId, new Date());
     // Owner ruling R1: an Undo that writes Owners only back takes the open expiry To-dos with it too.
     if (r === "updated" && prior) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
     return r === "updated" ? { ok: true } : fail("documents.undoChanged");

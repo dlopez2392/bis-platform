@@ -135,6 +135,13 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
       return { verb: tr.text("timeline.documentSkip", { category: tr.text(`documents.category.${entry.skip.category}` as MessageKey) }), status: null, detail: null };
     case "documentUnskip":
       return { verb: tr.text("timeline.documentUnskip", { category: tr.text(`documents.category.${entry.skip.category}` as MessageKey) }), status: null, detail: null };
+    // S-07 3b: "{person} shared <title>" and "{the link's recipient} opened <title>"; a trashed file's status, the category as detail.
+    case "documentShared":
+    case "documentShareOpened": return {
+      verb: tr.text(entry.kind === "documentShared" ? "timeline.documentShared" : "timeline.documentShareOpened", { title: entry.share.title }),
+      status: entry.share.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
+      detail: tr.text(`documents.category.${entry.share.category}`),
+    };
   }
 }
 

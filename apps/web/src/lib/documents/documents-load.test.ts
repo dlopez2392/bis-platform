@@ -52,6 +52,19 @@ describe("documentsLoadFrom: anything but a well-formed 200 is the card's error 
     expect(await documentsLoadFrom(res(sent))).toEqual({ status: "ready", data: sent });
     expect(await documentsLoadFrom(res({ ...body, live: [{ ...view, source: "fax" }] }))).toEqual({ status: "error" });
   });
+  it("S-07 3b: a file with a live share link carries its expiry and parses; a file without one parses too", async () => {
+    const shared = { ...body, live: [{ ...view, share: { expiresAt: "2026-10-19T12:00:00Z" } }, { ...view, id: "d2" }] };
+    expect(await documentsLoadFrom(res(shared))).toEqual({ status: "ready", data: shared });
+    expect(await documentsLoadFrom(res(body))).toEqual({ status: "ready", data: body });
+  });
+  it.each([
+    ["an expiry that is not an instant", { expiresAt: "soon" }],
+    ["a share that is not an object", "x"],
+    ["a null share", null],
+    ["a share with no expiry", {}],
+  ])("S-07 3b: refuses %s (mutation: accept any share -> FAILS)", async (_l, share) => {
+    expect(await documentsLoadFrom(res({ ...body, live: [{ ...view, share }] }))).toEqual({ status: "error" });
+  });
   it("'locked' (a password-protected file) parses (owner ruling 2026-10-15)", async () => {
     const locked = { ...body, live: [{ ...view, version: { ...view.version, scan: "locked" }, versions: [{ ...view.versions[0], scan: "locked" }, view.versions[1]] }] };
     expect(await documentsLoadFrom(res(locked))).toEqual({ status: "ready", data: locked });

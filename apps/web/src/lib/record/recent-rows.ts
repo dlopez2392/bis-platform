@@ -50,6 +50,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "documentRequest": return null;
     // S-07 2c: a skip or an un-skip is its head only; the category is already in it.
     case "documentSkip": case "documentUnskip": return null;
+    // S-07 3b: the head already names the file.
+    case "documentShared": case "documentShareOpened": return null;
     // S-06 part 3: the head already says who chatted and how much; the unconfirmed line comes from the row.
     case "chat": return null;
   }

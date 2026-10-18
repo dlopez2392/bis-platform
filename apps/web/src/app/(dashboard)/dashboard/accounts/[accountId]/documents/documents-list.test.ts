@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock("../contacts/documents-actions", () => ({
@@ -14,6 +16,9 @@ vi.mock("../contacts/document-requests-actions", () => ({
 }));
 vi.mock("../contacts/document-requirements-actions", () => ({
   skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn(),
+}));
+vi.mock("../contacts/document-shares-actions", () => ({
+  createDocumentShareAction: vi.fn(), stopSharingAction: vi.fn(), undoStopSharingAction: vi.fn(),
 }));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
@@ -130,5 +135,14 @@ describe("the Documents page's rows (spec 3.1)", () => {
     expect(text).toContain("Solo dueños");
     expect(text).toContain("Revisando");
     expect(text).not.toContain("Owners only");
+  });
+
+  it("the page's viewer offers Copy share link too (S-07 3b; deviation 2: the viewer is shared by the card and the page; structure pin, the viewer closed in this static render; mutation: drop onShare -> FAILS)", () => {
+    const src = readFileSync(fileURLToPath(new URL("./documents-list.tsx", import.meta.url)), "utf8");
+    const open = src.indexOf("<DocumentViewer");
+    expect(open).toBeGreaterThanOrEqual(0);
+    const close = src.indexOf("/>", open);
+    expect(close).toBeGreaterThan(open);
+    expect(src.slice(open, close)).toContain("onShare={(d) => void handlers.copyShareLink(d)}");
   });
 });

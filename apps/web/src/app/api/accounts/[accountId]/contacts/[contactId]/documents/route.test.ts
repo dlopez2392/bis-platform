@@ -8,7 +8,7 @@ const zoneRead = vi.fn<(...read: string[]) => Promise<ZoneAnswer>>(async () => (
 const REQUEST = { tag: "request-db", from: (t: string) => ({ select: (c: string) => ({ eq: (k: string, v: string) => ({ maybeSingle: () => zoneRead(t, c, k, v) }) }) }) };
 vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 const db = {
-  getContact: vi.fn(), listRecordDocuments: vi.fn(), listPeopleNames: vi.fn(), documentSpaceUsed: vi.fn(),
+  getContact: vi.fn(), listRecordDocuments: vi.fn(), listPeopleNames: vi.fn(), documentSpaceUsed: vi.fn(), listLiveDocumentShares: vi.fn(),
   serviceDb: vi.fn(() => { throw new Error("never"); }), DOCUMENT_PURGING_MARK: "documents:purging",
 };
 vi.mock("@bis/db", () => db);
@@ -40,6 +40,7 @@ beforeEach(() => {
   db.listRecordDocuments.mockResolvedValue({ live: [row()], trashed: [], liveMore: false, trashedMore: false });
   db.listPeopleNames.mockResolvedValue({ user_ana: "Ana" });
   db.documentSpaceUsed.mockResolvedValue(4_500_000_000);
+  db.listLiveDocumentShares.mockImplementation(async () => ({}));
 });
 
 afterEach(() => vi.useRealTimers());
@@ -134,5 +135,26 @@ describe("the Documents card's read for a contact", () => {
     expect(text).not.toContain("Heuristics");
     const body = JSON.parse(text) as { live: { version: { scan: string } }[] };
     expect(body.live.map((d) => d.version.scan)).toEqual(["locked", "unscannable"]);
+  });
+  it("S-07 3b: a file with a live share link carries its expiry, read on the REQUEST client; other files, and a trashed one, carry no share key (mutation: share: null on every row -> the exact toEqual above FAILS)", async () => {
+    db.listRecordDocuments.mockResolvedValue({ live: [row(), row({ id: "d2" })], trashed: [row({ id: "t1", deleted_at: "2026-10-13T03:00:00Z", deleted_by: "user_ana" })], liveMore: false, trashedMore: false });
+    db.listLiveDocumentShares.mockResolvedValue({ d1: "2026-10-19T12:00:00Z", t1: "2026-10-19T12:00:00Z" });
+    const res = await call();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(db.listLiveDocumentShares.mock.calls).toEqual([[REQUEST, ACC, { kind: "contact", id: C }, expect.any(Date)]]);
+    expect(body.live[0].share).toEqual({ expiresAt: "2026-10-19T12:00:00Z" });
+    expect("share" in body.live[1]).toBe(false);
+    expect("share" in body.trashed[0]).toBe(false);
+  });
+  it("S-07 3b: a failed share read omits the Shared line, never the card, and is logged by account (mutation: let the throw fail the route -> 500 -> FAILS)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    db.listLiveDocumentShares.mockRejectedValue(new Error("42501"));
+    const res = await call();
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.live.some((d: object) => "share" in d)).toBe(false);
+    expect(logged.mock.calls.map((c) => c.map(String).join(" ")).filter((l) => l.includes(ACC) && l.includes("42501"))).toHaveLength(1);
+    logged.mockRestore();
   });
 });

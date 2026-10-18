@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readGroup, listRecordDocuments, listPeopleNames } from "@bis/db";
+import { readGroup, listRecordDocuments, listPeopleNames, listLiveDocumentShares } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -24,8 +24,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
   try {
     const group = await readGroup(db, accountId, groupId);
     if (!group) return NextResponse.json({}, { status: 404 });
-    const [docs, { today, zone }, space] = await Promise.all([
-      listRecordDocuments(db, accountId, { kind: "group", id: groupId }), documentsClock(db, accountId), documentsSpace(db, accountId)]);
+    const [docs, { today, zone }, space, shares] = await Promise.all([
+      listRecordDocuments(db, accountId, { kind: "group", id: groupId }), documentsClock(db, accountId), documentsSpace(db, accountId),
+      // S-07 3b: each live file's latest share-link expiry, under the same RLS. Decorative (the space line's
+      // rule): a failed read omits the "Shared" line, never the card.
+      listLiveDocumentShares(db, accountId, { kind: "group", id: groupId }, new Date()).catch((e: unknown) => {
+        console.error(`documents read shares (account ${accountId}): ${loggableError(e)}`);
+        return {} as Record<string, string>;
+      })]);
     const all = [...docs.live, ...docs.trashed];
     const names = await listPeopleNames(db, [...new Set(all.map((d) => d.created_by))]).catch((e: unknown) => {
       console.error(`documents read names (account ${accountId}): ${loggableError(e)}`);
@@ -33,7 +39,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ account
     });
     const body: DocumentsResponse = {
       today, now: new Date().toISOString(), record: { kind: "group", id: groupId, groupKind: group.kind },
-      live: docs.live.map((d) => documentView(d, access.userId, names, zone)),
+      live: docs.live.map((d) => documentView(d, access.userId, names, zone, Object.hasOwn(shares, d.id) ? shares[d.id]! : null)),
       trashed: docs.trashed.map((d) => documentView(d, access.userId, names, zone)),
       capped: docs.liveMore || docs.trashedMore,
       space,

@@ -289,6 +289,10 @@ instead of status — who did it is never left to be inferred.
 A person the reader cannot name — someone who has left the team, or one
 their role cannot see — reads "Someone on the team" ("Alguien del equipo");
 it is still the person mark, never a sixth kind (decided 2026-10-12).
+**Amended 2026-10-18 (S-07 part 3b):** whoever opens a shared file's link is
+not known to be the customer, so that row's mark is the CUSTOMER kind labelled
+"The link's recipient" ("Quien recibió el enlace") — a second word inside one
+kind, as "Someone on the team" is inside the person kind; never a sixth kind.
 
 ## Installation status (2026-08-31 — Phase 1 COMPLETE, tokens import LIVE)
 

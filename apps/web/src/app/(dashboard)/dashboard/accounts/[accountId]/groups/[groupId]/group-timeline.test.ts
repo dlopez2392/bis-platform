@@ -197,6 +197,29 @@ describe("a required-document skip and un-skip on the group page (S-07 2c)", () 
   });
 });
 
+describe("a share link and its first open on the group page (S-07 3b)", () => {
+  it("each renders as one: its verb, the sharer's or the recipient's mark, its own icon and its member's link (mutations: return null for either case, or wear the Link2 icon on the open -> FAILS)", () => {
+    const share = { id: "s1", document_id: "d1", title: "Seguro 2026.pdf", category: "insurance", created_by: "user_me", created_at: AT, first_opened_at: AT, contact_id: "c-ana", client_group_id: null, deleted_at: null };
+    const entries = [
+      { kind: "documentShareOpened", id: "s1", at: AT, contactId: "c-ana", share },
+      { kind: "documentShared", id: "s1", at: AT, contactId: "c-ana", share },
+    ] as TimelineEntry[];
+    const tr = makeTr("es");
+    const rows = timelineRows(entries, { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const html = render({ rows, tr }, "es");
+    const sharedRow = rowHtml(html, "documentShared");
+    expect(sharedRow).toContain(">compartió Seguro 2026.pdf<");
+    expect(sharedRow).toContain(`>${m["provenance.you.es"]}<`);
+    expect(sharedRow).toContain("lucide-link-2");
+    expect(sharedRow).toContain("/dashboard/accounts/a1/contacts/c-ana");
+    const openedRow = rowHtml(html, "documentShareOpened");
+    expect(openedRow).toContain(">abrió Seguro 2026.pdf<");
+    expect(openedRow).toContain(`>${m["provenance.linkRecipient.es"]}<`);
+    expect(openedRow).toContain("lucide-download");
+    expect(openedRow).toContain("/dashboard/accounts/a1/contacts/c-ana");
+  });
+});
+
 const { renderedText } = await import("@/lib/rendered-text");
 const { buttonVariants } = await import("@/components/ui/button");
 const { cn } = await import("@/lib/utils");
