@@ -337,10 +337,17 @@ export async function trashDocumentAction(accountId: string, documentId: string)
   try {
     if (!(await visibleDocument(accountId, docId, true))) return fail(REFUSED);
     const r = await trashDocument(serviceDb(), accountId, docId, access.userId);
+    if (r.status !== "trashed") return fail(REFUSED);
     // Owner ruling R4 (S-07 3a): a file moved to the trash keeps no open expiry To-do; a restore holds
     // nothing (the next pass reopens it while the file is still in its window). A done To-do stays.
-    if (r.status === "trashed") await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
-    return r.status === "trashed" ? { ok: true, deletedAt: r.deletedAt } : fail(REFUSED);
+    // The trash has committed, so a failed delete is logged (ids only, never the title) and the answer
+    // is still the trash with its instant: the card offers its Undo (orchestrator ruling, Task 4 review).
+    try {
+      await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
+    } catch (e) {
+      log(`trash: open expiry To-dos not deleted (document ${docId})`, accountId, e);
+    }
+    return { ok: true, deletedAt: r.deletedAt };
   } catch (e) {
     log("trash", accountId, e);
     return fail(FAILED);

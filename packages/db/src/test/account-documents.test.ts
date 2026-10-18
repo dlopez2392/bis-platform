@@ -98,10 +98,41 @@ describe("listAccountDocuments: the order and the cursor round-trip (spec 3.1 So
       expect(keys).toEqual(show === "expiring" ? sorted : sorted.reverse());
     }));
 
+  it("all: two files with the SAME created_at page across one at a time, by id descending (review: distinct created_at could not fail the tiebreak; mutation: drop the and() id branch -> a file is skipped -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+      const a = await file(db, accountId, ana, { expiresOn: null });
+      const b = await file(db, accountId, ana, { expiresOn: null });
+      await file(db, accountId, ana, { expiresOn: null });
+      const { data, error } = await db.from("documents").update({ created_at: "2001-01-01T00:00:00.123456+00:00" })
+        .in("id", [a, b]).select("id");
+      if (error) throw new Error(error.message);
+      expect(data).toHaveLength(2);
+      const whole = await listAccountDocuments(db, accountId, F("all"), { limit: 50 });
+      expect(whole).toHaveLength(3);
+      expect(ids(whole.slice(1))).toEqual([a, b].sort().reverse());
+      const paged: string[] = [];
+      let before: { v: string; id: string } | undefined;
+      for (let page = 0; page < 5; page++) {
+        const rows = await listAccountDocuments(db, accountId, F("all"), { limit: 1, before });
+        paged.push(...ids(rows));
+        if (rows.length < 1) break;
+        before = { v: rows[0]!.created_at, id: rows[0]!.id };
+      }
+      expect(paged).toEqual(ids(whole));
+    }));
+
   it("a cursor that does not fit the list is refused, never sent to the database (mutation: skip the check -> FAILS)", () =>
     withTestAccount(async (db, accountId) => {
       await expect(listAccountDocuments(db, accountId, F("expiring"), { limit: 2, before: { v: "2030-03-01T00:00:00Z", id: crypto.randomUUID() } })).rejects.toThrow(TypeError);
       await expect(listAccountDocuments(db, accountId, F("all"), { limit: 2, before: { v: "2030-03-01", id: "x" } })).rejects.toThrow(TypeError);
+    }));
+
+  it("an impossible day is refused as a cursor that does not fit, before the database (review minor; mutation: the DAY regex alone -> Postgres answers a plain Error -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      for (const show of ["expiring", "expired"] as const) {
+        await expect(listAccountDocuments(db, accountId, F(show), { limit: 2, before: { v: "2030-02-31", id: crypto.randomUUID() } }), show).rejects.toThrow(TypeError);
+      }
     }));
 });
 

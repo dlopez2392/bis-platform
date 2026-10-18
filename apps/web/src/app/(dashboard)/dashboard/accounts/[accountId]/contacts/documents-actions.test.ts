@@ -657,9 +657,13 @@ describe("owner ruling R4: a file moved to the trash loses its open expiry To-do
     expect(await A.restoreDocumentAction(ACC, D, AT)).toEqual({ ok: true });
     expect(db.deleteOpenExpiryTasks).not.toHaveBeenCalled();
   });
-  it("a failed delete answers the failure, never a silent success (mutation: swallow it -> FAILS)", async () => {
+  it("a failed delete still answers the trash with its instant, so the card offers Undo, and logs the account and document ids, never the title (orchestrator ruling; mutations: answer failed -> FAILS; drop the log -> FAILS)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     db.deleteOpenExpiryTasks.mockRejectedValueOnce(new Error("boom"));
-    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: false, error: "documents.error.failed" });
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: true, deletedAt: AT });
     expect(db.trashDocument).toHaveBeenCalledTimes(1);
+    const lines = logged.mock.calls.map((c) => c.map(String).join(" "));
+    expect(lines.filter((l) => l.includes(ACC) && l.includes(D) && l.includes("boom"))).toHaveLength(1);
+    expect(lines.some((l) => l.includes(DOC.title))).toBe(false);
   });
 });

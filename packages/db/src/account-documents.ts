@@ -51,7 +51,7 @@ export async function listAccountDocuments(
   let q = scoped(db.from("documents").select(SELECT) as unknown as Q, accountId, f);
   if (opts.before) {
     const { v, id } = opts.before;
-    const fits = UUID.test(id) && (f.show === "all" ? /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)) : DAY.test(v));
+    const fits = UUID.test(id) && (f.show === "all" ? /^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v)) : DAY.test(v) && shiftDay(v, 0) === v);
     if (!fits) throw new TypeError("listAccountDocuments: a cursor that does not fit this list");
     const cmp = ascending ? "gt" : "lt";
     q = q.or(`${column}.${cmp}.${quote(v)},and(${column}.eq.${quote(v)},id.${cmp}.${id})`);
