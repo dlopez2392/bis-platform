@@ -29,7 +29,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     case "task":
       if (entry.task.call_id) return { kind: "ai", personId: null };
       // S-07 2b: a To-do opened for a request's files is the automation's, like the stop-hold one.
-      if (entry.task.consent_event_id || entry.task.document_request_id) return { kind: "automation", personId: null };
+      // S-07 3a: and so is an expiry To-do (0084's document_expiry_id).
+      if (entry.task.consent_event_id || entry.task.document_request_id || entry.task.document_expiry_id) return { kind: "automation", personId: null };
       return { kind: "person", personId: entry.task.created_by };
     case "deal": return { kind: "person", personId: entry.deal.created_by };
     case "submission": {

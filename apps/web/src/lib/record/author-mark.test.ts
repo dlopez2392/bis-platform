@@ -152,6 +152,10 @@ describe("customer upload links' marks (S-07 2b)", () => {
     const task = { kind: "task", id: "t1", at: AT, contactId: "c1", task: { id: "t1", title: "Ana sent documents · Review", due_at: AT, completed_at: null, created_at: AT, consent_event_id: null, call_id: null, assigned_to: null, created_by: null, document_request_id: "r1" } } as TimelineEntry;
     expect(authorOf(task)).toEqual({ kind: "automation", personId: null });
   });
+  it("an expiry To-do carries the automation mark, even with a created_by on the row (S-07 3a; mutation: drop the document_expiry_id branch -> person -> FAILS)", () => {
+    const task = { kind: "task", id: "t1", at: AT, contactId: "c1", task: { id: "t1", title: "Ana's insurance expires on Nov 16", due_at: AT, completed_at: null, created_at: AT, consent_event_id: null, call_id: null, assigned_to: null, created_by: "user_x", document_expiry_id: "d1" } } as TimelineEntry;
+    expect(authorOf(task)).toEqual({ kind: "automation", personId: null });
+  });
 });
 
 describe("required-documents skip marks (S-07 2c)", () => {

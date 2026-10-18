@@ -277,6 +277,8 @@ export type TimelineTask = {
   consent_event_id: string | null; call_id: string | null; assigned_to: string | null; created_by: string | null;
   /** S-07 2b (0080): the request whose files this To-do reviews; the automation opened it. Optional, so no task fixture changes. */
   document_request_id?: string | null;
+  /** S-07 3a (0084): the file whose expiry this To-do is about; the automation opened it. Optional, so no task fixture changes. */
+  document_expiry_id?: string | null;
 };
 export type TimelineDeal = {
   id: string; name: string; status: string; monetary_value: number | string; created_at: string; created_by: string | null;
