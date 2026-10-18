@@ -245,8 +245,7 @@ test("4. An expiry To-do and its link: dedupe end to end, the work queue's title
   const { data: tasksAfterFirst, error: t1Err } = await db().from("tasks").select("id, document_expiry_on")
     .eq("account_id", accountId).eq("document_expiry_id", docA);
   if (t1Err) throw new Error(`tasks read: ${t1Err.message}`);
-  expect(tasksAfterFirst ?? []).toHaveLength(1);
-  expect((tasksAfterFirst as { document_expiry_on: string }[])[0].document_expiry_on).toBe(expiresOnA);
+  expect(tasksAfterFirst ?? []).toEqual([{ id: expect.any(String), document_expiry_on: expiresOnA }]);
 
   await openExpiryTasks(serviceDb(), new Date(), { accountId });
   const { data: tasksAfterSecond, error: t2Err } = await db().from("tasks").select("id")
