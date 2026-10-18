@@ -164,8 +164,10 @@ test("2. Open in a fresh context with no sign-in, download once, a double-click 
     expect(headers["referrer-policy"] ?? "").toBe("no-referrer");
     expect(headers["x-robots-tag"] ?? "").toContain("noindex");
 
-    // The title line has no data hook (page.tsx); [data-share-file] is the type/size line.
-    await expect(p.getByText(STAMP, { exact: false }).first()).toBeVisible();
+    // The title is the page's one .bis-docreq-label line (page.test.ts pins its markup); [data-share-file] is the type/size line.
+    const title = p.locator("p.bis-docreq-label");
+    await expect(title).toHaveCount(1);
+    await expect(title).toHaveText(STAMP);
     await expect(p.locator("[data-share-file]")).toBeVisible();
     await expect(p.locator("[data-share-download]")).toHaveCount(1);
     await expect(p.locator("main")).toHaveAttribute("lang", lang);
