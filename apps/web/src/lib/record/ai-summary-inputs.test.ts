@@ -292,12 +292,12 @@ describe("what the model is given (spec 4.3; I6)", () => {
     expect(j.who.source).toBe("referral from [number]");
   });
 
-  it("the last name never leaves, in any free text: the expiry pass's own To-do titles, deal names, document titles, call summaries and the source (review I1; mutations: skip the name redactor on To-dos -> FAILS; match case-sensitively -> FAILS)", async () => {
+  it("the last name never leaves where it reads as a name, in any free text: the expiry pass's own To-do titles, deal names, document titles, call summaries and the source (review I1; owner ruling 2026-10-18; mutations: skip the name redactor on To-dos -> FAILS; match the full name case-sensitively -> 'ana garcia lease' FAILS)", async () => {
     const expiry = (name: string, lang: "en" | "es") => expiryTaskTitle({ category: "id", title: "Driver license", name, expiresOn: "2026-11-02" }, lang);
     const r = recordingDb({
       conversations: { data: { id: "v1" } },
       tasks: { data: [{ title: expiry("Ana Garcia", "en"), due_at: null }, { title: expiry("Ana Garcia", "es"), due_at: null }] },
-      opportunities: { data: [{ name: "GARCIA deck", monetary_value: "10", stage_id: "s1" }] },
+      opportunities: { data: [{ name: "Deck for the Garcia family", monetary_value: "10", stage_id: "s1" }] },
       pipeline_stages: { data: [{ id: "s1", name: "New" }] },
       documents: { data: [{ title: "ana garcia lease", category: "contract" }] },
       calls: { data: [{ id: "k1", contact_id: C, started_at: "2026-10-17T20:00:00Z", outcome: "booked", duration_secs: 60, reason: null, summary: "Mrs. Garcia wants a quote.", language: "en" }] },
@@ -307,15 +307,67 @@ describe("what the model is given (spec 4.3; I6)", () => {
     expect(i.todos[0]!.title).toBe("Ana's ID expires on Nov 2");
     expect([i.deals[0]!.name, i.documents[0]!.title, i.calls[0]!.summary, i.who.source])
       // The full name, in any case, becomes the stored first name.
-      .toEqual(["[name] deck", "Ana lease", "Mrs. [name] wants a quote.", "referral from the [name] family"]);
+      .toEqual(["Deck for the [name] family", "Ana lease", "Mrs. [name] wants a quote.", "referral from the [name] family"]);
     expect(JSON.stringify(i)).not.toMatch(/garcia/i);
   });
 
-  it("the name redactor matches whole words only, and leaves text alone with no last name", () => {
-    expect(redactName("Garciaville and garcia's yard", "Ana", "Garcia")).toBe("Garciaville and [name]'s yard");
-    expect(redactName("Ana Garcia called", null, "Garcia")).toBe("Ana [name] called");
+  // Owner ruling 2026-10-18, "only where it's a name": a last name that is also a word stays a word.
+  it.each<[string, string, string]>([
+    ["Price", "Wants a price for the fence. Price is fine.", "no cue, either case"],
+    ["Price", "The price's fine and the Price is right", "a possessive on the lowercase word"],
+    ["Bill", "Send Bill the bill; the bill's due Friday", "a lowercase possessive"],
+    ["Flores", "Plantar flores en el jardín", "a Spanish common noun"],
+    ["Flores", "Las flores familia de plantas", "a lowercase word beside 'familia'"],
+    ["Green", "Paint the door green. Green trim too.", "a colour"],
+    ["Stone", "A stone wall; the stone's weight", "a lowercase possessive"],
+    ["Rosa", "Una rosa para mamá", "a flower"],
+    ["Paz", "Que lo deje en paz", "a common noun"],
+    ["May", "Come back in May, may be sooner", "a month"],
+    ["Will", "I will call, Will said nothing", "a verb"],
+    ["Cruz", "Lives on Santa Cruz Ave", "a street"],
+    ["de la Garza", "Turn left on Garza Road", "a street"],
+    ["Price", "Dr price called about mrs price", "a lowercase word after an honorific"],
+  ])("leaves %s alone in %j (%s)", (last, text) => {
+    expect(redactName(text, "Ana", last)).toBe(text);
+  });
+
+  it.each<[string, string | null, string, string]>([
+    ["an honorific", null, "Flores", "Mrs. Flores called; Sra Flores también; Dr Flores; Doña Flores"],
+    ["a possessive", null, "Flores", "Flores's yard and Flores’s fence"],
+    ["the family, either side", null, "Flores", "the Flores family; la familia Flores"],
+  ])("redacts a last name where it reads as a name: %s (mutations: drop that cue -> FAILS)", (_cue, first, last, text) => {
+    expect(redactName(text, first, last)).not.toMatch(/Flores/);
+  });
+
+  it("each cue redacts only the name, never the cue word", () => {
+    expect(redactName("Mrs. Flores called", null, "Flores")).toBe("Mrs. [name] called");
+    expect(redactName("Flores's yard and Flores’s fence", null, "Flores")).toBe("[name]'s yard and [name]’s fence");
+    expect(redactName("the Flores family; la familia Flores", null, "Flores")).toBe("the [name] family; la familia [name]");
+    expect(redactName("Sra Flores, Srta. Flores, Don Flores, Doña Flores, Miss Flores", null, "Flores"))
+      .toBe("Sra [name], Srta. [name], Don [name], Doña [name], Miss [name]");
+  });
+
+  it("accents fold on both sides: stored García matches Garcia and the other way round (mutation: no accent folding -> FAILS)", () => {
+    expect(redactName("Ana Garcia's ID; Mrs. Garcia called", "Ana", "García")).toBe("Ana's ID; Mrs. [name] called");
+    expect(redactName("La identificación de Ana García; la Sra. García llamó", "Ana", "Garcia")).toBe("La identificación de Ana; la Sra. [name] llamó");
+    expect(redactName("José Núñez llamó; la familia Nuñez otra vez", "José", "Núñez")).toBe("José llamó; la familia [name] otra vez");
+  });
+
+  it("a compound last name: the whole, its final part, and the first of two parts, each in the cue positions (mutations: drop the final part -> 'Sr. Garza' FAILS; drop the first of two -> 'Sr. García' FAILS)", () => {
+    expect(redactName("Ana de la Garza called; Sr. Garza later; the Garza family", "Ana", "de la Garza")).toBe("Ana called; Sr. [name] later; the [name] family");
+    expect(redactName("Mrs. de la Garza's yard", null, "de la Garza")).toBe("Mrs. [name]'s yard");
+    expect(redactName("Sr. García López; Sr. García; la familia López; López's fence", null, "García López"))
+      .toBe("Sr. [name]; Sr. [name]; la familia [name]; [name]'s fence");
+    // A particle is never matched on its own, even as the first of two parts (mutation: allow lowercase parts -> FAILS).
+    expect(redactName("Mr. de called", null, "de la Garza")).toBe("Mr. de called");
+    expect(redactName("Ask Mr. de Haan, then Sr. León", null, "de León")).toBe("Ask Mr. de Haan, then Sr. [name]");
+  });
+
+  it("the full name becomes the first name in any case; with no last name nothing changes; a bare capitalised name with no cue passes (accepted residual)", () => {
+    expect(redactName("ANA GARCIA called, then ana garcia again", "Ana", "Garcia")).toBe("Ana called, then Ana again");
     expect(redactName("Ana Garcia called", "Ana", null)).toBe("Ana Garcia called");
-    expect(redactName("José Núñez llamó; Núñez otra vez", "José", "Núñez")).toBe("José llamó; [name] otra vez");
+    expect(redactName("Garcia called", null, "Garcia")).toBe("Garcia called");
+    expect(redactName("Garciaville's yard", null, "Garcia")).toBe("Garciaville's yard");
   });
 
   it("local dates in the account's zone (mutation: format in UTC -> the 04:30Z due date reads 2026-10-19 -> FAILS)", () => {

@@ -51,18 +51,79 @@ export function redactContactDetails(text: string): string {
 }
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-/** Whole words in any script (\b knows only ASCII letters, so it would split "Núñez"), any case. */
-const wholeWord = (pattern: string): RegExp => new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, "giu");
+/** Accents off ("García" -> "Garcia"), so a stored name and a typed one match either way round. */
+const fold = (s: string): string => s.normalize("NFD").replace(/\p{M}/gu, "");
+/** A name as a pattern: accent-folded, escaped, any run of spaces between its words. */
+const namePattern = (s: string): string => escapeRe(fold(s)).replace(/\s+/g, "\\s+");
+/** Not inside a longer word, in any script (\b knows only ASCII letters, so it would split "Núñez"). */
+const L_ = "[\\p{L}\\p{N}]";
+/** Honorifics as they are written before a name, capitalised or not, with or without a period. Folded, so
+ *  "Doña" is "Dona". Each is its own word: "Dr" never matches the end of "Andr". */
+const HONORIFIC = "(?:[Mm]rs|[Mm]r|[Mm]s|[Mm]iss|[Dd]r|[Ss]rta|[Ss]ra|[Ss]r|[Dd]ona|[Dd]on)";
 
-/** The customer's last name out of free text (review I1): the expiry pass writes "{first last}'s ID expires on
- *  {date}" into To-do titles (lib/documents/expiry-task.ts). The full name becomes the first name, which the
- *  model is given anyway; the last name on its own becomes "[name]". Whole words, any case. */
+/** `re` runs on the accent-folded text; each match is replaced in the ORIGINAL text, so accents elsewhere survive. */
+function replaceFolded(text: string, re: RegExp, by: string): string {
+  const start: number[] = [];
+  const end: number[] = [];
+  let folded = "";
+  for (let i = 0; i < text.length;) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    const f = fold(ch);
+    // A combining mark folds to nothing: it belongs to the character before it.
+    if (f === "" && end.length > 0) end[end.length - 1] = i + ch.length;
+    for (let k = 0; k < f.length; k++) { start.push(i); end.push(i + ch.length); }
+    folded += f;
+    i += ch.length;
+  }
+  let out = "";
+  let at = 0;
+  for (const m of folded.matchAll(re)) {
+    if (m[0].length === 0) continue;
+    const s = start[m.index]!;
+    out += text.slice(at, s) + by;
+    at = end[m.index + m[0].length - 1]!;
+  }
+  return out + text.slice(at);
+}
+
+/**
+ * The customer's last name out of free text (review I1): the expiry pass writes "{first last}'s ID expires on
+ * {date}" into To-do titles (lib/documents/expiry-task.ts). Owner ruling 2026-10-18, "only where it's a name":
+ * - the full name (first + last), in any case and with or without accents, becomes the first name, which the
+ *   model is given anyway;
+ * - the last name on its own becomes "[name]" ONLY where it reads as a name: written as stored (accents
+ *   aside) AND with a cue, an honorific before it (Mrs. Flores, Sra Flores), a possessive after it
+ *   (Flores's) or "family"/"familia" beside it (the Flores family, familia Flores). So "a price for the
+ *   fence", "Send Bill the bill" and "plantar flores" stay as they are.
+ * - a compound name ("de la Garza", "García López") is matched whole, by its final part, and (two parts
+ *   only) by its first part, in those same cue positions; a lowercase particle ("de", "la") never alone.
+ * ACCEPTED RESIDUAL (same ruling): a bare capitalised last name with no cue, such as "Flores called" at the
+ * start of a sentence, passes through.
+ */
 export function redactName(text: string, first: string | null, last: string | null): string {
   const l = (last ?? "").trim();
   if (!l) return text;
   const f = (first ?? "").trim();
-  const out = f ? text.replace(wholeWord(`${escapeRe(f)}\\s+${escapeRe(l)}`), () => f) : text;
-  return out.replace(wholeWord(escapeRe(l)), "[name]");
+  let out = text;
+  if (f) out = replaceFolded(out, new RegExp(`(?<!${L_})${namePattern(f)}\\s+${namePattern(l)}(?!${L_})`, "giu"), f);
+  const parts = l.split(/[\s-]+/).filter(Boolean);
+  // The whole stored name, then its final part and (two parts only) its first, a part only when it is
+  // capitalised (so never the particle "de" or "la"); longest first, so "García López" goes before "García".
+  const pieces = [...(parts.length > 1 ? [parts[parts.length - 1]!] : []), ...(parts.length === 2 ? [parts[0]!] : [])]
+    .filter((c) => /^\p{Lu}/u.test(c));
+  const candidates = [...new Set([l, ...pieces])].sort((a, b) => b.length - a.length);
+  for (const c of candidates) {
+    const n = namePattern(c);
+    const cue = [
+      `(?<=(?<!${L_})${HONORIFIC}(?:\\.\\s*|\\s+))${n}(?!${L_})`,
+      `(?<!${L_})${n}(?=['’]s(?!${L_}))`,
+      `(?<!${L_})${n}(?=\\s+[Ff]amil(?:y|ia)(?!${L_}))`,
+      `(?<=(?<!${L_})[Ff]amil(?:y|ia)\\s+)${n}(?!${L_})`,
+    ];
+    // Case-SENSITIVE on purpose: the stored capitalisation is half of "reads as a name".
+    out = replaceFolded(out, new RegExp(cue.join("|"), "gu"), "[name]");
+  }
+  return out;
 }
 
 function must<T>(label: string, r: { data: T | null; error: { message: string } | null }): T {
