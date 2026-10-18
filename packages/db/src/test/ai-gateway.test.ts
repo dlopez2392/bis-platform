@@ -104,8 +104,11 @@ describe("the card's reads and writes", () => {
       expect(await getAiSettings(db, other)).toEqual({ accountEnabled: true, monthlyBudgetCents: 7700, monthKey: "2026-10", monthSpendMicroUsd: 9_999, globalEnabled: true });
     })));
 
-  it("the account's Undo is a compare-and-set: it writes back only while the row still holds what its save wrote, else answers 'changed' and writes nothing (Task 7 fix round 4; mutations: drop the enabled filter; drop the budget filter; upsert when expected is given -> FAILS)", () =>
-    withTestAccount(async (db, accountId) => {
+  it("the account's Undo is a compare-and-set: it writes back only while the row still holds what its save wrote, else answers 'changed' and writes nothing (Task 7 fix round 4; mutations: drop the enabled filter; drop the budget filter; upsert when expected is given; drop the account filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, other) => {
+      // Round 2: another account holds the SAME values the save wrote, so an Undo without its account filter
+      // would match (and rewrite) that row too.
+      await setAccountAiSettings(db, other, { enabled: false, monthlyBudgetCents: 2500, actorId: "user_other" });
       const undo = { enabled: true, monthlyBudgetCents: 1000, actorId: "user_test" };
       const wrote = { enabled: false, monthlyBudgetCents: 2500 };
       // No row yet: an Undo must not create one.
@@ -123,7 +126,9 @@ describe("the card's reads and writes", () => {
       await setAccountAiSettings(db, accountId, { ...wrote, actorId: "user_test" });
       expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("updated");
       expect(await getAiSettings(db, accountId)).toMatchObject({ accountEnabled: true, monthlyBudgetCents: 1000 });
-    }));
+      const { data: otherRow } = await db.from("account_ai_settings").select("enabled, monthly_budget_cents, updated_by").eq("account_id", other).single();
+      expect(otherRow).toEqual({ enabled: false, monthly_budget_cents: 2500, updated_by: "user_other" });
+    })));
 
   // Review I9: the db suite NEVER writes ai_gateway_settings (one row shared by every account and every
   // concurrent suite on the project). setGlobalAiEnabled and getAiSettings's missing-row answer are proved on a

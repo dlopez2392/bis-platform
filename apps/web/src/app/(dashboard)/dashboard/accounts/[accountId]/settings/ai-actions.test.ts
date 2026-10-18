@@ -138,6 +138,10 @@ describe("setGlobalAiAction (choice I12, rule 6)", () => {
     dbm.setGlobalAiEnabled.mockResolvedValueOnce("changed");
     expect(await setGlobalAiAction("a1", { enabled: false, confirm: "OFF", expected: true })).toEqual({ ok: false, error: "documents.undoChanged" });
   });
+  it("an Undo that turns AI off everywhere still needs the typed word: `expected` never stands in for it (round 2, plan M12; mutation: skip the word when expected is set -> FAILS)", async () => {
+    expect(await setGlobalAiAction("a1", { enabled: false, expected: true })).toEqual({ ok: false, error: "aiSettings.global.wrongWord" });
+    expect(dbm.setGlobalAiEnabled).not.toHaveBeenCalled();
+  });
   it("an `expected` that is not a boolean writes nothing (fix round 4)", async () => {
     expect(await setGlobalAiAction("a1", { enabled: true, expected: "false" as never })).toEqual({ ok: false, error: "aiSettings.error.failed" });
     expect(dbm.setGlobalAiEnabled).not.toHaveBeenCalled();
