@@ -701,6 +701,17 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
       checklist: { canSkip: true } });
   });
 
+  it("a To-do's link (?document=, ?ask=) reaches the Documents card as its focus, the rest of its props unchanged (S-07 3a, plan deviations 5, 6; mutation: never pass focus -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-s");
+    const html = await render({ document: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" });
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes",
+      checklist: { canSkip: true }, focus: { documentId: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" } });
+  });
+
   it("a Technician's Documents card gets the checklist with no Not needed (S-07 2c D1: they see the list and can Upload or Ask, never change it; mutation: pass canSkip: true always -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "technician", canManage: false });
     readPersonIdMock.mockResolvedValueOnce("p-t");

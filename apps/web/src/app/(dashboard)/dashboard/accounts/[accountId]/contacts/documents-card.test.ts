@@ -17,7 +17,7 @@ vi.mock("./document-requirements-actions", () => ({
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
-  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles } = await import("./documents-card");
+  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles, askPreset } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -650,5 +650,20 @@ describe("the required documents on the card (S-07 2c, spec 5.4; D3, D9, I6)", (
     expect(preset.map((f) => f.phase)).toEqual([null, null]);
     expect(new Set(preset.map((f) => f.key)).size).toBe(2);
     expect(panelFiles([pdf, jpg], null, "en").map((f) => f.category)).toEqual(["other", "photo"]);
+  });
+});
+
+describe("a To-do's link: the file in focus and the pre-ticked Ask (S-07 3a, spec 3.2; plan deviations 5, 6)", () => {
+  it("askPreset ticks the link's category, and nothing without one (mutation: [focus.ask] without the null check -> [null], FAILS)", () => {
+    expect(askPreset({ documentId: null, ask: "insurance" })).toEqual(["insurance"]);
+    expect(askPreset(undefined)).toEqual([]);
+    expect(askPreset({ documentId: "d", ask: null })).toEqual([]);
+  });
+
+  it("each row's OPEN button, and only it, carries data-document-open (mutation: the attribute on the menu trigger -> FAILS on the label)", () => {
+    const html = render(ready([view(), view({ id: "d2", title: "Roof" })]));
+    const tags = [...html.matchAll(/<button[^>]*data-document-open[^>]*>/g)].map((x) => x[0]);
+    expect(tags).toHaveLength(2);
+    expect(tags.map((tag) => /aria-label="([^"]*)"/.exec(tag)?.[1])).toEqual(["Open Signed lease", "Open Roof"]);
   });
 });

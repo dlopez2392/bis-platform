@@ -30,6 +30,7 @@ import { loggableError } from "@/lib/loggable-error";
 import { renderZone } from "@/lib/zone";
 import { PlacesCard } from "../../contacts/places-card";
 import { DocumentsCard } from "../../contacts/documents-card";
+import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { DealsBody } from "../../contacts/[contactId]/deals-card";
 import { SummaryBody } from "../../contacts/[contactId]/summary-card";
 import { NextUpBody } from "../../contacts/[contactId]/next-up-card";
@@ -65,10 +66,12 @@ export default async function GroupRecordPage({ params, searchParams }: {
   params: Promise<{ accountId: string; groupId: string }>;
   // Optional, as the contact page's: the QA locale override, People's own cursor (C10) and the
   // timeline's (2b). Each pager keeps only ?locale= (plan deviation 14).
-  searchParams?: Promise<{ locale?: string; people?: string; before?: string }>;
+  searchParams?: Promise<{ locale?: string; people?: string; before?: string; document?: string; ask?: string }>;
 }) {
   const { accountId, groupId } = await params;
-  const { locale: localeParam, people: peopleParam, before: beforeParam } = (await searchParams) ?? {};
+  const { locale: localeParam, people: peopleParam, before: beforeParam, document: documentParam, ask: askParam } = (await searchParams) ?? {};
+  // S-07 3a (plan deviations 5, 6): a To-do's link names a file to focus and a category to pre-tick in Ask the customer.
+  const focus = cardFocusFrom({ document: documentParam, ask: askParam });
   const access = await requireAccountAccess(accountId);
   // C16: a malformed id would be a 500 from the uuid cast; it is a 404, before any read.
   if (!isUuid(groupId)) notFound();
@@ -227,7 +230,7 @@ export default async function GroupRecordPage({ params, searchParams }: {
       : failed("record.card.deals"),
     documents: {
       node: <DocumentsCard accountId={accountId} record={{ kind: "group", id: group.id }} canManage={access.canManage}
-        emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} name={group.name} />,
+        emptyText={tr.text(DOCUMENTS_EMPTY_KEY[group.kind])} name={group.name} {...(focus ? { focus } : {})} />,
     },
     people: people.status === "ready"
       ? {

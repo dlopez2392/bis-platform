@@ -125,3 +125,22 @@ describe("the checklist re-reads only when a files read changed what it depends 
     expect(effect).not.toMatch(/setTimeout|setInterval/);
   });
 });
+
+describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; plan deviations 5, 6)", () => {
+  it("the header's Ask the customer opens with the link's category (mutation: onAsk: () => openAsk() -> FAILS)", () => {
+    expect(body).toContain("onAsk: () => openAsk(askPreset(focus))");
+    expect(body).not.toContain("onAsk: () => openAsk(),");
+  });
+
+  it("the focus effect runs once, only after the files are ready, only for a row it found, and sets no state (mutations: drop the once guard or the row check; a setState in the effect -> FAILS)", () => {
+    const from = body.indexOf("const focusedOnce = useRef(false);");
+    const to = body.indexOf("}, [focusId, filesReady]);");
+    expect(from).toBeGreaterThanOrEqual(0);
+    expect(to).toBeGreaterThan(from);
+    const effect = body.slice(from, to);
+    expect(effect).toContain("if (focusedOnce.current || !focusId || !filesReady) return;");
+    expect(effect).toContain("if (!button) return;");
+    expect(effect.indexOf("focusedOnce.current = true;")).toBeGreaterThan(effect.indexOf("if (!button) return;"));
+    expect(effect).not.toMatch(/\bset[A-Z]\w*\(/);
+  });
+});
