@@ -109,6 +109,8 @@ vi.mock("../../../blueprints/actions", () => blueprintActions);
 vi.mock("./billing-actions", () => ({
   sendBillingLinkAction: noop, markComplimentaryAction: noop, removeComplimentaryAction: noop, changePlanAction: noop,
 }));
+const aiSection = vi.hoisted(() => ({ AiSection: () => null, AiCardSkeleton: () => null }));
+vi.mock("./ai-section", () => aiSection);
 
 // The Team card (Task 10) streams inside ClientAccessSection; its reads and
 // actions are TeamSection's own (components/team/team-section.test.ts).
@@ -210,6 +212,20 @@ describe("settings page — the Billing card", () => {
     const column = all.find((e) => Array.isArray(e.props.children) && (e.props.children as unknown[]).includes(boundary));
     const siblings = (column!.props.children as unknown[]).filter((c) => isValidElement(c));
     expect(siblings[siblings.indexOf(boundary!) - 1]).toBe(boundaryAround(all, ClientAccessSection));
+  });
+});
+
+describe("settings page — the AI card", () => {
+  it("mounts AiSection for THIS account in its own Suspense (skeleton fallback), directly after the Billing card's boundary (mutation: drop the mount, or render it outside Suspense -> FAILS)", async () => {
+    const all = await pageElements();
+    const boundary = boundaryAround(all, aiSection.AiSection);
+    expect(boundary, "AiSection inside <Suspense>").toBeTruthy();
+    expect(((boundary!.props.children as ReactElement).props as { accountId: string }).accountId).toBe("a1");
+    const fallback = boundary!.props.fallback;
+    expect(isValidElement(fallback) && fallback.type).toBe(aiSection.AiCardSkeleton);
+    const column = all.find((e) => Array.isArray(e.props.children) && (e.props.children as unknown[]).includes(boundary));
+    const siblings = (column!.props.children as unknown[]).filter((c) => isValidElement(c));
+    expect(siblings[siblings.indexOf(boundary!) - 1]).toBe(boundaryAround(all, BillingSection));
   });
 });
 

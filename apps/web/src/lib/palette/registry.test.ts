@@ -126,6 +126,16 @@ describe("buildPaletteEntries", () => {
     expect(filterEntries(entries, "documentos").some((e) => e.id === "settings:required-documents")).toBe(true);
   });
 
+  it("registers the AI settings section, agency only, found by 'budget' and 'ia' (mutation: remove the SETTINGS_SECTIONS entry -> FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const entry = entries.find((e) => e.id === "settings:ai");
+    expect((entry as { href: string } | undefined)?.href).toBe(`${BASE}/settings#ai`);
+    expect(entry?.agencyOnly).toBe(true);
+    expect(filterEntries(entries, "budget").some((e) => e.id === "settings:ai")).toBe(true);
+    expect(filterEntries(entries, "presupuesto").some((e) => e.id === "settings:ai")).toBe(true);
+    expect(buildPaletteEntries(BASE, false, true).some((e) => e.id === "settings:ai")).toBe(false);
+  });
+
   // Staff and roles (Task 8): a client Owner gets a direct `nav:team` entry;
   // a client Staff does not. Not a SETTINGS_SECTIONS anchor — see
   // registry.ts's own comment on why — so this is checked by id/href, not
@@ -238,6 +248,7 @@ describe("buildPaletteEntries", () => {
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/weekly-report-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/required-documents-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/billing-card.tsx",
+      "../../app/(dashboard)/dashboard/accounts/[accountId]/settings/ai-card.tsx",
       "../../app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card.tsx",
       "../../components/alert-phone-card.tsx",
       "../../components/branding-panel.tsx",

@@ -23,6 +23,7 @@ import { NeverLogList } from "@/components/never-log-list";
 import { loggableError } from "@/lib/loggable-error";
 import { cleanRequiredCategories } from "@bis/db/document-rules";
 import { BillingSection, BillingCardSkeleton } from "./billing-section";
+import { AiSection, AiCardSkeleton } from "./ai-section";
 import { AlertPhoneCard } from "@/components/alert-phone-card";
 import { resolveSmsSender } from "@/lib/sms/sender";
 import { BrandingPanel } from "@/components/branding-panel";
@@ -206,6 +207,10 @@ export default async function CrmSettingsPage({
             renders its own error card (billing-section.tsx). */}
         <Suspense fallback={<BillingCardSkeleton />}>
           <BillingSection accountId={accountId} />
+        </Suspense>
+        {/* Item 8a-1: the agency's AI card, its own boundary, after Billing (both are about what this account costs). */}
+        <Suspense fallback={<AiCardSkeleton />}>
+          <AiSection accountId={accountId} />
         </Suspense>
         <BrandingPanel
           // Remount when the ACCOUNT changes, so the panel's own state cannot
