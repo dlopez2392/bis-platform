@@ -5,15 +5,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 const listAccountDocuments = vi.fn<(...a: unknown[]) => Promise<unknown[]>>();
 const countAccountDocuments = vi.fn<(...a: unknown[]) => Promise<number>>();
 const listPeopleNames = vi.fn<(...a: unknown[]) => Promise<Record<string, string>>>();
+const getRequiredDocumentCategories = vi.fn<(...a: unknown[]) => Promise<string[]>>();
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   listAccountDocuments: (...a: unknown[]) => listAccountDocuments(...a),
   countAccountDocuments: (...a: unknown[]) => countAccountDocuments(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNames(...a),
+  getRequiredDocumentCategories: (...a: unknown[]) => getRequiredDocumentCategories(...a),
 }));
+const access = vi.hoisted(() => ({ value: { userId: "u1", isAgency: false, role: "owner" as string | null, canManage: true } }));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "u1", isAgency: false, role: "owner", canManage: true }),
+  requireAccountAccess: async () => access.value,
 }));
+vi.mock("./required-documents-summary", () => ({
+  RequiredDocumentsSummary: (p: unknown) => createElement("div", { "data-summary-mock": JSON.stringify(p) }),
+}));
+vi.mock("../settings/document-requirements-actions", () => ({ setRequiredDocumentCategoriesAction: vi.fn() }));
+vi.mock("./required-documents-actions", () => ({ undoRequiredDocumentsAction: vi.fn() }));
 const DB = {
   from: (table: string) => {
     if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
@@ -72,7 +80,9 @@ beforeEach(() => {
   listAccountDocuments.mockReset().mockResolvedValue([row(), row()]);
   countAccountDocuments.mockReset().mockResolvedValue(7);
   listPeopleNames.mockReset().mockResolvedValue({ u2: "Rosa" });
+  getRequiredDocumentCategories.mockReset().mockResolvedValue(["id", "insurance"]);
   prefs.mockReset().mockResolvedValue({ language: null });
+  access.value = { userId: "u1", isAgency: false, role: "owner", canManage: true };
 });
 
 describe("the Documents page (spec 3.1)", () => {
@@ -172,5 +182,23 @@ describe("the Documents page (spec 3.1)", () => {
 
   it("names no hero (rule 11)", async () => {
     expect(await render()).not.toContain("data-hero");
+  });
+
+  it("an Owner gets the Required documents card mounted BEFORE the list, with the required list it read", async () => {
+    const html = await render();
+    expect(getRequiredDocumentCategories).toHaveBeenCalledWith(DB, "a1");
+    const summaryAt = html.indexOf("data-summary-mock");
+    const listAt = html.indexOf("data-list-mock");
+    expect(summaryAt).toBeGreaterThan(-1);
+    expect(summaryAt).toBeLessThan(listAt);
+    const raw = /data-summary-mock="([^"]*)"/.exec(html)![1]!.replace(/&quot;/g, '"').replace(/&amp;/g, "&");
+    expect((JSON.parse(raw) as { required: string[] }).required).toEqual(["id", "insurance"]);
+  });
+
+  it("a Staff member gets no summary and the required list is never read (mutation: render it for everyone -> FAILS)", async () => {
+    access.value = { userId: "u2", isAgency: false, role: "staff", canManage: false };
+    const html = await render();
+    expect(html).not.toContain("data-summary-mock");
+    expect(getRequiredDocumentCategories).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { FolderOpen, ArrowLeft, ArrowRight } from "lucide-react";
-import { countAccountDocuments, listAccountDocuments, listPeopleNames, DOCUMENT_CATEGORIES, type DocumentCategory, type AccountDocumentsShow } from "@bis/db";
+import {
+  countAccountDocuments, listAccountDocuments, listPeopleNames, getRequiredDocumentCategories,
+  DOCUMENT_CATEGORIES, type DocumentCategory, type AccountDocumentsShow,
+} from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
+import { setRequiredDocumentCategoriesAction } from "../settings/document-requirements-actions";
+import { undoRequiredDocumentsAction } from "./required-documents-actions";
+import { RequiredDocumentsSummary } from "./required-documents-summary";
 import { dbForRequest } from "@/lib/db";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
@@ -62,6 +68,13 @@ export default async function DocumentsPage({ params, searchParams }: {
     listAccountDocuments(db, accountId, filter, { before: q.cursor, limit: DOCUMENTS_PAGE_SIZE + 1 }),
     countAccountDocuments(db, accountId, filter),
   ]);
+  // Owner-or-agency only (spec 3.3); a Staff member and a Technician get neither the read nor the card.
+  const required = access.canManage
+    ? await getRequiredDocumentCategories(db, accountId).catch((e: unknown) => {
+        console.error(`documents page: required list (account ${accountId}): ${loggableError(e)}`);
+        return null;
+      })
+    : undefined;
   const hasMore = rows.length > DOCUMENTS_PAGE_SIZE;
   const page = hasMore ? rows.slice(0, DOCUMENTS_PAGE_SIZE) : rows;
   // Names are a convenience: a failed read reads "Someone on the team", never a failed page.
@@ -106,8 +119,15 @@ export default async function DocumentsPage({ params, searchParams }: {
           </div>
         }
       />
-      {/* Task 10 mounts the Owner's Required documents card as this column's first child, above the list. */}
       <div className="space-y-4 p-6">
+        {access.canManage ? (
+          <RequiredDocumentsSummary
+            required={required ?? null}
+            locale={locale}
+            save={setRequiredDocumentCategoriesAction.bind(null, accountId)}
+            undo={undoRequiredDocumentsAction.bind(null, accountId)}
+          />
+        ) : null}
         {page.length === 0 && !q.cursor ? (
           // The cold start: page one with nothing on it. A cursored zero is real history with nothing past the
           // cursor: no empty state, just the start link below (contacts/page.tsx's rule).
