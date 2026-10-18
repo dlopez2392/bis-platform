@@ -118,12 +118,17 @@ describe("createDocumentShareAction: Copy share link (spec 4.1)", () => {
     expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: false, error: "documents.share.failed" });
     expect(writes()).toEqual([]);
   });
-  it("a failed write answers failed and logs the account and the document, never the token or the link (mutation: log the url -> FAILS)", async () => {
-    db.createDocumentShare.mockRejectedValue(new Error(`boom ${TOKEN}`));
+  it("a failed write answers failed and logs the account and the document, never the token or the link (mutations: log the token or the url -> FAILS)", async () => {
+    db.createDocumentShare.mockRejectedValue(new Error("boom"));
     expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: false, error: "documents.share.failed" });
     const lines = errSpy.mock.calls.map((c) => c.map(String).join(" "));
-    expect(lines.filter((l) => l.includes(ACC) && l.includes(DOC))).toHaveLength(1);
-    expect(lines.some((l) => l.includes("/s/"))).toBe(false);
+    expect(lines.filter((l) => l.includes(ACC) && l.includes(DOC) && l.includes("boom"))).toHaveLength(1);
+    expect(lines.filter((l) => l.includes(TOKEN) || l.includes("/s/"))).toEqual([]);
+  });
+  it("a successful create logs nothing that carries the token or the link (mutation: log the token after minting it -> FAILS)", async () => {
+    expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: true, url: `https://app.example.com/s/${TOKEN}` });
+    const lines = errSpy.mock.calls.map((c) => c.map(String).join(" "));
+    expect(lines.filter((l) => l.includes(TOKEN) || l.includes("/s/"))).toEqual([]);
   });
 });
 
@@ -205,6 +210,25 @@ describe("undoStopSharingAction: Stop sharing's Undo (rule 6)", () => {
     expect(await undo([S1], REVOKED_AT, false)).toEqual({ ok: false, error: "documents.share.ended" });
     expect(writes()).toEqual([]);
     expect(await undo([S1], REVOKED_AT, true)).toEqual({ ok: true });
+    expect(db.restoreDocumentShares.mock.calls[0]![1]).toMatchObject({ ownersOnly: true });
+  });
+  it("orchestrator ruling M1: an Owner who stops a TEAM file's links, then switches it to Owners only, gets nothing back from an Undo claiming Owners only (the breaking sequence; mutation: drop the changed-since-the-stop check -> Staff's links come back -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    const STOP_AT = "2026-10-18T12:00:00.000Z";
+    db.revokeDocumentShares.mockResolvedValue({ ids: [S1], revokedAt: STOP_AT });
+    // 1. Stop sharing on a team file: the payload says ownersOnly false.
+    const stopped = await A.stopSharingAction(ACC, DOC);
+    expect(stopped).toEqual({ ok: true, ids: [S1], revokedAt: STOP_AT, ownersOnly: false });
+    // 2. The Owner switches the file to Owners only AFTER the stop (setDocumentOwnersOnly stamps updated_at).
+    db.getDocument.mockResolvedValue(doc({ owners_only: true, updated_at: "2026-10-18T12:00:05.000Z" }));
+    // 3. The Undo, posted with the payload's value changed to true, so it matches the file.
+    expect(await undo([S1], STOP_AT, true)).toEqual({ ok: false, error: "documents.share.ended" });
+    expect(db.restoreDocumentShares).not.toHaveBeenCalled();
+  });
+  it("orchestrator ruling M1: a file that was ALREADY Owners only when an Owner stopped its links (unchanged since) still undoes (mutation: refuse every Owners-only undo -> FAILS)", async () => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.getDocument.mockResolvedValue(doc({ owners_only: true, updated_at: "2026-10-18T11:59:59.000Z" }));
+    expect(await undo([S1], "2026-10-18T12:00:00.000Z", true)).toEqual({ ok: true });
     expect(db.restoreDocumentShares.mock.calls[0]![1]).toMatchObject({ ownersOnly: true });
   });
   it("a file the caller cannot see is refused with no write", async () => {

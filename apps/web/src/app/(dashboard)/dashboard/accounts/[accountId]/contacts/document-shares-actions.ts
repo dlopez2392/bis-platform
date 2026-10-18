@@ -116,6 +116,11 @@ export async function undoStopSharingAction(
     const doc = await provenDocument(accountId, docId, access.canManage);
     if (typeof doc === "string") return fail(doc);
     if (doc.owners_only !== ownersOnly) return fail(ENDED);
+    // Orchestrator ruling M1: the payload's value is the browser's, so it cannot tell "already Owners only
+    // when stopped" from "switched to Owners only since" (an Owner could post true after the switch and
+    // bring Staff's links back). Decided here: an Owners-only file changed after the stop gets nothing
+    // back. Any edit stamps updated_at, so this over-refuses; that is acceptable for an Undo.
+    if (doc.owners_only && Date.parse(doc.updated_at) > Date.parse(revokedAt)) return fail(ENDED);
     const r = await restoreDocumentShares(serviceDb(), {
       accountId, documentId: doc.id, ids: ids.map((i) => i.toLowerCase()), revokedAt, actorId: access.userId,
       ownersOnly: doc.owners_only, now: new Date(),
