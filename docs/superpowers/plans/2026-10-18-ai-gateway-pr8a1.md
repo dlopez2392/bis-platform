@@ -1883,6 +1883,7 @@ export function openGateDb(over: GateOver = {}): { db: SupabaseClient; calls: Ga
 - Modify (tests): `apps/web/src/lib/voice/summary-service.test.ts`, `apps/web/src/lib/voice/call-card.test.ts`, `apps/web/src/lib/voice/finish-call.test.ts:416-420`, `:723` (comment), `:1813`, `apps/web/src/app/api/voice/incoming/lifecycle.test.ts:627-680`, `:1101` (comment)
 - Orchestrator (not the agent; `.env*` and `.claude/agents/*.md` are not bis-voice's): `.env.example:125-131` ("Clamped to 10-697 … The 697 ceiling … 73s of tail") and `.claude/agents/bis-voice.md:25` ("clamped 10–697") move to 679 / 91 s in the same PR, text given in Step 7.
 - Create: `apps/web/src/lib/voice/summary-service.fallback.test.ts`, `apps/web/src/lib/voice/call-card.fallback.test.ts`
+- Modify (review of 64930866): `apps/web/src/app/api/voice/texml/handoff/route.ts:148-149` (comment): "the cap clamps at 697s … 697 + ~10 is ~11.8 minutes" becomes "the cap clamps at 679s … 679 + ~10 is ~11.5 minutes"; the "~590s" trigger is unchanged. Included in Step 10's commit and in Step 7's `b697b` grep.
 
 **Interfaces**
 - Consumes: `aiComplete`, `AI_REFUSALS` (`@/lib/ai/gateway`); `aiSafeError` (`@/lib/ai/log`); `openGateDb` (`@/lib/ai/testing/open-gate`, tests only); `type SupabaseClient` (`@bis/db`).
@@ -2205,7 +2206,7 @@ Imports added at `:32-37`: `import type { CallCard, SupabaseClient, TranscriptEv
 
 - [ ] **Step 9: Probes, by name:** (a) in `generateSummary`, `composeSummary(answer.ok ? answer.text : "AI unavailable.", state)` → every `it.each` row of the summary fallback FAILS; (b) move the spam check below `aiComplete` → "the spam skip makes no gateway call" FAILS; (c) `feature: "call_card"` in `generateSummary` → the two feature cases FAIL; (d) in `readCallForCard`'s catch, `String(e)` → the SENTINEL case FAILS; (e) drop `if (!answer.ok) return NO_READING;` (parse `""` instead) → the card fallback rows still pass via the catch: if they do, that proves the catch is the fallback, so instead mutate to `if (!answer.ok) return { reason: "", callerWords: null };` → the card fallback rows FAIL; (f) drop `db: ctx.db` at `:404` → the finish-call case FAILS; (g) the clamp at `680` in `route.ts:491` → "PHONE_MAX_CALL_SECONDS=680 … clamped to 679" FAILS (no goodbye at 679 s). Paste each line.
 
-- [ ] **Step 10: Commit** `git add -- apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts` then `git commit -m "voice: the call summary and the call card's reading go through the AI door; every refusal is the fact line or no reading, and no model word reaches a log (item 8a-1)" -- apps/web/src/lib/voice/summary-service.ts apps/web/src/lib/voice/summary-service.test.ts apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.ts apps/web/src/lib/voice/call-card.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts apps/web/src/lib/voice/finish-call.ts apps/web/src/lib/voice/finish-call.test.ts apps/web/src/app/api/voice/incoming/route.ts apps/web/src/app/api/voice/incoming/lifecycle.test.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/textback-window.ts"`. The orchestrator commits the `.env.example` and `.claude/agents/bis-voice.md` lines (Step 7) separately: `git commit -m "docs: the call cap's ceiling is 679 after the AI gateway (item 8a-1)" -- .env.example .claude/agents/bis-voice.md`.
+- [ ] **Step 10: Commit** `git add -- apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts` then `git commit -m "voice: the call summary and the call card's reading go through the AI door; every refusal is the fact line or no reading, and no model word reaches a log (item 8a-1)" -- apps/web/src/lib/voice/summary-service.ts apps/web/src/lib/voice/summary-service.test.ts apps/web/src/lib/voice/summary-service.fallback.test.ts apps/web/src/lib/voice/call-card.ts apps/web/src/lib/voice/call-card.test.ts apps/web/src/lib/voice/call-card.fallback.test.ts apps/web/src/lib/voice/finish-call.ts apps/web/src/lib/voice/finish-call.test.ts apps/web/src/app/api/voice/incoming/route.ts apps/web/src/app/api/voice/incoming/lifecycle.test.ts apps/web/src/app/api/voice/texml/handoff/route.ts "apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/calls/textback-window.ts"`. The orchestrator commits the `.env.example` and `.claude/agents/bis-voice.md` lines (Step 7) separately: `git commit -m "docs: the call cap's ceiling is 679 after the AI gateway (item 8a-1)" -- .env.example .claude/agents/bis-voice.md`.
 
 ---
 
@@ -3472,7 +3473,7 @@ test.describe.configure({ mode: "serial", timeout: 90_000 });
  */
 let accountId = "";
 async function words(page: Page) {
-  const lang = await page.locator("#ai").getAttribute("lang");
+  const lang = await page.locator("#ai[data-ai-card]").getAttribute("lang");
   return (key: MessageKey, params: Record<string, string | number> = {}) => {
     const raw = (lang === "es" ? (m as Record<string, string>)[`${key}.es`] : undefined) ?? m[key];
     return Object.entries(params).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), raw);
