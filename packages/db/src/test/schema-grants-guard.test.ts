@@ -112,7 +112,8 @@ describe("schema guard: every public table, view, materialized view and foreign 
       // 0078 (S-07 1b): the one view in public, security_invoker (the tables' RLS decides every row its caller
       // reads) and SELECT-only, reviewed in docs/superpowers/plans/2026-10-14-document-vault-pr1b.md deviation 6.
       // document-space-used.test.ts pins its security_invoker option and its grants.
-      expect((await writeSurface(c)).rlsOff).toEqual(["document_scan_timeline", "document_version_timeline"]);
+      // 0085 (S-07 3b) adds document_share_timeline, the same shape, reviewed in docs/superpowers/plans/2026-10-18-document-vault-pr3b.md deviation 4.
+      expect((await writeSurface(c)).rlsOff).toEqual(["document_scan_timeline", "document_share_timeline", "document_version_timeline"]);
     }));
 
   it("has no policy that applies to PUBLIC", () =>
