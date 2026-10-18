@@ -65,7 +65,10 @@ describe("/s/[token] page", () => {
     expect(html).toMatch(/<a href="https:\/\/bis-rgv\.com"[^>]*>Con tecnología de BIS<\/a>/);
     expect(text).not.toMatch(/Download|Questions|Powered by|shared a file/);
     expect(html).not.toContain("data-hero");
-    expect(html).not.toContain(TOKEN); // the token never reaches the markup
+    // Not in the static HTML. renderToStaticMarkup cannot see a client component's props, though: the token
+    // IS serialized into the page data for ShareDownload's fetch, so it reaches the browser. That residual is
+    // accepted (final review minor 5): the token is already in the address bar, the same exposure.
+    expect(html).not.toContain(TOKEN);
   });
 
   it("an open English link reads English", async () => {
