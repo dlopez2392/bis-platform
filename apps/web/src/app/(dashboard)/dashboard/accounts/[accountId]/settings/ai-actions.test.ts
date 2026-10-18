@@ -18,7 +18,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
 
 const { saveAccountAiAction, undoAccountAiAction, setGlobalAiAction } = await import("./ai-actions");
 const SVC = { tag: "service" };
-const STORED = { accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 0, globalEnabled: true };
+const STORED = { accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 0, globalEnabled: true, dayKey: null, recordSummariesToday: 0 };
 const WROTE = { enabled: false, monthlyBudgetCents: 2500 };
 
 /**

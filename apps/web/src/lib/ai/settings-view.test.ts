@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
+import type { AiSettingsRead } from "@bis/db";
 import { aiCardView, isConfirmWord, parseBudgetDollars } from "./settings-view";
+import { periodKeys } from "./period";
 
 /** Spec 3.6; plan deviations 15, 17. Intl outputs read with node (plan, "Read, not assumed"). */
 const NOW = new Date("2026-10-18T15:00:00Z");
@@ -87,5 +89,16 @@ describe("aiCardView (spec 3.6)", () => {
   it("the switches and the budget as the field shows it (mutation: budgetDollars in cents -> FAILS)", () => {
     const v = aiCardView({ settings: settings({ accountEnabled: false, monthlyBudgetCents: 2500, globalEnabled: false }), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale: "en" });
     expect([v.accountEnabled, v.budgetDollars, v.globalEnabled]).toEqual([false, "25", false]);
+  });
+});
+
+describe("item 8a-2: today's customer summaries (spec 3.6, 4.6; plan deviation 17)", () => {
+  it("today's count against the cap, in both languages; another day's count reads as none; zero hides the line (mutations: ignore dayKey -> yesterday's 7 shows -> FAILS; show '0 of 200' -> FAILS)", () => {
+    const today = (locale: "en" | "es", o: Partial<AiSettingsRead>) => aiCardView({ settings: settings(o), refusals: 0, overBudgetAt: null, now: NOW, zone: ZONE, locale }).summariesLine;
+    const { dayKey } = periodKeys(NOW, ZONE);
+    expect([today("en", { dayKey, recordSummariesToday: 12 }), today("es", { dayKey, recordSummariesToday: 12 })])
+      .toEqual(["12 of 200 customer summaries written today", "12 de 200 resúmenes de clientes escritos hoy"]);
+    expect(today("en", { dayKey: "2026-01-01", recordSummariesToday: 7 })).toBeNull();
+    expect(today("en", { dayKey, recordSummariesToday: 0 })).toBeNull();
   });
 });

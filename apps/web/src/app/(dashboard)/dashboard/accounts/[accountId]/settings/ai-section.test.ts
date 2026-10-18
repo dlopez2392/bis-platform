@@ -3,7 +3,7 @@ import { isValidElement, type ReactElement } from "react";
 
 const fx = vi.hoisted(() => ({
   agency: true, reads: [] as string[], fail: false, prefsLanguage: null as "en" | "es" | null,
-  settings: { accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 1_840_000, globalEnabled: true },
+  settings: { accountEnabled: true, monthlyBudgetCents: 1000, monthKey: "2026-10", monthSpendMicroUsd: 1_840_000, globalEnabled: true, dayKey: null, recordSummariesToday: 0 },
 }));
 vi.mock("@/lib/auth", () => ({
   requireAgencyOnlyAccountAccess: async () => { fx.reads.push("guard"); if (!fx.agency) throw new Error("NEXT_REDIRECT"); return { userId: "u" }; },
