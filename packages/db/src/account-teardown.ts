@@ -18,6 +18,8 @@ import { DOCUMENT_BUCKET } from "./document-rules";
  * list, two callers.
  */
 export const ACCOUNT_OWNED_TABLES = [
+  // Item 8a-1 (0086): the AI ledger and the account's AI settings (both cascade too; spec 3.3 lists them).
+  "ai_ledger", "account_ai_settings",
   "site_traffic_breakdown", "site_traffic_daily", "sites",
   "calls", "bookings", "calendars", "events",
   "concierge_conversations", "form_submissions", "forms",
