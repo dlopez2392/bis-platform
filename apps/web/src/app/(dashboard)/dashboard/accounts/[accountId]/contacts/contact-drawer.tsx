@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-  CalendarCheck, CheckSquare, DollarSign, ExternalLink, FileText, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
+  CalendarCheck, CheckSquare, DollarSign, Download, ExternalLink, FileText, Link2, ListChecks, MessageSquare, MessagesSquare, Paperclip, Phone, Plus, Send, ShieldAlert, Square, StickyNote, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -64,7 +64,7 @@ export const FIELDS: { field: Exclude<EditableField, "source" | "company_name">;
 const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   note: StickyNote, task: Square, deal: DollarSign, submission: FileText, message: MessageSquare, booking: CalendarCheck, call: Phone,
   document: Paperclip, documentVersion: Paperclip, documentRemoved: ShieldAlert, documentRequest: Send,
-  documentSkip: ListChecks, documentUnskip: ListChecks, chat: MessagesSquare,
+  documentSkip: ListChecks, documentUnskip: ListChecks, documentShared: Link2, documentShareOpened: Download, chat: MessagesSquare,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";

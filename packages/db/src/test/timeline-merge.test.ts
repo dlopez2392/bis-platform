@@ -143,12 +143,14 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     // S-07 1b (owner ruling R2) + S-07 2a (spec 3.5) + S-07 2b (plan deviation 6) + S-07 2c: the documents
     // source reads `documents`, 0078's document_version_timeline, 0079's document_scan_timeline, 0080's
     // document_requests and 0081's two document_requirement_skips reads (a skip at created_at, an un-skip at
-    // unskipped_at), so there are five reads more than there are sources, each at limit + 1.
-    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 5).fill(TIMELINE_PAGE_SIZE + 1));
+    // unskipped_at), and 0085's two document_share_timeline reads (a share at created_at, an open at
+    // first_opened_at), so there are seven reads more than there are sources, each at limit + 1.
+    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 7).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_requirement_skips").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_version_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_scan_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
+    expect(paged.filter((r) => r.table === "document_share_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);
     const exact = await listContactTimelinePage(fakeDb({ notes: notes(30) }).db, u(100), u(99));
     expect(exact.items).toHaveLength(30);
     expect(exact.older).toBeNull();
@@ -213,6 +215,14 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
 
   it("a refused read of the skip relation fails the documents source too, not a swallowed empty (S-07 2c; mutation: .catch(() => ({ skips: [], unskips: [] })) on listDocumentSkipTimeline -> FAILS)", async () => {
     const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_requirement_skips"] });
+    const errors: string[] = [];
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
+    expect(page.failed).toEqual(["documents"]);
+    expect(errors).toEqual(["documents"]);
+  });
+
+  it("a refused read of the share-link relation fails the documents source too, not a swallowed empty (S-07 3b; mutation: .catch(() => ({ shares: [], opens: [] })) on listDocumentShareTimeline -> FAILS)", async () => {
+    const { db } = fakeDb({ conversations: [{ id: CONV }] }, { errorOn: ["document_share_timeline"] });
     const errors: string[] = [];
     const page = await listContactTimelinePage(db, u(100), u(99), undefined, { onError: (s) => errors.push(s) });
     expect(page.failed).toEqual(["documents"]);

@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, FileText, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -139,6 +139,11 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
     case "documentSkip":
     case "documentUnskip":
       return <TimelineItem {...head} icon={ListChecks} />;
+    // S-07 3b: a share link wears the link icon; its first open, the download icon.
+    case "documentShared":
+      return <TimelineItem {...head} icon={Link2} />;
+    case "documentShareOpened":
+      return <TimelineItem {...head} icon={Download} />;
     case "submission": {
       const answers = e.submission.answers.filter((a) => a.value);
       return (
