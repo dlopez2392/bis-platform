@@ -126,6 +126,9 @@ test.describe("the command palette, as the agency", () => {
   });
 
   test("typing a seeded contact returns it live and opens that contact", async ({ page }) => {
+    // Item 8a-2: opening Test Client One's record would write an AI summary (a cache row and a ledger row) on
+    // that live account. This test is about the palette; the record's AI part never runs here (plan deviation 23).
+    await page.route(/\/ai-summary(\?|$)/, (route) => route.abort());
     await openAccountByName(page, SEEDED_ACCOUNT_NAME);
     await page.keyboard.press("ControlOrMeta+k");
     const palette = page.getByRole(PALETTE);
