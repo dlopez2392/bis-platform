@@ -76,9 +76,11 @@ end $$;
 create index documents_by_expiry on public.documents (account_id, expires_on, id)
   where deleted_at is null and expires_on is not null;
 
--- 4. The pass's window, across every account (a leading account_id cannot serve it).
+-- 4. The pass's window, across every account (a leading account_id cannot serve it). No owners_only
+--    clause: a parameterised owners_only = $1 under a generic plan cannot match a partial predicate,
+--    and the pass filters owners_only on the rows anyway.
 create index documents_expiry_window on public.documents (expires_on)
-  where deleted_at is null and expires_on is not null and not owners_only;
+  where deleted_at is null and expires_on is not null;
 
 -- 5. The Documents page's All filter (0077 has no created_at index on documents).
 create index documents_live_by_created on public.documents (account_id, created_at desc, id desc)

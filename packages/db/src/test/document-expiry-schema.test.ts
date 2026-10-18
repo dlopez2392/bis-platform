@@ -91,13 +91,38 @@ describe("0084: the expiry To-do's link (spec 3.2, 3.4)", () => {
         [t1]);
       expect(kept).toEqual({ document_expiry_id: s.doc, document_expiry_on: "2026-11-16", title: "T2" });
     }));
+
+  it("a signed-in update cannot move the To-do's expiry date alone (mutation: drop new.document_expiry_on := old.document_expiry_on -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const t1 = (await task(c, s.acct, s.doc, "2026-11-16", s.ana)).rows[0]!.id;
+      await actAs(c, { org_id: ORG, sub: OWNER });
+      const { rows: [kept] } = await c.query<{ document_expiry_id: string; document_expiry_on: string }>(
+        "update tasks set document_expiry_on = '2027-02-02' where id = $1 returning document_expiry_id, document_expiry_on::text",
+        [t1]);
+      expect(kept).toEqual({ document_expiry_id: s.doc, document_expiry_on: "2026-11-16" });
+    }));
+
+  it("a signed-in update cannot move the To-do to another document with a new date (mutation: drop new.document_expiry_id := old.document_expiry_id -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const doc2 = await one(c,
+        "insert into documents (account_id, contact_id, title, category, expires_on, source, created_by) values ($1,$2,'Permiso','permit','2027-03-03','upload','user_seed') returning id",
+        [s.acct, s.ana]);
+      const t1 = (await task(c, s.acct, s.doc, "2026-11-16", s.ana)).rows[0]!.id;
+      await actAs(c, { org_id: ORG, sub: OWNER });
+      const { rows: [kept] } = await c.query<{ document_expiry_id: string; document_expiry_on: string }>(
+        "update tasks set document_expiry_id = $2, document_expiry_on = '2027-03-03' where id = $1 returning document_expiry_id, document_expiry_on::text",
+        [t1, doc2]);
+      expect(kept).toEqual({ document_expiry_id: s.doc, document_expiry_on: "2026-11-16" });
+    }));
 });
 
 describe("0084: the documents indexes (deviation 4)", () => {
   it.each([
     ["tasks_document_expiry_once", "CREATE UNIQUE INDEX tasks_document_expiry_once ON public.tasks USING btree (document_expiry_id, document_expiry_on) WHERE (document_expiry_id IS NOT NULL)"],
     ["documents_by_expiry", "CREATE INDEX documents_by_expiry ON public.documents USING btree (account_id, expires_on, id) WHERE ((deleted_at IS NULL) AND (expires_on IS NOT NULL))"],
-    ["documents_expiry_window", "CREATE INDEX documents_expiry_window ON public.documents USING btree (expires_on) WHERE ((deleted_at IS NULL) AND (expires_on IS NOT NULL) AND (NOT owners_only))"],
+    ["documents_expiry_window", "CREATE INDEX documents_expiry_window ON public.documents USING btree (expires_on) WHERE ((deleted_at IS NULL) AND (expires_on IS NOT NULL))"],
     ["documents_live_by_created", "CREATE INDEX documents_live_by_created ON public.documents USING btree (account_id, created_at DESC, id DESC) WHERE (deleted_at IS NULL)"],
   ])("%s is exactly as designed (mutations: drop any predicate clause or column -> FAILS)", (name, def) =>
     withRollback(async (c) => {
