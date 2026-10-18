@@ -11,6 +11,7 @@ import {
 import {
   createDocumentRequestAction, documentRequestLinkAction, revokeDocumentRequestAction, undoRevokeDocumentRequestAction,
 } from "./document-requests-actions";
+import { createDocumentShareAction, stopSharingAction, undoStopSharingAction } from "./document-shares-actions";
 
 /**
  * What the Documents card does on trash, restore, Owners only and Download (spec 4.4, rule 6: at
@@ -47,6 +48,10 @@ export type DocumentHandlers = {
   copyRequestLink(id: string): Promise<void>;
   /** At once, with an Undo (rule 6). */
   revokeRequest(id: string): Promise<void>;
+  /** S-07 3b: makes a link to the file's current clean version and copies it. */
+  copyShareLink(doc: DocumentView): Promise<void>;
+  /** At once, with an Undo (rule 6). */
+  stopSharing(doc: DocumentView): Promise<void>;
 };
 
 type Answer = { ok: true } | { ok: false; error: string; params?: Record<string, string | number> };
@@ -81,12 +86,12 @@ export function documentHandlers({ accountId, locale, reload, reloadRequests, in
    * billing-card.tsx's copyLink: with no clipboard (a non-secure origin) or a refused one, the URL itself
    * goes in a toast that stays, so it can be copied by hand.
    */
-  async function copyLink(url: string): Promise<void> {
+  async function copyLink(url: string, copiedKey: MessageKey = "documents.request.linkCopied"): Promise<void> {
     const clipboard = typeof navigator === "undefined" ? undefined : navigator.clipboard;
     try {
       if (!clipboard) throw new Error("no clipboard");
       await clipboard.writeText(url);
-      toast.success(tt("documents.request.linkCopied"));
+      toast.success(tt(copiedKey));
     } catch {
       toast.error(tt("documents.request.copyFailed"), { description: url, duration: Infinity, closeButton: true });
     }
@@ -108,6 +113,8 @@ export function documentHandlers({ accountId, locale, reload, reloadRequests, in
   };
   /** A request's row in the one-write-at-a-time lock, apart from any file's id. */
   const requestRow = (id: string) => `request:${id}`;
+  /** A share write's row in the one-write-at-a-time lock, apart from the file's own id (trash, Owners only, …). */
+  const shareRow = (id: string) => `share:${id}`;
 
   return {
     async trash(doc) {
@@ -210,6 +217,23 @@ export function documentHandlers({ accountId, locale, reload, reloadRequests, in
       reloadRequests();
       // The Undo restores against the instant THIS revoke wrote, so a later revoke by someone else is never undone.
       offer(tt("documents.requests.revoked"), requestRow(id), () => undoRevokeDocumentRequestAction(accountId, id, r.revokedAt), reloadRequests);
+    },
+    async copyShareLink(doc) {
+      const r = await once(shareRow(doc.id), () => createDocumentShareAction(accountId, doc.id).catch(() => ({ ok: false as const, error: "documents.share.failed" })));
+      if (!r) return;
+      if (!r.ok) { say(r); return; }
+      await copyLink(r.url, "documents.share.copied");
+      reload();
+    },
+    async stopSharing(doc) {
+      const r = await once(shareRow(doc.id), () => stopSharingAction(accountId, doc.id).catch(() => failed));
+      if (!r) return;
+      if (!r.ok) { say(r); reload(); return; }
+      reload();
+      // The Undo puts back exactly the links THIS stop wrote, at its instant (plan deviation 3), with the
+      // Owners-only value this stop's own read saw (undoStopSharingAction's fifth argument).
+      offer(tt("documents.share.stopped", { title: doc.title }), shareRow(doc.id),
+        () => undoStopSharingAction(accountId, doc.id, r.ids, r.revokedAt, r.ownersOnly));
     },
   };
 }

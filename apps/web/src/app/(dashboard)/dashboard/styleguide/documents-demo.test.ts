@@ -14,6 +14,9 @@ vi.mock("../accounts/[accountId]/contacts/document-requests-actions", () => ({
 vi.mock("../accounts/[accountId]/contacts/document-requirements-actions", () => ({
   skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn(),
 }));
+vi.mock("../accounts/[accountId]/contacts/document-shares-actions", () => ({
+  createDocumentShareAction: vi.fn(), stopSharingAction: vi.fn(), undoStopSharingAction: vi.fn(),
+}));
 const requestActions = await import("../accounts/[accountId]/contacts/document-requests-actions");
 const { DocumentsDemo, demoHandlers } = await import("./documents-demo");
 const actions = await import("../accounts/[accountId]/contacts/documents-actions");
@@ -81,6 +84,11 @@ describe("styleguide: the Documents card in every state (DoD: /styleguide gains 
     expect(html).toContain("data-document-versions");
     expect(html).toContain("data-document-purge-form");
     expect(text).toContain(m["documents.purge.mismatch"]);
+  });
+
+  it("exactly one card shows a live share link, 'Shared · expires in 18 h' (S-07 3b; mutation: share it on every READY card -> FAILS)", () => {
+    expect(html.match(/data-document-shared/g)).toHaveLength(1);
+    expect(text).toContain("Shared · expires in 18 h");
   });
 
   it("the demo's handlers are inert: none reaches a server action (PR 1a review M6; mutation: build demoHandlers from documentHandlers -> FAILS)", async () => {

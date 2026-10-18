@@ -14,9 +14,12 @@ vi.mock("./document-requests-actions", () => ({
 vi.mock("./document-requirements-actions", () => ({
   skipDocumentRequirementAction: vi.fn(), undoSkipDocumentRequirementAction: vi.fn(), unskipDocumentRequirementAction: vi.fn(), undoUnskipDocumentRequirementAction: vi.fn(),
 }));
+vi.mock("./document-shares-actions", () => ({
+  createDocumentShareAction: vi.fn(), stopSharingAction: vi.fn(), undoStopSharingAction: vi.fn(),
+}));
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
-const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
+const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, shareHoursLeft, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
   shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles, askPreset, focusTarget, focusDue } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
@@ -28,10 +31,12 @@ const view = (over: Record<string, unknown> = {}) => ({
   versions: [{ id: "v1", contentType: "application/pdf", bytes: 1200, createdAt: "2026-10-10T15:00:00.000Z", addedOn: "2026-10-10", scan: "clean" }],
   purging: false, ...over,
 });
-const ready = (live: unknown[], trashed: unknown[] = [], capped = false, space: { used: number; quota: number } | null = null): Load => ({ status: "ready", data: {
-  today: "2026-10-13", now: "2026-10-13T15:00:00.000Z", record: { kind: "contact", id: "c1" }, live, trashed, capped, space } } as Load);
+const ready = (
+  live: unknown[], trashed: unknown[] = [], capped = false, space: { used: number; quota: number } | null = null, now = "2026-10-13T15:00:00.000Z",
+): Load => ({ status: "ready", data: {
+  today: "2026-10-13", now, record: { kind: "contact", id: "c1" }, live, trashed, capped, space } } as Load);
 const handlers = { trash: vi.fn(), restore: vi.fn(), setOwnersOnly: vi.fn(), download: vi.fn(), saveField: vi.fn(), undoField: vi.fn(), purge: vi.fn(), changed: vi.fn(),
-  askCustomer: vi.fn(), copyRequestLink: vi.fn(), revokeRequest: vi.fn() };
+  askCustomer: vi.fn(), copyRequestLink: vi.fn(), revokeRequest: vi.fn(), copyShareLink: vi.fn(), stopSharing: vi.fn() };
 type RequestsLoad = Props["requests"]["load"];
 const openRequest = { id: "r1", channel: "link", createdAt: "2026-10-13T15:00:00.000Z", expiresAt: "2026-10-19T15:00:00.000Z",
   items: [{ key: "insurance", category: "insurance", note: null, answered: false }] };
@@ -188,11 +193,42 @@ describe("the Documents card (spec 4.1, 4.5)", () => {
   });
 
   it("the row menu: Upload new version for everyone who sees the file, Owners only for an Owner only, in the spec's order (mutations: drop newVersion; drop the canManage guard -> FAILS)", () => {
-    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "trash"]);
+    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "share", "trash"]);
     expect(rowMenuItems(view() as never, true).map((i) => [i.id, i.labelKey])).toEqual([
       ["edit", "documents.edit"], ["ownersOnly", "documents.makeOwnersOnly"], ["newVersion", "documents.newVersion"],
-      ["download", "documents.download"], ["trash", "documents.trash"]]);
+      ["download", "documents.download"], ["share", "documents.share"], ["trash", "documents.trash"]]);
     expect(rowMenuItems(view({ ownersOnly: true }) as never, true).find((i) => i.id === "ownersOnly")!.labelKey).toBe("documents.makeTeam");
+  });
+
+  it("a live share link offers Stop sharing too, only while it is still live and only when the caller passes 'now' (S-07 3b; mutation: offer Stop sharing on an expired link -> FAILS)", () => {
+    const shared = view({ share: { expiresAt: "2026-10-19T06:00:00.000Z" } });
+    expect(rowMenuItems(shared as never, false, "2026-10-18T12:00:00.000Z").map((i) => i.id))
+      .toEqual(["edit", "newVersion", "download", "share", "stopSharing", "trash"]);
+    // Past the link's own expiry: no Stop sharing (nothing live to stop).
+    expect(rowMenuItems(shared as never, false, "2026-10-19T07:00:00.000Z").map((i) => i.id))
+      .toEqual(["edit", "newVersion", "download", "share", "trash"]);
+    // No 'now' at all: never offered (the caller must know the time to judge "live").
+    expect(rowMenuItems(shared as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "share", "trash"]);
+  });
+
+  it("shareHoursLeft: whole hours left, rounded UP; null with no live link or none left (mutation: Math.floor -> the one-minute case reads 0 -> FAILS)", () => {
+    expect(shareHoursLeft({ share: { expiresAt: "2026-10-19T06:00:00.000Z" } }, "2026-10-18T12:00:00.000Z")).toBe(18);
+    expect(shareHoursLeft({ share: { expiresAt: "2026-10-18T12:01:00.000Z" } }, "2026-10-18T12:00:00.000Z")).toBe(1);
+    expect(shareHoursLeft({ share: { expiresAt: "2026-10-18T12:00:00.000Z" } }, "2026-10-18T12:00:00.000Z")).toBeNull();
+    expect(shareHoursLeft({ share: undefined }, "2026-10-18T12:00:00.000Z")).toBeNull();
+  });
+
+  it("a shared row shows 'Shared · expires in 18 h', in both languages, exactly once, and the card still has ONE primary (rule 8; mutation: render it for an expired link -> FAILS)", () => {
+    const shared = view({ share: { expiresAt: "2026-10-19T06:00:00.000Z" } });
+    const html = render(ready([shared], [], false, null, "2026-10-18T12:00:00.000Z"));
+    expect(html.match(/data-document-shared/g)).toHaveLength(1);
+    expect(renderedText(html)).toContain("Shared · expires in 18 h");
+    expect(html.match(/data-variant="default"/g) ?? []).toHaveLength(1);
+    const es = render(ready([shared], [], false, null, "2026-10-18T12:00:00.000Z"), { locale: "es" });
+    expect(renderedText(es)).toContain("Compartido · vence en 18 h");
+    // An expired link draws nothing.
+    const expired = view({ share: { expiresAt: "2026-10-17T06:00:00.000Z" } });
+    expect(render(ready([expired], [], false, null, "2026-10-18T12:00:00.000Z"))).not.toContain("data-document-shared");
   });
 });
 
@@ -381,7 +417,7 @@ describe("virus scanning on the card (S-07 2a; spec 3.5; rule 3)", () => {
     expect(renderedText(rowOf(render(ready([removed])), "dx"))).toContain(m["documents.status.virusRemoved"]);
     expect(rowMenuItems(removed as never, true).map((i) => i.id)).toEqual(["edit", "ownersOnly", "newVersion", "trash"]);
     expect(rowMenuItems(pending("2026-10-13T14:59:00.000Z") as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "trash"]);
-    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "trash"]);
+    expect(rowMenuItems(view() as never, false).map((i) => i.id)).toEqual(["edit", "newVersion", "download", "share", "trash"]);
   });
 
   it("the card still has exactly ONE primary button with Checking and removed rows on it (rule 8; mutation: a primary 'Retry scan' -> FAILS)", () => {

@@ -3,10 +3,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 vi.mock("./documents-actions", () => ({ getDocumentUrlAction: vi.fn() }));
+import type { DocumentView } from "@/lib/documents/documents-load";
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const {
-  DocumentViewerBody, DocumentVersionsList, DocumentViewerDownload, viewerStateFor, fetchKeyFor, imageErrorStep,
+  DocumentViewerBody, DocumentVersionsList, DocumentViewerDownload, DocumentViewerShare, viewerStateFor, fetchKeyFor, imageErrorStep,
   FIRST_SESSION, sessionAfterImageError, sessionOnOpenChange, canOpen, shouldFetchUrl,
 } = await import("./document-viewer");
 
@@ -239,5 +240,32 @@ describe("DocumentViewerDownload: the dialog's own Download (review I2)", () => 
   it("drawn only for a clean file; absent for every non-clean state (mutation: always draw it -> FAILS)", () => {
     expect(render("clean")).toContain("Download");
     for (const scan of ["pending", "infected", "unscannable", "locked"] as const) expect(render(scan), scan).toBe("");
+  });
+});
+
+describe("DocumentViewerShare: the viewer's Copy share link, ghost, only for a clean live file (S-07 3b)", () => {
+  const shareSpy = () => vi.fn<(doc: DocumentView) => void>();
+  const render = (scan: "clean" | "pending" | "infected" | "unscannable" | "locked", opts: { onShare?: ReturnType<typeof shareSpy>; deletedAt?: string | null } = {}) =>
+    renderToStaticMarkup(createElement(DocumentViewerShare, {
+      doc: { ...withScan(scan), deletedAt: opts.deletedAt ?? null } as never, locale: "en", onShare: opts.onShare,
+    }));
+  it("one ghost button for a clean file with onShare (mutation: render it for 'pending' -> FAILS)", () => {
+    const html = render("clean", { onShare: shareSpy() });
+    expect(html).toContain("data-document-share");
+    expect(html).toContain('data-variant="ghost"');
+    expect(renderedText(html)).toContain(m["documents.share"]);
+    for (const scan of ["pending", "infected", "unscannable", "locked"] as const) {
+      expect(render(scan, { onShare: shareSpy() }), scan).toBe("");
+    }
+  });
+  it("nothing without onShare, and nothing for a trashed file even when clean (mutation: drop the deletedAt check -> FAILS)", () => {
+    expect(render("clean")).toBe("");
+    expect(render("clean", { onShare: shareSpy(), deletedAt: "2026-10-18T00:00:00.000Z" })).toBe("");
+  });
+  it("clicking it calls onShare with the document", () => {
+    const onShare = vi.fn<(doc: DocumentView) => void>();
+    const el = DocumentViewerShare({ doc: withScan("clean") as never, locale: "en", onShare }) as ReactElement<{ onClick?: () => void }>;
+    el.props.onClick!();
+    expect(onShare).toHaveBeenCalledWith(withScan("clean"));
   });
 });
