@@ -67,7 +67,7 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
 
 ### 3.2 Expiry To-dos
 
-- **New pass `documentsExpiry`** goes in `lib/automations/registry.ts`, beside `documentsSweep` and `documentsScan`. It runs through the existing cron harness once a day, in the same daily window as the sweep, with a heartbeat key `cron.pass.documentsExpiry`.
+- **New pass `documentsExpiry`** goes in `lib/automations/registry.ts`, beside `documentsSweep` and `documentsScan`. It runs through the existing cron harness on every tick, as the sweep does, and is idempotent: a file that already has its To-do for that date is skipped, and the unique index is the last word. Its heartbeat key is `cron.pass.documentsExpiry`. **Amended 2026-10-17:** the sweep has no daily window (it runs every tick), so neither does this pass (plan PR 3a deviation 1).
 - **A document qualifies when:**
   - it is not trashed
   - it is not Owners only (a To-do title would reveal the file to Staff)
@@ -85,6 +85,7 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
   - **Due date:** `due_at` is the expiry date at 09:00 in the account's zone, minus 7 days.
   - **Event:** `task.created` is emitted with `documentId`, actor `documents-expiry`, type `system`.
 - **The To-do links to the record's Documents card** with the document in focus. On the card, **Pedir al cliente** accepts a pre-selected category, carried in the URL (`?ask=insurance`). This is a small change to the 2b dialog's initial state.
+- **Owners only removes the To-do (amended 2026-10-17, owner ruling R1).** Switching a file to Owners only deletes its open expiry To-dos at once, on the server, in the same action, after the action's own visibility read: a To-do title names the file, and Staff read To-dos. A done To-do stays. Switching the file back off holds nothing, so the next pass run reopens the To-do for that file and date.
 - **Failures** are logged by document id and account, never with the file title (`loggableError`). One document's failure never stops the pass. The pass has a per-run cap (200 To-dos), and a capped run logs that it was capped.
 
 ### 3.3 The Required documents card (Owner screen for the 2c checklist)
@@ -98,10 +99,12 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
 ### 3.4 Migration 0084 (`document_expiry_tasks`)
 
 - The two `tasks` columns, the check, the composite foreign key, the unique partial index, and the client-write trigger extension (3.2).
-- A partial index on `documents (account_id, expires_on) where deleted_at is null and expires_on is not null` serves both the pass and the page's expiring and expired filters.
-- An index on `documents (account_id, created_at desc, id) where deleted_at is null` serves the All filter. The plan checks whether 0077 already has an equivalent and drops this one if so.
+- Three `documents` indexes (amended 2026-10-17; plan PR 3a deviation 4):
+  - `(account_id, expires_on, id) where deleted_at is null and expires_on is not null` serves the page's expiring and expired filters;
+  - `(expires_on) where deleted_at is null and expires_on is not null and not owners_only` serves the pass, which reads across every account (a leading `account_id` cannot serve that on Postgres 17);
+  - `(account_id, created_at desc, id desc) where deleted_at is null` serves the All filter (0077 has no `created_at` index on `documents`).
 - The rollback note lives in the file's header.
-- Grants and RLS: no new table, so the existing `tasks` policies apply. The grants guard test is updated for the new columns.
+- Grants and RLS: no new table, so the existing `tasks` policies apply. **Amended 2026-10-17:** the grants guard test does not change (`tasks` already holds table-wide client grants); the control is the extended client-write trigger.
 
 ## 4. PR 3b: share links
 

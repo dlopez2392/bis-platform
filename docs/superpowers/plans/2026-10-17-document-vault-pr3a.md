@@ -4,24 +4,34 @@
 
 **Goal:** An account-wide **Documents** page under CRM (right after Contacts) lists every live file filed on a customer or a household/business, "Expiring soon" by default, with Expired / All and a category filter, a real total and cursor paging; thirty days before a file's expiry a cron pass opens ONE To-do on the record ("Ana García's insurance expires on Nov 16"), linked to the record's Documents card with that file in focus and **Ask the customer** pre-ticked for its category; and a client Owner (or the agency) edits the account's required-documents list from a **Required documents** card at the top of that page, with its own Save, toast and Undo. Closes the 2c note that P7 is not met for client Owners.
 
-**Architecture:** One migration, **0084**: two `tasks` columns (`document_expiry_id`, `document_expiry_on`) with a coherence CHECK, a composite FK to `documents (account_id, id)` ON DELETE CASCADE, a unique partial index `tasks_document_expiry_once`, 0080's `app.keep_task_links()` re-created with the two new columns held for the client role, and three `documents` indexes (page's expiry order, the pass's cross-account window, the page's All order). Two new `@bis/db` modules: `document-expiry.ts` (the pass's candidate read, the existing-key read, the one-To-do insert with 23505 dedupe) and `account-documents.ts` (the page's filtered, cursor-paged read and its head count that throws on `null`). A new cron pass `documentsExpiry` (registered after `documentsScan`, every tick, idempotent) uses pure helpers in `lib/documents/expiry-task.ts` (the account-zone window, the due instant, the To-do's title in the account's language). The page is a server component reading through the REQUEST client only; its rows open the existing viewer. The work queue learns the To-do's link from its `document_expiry_id`; the Documents card learns `?document=` (focus) and `?ask=` (pre-tick). The Owner card reuses 2c's save action and adds a compare-and-set Undo.
+**Architecture:** One migration, **0084**: two `tasks` columns (`document_expiry_id`, `document_expiry_on`) with a coherence CHECK, a composite FK to `documents (account_id, id)` ON DELETE CASCADE, a unique partial index `tasks_document_expiry_once`, 0080's `app.keep_task_links()` re-created with the two new columns held for the client role, and three `documents` indexes (page's expiry order, the pass's cross-account window, the page's All order). Two new `@bis/db` modules: `document-expiry.ts` (the pass's candidate read, the existing-key read, the one-To-do insert with 23505 dedupe) and `account-documents.ts` (the page's filtered, cursor-paged read and its head count that throws on `null`). A new cron pass `documentsExpiry` (registered after `documentsScan`, every tick, idempotent) uses pure helpers in `lib/documents/expiry-task.ts` (the account-zone window, the due instant, the To-do's title in the account's language). The page is a server component reading through the REQUEST client only; its rows open the existing viewer. The work queue learns the To-do's link from its `document_expiry_id`; the Documents card learns `?document=` (focus) and `?ask=` (pre-tick). The Owner card reuses 2c's save action and adds a compare-and-set Undo. Switching a file to Owners only deletes its open expiry To-dos at once (owner ruling R1).
 
 **Tech Stack:** Postgres 17 (Supabase) migration; supabase-js 2.110.8; Next.js 16.3.6 App Router (server components, server actions, `error.tsx`/`loading.tsx` boundaries); React 19.2.4; vitest 4 (`renderToStaticMarkup`, no DOM; `vi.mock`); sonner toasts; lucide-react; the `@bis/db` suites on a local PG18 replica (with a local PostgREST for `withTestAccount`) and CI `verify`; Playwright (bis-e2e-qa writes it, the orchestrator runs it).
 
 **Spec:** `docs/superpowers/specs/2026-10-17-document-vault-part3-design.md` (owner-approved 2026-10-17): §1 (scope, "Not in part 3"), §2 E0–E2, §3 whole (3.1–3.4), and the 3a parts of §5, §6, §7. NOT §4 (3b, share links). Owner-accepted implementer choice (2026-10-17): **a To-do's due is the expiry date minus 7 days, at 09:00 in the account's zone.** Templates: `docs/superpowers/plans/2026-10-16-document-vault-pr2c.md` (shipped as #263) and `docs/superpowers/plans/2026-10-15-document-vault-pr2b.md` (#261). Base: `main` at `d806ec5c` (#267) plus the spec commit `ac252552`. **0077–0083 are on bis-ci and production: never re-apply.** Every file:line below was read off this worktree at `ac252552`; anything not read is labelled **Assumption**.
 
+**Revision:** 2026-10-17, after the opus plan review of `95bc0ba1` (CHANGES REQUESTED). Owner rulings R1–R3 below; findings I1, I2 and M1–M12 applied, each named where it lands; the spec carries matching "Amended 2026-10-17" lines (§3.2, §3.4).
+
 `<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s07-3` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s07-3`), branch `feat/s07-vault-3`. `<SCRATCH>` = `C:\Users\danlo\AppData\Local\Temp\claude\C--Users-danlo-bis-platform\efc99fd8-2a23-42ec-987c-f80cb2c56ca1\scratchpad` (Git Bash: `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/efc99fd8-2a23-42ec-987c-f80cb2c56ca1/scratchpad`); write it out literally in every command. `<KIT6B>` = `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/16ea02fa-4bbf-472b-babe-a260f83c4097/scratchpad/s06b-kit` (the newest kit, built for 0083; read 2026-10-17: `replica.sh`, `pgrst.sh` present; its `pgrst.sh` copies `postgrest.exe`, `make-jwt.js`, `proxy.mjs` from `/c/Users/danlo/AppData/Local/Temp/claude/C--Users-danlo-bis-platform/db21dcfe-6aee-47cd-8939-ff4f82a45810/scratchpad/s07-t3-impl`, present). `…/acct/` = `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/`. `…/contacts/` = `…/acct/contacts/`. `…/documents/` = `…/acct/documents/` (new).
 
-## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited; each goes to the owner)
+## Owner rulings (2026-10-17, after the plan review)
 
-1. **"Once a day, in the same daily window as the sweep": the sweep has no daily window.** `passes/documents-sweep.ts:6` says "EVERY tick (with nothing due it is two indexed reads and no write)"; the cron runs every 15 minutes (`apps/web/vercel.json`: `*/15 * * * *`). The expiry pass therefore runs every tick too, idempotently: one candidate read, one existing-key read, and inserts only for keys with no To-do (0084's unique index is the last word, 23505 = already there). A To-do opens on the first tick of the account-zone day a file enters the 30-day window, and a file whose newest version only turns clean later in the day is picked up on that tick, not tomorrow. Heartbeat key `cron.pass.documentsExpiry` (written by `runPasses`, `harness.ts:46`, for every registered pass; nothing to add).
+| # | Ruling |
+|---|---|
+| R1 | **Switching a file to Owners only DELETES its open expiry To-dos at once** (review I3: a To-do's title names the file, and Staff read To-dos). Server-side, in the action path: `setOwnersOnlyAction` (and `undoOwnersOnlyAction` when it writes `true` back), after the request-client read it already does (`visibleDocument`) and the Owners-only write, deletes on the SERVICE client every To-do with that `account_id` and `document_expiry_id` that is not done (`completed_at is null`). A done To-do stays (history). Switching the file back off holds nothing: the next pass run reopens the To-do for that file and date. Tasks 3 (`deleteOpenExpiryTasks`) and 4 (the two actions); spec §3.2 amended. |
+| R2 | Deviation 8's pager words ("Next" / "Back to the start") are ACCEPTED; Task 13 amends DESIGN.md's "Paged lists" line to allow them. |
+| R3 | Deviation 7 (the 1000-candidate read) is ACCEPTED; every other deviation is accepted as written. |
+
+## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited; ACCEPTED by the owner 2026-10-17)
+
+1. **"Once a day, in the same daily window as the sweep": the sweep has no daily window.** `passes/documents-sweep.ts:6` says "EVERY tick (with nothing due it is two indexed reads and no write)"; the cron runs every 15 minutes (`apps/web/vercel.json`: `*/15 * * * *`). The expiry pass therefore runs every tick too, idempotently: one candidate read, one existing-key read, and inserts only for keys with no To-do (0084's unique index is the last word, 23505 = already there). A To-do opens on the first tick of the account-zone day a file enters the 30-day window, and a file whose newest version only turns clean later in the day is picked up on that tick, not tomorrow. Heartbeat key `cron.pass.documentsExpiry` (written by `runPasses`, `harness.ts:46`, for every registered pass; nothing to add). Spec §3.2 amended 2026-10-17 to say "every tick, idempotent".
 2. **The FK is ON DELETE CASCADE** (spec §3.2 is silent on delete). `purgeDocumentRow` (`packages/db/src/documents.ts:375-384`, the sweep's 30-day purge), `deletePurgedDocument` and `purgeContactDocuments` DELETE document rows; a NO ACTION FK would make every purge of a file that ever had an expiry To-do fail with 23503. 0080 chose the same for request To-dos (`0080_document_requests.sql:244-246`). A purged file's To-do goes with it.
-3. **The grants guard test does not change.** Spec §3.4 says "The grants guard test is updated for the new columns", but `tasks` is allow-listed as table-wide `IUD` for `authenticated` (`packages/db/src/test/schema-grants-guard.test.ts:106`), so adding columns changes no grant the guard reads. The control is 0084's `keep_task_links` (the client role's insert stores NULL, its update keeps the stored values), proven in Task 1. The guard is still RE-RUN in Task 1 to prove it is unchanged.
-4. **Indexes.** Spec §3.4's `documents (account_id, expires_on) where deleted_at is null and expires_on is not null` cannot serve the pass's CROSS-account window read on Postgres 17 (no skip scan; the leading column is `account_id`). 0084 therefore makes three: `documents_by_expiry (account_id, expires_on, id) where deleted_at is null and expires_on is not null` (the page's two expiry filters; `id` for the cursor's tiebreak), `documents_expiry_window (expires_on) where deleted_at is null and expires_on is not null and not owners_only` (the pass), and `documents_live_by_created (account_id, created_at desc, id desc) where deleted_at is null` (the All filter). 0077 has no `created_at` index on `documents` (`0077_document_vault.sql:111-114`: by contact, by group, by opportunity, trashed), so the All index is needed.
+3. **The grants guard test does not change.** Spec §3.4 says "The grants guard test is updated for the new columns", but `tasks` is allow-listed as table-wide `IUD` for `authenticated` (`packages/db/src/test/schema-grants-guard.test.ts:106`), so adding columns changes no grant the guard reads. The control is 0084's `keep_task_links` (the client role's insert stores NULL, its update keeps the stored values), proven in Task 1. The guard is still RE-RUN in Task 1 to prove it is unchanged. Spec §3.4 amended 2026-10-17 (the guard line dropped).
+4. **Indexes.** Spec §3.4's `documents (account_id, expires_on) where deleted_at is null and expires_on is not null` cannot serve the pass's CROSS-account window read on Postgres 17 (no skip scan; the leading column is `account_id`). 0084 therefore makes three: `documents_by_expiry (account_id, expires_on, id) where deleted_at is null and expires_on is not null` (the page's two expiry filters; `id` for the cursor's tiebreak), `documents_expiry_window (expires_on) where deleted_at is null and expires_on is not null and not owners_only` (the pass), and `documents_live_by_created (account_id, created_at desc, id desc) where deleted_at is null` (the All filter). 0077 has no `created_at` index on `documents` (`0077_document_vault.sql:111-114`: by contact, by group, by opportunity, trashed), so the All index is needed. Spec §3.4 amended 2026-10-17 (three indexes).
 5. **"The To-do links to the record's Documents card with the document in focus."** A task has no link of its own: the work queue links a task row to its contact (`…/acct/tasks/work-list.tsx:370-374`; `apps/web/src/app/(dashboard)/dashboard/work/agency-work-list.tsx:194`). The link is therefore DERIVED from the task's `document_expiry_id`: the work-queue read embeds the document's `category` and `client_group_id`, and one pure function builds `…/contacts/<contactId>?document=<id>&ask=<category>`, or, for a household/business file, `…/groups/<groupId>?document=<id>&ask=<category>` (a contact's card does not list its group's files: `listRecordDocuments` filters on `contact_id`, `documents.ts:75-77`). "In focus" = the card scrolls that row into view and focuses its open button once its files read is ready; the viewer is NOT opened by itself.
 6. **`?ask=<category>` pre-ticks; it does not open the dialog.** Spec §3.2: "Pedir al cliente accepts a pre-selected category … a small change to the 2b dialog's initial state." The card's header "Ask the customer" opens the dialog with `[ask]` ticked (`openAsk(items)`, `documents-card.tsx:707`; the dialog already takes `initialItems`, `:829`). Only the eight requirable categories (2c D8, `REQUIRABLE_DOCUMENT_CATEGORIES`, `document-rules.ts:121`) are carried: an `other` file's To-do link has no `ask` (2b's dialog needs a note for Other).
 7. **The candidate read is bounded.** The pass reads at most 1000 window candidates per tick (newest expiry first, so files entering the window and renewals come first), and logs when the read came back full. Above ~1000 files expiring within a month across ALL accounts, a file uploaded with an expiry already inside the window could wait. Not reached at this agency's scale; the log line is the signal. (The alternative, a SQL anti-join function in 0084, was not taken: the spec lists 0084's contents.)
-8. **The pager's words.** DESIGN.md "Paged lists" names "Older"/"Newer". On "Expiring soon" (sorted soonest first) "Older" would point at LATER dates. This plan uses **"Next"** / **"Back to the start"** ("Siguiente" / "Volver al principio"), same `?before=` mechanics, exactly one pager; "Back to the start" returns to the head, as the contact list's "Newer" does (`…/contacts/page.tsx:73-77`). Two keys in Task 2; flipping them back is one edit.
+8. **The pager's words.** DESIGN.md "Paged lists" names "Older"/"Newer". On "Expiring soon" (sorted soonest first) "Older" would point at LATER dates. This plan uses **"Next"** / **"Back to the start"** ("Siguiente" / "Volver al principio"), same `?before=` mechanics, exactly one pager; "Back to the start" returns to the head, as the contact list's "Newer" does (`…/contacts/page.tsx:73-77`). Two keys in Task 2. **ACCEPTED (R2);** Task 13 amends DESIGN.md's "Paged lists" line.
 9. **The Owner card's Undo is a compare-and-set on the whole list** (restore the previous list only while the stored list is still exactly what this save wrote), not 2c's "the actor's own, within 10 minutes" (a per-row rule: the account column has no author or time). A concurrent edit (the agency on Settings) makes the Undo answer "changed" instead of clobbering it.
 10. **A pass run with any failed document throws at the end** (the sweep's pattern, `documents-sweep.ts:72-74`), after every other document in the run was processed, so the heartbeat records the failure and two failing ticks are opsWatch's alert. Spec §3.2's "one document's failure never stops the pass" holds within the run.
 11. **The Owner card's words are its own.** 2c's save action answers English display text (`m[...]`, `…/acct/settings/document-requirements-actions.ts:21-30`). The bilingual card ignores `error` and toasts its own usted sentence (`documents.required.failed`) in the reader's language.
@@ -45,10 +55,10 @@
 - **0084 is NOT on bis-ci until Task 15 step 2.** Until then: **no `@bis/db` vitest and no live web test may run against bis-ci** (the suites would hit a schema without the new columns and report environment failures as code failures, and a mutation probe could write there). Every `@bis/db` suite runs on YOUR local PG18 replica ("The replica kit" below), or is left to CI `verify` (which builds its own stack from the branch's migrations). Never `pnpm --filter @bis/db exec vitest` with the default env.
 - **Ownership (tag on every task; no task edits a file its owner does not own).**
   - **bis-db-schema:** `packages/db/supabase/migrations/0084_document_expiry_tasks.sql` (new), `packages/db/src/test/document-expiry-schema.test.ts` (new), `<SCRATCH>/s07f-kit/*` (Task 1).
-  - **bis-crm:** `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 2 only); `packages/db/src/{document-expiry,document-rules}.ts`, `packages/db/src/index.ts` (Task 3), `packages/db/src/test/document-expiry.test.ts`; `packages/db/src/{account-documents,documents,document-requirements}.ts`, `packages/db/src/index.ts` (Task 4, after Task 3), `packages/db/src/test/account-documents.test.ts`, `…/documents/required-documents-actions.ts` (+ test), one line in `…/acct/settings/document-requirements-actions.ts`, one `ALLOWED` line in `…/acct/in-account-service-reads.test.ts` (Task 4); `packages/db/src/{work-queue,activities,record}.ts`, `packages/db/src/test/work-queue.test.ts`, `apps/web/src/lib/record/author-mark.ts` (+ test), `apps/web/src/lib/documents/card-focus.ts` (+ test), `…/acct/tasks/work-list.tsx`, `apps/web/src/app/(dashboard)/dashboard/work/agency-work-list.tsx` (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 11, regenerated).
-  - **bis-automations:** `apps/web/src/lib/documents/expiry-task.ts` (+ test), `apps/web/src/lib/automations/passes/documents-expiry.ts` (+ test), `apps/web/src/lib/automations/registry.ts`, `apps/web/src/lib/automations/sentinel.test.ts`, `apps/web/src/app/api/cron/reminders/route.test.ts` (Task 5).
+  - **bis-crm:** `apps/web/src/lib/messages.ts` + one `describe` in `messages.test.ts` (Task 2 only); `packages/db/src/{document-expiry,document-rules}.ts`, `packages/db/src/index.ts` (Task 3), `packages/db/src/test/document-expiry.test.ts`; `packages/db/src/{account-documents,documents,document-requirements}.ts`, `packages/db/src/index.ts` (Task 4, after Task 3), `packages/db/src/test/account-documents.test.ts`, `…/documents/required-documents-actions.ts` (+ test), one line in `…/acct/settings/document-requirements-actions.ts`, one `ALLOWED` line in `…/acct/in-account-service-reads.test.ts`, R1's lines in `…/contacts/documents-actions.ts` (+ `documents-actions.test.ts`) (Task 4); `packages/db/src/{work-queue,activities,record}.ts`, `packages/db/src/test/{work-queue,tasks-call-id-read}.test.ts`, `apps/web/src/lib/record/author-mark.ts` (+ test), `apps/web/src/lib/documents/card-focus.ts` (+ test), `…/acct/tasks/work-list.tsx`, `apps/web/src/app/(dashboard)/dashboard/work/agency-work-list.tsx` (Task 6); `apps/web/src/lib/i18n/{catalogue,ratchet}-baseline.json` (Task 11, regenerated).
+  - **bis-automations:** `apps/web/src/lib/documents/expiry-task.ts` (+ test), `apps/web/src/lib/automations/passes/documents-expiry.ts` (+ test), `apps/web/src/lib/automations/registry.ts`, `apps/web/src/lib/automations/sentinel.test.ts`, `apps/web/src/app/api/cron/reminders/route.test.ts`, `apps/web/src/lib/automations/cron-coupling.test.ts` (Task 5).
   - **bis-frontend:** `…/contacts/documents-card.tsx` (+ `documents-card.test.ts`, one `describe` appended to `documents-card-structure.test.ts`), `…/contacts/[contactId]/page.tsx` (+ `page.test.ts`), `…/acct/groups/[groupId]/page.tsx` (+ `page.test.ts`) (Task 7); `apps/web/src/lib/nav-groups.ts` (+ test), `apps/web/src/components/app-sidebar.tsx`, `apps/web/src/lib/palette/registry.ts` (+ test) (Task 8); `apps/web/src/lib/documents/account-list.ts` (+ test), `…/documents/{page.tsx,page.test.ts,loading.tsx,error.tsx,documents-list.tsx,documents-list.test.ts,category-filter.tsx}`, `…/acct/technician-guards.test.ts` (one case) (Task 9); `…/documents/{required-documents-summary.tsx,required-documents-summary.test.ts,required-documents-handlers.ts,required-documents-handlers.test.ts}`, the summary's mount in `…/documents/page.tsx` (+ one `page.test.ts` case), `apps/web/src/app/(dashboard)/dashboard/styleguide/{documents-page-demo.tsx,documents-page-demo.test.ts,page.tsx}` (Task 10).
-  - **bis-e2e-qa:** `apps/web/e2e/documents-page.spec.ts` (new) (Task 12).
+  - **bis-e2e-qa:** `apps/web/e2e/documents-page.spec.ts` (new); the nav pins in `apps/web/e2e/client-access.spec.ts` and `apps/web/e2e/assign.spec.ts` (Task 12).
   - **Orchestrator:** Task 0, `DESIGN.md` and the part-2 spec's amendment line (Task 13), the ledger, the bis-ci and production applies of 0084, the parity check, the gates, the PR, the merge, the tracker.
 - **Shared files, one task at a time.** `apps/web/src/lib/messages.ts`: **Task 2 only** (every key this plan uses is listed there; a later task that finds one missing STOPS and reports; the orchestrator re-opens Task 2). `packages/db/src/index.ts`: Task 3, then Task 4 (sequential). `…/contacts/documents-card.tsx`: **Task 7 only** (it also EXPORTS `ExpiryLine` and `ScanStatus` for Task 9). `…/documents/page.tsx`: Task 9 creates it, Task 10 adds the summary's mount after Task 9 has committed. `apps/web/src/lib/palette/registry.ts`, `nav-groups.ts`: Task 8 only ("add a line, never reorder"). `apps/web/src/lib/i18n/*-baseline.json`: Task 11 only, after every copy-bearing task.
 - **Every test must be able to fail; the plan writer named each one's mutation, and the implementer runs it.** Run the probe, see the test fail BY NAME, paste the failing assertion line into the report, revert by editing back. Shapes a reviewer rejects on sight (memory "Vacuous test shapes"): `toBeTruthy`/`toBeDefined` on content; a count-only guard where the content can be asserted; an English-only assertion where a Spanish twin exists (assert BOTH, the Spanish against the literal string, never `t()`'s output, which falls back to English silently); a mock that satisfies itself; an assertion on a value the fixture already held before the code ran; a WANT constant compared with itself; a negative `not.toContain` on raw `renderToStaticMarkup` output for a string with an apostrophe (use `renderedText()` from `apps/web/src/lib/rendered-text.ts` for EVERY copy assertion). A `-t` filter that matches nothing passes silently: check the run count in vitest's summary block.
@@ -89,9 +99,13 @@ Paste both values; stop if they differ.
 
 ## Pinned tests this PR changes (stated outright)
 
-- `apps/web/src/lib/automations/sentinel.test.ts`: `dbMocks` (`:16-50`) gains `listExpiringDocuments: vi.fn(async () => [])`; `beforeEach` (`:200-250` area) sets it to `[]` again beside the sweep's two; a new `expect(results.documentsExpiry).toEqual({ opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0 })` after `:269`; the registry-order case (`:285-286`) gains `"documentsExpiry"` right after `"documentsScan"`, and its title names "the documents expiry To-dos after the scan" (Task 5).
-- `apps/web/src/app/api/cron/reminders/route.test.ts`: the bare `@bis/db` factory (`:14-60`) gains `listExpiringDocuments: async () => []` (an unlisted export throws in this factory, `:16-21`); a new `const EMPTY_DOCUMENTS_EXPIRY = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0 };` beside `:323-324`; every exact body that lists `documentsScan: EMPTY_DOCUMENTS_SCAN` gains `documentsExpiry: EMPTY_DOCUMENTS_EXPIRY` right after it: `:412`, `:435`, `:458`, `:474`, `:567`, `:597`, `:640` (seven) (Task 5). Read the count off `grep -c "documentsScan: EMPTY_DOCUMENTS_SCAN"` first; if it is not 7, stop and report.
-- `apps/web/src/lib/nav-groups.test.ts`: `:58` CRM list becomes `["nav.contacts", "nav.documents", "nav.opportunities"]`; the Technician case `:142-150` gains `${BASE}/documents` after `${BASE}/contacts`; the snapshot `:154-173` gains `${BASE}/documents` after `${BASE}/contacts` in `owner` (so `staff`, derived, too) and `agency`; its comment says "S-07 3a added Documents after Contacts". (Task 8)
+- `apps/web/src/lib/automations/sentinel.test.ts`: `dbMocks` (`:16-50`) gains `listExpiringDocuments: vi.fn(async () => [])`; `beforeEach` (`:200-250` area) sets it to `[]` again beside the sweep's two; a new `expect(results.documentsExpiry).toEqual({ opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 })` after `:269`; the registry-order case (`:285-286`) gains `"documentsExpiry"` right after `"documentsScan"`, and its title names "the documents expiry To-dos after the scan" (Task 5).
+- `apps/web/src/app/api/cron/reminders/route.test.ts`: the bare `@bis/db` factory (`:14-60`) gains `listExpiringDocuments: async () => []` (an unlisted export throws in this factory, `:16-21`); a new `const EMPTY_DOCUMENTS_EXPIRY = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };` beside `:323-324` (the pass's `shiftDay` and window constant come from the UNMOCKED subpath `@bis/db/document-rules`, review I1, so the factory needs only the one read); every exact body that lists `documentsScan: EMPTY_DOCUMENTS_SCAN` gains `documentsExpiry: EMPTY_DOCUMENTS_EXPIRY` right after it: `:412`, `:435`, `:458`, `:474`, `:567`, `:597`, `:640` (seven) (Task 5). Read the count off `grep -c "documentsScan: EMPTY_DOCUMENTS_SCAN"` first; if it is not 7, stop and report.
+- `apps/web/src/lib/automations/cron-coupling.test.ts:330-338` (review M4): the sum gains a fifth term, `EXPIRY_BUDGET_MS` (15 s; imported from `./passes/documents-expiry`), the case title says "five", and its comment names S-07 3a: 60 + 60 + 60 + 45 + 15 = 240 s, plus the 60 s headroom = 300 = `maxDuration` (Task 5).
+- `packages/db/src/test/tasks-call-id-read.test.ts:59` (review M5): the exact `listContactTasks` select string gains `, document_expiry_id` (Task 6).
+- `…/contacts/documents-actions.test.ts:13-25`: the `db` mock object gains `deleteOpenExpiryTasks: vi.fn()` (the factory spreads `db`); new R1 cases (Task 4).
+- `apps/web/e2e/client-access.spec.ts:99-103` (review I2): `CLIENT_NAV` gains `"Documents"` right after `"Contacts"`; `apps/web/e2e/assign.spec.ts:173-174`: the Technician's nav link count 5 → **6** and its label list gains `"Documents"` after `"Contacts"` (Task 12).
+- `apps/web/src/lib/nav-groups.test.ts`: `:58` CRM list becomes `["nav.contacts", "nav.documents", "nav.opportunities"]`; the Technician case `:142-150` gains `${BASE}/documents` after `${BASE}/contacts` and its title becomes "a Technician sees exactly To do, Contacts, Documents, Conversations, Calls and Calendar, in the groups' order (mutation: leave Website in for a Technician -> FAILS)" (review M12); the snapshot `:154-173` gains `${BASE}/documents` after `${BASE}/contacts` in `owner` (so `staff`, derived, too) and `agency`; its comment says "S-07 3a added Documents after Contacts". (Task 8)
 - `apps/web/src/lib/palette/registry.test.ts`: two new cases (Documents keywords; the Owner's Required documents entry) (Task 8).
 - `…/acct/technician-guards.test.ts`: one new case: `documents/page.tsx` never calls `requireNotTechnician` (Task 9).
 - `apps/web/src/lib/record/author-mark.test.ts`: one new case (an expiry To-do is the automation's) (Task 6). `packages/db/src/activities.ts:50` `TASK_COLS` gains `document_expiry_id`; Task 6 greps every test that pins that select string or a task fixture's exact keys and updates it (report each file).
@@ -101,7 +115,7 @@ Paste both values; stop if they differ.
 - `apps/web/src/lib/messages.test.ts`: one new `describe` at the end (Task 2).
 - `…/acct/in-account-service-reads.test.ts`: `ALLOWED` gains one line beside `:136` (Task 4).
 - **Re-run unchanged, because 0084 re-creates `keep_task_links` (Task 1):** `packages/db/src/test/document-requests-schema.test.ts` (0080's task-link case, `:368-397`) and `packages/db/src/test/record-provenance-schema.test.ts` (`:291`, 0074's call and consent links). A lost 0074/0080 line in the re-created function fails one of them.
-- **Unchanged, checked:** `schema-grants-guard.test.ts` (deviation 3); `account-teardown.ts`' `ACCOUNT_OWNED_TABLES` (tasks before documents, `:24-25`, and the FK cascades anyway); `apps/web/src/app/api/ops/health/route.ts` (it reads only `cron.tick` and the scanner heartbeat, `:7-21`; it lists no pass); `cron-coupling.test.ts` (the pass is bounded by count, not time: no fourth budget, a `BUDGET` comment in the pass says so).
+- **Unchanged, checked:** `schema-grants-guard.test.ts` (deviation 3); `account-teardown.ts`' `ACCOUNT_OWNED_TABLES` (tasks before documents, `:24-25`, and the FK cascades anyway); `apps/web/src/app/api/ops/health/route.ts` (it reads only `cron.tick` and the scanner heartbeat, `:7-21`; it lists no pass). `cron-coupling.test.ts` DOES change (its row above).
 
 ## Not in this PR
 
@@ -142,26 +156,26 @@ Paste both values; stop if they differ.
 | 1 | Migration 0084 and its proof on the replica; the kit | bis-db-schema | **opus** | 0 | the migration, `document-expiry-schema.test.ts`, `<SCRATCH>/s07f-kit/*` |
 | 2 | Every key (**messages.ts, the only writer**) | bis-crm | sonnet | 0 | `lib/messages.ts`, `lib/messages.test.ts` |
 | 3 | `@bis/db`: the expiry module, two rules, the barrel | bis-crm | **opus** | 1 | `document-expiry.ts`, `document-rules.ts`, `index.ts`, its test |
-| 4 | `@bis/db`: the page's read and count, the list's restore; the Undo action | bis-crm | **opus** | 1, 2, 3 | `account-documents.ts`, `documents.ts`, `document-requirements.ts`, `index.ts`, tests, the action, two one-line edits |
-| 5 | The pure expiry helpers and the `documentsExpiry` pass | bis-automations | **opus** | 2, 3 | `lib/documents/expiry-task*`, `passes/documents-expiry*`, `registry.ts`, `sentinel.test.ts`, `route.test.ts` |
-| 6 | The To-do's link: the work queue, the author mark, the URL contract | bis-crm | sonnet | 1, 3 | `work-queue.ts`, `activities.ts`, `record.ts`, `author-mark*`, `card-focus*`, both work lists |
+| 4 | `@bis/db`: the page's read and count, the list's restore; the Undo action; R1 in the Owners-only actions | bis-crm | **opus** | 1, 2, 3 | `account-documents.ts`, `documents.ts`, `document-requirements.ts`, `index.ts`, tests, the Undo action, `contacts/documents-actions*`, two one-line edits |
+| 5 | The pure expiry helpers and the `documentsExpiry` pass | bis-automations | **opus** | 2, 3 | `lib/documents/expiry-task*`, `passes/documents-expiry*`, `registry.ts`, `sentinel.test.ts`, `route.test.ts`, `cron-coupling.test.ts` |
+| 6 | The To-do's link: the work queue, the author mark, the URL contract | bis-crm | sonnet | 1, 3 | `work-queue.ts`, `activities.ts`, `record.ts`, `author-mark*`, `card-focus*`, both work lists, `tasks-call-id-read.test.ts` |
 | 7 | The Documents card: focus and the pre-ticked Ask; the two pages pass it | bis-frontend | **opus** | 2, 6 | `documents-card*`, `[contactId]/page*`, `groups/[groupId]/page*` |
 | 8 | The nav entry, its icon, ⌘K | bis-frontend | sonnet | 2 | `nav-groups*`, `app-sidebar.tsx`, `palette/registry*` |
 | 9 | The Documents page | bis-frontend | **opus** | 2, 4, 7, 8 | `lib/documents/account-list*`, `…/documents/*` (page, boundaries, list, filter), one `technician-guards.test.ts` case |
 | 10 | The Required documents card on the page; `/styleguide` | bis-frontend | sonnet | 2, 4, 9 | `…/documents/required-documents-*`, the page's mount, the styleguide demo |
 | 11 | Regenerate the i18n baselines | bis-crm | sonnet | 2, 5, 7, 9, 10 | `lib/i18n/*-baseline.json` |
-| 12 | The e2e spec | bis-e2e-qa | sonnet | 5, 6, 7, 9, 10, 11 | `e2e/documents-page.spec.ts` |
-| 13 | DESIGN.md and the part-2 spec amendment | orchestrator | n/a | 9 | `DESIGN.md`, part-2 spec |
+| 12 | The e2e spec; the two e2e nav pins | bis-e2e-qa | sonnet | 5, 6, 7, 8, 9, 10, 11 | `e2e/documents-page.spec.ts`, `e2e/client-access.spec.ts`, `e2e/assign.spec.ts` |
+| 13 | DESIGN.md (sidebar, module contract, Paged lists words) and the part-2 spec amendment | orchestrator | n/a | 0 (Wave A, before any UI task) | `DESIGN.md`, part-2 spec |
 | 14 | Whole-branch final review (checkpoint) | reviewer | **opus** | 1–13 | none |
 | 15 | Rollout (orchestrator; LAST) | orchestrator | n/a | 14 | none in the repo |
 
 ```
-Wave A (two lanes):    T1 (bis-db-schema)                 T2 (bis-crm)
+Wave A (three lanes):  T1 (bis-db-schema)                 T2 (bis-crm)                          T13 (orchestrator: DESIGN.md first, review M10)
 Wave B:                T3 (bis-crm, after T1)             T8 (bis-frontend, after T2)
 Wave C (three lanes):  T4 (bis-crm, after T3)             T5 (bis-automations, after T2, T3)     T6 (bis-crm 2nd instance, after T1, T3)
 Wave D:                T7 (bis-frontend, after T6)
 Wave E:                T9 (bis-frontend, after T4, T7, T8), then T10
-Wave F:                T11, then T12; T13 any time after T9
+Wave F:                T11, then T12
 Checkpoint:            T14
 Rollout:               T15 (orchestrator, LAST)
 ```
@@ -173,6 +187,7 @@ Disjointness: T4 (`account-documents.ts`, `documents.ts` exports, `document-requ
 ## Task 0: Confirm the base (orchestrator)
 
 - [ ] **Step 1.** In `<WT>`: `git log --oneline -2` shows this plan's commit, then `ac252552 Spec: document vault part 3 …`, and `git log --oneline -3` includes `d806ec5c`. `git fetch origin && git log --oneline origin/main -1`. If `main` moved past `d806ec5c`, read what moved it; if it touched any file in "File Structure", merge `origin/main` into `<WT>` ONCE now (never rebase), before any lane starts.
+- [ ] **Step 1b (review M11).** `pnpm install --frozen-lockfile` in `<WT>` (a fresh worktree has no `node_modules`; every lane's vitest and typecheck need it). It must not change `pnpm-lock.yaml` (`git status --short` shows nothing new).
 - [ ] **Step 2.** Confirm, and stop if any line differs:
   - `ls packages/db/supabase/migrations | tail -1` → `0083_inbound_never_log.sql`; `git log --all --oneline -- 'packages/db/supabase/migrations/0084*'` → nothing.
   - `grep -n "documentsSweepPass, documentsScanPass, weeklyClientReportPass" apps/web/src/lib/automations/registry.ts` → `60:`.
@@ -463,7 +478,7 @@ Expected: `0`, then `1` (the control), then the md5 (paste it: Task 15 compares 
 describe("S-07 3a: the Documents page, the expiry To-dos and the Owner's Required card (plan Task 2)", () => {
   const KEYS_3A = [
     "nav.documents",
-    "documents.page.title", "documents.page.count", "documents.page.countOne",
+    "documents.page.title",
     "documents.page.show.label", "documents.page.show.expiring", "documents.page.show.expired", "documents.page.show.all",
     "documents.page.category.label", "documents.page.category.any",
     "documents.page.openRecord", "documents.page.noName",
@@ -522,10 +537,6 @@ describe("S-07 3a: the Documents page, the expiry To-dos and the Owner's Require
   // S-07 3a: the account-wide Documents page (spec 3.1).
   "documents.page.title": "Documents",
   "documents.page.title.es": "Documentos",
-  "documents.page.count": "{count} files",
-  "documents.page.count.es": "{count} archivos",
-  "documents.page.countOne": "{count} file",
-  "documents.page.countOne.es": "{count} archivo",
   "documents.page.show.label": "Show",
   "documents.page.show.label.es": "Mostrar",
   "documents.page.show.expiring": "Expiring soon",
@@ -598,7 +609,7 @@ describe("S-07 3a: the Documents page, the expiry To-dos and the Owner's Require
   "documents.required.crashed.es": "Eso no se completó. Puede que esta página esté desactualizada: vuelva a cargarla e intente de nuevo.",
 ```
 
-The card's title, body, off line and saved toasts REUSE `settings.requiredDocuments.title|body|off|saved|savedOff` (each already has its `.es`, `messages.ts:1136-1145`); `common.save` and `common.undo` have `.es` (`:292-297`); the viewer's words and `documents.retry` already exist.
+The page's header total REUSES `documents.count` / `documents.countOne` ("{count} files" / "{count} archivos", `messages.ts:3838-3841`; review M7). The card's title, body, off line and saved toasts REUSE `settings.requiredDocuments.title|body|off|saved|savedOff` (each already has its `.es`, `messages.ts:1136-1145`); `common.save` and `common.undo` have `.es` (`:292-297`); the viewer's words and `documents.retry` already exist.
 
 - [ ] **Step 5: Run** `pnpm --filter web exec vitest run src/lib/messages.test.ts src/lib/i18n/ratchet.test.ts` → PASS; `pnpm --filter web typecheck`.
 - [ ] **Step 6: Probes:** (a) delete `"documents.page.next.es"` → the twin case FAILS naming it; (b) change the insurance `.es` to "El seguro de {name} vence" (no date) → the title case FAILS; (c) set an `.es` to "Revisa su conexión" → the usted case FAILS. Paste each.
@@ -624,7 +635,8 @@ The card's title, body, off line and saved toasts REUSE `settings.requiredDocume
     - `export const expiryTaskKey = (documentId: string, expiresOn: string): string => \`${documentId}|${expiresOn}\``
     - `export async function listDocumentExpiryTaskKeys(db: SupabaseClient, documentIds: readonly string[]): Promise<Set<string>>`
     - `export async function ensureDocumentExpiryTask(db: SupabaseClient, accountId: string, input: { documentId: string; expiresOn: string; contactId: string | null; title: string; dueAt: string }, actorId: string, actorType?: ActorType): Promise<{ id: string; created: boolean }>`
-  - Barrel: all five `document-expiry.ts` names; `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` in the `./document-rules` block.
+    - `export async function deleteOpenExpiryTasks(db: SupabaseClient, accountId: string, documentId: string): Promise<number>` (owner ruling R1; service client; answers how many went)
+  - Barrel: all six `document-expiry.ts` names; `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` in the `./document-rules` block.
 
 - [ ] **Step 1: Read** `packages/db/src/document-requests.ts:1-15, :180-240, :265-320` (the target read, the To-do insert and its 23505 path, the batched key read `listRequestsMissingReceivedTask`), `documents.ts:1-90, :340-385` (the column lists, the embeds by constraint name, the sweep reads), `document-rules.ts:1-50, :115-150`, `index.ts:280-330`, `test/document-requests.test.ts:1-60`, `test/fixtures.ts:130-160`.
 
@@ -636,7 +648,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
-import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey } from "../document-expiry";
+import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks } from "../document-expiry";
 import { shiftDay, DOCUMENT_EXPIRY_WINDOW_DAYS } from "../document-rules";
 
 /** The pass's reads and its one write (spec 3.2), on the service client, behind PostgREST on the replica. */
@@ -724,6 +736,30 @@ describe("ensureDocumentExpiryTask and listDocumentExpiryTaskKeys (spec 3.2: exa
       const keys = await listDocumentExpiryTaskKeys(db, [doc]);
       expect([...keys].sort()).toEqual([expiryTaskKey(doc, shiftDay(FROM, 10)), expiryTaskKey(doc, shiftDay(FROM, 20))].sort());
       expect(await listDocumentExpiryTaskKeys(db, [])).toEqual(new Set());
+    }));
+});
+
+describe("deleteOpenExpiryTasks (owner ruling R1: a file made Owners only takes its open expiry To-dos with it)", () => {
+  it("deletes this account's OPEN To-dos for this file only; a done one, another file's and another account's stay (mutations: drop .is('completed_at', null), the account eq, or the document eq -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+        const doc = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 10) });
+        const other = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 12) });
+        const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
+        const theirs = await file(dbB, accountB, bea, { expiresOn: shiftDay(FROM, 10) });
+        const t = (documentId: string, acct: string, on: string, contactId: string) =>
+          ensureDocumentExpiryTask(db, acct, { documentId, expiresOn: on, contactId, title: "T", dueAt: "2030-03-01T15:00:00Z" }, "documents-expiry");
+        const open = await t(doc, accountId, shiftDay(FROM, 10), ana);
+        const done = await t(doc, accountId, shiftDay(FROM, 11), ana);
+        await db.from("tasks").update({ completed_at: new Date().toISOString() }).eq("id", done.id);
+        const otherOpen = await t(other, accountId, shiftDay(FROM, 12), ana);
+        const theirOpen = await t(theirs, accountB, shiftDay(FROM, 10), bea);
+        expect(await deleteOpenExpiryTasks(db, accountB, doc)).toBe(0);
+        expect(await deleteOpenExpiryTasks(db, accountId, doc)).toBe(1);
+        const { data } = await db.from("tasks").select("id").in("id", [open.id, done.id, otherOpen.id, theirOpen.id]);
+        expect((data ?? []).map((r: { id: string }) => r.id).sort()).toEqual([done.id, otherOpen.id, theirOpen.id].sort());
+      });
     }));
 });
 ```
@@ -827,6 +863,19 @@ export async function ensureDocumentExpiryTask(
   if (readErr || !found) throw new Error(`ensureDocumentExpiryTask: already there but unreadable: ${readErr?.message ?? "no row"}`);
   return { id: (found as { id: string }).id, created: false };
 }
+
+/**
+ * Service client, after the caller's role check and its request-client read (owner ruling R1, 2026-10-17):
+ * a file switched to Owners only takes its OPEN expiry To-dos with it at once, so no To-do title names it
+ * to Staff. A done To-do stays (history). Switching the file back off holds nothing: the next pass run
+ * reopens the To-do for that file and date. Answers how many went.
+ */
+export async function deleteOpenExpiryTasks(db: SupabaseClient, accountId: string, documentId: string): Promise<number> {
+  const { data, error } = await db.from("tasks").delete()
+    .eq("account_id", accountId).eq("document_expiry_id", documentId).is("completed_at", null).select("id");
+  if (error) throw new Error(`deleteOpenExpiryTasks failed: ${error.message}`);
+  return (data ?? []).length;
+}
 ```
 
 `index.ts`: after the `./document-requirements` block (`:325-329`), add
@@ -834,14 +883,14 @@ export async function ensureDocumentExpiryTask(
 ```ts
 // S-07 3a: the expiry To-dos. See ./document-expiry.ts.
 export {
-  listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, type ExpiringDocument,
+  listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, type ExpiringDocument,
 } from "./document-expiry";
 ```
 
 and add `DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay,` to the `./document-rules` export block's S-07 2c line (`:318-319`).
 
 - [ ] **Step 5: Run** `document-expiry.test.ts` on set A → PASS (paste the summary), then `pnpm --filter @bis/db typecheck` (read `packages/db/package.json`'s script name first; if it has none, `pnpm --filter web typecheck`).
-- [ ] **Step 6: Probes:** (a) drop `.eq("owners_only", false)` → the "who qualifies" case FAILS; (b) drop `.eq("version.scan_status", "clean")` → the pending file comes back with `version_scan: "pending"` → FAILS (removing only `!inner` is NOT a probe: the embed then answers `version: null` for the pending file and the `flatMap` drops it, so the test cannot see it; say so in the report if a reviewer asks); (c) drop `.match(...)` → the scope case FAILS; (d) make the 23505 branch `throw` → the ensure case FAILS; (e) emit before the `if (!error …)` check (always) → the events assertion FAILS. Paste each.
+- [ ] **Step 6: Probes:** (a) drop `.eq("owners_only", false)` → the "who qualifies" case FAILS; (b) drop `.eq("version.scan_status", "clean")` → the pending file comes back with `version_scan: "pending"` → FAILS (removing only `!inner` is NOT a probe: the embed then answers `version: null` for the pending file and the `flatMap` drops it, so the test cannot see it; say so in the report if a reviewer asks); (c) drop `.match(...)` → the scope case FAILS; (d) make the 23505 branch `throw` → the ensure case FAILS; (e) emit before the `if (!error …)` check (always) → the events assertion FAILS; (f) drop `.is("completed_at", null)` in `deleteOpenExpiryTasks` → the R1 case FAILS (the done To-do goes); (g) drop its `.eq("account_id", …)` → the `accountB` call answers 1 → FAILS. Paste each.
 - [ ] **Step 7: Stop your kit. Commit** the four paths, message "db: the expiry To-do's reads and its one insert, deduped by 0084 (S-07 3a)".
 
 ---
@@ -854,7 +903,8 @@ and add `DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay,` to the `./document-rules` expor
 - Create: `packages/db/src/account-documents.ts`, `packages/db/src/test/account-documents.test.ts`
 - Modify: `packages/db/src/documents.ts` (export four existing private names; no behaviour change), `packages/db/src/document-requirements.ts` (one function appended), `packages/db/src/index.ts` (one export block; one name added to the `./document-requirements` block), `packages/db/src/test/document-requirements.test.ts` (one case appended)
 - Create: `…/documents/required-documents-actions.ts`, `…/documents/required-documents-actions.test.ts`
-- Modify: `…/acct/settings/document-requirements-actions.ts` (one `revalidatePath` line) and its test if it pins the revalidated paths; `…/acct/in-account-service-reads.test.ts` (one `ALLOWED` line beside `:136`)
+- Modify: `…/acct/settings/document-requirements-actions.ts` (one `revalidatePath` line) and its test; `…/acct/in-account-service-reads.test.ts` (one `ALLOWED` line beside `:136`)
+- Modify (owner ruling R1): `…/contacts/documents-actions.ts` (`setOwnersOnlyAction` `:297-310`, `undoOwnersOnlyAction` `:312-324`) and `…/contacts/documents-actions.test.ts`
 
 **Interfaces**
 - Consumes: `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` (Task 3); 0084's indexes (Task 1); `cleanRequiredCategories`, `RequirableCategory` (`document-rules.ts:121-142`); `requireAccountAccess` (`apps/web/src/lib/auth.ts:38`, `{ userId, isAgency, role, canManage }`).
@@ -1064,6 +1114,35 @@ describe("undoRequiredDocumentsAction (spec 3.3; plan deviation 9)", () => {
 
 (`cleanRequiredCategories` answers the vault's order, duplicates dropped: `document-rules.ts:133-140`, read 2026-10-17.)
 
+- **R1 cases** in `…/contacts/documents-actions.test.ts` (the `db` mock gains `deleteOpenExpiryTasks: vi.fn()`; `beforeEach` sets `db.getDocument` as the file's own Owners-only cases do, `db.setDocumentOwnersOnly.mockResolvedValue("updated")`, `db.deleteOpenExpiryTasks.mockResolvedValue(1)`):
+
+```ts
+describe("owner ruling R1: a file made Owners only loses its open expiry To-dos at once", () => {
+  beforeEach(() => requireAccountAccess.mockResolvedValue(OWNER));
+  it("switching ON deletes them on the SERVICE client, after the Owners-only write (mutation: remove the delete call -> FAILS; delete before the write -> the order FAILS)", async () => {
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toMatchObject({ ok: true });
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledWith(SERVICE, ACC, D);
+    expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[0]!).toBeGreaterThan(db.setDocumentOwnersOnly.mock.invocationCallOrder[0]!);
+  });
+  it("switching OFF, or a write that changed nothing, deletes nothing (mutation: delete on every call -> FAILS)", async () => {
+    await A.setOwnersOnlyAction(ACC, D, false);
+    db.setDocumentOwnersOnly.mockResolvedValueOnce("changed");
+    await A.setOwnersOnlyAction(ACC, D, true);
+    expect(db.deleteOpenExpiryTasks).not.toHaveBeenCalled();
+  });
+  it("an Undo that writes Owners only back deletes them too; one that writes it off does not (mutation: ignore the undo path -> FAILS)", async () => {
+    await A.undoOwnersOnlyAction(ACC, D, true, false);
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(1);
+    await A.undoOwnersOnlyAction(ACC, D, false, true);
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(1);
+  });
+  it("a failed delete answers the failure, so the Owner sees it and retries (a retry re-writes and re-deletes) (mutation: swallow it -> FAILS)", async () => {
+    db.deleteOpenExpiryTasks.mockRejectedValueOnce(new Error("boom"));
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.failed" });
+  });
+});
+```
+
 - [ ] **Step 3: Run them to see them fail** (the db files on set A; the action with `pnpm --filter web exec vitest run "src/app/(dashboard)/dashboard/accounts/[accountId]/documents/required-documents-actions.test.ts"`). Paste one failing line from each.
 
 - [ ] **Step 4: Implement.**
@@ -1217,9 +1296,10 @@ export async function undoRequiredDocumentsAction(accountId: string, expected: s
 
   - `…/acct/settings/document-requirements-actions.ts`: add `` revalidatePath(`/dashboard/accounts/${accountId}/documents`); `` on the line BEFORE its `revalidatePath(…/settings)` (the Owner card reads the list there). Its test asserts `` expect(revalidatePath).toHaveBeenLastCalledWith(`/dashboard/accounts/${ACC}/settings`) `` (`settings/document-requirements-actions.test.ts:43`), which stays true with the new line first; add beside it `` expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${ACC}/documents`); `` (mutation: drop the new line -> FAILS).
   - `in-account-service-reads.test.ts`, beside `:136`: `"app/(dashboard)/dashboard/accounts/[accountId]/documents/required-documents-actions.ts": "owner-only",`.
+  - **R1**, `…/contacts/documents-actions.ts`: add `deleteOpenExpiryTasks` to its `@bis/db` import. In `setOwnersOnlyAction`, after `const r = await setDocumentOwnersOnly(serviceDb(), accountId, docId, value);`: `if (r === "updated" && value) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);` with the comment "Owner ruling R1 (S-07 3a): an Owners-only file keeps no open expiry To-do (its title would name the file to Staff); switching it back off lets the next pass reopen one." In `undoOwnersOnlyAction`, after its write: `if (r === "updated" && prior) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);`. Both sit inside the existing `try`, so a failed delete answers `FAILED` (the request-client read, `visibleDocument`, stays first). Run `grep -rln 'vi.mock("@bis/db"' apps/web/src | xargs grep -ln "documents-actions"`: every factory found gains `deleteOpenExpiryTasks`.
 
-- [ ] **Step 5: Run** on set A: `account-documents.test.ts`, `document-requirements.test.ts`, `documents.test.ts` (the export change is behaviour-neutral) → PASS. Web: the action test, `settings/document-requirements-actions.test.ts`, `in-account-service-reads.test.ts`, typecheck, eslint on the touched files → PASS. Paste summaries.
-- [ ] **Step 6: Probes:** (a) `lte` → `lt` in `scoped` → the bounds case FAILS on `d30`; (b) the cursor `gt` → `gte` → the round-trip case FAILS; (c) `count ?? 0` → the null-count case FAILS; (d) drop the list `.eq` in `restoreRequiredDocumentCategories` → its case FAILS; (e) drop `if (!access.canManage)` in the action → the Staff case FAILS; (f) remove the new `ALLOWED` line → `in-account-service-reads.test.ts` FAILS naming the file. Paste each.
+- [ ] **Step 5: Run** on set A: `account-documents.test.ts`, `document-requirements.test.ts`, `documents.test.ts` (the export change is behaviour-neutral) → PASS. Web: the action test, `…/contacts/documents-actions.test.ts`, `settings/document-requirements-actions.test.ts`, `in-account-service-reads.test.ts`, typecheck, eslint on the touched files → PASS. Paste summaries.
+- [ ] **Step 6: Probes:** (a) `lte` → `lt` in `scoped` → the bounds case FAILS on `d30`; (b) the cursor `gt` → `gte` → the round-trip case FAILS; (c) `count ?? 0` → the null-count case FAILS; (d) drop the list `.eq` in `restoreRequiredDocumentCategories` → its case FAILS; (e) drop `if (!access.canManage)` in the action → the Staff case FAILS; (f) remove the new `ALLOWED` line → `in-account-service-reads.test.ts` FAILS naming the file; (g) remove R1's delete from `setOwnersOnlyAction` → the R1 "switching ON" case FAILS; (h) move it above the write → the order assertion FAILS. Paste each.
 - [ ] **Step 7: Stop your kit. Commit** every path above, message "db: the Documents page's filtered, paged read and its real total; the required list's compare-and-set restore and its Undo action (S-07 3a)".
 
 ---
@@ -1231,29 +1311,36 @@ export async function undoRequiredDocumentsAction(accountId: string, expected: s
 **Files**
 - Create: `apps/web/src/lib/documents/expiry-task.ts` (+ `expiry-task.test.ts`)
 - Create: `apps/web/src/lib/automations/passes/documents-expiry.ts` (+ `documents-expiry.test.ts`)
-- Modify: `apps/web/src/lib/automations/registry.ts` (import, one array entry after `documentsScanPass`, one doc-comment sentence), `apps/web/src/lib/automations/sentinel.test.ts`, `apps/web/src/app/api/cron/reminders/route.test.ts` (exactly the rows in "Pinned tests this PR changes")
+- Modify: `apps/web/src/lib/automations/registry.ts` (import, one array entry after `documentsScanPass`, one doc-comment sentence), `apps/web/src/lib/automations/sentinel.test.ts`, `apps/web/src/app/api/cron/reminders/route.test.ts`, `apps/web/src/lib/automations/cron-coupling.test.ts` (exactly the rows in "Pinned tests this PR changes")
 
 **Interfaces**
-- Consumes: `listExpiringDocuments`, `listDocumentExpiryTaskKeys`, `ensureDocumentExpiryTask`, `expiryTaskKey`, `ExpiringDocument`, `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` (Task 3); `documentRequestTarget` (`document-requests.ts:196`, `(db, accountId, { contact_id, client_group_id }) => Promise<DocumentRequestTarget | null>`, `name` and `contactId`); `resolveAccountZone` (`lib/booking/followup-timing.ts:122`); `partsInZone`, `zonedTimeToUtc` (`lib/booking/slots.ts:40, :82`); `dayDiff` (`lib/documents/expiry.ts:12`); keys `documents.expiryTask.*` (Task 2); `Pass` (`lib/automations/context.ts`).
+- Consumes: from the `@bis/db` BARREL, only functions dereferenced inside `openExpiryTasks` (`listExpiringDocuments`, `listDocumentExpiryTaskKeys`, `ensureDocumentExpiryTask`, `expiryTaskKey`, `documentRequestTarget`) and types; from the unmocked subpath **`@bis/db/document-rules`**, `DOCUMENT_EXPIRY_WINDOW_DAYS` and `shiftDay` (review I1: `route.test.ts:14-60` is a bare factory where an unlisted export throws, and `shiftDay` runs BEFORE the candidate read, so a barrel import would make every exact body read `documentsExpiry: { errored: 1 }`; the subpath is not mocked there, so no factory line is needed for these two). `documentRequestTarget` (`document-requests.ts:196`, `(db, accountId, { contact_id, client_group_id }) => Promise<DocumentRequestTarget | null>`, `name` and `contactId`); `resolveAccountZone` (`lib/booking/followup-timing.ts:122`); `dayKeyInZone` (`lib/booking/availability.ts:89`, review M7: reused, not a new helper); `zonedTimeToUtc` (`lib/booking/slots.ts:82`); `dayDiff` (`lib/documents/expiry.ts:12`); keys `documents.expiryTask.*` (Task 2); `Pass` (`lib/automations/context.ts`).
 - Produces:
-  - `lib/documents/expiry-task.ts`: `EXPIRY_DUE_LEAD_DAYS = 7`, `EXPIRY_DUE_HOUR = 9`, `dayKeyIn(now: Date, zone: string): string`, `inExpiryWindow(expiresOn: string, today: string): boolean`, `expiryDueAt(expiresOn: string, zone: string): string` (an ISO instant), `expiryTaskTitle(a: { category: DocumentCategory; title: string; name: string; expiresOn: string }, lang: Locale): string`.
-  - `passes/documents-expiry.ts`: `EXPIRY_TASKS_PER_RUN = 200`, `EXPIRY_CANDIDATES_PER_RUN = 1000`, `type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number }`, `openExpiryTasks(db: SupabaseClient, now: Date, scope?: { accountId?: string }): Promise<ExpiryCounters>`, `documentsExpiryPass: Pass` (key `"documentsExpiry"`). Task 12 imports `openExpiryTasks`.
+  - `lib/documents/expiry-task.ts`: `EXPIRY_DUE_LEAD_DAYS = 7`, `EXPIRY_DUE_HOUR = 9`, `inExpiryWindow(expiresOn: string, today: string): boolean`, `expiryDueAt(expiresOn: string, zone: string): string` (an ISO instant), `expiryTaskTitle(a: { category: DocumentCategory; title: string; name: string; expiresOn: string }, lang: Locale): string`.
+  - `passes/documents-expiry.ts`: `EXPIRY_TASKS_PER_RUN = 200`, `EXPIRY_CANDIDATES_PER_RUN = 1000`, `EXPIRY_BUDGET_MS = 15_000`, `type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number; deferred: number }`, `openExpiryTasks(db: SupabaseClient, now: Date, scope?: { accountId?: string; clock?: () => number }): Promise<ExpiryCounters>`, `documentsExpiryPass: Pass` (key `"documentsExpiry"`). Task 12 imports `openExpiryTasks`.
 
-- [ ] **Step 1: Read** `passes/documents-sweep.ts` and `passes/documents-scan.ts` whole (shape, logging, the end-of-run throw, the BUDGET comment), `lib/document-requests/request-task.ts` (the account-language title), `registry.ts`, `harness.ts:30-55`, `lib/booking/slots.ts:36-95`, `lib/booking/followup-timing.ts:100-130`, `lib/documents/expiry.ts`, `lib/loggable-error.ts`, `sentinel.test.ts:1-60, :195-290`, `route.test.ts:1-70, :315-330, :405-415, :585-645`.
+- [ ] **Step 1: Read** `passes/documents-sweep.ts` and `passes/documents-scan.ts` whole (shape, logging, the end-of-run throw, the wall-clock cutoff and its `deferred` counter at `:118-125`, the BUDGET comment), `lib/document-requests/request-task.ts` (the account-language title), `registry.ts`, `harness.ts:30-55`, `lib/booking/availability.ts:85-93` (`dayKeyInZone`), `lib/booking/slots.ts:36-95`, `lib/booking/followup-timing.ts:100-130`, `lib/documents/expiry.ts`, `lib/loggable-error.ts`, `sentinel.test.ts:1-60, :195-290`, `route.test.ts:1-70, :315-330, :405-415, :585-645`, `cron-coupling.test.ts:1-20, :296-345`.
 
 - [ ] **Step 2: Write the failing tests.** `apps/web/src/lib/documents/expiry-task.test.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { dayKeyIn, inExpiryWindow, expiryDueAt, expiryTaskTitle } from "./expiry-task";
+import { dayKeyInZone } from "@/lib/booking/availability";
+import { inExpiryWindow, expiryDueAt, expiryTaskTitle } from "./expiry-task";
 
-/** S-07 3a (spec 3.2): the account's own day, the 30-day window, the due instant (owner choice: expiry - 7 days at 09:00 in the zone), the title. */
+/** S-07 3a (spec 3.2): the account's own day (dayKeyInZone), the 30-day window, the due instant (owner choice: expiry - 7 days at 09:00 in the zone), the title. */
 const NOW = new Date("2026-11-01T03:00:00Z");   // 22:00 on Oct 31 in Chicago (CDT), 04:00 on Nov 1 in Berlin
 
-describe("dayKeyIn: the account's calendar day, not UTC's", () => {
-  it("is Oct 31 in Chicago and Nov 1 in Berlin at the same instant (mutation: now.toISOString().slice(0, 10) -> Chicago FAILS)", () => {
-    expect(dayKeyIn(NOW, "America/Chicago")).toBe("2026-10-31");
-    expect(dayKeyIn(NOW, "Europe/Berlin")).toBe("2026-11-01");
+describe("the pass's day is the account's calendar day (dayKeyInZone), not UTC's", () => {
+  it("is Oct 31 in Chicago and Nov 1 in Berlin at the same instant", () => {
+    expect(dayKeyInZone(NOW, "America/Chicago")).toBe("2026-10-31");
+    expect(dayKeyInZone(NOW, "Europe/Berlin")).toBe("2026-11-01");
+  });
+  // Review M8: Havana springs forward AT MIDNIGHT (second Sunday of March: 00:00 CST becomes 01:00 CDT), so there is no
+  // 00:00 on 2026-03-08. 04:30Z is 23:30 on Mar 7; 05:30Z is 01:30 on Mar 8.
+  it("crosses a midnight DST change on the right side (America/Havana, 2026-03-08)", () => {
+    expect(dayKeyInZone(new Date("2026-03-08T04:30:00Z"), "America/Havana")).toBe("2026-03-07");
+    expect(dayKeyInZone(new Date("2026-03-08T05:30:00Z"), "America/Havana")).toBe("2026-03-08");
   });
 });
 
@@ -1271,7 +1358,9 @@ describe("expiryDueAt: the expiry date minus 7 calendar days, at 09:00 in the zo
     ["2026-11-16", "Europe/Berlin", "2026-11-09T08:00:00.000Z"],
     // Across the US fall-back (Nov 1 2026): 09:00 CDT on Oct 29. 7 x 24 h back from 09:00 CST on Nov 5 would be 10:00 CDT.
     ["2026-11-05", "America/Chicago", "2026-10-29T14:00:00.000Z"],
-  ])("%s in %s -> %s (mutation: subtract 7 x 86_400_000 ms from the expiry day's 09:00 -> the DST case FAILS)", (expiresOn, zone, want) => {
+    // Review M8: the due DAY is Havana's midnight-DST day; 09:00 that day is CDT (UTC-4).
+    ["2026-03-15", "America/Havana", "2026-03-08T13:00:00.000Z"],
+  ])("%s in %s -> %s (mutation: subtract 7 x 86_400_000 ms from the expiry day's 09:00 -> the Chicago DST case FAILS)", (expiresOn, zone, want) => {
     expect(expiryDueAt(expiresOn, zone)).toBe(want);
   });
 });
@@ -1292,6 +1381,8 @@ describe("expiryTaskTitle: the account's language, the customer's or household's
 });
 ```
 
+(The two Havana cases rest on Node's tz data for Cuba's 2026 rule. If either fails on the UNCHANGED code, check the transition with `new Intl.DateTimeFormat("en-US", { timeZone: "America/Havana", timeZoneName: "short", hour: "numeric" }).format(new Date("2026-03-08T05:30:00Z"))` and report the actual rule: never edit an expected value to whatever the code answers without that check.)
+
 `apps/web/src/lib/automations/passes/documents-expiry.test.ts`:
 
 ```ts
@@ -1303,11 +1394,12 @@ const db = vi.hoisted(() => ({
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 import { expiryTaskKey } from "@bis/db";
-import { openExpiryTasks, documentsExpiryPass, EXPIRY_TASKS_PER_RUN, EXPIRY_CANDIDATES_PER_RUN } from "./documents-expiry";
+import { openExpiryTasks, documentsExpiryPass, EXPIRY_TASKS_PER_RUN, EXPIRY_CANDIDATES_PER_RUN, EXPIRY_BUDGET_MS } from "./documents-expiry";
 
-/** S-07 3a (spec 3.2, 6): who opens a To-do, once, where, titled and due how, and what a bad document does to the run. */
+/** S-07 3a (spec 3.2, 6): who opens a To-do, once, where, titled and due how, and what a bad document or a slow run does. */
 const NOW = new Date("2026-11-01T03:00:00Z");   // Chicago's day is Oct 31, Berlin's Nov 1
 const FAKE_DB = { tag: "service" } as never;
+const ZERO = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };
 let n = 0;
 const row = (o: Partial<ExpiringDocument> = {}): ExpiringDocument => ({
   id: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`, account_id: "acct-chi", contact_id: "c-ana", client_group_id: null,
@@ -1335,7 +1427,7 @@ describe("the window, in each account's own day (spec 3.2)", () => {
     db.listExpiringDocuments.mockResolvedValue([chi30, chi31, chi0, ber30, berPast]);
     const c = await openExpiryTasks(FAKE_DB, NOW);
     expect(opened().sort()).toEqual([chi30.id, chi0.id, ber30.id].sort());
-    expect(c).toEqual({ opened: 3, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0 });
+    expect(c).toEqual({ ...ZERO, opened: 3 });
     expect(db.listExpiringDocuments).toHaveBeenCalledWith(FAKE_DB, { fromDay: "2026-10-31", toDay: "2026-12-02", limit: EXPIRY_CANDIDATES_PER_RUN, accountId: undefined });
   });
 
@@ -1403,13 +1495,22 @@ describe("the To-do: where, titled and due how (spec 3.2)", () => {
   });
 });
 
-describe("the run's limits and failures (spec 3.2)", () => {
+describe("the run's limits and failures (spec 3.2; review M4)", () => {
   it(`opens at most ${EXPIRY_TASKS_PER_RUN} To-dos and says it was capped (mutation: no cap -> FAILS)`, async () => {
     db.listExpiringDocuments.mockResolvedValue(Array.from({ length: EXPIRY_TASKS_PER_RUN + 1 }, () => row()));
     const c = await openExpiryTasks(FAKE_DB, NOW);
     expect(db.ensureDocumentExpiryTask).toHaveBeenCalledTimes(EXPIRY_TASKS_PER_RUN);
     expect(c.capped).toBe(1);
     expect(errors.mock.calls.flat().join(" ")).toContain("capped");
+  });
+
+  it(`stops STARTING a To-do once ${EXPIRY_BUDGET_MS} ms have gone and counts the rest as deferred (mutation: drop the cutoff -> all three open -> FAILS)`, async () => {
+    db.listExpiringDocuments.mockResolvedValue([row(), row(), row()]);
+    const times = [0, 0, EXPIRY_BUDGET_MS + 1];
+    const clock = () => times.shift() ?? EXPIRY_BUDGET_MS + 1;   // the start, then before each To-do
+    const c = await openExpiryTasks(FAKE_DB, NOW, { clock });
+    expect(db.ensureDocumentExpiryTask).toHaveBeenCalledTimes(1);
+    expect(c).toMatchObject({ opened: 1, deferred: 2 });
   });
 
   it("one document's failure does not stop the others; the run then throws with its counters, logging ids, never the file's title (mutations: rethrow at once -> the second is never opened; log the title -> FAILS)", async () => {
@@ -1433,7 +1534,7 @@ describe("the registered pass", () => {
     db.listExpiringDocuments.mockResolvedValue([]);
     expect(documentsExpiryPass.key).toBe("documentsExpiry");
     const c = await documentsExpiryPass.run({ db: FAKE_DB, now: NOW, origin: "https://x", email: {} as never, sms: {} as never });
-    expect(c).toEqual({ opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0 });
+    expect(c).toEqual(ZERO);
     expect(db.listDocumentExpiryTaskKeys).not.toHaveBeenCalled();
   });
 });
@@ -1445,27 +1546,21 @@ describe("the registered pass", () => {
 
 ```ts
 import { DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay, type DocumentCategory } from "@bis/db/document-rules";
-import { partsInZone, zonedTimeToUtc } from "@/lib/booking/slots";
+import { zonedTimeToUtc } from "@/lib/booking/slots";
 import { dayDiff } from "@/lib/documents/expiry";
 import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 
 /**
- * The expiry To-do's pure rules (S-07 3a, spec 3.2). Every day is the ACCOUNT's calendar day
- * (partsInZone, the slot engine's own conversion); the window is today .. today + 30, so a file
- * already past its date never opens a To-do (the catch-up rule: the Documents page's Expired filter
- * covers those). Due: the expiry date minus 7 CALENDAR days, at 09:00 in the zone (owner choice
- * 2026-10-17), so a DST change in between never moves it to 08:00 or 10:00.
+ * The expiry To-do's pure rules (S-07 3a, spec 3.2). "Today" is the ACCOUNT's calendar day, read by the
+ * caller with dayKeyInZone (lib/booking/availability.ts, the slot engine's own conversion); the window is
+ * today .. today + 30, so a file already past its date never opens a To-do (the catch-up rule: the
+ * Documents page's Expired filter covers those). Due: the expiry date minus 7 CALENDAR days, at 09:00 in
+ * the zone (owner choice 2026-10-17), so a DST change in between never moves it to 08:00 or 10:00.
  */
 export const EXPIRY_DUE_LEAD_DAYS = 7;
 export const EXPIRY_DUE_HOUR = 9;
-const pad = (v: number) => String(v).padStart(2, "0");
-
-export function dayKeyIn(now: Date, zone: string): string {
-  const p = partsInZone(now, zone);
-  return `${p.y}-${pad(p.m)}-${pad(p.d)}`;
-}
 
 export function inExpiryWindow(expiresOn: string, today: string): boolean {
   const days = dayDiff(today, expiresOn);
@@ -1487,44 +1582,53 @@ export function expiryTaskTitle(a: { category: DocumentCategory; title: string; 
 }
 ```
 
-(`partsInZone`'s answer has numeric `y`, `m`, `d`: confirm at `slots.ts:40-70` and adapt the field names if they differ.)
-
 `apps/web/src/lib/automations/passes/documents-expiry.ts`:
 
 ```ts
 import {
   listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, documentRequestTarget, expiryTaskKey,
-  DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay, type ExpiringDocument, type SupabaseClient,
+  type ExpiringDocument, type SupabaseClient,
 } from "@bis/db";
+// The subpath, not the barrel (review I1): these two run before the candidate read, and the cron route
+// test's bare @bis/db factory throws on any export it does not list.
+import { DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay } from "@bis/db/document-rules";
 import type { Pass } from "../context";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
-import { dayKeyIn, inExpiryWindow, expiryDueAt, expiryTaskTitle } from "@/lib/documents/expiry-task";
+import { dayKeyInZone } from "@/lib/booking/availability";
+import { inExpiryWindow, expiryDueAt, expiryTaskTitle } from "@/lib/documents/expiry-task";
 import { loggableError } from "@/lib/loggable-error";
 
 /**
- * Expiry To-dos (S-07 3a, spec 3.2; plan deviations 1, 7, 10). Not a recipe; it sends nothing. EVERY
- * tick, idempotent: one candidate read over a coarse UTC range (today - 1 .. today + 31, wide enough for
- * every zone's own today), each candidate narrowed to its ACCOUNT's day, one read of the keys that
- * already have their To-do, then one insert per missing (document, date). 0084's unique index is the
- * last word (23505 = already there). Staff only (E1): nothing goes to a customer. The To-do lands on the
+ * Expiry To-dos (S-07 3a, spec 3.2 as amended; plan deviations 1, 7, 10). Not a recipe; it sends nothing.
+ * EVERY tick, idempotent: one candidate read over a coarse UTC range (today - 1 .. today + 31, wide enough
+ * for every zone's own today), each candidate narrowed to its ACCOUNT's day, one read of the keys that
+ * already have their To-do, then one insert per missing (document, date). 0084's unique index is the last
+ * word (23505 = already there). Staff only (E1): nothing goes to a customer. The To-do lands on the
  * contact, or on a household's primary contact (documentRequestTarget, 2b), titled in the ACCOUNT's
  * language. Logs ids, never a title. A run with any failed document throws after the rest
- * (documents-sweep's pattern), so the heartbeat records it. BUDGET: bounded by count (1000 candidates,
- * 200 inserts with at most two reads each), not by time; cron-coupling.test.ts sums wall-clock budgets
- * only, and this adds none. Every @bis/db export is dereferenced inside a function, never at module
- * scope (the cron route test's bare mock throws on a dereference).
+ * (documents-sweep's pattern), so the heartbeat records it.
+ * BUDGET (review M4): at most 200 To-dos a run, each up to four round trips (the target's one or two
+ * reads, the insert, its event), and no To-do STARTS once EXPIRY_BUDGET_MS has gone (documents-scan.ts'
+ * cutoff shape); the rest count as `deferred` and open on a later tick. EXPIRY_BUDGET_MS is the fifth term
+ * in cron-coupling.test.ts' sum. Every @bis/db BARREL export is dereferenced inside the function, never at
+ * module scope or before the first read (the cron route test's bare mock throws on a dereference).
  */
 export const EXPIRY_TASKS_PER_RUN = 200;
 export const EXPIRY_CANDIDATES_PER_RUN = 1000;
+export const EXPIRY_BUDGET_MS = 15_000;
 const ACTOR = "documents-expiry";
 
-export type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number };
+export type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number; deferred: number };
 
 const qualifies = (r: ExpiringDocument) =>
   !r.owners_only && r.deleted_at === null && r.version_scan === "clean" && (r.contact_id !== null || r.client_group_id !== null);
 
-export async function openExpiryTasks(db: SupabaseClient, now: Date, scope: { accountId?: string } = {}): Promise<ExpiryCounters> {
-  const c: ExpiryCounters = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0 };
+export async function openExpiryTasks(
+  db: SupabaseClient, now: Date, scope: { accountId?: string; clock?: () => number } = {},
+): Promise<ExpiryCounters> {
+  const clock = scope.clock ?? Date.now;
+  const startedAt = clock();
+  const c: ExpiryCounters = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };
   const utcToday = now.toISOString().slice(0, 10);
   const rows = await listExpiringDocuments(db, {
     fromDay: shiftDay(utcToday, -1), toDay: shiftDay(utcToday, DOCUMENT_EXPIRY_WINDOW_DAYS + 1),
@@ -1548,19 +1652,22 @@ export async function openExpiryTasks(db: SupabaseClient, now: Date, scope: { ac
       }
       continue;
     }
-    if (inExpiryWindow(r.expires_on, dayKeyIn(now, zone))) due.push({ r, zone });
+    if (inExpiryWindow(r.expires_on, dayKeyInZone(now, zone))) due.push({ r, zone });
   }
   if (due.length === 0) return c;
   const have = await listDocumentExpiryTaskKeys(db, due.map((d) => d.r.id));
-  let attempted = 0;
-  for (const { r, zone } of due) {
-    if (have.has(expiryTaskKey(r.id, r.expires_on))) { c.alreadyOpen++; continue; }
-    if (attempted >= EXPIRY_TASKS_PER_RUN) {
+  const todo = due.filter(({ r }) => {
+    if (!have.has(expiryTaskKey(r.id, r.expires_on))) return true;
+    c.alreadyOpen++;
+    return false;
+  });
+  for (const [i, { r, zone }] of todo.entries()) {
+    if (i >= EXPIRY_TASKS_PER_RUN) {
       c.capped = 1;
       console.error(`documents expiry: capped at ${EXPIRY_TASKS_PER_RUN} To-dos this run; the rest open on the next tick`);
       break;
     }
-    attempted++;
+    if (clock() - startedAt > EXPIRY_BUDGET_MS) { c.deferred = todo.length - i; break; }
     try {
       const target = await documentRequestTarget(db, r.account_id, r);
       const title = expiryTaskTitle({ category: r.category, title: r.title, name: target?.name ?? "", expiresOn: r.expires_on },
@@ -1584,11 +1691,12 @@ export const documentsExpiryPass: Pass = {
 };
 ```
 
+  (The budget test's clock answers 0 for the start, 0 before the first To-do, then past the budget: when a `deferred` cutoff fires, the cap is not also counted. If the cap and the cutoff would both trip on the same index, the cap wins, as written.)
   - `registry.ts`: `import { documentsExpiryPass } from "./passes/documents-expiry";` after the scan's import; `documentsScanPass, documentsExpiryPass,` in `PASSES`; in the doc comment after "…which opsWatch (last) reads in the same tick." add: "The expiry To-dos (S-07 3a) follow the scan, so a version the scan just cleared opens its To-do this same tick; they read the vault and write only To-dos."
-  - `sentinel.test.ts`, `route.test.ts`: exactly the rows in "Pinned tests this PR changes".
+  - `sentinel.test.ts`, `route.test.ts`, `cron-coupling.test.ts`: exactly the rows in "Pinned tests this PR changes".
 
 - [ ] **Step 5: Run** `expiry-task.test.ts`, `documents-expiry.test.ts`, `src/lib/automations/sentinel.test.ts`, `src/lib/automations/harness.test.ts`, `src/lib/automations/cron-coupling.test.ts`, `src/lib/automations/imports.test.ts`, `src/app/api/cron/reminders/route.test.ts`, typecheck, eslint. All PASS; paste each summary.
-- [ ] **Step 6: Probes:** (a) `dayKeyIn` → `now.toISOString().slice(0, 10)` → the zone case AND the pass's window case FAIL; (b) `days <= DOCUMENT_EXPIRY_WINDOW_DAYS` → `<` → the window cases FAIL on day 30; (c) `expiryDueAt` as `Date.parse(expiresOn 09:00 in zone) - 7 * 86_400_000` → the DST case FAILS; (d) remove `if (attempted >= …)` → the cap case FAILS; (e) `throw e` inside the catch → the isolation case FAILS (the good one is never opened); (f) remove the pass from `PASSES` → the sentinel order case FAILS; (g) leave `listExpiringDocuments` out of `route.test.ts`' factory → the exact bodies FAIL with `documentsExpiry: { errored: 1 }`. Paste each.
+- [ ] **Step 6: Probes:** (a) the pass's `dayKeyInZone(now, zone)` → `now.toISOString().slice(0, 10)` → the pass's window case FAILS; (b) `days <= DOCUMENT_EXPIRY_WINDOW_DAYS` → `<` → the window cases FAIL on day 30; (c) `expiryDueAt` as the expiry day's 09:00 instant `- 7 * 86_400_000` → the Chicago DST case FAILS; (d) remove the cap check → the cap case FAILS; (e) remove the `EXPIRY_BUDGET_MS` cutoff → the deferred case FAILS; (f) `throw e` inside the catch → the isolation case FAILS (the good one is never opened); (g) remove the pass from `PASSES` → the sentinel order case FAILS; (h) import `shiftDay` from the `@bis/db` barrel instead of the subpath → `route.test.ts`' exact bodies FAIL with `documentsExpiry: { errored: 1 }` (review I1's reason, proven); (i) raise `EXPIRY_BUDGET_MS` to 16_000 → the cron-coupling sum case FAILS. Paste each.
 - [ ] **Step 7: Commit** every path above, message "automations: the documents expiry pass opens one To-do per file and date 30 days ahead, in each account's own day (S-07 3a)".
 
 ---
@@ -1599,7 +1707,7 @@ export const documentsExpiryPass: Pass = {
 
 **Files**
 - Create: `apps/web/src/lib/documents/card-focus.ts` (+ `card-focus.test.ts`), `…/acct/tasks/work-list.href.test.ts`
-- Modify: `packages/db/src/work-queue.ts` (`WorkRow`, `openTasks`), `packages/db/src/test/work-queue.test.ts` (one case), `packages/db/src/activities.ts` (`TASK_COLS` `:50`, the row type `:63-75`), `packages/db/src/record.ts` (`TimelineTask` `:276-280`), `apps/web/src/lib/record/author-mark.ts` (`:32`) (+ `author-mark.test.ts`), `…/acct/tasks/work-list.tsx` (`:370-379`), `apps/web/src/app/(dashboard)/dashboard/work/agency-work-list.tsx` (`:194`)
+- Modify: `packages/db/src/work-queue.ts` (`WorkRow`, `openTasks`), `packages/db/src/test/work-queue.test.ts` (one case), `packages/db/src/test/tasks-call-id-read.test.ts:59` (the exact select string gains `, document_expiry_id`; review M5), `packages/db/src/activities.ts` (`TASK_COLS` `:50`, the row type `:63-75`), `packages/db/src/record.ts` (`TimelineTask` `:276-280`), `apps/web/src/lib/record/author-mark.ts` (`:32`) (+ `author-mark.test.ts`), `…/acct/tasks/work-list.tsx` (`:370-379`), `apps/web/src/app/(dashboard)/dashboard/work/agency-work-list.tsx` (`:194`)
 
 **Interfaces**
 - Consumes: 0084's columns and `tasks_document_expiry_fkey` (Task 1); `ensureDocumentExpiryTask` (Task 3, in the db test); `isRequirableCategory`, `RequirableCategory` (`@bis/db/document-rules`).
@@ -1688,7 +1796,7 @@ function stripComments(src: string): string {
   }
   return out;
 }
-const AGENCY = path.resolve(__dirname, "../../../../work/agency-work-list.tsx");
+const AGENCY = path.resolve(__dirname, "../../../work/agency-work-list.tsx");
 
 describe("the work queues' row links", () => {
   it("the agency list's path resolves (a wrong path must fail, never skip)", () => {
@@ -1705,7 +1813,7 @@ describe("the work queues' row links", () => {
 });
 ```
 
-(`…/acct/tasks/` is `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/`, so `../../../../work/` reaches `apps/web/src/app/(dashboard)/dashboard/work/`; the first case proves it.)
+(`…/acct/tasks/` is `apps/web/src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/`: up three (`[accountId]`, `accounts`, `dashboard`), so `../../../work/` reaches `apps/web/src/app/(dashboard)/dashboard/work/`; the first case proves it.)
 
 `packages/db/src/test/work-queue.test.ts`, one case (with the file's own imports; add `createDocument` from `../documents`, `createGroupWithMember` from `../client-groups`, `ensureDocumentExpiryTask` from `../document-expiry` if missing; use `listAccountWork`'s signature as read in Step 1):
 
@@ -1782,7 +1890,7 @@ export function workRowHref(
   - `author-mark.ts:32`: `if (entry.task.consent_event_id || entry.task.document_request_id || entry.task.document_expiry_id) return { kind: "automation", personId: null };`, its comment gaining "and S-07 3a's expiry To-do".
   - `work-list.tsx`: `import { workRowHref } from "@/lib/documents/card-focus";`; before the row's `return`, `const href = workRowHref(accountId, row);`; the branch becomes `{href ? (<Link href={href} className={cn(rowClassName, "min-w-0 flex-1")}>{body}</Link>) : (<div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>)}`; the comment above it gains "S-07 3a: an expiry To-do links to its file (workRowHref)".
   - `agency-work-list.tsx:194`: the same with `workRowHref(row.accountId, row)`.
-- [ ] **Step 5: Run** `card-focus.test.ts`, `work-list.href.test.ts`, every `…/acct/tasks/*.test.ts`, every `…/dashboard/work/*.test.ts`, `author-mark.test.ts`, the files Step 1's greps found, typecheck, eslint; on set A `work-queue.test.ts`, `activities.test.ts`, `record.test.ts`. All PASS.
+- [ ] **Step 5: Run** `card-focus.test.ts`, `work-list.href.test.ts`, every `…/acct/tasks/*.test.ts`, every `…/dashboard/work/*.test.ts`, `author-mark.test.ts`, the files Step 1's greps found, typecheck, eslint; on set A `work-queue.test.ts`, `activities.test.ts`, `record.test.ts`, `tasks-call-id-read.test.ts`. All PASS.
 - [ ] **Step 6: Probes:** (a) `workRowHref` tests `row.contactId` before `f.groupId` → the household case FAILS; (b) `openTasks` always sets `documentFocus` → the db plain-row assertion FAILS; (c) drop `|| entry.task.document_expiry_id` → the author-mark case FAILS; (d) restore the template-literal href in `work-list.tsx` → `work-list.href.test.ts` FAILS. Paste each.
 - [ ] **Step 7: Stop your kit. Commit** every path above, message "work queue: an expiry To-do links to its file on the customer or household, and reads as the automation's (S-07 3a)".
 
@@ -1844,7 +1952,7 @@ describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; 
   // S-07 3a (plan deviation 5): a To-do's link names a file. Once the files are read, its row is scrolled to and
   // its open button focused, once; a file not on this card (trashed, or another record's) does nothing.
   const focusId = focus?.documentId ?? null;
-  const filesReady = ready !== null;
+  const filesReady = load.status === "ready";
   const focusedOnce = useRef(false);
   useEffect(() => {
     if (focusedOnce.current || !focusId || !filesReady) return;
@@ -1856,7 +1964,7 @@ describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; 
   }, [focusId, filesReady]);
 ```
 
-  (`ready` is the container's ready-files value `:836` reads; if its name or type differs, use the container's equivalent boolean and keep both string pins true. `focusId` is a validated uuid from `cardFocusFrom`, so the selector cannot be injected.)
+  (Review M1: NOT `ready`, which is declared later at `:809`, so reading it from an effect declared above that line is TS2448. `load` is declared at `:608`, before every effect. `focusId` is a validated uuid from `cardFocusFrom`, so the selector cannot be injected.)
   - `[contactId]/page.tsx`: the `searchParams` type gains `document?: string; ask?: string`; destructure them as `documentParam`, `askParam`; `const focus = cardFocusFrom({ document: documentParam, ask: askParam });`; on the card `{...(focus ? { focus } : {})}`. `groups/[groupId]/page.tsx`: the same.
 - [ ] **Step 5: Run** `documents-card.test.ts`, `documents-card-structure.test.ts`, `documents-card-handlers.test.ts`, `[contactId]/page.test.ts`, `groups/[groupId]/page.test.ts`, `styleguide/documents-demo.test.ts`, typecheck, eslint. All PASS.
 - [ ] **Step 6: Probes:** (a) `onAsk: () => openAsk()` restored → the structure case FAILS; (b) `focusedOnce.current = true;` moved above `if (!button) return;` → FAILS; (c) the page always passes `focus` (even `undefined`) → the existing `:700` exact-props case FAILS; (d) `askPreset` without the null check → its case FAILS. Paste each.
@@ -1877,7 +1985,7 @@ describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; 
 
 - [ ] **Step 1: Read** `nav-groups.ts` whole, `nav-groups.test.ts` whole, `app-sidebar.tsx:1-40, :60-110`, every `src/components/app-sidebar*.test.ts` (any icon or count pin), `registry.ts` whole, `registry.test.ts:1-120, :200-340`.
 - [ ] **Step 2: Failing tests.**
-  - `nav-groups.test.ts`: the three pins in "Pinned tests this PR changes", plus "Documents sits right after Contacts in CRM for every role, with its own icon (spec 3.1, E2; mutation: append it after Opportunities -> FAILS)": for `(BASE, true, false)`, `(BASE, false, true)`, `(BASE, false, false)`, `(BASE, false, false, true)`, the CRM group's first two items are Contacts, then exactly `{ href: \`${BASE}/documents\`, labelKey: "nav.documents", iconKey: "documents" }`.
+  - `nav-groups.test.ts`: the three pins in "Pinned tests this PR changes" (the Technician case's title renamed, review M12), plus "Documents sits right after Contacts in CRM for every role, with its own icon (spec 3.1, E2; mutation: append it after Opportunities -> FAILS)": for `(BASE, true, false)`, `(BASE, false, true)`, `(BASE, false, false)`, `(BASE, false, false, true)`, the CRM group's first two items are Contacts, then exactly `{ href: \`${BASE}/documents\`, labelKey: "nav.documents", iconKey: "documents" }`.
   - `registry.test.ts`: (1) "the Documents page is findable by its words in both languages (mutation: no NAV_KEYWORDS entry -> FAILS)": `filterEntries(buildPaletteEntries(BASE, false, false), "vencen")` and `(…, "expiring")` each include the entry with id `` `nav:${BASE}/documents` ``. (2) "a client Owner's Required documents opens the Documents page's card; Staff, a Technician and the agency get no such entry (spec 3.3; mutations: drop the isOwner check -> the Staff case FAILS; point it at settings -> FAILS)": `buildPaletteEntries(BASE, false, true)` contains an entry matching `{ id: "nav:required-documents", href: \`${BASE}/documents#required-documents\`, agencyOnly: false, group: "navigation" }`; `(BASE, false, false)`, `(BASE, false, false, true)` and `(BASE, true, false)` contain no `nav:required-documents`; the agency still has `settings:required-documents`.
 - [ ] **Step 3: Run them to see them fail.** Paste one line.
 - [ ] **Step 4: Implement.**
@@ -1921,7 +2029,7 @@ describe("a To-do's link focuses its file and pre-ticks Ask (S-07 3a, spec 3.2; 
 - Modify: `…/acct/technician-guards.test.ts` (one case)
 
 **Interfaces**
-- Consumes: `listAccountDocuments`, `countAccountDocuments`, `listPeopleNames`, `AccountDocument`, `AccountDocumentsShow` (`@bis/db`, Task 4); `documentsClock`, `documentView` (`lib/documents/document-view.ts:20, :34`); `encodeCursor`, `parseCursor` (`lib/cursor.ts`); `requestLocale`, `requestPseudoMode` (`lib/i18n/request-locale.ts`); `makeTr` (`lib/record/copy.ts`); `getPersonPrefs`; `requireAccountAccess`; `dbForRequest`; `PageHeader` (`components/page-header.tsx`: `title`, `count`, `actions`, `filters`), `EmptyState` (`icon`, `title`, `body`, `action`, `lang`); `ExpiryLine`, `ScanStatus`, `sourceLine` (`…/contacts/documents-card.tsx`, Task 7); `documentHandlers` (`…/contacts/documents-card-handlers.ts:55`, `{ accountId, locale, reload, reloadRequests }`); `DocumentViewer` (`…/contacts/document-viewer.tsx:187`); `rowScan` (`lib/documents/scan-state.ts:20`); `expiryView`, `expiryText` (`lib/documents/expiry.ts`); keys `documents.page.*` (Task 2).
+- Consumes: `listAccountDocuments`, `countAccountDocuments`, `listPeopleNames`, `AccountDocument`, `AccountDocumentsShow` (`@bis/db`, Task 4); `documentsClock`, `documentView` (`lib/documents/document-view.ts:20, :34`); `encodeCursor`, `parseCursor` (`lib/cursor.ts`); `requestLocale`, `requestPseudoMode` (`lib/i18n/request-locale.ts`); `makeTr` (`lib/record/copy.ts`); `getPersonPrefs`; `requireAccountAccess`; `dbForRequest`; `PageHeader` (`components/page-header.tsx`: `title`, `count`, `actions`, `filters`), `EmptyState` (`icon`, `title`, `body`, `action`, `lang`); `ExpiryLine`, `ScanStatus`, `sourceLine` (`…/contacts/documents-card.tsx`, Task 7); `documentHandlers` (`…/contacts/documents-card-handlers.ts:55`, `{ accountId, locale, reload, reloadRequests }`); `DocumentViewer` (`…/contacts/document-viewer.tsx:187`); `rowScan` (`lib/documents/scan-state.ts:20`); `expiryView`, `expiryText` (`lib/documents/expiry.ts`); keys `documents.page.*` (Task 2) and `documents.count`/`documents.countOne` (existing, review M7).
 - Produces:
   - `lib/documents/account-list.ts` (server-side; imports `lib/cursor.ts`): `DOCUMENTS_PAGE_SIZE = 50`; `type DocumentsQuery = { show: AccountDocumentsShow; category: DocumentCategory | null; cursor: { v: string; id: string } | undefined }`; `documentsQuery(sp: { show?: unknown; category?: unknown; before?: unknown }): DocumentsQuery`; `documentsHref(base: string, q: { show: AccountDocumentsShow; category: DocumentCategory | null }, before?: string): string`; `documentsPagerHrefs(base: string, q: DocumentsQuery, hasMore: boolean, last: { id: string; created_at: string; expires_on: string | null } | undefined): { next: string | null; first: string | null }`; `type DocumentsRowView = { doc: DocumentView; filedOn: { name: string; href: string } }`; `filedOnView(accountId: string, d: Pick<AccountDocument, "contact" | "group" | "contact_id" | "client_group_id">, noName: string): { name: string; href: string }`.
   - The page renders `data-documents-page` on its list wrapper and `data-documents-page-row={id}` on each row. Task 10 adds the Required card above the list.
@@ -1998,8 +2106,8 @@ describe("filedOnView: the customer's or household's name, linking to its record
     3. C carries `data-document-scan="pending"` and "Owners only"; A carries no `data-document-scan`.
     4. No `type="checkbox"`, no `role="checkbox"` (rule 4: no bulk actions) and no `data-variant="default"` (rule 8: the list has no primary).
     5. Spanish (`locale: "es"`): "Vence en 12 días", "Venció hace 3 días", "Seguro", "Solo dueños" (read `documents.ownersOnly.es` and use its literal), each against the literal.
-  - `…/documents/page.test.ts`: mock `@bis/db` as `async (importOriginal) => ({ ...(await importOriginal<object>()), listAccountDocuments, countAccountDocuments, listPeopleNames })` (the page also imports `DOCUMENT_CATEGORIES`, which must stay real; Task 10 adds `getRequiredDocumentCategories` to the overrides), `@/lib/auth` (`requireAccountAccess` → `{ userId: "u1", isAgency: false, role: "owner", canManage: true }`), `@/lib/db` (`dbForRequest` → a fake whose `from("accounts").select().eq().maybeSingle()` answers `{ data: { language: null }, error: null }`), `@/lib/preferences/person-prefs` (`getPersonPrefs` → `{ language: null }`), `@/lib/documents/document-view` (`documentsClock` → `{ today: "2026-10-17", zone: "America/Chicago" }`; `documentView` from `vi.importActual`), and `./documents-list` and `./category-filter` as `createElement("div", { "data-…-mock": JSON.stringify(p) })` (the contact page test's shape). Render with `renderToStaticMarkup(await DocumentsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({...}) }))`. Cases:
-    1. Default: `listAccountDocuments` called with `(db, "a1", { show: "expiring", category: null, today: "2026-10-17" }, { before: undefined, limit: 51 })`; `countAccountDocuments` with the same filter; with 2 rows and a count of 7 the header reads "7 files" (the REAL total; mutation: count = rows.length → "2 files" → FAILS).
+  - `…/documents/page.test.ts`: mock `@bis/db` as `async (importOriginal) => ({ ...(await importOriginal<object>()), listAccountDocuments, countAccountDocuments, listPeopleNames })` (the page also imports `DOCUMENT_CATEGORIES`, which must stay real; Task 10 adds `getRequiredDocumentCategories` to the overrides), `@/lib/auth` (`requireAccountAccess` → `{ userId: "u1", isAgency: false, role: "owner", canManage: true }`), `@/lib/db` (`dbForRequest` → a fake whose `from("accounts").select().eq().maybeSingle()` answers `{ data: { language: null }, error: null }`), `@/lib/preferences/person-prefs` (`getPersonPrefs` → `{ language: null }`), `@/lib/documents/document-view` (`documentsClock` → `{ today: "2030-03-01", zone: "America/Chicago" }`: a far date, so a page that took today from the server's own UTC clock instead of `documentsClock` FAILS case 1 (review M3); `documentView` from `vi.importActual`), and `./documents-list` and `./category-filter` as `createElement("div", { "data-…-mock": JSON.stringify(p) })` (the contact page test's shape). Render with `renderToStaticMarkup(await DocumentsPage({ params: Promise.resolve({ accountId: "a1" }), searchParams: Promise.resolve({...}) }))`. Cases:
+    1. Default: `listAccountDocuments` called with `(db, "a1", { show: "expiring", category: null, today: "2030-03-01" }, { before: undefined, limit: 51 })`; `countAccountDocuments` with the same filter; with 2 rows and a count of 7 the header reads "7 files" (the REAL total; mutation: count = rows.length → "2 files" → FAILS).
     2. The count throws → the page rejects (the error boundary shows; mutation: `.catch(() => 0)` → FAILS).
     3. 51 rows → the list mock gets 50 rows and the page has a "Next" link whose href carries `before=`; no "Back to the start" without a cursor; exactly ONE pager (`data-documents-pager` once).
     4. Empty cold start, each filter: expiring → "Nothing expires in the next 30 days." and its body; expired → "Nothing has expired."; all → "Files you upload to a customer or household show up here." and "Open a customer and use Documents to add one." A cursored empty page shows the start link and NO empty state.
@@ -2153,7 +2261,7 @@ export default async function DocumentsPage({ params, searchParams }: {
     <div lang={locale}>
       <PageHeader
         title={tr.text("documents.page.title")}
-        count={tr.count("documents.page.count", total)}
+        count={tr.count("documents.count", total)}
         filters={
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <nav aria-label={tr.text("documents.page.show.label")} className="flex min-w-0 flex-wrap items-center gap-1">
@@ -2306,7 +2414,7 @@ export function DocumentsList({ accountId, locale, today, now, rows }: {
   - `…/documents/error.tsx`: `preferences/error.tsx`' shape with `data-documents-page-error`, `title={t(m, "documents.page.title", locale)}`, `body={t(m, "documents.page.loadFailed", locale)}`, and a ghost Retry (`documents.retry`) that runs `startTransition(() => { router.refresh(); reset(); })`; `console.error(error)` in its effect (the raw message never reaches the screen).
   - `technician-guards.test.ts`: the case from Step 2.
 - [ ] **Step 5: Run** `account-list.test.ts`, `documents-list.test.ts`, `…/documents/page.test.ts`, `technician-guards.test.ts`, `src/lib/i18n/request-locale-callers.test.ts`, `…/acct/in-account-service-reads.test.ts` (the page has no service client), `src/components/ui/material.test.ts`, `src/lib/i18n/ratchet.test.ts`, typecheck, eslint. All PASS.
-- [ ] **Step 6: Probes:** (a) `count={tr.count("documents.page.count", page.length)}` → the real-total case FAILS; (b) Next built from `created_at` on every list → the account-list pager case FAILS; (c) the filed-on `<Link>` moved inside the `<button>` → the list case FAILS; (d) `requireNotTechnician(accountId)` added → the technician case FAILS; (e) `documentsQuery` accepting any cursor → its cursor case FAILS. Paste each.
+- [ ] **Step 6: Probes:** (a) `count={tr.count("documents.count", page.length)}` → the real-total case FAILS; (b) Next built from `created_at` on every list → the account-list pager case FAILS; (c) the filed-on `<Link>` moved inside the `<button>` → the list case FAILS; (d) `requireNotTechnician(accountId)` added → the technician case FAILS; (e) `documentsQuery` accepting any cursor → its cursor case FAILS. Paste each.
 - [ ] **Step 7: Commit** every path above, message "documents page: every file on a customer or household, Expiring soon first, filtered and paged on the server with a real total (S-07 3a)".
 
 ---
@@ -2337,6 +2445,7 @@ export function DocumentsList({ accountId, locale, today, now, rows }: {
     2. Eight `role="checkbox"` (the eight requirable; no "Other"), ID and Insurance `data-state="checked"`; exactly ONE `data-variant="default"` (Save; rule 8; mutation: a second primary → FAILS).
     3. `required: []` → the summary reads "Nothing is required for every customer yet."
     4. `required: null` → "Couldn't load the required list.", no checkbox, no `data-variant="default"` (it fails on its own, rule 5; mutation: draw the picker → FAILS).
+    5. Review M9: `shouldOpenForHash("#required-documents")` is true, `""` and `"#documents"` false; and a source pin (comments stripped with the house `stripComments`, copied from `technician-guards.test.ts:38-63`) that `required-documents-summary.tsx` contains `<details ref={details}>`, `if (details.current && shouldOpenForHash(window.location.hash)) details.current.open = true;` and `window.addEventListener("hashchange", onHash);` (mutations: drop the ref, the check or the listener → FAILS). Task 8's palette href and this constant are the same string: assert `REQUIRED_DOCUMENTS_HASH` equals the `#…` part of the Owner entry's href from `buildPaletteEntries(BASE, false, true)` (mutation: rename either → FAILS).
   - `…/documents/page.test.ts`, two cases: (1) an Owner (`canManage: true`) gets the summary mock with `required` equal to what `getRequiredDocumentCategories` answered, and it renders BEFORE `data-documents-page`/the empty state; (2) a Staff member (`role: "staff", canManage: false`) gets no summary and `getRequiredDocumentCategories` is never called (mutation: render it for everyone → FAILS). Mock `./required-documents-summary` as the others are.
   - `documents-page-demo.test.ts`: `data-required-documents` occurs 4 times (English partial, Spanish partial, off, failed) and `data-documents-page-row` 3 times; every `data-required-documents` block has at most one `data-variant="default"`.
 - [ ] **Step 3: Run them to see them fail.**
@@ -2392,7 +2501,7 @@ export function requiredListHandlers({ locale, save, undo, onChange }: {
 ```tsx
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { REQUIRABLE_DOCUMENT_CATEGORIES, type RequirableCategory } from "@bis/db/document-rules";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -2416,6 +2525,10 @@ export function requiredSummaryText(list: readonly RequirableCategory[], locale:
   return t(m, "documents.required.summary", locale, { list: names, count: list.length });
 }
 
+/** Review M9: ⌘K's nav:required-documents lands on #required-documents; the collapsed card opens itself for it. */
+export const REQUIRED_DOCUMENTS_HASH = "#required-documents";
+export const shouldOpenForHash = (hash: string): boolean => hash === REQUIRED_DOCUMENTS_HASH;
+
 export function RequiredDocumentsSummary({ required, locale, save, undo }: {
   required: RequirableCategory[] | null; locale: Locale;
   save: (formData: FormData) => Promise<{ ok: true; list: string[] } | { ok: false; error: string }>;
@@ -2426,6 +2539,14 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
   const handlers = requiredListHandlers({ locale, save, undo, onChange: (list) => { setSaved(list); setPicked(new Set(list)); } });
   const { pending, onSubmit } = useFormSubmit((formData) => handlers.submit(formData, saved));
   const tt = (key: MessageKey) => t(m, key, locale);
+  const details = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    // A DOM property, never state (react-hooks/set-state-in-effect): open on arrival and on a later hash change.
+    const onHash = () => { if (details.current && shouldOpenForHash(window.location.hash)) details.current.open = true; };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   if (required === null) {
     return (
       <Card id="required-documents" data-required-documents className="scroll-mt-24">
@@ -2436,7 +2557,7 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
   return (
     <Card id="required-documents" data-required-documents className="scroll-mt-24">
       <CardContent>
-        <details>
+        <details ref={details}>
           <summary className="min-h-11 cursor-pointer rounded-[var(--radius-ctl)] py-2 text-sm font-medium text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8">
             {requiredSummaryText(saved, locale)}
           </summary>
@@ -2487,6 +2608,7 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
 
 **Files**
 - Create: `apps/web/e2e/documents-page.spec.ts`
+- Modify (review I2): `apps/web/e2e/client-access.spec.ts:99-103` (`CLIENT_NAV` gains `"Documents"` after `"Contacts"`), `apps/web/e2e/assign.spec.ts:173-174` (the Technician's nav count 5 → 6; the label list gains `"Documents"` after `"Contacts"`)
 
 - [ ] **Step 1: Read** `apps/web/e2e/document-requirements.spec.ts` and `documents-scan.spec.ts` whole (env loading, the fixture contact, card locators, the afterAll that removes objects and rows and re-reads), `apps/web/e2e/support.ts:100-135` (`readClientFixture`, `recordPage`), `apps/web/playwright.config.ts:160-180` (one worker; the fake clamd), `…/contacts/document-request-dialog.tsx` (how a ticked item is marked in the markup), `…/acct/tasks/work-list.tsx` (a row's link).
 - [ ] **Step 2: Write the spec.** `import { test, expect, type Page } from "./fixtures/test"` (never `@playwright/test`: `clerk-cookie-guard.test.ts`). `import { serviceDb, createContact, createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan, shiftDay } from "@bis/db";`, `import { openExpiryTasks } from "../src/lib/automations/passes/documents-expiry";`, `import { m } from "../src/lib/messages";`. `test.describe.configure({ mode: "serial", timeout: 180_000 })`. `STAMP = \`Docs3a${Date.now()}\``. `beforeAll`: `readClientFixture()` (throw if missing); READ and keep the account's `required_document_categories` and `timezone` (service client); compute the account's today with `Intl.DateTimeFormat("en-CA", { timeZone })` (YYYY-MM-DD); one contact `{ firstName: "Lia", lastName: STAMP }` (refuse `existing`); files through a `file(category, expiresOn, title)` helper (`createDocument` + `reserveDocumentVersion` + `markDocumentVersionReady` + `recordDocumentScan` "clean"; no stored object: nothing here opens the viewer): **A** insurance, `today + 10`, title `${STAMP} Póliza`; **B** permit, `today - 3`, `${STAMP} Permiso`; **C** photo, no expiry, `${STAMP} Foto`; and 51 × estimate, no expiry, titles `${STAMP} E01..E51`. Base URL `/dashboard/accounts/<id>/documents`. Every test starts with `page.goto(…)` (never `reload`).
@@ -2494,12 +2616,14 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
   2. **Paging.** `goto(base + "?show=all&category=estimate")`: read the header's number N (the per-run fixture account may hold another spec's estimates, so N ≥ 51 and N ≤ 100 are asserted rather than N = 51); the page has exactly 50 rows and one `[data-documents-pager]` with "Next" and no "Back to the start"; click "Next" → exactly N − 50 rows and a "Back to the start" link; collect the row titles of both pages: no title appears on both, and all 51 `${STAMP} E…` titles appear across the two; click "Back to the start" → 50 rows again.
   3. **The Owner card with Undo** (the default signed-in user is the agency, which the card admits). `goto(base)`: `#required-documents` summary reads the stored list's sentence; open it; tick Warranty; Save → the toast "Saved. Each customer's Documents card shows the list."; the database list contains `warranty`; click the toast's Undo → the toast "Put back the list you had."; the database list equals the one read in `beforeAll`.
   4. **An expiry To-do and its link** (spec 6). `await openExpiryTasks(serviceDb(), new Date(), { accountId })` (SCOPED: never an unscoped run, Global Constraints) → its `opened` is ≥ 1; the database holds exactly one task with `document_expiry_id = A` and `document_expiry_on = A's date`; run it again → that task count stays 1 (dedupe end to end). `goto` `/dashboard/accounts/<id>/tasks`; the row showing `expiryTaskTitle({ category: "insurance", title: \`${STAMP} Póliza\`, name: \`Lia ${STAMP}\`, expiresOn: <A's date> }, <the account's language, read in beforeAll, "es" or "en">)` (imported from `../src/lib/documents/expiry-task`, the function the pass used) is there; click it → the URL has `document=<A>` and `ask=insurance`; on the contact page, `[data-document-row="<A>"] [data-document-open]` is focused (`toBeFocused()`); click "Ask the customer" → the dialog opens with Insurance ticked (read the dialog's markup for how a ticked item shows).
-  `afterAll`: restore the account's list (check the error; re-read it equal); delete the contact's tasks (`document_expiry_id` in the spec's documents) then the documents (their versions cascade; no stored objects were made) then the contact; check every `error`; re-read that no row is left.
-- [ ] **Step 3:** `pnpm --filter web exec playwright test --list e2e/documents-page.spec.ts` lists four tests (listing loads every import: Assumption A5; if `@/` does not resolve, STOP and report). `pnpm --filter web exec eslint e2e/documents-page.spec.ts`. Commit, message "e2e: the Documents page's filters and paging, the Owner's Required card with Undo, an expiry To-do opening its file with Ask pre-ticked (S-07 3a)".
+  `afterAll`: restore the account's list (check the error; re-read it equal); delete EVERY expiry To-do on the fixture account created since this spec began (`account_id` = the fixture, `document_expiry_id is not null`, `created_at >= ` the instant `beforeAll` recorded; review M6: the scoped pass run may open To-dos for another spec's files on the same account, and none may outlive this run), then the spec's documents (their versions cascade; no stored objects were made) then the contact; check every `error`; re-read that no row is left.
+- [ ] **Step 3:** `pnpm --filter web exec playwright test --list e2e/documents-page.spec.ts e2e/client-access.spec.ts e2e/assign.spec.ts` lists them (the new file's four tests among them) (listing loads every import: Assumption A5; if `@/` does not resolve, STOP and report). `pnpm --filter web exec eslint e2e/documents-page.spec.ts e2e/client-access.spec.ts e2e/assign.spec.ts`. Commit the three files, message "e2e: the Documents page's filters and paging, the Owner's Required card with Undo, an expiry To-do opening its file with Ask pre-ticked (S-07 3a)".
 
 ---
 
-## Task 13: DESIGN.md and the part-2 spec amendment (orchestrator)
+## Task 13: DESIGN.md and the part-2 spec amendment (orchestrator; Wave A, before any UI task: review M10)
+
+DESIGN.md says a module earns a top-level surface "only by amending this file first", so these lines land before Tasks 8–10 start.
 
 - [ ] **Step 1. DESIGN.md**, Key patterns › **Sidebar**, appended to that bullet:
 
@@ -2508,6 +2632,10 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
   and **The module contract**, appended:
 
 > **Amended 2026-10-17 (S-07 part 3):** the document vault earns ONE top-level surface, the Documents page under CRM, because "what expires across every customer" is a work list no record card can show. Its work still routes to the work queue (an expiry To-do per file and date) and its news to the record's timeline; it adds no second settings section (a client Owner's Required documents card sits on that page; the agency's stays on Settings).
+
+- [ ] **Step 1b. DESIGN.md, Key patterns › **Paged lists**** (owner ruling R2), appended to that bullet:
+
+> **Amended 2026-10-17 (S-07 part 3):** a list sorted by something other than recency (the Documents page's Expiring soon, soonest first) names its pager **"Next"** / **"Back to the start"** instead of "Older" / "Newer"; the mechanics are unchanged (`?before=`, exactly one pager, the start link drops the cursor).
 
 - [ ] **Step 2. The part-2 spec** (`docs/superpowers/specs/2026-10-15-document-vault-part2-design.md`), §5.2's 2c amendment line, add: "**Amended 2026-10-17 (part 3, PR 3a):** a client Owner sets the list on the Documents page's Required documents card (spec part 3 §3.3); P7's Owner half and §8's 'until an Owner opts in' are met from PR 3a."
 - [ ] **Step 3.** Commit both with `git commit -m "docs: DESIGN.md names the Documents page under CRM; P7 is met for client Owners (S-07 3a)" -- DESIGN.md docs/superpowers/specs/2026-10-15-document-vault-part2-design.md`.
@@ -2520,7 +2648,7 @@ export function RequiredDocumentsSummary({ required, locale, save, undo }: {
 
 - [ ] **Step 1.** Read spec §1–§3, §5–§7 (3a parts), this plan's Deviations, then `git diff d806ec5c...HEAD` in `<WT>`; walk "Spec coverage" below row by row against the diff.
 - [ ] **Step 2.** Web tests by path: every test file Tasks 2 and 4–10 touched, plus `src/lib/i18n/ratchet.test.ts`, `src/lib/messages.test.ts`, `src/components/ui/material.test.ts`, `src/lib/i18n/request-locale-callers.test.ts`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/in-account-service-reads.test.ts"`, `"src/app/(dashboard)/dashboard/accounts/[accountId]/technician-guards.test.ts"`, `src/lib/automations/cron-coupling.test.ts`; `pnpm --filter web typecheck`. The db suites on your own replica (Postgres `55631`, PostgREST `55638`, gateway `55639`): `document-expiry-schema.test.ts`, `document-requests-schema.test.ts`, `record-provenance-schema.test.ts`, `schema-grants-guard.test.ts` on `post`; `document-expiry.test.ts`, `account-documents.test.ts`, `document-requirements.test.ts`, `work-queue.test.ts`, `documents.test.ts` behind PostgREST. Re-run two probes of your own choosing, by name. A bis-design-reviewer pass on a running build (the page in both themes at desktop and 360 px with the pseudo-locale, all three empty states, the error boundary, the Required card open and failed) if the orchestrator provides one.
-- [ ] **Step 3.** Hunt specifically: (a) any page or count read on the service client, or `serviceDb` in a new `lib/` file; (b) `count ?? 0` or a count taken from the rows; (c) a filter or "today" computed from the server's UTC day instead of the account's (`documentsClock`, `dayKeyIn`); the expiring window inclusive at both ends, Expired strictly before today; (d) the pass opening a To-do for an Owners-only, trashed, unclean or already-expired file, or for a key that has one; the cap missing; a title in a log line; an unscoped `openExpiryTasks` anywhere but the registered pass; (e) 0084: ASCII, `lock_timeout` first, the FK composite and cascading, the unique index partial, the re-created `keep_task_links` identical to 0080's plus exactly four lines, the rollback order (function first); (f) the work-queue link wrong for a household file, or `documentFocus` present on a plain To-do; (g) the card's focus effect setting state, running more than once, or building its selector from an unvalidated value; `?ask=other` pre-ticking anything; (h) rule 3 (expiry and scan as dot AND word), rule 4 (no checkbox; the whole row opens the viewer; the filed-on link outside the button), rule 7 (skeletons), rule 8 (the page has no primary, the Required card exactly one), rule 11 (no `data-hero`); (i) Spanish in tú anywhere, a Spanish assertion against `t()`'s output, `common.actionCrashed` in bilingual copy; (j) the Owner card's Undo not compare-and-set, or shown to Staff; the palette's Owner entry for Staff or the agency; (k) a test that cannot fail (memory "Vacuous test shapes"); (l) the e2e mutating anything but the per-run fixture account, or running the pass unscoped.
+- [ ] **Step 3.** Hunt specifically: (a) any page or count read on the service client, or `serviceDb` in a new `lib/` file; (b) `count ?? 0` or a count taken from the rows; (c) a filter or "today" computed from the server's UTC day instead of the account's (`documentsClock`, `dayKeyInZone`); the expiring window inclusive at both ends, Expired strictly before today; (d) the pass opening a To-do for an Owners-only, trashed, unclean or already-expired file, or for a key that has one; the cap missing; a title in a log line; an unscoped `openExpiryTasks` anywhere but the registered pass; (e) 0084: ASCII, `lock_timeout` first, the FK composite and cascading, the unique index partial, the re-created `keep_task_links` identical to 0080's plus exactly four lines, the rollback order (function first); (f) the work-queue link wrong for a household file, or `documentFocus` present on a plain To-do; (g) the card's focus effect setting state, running more than once, or building its selector from an unvalidated value; `?ask=other` pre-ticking anything; (h) rule 3 (expiry and scan as dot AND word), rule 4 (no checkbox; the whole row opens the viewer; the filed-on link outside the button), rule 7 (skeletons), rule 8 (the page has no primary, the Required card exactly one), rule 11 (no `data-hero`); (i) Spanish in tú anywhere, a Spanish assertion against `t()`'s output, `common.actionCrashed` in bilingual copy; (j) the Owner card's Undo not compare-and-set, or shown to Staff; the palette's Owner entry for Staff or the agency; (k) a test that cannot fail (memory "Vacuous test shapes"); (l) the e2e mutating anything but the per-run fixture account, or running the pass unscoped; (m) R1: an Owners-only switch (or an Undo writing it back) that leaves an open expiry To-do, a delete on the request client or before the request-client read, a delete that reaches a done To-do or another account; (n) a `@bis/db` BARREL export dereferenced in the pass before its first read (review I1).
 - [ ] **Step 4.** Report findings by severity with file:line; the orchestrator routes fixes to the owning task's agent.
 
 ---
@@ -2571,7 +2699,9 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 | §3.3 the Required card at the top of the page for Owners and the agency; summary line; the picker; 2c's save; own Save, toast, Undo; agency Settings keeps its card | Tasks 4 (Undo action), 10 |
 | §3.3 Settings ⌘K entry opens this card for Owners | Task 8 (`nav:required-documents` for Owners; the agency's `settings:required-documents` unchanged) |
 | §3.3 the 2c note closed; the part-2 spec gets an amendment | Task 13 step 2; Task 15 step 8 (PR body) |
-| §3.4 0084: columns, check, FK, unique index, trigger, the expiry index, the All index (0077 checked: none), rollback note, no new grants (guard) | Task 1; deviations 3, 4 |
+| §3.4 0084: columns, check, FK, unique index, trigger, the expiry index, the All index (0077 checked: none), rollback note, no new grants (guard) | Task 1; deviations 3, 4 (spec amended) |
+| §3.2 amendment (R1): Owners only deletes open expiry To-dos at once | Task 3 (`deleteOpenExpiryTasks`), Task 4 (both actions); Task 14 (m) |
+| DESIGN.md amended before the surface (sidebar, module contract, Paged lists words) | Task 13 (Wave A); R2 |
 | §5 every string in the catalogue, English and Spanish (usted); To-do titles in the account's language; the page in the reader's locale; pseudo-locale at 360 px; `lang` | Task 2; Task 9 (`requestLocale`, `lang={locale}`); Task 14 step 2 |
 | §6 0084 tests (service-only columns, dedupe, cross-account FK) | Task 1 |
 | §6 pass tests (edges at day 30 and 0 in two zones across midnight UTC; expired never; Owners-only/trashed/unclean skipped; dedupe; re-arm; group routing; cap; one error) | Task 5 |
@@ -2584,6 +2714,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 - **Spec coverage:** every §3 bullet maps to a row above. The places where the code made the spec's words impossible or ambiguous are deviations 1–12, each with the file:line that decided it; none blocks a task.
 - **Placeholder scan:** no TBD/TODO; every code step carries its code. Two steps name a read-then-adapt rule instead of guessing a name the plan writer could not see in full (the container's ready-files value in `documents-card.tsx` at `:836`; `partsInZone`'s field names); each keeps the test's pinned strings fixed so the adaptation cannot weaken them.
-- **Type consistency:** `ExpiringDocument`, `listExpiringDocuments`, `listDocumentExpiryTaskKeys`, `ensureDocumentExpiryTask`, `expiryTaskKey`, `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` (Task 3) → Tasks 4, 5, 6, 12; `AccountDocument*`, `listAccountDocuments`, `countAccountDocuments`, `restoreRequiredDocumentCategories`, `undoRequiredDocumentsAction`, `RequiredUndoAnswer` (Task 4) → Tasks 9, 10; `openExpiryTasks`, `documentsExpiryPass` (Task 5) → Task 12; `CardFocus`, `cardFocusFrom`, `workRowHref`, `WorkRow.documentFocus` (Task 6) → Task 7; `ExpiryLine`, `ScanStatus`, `askPreset`, `data-document-open`, `DocumentsCard.focus` (Task 7) → Tasks 9, 12; `DocumentsRowView`, `documentsQuery`, `documentsHref`, `documentsPagerHrefs`, `filedOnView` (Task 9) → Task 10's demo; `nav:required-documents` → `#required-documents` (Tasks 8, 10).
+- **Type consistency:** `ExpiringDocument`, `listExpiringDocuments`, `listDocumentExpiryTaskKeys`, `ensureDocumentExpiryTask`, `expiryTaskKey`, `DOCUMENT_EXPIRY_WINDOW_DAYS`, `shiftDay` (Task 3; the pass imports both from `@bis/db/document-rules`) → Tasks 4, 5, 6, 12; `deleteOpenExpiryTasks` (Task 3) → Task 4; `AccountDocument*`, `listAccountDocuments`, `countAccountDocuments`, `restoreRequiredDocumentCategories`, `undoRequiredDocumentsAction`, `RequiredUndoAnswer` (Task 4) → Tasks 9, 10; `openExpiryTasks`, `documentsExpiryPass`, `EXPIRY_BUDGET_MS` (Task 5) → Task 12, `cron-coupling.test.ts`; `CardFocus`, `cardFocusFrom`, `workRowHref`, `WorkRow.documentFocus` (Task 6) → Task 7; `ExpiryLine`, `ScanStatus`, `askPreset`, `data-document-open`, `DocumentsCard.focus` (Task 7) → Tasks 9, 12; `DocumentsRowView`, `documentsQuery`, `documentsHref`, `documentsPagerHrefs`, `filedOnView` (Task 9) → Task 10's demo; `nav:required-documents` → `#required-documents` (Tasks 8, 10).
 - **Vacuity pass:** every prescribed test names its mutation; copy is asserted in both languages against literals; the one source-scan pin (`work-list.href.test.ts`) strips comments with the house scanner and proves its own path resolves; the structure pins on the card fail when an anchor is missing (both `indexOf`s asserted before slicing); the real-total case asserts a count different from the rows; probe (b) in Task 3 names why removing `!inner` alone is not a probe.
+- **Revision 2026-10-17 (opus review of `95bc0ba1`):** R1 (Tasks 3, 4; spec §3.2), R2 (Task 13 step 1b), R3; I1 (the pass's two pre-read imports from `@bis/db/document-rules`; probe (h) proves the reason), I2 (two e2e nav pins, Task 12), M1 (`load.status`), M2 (`../../../work`), M3 (2030-03-01), M4 (`EXPIRY_BUDGET_MS` 15 s, `deferred`, the coupling sum's fifth term, "four round trips"), M5 (`tasks-call-id-read.test.ts:59`), M6 (afterAll sweeps the account's expiry To-dos since the spec began), M7 (`dayKeyInZone`; `documents.count`), M8 (America/Havana cases), M9 (the card opens on `#required-documents`), M10 (Task 13 in Wave A), M11 (`pnpm install --frozen-lockfile`), M12 (the Technician case's title).
 - **Not executed:** nothing in this plan was run; every name was read off `ac252552` except where an Assumption says otherwise (A1–A7), each with its check.
