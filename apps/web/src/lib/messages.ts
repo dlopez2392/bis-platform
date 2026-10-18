@@ -4910,7 +4910,7 @@ export const m = {
   "record.facts.channel.chat": "website chat",
   "record.facts.channel.chat.es": "chat del sitio web",
 
-  // S-07 3b: share links (plan 2026-10-17-document-vault-pr3b.md).
+  // S-07 3b: share links (plan 2026-10-18-document-vault-pr3b.md).
   "documents.share": "Copy share link",
   "documents.share.es": "Copiar enlace para compartir",
   "documents.share.copied": "Link copied. It works for 24 hours.",
