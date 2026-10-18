@@ -1185,3 +1185,37 @@ describe("the record page's Forwarding address row (S-06 part 2)", () => {
     expect(plain).not.toMatch(/^\s*["']use (client|server)["']/m);
   });
 });
+
+describe("item 8a-2: the AI part sits under the facts line (spec 4.1; plan deviation 15)", () => {
+  // Deviation from the brief: this file sets no BIS_I18N_QA case anywhere (grep confirms), so the
+  // `?locale=` override is off in this suite — requestLocale ignores it and resolves "en" for this
+  // agency-operator access. Passing no searchParams and asserting the URL carries NO `?locale=`.
+  it("the summary card holds the facts line, then the AI part pointing at its route, in the page's language (mutations: put the part above SummaryBody -> FAILS; drop the locale param -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    const html = cardHtml(await render(), "summary");
+    expect(html.indexOf("data-record-facts")).toBeGreaterThan(-1);
+    expect(html.indexOf("data-ai-summary")).toBeGreaterThan(html.indexOf("data-record-facts"));
+    expect(html).toContain('data-ai-summary-url="/api/accounts/acct1/contacts/ct1/ai-summary"');
+  });
+  it("no AI part when the facts failed (mutation: mount it outside the facts check -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    // the file's own "summary failing" switch, inlined (see the case at :763): loadSummary rejects.
+    contactFactsMock.mockRejectedValue(new Error("facts down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = cardHtml(await render(), "summary");
+      expect(html).not.toContain("data-ai-summary");
+    } finally {
+      errors.mockRestore();
+      contactFactsMock.mockResolvedValue(READY_FACTS);
+    }
+  });
+});

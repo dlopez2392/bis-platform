@@ -7,6 +7,7 @@ import { RecordCardView } from "@/components/record/record-card";
 import { RecordHeader } from "@/components/record/record-header";
 import { RecordLayout } from "@/components/record/record-layout";
 import { RecordSection } from "@/components/record/record-section";
+import { AiSummaryView } from "../accounts/[accountId]/contacts/[contactId]/ai-summary";
 import { m, type MessageKey } from "@/lib/messages";
 
 /**
@@ -61,6 +62,12 @@ const layout = (width: string, idPrefix: string) => (
   </div>
 );
 
+// A specimen paragraph: a variable, not a JSX literal (the i18n ratchet counts literals).
+const SPECIMEN = "Ana booked a roof repair for Tuesday at 10:00 AM. A quote is open, and her insurance card is on file.";
+const AI_LABELS = {
+  regenerate: m["record.ai.regenerate"], retry: m["record.card.retry"], failed: m["record.ai.failed"],
+  capped: m["record.ai.capped"], writing: m["record.ai.writing"],
+};
 // A specimen person's name: a variable, not a JSX literal (the i18n ratchet counts literals).
 const PERSON = "Dan López";
 const MARKS = [
@@ -114,6 +121,17 @@ export function RecordDemo() {
         {card("error", { state: "error" })}
         {card("closed", { disclosure: true, open: false })}
       </div>
+      {/* Item 8a-2: the record summary's AI part in its five states (spec 4.8). Words from the catalogue; the specimen paragraph is a variable. */}
+      <div data-sg-ai-summary className="flex flex-wrap gap-4">
+        {(["loading", "ready", "capped", "failed"] as const).map((s) => (
+          <div key={s} className="w-[280px] max-w-full">
+            <AiSummaryView labels={AI_LABELS} onRegenerate={() => {}} onRetry={() => {}}
+              view={s === "ready" ? { state: "ready", text: SPECIMEN, generatedAt: "2026-10-18T14:42:00Z", language: "en", stamp: m["record.ai.label"].replace("{time}", "9:42 AM") } : { state: s }} />
+          </div>
+        ))}
+        <div data-sg-ai-none className="w-[280px] max-w-full"><AiSummaryView labels={AI_LABELS} onRegenerate={() => {}} onRetry={() => {}} view={{ state: "none" }} /></div>
+      </div>
+      <span data-sg-ai-summary-end hidden />
       <div data-sg-author-marks className="flex flex-wrap gap-2">
         {MARKS.map((mk) => <AuthorMark key={mk.kind} kind={mk.kind} label={mk.label} />)}
       </div>
