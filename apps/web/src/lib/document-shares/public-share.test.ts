@@ -146,11 +146,18 @@ describe("resolveShare: the token is proven first, then every read carries the t
     ["an infected scan", {}, {}, { scan_status: "infected" }, "removed"],
     ["an unscannable scan", {}, {}, { scan_status: "unscannable" }, "removed"],
     ["an uploading version", {}, {}, { status: "uploading" }, "removed"],
+    ["a used-up link (open_count = SHARE_LINK_MAX_DOWNLOADS)", { open_count: 100 }, {}, {}, "expired"],
+    ["a link past its cap (open_count = 101)", { open_count: 101 }, {}, {}, "expired"],
   ];
   it.each(cases)("%s answers its state (mutation: drop the check -> FAILS)", async (_n, s, d, v, want) => {
     dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, ...s });
     dbm.getShareTarget.mockResolvedValueOnce({ document: { ...TARGET.document, ...d }, version: { ...TARGET.version, ...v } });
     expect((await resolveShare(fakeDb, TOK, NOW)).state).toBe(want);
+  });
+
+  it("Minor 1: a link one download short of its cap (99) is still open (mutation: cap at 99 -> FAILS)", async () => {
+    dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, open_count: SHARE_LINK_MAX_DOWNLOADS - 1 });
+    expect((await resolveShare(fakeDb, TOK, NOW)).state).toBe("open");
   });
 
   it("a target that is gone (getShareTarget null) is not_found", async () => {
@@ -188,12 +195,19 @@ describe("shareDownload: one claim, one mint of the SHARED version, every refusa
     ["an expired link", () => dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, expires_at: NOW.toISOString() }), TOK],
     ["a trashed file", () => dbm.getShareTarget.mockResolvedValueOnce({ ...TARGET, document: { ...TARGET.document, deleted_at: "2026-03-01T11:45:00.000Z" } }), TOK],
     ["a removed file", () => dbm.getShareTarget.mockResolvedValueOnce({ ...TARGET, version: { ...TARGET.version, scan_status: "infected" } }), TOK],
+    ["a used-up link (100 downloads)", () => dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, open_count: 100 }), TOK],
   ];
   it.each(refusedBeforeClaim)("%s answers EXACTLY 410 unavailable and is never claimed or minted (mutations: a state word; claim first -> FAILS)", async (_n, arrange, token) => {
     arrange();
     expect(await shareDownload(fakeDb, token, IP_HASH, NOW)).toEqual(UNAVAILABLE);
     expect(dbm.claimDocumentShareDownload).not.toHaveBeenCalled();
     expect(dbm.signedDocumentReadUrl).not.toHaveBeenCalled();
+  });
+
+  it("Minor 1: a link at 99 downloads is still claimed and minted (the route agrees with the page)", async () => {
+    dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, open_count: 99 });
+    expect(await shareDownload(fakeDb, TOK, IP_HASH, NOW)).toEqual({ status: 200, body: { url: "https://signed.example/x" } });
+    expect(dbm.claimDocumentShareDownload).toHaveBeenCalledTimes(1);
   });
 
   it.each(["not_found", "closed"] as const)("a claim answering %s (closed = the link's 100-download cap) is the same 410 and mints nothing", async (status) => {
@@ -263,6 +277,13 @@ describe("sharePage: the page's whole read", () => {
     expect(languageIds).toEqual([ACC]);
     expect(dbm.getBranding.mock.calls[0]).toEqual([fakeDb, ACC]);
     expect(dbm.listPhoneNumbersForAccount.mock.calls[0]).toEqual([fakeDb, ACC]);
+  });
+
+  it.each([[99, "open"], [100, "expired"]] as const)("Minor 1: a link at %i downloads reads the %s page (page and route agree; mutations: drop the cap check, cap at 99 -> FAILS)", async (count, want) => {
+    dbm.findDocumentShareByTokenHash.mockResolvedValueOnce({ ...SHARE, open_count: count });
+    const p = await sharePage(fakeDb, TOK, NOW);
+    expect(p.state).toBe(want);
+    expect(p.file === null).toBe(want !== "open");
   });
 
   it("no logo path answers logoUrl null; an English account answers en", async () => {

@@ -12,7 +12,7 @@ import { loggableError } from "@/lib/loggable-error";
 /**
  * The public rule for a share link (study 3.4; spec 4.2): the token is proven FIRST on every request
  * (its shape, then a lookup by its sha256, then open: not revoked, not expired, the document not
- * trashed, the shared version ready and clean), and every later read carries the TOKEN ROW's account,
+ * trashed, the shared version ready and clean, fewer than SHARE_LINK_MAX_DOWNLOADS downloads), and every later read carries the TOKEN ROW's account,
  * document and version. The browser sends nothing else. Every refused download is the same answer
  * (plan deviation 6); the page states differ only for a real token's holder. Logs name the share id,
  * never the token. The client is the CALLER's (the route's or the page's); this file names none of its
@@ -34,6 +34,9 @@ export async function resolveShare(db: SupabaseClient, token: string, now: Date)
   if (!target) return { state: "not_found" };
   const life = documentShareState(share, now);
   if (life !== "open") return { state: life, share, target };
+  // Final review minor 1: a link at its cap is a closed page, not an open one whose Download 0085 refuses
+  // forever. It reads the expired page (no new words): the link has run out, and the ask still stands.
+  if (share.open_count >= SHARE_LINK_MAX_DOWNLOADS) return { state: "expired", share, target };
   if (target.document.deleted_at !== null) return { state: "trashed", share, target };
   if (target.version.status !== "ready" || target.version.scan_status !== "clean") return { state: "removed", share, target };
   return { state: "open", share, target };

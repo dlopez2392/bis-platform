@@ -66,10 +66,10 @@ describe("requestDownload: a fetch POST to the route, then the browser goes to t
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("410: the page re-reads (into its refusal), and the browser goes nowhere", async () => {
+  it("410: the page re-reads (into its refusal), the browser goes nowhere, and the failed note stands for a page that re-reads open (final review minor 1; mutation: answer null -> FAILS)", async () => {
     const go = vi.fn();
     const refresh = vi.fn();
-    expect(await requestDownload(TOKEN, { fetch: fakeFetch(410, { error: "unavailable" }), go, refresh })).toBeNull();
+    expect(await requestDownload(TOKEN, { fetch: fakeFetch(410, { error: "unavailable" }), go, refresh })).toBe("failed");
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(go).not.toHaveBeenCalled();
   });
@@ -165,9 +165,9 @@ describe("settleDownload: the answer's sentence, and busy cleared (review M2)", 
     expect(await press(fakeFetch(503, { error: "failed" }))).toEqual({ busy: false, note: WORDS.failedText });
     expect(await press(vi.fn(async () => { throw new TypeError("Failed to fetch"); }))).toEqual({ busy: false, note: WORDS.failedText });
   });
-  it("410: the page re-reads, and no sentence", async () => {
+  it("410: the page re-reads AND the retry sentence is set: a refusal page unmounts the button with it, and a page that re-reads open (a scan flip between claim and mint) is never a silent button (final review minor 1)", async () => {
     const refresh = vi.fn();
-    expect(await press(fakeFetch(410, { error: "unavailable" }), refresh)).toEqual({ busy: false, note: null });
+    expect(await press(fakeFetch(410, { error: "unavailable" }), refresh)).toEqual({ busy: false, note: WORDS.failedText });
     expect(refresh).toHaveBeenCalledTimes(1);
   });
   it("200: the browser went on, no sentence", async () => {

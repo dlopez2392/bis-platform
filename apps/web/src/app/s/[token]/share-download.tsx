@@ -24,7 +24,10 @@ export type DownloadDeps = {
  * One press of Download (spec 4.2). A fetch POST, never a form post or a navigation to the route: a
  * document request to /api would meet Clerk's handshake redirect for a signed-in visitor (Task 7
  * review). Then the browser goes to the returned 120 s URL, which downloads. Answers the note to show,
- * or null when the browser went somewhere or the page re-reads.
+ * or null when the browser went somewhere. A 410 re-reads the page AND answers "failed" (final review
+ * minor 1): a refusal page unmounts the button and its note together, so the sentence is only ever seen
+ * when the page re-reads OPEN again (a scan flip between claim and mint), where a silent button would
+ * otherwise press into nothing for ever.
  */
 export async function requestDownload(token: string, deps: DownloadDeps): Promise<"limit" | "failed" | null> {
   try {
@@ -33,8 +36,10 @@ export async function requestDownload(token: string, deps: DownloadDeps): Promis
     });
     const o = downloadOutcome(res.status, await res.json().catch(() => null));
     if (o.kind === "go") deps.go(o.url);
-    else if (o.kind === "refresh") deps.refresh();
-    else return o.kind;
+    else if (o.kind === "refresh") {
+      deps.refresh();
+      return "failed";
+    } else return o.kind;
     return null;
   } catch {
     return "failed";
@@ -51,7 +56,7 @@ export const SHARE_CSS = `.bis-docreq-primary[aria-disabled="true"] { opacity: 0
 
 export type DownloadWords = { limitText: string; failedText: string };
 
-/** After one press: busy clears, and the sentence the answer earns (none when the browser went on or the page re-reads). */
+/** After one press: busy clears, and the sentence the answer earns (none when the browser went on). */
 export function settleDownload(kind: "limit" | "failed" | null, words: DownloadWords): { busy: false; note: string | null } {
   return { busy: false, note: kind === "limit" ? words.limitText : kind === "failed" ? words.failedText : null };
 }
