@@ -63,6 +63,7 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
   - All: "Files you upload to a customer or household show up here. Open a customer and use Documents to add one."
   - Expiring soon: "Nothing expires in the next 30 days. Files with an expiry date show up here a month before."
   - Expired: "Nothing has expired."
+  - Any filter with a **category** selected: "Nothing of this type here. Choose Any type to see every file." with a link to Any type (amended 2026-10-17, final review).
 - **No hero** (rule 11). This is a work list, not a headline metric.
 
 ### 3.2 Expiry To-dos
@@ -87,11 +88,12 @@ Part 3 is one spec built as two PRs (decided 2026-10-17):
 - **The To-do links to the record's Documents card** with the document in focus. On the card, **Pedir al cliente** accepts a pre-selected category, carried in the URL (`?ask=insurance`). This is a small change to the 2b dialog's initial state.
 - **Owners only removes the To-do (amended 2026-10-17, owner ruling R1).** Switching a file to Owners only deletes its open expiry To-dos at once, on the server, in the same action, after the action's own visibility read: a To-do title names the file, and Staff read To-dos. A done To-do stays. Switching the file back off holds nothing, so the next pass run reopens the To-do for that file and date.
 - **The trash removes the To-do (amended 2026-10-17, owner ruling R4).** Moving a file to the trash (each file trashed; there is no bulk trash) deletes its open expiry To-dos at once, on the server, in the same action, after the action's own visibility read. A done To-do stays. Undo or restore puts the file back; the next pass run reopens the To-do if the file is still in its window.
+- **The pass heals (amended 2026-10-17, final review).** After its inserts, each run also deletes any open expiry To-do whose file is now Owners only or in the trash (service client, scoped like its read, capped, ids-only logs). This closes the race where a run reads a file just before it is switched or trashed, and clears a delete that failed in the action, within one tick.
 - **Failures** are logged by document id and account, never with the file title (`loggableError`). One document's failure never stops the pass. The pass has a per-run cap (200 To-dos), and a capped run logs that it was capped.
 
 ### 3.3 The Required documents card (Owner screen for the 2c checklist)
 
-- **Placement:** at the top of the Documents page, visible to client Owners and agency staff only (`is_account_owner` or agency). It is a collapsed summary line, "Required for every customer: ID, Insurance (2)", that expands into the same nine-category picker as the agency Settings card.
+- **Placement:** at the top of the Documents page, visible to client Owners and agency staff only (`is_account_owner` or agency). It is a collapsed summary line, "Required for every customer: ID, Insurance (2)", that expands into the same eight-category picker as the agency Settings card (the requirable categories; Other cannot be required).
 - **Saving** uses 2c's existing save action, which already admits a client Owner (2c §5.2 amendment D6). No database change. The card has its own primary Save, its own toast and its own Undo (rule 8: the card is its own view).
 - **Agency Settings keeps its card.** Both surfaces write the same account list.
 - **Settings ⌘K entry:** the palette's "Required documents" target now opens this card for Owners.
