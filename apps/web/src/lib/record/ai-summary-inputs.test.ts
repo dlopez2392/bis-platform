@@ -306,8 +306,8 @@ describe("what the model is given (spec 4.3; I6)", () => {
     expect(i.todos.map((t) => t.title)).toEqual([expiry("Ana", "en"), expiry("Ana", "es")]);
     expect(i.todos[0]!.title).toBe("Ana's ID expires on Nov 2");
     expect([i.deals[0]!.name, i.documents[0]!.title, i.calls[0]!.summary, i.who.source])
-      // The full name, in any case, becomes the stored first name.
-      .toEqual(["Deck for the [name] family", "Ana lease", "Mrs. [name] wants a quote.", "referral from the [name] family"]);
+      // The full name, in any case, becomes its first name as written there.
+      .toEqual(["Deck for the [name] family", "ana lease", "Mrs. [name] wants a quote.", "referral from the [name] family"]);
     expect(JSON.stringify(i)).not.toMatch(/garcia/i);
   });
 
@@ -318,6 +318,9 @@ describe("what the model is given (spec 4.3; I6)", () => {
     ["Bill", "Send Bill the bill; the bill's due Friday", "a lowercase possessive"],
     ["Flores", "Plantar flores en el jardín", "a Spanish common noun"],
     ["Flores", "Las flores familia de plantas", "a lowercase word beside 'familia'"],
+    ["Flores", "Don't miss Flores Road", "a lowercase miss (round 3, item 3)"],
+    ["Mesa", "Put it on the ms Mesa table", "a lowercase ms (round 3, item 3)"],
+    ["Flores", "Don't Flores", "an apostrophe inside a word before it"],
     ["Green", "Paint the door green. Green trim too.", "a colour"],
     ["Stone", "A stone wall; the stone's weight", "a lowercase possessive"],
     ["Rosa", "Una rosa para mamá", "a flower"],
@@ -337,6 +340,35 @@ describe("what the model is given (spec 4.3; I6)", () => {
     ["the family, either side", null, "Flores", "the Flores family; la familia Flores"],
   ])("redacts a last name where it reads as a name: %s (mutations: drop that cue -> FAILS)", (_cue, first, last, text) => {
     expect(redactName(text, first, last)).not.toMatch(/Flores/);
+  });
+
+  // Round 3, item 1: every honorific, Spanish ones included, written accent-folded and longest first.
+  it.each([
+    "La señora Flores llamó", "El señor Flores vino", "Señorita Flores", "Dra. Flores", "Lic. Flores", "Licda. Flores",
+    "Ing. Flores", "los Sres. Flores", "las Sras. Flores", "Mx. Flores", "Prof. Flores", "Srta. Flores", "Sra Flores",
+    "Sr. Flores", "Mr. Flores", "Mrs. Flores", "Ms. Flores", "Miss Flores", "Dr Flores", "Don Flores", "Doña Flores",
+  ])("the honorific in %j redacts the name, and only the name (mutation: drop that honorific -> FAILS)", (text) => {
+    expect(redactName(text, null, "Flores")).toBe(text.replace("Flores", "[name]"));
+  });
+
+  it("with a cue, the name in full capitals and the honorific in any case still redact (round 3, item 2a; mutations: stored form only -> FAILS; case-sensitive honorific -> FAILS)", () => {
+    expect(redactName("MRS. FLORES called", null, "Flores")).toBe("MRS. [name] called");
+    expect(redactName("Mrs. FLORES called", null, "Flores")).toBe("Mrs. [name] called");
+    expect(redactName("SRA. GARCÍA llamó", null, "García")).toBe("SRA. [name] llamó");
+    expect(redactName("mrs. Flores called", null, "Flores")).toBe("mrs. [name] called");
+    expect(redactName("FLORES'S yard; THE FLORES FAMILY", null, "Flores")).toBe("[name]'S yard; THE [name] FAMILY");
+  });
+
+  it("a bare-apostrophe possessive redacts (round 3, item 2b; mutation: 's only -> FAILS)", () => {
+    expect(redactName("the Flores' office and the Flores’ truck", null, "Flores")).toBe("the [name]' office and the [name]’ truck");
+  });
+
+  it("middle names: the full name with up to two between, and an honorific with up to two capitalised words before the last name (round 3, item 2c; mutations: no middle words in the full name -> FAILS; none after the honorific -> FAILS)", () => {
+    expect(redactName("Sra. Ana María Flores llamó", "Ana", "Flores")).toBe("Sra. Ana María llamó");
+    expect(redactName("Sra. Ana Flores llamó", "Ana María", "Flores")).toBe("Sra. Ana llamó");
+    expect(redactName("ana maría flores llamó", "Ana María", "Flores")).toBe("ana maría llamó");
+    expect(redactName("Ana Lucía María Flores llamó", "Ana", "Flores")).toBe("Ana Lucía María llamó");
+    expect(redactName("Sra. Lupe María Flores llamó", null, "Flores")).toBe("Sra. Lupe María [name] llamó");
   });
 
   it("each cue redacts only the name, never the cue word", () => {
@@ -364,7 +396,7 @@ describe("what the model is given (spec 4.3; I6)", () => {
   });
 
   it("the full name becomes the first name in any case; with no last name nothing changes; a bare capitalised name with no cue passes (accepted residual)", () => {
-    expect(redactName("ANA GARCIA called, then ana garcia again", "Ana", "Garcia")).toBe("Ana called, then Ana again");
+    expect(redactName("ANA GARCIA called, then ana garcia again", "Ana", "Garcia")).toBe("ANA called, then ana again");
     expect(redactName("Ana Garcia called", "Ana", null)).toBe("Ana Garcia called");
     expect(redactName("Garcia called", null, "Garcia")).toBe("Garcia called");
     expect(redactName("Garciaville's yard", null, "Garcia")).toBe("Garciaville's yard");
