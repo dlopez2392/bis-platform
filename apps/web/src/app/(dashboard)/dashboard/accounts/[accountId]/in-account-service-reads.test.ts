@@ -126,6 +126,8 @@ const ALLOWED: Record<string, Reason> = {
   // the composer's two recipient states (smsRecipientState, emailRecipientState) read on ledgerDb only
   // inside loadInboxComposer, after getContact on the request client proved the thread's own customer.
   "app/(dashboard)/dashboard/accounts/[accountId]/conversations/page.tsx": "proven-target",
+  // The Owner's Required documents card's Undo (S-07 3a): an Owner or the agency only (canManage), a compare-and-set on one account column.
+  "app/(dashboard)/dashboard/accounts/[accountId]/documents/required-documents-actions.ts": "owner-only",
   // The Never record list's Add/Remove (S-06 part 2): requireAccountOwner (the agency or this
   // account's own Owner) proves the caller before any service write, every write scoped by account_id.
   "app/(dashboard)/dashboard/accounts/[accountId]/never-log-actions.ts": "owner-only",

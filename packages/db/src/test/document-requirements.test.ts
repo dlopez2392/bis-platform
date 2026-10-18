@@ -5,6 +5,7 @@ import { createContact } from "../contacts";
 import {
   listDocumentRequirements, getRequiredDocumentCategories, setRequiredDocumentCategories, getActiveDocumentSkip, getDocumentSkip,
   skipDocumentRequirement, undoDocumentSkip, unskipDocumentRequirement, undoDocumentUnskip, listDocumentSkipTimeline,
+  restoreRequiredDocumentCategories,
 } from "../document-requirements";
 import { cleanRequiredCategories, requirementsMeter, REQUIRABLE_DOCUMENT_CATEGORIES, DOCUMENT_CATEGORIES } from "../document-rules";
 
@@ -188,5 +189,20 @@ describe("listDocumentSkipTimeline (spec 5.4: each move is a timeline row)", () 
       expect(t.unskips.map((r) => r.id)).toEqual([first.skip.id]); // un-skipped last
       const older = await listDocumentSkipTimeline(db, accountId, ana, { limit: 1, before: { v: t.unskips[0]!.unskipped_at!, id: first.skip.id } });
       expect(older.unskips.map((r) => r.id)).toEqual([second.skip.id]);
+    }));
+});
+
+describe("restoreRequiredDocumentCategories (S-07 3a: the Owner card's Undo; plan deviation 9)", () => {
+  it("puts the previous list back only while the stored list is exactly the expected one (mutation: drop the list eq -> the second call answers true -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await setRequiredDocumentCategories(db, accountId, ["id", "insurance"]);
+      expect(await restoreRequiredDocumentCategories(db, accountId, ["id", "insurance"], ["id"])).toBe(true);
+      expect(await getRequiredDocumentCategories(db, accountId)).toEqual(["id"]);
+      expect(await restoreRequiredDocumentCategories(db, accountId, ["id", "insurance"], [])).toBe(false);
+      expect(await getRequiredDocumentCategories(db, accountId)).toEqual(["id"]);
+      await setRequiredDocumentCategories(db, accountId, []);
+      expect(await restoreRequiredDocumentCategories(db, accountId, [], ["warranty"])).toBe(true);
+      expect(await getRequiredDocumentCategories(db, accountId)).toEqual(["warranty"]);
+      await expect(restoreRequiredDocumentCategories(db, accountId, ["other"], [])).rejects.toThrow(TypeError);
     }));
 });

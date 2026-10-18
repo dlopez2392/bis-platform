@@ -41,6 +41,7 @@ describe("setRequiredDocumentCategoriesAction", () => {
       expect(await setRequiredDocumentCategoriesAction(ACC, form("insurance", "id", "insurance"))).toEqual({ ok: true, list: ["id", "insurance"] });
       expect(calls).toEqual([["serviceDb"], ["set", SVC, ACC, ["id", "insurance"]]]);
       expect(revalidatePath).toHaveBeenLastCalledWith(`/dashboard/accounts/${ACC}/settings`);
+      expect(revalidatePath).toHaveBeenCalledWith(`/dashboard/accounts/${ACC}/documents`);
     }
   });
   it("Staff may not change it, and nothing is written (mutation: drop the role check -> FAILS)", async () => {

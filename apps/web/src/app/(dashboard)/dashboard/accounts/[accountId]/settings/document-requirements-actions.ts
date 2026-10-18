@@ -22,6 +22,7 @@ export async function setRequiredDocumentCategoriesAction(
   if (!list) return { ok: false, error: m["settings.requiredDocuments.failed"] };
   try {
     const saved = await setRequiredDocumentCategories(serviceDb(), accountId, list);
+    revalidatePath(`/dashboard/accounts/${accountId}/documents`);
     revalidatePath(`/dashboard/accounts/${accountId}/settings`);
     return { ok: true, list: saved };
   } catch (e) {
