@@ -73,6 +73,8 @@ const accountRow = {
 const serviceDbSpy = vi.hoisted(() => vi.fn());
 
 vi.mock("@bis/db", () => ({
+  // The AI gateway (item 8a-1) reads AI_OUTCOMES at import: an unlisted export of this bare factory throws.
+  AI_OUTCOMES: ["ok", "global_off", "account_off", "over_budget", "unknown_model", "gate_unreadable", "no_key", "timeout", "provider_error"],
   serviceDb: () => (serviceDbSpy(), {
     from: (table: string) => {
       dbQuerySpy.fromCalls.push(table);
