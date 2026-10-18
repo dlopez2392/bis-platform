@@ -7,7 +7,7 @@
 -- paragraph is stale), and a 30-second lease so one reader writes while every other reader waits.
 -- The app writes it through the service role only, after the route proved the customer on the
 -- reader's own client. The client role reads a row exactly when it can read the customer (the
--- restrictive policy's subquery runs under contacts' own policies, 0068's Technician fence included)
+-- restrictive policy's exists runs under contacts' own policies, 0068's Technician fence included)
 -- and writes nothing. claim_record_summary (service_role only) creates the row if missing, locks it,
 -- and answers busy (a live lease), fresh (not forced and the digest is unchanged), too_soon (forced,
 -- the digest unchanged, within a minute of the last such forced claim) or won with a new lease_id the
@@ -63,9 +63,12 @@ grant select on public.record_summaries to authenticated;
 grant select, insert, update, delete on public.record_summaries to service_role;
 create policy record_summaries_member_read on public.record_summaries for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
--- A row is visible exactly when its customer is: the subquery runs under contacts' own policies.
+-- A row is visible exactly when its customer is: the exists runs under contacts' own policies.
+-- An exists on the row's own contact, not 0085's "in (select ...)" shape: the in-list hashes every
+-- contact the reader can see (a seq scan, 321 ms at 30k contacts as an Owner), the exists is one
+-- index probe per row (2 ms).
 create policy record_summaries_through_contact on public.record_summaries as restrictive for select to authenticated
-  using (contact_id in (select c.id from public.contacts c));
+  using (exists (select 1 from public.contacts c where c.id = record_summaries.contact_id));
 
 -- 3. The claim. The row lock (for update) is the one serialisation point: concurrent claims queue,
 --    and every claim after the winner sees its lease.
