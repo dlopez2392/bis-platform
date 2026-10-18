@@ -120,6 +120,10 @@ export async function undoStopSharingAction(
     // when stopped" from "switched to Owners only since" (an Owner could post true after the switch and
     // bring Staff's links back). Decided here: an Owners-only file changed after the stop gets nothing
     // back. Any edit stamps updated_at, so this over-refuses; that is acceptable for an Undo.
+    // What it does NOT stop (final review minor 3): the Owners-only switch revokes the links itself, so an
+    // Owner replaying THAT revoke's own payload passes (updated_at T1 is not after its revokedAt T2). That is
+    // not an escalation: only an Owner or the agency gets past provenDocument on an Owners-only file at all,
+    // and they may share that file afresh anyway.
     if (doc.owners_only && Date.parse(doc.updated_at) > Date.parse(revokedAt)) return fail(ENDED);
     const r = await restoreDocumentShares(serviceDb(), {
       accountId, documentId: doc.id, ids: ids.map((i) => i.toLowerCase()), revokedAt, actorId: access.userId,
