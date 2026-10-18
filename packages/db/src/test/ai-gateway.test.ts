@@ -89,19 +89,21 @@ describe("aiGateCheck / recordAiLedger", () => {
 });
 
 describe("the card's reads and writes", () => {
-  it("no row reads the defaults; a save is read back and never resets the counters, and another account's row never leaks in (mutations: add month_spend_microusd: 0 to the upsert; drop getAiSettings's .eq('account_id') -> FAILS)", () =>
+  it("no row reads the defaults; a save is read back and never resets the counters, and another account's row never leaks in (mutations: add month_spend_microusd: 0 to the upsert; drop getAiSettings's .eq('account_id') -> FAILS; hard-code recordSummariesToday: 0 -> FAILS)", () =>
     withTestAccount(async (db, accountId) => withTestAccount(async (_db, other) => {
       // Fix round, review 1: the agency's RLS sees EVERY account, so only the account filter keeps a
       // second client's settings off this card. The other account has a row with different values first.
-      await recordAiLedger(db, entry(other, { costMicroUsd: 9_999 }));
+      await recordAiLedger(db, entry(other, { feature: "record_summary", costMicroUsd: 9_999 }));
       await setAccountAiSettings(db, other, { enabled: true, monthlyBudgetCents: 7700, actorId: "user_other" });
-      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: null, monthSpendMicroUsd: 0, globalEnabled: true });
+      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: null, monthSpendMicroUsd: 0, globalEnabled: true, dayKey: null, recordSummariesToday: 0 });
       await recordAiLedger(db, entry(accountId, { costMicroUsd: 720 }));
+      await recordAiLedger(db, entry(accountId, { feature: "record_summary", costMicroUsd: 0 }));
+      await recordAiLedger(db, entry(accountId, { feature: "record_summary", costMicroUsd: 0 }));
       await setAccountAiSettings(db, accountId, { enabled: false, monthlyBudgetCents: 2500, actorId: "user_test" });
-      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: false, monthlyBudgetCents: 2500, monthKey: "2026-10", monthSpendMicroUsd: 720, globalEnabled: true });
+      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: false, monthlyBudgetCents: 2500, monthKey: "2026-10", monthSpendMicroUsd: 720, globalEnabled: true, dayKey: "2026-10-18", recordSummariesToday: 2 });
       const { data } = await db.from("account_ai_settings").select("updated_by").eq("account_id", accountId).single();
       expect(data).toEqual({ updated_by: "user_test" });
-      expect(await getAiSettings(db, other)).toEqual({ accountEnabled: true, monthlyBudgetCents: 7700, monthKey: "2026-10", monthSpendMicroUsd: 9_999, globalEnabled: true });
+      expect(await getAiSettings(db, other)).toEqual({ accountEnabled: true, monthlyBudgetCents: 7700, monthKey: "2026-10", monthSpendMicroUsd: 9_999, globalEnabled: true, dayKey: "2026-10-18", recordSummariesToday: 1 });
     })));
 
   it("the account's Undo is a compare-and-set: it writes back only while the row still holds what its save wrote, else answers 'changed' and writes nothing (Task 7 fix round 4; mutations: drop the enabled filter; drop the budget filter; upsert when expected is given; drop the account filter -> FAILS)", () =>

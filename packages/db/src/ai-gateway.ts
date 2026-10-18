@@ -56,17 +56,17 @@ export async function recordAiLedger(db: SupabaseClient, r: AiLedgerEntry & { si
   if (error) throw new Error(`recordAiLedger failed: ${error.message}`);
 }
 
-export type AiSettingsRead = { accountEnabled: boolean; monthlyBudgetCents: number; monthKey: string | null; monthSpendMicroUsd: number; globalEnabled: boolean };
+export type AiSettingsRead = { accountEnabled: boolean; monthlyBudgetCents: number; monthKey: string | null; monthSpendMicroUsd: number; globalEnabled: boolean; dayKey: string | null; recordSummariesToday: number };
 
 /** The card's read. No account row means the defaults; no global row reads OFF, as the gate does. */
 export async function getAiSettings(db: SupabaseClient, accountId: string): Promise<AiSettingsRead> {
   const [acct, global] = await Promise.all([
-    db.from("account_ai_settings").select("enabled, monthly_budget_cents, month_key, month_spend_microusd").eq("account_id", accountId).maybeSingle(),
+    db.from("account_ai_settings").select("enabled, monthly_budget_cents, month_key, month_spend_microusd, day_key, record_summaries_today").eq("account_id", accountId).maybeSingle(),
     db.from("ai_gateway_settings").select("enabled").eq("id", true).maybeSingle(),
   ]);
   if (acct.error) throw new Error(`getAiSettings: account read failed: ${acct.error.message}`);
   if (global.error) throw new Error(`getAiSettings: global read failed: ${global.error.message}`);
-  const a = acct.data as { enabled: boolean; monthly_budget_cents: number; month_key: string | null; month_spend_microusd: number | string } | null;
+  const a = acct.data as { enabled: boolean; monthly_budget_cents: number; month_key: string | null; month_spend_microusd: number | string; day_key: string | null; record_summaries_today: number } | null;
   const g = global.data as { enabled: boolean } | null;
   return {
     accountEnabled: a?.enabled ?? true,
@@ -74,6 +74,8 @@ export async function getAiSettings(db: SupabaseClient, accountId: string): Prom
     monthKey: a?.month_key ?? null,
     monthSpendMicroUsd: Number(a?.month_spend_microusd ?? 0),
     globalEnabled: g?.enabled ?? false,
+    dayKey: a?.day_key ?? null,
+    recordSummariesToday: a?.record_summaries_today ?? 0,
   };
 }
 

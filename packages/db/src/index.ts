@@ -352,6 +352,11 @@ export {
   aiGateCheck, recordAiLedger, getAiSettings, countAiSkipsSince, firstOverBudgetSince, setAccountAiSettings, setGlobalAiEnabled,
   type AiFeature, type AiOutcome, type AiGate, type AiLedgerEntry, type AiSettingsRead,
 } from "./ai-gateway";
+// Item 8a-2: the record page's AI paragraph cache (0087). See ./record-summaries.ts.
+export {
+  getRecordSummary, claimRecordSummary, saveRecordSummary, releaseRecordSummaryLease,
+  type SummaryLanguage, type RecordSummaryKey, type RecordSummaryRow, type RecordSummaryClaim,
+} from "./record-summaries";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {
