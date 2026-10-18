@@ -1187,9 +1187,10 @@ describe("the record page's Forwarding address row (S-06 part 2)", () => {
 });
 
 describe("item 8a-2: the AI part sits under the facts line (spec 4.1; plan deviation 15)", () => {
-  // Deviation from the brief: this file sets no BIS_I18N_QA case anywhere (grep confirms), so the
-  // `?locale=` override is off in this suite — requestLocale ignores it and resolves "en" for this
-  // agency-operator access. Passing no searchParams and asserting the URL carries NO `?locale=`.
+  // With no searchParams the URL carries NO `?locale=`; with the QA override on (BIS_I18N_QA=1, stubbed for
+  // this case only, as branding/page.test.ts does) a `?locale=es` page hands the same override to the part's
+  // route, so the part writes in the page's language (final review M-a: the first half alone passed with the
+  // forwarding removed).
   it("the summary card holds the facts line, then the AI part pointing at its route, in the page's language (mutations: put the part above SummaryBody -> FAILS; drop the locale param -> FAILS)", async () => {
     getContactMock.mockReset().mockResolvedValue(CONTACT);
     recipientState.mockReset().mockResolvedValue({ kind: "ok" });
@@ -1200,6 +1201,14 @@ describe("item 8a-2: the AI part sits under the facts line (spec 4.1; plan devia
     expect(html.indexOf("data-record-facts")).toBeGreaterThan(-1);
     expect(html.indexOf("data-ai-summary")).toBeGreaterThan(html.indexOf("data-record-facts"));
     expect(html).toContain('data-ai-summary-url="/api/accounts/acct1/contacts/ct1/ai-summary"');
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const es = cardHtml(await render({ locale: "es" }), "summary");
+      expect(es).toContain('data-ai-summary-url="/api/accounts/acct1/contacts/ct1/ai-summary?locale=es"');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
   it("no AI part when the facts failed (mutation: mount it outside the facts check -> FAILS)", async () => {
     getContactMock.mockReset().mockResolvedValue(CONTACT);
