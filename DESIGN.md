@@ -263,6 +263,9 @@ the page (rule 5 extended to the card, not just the screen).
 On a phone it is one column (decided 2026-10-12): the header with Call
 first, the summary and what is next, the timeline, what they have (closed
 until tapped), then who they are.
+**Amended 2026-10-17 (S-07 part 3):** a link that names a file (an expiry
+To-do's `?document=`) opens the Documents card on a phone, so the file can be
+focused; every other link leaves it closed.
 A household or a business has its own record page on the same kit
 (decided 2026-10-13): it is a record, reached from its members' pages, not
 a new top-level surface.
