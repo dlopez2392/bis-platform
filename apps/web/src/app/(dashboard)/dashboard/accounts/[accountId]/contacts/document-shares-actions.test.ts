@@ -125,10 +125,15 @@ describe("createDocumentShareAction: Copy share link (spec 4.1)", () => {
     expect(lines.filter((l) => l.includes(ACC) && l.includes(DOC) && l.includes("boom"))).toHaveLength(1);
     expect(lines.filter((l) => l.includes(TOKEN) || l.includes("/s/"))).toEqual([]);
   });
-  it("a successful create logs nothing that carries the token or the link (mutation: log the token after minting it -> FAILS)", async () => {
-    expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: true, url: `https://app.example.com/s/${TOKEN}` });
-    const lines = errSpy.mock.calls.map((c) => c.map(String).join(" "));
-    expect(lines.filter((l) => l.includes(TOKEN) || l.includes("/s/"))).toEqual([]);
+  it("a successful create logs nothing that carries the token or the link, on ANY console channel (final review minor 2; mutation: console.info the token after minting it -> FAILS)", async () => {
+    const others = (["log", "info", "warn", "debug"] as const).map((k) => vi.spyOn(console, k).mockImplementation(() => {}));
+    try {
+      expect(await A.createDocumentShareAction(ACC, DOC)).toEqual({ ok: true, url: `https://app.example.com/s/${TOKEN}` });
+      const lines = [errSpy, ...others].flatMap((spy) => spy.mock.calls.map((c: unknown[]) => c.map(String).join(" ")));
+      expect(lines.filter((l) => l.includes(TOKEN) || l.includes("/s/"))).toEqual([]);
+    } finally {
+      for (const spy of others) spy.mockRestore();
+    }
   });
 });
 
