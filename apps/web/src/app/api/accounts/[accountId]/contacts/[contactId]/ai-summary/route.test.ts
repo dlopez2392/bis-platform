@@ -132,6 +132,51 @@ describe("the AI summary route (spec 4.2)", () => {
     }
   });
 
+  it("an account in a zone that is neither UTC nor the fallback: at 12:00 UTC Oct 31 Auckland is already Nov 1, and both the gate and the completion are asked in Auckland (review M2; mutations: hard-code \"America/Chicago\" in the gate's periodKeys -> FAILS; hard-code it as aiComplete's timezone -> FAILS)", async () => {
+    REQUEST.from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "Pacific/Auckland", language: null }, error: null }) }) }) }));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-31T12:00:00Z")); // Chicago: 2026-10-31 07:00; UTC: 2026-10-31; Auckland (NZDT): 2026-11-01 01:00
+      await call(GET);
+      const deps = serveMock.mock.calls[0]![0] as { gate(): Promise<unknown>; complete(m: unknown[]): Promise<unknown> };
+      await deps.gate(); await deps.complete([]);
+      expect(aiGateCheckMock.mock.calls[0]![1]).toMatchObject({ accountId: A, monthKey: "2026-11", dayKey: "2026-11-01" });
+      expect(aiCompleteMock.mock.calls[0]![1]).toMatchObject({ timezone: "Pacific/Auckland" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an AGENCY reader whose customer the request client does not return is still a 404: for an agency session getContact is the only fence (review M1; mutation: `if (!contact && !access.isAgency)` -> FAILS)", async () => {
+    fx.access = { userId: "u1", isAgency: true };
+    fx.contact = null;
+    expect((await call(GET)).status).toBe(404);
+    expect((await call(POST)).status).toBe(404);
+    expect(getContactMock).toHaveBeenCalledWith(REQUEST, A, C);
+    expect(serviceDbMock).not.toHaveBeenCalled();
+    expect(serveMock).not.toHaveBeenCalled();
+  });
+
+  it("with BIS_I18N_QA on, ?locale=es makes the cache language es and ?locale=pseudo leaves it en, never a third language (review M3; mutations: drop the locale param from requestLocale -> FAILS; key the cache on the raw param -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      await call(GET, A, C, "?locale=es");
+      expect(serveMock.mock.calls.at(-1)![1]).toMatchObject({ language: "es" });
+      let deps = serveMock.mock.calls.at(-1)![0] as { cached(): Promise<unknown> };
+      await deps.cached();
+      expect(getRecordSummaryMock).toHaveBeenLastCalledWith(REQUEST, { accountId: A, contactId: C, language: "es" });
+
+      await call(GET, A, C, "?locale=pseudo");
+      expect(serveMock.mock.calls.at(-1)![1]).toMatchObject({ language: "en" });
+      deps = serveMock.mock.calls.at(-1)![0] as { cached(): Promise<unknown> };
+      await deps.cached();
+      expect(getRecordSummaryMock).toHaveBeenLastCalledWith(REQUEST, { accountId: A, contactId: C, language: "en" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("an unusable stored zone still asks the gate for a real day, the gateway's own fallback zone (orchestrator note 1: safeZone, as aiComplete does; mutation: drop safeZone -> periodKeys throws -> FAILS)", async () => {
     REQUEST.from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { timezone: "Not/AZone", language: null }, error: null }) }) }) }));
     vi.useFakeTimers({ toFake: ["Date"] });
