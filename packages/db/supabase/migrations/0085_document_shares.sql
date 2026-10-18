@@ -5,15 +5,16 @@
 -- Staff make a link to ONE version of ONE file: /s/<token>, no sign-in, 24 hours, revocable. The
 -- token is 32 random bytes the app mints; only sha256(token) is stored (token_hash). A share names
 -- the version the reader saw when it was made (the app computes it on the server: the newest clean
--- ready version), so a newer version never changes what an old link serves. Every link to a document or a version is a same-account composite key; a share and its
--- downloads go with their document (on delete cascade), as the purge and the teardown need.
+-- ready version), so a newer version never changes what an old link serves. Every link to a
+-- document or a version is a same-account composite key; a share and its downloads go with their
+-- document (on delete cascade), as the purge and the teardown need.
 -- Written by server code only (0053's pattern): the client role reads a share exactly when it can
 -- read its document (the restrictive policy's subquery runs under documents' own policies: the
 -- tenant, the Technician fence, Owners only) and writes nothing. One service-only function claims
--- a download: it locks the share, re-proves it open (not revoked, not expired, the document not in
--- the trash, the version ready and clean), answers closed past the link's total cap (p_link_max), counts this
--- address's downloads of this link inside the window (the forms limiter's numbers, passed by the app),
--- records the download, and sets
+-- a download: it refuses a limit below 1, locks the share, re-proves it open (not revoked, not
+-- expired, the document not in the trash, the version ready and clean), answers closed past the
+-- link's total cap (p_link_max), counts this address's downloads of this link inside the window
+-- (the forms limiter's numbers, passed by the app), records the download, and sets
 -- first_opened_at only the first time: under the lock, exactly one claim sees it unset.
 -- document_share_downloads keeps an HMAC of the address (lib/forms/guards.ts hashIp), never the
 -- address. A security_invoker view feeds the record's timeline (a share made, its first open).
@@ -66,7 +67,9 @@ create table public.document_shares (
 );
 create index document_shares_by_document on public.document_shares (account_id, document_id);
 comment on table public.document_shares is
-  'A link to one version of one document (0085). Reached by /s/<token>; only sha256(token) is stored. Server-written only; authenticated reads a share exactly when it reads its document. Expired once expires_at has passed (computed, never written).';
+  'A link to one version of one document (0085). Reached by /s/<token>; only sha256(token) is stored. '
+  'Server-written only; authenticated reads a share exactly when it reads its document. '
+  'Expired once expires_at has passed (computed, never written).';
 
 -- 3. Each download, for the per-link, per-address limit (plan deviation 1). Service only.
 create table public.document_share_downloads (
@@ -103,8 +106,13 @@ create function public.claim_document_share_download(
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_share public.document_shares%rowtype; v_recent integer;
 begin
-  if p_account_id is null or p_share_id is null or p_ip_hash is null or p_max is null or p_window_seconds is null or p_link_max is null then
+  if p_account_id is null or p_share_id is null or p_ip_hash is null
+     or p_max is null or p_window_seconds is null or p_link_max is null then
     raise exception 'claim_document_share_download: a required argument is null' using errcode = '22004';
+  end if;
+  -- A limit below 1 would switch a limit off (a window of 0 seconds counts nothing): refuse it.
+  if p_max < 1 or p_window_seconds < 1 or p_link_max < 1 then
+    raise exception 'claim_document_share_download: every limit must be at least 1' using errcode = '22023';
   end if;
   select * into v_share from public.document_shares
    where account_id = p_account_id and id = p_share_id
@@ -131,7 +139,8 @@ begin
    where account_id = p_account_id and id = p_share_id;
   return jsonb_build_object('status', 'ok', 'first', v_share.first_opened_at is null);
 end $$;
-revoke all on function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer) from public, anon, authenticated, service_role;
+revoke all on function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)
+  from public, anon, authenticated, service_role;
 grant execute on function public.claim_document_share_download(uuid, uuid, text, integer, integer, integer) to service_role;
 
 -- 6. The record's timeline (plan deviation 4): a share made (created_at) and its first open
@@ -146,4 +155,5 @@ create view public.document_share_timeline with (security_invoker = true) as
 revoke all on public.document_share_timeline from public, anon, authenticated, service_role;
 grant select on public.document_share_timeline to authenticated, service_role;
 comment on view public.document_share_timeline is
-  'One row per share link (0085), with its document''s title and record. security_invoker, so the RLS of document_shares and documents decides what each caller sees.';
+  'One row per share link (0085), with its document''s title and record. '
+  'security_invoker, so the RLS of document_shares and documents decides what each caller sees.';

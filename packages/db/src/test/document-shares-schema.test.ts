@@ -22,6 +22,7 @@ const claims = (p: Who) =>
   p === "agency" ? { app_role: "agency_admin", sub: `u_dsh_agency_${RUN}` } : { org_id: p === "ownerB" ? ORG_B : ORG, sub: SUB[p] };
 const hex = (bytes: number) => randomBytes(bytes).toString("hex");
 const IP = "a".repeat(32);
+const CLAIM = "public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)";
 
 async function attempt<T extends object = Record<string, unknown>>(c: Client, sql: string, args: unknown[] = []) {
   await c.query("savepoint s");
@@ -170,7 +171,7 @@ describe("0085: who reads a share (spec 4.4, 6: exactly who reads its document)"
 });
 
 describe("0085: the client role writes nothing (spec 4.4)", () => {
-  it("no INSERT, UPDATE or DELETE on either table for anon or authenticated, no SELECT on downloads, no EXECUTE on the claim; service_role holds them (mutations: grant insert on document_shares to authenticated; grant execute to authenticated -> FAILS)", () =>
+  it("no INSERT, UPDATE or DELETE on either table for anon or authenticated, no SELECT on downloads, no EXECUTE on the claim; service_role holds them; the claim is SECURITY DEFINER with an empty search_path (mutations: grant insert on document_shares to authenticated; grant execute to authenticated; grant execute to anon; security invoker; drop the set search_path -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ x: string }>(`
         select r || ' ' || t || ' ' || p || ' ' || has_table_privilege(r, 'public.' || t, p)::text as x
@@ -181,10 +182,15 @@ describe("0085: the client role writes nothing (spec 4.4)", () => {
       for (const r of ["anon", "authenticated"]) for (const t of ["document_shares", "document_share_downloads"]) for (const p of ["INSERT", "UPDATE", "DELETE"]) expect(has(r, t, p)).toBe(false);
       expect([has("authenticated", "document_shares", "SELECT"), has("authenticated", "document_share_downloads", "SELECT"), has("anon", "document_shares", "SELECT")]).toEqual([true, false, false]);
       for (const p of ["SELECT", "INSERT", "UPDATE", "DELETE"]) expect(has("service_role", "document_shares", p) && has("service_role", "document_share_downloads", p)).toBe(true);
-      const { rows: [fx] } = await c.query<{ a: boolean; s: boolean }>(
-        `select has_function_privilege('authenticated', 'public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)', 'execute') as a,
-                has_function_privilege('service_role', 'public.claim_document_share_download(uuid, uuid, text, integer, integer, integer)', 'execute') as s`);
-      expect(fx).toEqual({ a: false, s: true });
+      const { rows: fx } = await c.query<{ r: string; ok: boolean }>(
+        `select r, has_function_privilege(r, '${CLAIM}', 'execute') as ok
+           from (values ('anon'), ('authenticated'), ('service_role')) v(r) order by 1`);
+      expect(fx).toEqual([{ r: "anon", ok: false }, { r: "authenticated", ok: false }, { r: "service_role", ok: true }]);
+      // Definer (it reads and writes past the caller's RLS for the service role) with search_path pinned empty,
+      // as document-space-used.test.ts pins 0078's function.
+      const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] | null }>(
+        `select prosecdef, proconfig from pg_proc where oid = '${CLAIM}'::regprocedure`);
+      expect(f).toEqual({ prosecdef: true, proconfig: ['search_path=""'] });
     }));
 
   // Two layers deep: no INSERT grant AND no insert policy, both answering 42501. A grant alone leaves RLS
@@ -263,6 +269,20 @@ describe("0085: claim_document_share_download (spec 4.2, 4.3; plan deviations 1,
       expect((await claim(c, s.acct, s.shares.mine, IP, 1)).status).toBe("ok");
       await c.query("update document_share_downloads set created_at = now() - interval '11 minutes' where share_id = $1", [s.shares.mine]);
       expect((await claim(c, s.acct, s.shares.mine, IP, 1, 600)).status).toBe("ok");
+    }));
+
+  // A limit below 1 would switch a limit off (a window of 0 seconds counts nothing), so the claim refuses it.
+  // [the argument, p_max, p_window_seconds, p_link_max]
+  const badLimits: [string, number, number, number][] = [
+    ["p_max", 0, 600, 100],
+    ["p_window_seconds", 5, 0, 100],
+    ["p_link_max", 5, 600, 0],
+  ];
+  it.each(badLimits)("%s below 1 raises 22023 (mutation: drop that argument's < 1 check -> FAILS)", (_arg, max, windowSeconds, linkMax) =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      await expect(attempt(c, "select public.claim_document_share_download($1, $2, $3, $4, $5, $6)",
+        [s.acct, s.shares.mine, IP, max, windowSeconds, linkMax])).rejects.toMatchObject({ code: "22023" });
     }));
 
   it("an address hash is 32 lower-case hex (mutation: drop document_share_downloads_ip_hash_check -> FAILS)", () =>
