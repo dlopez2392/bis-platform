@@ -113,7 +113,9 @@ vi.mock("@bis/db", () => ({
 }));
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
 // A desk: the three "have" cards render open, so their props and markers can be read.
-vi.mock("@/components/record/use-phone", () => ({ usePhone: () => false, PHONE_QUERY: "(max-width: 767px)" }));
+// S-07 3a: a case may switch to a phone (phoneMock.mockReturnValue(true)) and switches back in its finally.
+const phoneMock = vi.fn(() => false);
+vi.mock("@/components/record/use-phone", () => ({ usePhone: () => phoneMock(), PHONE_QUERY: "(max-width: 767px)" }));
 
 /** Echoes, in `resolveZone`'s own shape: a zone in is the account's own, no
  *  zone in is the UTC fallback, a GUESS. */
@@ -699,6 +701,32 @@ describe("the record page (S-03 part 1, 1a): every card loads and fails on its o
     const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
     expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes",
       checklist: { canSkip: true } });
+  });
+
+  it("a To-do's link (?document=, ?ask=) reaches the Documents card as its focus, the rest of its props unchanged (S-07 3a, plan deviations 5, 6; mutation: never pass focus -> FAILS)", async () => {
+    requireAccountAccessMock.mockResolvedValueOnce({ userId: "u1", isAgency: false, role: "staff", canManage: false });
+    readPersonIdMock.mockResolvedValueOnce("p-s");
+    const html = await render({ document: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" });
+    const match = html.match(/data-documents-mock="([^"]*)"/);
+    expect(match).toBeTruthy();
+    const props = JSON.parse(match![1]!.replaceAll("&quot;", '"'));
+    expect(props).toEqual({ accountId: "acct1", record: { kind: "contact", id: "ct1" }, canManage: false, emptyText: m["documents.empty.contact"], name: "Ana Reyes",
+      checklist: { canSkip: true }, focus: { documentId: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" } });
+  });
+
+  it("on a phone, a To-do's link to a file opens the Documents card, and only it; with no file named it stays closed (S-07 3a review I2; mutations: never pass defaultOpen, or open it for ?ask= alone -> FAILS)", async () => {
+    phoneMock.mockReturnValue(true);
+    try {
+      const linked = await render({ document: "0f8fad5b-d9cb-469f-a165-70867728950e", ask: "insurance" });
+      expect(cardHtml(linked, "documents")).toContain('aria-expanded="true"');
+      expect(linked).toContain("data-documents-mock");
+      for (const id of ["groups", "properties", "deals"]) expect(cardHtml(linked, id)).toContain('aria-expanded="false"');
+      for (const search of [{}, { ask: "insurance" }, { document: "not-a-uuid" }] as Record<string, string>[]) {
+        const plain = await render(search);
+        expect(cardHtml(plain, "documents")).toContain('aria-expanded="false"');
+        expect(plain).not.toContain("data-documents-mock");
+      }
+    } finally { phoneMock.mockReturnValue(false); }
   });
 
   it("a Technician's Documents card gets the checklist with no Not needed (S-07 2c D1: they see the list and can Upload or Ask, never change it; mutation: pass canSkip: true always -> FAILS)", async () => {

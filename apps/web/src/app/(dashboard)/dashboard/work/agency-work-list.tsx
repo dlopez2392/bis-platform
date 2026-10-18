@@ -37,6 +37,7 @@ import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+import { workRowHref } from "@/lib/documents/card-focus";
 // Task 7's own extracted, reusable pieces (its header comment says so) —
 // reused here rather than copied: `ResolvedStage` (the shape page.tsx's own
 // batched `pipeline_stages` read resolves an opportunity_stage proposal's
@@ -184,14 +185,16 @@ function AgencyWorkRowItem({
   );
 
   const rowClassName = "flex w-full items-center gap-3 px-4 py-3 text-sm";
+  // S-07 3a: an expiry To-do links to its file (workRowHref), on THAT row's own account.
+  const href = workRowHref(row.accountId, row);
 
   // Only a row tied to a real contact has anywhere to go, and it goes into
   // THAT row's own account (`row.accountId`) — never a single accountId
   // shared by the whole list, unlike the per-account screen's WorkRowItem.
   return (
     <li className={cn(LIST_ROW, "flex items-center transition-colors hover:bg-[var(--surface-3)]")}>
-      {row.contactId ? (
-        <Link href={`/dashboard/accounts/${row.accountId}/contacts/${row.contactId}`} className={rowClassName}>
+      {href ? (
+        <Link href={href} className={rowClassName}>
           {body}
         </Link>
       ) : (

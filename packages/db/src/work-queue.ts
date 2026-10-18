@@ -3,6 +3,7 @@ import { brandDisplayName } from "./branding";
 import { readConsentActions, type ConsentAction } from "./consent";
 import type { AssigneeFilter } from "./assignment";
 import { withAssigneeOn } from "./contacts";
+import type { DocumentCategory } from "./document-rules";
 
 export type WorkSource = "task" | "conversation" | "booking";
 
@@ -27,6 +28,9 @@ export type WorkRow = {
    *  "Assigned to" picker; null when nobody does. Absent on every other row,
    *  whose holder is the customer's. */
   assigneeId?: string | null;
+  /** S-07 3a: an expiry To-do (0084's tasks.document_expiry_id) with its file's category and household, for the row's link
+   *  (apps/web/src/lib/documents/card-focus.ts). Present ONLY on such a task. */
+  documentFocus?: { documentId: string; category: DocumentCategory | null; groupId: string | null };
 };
 
 async function openTasks(db: SupabaseClient, accountId: string, assignee?: AssigneeFilter): Promise<WorkRow[]> {
@@ -49,7 +53,7 @@ async function openTasks(db: SupabaseClient, accountId: string, assignee?: Assig
   // sharing a due_at (including every undated one, tied on NULL) still order
   // deterministically rather than at the database's discretion.
   let q = db.from("tasks")
-    .select("id, contact_id, title, due_at, created_at, consent_event_id, call_id, assigned_to")
+    .select("id, contact_id, title, due_at, created_at, consent_event_id, call_id, assigned_to, document_expiry_id, expiry_doc:documents!tasks_document_expiry_fkey(category, client_group_id)")
     .eq("account_id", accountId).is("completed_at", null);
   // Mine/Unassigned (spec §8): the TASK's own assignee, independent of
   // whose customer it is against (A4's own point — a task moves with its
@@ -61,7 +65,11 @@ async function openTasks(db: SupabaseClient, accountId: string, assignee?: Assig
     .order("created_at", { ascending: true })
     .limit(200);
   if (error) throw new Error(`openTasks failed: ${error.message}`);
-  const rows = (data ?? []) as { id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string; consent_event_id: string | null; call_id: string | null; assigned_to: string | null }[];
+  const rows = (data ?? []) as unknown as {
+    id: string; contact_id: string | null; title: string; due_at: string | null; created_at: string;
+    consent_event_id: string | null; call_id: string | null; assigned_to: string | null;
+    document_expiry_id: string | null; expiry_doc: { category: DocumentCategory; client_group_id: string | null } | null;
+  }[];
   // One read for the whole batch, and none at all without a consent task.
   const linked = rows.map((t) => t.consent_event_id).filter((id): id is string => id !== null);
   const actions = await readConsentActions(db, accountId, linked);
@@ -74,6 +82,7 @@ async function openTasks(db: SupabaseClient, accountId: string, assignee?: Assig
       consent: t.consent_event_id && action ? { eventId: t.consent_event_id, action } : null,
       callId: t.call_id ?? null,
       assigneeId: t.assigned_to ?? null,
+      ...(t.document_expiry_id ? { documentFocus: { documentId: t.document_expiry_id, category: t.expiry_doc?.category ?? null, groupId: t.expiry_doc?.client_group_id ?? null } } : {}),
     };
   });
 }

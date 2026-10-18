@@ -17,7 +17,7 @@ vi.mock("./document-requirements-actions", () => ({
 const { m } = await import("@/lib/messages");
 const { renderedText } = await import("@/lib/rendered-text");
 const { DocumentsCardView, addedWhen, sourceLine, rowMenuItems, documentsRouteFor, exclusive, keepOpen, keepPurge, dropRefusal, rowSavers, versionToast, pollTimerKey,
-  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles } = await import("./documents-card");
+  shouldReloadRequests, askAfter, keepRequests, requestsPollMs, requestsChanged, REQUESTS_POLL_MS, panelFiles, askPreset, focusTarget, focusDue } = await import("./documents-card");
 type Props = Parameters<typeof DocumentsCardView>[0];
 type Load = Props["load"];
 
@@ -652,3 +652,85 @@ describe("the required documents on the card (S-07 2c, spec 5.4; D3, D9, I6)", (
     expect(panelFiles([pdf, jpg], null, "en").map((f) => f.category)).toEqual(["other", "photo"]);
   });
 });
+
+describe("a To-do's link: the file in focus and the pre-ticked Ask (S-07 3a, spec 3.2; plan deviations 5, 6)", () => {
+  it("askPreset ticks the link's category, and nothing without one (mutation: [focus.ask] without the null check -> [null], FAILS)", () => {
+    expect(askPreset({ documentId: null, ask: "insurance" })).toEqual(["insurance"]);
+    expect(askPreset(undefined)).toEqual([]);
+    expect(askPreset({ documentId: "d", ask: null })).toEqual([]);
+  });
+
+  it("each row's OPEN button, and only it, carries data-document-open (mutation: the attribute on the menu trigger -> FAILS on the label)", () => {
+    const html = render(ready([view(), view({ id: "d2", title: "Roof" })]));
+    const tags = [...html.matchAll(/<button[^>]*data-document-open[^>]*>/g)].map((x) => x[0]);
+    expect(tags).toHaveLength(2);
+    expect(tags.map((tag) => /aria-label="([^"]*)"/.exec(tag)?.[1])).toEqual(["Open Signed lease", "Open Roof"]);
+  });
+
+  it("focusTarget finds the named file's OPEN button on the card's real markup; a trashed or unknown file is null (review I1; mutation: the lookup without its row -> FAILS)", () => {
+    const html = render(ready([view(), view({ id: "d2", title: "Roof" })], [view({ id: "d3", title: "Old policy", deletedAt: "2026-10-12T15:00:00.000Z" })]));
+    const root = domFrom(html);
+    expect(root.querySelectorAll("[data-document-trashed]")).toHaveLength(1);
+    expect(focusTarget(root as never, "d2")?.getAttribute("aria-label")).toBe("Open Roof");
+    expect(focusTarget(root as never, "d1")?.getAttribute("aria-label")).toBe("Open Signed lease");
+    expect(focusTarget(root as never, "d3")).toBeNull();
+    expect(focusTarget(root as never, "zz")).toBeNull();
+  });
+
+  it("focusDue: once per FILE, only once the files are ready (review M1; mutations: a once-ever guard, or drop the per-file check -> FAILS)", () => {
+    expect(focusDue(null, "d1", true)).toBe(true);
+    // The same file again (a ?before= pager change, a re-read, a Retry): never a second jump.
+    expect(focusDue("d1", "d1", true)).toBe(false);
+    // A different ?document= on a mounted card: the new file is focused.
+    expect(focusDue("d1", "d2", true)).toBe(true);
+    expect(focusDue(null, "d1", false)).toBe(false);
+    expect(focusDue(null, null, true)).toBe(false);
+  });
+});
+
+/**
+ * A minimal element tree from server markup (no DOM library in this repo): tags, attributes, nesting, and
+ * querySelector(All) for attribute selectors (`[a]`, `[a="v"]`) joined by descendant spaces. Anything else throws.
+ */
+type FakeEl = {
+  tag: string; attrs: Record<string, string>; children: FakeEl[];
+  getAttribute: (n: string) => string | null; querySelectorAll: (s: string) => FakeEl[]; querySelector: (s: string) => FakeEl | null;
+};
+const VOID = new Set(["area", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+function fakeEl(tag: string, attrs: Record<string, string>): FakeEl {
+  const el: FakeEl = {
+    tag, attrs, children: [],
+    getAttribute: (n) => (n in attrs ? attrs[n]! : null),
+    querySelectorAll: (s) => select(el, s),
+    querySelector: (s) => select(el, s)[0] ?? null,
+  };
+  return el;
+}
+function descendants(el: FakeEl): FakeEl[] { return el.children.flatMap((c) => [c, ...descendants(c)]); }
+function matches(el: FakeEl, part: string): boolean {
+  const p = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(part);
+  if (!p) throw new Error(`unsupported selector part: ${part}`);
+  return p[2] === undefined ? p[1]! in el.attrs : el.attrs[p[1]!] === p[2];
+}
+function select(root: FakeEl, selector: string): FakeEl[] {
+  let scope = [root];
+  for (const part of selector.trim().split(/\s+/)) {
+    const found = scope.flatMap((s) => descendants(s).filter((d) => matches(d, part)));
+    scope = [...new Set(found)];
+  }
+  return scope;
+}
+function domFrom(html: string): FakeEl {
+  const root = fakeEl("#root", {});
+  const stack = [root];
+  for (const t of html.matchAll(/<(\/?)([a-zA-Z][\w-]*)((?:\s+[^\s=>/]+(?:="[^"]*")?)*)\s*(\/?)>/g)) {
+    const [, close, tag, rawAttrs, selfClose] = t;
+    if (close) { stack.pop(); continue; }
+    const attrs: Record<string, string> = {};
+    for (const a of rawAttrs!.matchAll(/([^\s=]+)(?:="([^"]*)")?/g)) attrs[a[1]!] = a[2] ?? "";
+    const el = fakeEl(tag!.toLowerCase(), attrs);
+    stack.at(-1)!.children.push(el);
+    if (!selfClose && !VOID.has(el.tag)) stack.push(el);
+  }
+  return root;
+}

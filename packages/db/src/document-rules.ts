@@ -144,3 +144,12 @@ export function requirementsMeter(items: readonly { state: RequirementState }[])
   const counted = items.filter((i) => i.state !== "skipped");
   return { met: counted.filter((i) => i.state === "met").length, required: counted.length };
 }
+
+/** S-07 3a (spec 3.2): a file opens its expiry To-do this many days before its expiry date. */
+export const DOCUMENT_EXPIRY_WINDOW_DAYS = 30;
+
+/** Calendar arithmetic on a YYYY-MM-DD day (UTC midnights, so no zone or DST can move it). */
+export function shiftDay(day: string, days: number): string {
+  const at = Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)) + days);
+  return new Date(at).toISOString().slice(0, 10);
+}

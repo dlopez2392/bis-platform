@@ -15,6 +15,7 @@ const db = {
   createDocument: vi.fn(), reserveDocumentVersion: vi.fn(), markDocumentVersionReady: vi.fn(), discardDocumentUpload: vi.fn(),
   updateDocumentField: vi.fn(), setDocumentOwnersOnly: vi.fn(), trashDocument: vi.fn(), restoreDocument: vi.fn(),
   listDocumentVersionStates: vi.fn(), claimDocumentForPurge: vi.fn(), deletePurgedDocument: vi.fn(), signedDocumentReadUrl: vi.fn(),
+  deleteOpenExpiryTasks: vi.fn(),
   serviceDb: vi.fn(() => SERVICE),
 };
 vi.mock("@bis/db", async (importOriginal) => {
@@ -578,5 +579,91 @@ describe("nothing throws out of an action (the tree's convention)", () => {
     db.getDocument.mockRejectedValue(new Error("db down"));
     db.getDocumentVersion.mockRejectedValue(new Error("db down"));
     await expect(run()).resolves.toEqual({ ok: false, error });
+  });
+});
+
+describe("owner ruling R1: a file made Owners only loses its open expiry To-dos at once", () => {
+  beforeEach(() => {
+    requireAccountAccess.mockResolvedValue(OWNER);
+    db.setDocumentOwnersOnly.mockReset();
+    db.setDocumentOwnersOnly.mockResolvedValue("updated");
+    db.deleteOpenExpiryTasks.mockReset();
+    db.deleteOpenExpiryTasks.mockResolvedValue(1);
+  });
+  it("switching ON deletes them on the SERVICE client, after the Owners-only write (mutation: remove the delete call -> FAILS; delete before the write -> the order FAILS)", async () => {
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toMatchObject({ ok: true });
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledWith(SERVICE, ACC, D);
+    expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[0]!).toBeGreaterThan(db.setDocumentOwnersOnly.mock.invocationCallOrder[0]!);
+  });
+  it("switching OFF, or a write that changed nothing, deletes nothing (mutation: delete on every call -> FAILS)", async () => {
+    await A.setOwnersOnlyAction(ACC, D, false);
+    db.setDocumentOwnersOnly.mockResolvedValueOnce("changed");
+    await A.setOwnersOnlyAction(ACC, D, true);
+    expect(db.deleteOpenExpiryTasks).not.toHaveBeenCalled();
+  });
+  it("an Undo that writes Owners only back deletes them too; one that writes it off does not (mutation: ignore the undo path -> FAILS)", async () => {
+    await A.undoOwnersOnlyAction(ACC, D, true, false);
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(1);
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledWith(SERVICE, ACC, D);
+    expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[0]!).toBeGreaterThan(db.setDocumentOwnersOnly.mock.invocationCallOrder[0]!);
+    await A.undoOwnersOnlyAction(ACC, D, false, true);
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(1);
+  });
+  it("a failed delete answers the failure, so the Owner sees it and retries (a retry re-writes and re-deletes) (mutation: swallow it -> FAILS)", async () => {
+    db.deleteOpenExpiryTasks.mockRejectedValueOnce(new Error("boom"));
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: false, error: "documents.error.failed" });
+    expect(await A.setOwnersOnlyAction(ACC, D, true)).toEqual({ ok: true, prior: false });
+    expect(db.deleteOpenExpiryTasks).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("owner ruling R4: a file moved to the trash loses its open expiry To-dos at once", () => {
+  const D2 = "55555555-5555-4555-8555-555555555555";
+  const AT = "2026-10-17T15:00:00.123456+00:00";
+  beforeEach(() => {
+    db.trashDocument.mockReset();
+    db.trashDocument.mockResolvedValue({ status: "trashed", deletedAt: AT });
+    db.deleteOpenExpiryTasks.mockReset();
+    db.deleteOpenExpiryTasks.mockResolvedValue(1);
+    db.restoreDocument.mockReset();
+    db.restoreDocument.mockResolvedValue("updated");
+  });
+  it("a trash deletes them on the SERVICE client for that file, after the request-client read and after the trash write (mutation: remove the delete call -> FAILS; delete before the write -> the order FAILS)", async () => {
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: true, deletedAt: AT });
+    expect(db.deleteOpenExpiryTasks.mock.calls).toEqual([[SERVICE, ACC, D]]);
+    expect(db.getDocument.mock.calls[0]![0]).toBe(REQUEST);
+    expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[0]!).toBeGreaterThan(db.getDocument.mock.invocationCallOrder[0]!);
+    expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[0]!).toBeGreaterThan(db.trashDocument.mock.invocationCallOrder[0]!);
+  });
+  it("several files trashed one after another (the card's per-file trash; there is no bulk trash path) each delete their OWN To-dos, once per id (mutation: delete the first id's every time, or skip a call -> FAILS)", async () => {
+    db.getDocument.mockImplementation(async (_db: unknown, _acc: string, id: string) => ({ ...DOC, id }));
+    expect((await A.trashDocumentAction(ACC, D)).ok).toBe(true);
+    expect((await A.trashDocumentAction(ACC, D2.toUpperCase())).ok).toBe(true);
+    expect(db.deleteOpenExpiryTasks.mock.calls).toEqual([[SERVICE, ACC, D], [SERVICE, ACC, D2]]);
+    expect(db.trashDocument.mock.calls.map((c) => c[2])).toEqual([D, D2]);
+    for (const i of [0, 1]) {
+      expect(db.deleteOpenExpiryTasks.mock.invocationCallOrder[i]!).toBeGreaterThan(db.trashDocument.mock.invocationCallOrder[i]!);
+    }
+  });
+  it("a refused or no-op trash deletes nothing: a file the caller cannot see, one already in the trash, a trash that changed nothing; a restore never deletes (mutation: delete before checking the write's answer -> FAILS)", async () => {
+    db.getDocument.mockResolvedValueOnce(null);
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: false, error: "documents.error.refused" });
+    db.getDocument.mockResolvedValueOnce({ ...DOC, deleted_at: AT, deleted_by: "user_owner" });
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: false, error: "documents.error.refused" });
+    db.trashDocument.mockResolvedValueOnce({ status: "changed" });
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: false, error: "documents.error.refused" });
+    expect(db.trashDocument).toHaveBeenCalledTimes(1);
+    db.getDocument.mockResolvedValueOnce({ ...DOC, deleted_at: AT, deleted_by: "user_owner" });
+    expect(await A.restoreDocumentAction(ACC, D, AT)).toEqual({ ok: true });
+    expect(db.deleteOpenExpiryTasks).not.toHaveBeenCalled();
+  });
+  it("a failed delete still answers the trash with its instant, so the card offers Undo, and logs the account and document ids, never the title (orchestrator ruling; mutations: answer failed -> FAILS; drop the log -> FAILS)", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    db.deleteOpenExpiryTasks.mockRejectedValueOnce(new Error("boom"));
+    expect(await A.trashDocumentAction(ACC, D)).toEqual({ ok: true, deletedAt: AT });
+    expect(db.trashDocument).toHaveBeenCalledTimes(1);
+    const lines = logged.mock.calls.map((c) => c.map(String).join(" "));
+    expect(lines.filter((l) => l.includes(ACC) && l.includes(D) && l.includes("boom"))).toHaveLength(1);
+    expect(lines.some((l) => l.includes(DOC.title))).toBe(false);
   });
 });

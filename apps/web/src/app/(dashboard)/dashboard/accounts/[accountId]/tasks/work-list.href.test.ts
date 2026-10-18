@@ -1,0 +1,46 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync, existsSync } from "node:fs";
+import path from "node:path";
+
+/** S-07 3a: both work queues link a row through workRowHref, so an expiry To-do opens its file (plan deviation 5). */
+function stripComments(src: string): string {
+  let out = "";
+  let mode: "code" | "line" | "block" | "sq" | "dq" | "tpl" = "code";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    const d = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && d === "/") { mode = "line"; i++; continue; }
+      if (c === "/" && d === "*") { mode = "block"; i++; continue; }
+      if (c === "'") mode = "sq";
+      else if (c === '"') mode = "dq";
+      else if (c === "`") mode = "tpl";
+      out += c;
+      continue;
+    }
+    if (mode === "line") { if (c === "\n") { mode = "code"; out += c; } continue; }
+    if (mode === "block") {
+      if (c === "*" && d === "/") { mode = "code"; i++; } else if (c === "\n") out += c;
+      continue;
+    }
+    if (c === "\\") { out += c + (d ?? ""); i++; continue; }
+    if ((mode === "sq" && c === "'") || (mode === "dq" && c === '"') || (mode === "tpl" && c === "`")) mode = "code";
+    out += c;
+  }
+  return out;
+}
+const AGENCY = path.resolve(__dirname, "../../../work/agency-work-list.tsx");
+
+describe("the work queues' row links", () => {
+  it("the agency list's path resolves (a wrong path must fail, never skip)", () => {
+    expect(existsSync(AGENCY)).toBe(true);
+  });
+  it.each([
+    [path.resolve(__dirname, "work-list.tsx"), "workRowHref(accountId, row)"],
+    [AGENCY, "workRowHref(row.accountId, row)"],
+  ])("%s builds its link with %s, never the bare contact href (mutation: restore the template literal -> FAILS)", (file, call) => {
+    const src = stripComments(readFileSync(file, "utf8"));
+    expect(src).toContain(call);
+    expect(src).not.toMatch(/href=\{`\/dashboard\/accounts\/\$\{(?:accountId|row\.accountId)\}\/contacts\/\$\{row\.contactId\}`\}/);
+  });
+});

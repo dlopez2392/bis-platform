@@ -312,6 +312,8 @@ export {
   // S-07 2c: the required-documents checklist.
   REQUIRABLE_DOCUMENT_CATEGORIES, isRequirableCategory, REQUIREMENT_STATES, isRequirementState, DOCUMENT_REQUIREMENT_UNDO_MS,
   cleanRequiredCategories, requirementsMeter, type RequirableCategory, type RequirementState,
+  // S-07 3a: the expiry To-dos.
+  DOCUMENT_EXPIRY_WINDOW_DAYS, shiftDay,
 } from "./document-rules";
 export {
   createDocumentRequest, findDocumentRequestByTokenHash, getDocumentRequest, startDocumentRequestUpload,
@@ -325,8 +327,18 @@ export {
 export {
   listDocumentRequirements, getRequiredDocumentCategories, setRequiredDocumentCategories, getActiveDocumentSkip, getDocumentSkip,
   skipDocumentRequirement, undoDocumentSkip, unskipDocumentRequirement, undoDocumentUnskip, listDocumentSkipTimeline,
+  restoreRequiredDocumentCategories,
   type DocumentRequirement, type DocumentSkipRow, type TimelineDocumentSkip,
 } from "./document-requirements";
+// S-07 3a: the expiry To-dos. See ./document-expiry.ts.
+export {
+  listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, deleteExpiryTasksOfHiddenDocuments, type ExpiringDocument,
+} from "./document-expiry";
+// S-07 3a: the account-wide Documents page. See ./account-documents.ts.
+export {
+  listAccountDocuments, countAccountDocuments, ACCOUNT_DOCUMENTS_SHOWS,
+  type AccountDocumentsShow, type AccountDocumentsFilter, type AccountDocumentsCursor, type AccountDocument,
+} from "./account-documents";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {

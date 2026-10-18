@@ -50,12 +50,12 @@ describe("the To do reads name tasks.call_id directly, with no pre-0064 fallback
   it("listAccountWork: a missing call_id column throws, and is not retried without it (mutation: restore the 42703 retry → resolves, FAILS)", async () => {
     const { db, selects } = fakeDb();
     await expect(listAccountWork(db, "a1")).rejects.toThrow("call_id");
-    expect(selects).toEqual(["id, contact_id, title, due_at, created_at, consent_event_id, call_id, assigned_to"]);
+    expect(selects).toEqual(["id, contact_id, title, due_at, created_at, consent_event_id, call_id, assigned_to, document_expiry_id, expiry_doc:documents!tasks_document_expiry_fkey(category, client_group_id)"]);
   });
 
   it("listContactTasks: same, one select and the error surfaces (mutation: restore the 42703 retry → resolves, FAILS)", async () => {
     const { db, selects } = fakeDb();
     await expect(listContactTasks(db, "a1", "c1")).rejects.toThrow("call_id");
-    expect(selects).toEqual(["id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id"]);
+    expect(selects).toEqual(["id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id, document_expiry_id"]);
   });
 });

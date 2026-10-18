@@ -24,6 +24,7 @@ import { dayDiff, expiryView, expiryText, purgeDaysLeft, purgeText } from "@/lib
 import { MAX_BATCH, defaultCategory, titleFromFileName, typeForFile } from "@/lib/documents/rules";
 import { browserDeps, browserVersionDeps, uploadOne, uploadVersion, type UploadBatch, type UploadPhase } from "@/lib/documents/upload-client";
 import { spaceUsedText } from "@/lib/documents/space";
+import type { CardFocus } from "@/lib/documents/card-focus";
 import type { DocumentUndo } from "./documents-actions";
 import { documentHandlers, type DocumentHandlers, type FieldSave } from "./documents-card-handlers";
 import { DocumentUploadPanel, type PanelFile } from "./document-upload-panel";
@@ -160,7 +161,7 @@ const rowLine = "border-t border-[var(--row-line)] first:border-t-0";
 const ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.docx,.xlsx,application/pdf,image/jpeg,image/png,image/webp";
 
 /** Rule 3: 30 days away or less, or past, is a dot AND the words; further out, the words alone. */
-function ExpiryLine({ expiresOn, today, locale }: { expiresOn: string | null; today: string; locale: Locale }) {
+export function ExpiryLine({ expiresOn, today, locale }: { expiresOn: string | null; today: string; locale: Locale }) {
   const v = expiryView(expiresOn, today);
   if (!v) return null;
   return (
@@ -175,7 +176,7 @@ function ExpiryLine({ expiresOn, today, locale }: { expiresOn: string | null; to
 }
 
 /** Rule 3: a scan state is a dot AND the words (spec 3.5); a clean row draws nothing. */
-function ScanStatus({ scan, locale }: { scan: RowScan; locale: Locale }) {
+export function ScanStatus({ scan, locale }: { scan: RowScan; locale: Locale }) {
   const label = scanLabel(scan, locale);
   if (!label || scan.kind === "ok") return null;
   return (
@@ -218,7 +219,7 @@ function DocumentRow({ doc, today, now, canManage, locale, handlers, phase, onOp
       <div className="flex items-start gap-2 px-1 py-2">
         <FileText aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         {/* The whole row opens the viewer (rule 4): the button's ::after is stretched over the row, and its ring is the row's. */}
-        <button type="button" onClick={() => onOpen(doc)} aria-label={tt("documents.open", { title: doc.title })}
+        <button type="button" data-document-open onClick={() => onOpen(doc)} aria-label={tt("documents.open", { title: doc.title })}
           className={cn(
             "min-w-0 flex-1 text-left outline-none",
             "after:absolute after:inset-0 after:rounded-[var(--radius-ctl)] after:content-['']",
@@ -515,6 +516,28 @@ function subscribeVisibility(onChange: () => void): () => void {
 const tabHidden = () => document.visibilityState === "hidden";
 const tabHiddenOnServer = () => false;
 
+/** S-07 3a (plan deviation 6): what the header's "Ask the customer" opens with ticked: a To-do link's category, or nothing. */
+export function askPreset(focus: CardFocus | undefined): RequirableCategory[] {
+  return focus?.ask ? [focus.ask] : [];
+}
+
+/**
+ * S-07 3a (review I1): the open button of the named file's LIVE row on this card, or null. Only a row
+ * (`data-document-row`) is searched, so a trashed file (`data-document-trashed`, no open button) and a file
+ * this card does not list are null, never another row's button.
+ */
+export function focusTarget(root: ParentNode, documentId: string): HTMLButtonElement | null {
+  for (const row of root.querySelectorAll("[data-document-row]")) {
+    if (row.getAttribute("data-document-row") === documentId) return row.querySelector<HTMLButtonElement>("[data-document-open]");
+  }
+  return null;
+}
+
+/** S-07 3a (review M1): focus is due once per FILE, and only once the files read is ready. */
+export function focusDue(focusedFor: string | null, focusId: string | null, filesReady: boolean): focusId is string {
+  return focusId !== null && filesReady && focusedFor !== focusId;
+}
+
 let panelSeq = 0;
 
 /**
@@ -535,7 +558,7 @@ export function panelFiles(chosen: File[], preset: DocumentCategory | null, loca
  * panel's state and the viewer. A re-read after a change that fails keeps what the card already shows;
  * only a first read, or a Retry (which goes back to the skeleton first), shows the error state.
  */
-export function DocumentsCard({ accountId, record, canManage, emptyText, name = "", checklist }: {
+export function DocumentsCard({ accountId, record, canManage, emptyText, name = "", checklist, focus }: {
   /** `name`: who "Ask the customer" asks, for its dialog's title; with none, the title is the action's own words. */
   accountId: string; record: DocRecord; canManage: boolean; emptyText: string; name?: string;
   /**
@@ -543,6 +566,8 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
    * view, D1); a household's page does not (D3).
    */
   checklist?: { canSkip: boolean };
+  /** S-07 3a: a To-do's link (?document=, ?ask=): the file's row is scrolled to and focused once; Ask the customer opens with its category ticked. */
+  focus?: CardFocus;
 }) {
   const locale = useLocale();
   // A plain string, stable by value even when the caller hands `record` a fresh object each render.
@@ -691,6 +716,22 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
   const requirementsLoad: RequirementsLoad = requirementsRoute !== null && requirementsState.route === requirementsRoute
     ? requirementsState.load : { kind: "loading" };
 
+  // S-07 3a (plan deviation 5): a To-do's link names a file. Once the files are read, its row is scrolled to and
+  // its open button focused, once per file (review M1: a new ?document= on this mounted card focuses the new
+  // file; a ?before= pager change, a re-read or a Retry never jumps again); a file not on this card's live
+  // list (trashed, or another record's) does nothing.
+  const focusId = focus?.documentId ?? null;
+  const filesReady = load.status === "ready";
+  const focusedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusDue(focusedFor.current, focusId, filesReady)) return;
+    const button = focusTarget(document, focusId);
+    if (!button) return;
+    focusedFor.current = focusId;
+    button.scrollIntoView({ block: "center" });
+    button.focus({ preventScroll: true });
+  }, [focusId, filesReady]);
+
   // One Set for the card's whole life: the in-flight lock must outlast a re-render.
   const [inFlight] = useState(() => new Set<string>());
   const handlers = documentHandlers({ accountId, locale, reload, reloadRequests, inFlight });
@@ -817,7 +858,7 @@ export function DocumentsCard({ accountId, record, canManage, emptyText, name = 
         onFiles={onFiles} onOpen={(d) => setOpenId(d.id)} panel={panel}
         versionPhases={versionPhases} onNewVersion={onNewVersion} onPurge={(d) => setPurgeId(d.id)}
         requests={{
-          load: requestsLoad, onAsk: () => openAsk(),
+          load: requestsLoad, onAsk: () => openAsk(askPreset(focus)),
           onRetry: () => { setRequestsState({ route: "", load: { kind: "loading" } }); reloadRequests(); },
           onCopy: (id) => void handlers.copyRequestLink(id), onRevoke: (id) => void handlers.revokeRequest(id),
         }}

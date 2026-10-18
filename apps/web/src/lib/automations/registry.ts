@@ -12,6 +12,7 @@ import { quoteFollowupPass } from "./passes/quote-followup";
 import { siteTrafficPass } from "./passes/site-traffic";
 import { documentsSweepPass } from "./passes/documents-sweep";
 import { documentsScanPass } from "./passes/documents-scan";
+import { documentsExpiryPass } from "./passes/documents-expiry";
 import { weeklyClientReportPass } from "./passes/weekly-report";
 import { weeklyAgencyReportPass } from "./passes/weekly-agency-report";
 import { usageReportPass } from "./passes/usage-report";
@@ -42,7 +43,9 @@ import { opsWatchPass } from "./passes/ops-watch";
  * sweep (S-07) follows it for the same reason: it reads and writes only the
  * document vault, and the document scan (S-07 2a) follows the sweep: it reads
  * and writes only the vault and the documents.scanner heartbeat, which opsWatch
- * (last) reads in the same tick. The weekly
+ * (last) reads in the same tick. The expiry To-dos (S-07 3a) follow the scan,
+ * so a version the scan just cleared opens its To-do this same tick; they read
+ * the vault and write only To-dos. The weekly
  * reports run last of all: the client pass first (spec, "Recorded
  * consequence" — the roll-up fires on its own gate, not after all client
  * emails, so this order is a reading convenience, not a dependency), then
@@ -57,4 +60,4 @@ import { opsWatchPass } from "./passes/ops-watch";
  * a pass failing for the second time is reported in the same tick.
  * Adding a recipe = one line here plus its pass file. Nothing else.
  */
-export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];
+export const PASSES: readonly Pass[] = [releaseHeldPass, remindersPass, followupsPass, reviewRequestPass, referralAskPass, noShowNudgePass, smsReminderPass, appointmentConfirmPass, reactivationPass, quoteFollowupPass, siteTrafficPass, documentsSweepPass, documentsScanPass, documentsExpiryPass, weeklyClientReportPass, weeklyAgencyReportPass, usageReportPass, opsWatchPass];

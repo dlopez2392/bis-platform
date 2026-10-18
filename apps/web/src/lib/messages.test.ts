@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { m, type MessageKey } from "./messages";
+import { t } from "./i18n/t";
 
 /**
  * Internal roadmap labels must not reach a screen a client can open.
@@ -767,5 +768,51 @@ describe("S-06 part 3: web chat in the inbox and the record, English and Spanish
   it("no key uses an internal or vendor word (mutation: 'webchat transcript' in timeline.webchat → FAILS)", () => {
     const BANNED = /\b(webchat|concierge|transcript|provider|index|openai|telnyx|resend)\b/i;
     for (const [k, v] of Object.entries(WANT)) expect(BANNED.test(v), k).toBe(false);
+  });
+});
+
+describe("S-07 3a: the Documents page, the expiry To-dos and the Owner's Required card (plan Task 2)", () => {
+  const KEYS_3A = [
+    "nav.documents",
+    "documents.page.title",
+    "documents.page.show.label", "documents.page.show.expiring", "documents.page.show.expired", "documents.page.show.all",
+    "documents.page.category.label", "documents.page.category.any",
+    "documents.page.openRecord", "documents.page.noName",
+    "documents.page.next", "documents.page.first",
+    "documents.page.empty.all", "documents.page.empty.allBody",
+    "documents.page.empty.expiring", "documents.page.empty.expiringBody", "documents.page.empty.expired",
+    "documents.page.loadFailed",
+    "documents.expiryTask.noName",
+    "documents.expiryTask.id", "documents.expiryTask.contract", "documents.expiryTask.estimate", "documents.expiryTask.invoice",
+    "documents.expiryTask.photo", "documents.expiryTask.permit", "documents.expiryTask.insurance", "documents.expiryTask.warranty",
+    "documents.expiryTask.other",
+    "documents.required.summary", "documents.required.summaryOff", "documents.required.loadFailed",
+    "documents.required.restored", "documents.required.changed", "documents.required.failed", "documents.required.role",
+    "documents.required.crashed",
+  ] as const;
+
+  it("every key has a Spanish twin (mutation: delete any one .es line -> FAILS naming it)", () => {
+    const missing = KEYS_3A.filter((k) => !(`${k}.es` in m) || !(k in m));
+    expect(missing).toEqual([]);
+  });
+
+  it("the To-do titles read as the spec's example in both languages (mutation: drop {date} or {name} from either -> FAILS)", () => {
+    expect(t(m, "documents.expiryTask.insurance", "en", { name: "Ana García", date: "Nov 16" })).toBe("Ana García's insurance expires on Nov 16");
+    expect(t(m, "documents.expiryTask.insurance", "es", { name: "Ana García", date: "16 nov" })).toBe("El seguro de Ana García vence el 16 nov");
+    expect(t(m, "documents.expiryTask.other", "en", { name: "Bo", date: "Nov 16", title: "Pool permit" })).toBe("Bo's \"Pool permit\" expires on Nov 16");
+    expect(t(m, "documents.expiryTask.other", "es", { name: "Bo", date: "16 nov", title: "Pool permit" })).toBe("\"Pool permit\" de Bo vence el 16 nov");
+  });
+
+  it("the empty states are the spec's sentences (spec 3.1)", () => {
+    expect(`${m["documents.page.empty.all"]} ${m["documents.page.empty.allBody"]}`)
+      .toBe("Files you upload to a customer or household show up here. Open a customer and use Documents to add one.");
+    expect(`${m["documents.page.empty.expiring"]} ${m["documents.page.empty.expiringBody"]}`)
+      .toBe("Nothing expires in the next 30 days. Files with an expiry date show up here a month before.");
+    expect(m["documents.page.empty.expired"]).toBe("Nothing has expired.");
+  });
+
+  it("Spanish is usted, never tu (mutation: 'Revisa' or 'intenta' in any .es -> FAILS)", () => {
+    const es = KEYS_3A.map((k) => m[`${k}.es` as keyof typeof m] as string);
+    for (const s of es) expect(s).not.toMatch(/\b(revisa|intenta|vuelve|abre|usa|tu|tus)\b/i);
   });
 });

@@ -158,6 +158,10 @@ they re-resolve against the accent each element inherits.
   unread counts as small accent badges. Client switcher at top with a 30px/9px
   avatar carrying the account's initial + timezone. Footer: Settings link +
   a 5px setup progress meter on `--meter-bg`, pinned.
+  **Amended 2026-10-17 (S-07 part 3, decision E2):** CRM holds Contacts, then
+  **Documents** (every live file on a customer or household, Expiring soon
+  first), then Opportunities. A Technician's CRM group holds Contacts and
+  Documents; RLS bounds their Documents rows to assigned customers.
 - **Setup:** two-pane wizard — stepper rail (done ✓ / current / todo /
   locked-with-reason) + one step detail pane. First incomplete step
   pre-selected. When all steps complete, Setup leaves the nav; checklist
@@ -175,6 +179,11 @@ they re-resolve against the accent each element inherits.
   app to do so. A row is not a link; the whole row opens the drawer, so a row's
   identity is addressed by `data-contact-row`. Selection survives a page
   change.
+  **Amended 2026-10-17 (S-07 part 3):** a list sorted by something other than
+  recency (the Documents page's Expiring soon, soonest first) names its pager
+  **"Next"** / **"Back to the start"** instead of "Older" / "Newer"; the
+  mechanics are unchanged (`?before=`, exactly one pager, the start link drops
+  the cursor).
 - **CSV import:** its own route, three steps — choose a file, match the
   columns, confirm. The file is parsed in the BROWSER and never uploaded; only
   mapped rows travel, in bounded batches, and the server re-validates every
@@ -218,6 +227,12 @@ they re-resolve against the accent each element inherits.
   one review tray, and customer visibility off by default. A module earns a
   new top-level surface only by amending this file first — it is never a
   side effect of shipping the module.
+  **Amended 2026-10-17 (S-07 part 3):** the document vault earns ONE top-level
+  surface, the Documents page under CRM, because "what expires across every
+  customer" is a work list no record card can show. Its work still routes to
+  the work queue (an expiry To-do per file and date) and its news to the
+  record's timeline; it adds no second settings section (a client Owner's
+  Required documents card sits on that page; the agency's stays on Settings).
 
 ## Charts
 
@@ -248,6 +263,9 @@ the page (rule 5 extended to the card, not just the screen).
 On a phone it is one column (decided 2026-10-12): the header with Call
 first, the summary and what is next, the timeline, what they have (closed
 until tapped), then who they are.
+**Amended 2026-10-17 (S-07 part 3):** a link that names a file (an expiry
+To-do's `?document=`) opens the Documents card on a phone, so the file can be
+focused; every other link leaves it closed.
 A household or a business has its own record page on the same kit
 (decided 2026-10-13): it is a record, reached from its members' pages, not
 a new top-level surface.

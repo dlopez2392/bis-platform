@@ -5,7 +5,7 @@ import { dbForRequest } from "@/lib/db";
 import {
   serviceDb, getContact, readGroup, getDocument, getDocumentVersion, getUploadingVersion, createDocument,
   reserveDocumentVersion, discardDocumentUpload, updateDocumentField, setDocumentOwnersOnly,
-  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
+  trashDocument, restoreDocument, listDocumentVersionStates, claimDocumentForPurge, deletePurgedDocument, deleteOpenExpiryTasks, DOCUMENT_PURGING_MARK, DOCUMENT_BUCKET, DOCUMENT_MAX_BYTES, isDocumentCategory, isDocumentContentType, signedDocumentReadUrl,
   type SupabaseClient, type DocumentRecordRef, type DocumentContentType, type DocumentRow,
 } from "@bis/db";
 import { isUuid } from "@/lib/assign/action-guards";
@@ -303,6 +303,9 @@ export async function setOwnersOnlyAction(accountId: string, documentId: string,
     const doc = await visibleDocument(accountId, docId, true);
     if (!doc) return fail(REFUSED);
     const r = await setDocumentOwnersOnly(serviceDb(), accountId, docId, value);
+    // Owner ruling R1 (S-07 3a): an Owners-only file keeps no open expiry To-do (its title would name the
+    // file to Staff); switching it back off lets the next pass reopen one.
+    if (r === "updated" && value) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
     return r === "updated" ? { ok: true, prior: doc.owners_only } : fail(REFUSED);
   } catch (e) {
     log("owners only", accountId, e);
@@ -318,6 +321,8 @@ export async function undoOwnersOnlyAction(accountId: string, documentId: string
   try {
     if (!(await visibleDocument(accountId, docId, true))) return fail(REFUSED);
     const r = await setDocumentOwnersOnly(serviceDb(), accountId, docId, prior, written);
+    // Owner ruling R1: an Undo that writes Owners only back takes the open expiry To-dos with it too.
+    if (r === "updated" && prior) await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
     return r === "updated" ? { ok: true } : fail("documents.undoChanged");
   } catch (e) {
     log("undo owners only", accountId, e);
@@ -332,7 +337,17 @@ export async function trashDocumentAction(accountId: string, documentId: string)
   try {
     if (!(await visibleDocument(accountId, docId, true))) return fail(REFUSED);
     const r = await trashDocument(serviceDb(), accountId, docId, access.userId);
-    return r.status === "trashed" ? { ok: true, deletedAt: r.deletedAt } : fail(REFUSED);
+    if (r.status !== "trashed") return fail(REFUSED);
+    // Owner ruling R4 (S-07 3a): a file moved to the trash keeps no open expiry To-do; a restore holds
+    // nothing (the next pass reopens it while the file is still in its window). A done To-do stays.
+    // The trash has committed, so a failed delete is logged (ids only, never the title) and the answer
+    // is still the trash with its instant: the card offers its Undo (orchestrator ruling, Task 4 review).
+    try {
+      await deleteOpenExpiryTasks(serviceDb(), accountId, docId);
+    } catch (e) {
+      log(`trash: open expiry To-dos not deleted (document ${docId})`, accountId, e);
+    }
+    return { ok: true, deletedAt: r.deletedAt };
   } catch (e) {
     log("trash", accountId, e);
     return fail(FAILED);

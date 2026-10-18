@@ -108,16 +108,18 @@ export function RecordCardView(p: RecordCardViewProps) {
 export type RecordCardProps = {
   id: string; title: string; collapsibleOnPhone?: boolean; state?: RecordCardState; skeletonRows?: number;
   errorText?: string; onRetry?: () => void; action?: ReactNode; children?: ReactNode;
+  /** S-07 3a (review I2): a phone disclosure starts open (a link that names something inside it); it seeds the state only, so it still closes on a tap. */
+  defaultOpen?: boolean;
   /** Drawn in place of the default line skeleton while loading. */
   skeleton?: ReactNode;
 };
 
 /** A record card: the chrome, its own boundary, and (when `collapsibleOnPhone`) a phone disclosure. */
-export function RecordCard({ id, title, collapsibleOnPhone = false, state = "ready", skeletonRows = 3,
+export function RecordCard({ id, title, collapsibleOnPhone = false, defaultOpen = false, state = "ready", skeletonRows = 3,
   errorText, onRetry, action, skeleton, children }: RecordCardProps) {
   const locale = useLocale();
   const phone = usePhone();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <RecordCardView id={id} title={title} state={state} skeletonRows={skeletonRows}
       errorText={errorText ?? t(m, "record.card.failed", locale, { title })}

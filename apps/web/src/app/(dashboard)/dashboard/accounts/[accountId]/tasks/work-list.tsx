@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/empty-state";
 import { ListPanel, LIST_ROW } from "@/components/ui/list-panel";
 import { formatDateInZone } from "@/lib/format";
+import { workRowHref } from "@/lib/documents/card-focus";
 import { m, type MessageKey } from "@/lib/messages";
 import { plural } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
@@ -344,6 +345,8 @@ function WorkRowItem({
   );
 
   const rowClassName = "flex items-center gap-3 px-4 py-3 text-sm";
+  // S-07 3a: an expiry To-do links to its file (workRowHref).
+  const href = workRowHref(accountId, row);
 
   // Only a row tied to a real contact has anywhere to go — a contact-less
   // task (no `contact_id` on the `tasks` row) renders the same content as a
@@ -367,9 +370,9 @@ function WorkRowItem({
   // regardless of which branch renders inside it.
   return (
     <li className={cn(LIST_ROW, "flex items-center transition-colors hover:bg-[var(--surface-3)]")}>
-      {row.contactId ? (
+      {href ? (
         <Link
-          href={`/dashboard/accounts/${accountId}/contacts/${row.contactId}`}
+          href={href}
           className={cn(rowClassName, "min-w-0 flex-1")}
         >
           {body}

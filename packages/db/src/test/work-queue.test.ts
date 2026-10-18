@@ -3,6 +3,10 @@ import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { listAccountWork, listAgencyWork, mapBounded, AGENCY_READ_CONCURRENCY } from "../work-queue";
 import { addTask } from "../activities";
 import { getOrCreateCalendar, createBooking } from "../booking";
+import { createDocument } from "../documents";
+import { createGroupWithMember } from "../client-groups";
+import { ensureDocumentExpiryTask } from "../document-expiry";
+import { createContact } from "../contacts";
 
 describe("listAccountWork", () => {
   it("returns an open task and omits a completed one", async () => {
@@ -150,6 +154,24 @@ describe("listAccountWork", () => {
       expect(work.map((r) => r.id)).toContain(`task:${dueToday.id}`);
     });
   });
+
+  it("an expiry To-do carries its file, its category and its household; a plain To-do carries no such key (S-07 3a; mutations: always set documentFocus -> the plain row FAILS; drop the embed -> category null -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const ana = (await createContact(db, accountId, { firstName: "Ana" }, "user_wq")).id;
+      const g = await createGroupWithMember(db, accountId, ana, "household", "Casa Ana", null, "user_wq");
+      if (g.status !== "ok") throw new Error(g.status);
+      const onAna = await createDocument(db, { accountId, record: { kind: "contact", id: ana }, title: "S", category: "insurance", expiresOn: "2030-03-10", ownersOnly: false, source: "upload", createdBy: "user_wq" });
+      const onCasa = await createDocument(db, { accountId, record: { kind: "group", id: g.groupId }, title: "P", category: "permit", expiresOn: "2030-03-12", ownersOnly: false, source: "upload", createdBy: "user_wq" });
+      await ensureDocumentExpiryTask(db, accountId, { documentId: onAna, expiresOn: "2030-03-10", contactId: ana, title: "A", dueAt: "2030-03-03T15:00:00Z" }, "documents-expiry");
+      await ensureDocumentExpiryTask(db, accountId, { documentId: onCasa, expiresOn: "2030-03-12", contactId: ana, title: "B", dueAt: "2030-03-05T15:00:00Z" }, "documents-expiry");
+      const { error } = await db.from("tasks").insert({ account_id: accountId, contact_id: ana, title: "Plain" });
+      if (error) throw new Error(error.message);
+      const rows = await listAccountWork(db, accountId);
+      const byTitle = Object.fromEntries(rows.filter((r) => r.source === "task").map((r) => [r.title, r]));
+      expect(byTitle.A!.documentFocus).toEqual({ documentId: onAna, category: "insurance", groupId: null });
+      expect(byTitle.B!.documentFocus).toEqual({ documentId: onCasa, category: "permit", groupId: g.groupId });
+      expect("documentFocus" in byTitle.Plain!).toBe(false);
+    }));
 });
 
 describe("listAgencyWork", () => {

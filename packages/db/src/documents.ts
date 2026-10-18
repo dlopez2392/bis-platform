@@ -35,16 +35,17 @@ export type RecordDocuments = { live: ListedDocument[]; trashed: ListedDocument[
 /** Plan deviation 9: the card reads at most this many live and this many trashed documents. */
 export const MAX_DOCUMENTS_READ = 200;
 
-const DOC_COLS = "id, account_id, contact_id, client_group_id, title, category, expires_on, owners_only, source, "
+// Exported for account-documents.ts (S-07 3a) only; not in the barrel.
+export const DOC_COLS = "id, account_id, contact_id, client_group_id, title, category, expires_on, owners_only, source, "
   + "current_version_id, created_by, created_at, updated_at, deleted_at, deleted_by";
-const VERSION_COLS = "id, document_id, account_id, storage_path, bytes, content_type, original_name, status, created_at, scan_status, scan_signature";
+export const VERSION_COLS = "id, document_id, account_id, storage_path, bytes, content_type, original_name, status, created_at, scan_status, scan_signature";
 
 const recordColumn = (r: DocumentRecordRef) => (r.kind === "contact" ? "contact_id" : "client_group_id");
 /** The payload's record key: contactId or groupId, never both (documents_one_record). */
 const recordPayload = (row: { contact_id: string | null; client_group_id: string | null }) =>
   row.contact_id ? { contactId: row.contact_id } : { groupId: row.client_group_id };
 /** bigint arrives as a number from PostgREST below 2^53, as a string from pg; both read as a number here. */
-const asVersion = (v: DocumentVersionRow): DocumentVersionRow => ({ ...v, bytes: Number(v.bytes) });
+export const asVersion = (v: DocumentVersionRow): DocumentVersionRow => ({ ...v, bytes: Number(v.bytes) });
 
 /** Best-effort event after a committed write: the write stands, a lost event is logged (restoreContactLanguage's shape in contacts.ts). */
 async function emitAfter(
@@ -58,7 +59,7 @@ async function emitAfter(
 }
 
 /** Newest first by upload time, then id; the current version is always among them (spec 4.3's Versions list). */
-function readyVersionsOf(current: DocumentVersionRow, all: readonly DocumentVersionRow[]): DocumentVersionRow[] {
+export function readyVersionsOf(current: DocumentVersionRow, all: readonly DocumentVersionRow[]): DocumentVersionRow[] {
   const ready = all.filter((v) => v.status === "ready").map(asVersion)
     .sort((a, b) => (a.created_at === b.created_at ? (a.id < b.id ? 1 : -1) : a.created_at < b.created_at ? 1 : -1));
   return ready.some((v) => v.id === current.id) ? ready : [asVersion(current), ...ready];

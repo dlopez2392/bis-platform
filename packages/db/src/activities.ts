@@ -47,7 +47,7 @@ export async function addTask(
   return { id: data.id };
 }
 
-const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id";
+const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id, document_expiry_id";
 
 export async function listContactTasks(
   db: SupabaseClient, accountId: string, contactId: string | readonly string[], page?: TimelinePageOpts,
@@ -69,6 +69,8 @@ export async function listContactTasks(
     assigned_to: string | null;
     /** S-07 2b (0080): the request whose files this To-do reviews. */
     document_request_id: string | null;
+    /** S-07 3a (0084): the file whose expiry this To-do is about; the automation opened it. */
+    document_expiry_id: string | null;
     /** 0073: the author's Clerk subject; present in page mode only. */
     created_by?: string | null;
   }[];

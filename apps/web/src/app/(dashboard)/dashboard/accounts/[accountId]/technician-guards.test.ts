@@ -149,6 +149,14 @@ describe("a Technician's own screens never refuse them (the redirect-loop guard)
   });
 });
 
+describe("the Documents page admits a Technician (S-07 3a, spec 3.1)", () => {
+  it("the Documents page admits a Technician: it never calls requireNotTechnician, and it does call requireAccountAccess (spec 3.1; RLS bounds the rows) (mutation: add requireNotTechnician(accountId) -> FAILS)", () => {
+    const src = read("documents/page.tsx");
+    expect(src).not.toContain("requireNotTechnician");
+    expect(src).toContain("requireAccountAccess(accountId)");
+  });
+});
+
 describe("the scanner itself", () => {
   it("rejects a guard that comes after a read, and one that sits only in a comment", () => {
     expect(guardProblem("{\n  const db = await dbForRequest();\n  await requireNotTechnician(accountId);\n}")).toMatch(/dbForRequest/);

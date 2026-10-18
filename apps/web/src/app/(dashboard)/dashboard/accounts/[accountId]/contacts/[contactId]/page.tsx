@@ -31,6 +31,7 @@ import { ActivityTimeline } from "./activity-timeline";
 import { GroupsCard } from "../groups-card";
 import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
+import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { SummaryBody } from "./summary-card";
 import { NextUpBody } from "./next-up-card";
 import { DealsBody } from "./deals-card";
@@ -55,7 +56,8 @@ const READ_ONLY_ASSIGN: AssignView = {
   who: "all", personId: null, assignee: undefined, canAssign: false, showMine: false, members: [],
 };
 
-type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string };
+/** `defaultOpen`: S-07 3a (review I2), a phone disclosure that starts open. */
+type Slot = { node: ReactNode; state?: RecordCardState; errorText?: string; defaultOpen?: boolean };
 
 /**
  * The contact record page (S-03 part 1; spec §§8–9). Three columns on a desk (who they are |
@@ -69,10 +71,12 @@ export default async function ContactDetailPage({
   params: Promise<{ accountId: string; contactId: string }>;
   // Optional, as dashboard/page.tsx's: the QA locale override (`?locale=es|pseudo`, BIS_I18N_QA only),
   // and the timeline's cursor (1b).
-  searchParams?: Promise<{ locale?: string; before?: string }>;
+  searchParams?: Promise<{ locale?: string; before?: string; document?: string; ask?: string }>;
 }) {
   const { accountId, contactId } = await params;
-  const { locale: localeParam, before: beforeParam } = (await searchParams) ?? {};
+  const { locale: localeParam, before: beforeParam, document: documentParam, ask: askParam } = (await searchParams) ?? {};
+  // S-07 3a (plan deviations 5, 6): a To-do's link names a file to focus and a category to pre-tick in Ask the customer.
+  const focus = cardFocusFrom({ document: documentParam, ask: askParam });
   // 1b (spec §11): parsed before any read; a ?before= that does not parse is a cold start, never an
   // error and never seven failed sources.
   const before = parseTimelineCursor(beforeParam);
@@ -253,7 +257,9 @@ export default async function ContactDetailPage({
       node: <DocumentsCard accountId={accountId} record={{ kind: "contact", id: contactId }} canManage={access.canManage}
         emptyText={tr.text("documents.empty.contact")} name={rawName}
         // S-07 2c (D1): everyone who sees the customer sees the required list; only the whole account's view changes it.
-        checklist={{ canSkip: seesWholeAccount(access) }} />,
+        checklist={{ canSkip: seesWholeAccount(access) }} {...(focus ? { focus } : {})} />,
+      // S-07 3a (review I2, orchestrator ruling): a link that names a file opens this card on a phone, so the file can be focused.
+      defaultOpen: Boolean(focus?.documentId),
     },
     // S-03 part 3 (D10): Details and Tags are bilingual, so they inherit the page's lang.
     details: fieldDefs.status === "ready"
@@ -277,7 +283,7 @@ export default async function ContactDetailPage({
       const slot: Slot = slots[def.id];
       return (
         <RecordCard key={def.id} id={def.id} title={tr.text(def.titleKey)} collapsibleOnPhone={def.collapsibleOnPhone}
-          skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText}>
+          skeletonRows={def.skeletonRows} state={slot.state ?? "ready"} errorText={slot.errorText} defaultOpen={slot.defaultOpen}>
           {slot.node}
         </RecordCard>
       );

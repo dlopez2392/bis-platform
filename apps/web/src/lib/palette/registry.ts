@@ -55,6 +55,8 @@ const SETTINGS_SECTIONS: { anchor: string; label: string; keywords: string[] }[]
 const NAV_KEYWORDS: Record<string, string[]> = {
   "/dashboard": ["home", "overview"],
   "/contacts": ["people", "customers", "leads"],
+  // S-07 3a (spec 3.1): the document vault's account-wide list.
+  "/documents": ["files", "vault", "expiring", "expired", "expiry", "insurance", "permit", "license", "warranty", "documentos", "archivos", "vencen", "vencidos"],
   "/pipeline": ["deals", "opportunities", "sales"],
   "/conversations": ["messages", "inbox", "sms", "email"],
   "/calls": ["phone", "receptionist", "sofia"],
@@ -136,6 +138,17 @@ export function buildPaletteEntries(
       agencyOnly: false,
       keywords: ["team", "staff", "people", "invite", "users", "logins", "employees"],
       href: `${base}/team`,
+    });
+  }
+
+  // S-07 3a (spec 3.3): a client Owner edits the required-documents list on
+  // the Documents page's own card (#required-documents). The agency keeps
+  // Settings' card (SETTINGS_SECTIONS); Staff and a Technician get neither.
+  if (base && !isAgency && isOwner) {
+    entries.push({
+      kind: "href", id: "nav:required-documents", label: m["palette.settings.requiredDocuments"], group: "navigation", agencyOnly: false,
+      keywords: ["documents", "checklist", "required", "missing", "documentos", "requeridos"],
+      href: `${base}/documents#required-documents`,
     });
   }
 

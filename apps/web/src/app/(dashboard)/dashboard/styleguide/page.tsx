@@ -48,6 +48,7 @@ import { AssignDemo } from "./assign-demo";
 import { RelationshipsDemo } from "./relationships-demo";
 import { PlacesDemo } from "./places-demo";
 import { DocumentsDemo } from "./documents-demo";
+import { DocumentsPageDemo } from "./documents-page-demo";
 import { HeldEmailsDemo } from "./held-emails-demo";
 import { NeverLogDemo } from "./never-log-demo";
 import { ForwardingDemo } from "./forwarding-demo";
@@ -268,6 +269,13 @@ export default async function StyleguidePage({
             loading, in error, and with its upload panel open mid-batch. */}
         <Section title={m["documents.title"]} file="accounts/[accountId]/contacts/documents-card.tsx">
           <DocumentsDemo />
+        </Section>
+
+        {/* S-07 3a (spec 3.1, 3.3): the account-wide Documents page's own cards — the Owner's
+            Required documents card (partial in English and Spanish, off, and a failed read) and
+            the list's rows. */}
+        <Section title={t(m, "documents.page.title", "en")} file="accounts/[accountId]/documents/page.tsx">
+          <DocumentsPageDemo />
         </Section>
 
         {/* S-06 part 1, Task 12: the inbox's "Needs a look" filter — two held

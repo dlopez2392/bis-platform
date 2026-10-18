@@ -158,7 +158,7 @@ test.describe.serial("F-085 part 1: an Owner assigns a customer; the Technician 
   test.describe("2. the Technician sees exactly that customer", () => {
     test.use({ storageState: "e2e/.auth/technician-state.json" });
 
-    test("lands on To do, with exactly the five-item sidebar", async ({ page }) => {
+    test("lands on To do, with exactly the six-item sidebar", async ({ page }) => {
       await page.goto("/");
       // Two-hop landing: "/" resolves this org's account and redirects to
       // its /dashboard, which itself redirects a Technician on again
@@ -170,8 +170,8 @@ test.describe.serial("F-085 part 1: an Owner assigns a customer; the Technician 
       // idiom): the page itself may hold other links, and WhoFilter (absent
       // for a Technician anyway, see the next test) is also a <nav>.
       const navLinks = page.locator("aside nav").getByRole("link");
-      await expect(navLinks).toHaveCount(5);
-      for (const label of ["To do", "Contacts", "Conversations", "Calls", "Calendar"]) {
+      await expect(navLinks).toHaveCount(6);
+      for (const label of ["To do", "Contacts", "Documents", "Conversations", "Calls", "Calendar"]) {
         await expect(page.locator("aside nav").getByRole("link", { name: label })).toHaveCount(1);
       }
     });

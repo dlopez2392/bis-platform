@@ -11,6 +11,7 @@ export type NavIconKey =
   | "tasks"
   | "website"
   | "contacts"
+  | "documents"
   | "opportunities"
   | "conversations"
   | "calls"
@@ -95,14 +96,20 @@ export function buildNavGroups(
   }
 
   // A Technician (F-085 part 1, spec §9) works their own customers: To do
-  // (their landing, accountHome), Contacts, Conversations, Calls and Calendar,
-  // in the groups' usual order. Hiding the rest is convenience only;
-  // requireNotTechnician on every refused page and action is the boundary,
-  // and RLS (0068) bounds what the five they keep can read.
+  // (their landing, accountHome), Contacts, Documents, Conversations, Calls
+  // and Calendar, in the groups' usual order. Hiding the rest is convenience
+  // only; requireNotTechnician on every refused page and action is the
+  // boundary, and RLS (0068) bounds what the six they keep can read.
   if (isTechnician) {
     return [
       { label: "nav.group.overview", items: [{ href: `${base}/tasks`, labelKey: "nav.tasks", iconKey: "tasks" }] },
-      { label: "nav.group.crm", items: [{ href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" }] },
+      { label: "nav.group.crm", items: [
+        { href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" },
+        // S-07 3a (spec 3.1, decision E2): a Technician keeps Documents too —
+        // RLS (0077 + 0068) bounds their rows to assigned customers; the page
+        // itself calls requireAccountAccess only.
+        { href: `${base}/documents`, labelKey: "nav.documents", iconKey: "documents" },
+      ] },
       { label: "nav.group.communications", items: [
         { href: `${base}/conversations`, labelKey: "nav.conversations", iconKey: "conversations" },
         { href: `${base}/calls`, labelKey: "nav.calls", iconKey: "calls" },
@@ -158,6 +165,12 @@ export function buildNavGroups(
       label: "nav.group.crm",
       items: [
         { href: `${base}/contacts`, labelKey: "nav.contacts", iconKey: "contacts" },
+        // S-07 3a (spec 3.1, decision E2; DESIGN.md's sidebar pattern
+        // amended 2026-10-17): every file on a customer or household,
+        // Expiring soon first. Every role, a Technician too (RLS, 0077 +
+        // 0068, bounds their rows to assigned customers); the page itself
+        // calls requireAccountAccess only.
+        { href: `${base}/documents`, labelKey: "nav.documents", iconKey: "documents" },
         { href: `${base}/pipeline`, labelKey: "nav.opportunities", iconKey: "opportunities" },
       ],
     },

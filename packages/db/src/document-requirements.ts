@@ -137,3 +137,20 @@ export async function listDocumentSkipTimeline(
   if (unskips.error) throw new Error(`listDocumentSkipTimeline (un-skips) failed: ${unskips.error.message}`);
   return { skips: (skips.data ?? []) as TimelineDocumentSkip[], unskips: (unskips.data ?? []) as TimelineDocumentSkip[] };
 }
+
+/**
+ * Service client, after the caller's role check (S-07 3a: the Owner card's Undo; plan deviation 9).
+ * Back to `previous` only while the stored list is exactly `expected` (the save's own answer): a
+ * compare-and-set, so an Undo never clobbers a newer edit. Answers false when the list moved on.
+ */
+export async function restoreRequiredDocumentCategories(
+  db: SupabaseClient, accountId: string, expected: unknown, previous: unknown,
+): Promise<boolean> {
+  const e = cleanRequiredCategories(expected);
+  const p = cleanRequiredCategories(previous);
+  if (!e || !p) throw new TypeError("restoreRequiredDocumentCategories: not lists of requirable categories");
+  const { data, error } = await db.from("accounts").update({ required_document_categories: p })
+    .eq("id", accountId).eq("required_document_categories", `{${e.join(",")}}`).select("id");
+  if (error) throw new Error(`restoreRequiredDocumentCategories failed: ${error.message}`);
+  return (data ?? []).length === 1;
+}

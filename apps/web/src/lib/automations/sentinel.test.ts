@@ -37,6 +37,10 @@ const dbMocks = vi.hoisted(() => ({
   listAbandonedUploads: vi.fn(async () => []), listPurgeableDocuments: vi.fn(async () => []),
   // S-07 2b, Task 6b: the scan pass's lost-To-do reconcile, every tick, before anything else in it.
   listRequestsMissingReceivedTask: vi.fn(),
+  // S-07 3a: the expiry To-dos, every tick: one candidate read, nothing more when it is empty.
+  listExpiringDocuments: vi.fn(async () => []),
+  // ...then its self-heal, every tick: nothing to remove.
+  deleteExpiryTasksOfHiddenDocuments: vi.fn(async () => 0),
   listAccountsDueWeeklyReport: vi.fn(),
   getAgencyReportTarget: vi.fn(), stampAgencyReportSent: vi.fn(), listAccountsForWeeklyRollup: vi.fn(),
   recordAutomationLog: vi.fn(),
@@ -217,6 +221,9 @@ beforeEach(() => {
   dbMocks.listPurgeableDocuments.mockResolvedValue([]);
   // The scan pass's lost-To-do reconcile: nothing missing, so it must run to its own counter, not errored.
   dbMocks.listRequestsMissingReceivedTask.mockResolvedValue([]);
+  // The expiry To-dos: no candidate, so it must run to its zero counters, not errored.
+  dbMocks.listExpiringDocuments.mockResolvedValue([]);
+  dbMocks.deleteExpiryTasksOfHiddenDocuments.mockResolvedValue(0);
   dbMocks.readConsentState.mockResolvedValue({ state: "allowed" });
   dbMocks.readPhoneCountryFlag.mockResolvedValue(false);
   dbMocks.recordCarrierBlock.mockResolvedValue("appended");   // explicit: the gate reaches it only on a carrier stop (phase 3 rule)
@@ -267,6 +274,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(results.documentsSweep).toEqual({ abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 });
     // S-07 2a: the suite sets no SCANNER_URL, so the pass reports its own not-configured counter.
     expect(results.documentsScan).toEqual({ scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1, requestTasks: 0 });
+    expect(results.documentsExpiry).toEqual({ opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0, healed: 0 });
     expect(results.weeklyClientReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
     expect(results.weeklyClientReport).not.toHaveProperty("errored");
     expect(results.weeklyAgencyReport).toEqual(expect.objectContaining({ sent: 0, failed: 0 }));
@@ -282,8 +290,8 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     expect(everything).toContain(BRAND);   // and the brand name DID go out, in its place
   });
 
-  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
-    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
+  it("the registry runs the release pass, then reminders, follow-ups, review requests, referral asks, no-show nudges, text reminders, appointment confirmations, check-ins, quote follow-ups, site traffic, the documents sweep, the documents scan, the documents expiry To-dos after the scan, the two weekly reports, the usage report after every SMS pass, then the operational floor's alert pass LAST — the first three's order is the collision's contract (mutation: move usageReport ahead of an SMS pass, or opsWatch ahead of any pass whose heartbeat it reads → FAILS)", () => {
+    expect(PASSES.map((p) => p.key)).toEqual(["releaseHeld", "reminders", "followups", "reviewRequests", "referralAsks", "noShowNudges", "smsReminders", "appointmentConfirms", "reactivations", "quoteFollowups", "siteTraffic", "documentsSweep", "documentsScan", "documentsExpiry", "weeklyClientReport", "weeklyAgencyReport", "usageReport", "opsWatch"]);
   });
 
   /**
