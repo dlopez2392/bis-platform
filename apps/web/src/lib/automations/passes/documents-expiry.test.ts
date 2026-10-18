@@ -108,6 +108,16 @@ describe("the To-do: where, titled and due how (spec 3.2)", () => {
 });
 
 describe("the run's limits and failures (spec 3.2; review M4)", () => {
+  it(`a full candidate read (${EXPIRY_CANDIDATES_PER_RUN} rows) says it was capped even when every To-do is already open (mutation: drop the read cap's flag and log -> FAILS)`, async () => {
+    const rows = Array.from({ length: EXPIRY_CANDIDATES_PER_RUN }, () => row());
+    db.listExpiringDocuments.mockResolvedValue(rows);
+    db.listDocumentExpiryTaskKeys.mockResolvedValue(new Set(rows.map((r) => expiryTaskKey(r.id, r.expires_on))));
+    const c = await openExpiryTasks(FAKE_DB, NOW);
+    expect(db.ensureDocumentExpiryTask).not.toHaveBeenCalled();
+    expect(c).toEqual({ ...ZERO, alreadyOpen: EXPIRY_CANDIDATES_PER_RUN, capped: 1 });
+    expect(errors.mock.calls.flat().join(" ")).toContain("candidate read came back full");
+  });
+
   it(`opens at most ${EXPIRY_TASKS_PER_RUN} To-dos and says it was capped (mutation: no cap -> FAILS)`, async () => {
     db.listExpiringDocuments.mockResolvedValue(Array.from({ length: EXPIRY_TASKS_PER_RUN + 1 }, () => row()));
     const c = await openExpiryTasks(FAKE_DB, NOW);
@@ -142,11 +152,14 @@ describe("the run's limits and failures (spec 3.2; review M4)", () => {
 });
 
 describe("the registered pass", () => {
-  it("is documentsExpiry, runs on the tick's client and instant; nothing due is one read and zero counters (mutation: read the keys with no candidates -> FAILS)", async () => {
+  it("is documentsExpiry, runs on the tick's client and instant; nothing due is one read and zero counters (mutations: read the keys with no candidates, or run on a client or instant other than the tick's -> FAILS)", async () => {
     db.listExpiringDocuments.mockResolvedValue([]);
     expect(documentsExpiryPass.key).toBe("documentsExpiry");
     const c = await documentsExpiryPass.run({ db: FAKE_DB, now: NOW, origin: "https://x", email: {} as never, sms: {} as never });
     expect(c).toEqual(ZERO);
+    // The tick's client, and the range read off the tick's instant (NOW's UTC day is 2026-11-01: from - 1, to + 31).
+    expect(db.listExpiringDocuments).toHaveBeenCalledTimes(1);
+    expect(db.listExpiringDocuments).toHaveBeenCalledWith(FAKE_DB, expect.objectContaining({ fromDay: "2026-10-31", toDay: "2026-12-02" }));
     expect(db.listDocumentExpiryTaskKeys).not.toHaveBeenCalled();
   });
 });

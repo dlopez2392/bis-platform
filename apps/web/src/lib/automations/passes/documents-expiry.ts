@@ -20,9 +20,10 @@ import { loggableError } from "@/lib/loggable-error";
  * contact, or on a household's primary contact (documentRequestTarget, 2b), titled in the ACCOUNT's
  * language. Logs ids, never a title. A run with any failed document throws after the rest
  * (documents-sweep's pattern), so the heartbeat records it.
- * BUDGET (review M4): at most 200 To-dos a run, each up to four round trips (the target's one or two
- * reads, the insert, its event), and no To-do STARTS once EXPIRY_BUDGET_MS has gone (documents-scan.ts'
- * cutoff shape); the rest count as `deferred` and open on a later tick. EXPIRY_BUDGET_MS is the fifth term
+ * BUDGET (review M4): at most 200 To-dos a run, each up to four round trips on either path: the target's
+ * one read (a contact) or two (a group and its primary contact), then the insert and its event, or, on a
+ * 23505, the insert and the re-read of the To-do already there. No To-do STARTS once EXPIRY_BUDGET_MS has
+ * gone (documents-scan.ts' cutoff shape); the rest count as `deferred` and open on a later tick. EXPIRY_BUDGET_MS is the fifth term
  * in cron-coupling.test.ts' sum. Every @bis/db BARREL export is dereferenced inside the function, never at
  * module scope or before the first read (the cron route test's bare mock throws on a dereference).
  */
@@ -50,7 +51,7 @@ export async function openExpiryTasks(
   if (rows.length === 0) return c;
   if (rows.length >= EXPIRY_CANDIDATES_PER_RUN) {
     c.capped = 1;
-    console.error(`documents expiry: capped: the candidate read came back full (${EXPIRY_CANDIDATES_PER_RUN}); files beyond it wait for a later tick`);
+    console.error(`documents expiry: capped: the candidate read came back full (${EXPIRY_CANDIDATES_PER_RUN}); while 1000 or more files sit in the window, some files may not get a To-do until fewer than 1000 are in it`);
   }
   const badZone = new Set<string>();
   const due: { r: ExpiringDocument; zone: string }[] = [];
@@ -80,6 +81,8 @@ export async function openExpiryTasks(
       console.error(`documents expiry: capped at ${EXPIRY_TASKS_PER_RUN} To-dos this run; the rest open on the next tick`);
       break;
     }
+    // `deferred` counts every To-do this run did not start, including any past the EXPIRY_TASKS_PER_RUN cap
+    // (todo.length - i, not min(cap, todo.length) - i): all of them open on a later tick.
     if (clock() - startedAt > EXPIRY_BUDGET_MS) { c.deferred = todo.length - i; break; }
     try {
       const target = await documentRequestTarget(db, r.account_id, r);
