@@ -245,6 +245,9 @@ test("4. Stop sharing, the revoked page, uniform refusals (deviation 6)", async 
 });
 
 test("5. Undo brings a fresh stop back; a stopped link offers no Stop sharing again", async ({ page, browser }) => {
+  // Each test gets a fresh context, so test 1's grant is gone: without it writeText is refused and the
+  // card shows its copy-by-hand fallback instead of "Link copied" (CI 39131707579), and readText below fails.
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(contactUrl());
   await openRowMenu(page);
   await expect(page.getByRole("menuitem", { name: tt("documents.share.stop"), exact: true })).toHaveCount(0);
