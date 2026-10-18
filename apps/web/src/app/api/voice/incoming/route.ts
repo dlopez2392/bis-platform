@@ -405,22 +405,27 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //         runs on the `close` event, which waits for the peer's close
       //         frame; ws's own default wait is 30s, which is why it is set
       //     3s  finish()'s bounded frame drain (`Promise.race([chain, 3000])`)
-      //    10s  the summary reading (`generateSummary`, AbortSignal 10s) —
-      //         first in finishCall, before anything is written
+      //    16s  the summary reading (`generateSummary`): the gateway's gate
+      //         read (3s), the completion (AbortSignal 10s), its ledger row
+      //         (3s) — first in finishCall, before anything is written
       //    12s  contact, conversation and message rows, `finishCallRow`, and
       //         the staff alert email to ONE address — sequential network
       //         round trips with no timeout of their own (an estimate, not a
-      //         bound). THE CALL ROW IS DURABLE HERE, ~38s in.
+      //         bound). THE CALL ROW IS DURABLE HERE, ~44s in.
       //    10s  ONE carrier send (SEND_TIMEOUT_MS, `lib/sms/telnyx.ts`): the
       //         staff alert SMS (booked/lead/message) or the missed-call
       //         text-back (abandoned) — never both on one call
       //     5s  the usage ledger write (`recordUsageSafely`)
-      //    10s  the call card's reading (`readCallForCard`, AbortSignal 10s),
-      //         then its own update; the callback To do is a few ms before it
-      //    10s  the proposals' reading (`generateProposals`, AbortSignal 10s)
+      //    16s  the call card's reading (`readCallForCard`: gate 3s, 10s,
+      //         ledger 3s), then its own update; the callback To do is a few
+      //         ms before it
+      //    16s  the proposals' reading (`generateProposals`: gate 3s, 10s,
+      //         ledger 3s)
       //    ---
-      //    73s  tail (61s bounded by timeouts; the 12s rows-and-email leg is an
-      //         estimate — the Resend call has no timeout of its own)
+      //    91s  tail (79s bounded by timeouts; the 12s rows-and-email leg is an
+      //         estimate — the Resend call has no timeout of its own). Each
+      //         completion gained up to 6s of bounded database time with the
+      //         AI gateway (item 8a-1).
       //
       // BEFORE the cap timer is armed (the connect leg). This is real elapsed
       // `maxDuration` that the cap knows nothing about, because the clock the
@@ -456,15 +461,16 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //   this margin, so re-derive the clamp when one is added)
       //    10s  margin
       //
-      //   800 - 73 - 20 - 10 = 697, THE CLAMP BELOW.
+      //   800 - 91 - 20 - 10 = 679, THE CLAMP BELOW.
       //
-      // Pinned by lifecycle.test.ts ("cap-seconds clamp", at 900 and at 698).
-      // It has been tightened three times, each time because a leg had been
-      // left uncounted: from 770 (tail only), from 750 (tail counted as 30s),
-      // and from 715 (no hangup, and a close handshake that could wait ws's
-      // default 30s). If a leg is ever added to the tail, add it above and
+      // Pinned by lifecycle.test.ts ("cap-seconds clamp", at 900 and at 680).
+      // It has been tightened four times, each time because a leg had been
+      // left uncounted or had grown: from 770 (tail only), from 750 (tail
+      // counted as 30s), from 715 (no hangup, and a close handshake that could
+      // wait ws's default 30s), and from 697 (item 8a-1: each AI completion
+      // gained a 3s gate read and a 3s ledger write). If a leg is ever added to the tail, add it above and
       // re-derive here. An overrun is ORDERED, not random: the call row and
-      // the staff alert email land in the first ~38s of the tail, and what an
+      // the staff alert email land in the first ~44s of the tail, and what an
       // overrun cuts off is everything after them — the carrier send (alert
       // SMS or text-back), the usage row, the callback To do, the call card
       // and the proposals.
@@ -472,7 +478,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // THE ASSUMPTIONS THIS CARRIES: PHONE_CONNECT_TIMEOUT_MS is
       // configurable up to 60000ms (clamped above), and the ~20s connect leg
       // is its 15000ms DEFAULT plus the ~5s estimate. Raising it above the
-      // default spends the margin first and then the tail, and this 697 must
+      // default spends the margin first and then the tail, and this 679 must
       // be re-derived. And a calendar notifying many addresses spends the
       // margin one email at a time. Nothing enforces either coupling — the
       // knobs are independent, and this comment is the only thing linking
@@ -488,7 +494,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       // CAP is what makes the half-bound incapable of undercutting the clamp
       // it is applied to. Flooring after the min instead would let the window
       // TIE the cap, and a tie fires the cap first (insertion order).
-      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 697);
+      const maxSeconds = Math.min(Math.max(parsedOrDefault, 10), 679);
       capTimer = setTimeout(() => {
         log("call cap reached, sending goodbye", { callId, maxSeconds });
         try {
@@ -530,7 +536,7 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
       //
       // THE ORDERING IS ENFORCED HERE, NOT DESCRIBED. The two knobs are
       // independent in the environment: PHONE_MAX_SILENT_SECONDS clamps to
-      // 5–120 and PHONE_MAX_CALL_SECONDS to <=697, so `120` and `60` is a
+      // 5–120 and PHONE_MAX_CALL_SECONDS to <=679, so `120` and `60` is a
       // legal pair an operator can reach by two individually sensible edits.
       // Under it, on a call where nobody speaks, the CAP fires first and
       // hands the model the open-ended "Politely wrap up…" below — which is
@@ -584,8 +590,8 @@ function runCallLifecycle(args: LifecycleArgs): Promise<void> {
         // A bilingual line says the goodbye in both languages, one after the
         // other (`silenceGoodbye`, F-010) — so each gets the playout the
         // single goodbye gets, and the close waits for both. Not a leg of the
-        // cap's tail that the 697 clamp is derived from: this timer clears
-        // the cap, and fires at `maxSeconds / 2` at the latest (<= 348.5s),
+        // cap's tail that the 679 clamp is derived from: this timer clears
+        // the cap, and fires at `maxSeconds / 2` at the latest (<= 339.5s),
         // so even with 10s of playout and the whole tail after it this call
         // ends hundreds of seconds inside `maxDuration`.
         const silenceCloseMs = languages === "both" ? 2 * CLOSE_AFTER_GOODBYE_MS : CLOSE_AFTER_GOODBYE_MS;

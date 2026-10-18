@@ -8,9 +8,11 @@ import {
   recordedReason, callbackNumberOf, callbackWanted, callbackTaskTitle, cardReadable,
   readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
+import { openGateDb } from "@/lib/ai/testing/open-gate";
 
 beforeEach(() => { process.env.OPENAI_API_KEY = "sk-test"; });
 afterEach(() => { vi.restoreAllMocks(); });
+const GATE = { db: openGateDb().db, accountId: "acct", timezone: "America/Chicago" };
 
 const CALLER_ID = "+19562921696";
 const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
@@ -148,7 +150,7 @@ describe("readCallForCard: the model's reading, grounded", () => {
 
   it("returns the reason and the caller's WHOLE turn the quote came from, verbatim (mutation: store the model's excerpt → FAILS)", async () => {
     const fetchImpl = modelReturning({ reason: "Roof leak, needs someone out", quote: "my roof started leaking last night" });
-    expect(await readCallForCard(transcript, { fetchImpl })).toEqual({
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl })).toEqual({
       reason: "Roof leak, needs someone out",
       callerWords: "Hi, my roof started leaking last night and I need someone out here.",
     });
@@ -156,17 +158,17 @@ describe("readCallForCard: the model's reading, grounded", () => {
 
   it("a quote of the ASSISTANT grounds nothing: no words (mutation: drop grounding → Sofía's line stored as the caller's, FAILS)", async () => {
     const fetchImpl = modelReturning({ reason: "Roof leak", quote: "Thanks for calling Rio Roofing" });
-    expect((await readCallForCard(transcript, { fetchImpl })).callerWords).toBeNull();
+    expect((await readCallForCard(transcript, { ...GATE, fetchImpl })).callerWords).toBeNull();
   });
 
   it("a reason carrying a phone number is dropped: the card's number comes from the call, never from prose (mutation: drop the digit guard → FAILS)", async () => {
     const fetchImpl = modelReturning({ reason: "Call back at 956-555-0142 about a leak", quote: null });
-    expect((await readCallForCard(transcript, { fetchImpl })).reason).toBeNull();
+    expect((await readCallForCard(transcript, { ...GATE, fetchImpl })).reason).toBeNull();
   });
 
   it("asks gpt-4o-mini in JSON mode, under a time limit, with the transcript and an English-reason rule", async () => {
     const fetchImpl = modelReturning({ reason: null, quote: null });
-    await readCallForCard(transcript, { fetchImpl });
+    await readCallForCard(transcript, { ...GATE, fetchImpl });
     const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
     const body = JSON.parse((init as RequestInit).body as string);
@@ -179,7 +181,7 @@ describe("readCallForCard: the model's reading, grounded", () => {
 
   it("the reading is capped at 10 seconds, the summary's own bound (mutation: AbortSignal.timeout(600_000) → FAILS)", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
-    await readCallForCard(transcript, { fetchImpl: modelReturning({ reason: null, quote: null }) });
+    await readCallForCard(transcript, { ...GATE, fetchImpl: modelReturning({ reason: null, quote: null }) });
     expect(timeout).toHaveBeenCalledWith(10_000);
   });
 
@@ -187,25 +189,31 @@ describe("readCallForCard: the model's reading, grounded", () => {
     delete process.env.OPENAI_API_KEY;
     vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchImpl = modelReturning({ reason: "x", quote: null });
-    expect(await readCallForCard(transcript, { fetchImpl })).toEqual(NO_READING);
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl })).toEqual(NO_READING);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("never throws: a refused request, unparseable content and a network failure all read as nothing", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await readCallForCard(transcript, { fetchImpl: modelReturning({}, 500) })).toEqual(NO_READING);
-    expect(await readCallForCard(transcript, { fetchImpl: modelReturning("not json") })).toEqual(NO_READING);
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl: modelReturning({}, 500) })).toEqual(NO_READING);
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl: modelReturning("not json") })).toEqual(NO_READING);
     const failing = vi.fn(async () => { throw new Error("socket hang up"); }) as unknown as typeof fetch;
-    expect(await readCallForCard(transcript, { fetchImpl: failing })).toEqual(NO_READING);
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl: failing })).toEqual(NO_READING);
   });
 
   it("a very long caller turn is cut at a word with an ellipsis", async () => {
     const long = `My roof is leaking ${"and it keeps dripping ".repeat(60)}`.trim();
     const fetchImpl = modelReturning({ reason: "Roof leak", quote: "My roof is leaking" });
-    const words = (await readCallForCard([t("caller", long)], { fetchImpl })).callerWords!;
+    const words = (await readCallForCard([t("caller", long)], { ...GATE, fetchImpl })).callerWords!;
     expect(words.startsWith("My roof is leaking and it keeps dripping")).toBe(true);
     expect(words.endsWith("…")).toBe(true);
     expect(words.length).toBeLessThanOrEqual(501);
+  });
+  it("a reading that does not parse logs no word of it (plan deviation 6; mutation: log String(e) in the catch -> FAILS)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await readCallForCard(transcript, { ...GATE, fetchImpl: modelReturning("SENTINEL-OUTPUT-7f3 not json") })).toEqual(NO_READING);
+    expect(err.mock.calls.flat().map(String).join("\n")).not.toContain("SENTINEL");
+    expect(err).toHaveBeenCalledTimes(1);
   });
 });
 

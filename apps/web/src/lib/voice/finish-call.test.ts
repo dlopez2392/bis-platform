@@ -413,11 +413,11 @@ describe("finishCall", () => {
     expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1",
       expect.objectContaining({ outcome: "booked", contactId: "ct-existing", bookingId: "bk1" }));
   });
-  it("passes ctx.timezone through to generateSummary so prose speaks the account's local zone", async () => {
+  it("passes ctx.timezone through to generateSummary so prose speaks the account's local zone and this call's client and account (mutation: drop db from the call -> FAILS)", async () => {
     const s = withLead(withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" }),
       { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "+19562921696" } });
     await finishCall(s, ctx, meta);
-    expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ timezone: "America/Chicago" }));
+    expect(summaryMocks.generateSummary).toHaveBeenCalledWith(s, expect.objectContaining({ timezone: "America/Chicago", db: ctx.db, accountId: ctx.accountId }));
   });
   it("generateSummary is never handed a language, even for a Spanish account (owner decision A: summaries stay English; mutation: pass language: resolveLocale(undefined, ctx.accountLanguage) to generateSummary again → FAILS)", async () => {
     const s = withTranscript(emptyCallState(), { role: "caller", text: "hi", at: "t" });
@@ -720,7 +720,7 @@ describe("finishCall — missed-call text-back", () => {
    * for ten seconds inside an invocation that can be near its maxDuration,
    * comes after. Not the default case since Pro lifted the voice route's
    * ceiling to 800s against a 240s call cap, but exactly the case whenever
-   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 697s clamp. Pinned
+   * `PHONE_MAX_CALL_SECONDS` is raised toward the route's 679s clamp. Pinned
    * so a future reorder cannot quietly put the network call back in front of
    * the durable record.
    */
@@ -1810,7 +1810,7 @@ describe("finishCall — the call card and the callback To do", () => {
   it("the reading is handed THIS call's transcript, and is never asked about a silent or spam call (mutation: drop the cardReadable gate → asked about a robocall, FAILS)", async () => {
     const s = messageState();
     await finishCall(s, ctx, meta);
-    expect(cardMocks.readCallForCard).toHaveBeenCalledWith(s.transcript, expect.objectContaining({ label: "finishCall call1" }));
+    expect(cardMocks.readCallForCard).toHaveBeenCalledWith(s.transcript, expect.objectContaining({ label: "finishCall call1", db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone }));
     cardMocks.readCallForCard.mockClear();
     await finishCall(withRecordedCaller(caller("Press one for your warranty")), ctx, meta);
     await finishCall(emptyCallState(), ctx, meta);

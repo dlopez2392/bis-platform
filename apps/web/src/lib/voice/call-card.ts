@@ -30,12 +30,14 @@
 // And not the summary step: that completion is the call's prose record, and
 // changing its format to carry a card would let a card fault reach the
 // summary.
-import type { CallCard, TranscriptEvent } from "@bis/db";
+import type { CallCard, SupabaseClient, TranscriptEvent } from "@bis/db";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasTransferred, callerSpoke } from "./call-state";
 import { spokenPhone } from "./phone-number";
 import { groundedEvidence } from "@/lib/proposals/grounding";
 import { m } from "@/lib/messages";
+import { aiComplete } from "@/lib/ai/gateway";
+import { aiSafeError } from "@/lib/ai/log";
 
 /** What the post-call reading found. Both null = nothing (no key, a failed
  *  request, or a call that never said why). */
@@ -153,6 +155,8 @@ const SYSTEM = [
 
 /**
  * The post-call reading: a one-line reason and the caller turn that says it.
+ * It goes through the one AI door (`lib/ai/gateway.ts`); every refusal is no
+ * reading.
  *
  * NEVER THROWS, and that is what `finishCall` relies on: a missing key, a
  * refused or hung request (10 s, the summary's bound), unparseable content
@@ -161,43 +165,31 @@ const SYSTEM = [
  */
 export async function readCallForCard(
   transcript: TranscriptEvent[],
-  opts: { fetchImpl?: typeof fetch; label?: string } = {},
+  opts: { db: SupabaseClient; accountId: string; timezone: string; fetchImpl?: typeof fetch; label?: string },
 ): Promise<CardReading> {
   const label = opts.label ?? "readCallForCard";
   try {
-    // Read inside the body, never at module scope (summary-service.ts's
-    // rule): a missing key at build time must not break the import.
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      console.error(`${label}: OPENAI_API_KEY not set, no reading for the call card`);
-      return NO_READING;
-    }
-    const fetchImpl = opts.fetchImpl ?? fetch;
-    const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        // JSON mode: generate.ts's reason — without it the model routinely
-        // wraps JSON in a code fence, and this parse has no fallback of its
-        // own beyond "nothing".
-        response_format: { type: "json_object" },
-        max_tokens: 300,
-        messages: [
-          { role: "system", content: SYSTEM },
-          { role: "user", content: transcript.map((e) => `${e.role}: ${e.text}`).join("\n") },
-        ],
-      }),
-      signal: AbortSignal.timeout(10_000),
+    const answer = await aiComplete(opts.db, {
+      accountId: opts.accountId,
+      feature: "call_card",
+      model: "gpt-4o-mini",
+      // JSON mode: generate.ts's reason — without it the model routinely
+      // wraps JSON in a code fence, and this parse has no fallback of its
+      // own beyond "nothing".
+      responseFormat: { type: "json_object" },
+      maxTokens: 300,
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: transcript.map((e) => `${e.role}: ${e.text}`).join("\n") },
+      ],
+      timeoutMs: 10_000,
+      timezone: opts.timezone,
+      ref: label,
+      fetchImpl: opts.fetchImpl,
     });
-    if (!r.ok) {
-      console.error(`${label}: model request failed: HTTP ${r.status}`);
-      return NO_READING;
-    }
-    const data = await r.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") return NO_READING;
-    const parsed = JSON.parse(content) as { reason?: unknown; quote?: unknown } | null;
+    // Every refusal and failure was logged by the gateway, ids only.
+    if (!answer.ok) return NO_READING;
+    const parsed = JSON.parse(answer.text) as { reason?: unknown; quote?: unknown } | null;
 
     let reason = trimmed(parsed?.reason);
     if (reason && PHONE_LIKE.test(reason)) reason = null;
@@ -209,7 +201,8 @@ export async function readCallForCard(
       callerWords: words ? clamp(words, MAX_WORDS_LEN) : null,
     };
   } catch (e) {
-    console.error(`${label}: reading failed: ${String(e)}`);
+    // aiSafeError, never String(e): JSON.parse's SyntaxError quotes the model's words (plan deviation 6).
+    console.error(`${label}: reading failed: ${aiSafeError(e)}`);
     return NO_READING;
   }
 }
