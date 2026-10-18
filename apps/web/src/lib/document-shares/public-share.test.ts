@@ -202,9 +202,13 @@ describe("shareDownload: one claim, one mint of the SHARED version, every refusa
     expect(dbm.signedDocumentReadUrl).not.toHaveBeenCalled();
   });
 
-  it.each(["pending", "removed", "not_ready", "not_found"] as const)("a mint answering %s is the same 410", async (status) => {
+  it.each(["pending", "removed", "not_ready", "not_found"] as const)("a mint answering %s after a won claim is the same 410, logged by ids only (deviation 5's residual)", async (status) => {
     dbm.signedDocumentReadUrl.mockResolvedValueOnce({ status });
     expect(await shareDownload(fakeDb, TOK, IP_HASH, NOW)).toEqual(UNAVAILABLE);
+    const lines = logged(errSpy);
+    expect(lines).toEqual([`document share ${SHARE_ID}: claimed but not minted (${status})`]);
+    expect(lines[0]).not.toContain(TOK);
+    expect(lines[0]).not.toContain("Seguro");
   });
 
   it("ONLY a rate_limited claim (the per-address window) answers 429, and nothing is minted (mutation: mint anyway -> FAILS)", async () => {
@@ -242,7 +246,10 @@ describe("shareDownload: one claim, one mint of the SHARED version, every refusa
   it("a lookup that throws answers 503 failed and never logs the token", async () => {
     dbm.findDocumentShareByTokenHash.mockRejectedValueOnce(new Error("db down"));
     expect(await shareDownload(fakeDb, TOK, IP_HASH, NOW)).toEqual({ status: 503, body: { error: "failed" } });
-    for (const line of logged(errSpy)) expect(line).not.toContain(TOK);
+    const lines = logged(errSpy);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("document share unknown: download failed");
+    expect(lines[0]).not.toContain(TOK);
   });
 });
 

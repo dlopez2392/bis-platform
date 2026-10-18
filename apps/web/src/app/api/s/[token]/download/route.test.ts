@@ -69,4 +69,18 @@ describe("POST /api/s/[token]/download (spec 4.2): no sign-in, the token is the 
   it("is dynamic on the Node runtime", () => {
     expect([route.runtime, route.dynamic]).toEqual(["nodejs", "force-dynamic"]);
   });
+
+  it("exports ONLY POST, runtime and dynamic: a GET would let a link previewer claim a download (mutation: export GET -> FAILS)", () => {
+    expect(Object.keys(route).sort()).toEqual(["POST", "dynamic", "runtime"]);
+  });
+
+  it.each([
+    [200, { url: "https://signed.example/x" }],
+    [410, { error: "unavailable" }],
+  ])("a %i carries no access-control-allow-origin: no other site may read the answer (mutation: add the CORS header -> FAILS)", async (status, body) => {
+    shareDownload.mockResolvedValueOnce({ status, body });
+    const res = await post({ origin: "https://elsewhere.example" });
+    expect(res.status).toBe(status);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+  });
 });

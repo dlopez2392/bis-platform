@@ -127,7 +127,11 @@ export async function shareDownload(db: SupabaseClient, token: string, ipHash: s
     const signed = await signedDocumentReadUrl(db, r.share.account_id, r.share.version_id, {
       seconds: SHARE_URL_SECONDS, download: shareFileName(r.target.document.title, r.target.version.content_type),
     });
-    if (signed.status !== "ok") return unavailable();
+    if (signed.status !== "ok") {
+      // Deviation 5's residual: the claim already counted this download (and maybe the first open). Ids only.
+      console.error(`document share ${r.share.id}: claimed but not minted (${signed.status})`);
+      return unavailable();
+    }
     return { status: 200, body: { url: signed.url } };
   } catch (e) {
     console.error(`document share ${shareId}: download failed: ${loggableError(e)}`);
