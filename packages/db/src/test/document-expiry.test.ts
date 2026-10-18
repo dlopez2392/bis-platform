@@ -4,7 +4,7 @@ import { withTestAccount } from "./fixtures";
 import { createContact } from "../contacts";
 import { createGroupWithMember } from "../client-groups";
 import { createDocument, reserveDocumentVersion, markDocumentVersionReady, recordDocumentScan } from "../documents";
-import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks } from "../document-expiry";
+import { listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, deleteExpiryTasksOfHiddenDocuments } from "../document-expiry";
 import { shiftDay, DOCUMENT_EXPIRY_WINDOW_DAYS } from "../document-rules";
 
 /** The pass's reads and its one write (spec 3.2), on the service client, behind PostgREST on the replica. */
@@ -152,6 +152,45 @@ describe("deleteOpenExpiryTasks (owner ruling R1: a file made Owners only takes 
         expect(await deleteOpenExpiryTasks(db, accountId, doc)).toBe(1);
         const { data } = await db.from("tasks").select("id").in("id", [open.id, done.id, otherOpen.id, theirOpen.id]);
         expect((data ?? []).map((r: { id: string }) => r.id).sort()).toEqual([done.id, otherOpen.id, theirOpen.id].sort());
+      });
+    }));
+});
+
+describe("deleteExpiryTasksOfHiddenDocuments (the pass's self-heal: owner rulings R1 and R4, end to end)", () => {
+  it("deletes the OPEN To-dos of Owners-only and trashed files; a done one, a normal file's and (scoped) another account's stay; unscoped, it reaches every account; the limit caps it (mutations: drop the owners_only branch, the deleted_at branch, the read's completed_at filter, the read's account scope or the limit -> FAILS; the delete's own completed_at re-check guards a To-do ticked done between the read and the delete, a race no sequential test reaches)", () =>
+    withTestAccount(async (db, accountId) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const ana = (await createContact(db, accountId, { firstName: "Ana" }, ACTOR)).id;
+        const hidden = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 10), ownersOnly: true });
+        const trashed = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 11), trashed: true });
+        const normal = await file(db, accountId, ana, { expiresOn: shiftDay(FROM, 12) });
+        const bea = (await createContact(dbB, accountB, { firstName: "Bea" }, ACTOR)).id;
+        const theirsHidden = await file(dbB, accountB, bea, { expiresOn: shiftDay(FROM, 10), ownersOnly: true });
+        const t = (documentId: string, acct: string, on: string, contactId: string) =>
+          ensureDocumentExpiryTask(db, acct, { documentId, expiresOn: on, contactId, title: "T", dueAt: "2030-03-01T15:00:00Z" }, "documents-expiry");
+        const hiddenOpen = await t(hidden, accountId, shiftDay(FROM, 10), ana);
+        const hiddenDone = await t(hidden, accountId, shiftDay(FROM, 9), ana);
+        const trashedOpen = await t(trashed, accountId, shiftDay(FROM, 11), ana);
+        const trashedDone = await t(trashed, accountId, shiftDay(FROM, 8), ana);
+        const normalOpen = await t(normal, accountId, shiftDay(FROM, 12), ana);
+        const theirOpen = await t(theirsHidden, accountB, shiftDay(FROM, 10), bea);
+        const { error: doneErr } = await db.from("tasks").update({ completed_at: new Date().toISOString() }).in("id", [hiddenDone.id, trashedDone.id]);
+        if (doneErr) throw new Error(doneErr.message);
+        const left = async () => {
+          const { data, error } = await db.from("tasks").select("id")
+            .in("id", [hiddenOpen.id, hiddenDone.id, trashedOpen.id, trashedDone.id, normalOpen.id, theirOpen.id]);
+          if (error) throw new Error(error.message);
+          return (data ?? []).map((r: { id: string }) => r.id).sort();
+        };
+
+        // The limit caps one run: one of the two goes, the other waits for the next tick.
+        expect(await deleteExpiryTasksOfHiddenDocuments(db, { accountId, limit: 1 })).toBe(1);
+        expect(await deleteExpiryTasksOfHiddenDocuments(db, { accountId, limit: 200 })).toBe(1);
+        expect(await left()).toEqual([hiddenDone.id, trashedDone.id, normalOpen.id, theirOpen.id].sort());
+        expect(await deleteExpiryTasksOfHiddenDocuments(db, { accountId, limit: 200 })).toBe(0);
+        // Unscoped (the cron's call), it reaches the other account's.
+        expect(await deleteExpiryTasksOfHiddenDocuments(db, { limit: 200 })).toBeGreaterThanOrEqual(1);
+        expect(await left()).toEqual([hiddenDone.id, trashedDone.id, normalOpen.id].sort());
       });
     }));
 });

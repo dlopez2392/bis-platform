@@ -3,15 +3,16 @@ import type { ExpiringDocument } from "@bis/db";
 
 const db = vi.hoisted(() => ({
   listExpiringDocuments: vi.fn(), listDocumentExpiryTaskKeys: vi.fn(), documentRequestTarget: vi.fn(), ensureDocumentExpiryTask: vi.fn(),
+  deleteExpiryTasksOfHiddenDocuments: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 import { expiryTaskKey } from "@bis/db";
-import { openExpiryTasks, documentsExpiryPass, EXPIRY_TASKS_PER_RUN, EXPIRY_CANDIDATES_PER_RUN, EXPIRY_BUDGET_MS } from "./documents-expiry";
+import { openExpiryTasks, documentsExpiryPass, EXPIRY_TASKS_PER_RUN, EXPIRY_CANDIDATES_PER_RUN, EXPIRY_BUDGET_MS, EXPIRY_HEAL_PER_RUN } from "./documents-expiry";
 
 /** S-07 3a (spec 3.2, 6): who opens a To-do, once, where, titled and due how, and what a bad document or a slow run does. */
 const NOW = new Date("2026-11-01T03:00:00Z");   // Chicago's day is Oct 31, Berlin's Nov 1
 const FAKE_DB = { tag: "service" } as never;
-const ZERO = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };
+const ZERO = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0, healed: 0 };
 let n = 0;
 const row = (o: Partial<ExpiringDocument> = {}): ExpiringDocument => ({
   id: `00000000-0000-4000-8000-${String(++n).padStart(12, "0")}`, account_id: "acct-chi", contact_id: "c-ana", client_group_id: null,
@@ -28,6 +29,7 @@ beforeEach(() => {
   db.documentRequestTarget.mockImplementation(async (_db: unknown, _a: string, ref: { contact_id: string | null }) =>
     ({ name: "Ana García", contactId: ref.contact_id, language: null, phone: null, email: null, phoneCountryUnconfirmed: null }));
   db.ensureDocumentExpiryTask.mockResolvedValue({ id: "t1", created: true });
+  db.deleteExpiryTasksOfHiddenDocuments.mockResolvedValue(0);
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(() => errors.mockRestore());
@@ -152,7 +154,7 @@ describe("the run's limits and failures (spec 3.2; review M4)", () => {
 });
 
 describe("the registered pass", () => {
-  it("is documentsExpiry, runs on the tick's client and instant; nothing due is one read and zero counters (mutations: read the keys with no candidates, or run on a client or instant other than the tick's -> FAILS)", async () => {
+  it("is documentsExpiry, runs on the tick's client and instant; nothing due is one read, the heal, and zero counters (mutations: read the keys with no candidates, or run on a client or instant other than the tick's -> FAILS)", async () => {
     db.listExpiringDocuments.mockResolvedValue([]);
     expect(documentsExpiryPass.key).toBe("documentsExpiry");
     const c = await documentsExpiryPass.run({ db: FAKE_DB, now: NOW, origin: "https://x", email: {} as never, sms: {} as never });
@@ -161,5 +163,75 @@ describe("the registered pass", () => {
     expect(db.listExpiringDocuments).toHaveBeenCalledTimes(1);
     expect(db.listExpiringDocuments).toHaveBeenCalledWith(FAKE_DB, expect.objectContaining({ fromDay: "2026-10-31", toDay: "2026-12-02" }));
     expect(db.listDocumentExpiryTaskKeys).not.toHaveBeenCalled();
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledWith(FAKE_DB, { accountId: undefined, limit: EXPIRY_HEAL_PER_RUN });
+  });
+});
+
+describe("the self-heal (owner rulings R1 and R4, end to end: an Owners-only or trashed file keeps no open To-do)", () => {
+  it("runs AFTER the inserts, so a To-do opened this run for a file switched meanwhile is caught (mutation: heal before the insert loop -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([row(), row()]);
+    await openExpiryTasks(FAKE_DB, NOW);
+    const lastInsert = Math.max(...db.ensureDocumentExpiryTask.mock.invocationCallOrder);
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledTimes(1);
+    expect(db.deleteExpiryTasksOfHiddenDocuments.mock.invocationCallOrder[0]).toBeGreaterThan(lastInsert);
+  });
+
+  it("runs when nothing is a candidate and when nothing is due (mutation: keep the early returns before the heal -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([]);
+    await openExpiryTasks(FAKE_DB, NOW);
+    db.listExpiringDocuments.mockResolvedValue([row({ expires_on: "2026-12-25" })]);   // a candidate outside every zone's window
+    await openExpiryTasks(FAKE_DB, NOW);
+    expect(db.ensureDocumentExpiryTask).not.toHaveBeenCalled();
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledTimes(2);
+  });
+
+  it("is scoped like the read and capped (mutations: drop scope.accountId from the heal, or drop the limit -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([]);
+    await openExpiryTasks(FAKE_DB, NOW, { accountId: "acct-chi" });
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledWith(FAKE_DB, { accountId: "acct-chi", limit: EXPIRY_HEAL_PER_RUN });
+    expect(EXPIRY_HEAL_PER_RUN).toBe(200);
+  });
+
+  it("counts what it removed as healed, logging a number, never a title (mutation: drop the counter -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([row()]);
+    db.deleteExpiryTasksOfHiddenDocuments.mockResolvedValue(3);
+    const c = await openExpiryTasks(FAKE_DB, NOW);
+    expect(c).toEqual({ ...ZERO, opened: 1, healed: 3 });
+    const logged = errors.mock.calls.flat().join(" ");
+    expect(logged).toContain("removed 3 open expiry To-dos");
+    expect(logged).not.toContain("Póliza");
+  });
+
+  it("still runs once the budget has gone: two bounded round trips, and the leak it closes is likeliest on the busiest run (mutation: skip the heal past the cutoff -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([row(), row()]);
+    const times = [0];
+    const c = await openExpiryTasks(FAKE_DB, NOW, { clock: () => times.shift() ?? EXPIRY_BUDGET_MS + 1 });   // the start, then past the cutoff
+    expect(c.deferred).toBe(2);
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed heal is isolated: the inserts stand, it is counted as failed and logged with ids only, and the run throws at the end (mutations: let it throw at once, or swallow it -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([row()]);
+    db.deleteExpiryTasksOfHiddenDocuments.mockRejectedValue(new Error("delete failed"));
+    await expect(openExpiryTasks(FAKE_DB, NOW, { accountId: "acct-chi" })).rejects.toThrow(/"failed":1.*"healed":0/);
+    expect(db.ensureDocumentExpiryTask).toHaveBeenCalledTimes(1);
+    const logged = errors.mock.calls.flat().join(" ");
+    expect(logged).toContain("self-heal failed (account acct-chi)");
+    expect(logged).not.toContain("Póliza");
+  });
+
+  it("a failed candidate read does not skip the heal; the run then throws the read's own error (mutation: let the read's throw skip the heal -> FAILS)", async () => {
+    db.listExpiringDocuments.mockRejectedValue(new Error("listExpiringDocuments failed: boom"));
+    db.deleteExpiryTasksOfHiddenDocuments.mockResolvedValue(2);
+    await expect(openExpiryTasks(FAKE_DB, NOW)).rejects.toThrow("listExpiringDocuments failed: boom");
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed insert does not skip the heal; the run still throws after it (mutation: throw on a failed insert before the heal -> FAILS)", async () => {
+    db.listExpiringDocuments.mockResolvedValue([row()]);
+    db.ensureDocumentExpiryTask.mockRejectedValue(new Error("insert failed"));
+    db.deleteExpiryTasksOfHiddenDocuments.mockResolvedValue(1);
+    await expect(openExpiryTasks(FAKE_DB, NOW)).rejects.toThrow(/"failed":1.*"healed":1/);
+    expect(db.deleteExpiryTasksOfHiddenDocuments).toHaveBeenCalledTimes(1);
   });
 });

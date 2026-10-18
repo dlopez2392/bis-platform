@@ -1,6 +1,6 @@
 import {
   listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, documentRequestTarget, expiryTaskKey,
-  type ExpiringDocument, type SupabaseClient,
+  deleteExpiryTasksOfHiddenDocuments, type ExpiringDocument, type SupabaseClient,
 } from "@bis/db";
 // The subpath, not the barrel (review I1): these two run before the candidate read, and the cron route
 // test's bare @bis/db factory throws on any export it does not list.
@@ -26,13 +26,23 @@ import { loggableError } from "@/lib/loggable-error";
  * gone (documents-scan.ts' cutoff shape); the rest count as `deferred` and open on a later tick. EXPIRY_BUDGET_MS is the fifth term
  * in cron-coupling.test.ts' sum. Every @bis/db BARREL export is dereferenced inside the function, never at
  * module scope or before the first read (the cron route test's bare mock throws on a dereference).
+ * SELF-HEAL (owner rulings R1 and R4, end to end; final review): after the insert loop, one bounded read and
+ * one delete remove every OPEN expiry To-do whose file is now Owners only or in the trash
+ * (deleteExpiryTasksOfHiddenDocuments, at most EXPIRY_HEAL_PER_RUN, scoped like the read). AFTER, not before:
+ * a file switched before the heal's read is seen by it; one switched after it already had its To-do, which the
+ * action's own delete removes. It also clears, within a tick, an action whose delete failed or was only
+ * logged. It runs on every path, including nothing due, and EVEN PAST EXPIRY_BUDGET_MS: it is two round
+ * trips over at most 200 rows, and the leak it closes is likeliest on the busiest run, the one that hit the
+ * cutoff, and after a failed candidate read (that error is thrown after the heal). Counted as `healed`; its failure is logged with ids only, counted in `failed` and thrown at the
+ * end like a failed document, after the To-dos already opened.
  */
 export const EXPIRY_TASKS_PER_RUN = 200;
 export const EXPIRY_CANDIDATES_PER_RUN = 1000;
 export const EXPIRY_BUDGET_MS = 15_000;
+export const EXPIRY_HEAL_PER_RUN = 200;
 const ACTOR = "documents-expiry";
 
-export type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number; deferred: number };
+export type ExpiryCounters = { opened: number; alreadyOpen: number; failed: number; unresolvableTimezone: number; capped: number; deferred: number; healed: number };
 
 const qualifies = (r: ExpiringDocument) =>
   !r.owners_only && r.deleted_at === null && r.version_scan === "clean" && (r.contact_id !== null || r.client_group_id !== null);
@@ -42,13 +52,32 @@ export async function openExpiryTasks(
 ): Promise<ExpiryCounters> {
   const clock = scope.clock ?? Date.now;
   const startedAt = clock();
-  const c: ExpiryCounters = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };
+  const c: ExpiryCounters = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0, healed: 0 };
+  // A failed candidate or key read must not skip the heal: held, then thrown after it (the harness records errored).
+  let readError: unknown = null;
+  try { await openDue(db, now, scope.accountId, clock, startedAt, c); } catch (e) { readError = e; }
+  try {
+    c.healed = await deleteExpiryTasksOfHiddenDocuments(db, { accountId: scope.accountId, limit: EXPIRY_HEAL_PER_RUN });
+    if (c.healed > 0) console.error(`documents expiry: removed ${c.healed} open expiry To-dos of files now Owners only or in the trash`);
+  } catch (e) {
+    c.failed++;
+    console.error(`documents expiry: the self-heal failed${scope.accountId ? ` (account ${scope.accountId})` : ""}: ${loggableError(e)}`);
+  }
+  if (readError !== null) throw readError;
+  if (c.failed > 0) throw new Error(`documents expiry: ${JSON.stringify(c)}`);
+  return c;
+}
+
+/** The insert half: candidates, each account's window, the keys already there, one insert per missing key. Fills `c`; returns early when nothing is due. */
+async function openDue(
+  db: SupabaseClient, now: Date, accountId: string | undefined, clock: () => number, startedAt: number, c: ExpiryCounters,
+): Promise<void> {
   const utcToday = now.toISOString().slice(0, 10);
   const rows = await listExpiringDocuments(db, {
     fromDay: shiftDay(utcToday, -1), toDay: shiftDay(utcToday, DOCUMENT_EXPIRY_WINDOW_DAYS + 1),
-    limit: EXPIRY_CANDIDATES_PER_RUN, accountId: scope.accountId,
+    limit: EXPIRY_CANDIDATES_PER_RUN, accountId,
   });
-  if (rows.length === 0) return c;
+  if (rows.length === 0) return;
   if (rows.length >= EXPIRY_CANDIDATES_PER_RUN) {
     c.capped = 1;
     console.error(`documents expiry: capped: the candidate read came back full (${EXPIRY_CANDIDATES_PER_RUN}); while 1000 or more files sit in the window, some files may not get a To-do until fewer than 1000 are in it`);
@@ -68,7 +97,7 @@ export async function openExpiryTasks(
     }
     if (inExpiryWindow(r.expires_on, dayKeyInZone(now, zone))) due.push({ r, zone });
   }
-  if (due.length === 0) return c;
+  if (due.length === 0) return;
   const have = await listDocumentExpiryTaskKeys(db, due.map((d) => d.r.id));
   const todo = due.filter(({ r }) => {
     if (!have.has(expiryTaskKey(r.id, r.expires_on))) return true;
@@ -97,8 +126,6 @@ export async function openExpiryTasks(
       console.error(`documents expiry: document ${r.id} (account ${r.account_id}): the To-do was not opened: ${loggableError(e)}`);
     }
   }
-  if (c.failed > 0) throw new Error(`documents expiry: ${JSON.stringify(c)}`);
-  return c;
 }
 
 export const documentsExpiryPass: Pass = {

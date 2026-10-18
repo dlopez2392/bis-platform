@@ -38,6 +38,8 @@ vi.mock("@bis/db", async () => {
   // The expiry To-dos (S-07 3a), every tick: no candidate here. shiftDay and the window constant come from the
   // UNMOCKED subpath @bis/db/document-rules, so this one read is all the pass needs from this factory.
   listExpiringDocuments: async () => [],
+  // ...and its self-heal (owner rulings R1 and R4), every tick after the inserts: nothing to remove here.
+  deleteExpiryTasksOfHiddenDocuments: async () => 0,
   DOCUMENT_TRASH_DAYS: 30,
   DOCUMENT_BUCKET: "documents",
   // The two weekly-report passes read accounts and the agency row. Nothing is
@@ -325,7 +327,7 @@ const EMPTY_WEEKLY_AGENCY = { sent: 0, failed: 0, skippedNoRecipient: 1, skipped
 const EMPTY_SITE_TRAFFIC = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
 const EMPTY_DOCUMENTS_SWEEP = { abandoned: 0, purged: 0, objectDeleteFailed: 0, rowDeleteFailed: 0 };
 const EMPTY_DOCUMENTS_SCAN = { scanned: 0, clean: 0, infected: 0, unscannable: 0, stillPending: 0, unreached: 0, failed: 0, deferred: 0, breaker: 0, notConfigured: 1, requestTasks: 0 };
-const EMPTY_DOCUMENTS_EXPIRY = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0 };
+const EMPTY_DOCUMENTS_EXPIRY = { opened: 0, alreadyOpen: 0, failed: 0, unresolvableTimezone: 0, capped: 0, deferred: 0, healed: 0 };
 const EMPTY_SMS_REMINDERS = {
   sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0,
 };

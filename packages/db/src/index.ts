@@ -332,7 +332,7 @@ export {
 } from "./document-requirements";
 // S-07 3a: the expiry To-dos. See ./document-expiry.ts.
 export {
-  listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, type ExpiringDocument,
+  listExpiringDocuments, listDocumentExpiryTaskKeys, ensureDocumentExpiryTask, expiryTaskKey, deleteOpenExpiryTasks, deleteExpiryTasksOfHiddenDocuments, type ExpiringDocument,
 } from "./document-expiry";
 // S-07 3a: the account-wide Documents page. See ./account-documents.ts.
 export {

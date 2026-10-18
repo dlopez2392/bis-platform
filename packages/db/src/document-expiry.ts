@@ -94,3 +94,28 @@ export async function deleteOpenExpiryTasks(db: SupabaseClient, accountId: strin
   if (error) throw new Error(`deleteOpenExpiryTasks failed: ${error.message}`);
   return (data ?? []).length;
 }
+
+/**
+ * Service client. The documentsExpiry pass's SELF-HEAL (owner rulings R1 and R4, end to end): every OPEN
+ * expiry To-do whose file is now Owners only or in the trash goes. deleteOpenExpiryTasks is the action's
+ * at-once path; this is the net under it, closing (a) the race in which the pass read a candidate, the
+ * file was switched or trashed and its To-dos deleted, and the pass then inserted, and (b) an action whose
+ * own delete failed or was only logged. A done To-do stays (history). One read, capped at `limit`, then
+ * one delete of those ids that re-checks `completed_at is null` (a To-do ticked done between the two
+ * stays) and the account when scoped. Answers how many went. THROWS on a read or delete error.
+ */
+export async function deleteExpiryTasksOfHiddenDocuments(db: SupabaseClient, opts: { accountId?: string; limit: number }): Promise<number> {
+  const { data, error } = await db.from("tasks")
+    .select("id, document:documents!tasks_document_expiry_fkey!inner(owners_only, deleted_at)")
+    .match(opts.accountId ? { account_id: opts.accountId } : {})
+    .is("completed_at", null).not("document_expiry_id", "is", null)
+    .or("owners_only.eq.true,deleted_at.not.is.null", { referencedTable: "document" })
+    .order("id").limit(opts.limit);
+  if (error) throw new Error(`deleteExpiryTasksOfHiddenDocuments read failed: ${error.message}`);
+  const ids = ((data ?? []) as unknown as { id: string }[]).map((t) => t.id);
+  if (ids.length === 0) return 0;
+  const { data: gone, error: delErr } = await db.from("tasks").delete()
+    .in("id", ids).match(opts.accountId ? { account_id: opts.accountId } : {}).is("completed_at", null).select("id");
+  if (delErr) throw new Error(`deleteExpiryTasksOfHiddenDocuments delete failed: ${delErr.message}`);
+  return (gone ?? []).length;
+}
