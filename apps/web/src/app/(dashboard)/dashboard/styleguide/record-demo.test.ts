@@ -64,4 +64,12 @@ describe("styleguide: the record kit (DoD: /styleguide gains the new components;
     expect([...section.matchAll(/data-record-section="[^"]+" data-state="(\w+)"/g)].map((x) => x[1]))
       .toEqual(["ready", "loading", "empty", "error"]);
   });
+
+  it("the AI part's five states (DoD: /styleguide; spec 4.8; mutation: drop one state -> FAILS)", () => {
+    const start = html.indexOf("data-sg-ai-summary");
+    expect(start).toBeGreaterThan(-1);
+    const section = html.slice(start, html.indexOf("data-sg-ai-summary-end"));
+    for (const s of ["loading", "ready", "capped", "failed"]) expect(section).toContain(`data-state="${s}"`);
+    expect(section).toContain("data-sg-ai-none");
+  });
 });

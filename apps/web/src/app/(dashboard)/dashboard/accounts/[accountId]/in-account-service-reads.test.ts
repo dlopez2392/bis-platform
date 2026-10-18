@@ -153,6 +153,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/api/accounts/[accountId]/contacts/[contactId]/texts/route.ts": "proven-target",
   // The list drawer's summary (S-03 part 3): ledgerDb for the Text gate, only after getContact on the request client.
   "app/api/accounts/[accountId]/contacts/[contactId]/summary/route.ts": "proven-target",
+  // The record's AI summary (item 8a-2): serviceDb for the gate, the claim, the completion and the save, only after getContact on the request client.
+  "app/api/accounts/[accountId]/contacts/[contactId]/ai-summary/route.ts": "proven-target",
   // The Documents card's requests (S-07 2b): getContact / readGroup on the request client first; ledgerDb for
   // the consent state after that proof.
   "app/api/accounts/[accountId]/contacts/[contactId]/document-requests/route.ts": "proven-target",

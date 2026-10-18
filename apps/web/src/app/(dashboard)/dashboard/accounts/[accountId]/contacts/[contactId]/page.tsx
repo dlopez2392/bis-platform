@@ -33,6 +33,7 @@ import { PlacesCard } from "../places-card";
 import { DocumentsCard } from "../documents-card";
 import { cardFocusFrom } from "@/lib/documents/card-focus";
 import { SummaryBody } from "./summary-card";
+import { AiSummary } from "./ai-summary";
 import { NextUpBody } from "./next-up-card";
 import { DealsBody } from "./deals-card";
 import { sendEmailAction, sendSmsAction } from "../../conversations/actions";
@@ -204,12 +205,25 @@ export default async function ContactDetailPage({
   const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, {
     zone: zone.zone, tr, accountLanguage: accountRow ? (accountRow.language ?? null) : undefined,
   })) ?? undefined;
+  // Item 8a-2 (spec 4.1): the AI part's own route; the QA locale override travels with it (as the drawer's does).
+  const aiSummaryUrl = `/api/accounts/${accountId}/contacts/${contactId}/ai-summary${localeParam ? `?locale=${encodeURIComponent(localeParam)}` : ""}`;
 
   const failed = (errorText: string): Slot => ({ node: null, state: "error", errorText });
   const cardFailed = (titleKey: MessageKey) => failed(tr.text("record.card.failed", { title: tr.text(titleKey) }));
   const slots = {
     summary: facts
-      ? { node: <SummaryBody view={facts} retryLabel={tr.text("record.card.retry")} /> }
+      ? {
+        node: (
+          <div className="space-y-3">
+            <SummaryBody view={facts} retryLabel={tr.text("record.card.retry")} />
+            {/* Item 8a-2: under the facts line, never above it (G11); absent when the facts failed (plan deviation 15). */}
+            <AiSummary url={aiSummaryUrl} labels={{
+              regenerate: tr.text("record.ai.regenerate"), retry: tr.text("record.card.retry"), failed: tr.text("record.ai.failed"),
+              capped: tr.text("record.ai.capped"), writing: tr.text("record.ai.writing"),
+            }} />
+          </div>
+        ),
+      }
       : failed(tr.text("record.summary.failed")),
     "next-up": upNext
       // Add a To-do focuses the timeline's To-do field: with no timeline there is nothing behind it (D3).

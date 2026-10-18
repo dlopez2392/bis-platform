@@ -27,6 +27,10 @@ function escapeRegExp(s: string): string {
 // "Open full page" link. This test's navigation preamble was updated to
 // match; every assertion below it is unchanged.
 test("opening a contact from the table renders the detail screen", async ({ page }) => {
+  // Item 8a-2: this test opens Test Client One's first contact (Maria Garcia, who has an open deal in the seed),
+  // so the record's AI part would write a summary on that live account. It is about navigation; abort the AI route
+  // (plan deviation 23).
+  await page.route(/\/ai-summary(\?|$)/, (route) => route.abort());
   await page.goto("/dashboard/accounts");
   await page.getByRole("link", { name: new RegExp(ACCOUNT_NAME, "i") }).first().click();
   await expect(page).toHaveURL(/\/contacts$/);

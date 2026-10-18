@@ -2,6 +2,7 @@ import { MAX_MONTHLY_BUDGET_CENTS, type AiSettingsRead } from "@bis/db";
 import type { Locale } from "@/lib/i18n/locale";
 import { plural, t } from "@/lib/i18n/t";
 import { m } from "@/lib/messages";
+import { RECORD_SUMMARY_DAILY_CAP } from "@/lib/record/ai-summary-view";
 import { periodKeys } from "./period";
 
 /** Whole dollars, 0-1000, an optional leading "$" (plan deviation 17). Cents, or null. */
@@ -22,7 +23,7 @@ export function isConfirmWord(raw: unknown): boolean {
 
 export type AiCardView = {
   accountEnabled: boolean; budgetDollars: string; globalEnabled: boolean;
-  spendLine: string | null; reachedLine: string | null; skippedLine: string | null;
+  spendLine: string | null; reachedLine: string | null; skippedLine: string | null; summariesLine: string | null;
 };
 
 /** Intl's no-break and narrow no-break spaces as plain spaces, so a line reads (and compares) as typed. */
@@ -41,8 +42,9 @@ export function aiCardView(i: {
   const money = (cents: number) => plain(new Intl.NumberFormat(tag, { style: "currency", currency: "USD" }).format(cents / 100));
   const day = (d: Date) => plain(new Intl.DateTimeFormat(tag, { timeZone: i.zone, month: "short", day: "numeric" }).format(d));
   const s = i.settings;
-  const { monthKey } = periodKeys(i.now, i.zone);
+  const { monthKey, dayKey } = periodKeys(i.now, i.zone);
   const spent = s.monthKey === monthKey ? s.monthSpendMicroUsd : 0;
+  const todayCount = s.dayKey === dayKey ? s.recordSummariesToday : 0;
   // The 1st of next month, built from the account's own month key at NOON UTC and printed in UTC (review M4): a
   // calendar date, so no zone's midnight (a DST change AT midnight on the 1st, as Asuncion's 2023-10-01) can move it.
   const [y, mo] = monthKey.split("-").map(Number) as [number, number];
@@ -63,5 +65,6 @@ export function aiCardView(i: {
       : i.overBudgetAt ? t(m, "aiSettings.reached", i.locale, { date: day(new Date(i.overBudgetAt)), resume })
       : t(m, "aiSettings.reachedNoDate", i.locale, { resume }),
     skippedLine: i.refusals > 0 ? plural(m, "aiSettings.skipped", i.refusals, i.locale, { count: i.refusals }) : null,
+    summariesLine: todayCount > 0 ? t(m, "aiSettings.summariesToday", i.locale, { count: todayCount, cap: RECORD_SUMMARY_DAILY_CAP }) : null,
   };
 }

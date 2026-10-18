@@ -59,6 +59,7 @@ export function AiCard({ view, locale, save, undo, setGlobal }: {
           : <p data-ai-empty className="text-sm text-muted-foreground">{tt("aiSettings.empty")}</p>}
         {view.reachedLine ? <Notice tone="warn" data-ai-reached className="text-foreground">{view.reachedLine}</Notice> : null}
         {view.skippedLine ? <p data-ai-skipped className="text-xs text-muted-foreground tabular-nums">{view.skippedLine}</p> : null}
+        {view.summariesLine ? <p data-ai-summaries className="text-xs text-muted-foreground tabular-nums">{view.summariesLine}</p> : null}
         <form
           className="flex flex-col gap-3"
           onSubmit={(e) => { e.preventDefault(); setBusy(true); void h.save({ enabled, budget }).finally(() => setBusy(false)); }}

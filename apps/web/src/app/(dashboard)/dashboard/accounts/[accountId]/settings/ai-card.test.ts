@@ -8,8 +8,8 @@ vi.mock("./ai-actions", () => ({}));
 
 const { AiCard, AiCardSkeleton, AiCardError, AiGlobalConfirmForm, confirmMatches } = await import("./ai-card");
 
-const VIEW: { accountEnabled: boolean; budgetDollars: string; globalEnabled: boolean; spendLine: string | null; reachedLine: string | null; skippedLine: string | null } =
-  { accountEnabled: true, budgetDollars: "10", globalEnabled: true, spendLine: null, reachedLine: null, skippedLine: null };
+const VIEW: { accountEnabled: boolean; budgetDollars: string; globalEnabled: boolean; spendLine: string | null; reachedLine: string | null; skippedLine: string | null; summariesLine: string | null } =
+  { accountEnabled: true, budgetDollars: "10", globalEnabled: true, spendLine: null, reachedLine: null, skippedLine: null, summariesLine: null };
 const noop = async () => ({ ok: false as const, error: "aiSettings.error.failed" as const });
 const card = (view: Partial<typeof VIEW>, locale: "en" | "es" = "en") =>
   renderToStaticMarkup(createElement(AiCard, { view: { ...VIEW, ...view }, locale, save: noop, undo: noop, setGlobal: noop }));
@@ -30,6 +30,13 @@ describe("the AI card (spec 3.6; DESIGN.md rules 1, 5, 6, 7, 8)", () => {
     const html = card({ spendLine: "$1.84 of $10.00 this month, estimated", reachedLine: "Budget reached. AI is paused for this account until Nov 1.", skippedLine: "AI was skipped once this month because it was off or over budget." });
     expect([count(html, "data-ai-spend"), count(html, "data-ai-reached"), count(html, "data-ai-skipped"), count(html, "data-ai-empty")]).toEqual([1, 1, 1, 0]);
     expect(renderedText(html)).toContain("$1.84 of $10.00 this month, estimated");
+  });
+
+  it("the day's summaries line renders under the spend line when present, never when null (mutation: drop the line -> FAILS; render it always -> the null case FAILS)", () => {
+    const withLine = card({ spendLine: "$0.01 of $10.00 this month, estimated", summariesLine: "3 of 200 customer summaries written today" });
+    expect(withLine).toMatch(/data-ai-summaries[^>]*>3 of 200 customer summaries written today</);
+    expect(withLine.indexOf("data-ai-summaries")).toBeGreaterThan(withLine.indexOf("data-ai-spend"));
+    expect(card({ spendLine: "$0.01 of $10.00 this month, estimated" })).not.toContain("data-ai-summaries");
   });
 
   it("exactly one primary button, Save; the global switch is outline (rule 8; mutation: global button variant default -> FAILS)", () => {
