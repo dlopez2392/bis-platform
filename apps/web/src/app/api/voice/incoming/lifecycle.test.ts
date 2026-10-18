@@ -624,7 +624,7 @@ describe("runCallLifecycle — Important #5: connect timeout", () => {
 });
 
 describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
-  it("PHONE_MAX_CALL_SECONDS above 697 is clamped to 697, not the route's 800s maxDuration", async () => {
+  it("PHONE_MAX_CALL_SECONDS above 679 is clamped to 679, not the route's 800s maxDuration", async () => {
     vi.useFakeTimers();
     // Above BOTH the clamp and the route's `maxDuration = 800`, so a missing
     // clamp cannot accidentally still land inside the invocation budget.
@@ -641,28 +641,29 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
     await flushMicrotasks();
 
     // Just under the clamp: no goodbye yet.
-    await vi.advanceTimersByTimeAsync(696_000);
+    await vi.advanceTimersByTimeAsync(678_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
 
-    // Crossing 697s (not the configured 900s) fires the goodbye. 697 is
-    // 800 - 73 - 20 - 10, derived in route.ts: a 73s timed post-cap tail
+    // Crossing 679s (not the configured 900s) fires the goodbye. 679 is
+    // 800 - 91 - 20 - 10, derived in route.ts: a 91s timed post-cap tail
     // (goodbye playout, the SIP hangup, the socket's close handshake, the
-    // bounded drain, the summary reading, the durable rows and staff email,
-    // one carrier send, the usage write, the call card's and the proposals'
-    // readings), a ~20s connect leg before the cap timer is armed at all
+    // bounded drain, the summary reading with its gate and ledger, the
+    // durable rows and staff email, one carrier send, the usage write, the
+    // call card's and the proposals' readings with theirs), a ~20s connect leg before the cap timer is armed at all
     // (the cap's clock starts on `open`, not when the webhook arrived), and
     // 10s of margin for the legs nothing times. (770 counted only part of
     // the tail; 750 counted it as 30s; 715 missed the hangup and the close
-    // handshake, which defaulted to ws's 30s.)
+    // handshake, which defaulted to ws's 30s; 697 predates the AI gateway's
+    // two bounded database calls per completion.)
     await vi.advanceTimersByTimeAsync(1_000);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(true);
   });
 
-  it("PHONE_MAX_CALL_SECONDS=698, one second past the clamp, is clamped to 697 (mutation: clamp at 698 or above → no goodbye at 697s, FAILS)", async () => {
+  it("PHONE_MAX_CALL_SECONDS=680, one second past the clamp, is clamped to 679 (mutation: clamp at 680 or above → no goodbye at 679s, FAILS)", async () => {
     vi.useFakeTimers();
-    process.env.PHONE_MAX_CALL_SECONDS = "698";
+    process.env.PHONE_MAX_CALL_SECONDS = "680";
     const { ws } = await startLifecycle();
     ws.send = vi.fn();
     ws.emit("open");
@@ -670,7 +671,7 @@ describe("runCallLifecycle — Important #5: cap-seconds clamp", () => {
     ws.emit("message", JSON.stringify({ type: "input_audio_buffer.speech_started" }));
     await flushMicrotasks();
 
-    await vi.advanceTimersByTimeAsync(696_999);
+    await vi.advanceTimersByTimeAsync(678_999);
     expect((ws.send as ReturnType<typeof vi.fn>).mock.calls
       .some((c) => String(c[0]).includes("brief goodbye"))).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -1098,7 +1099,7 @@ describe("silence cutoff (Guard 1) — the two cost knobs cannot invert", () => 
     vi.useFakeTimers();
     // An operator's perfectly reasonable pair of edits, in the wrong order:
     // the cost cap tightened to a minute, the silence window left long. Both
-    // are inside their own documented clamps (cap ≤ 697, silence 5–120).
+    // are inside their own documented clamps (cap ≤ 679, silence 5–120).
     process.env.PHONE_MAX_CALL_SECONDS = "60";
     process.env.PHONE_MAX_SILENT_SECONDS = "120";
     const { ws } = await startLifecycle();

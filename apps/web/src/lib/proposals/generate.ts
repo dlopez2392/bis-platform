@@ -3,6 +3,8 @@ import { groundedEvidence } from "./grounding";
 import { callIsEligible } from "./eligibility";
 import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
+import { aiComplete } from "@/lib/ai/gateway";
+import { aiSafeError } from "@/lib/ai/log";
 
 /**
  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
@@ -220,7 +222,7 @@ function asRawProposal(v: unknown): RawProposal | null {
  * in the voice lifecycle's best-effort tail, after the call row is already
  * durable. A proposal failure must change nothing about the call, its
  * transcript, its outcome or its text-back. The eligibility check, the
- * fetch, the JSON parse AND the per-proposal loop all sit inside the SAME
+ * model call through the AI door (lib/ai/gateway.ts), the JSON parse AND the per-proposal loop all sit inside the SAME
  * try — a malformed element partway through must not throw past this
  * function, and a failure after some proposals already landed must not
  * report 0 and hide the ones that did. `callIsEligible` ends in
@@ -300,12 +302,12 @@ export async function generateProposals(input: {
     //
     // 1. Ordering (Task 4 of the fix-wave): on the one live account, spam
     // and abandoned calls are the DOMINANT traffic — several robocalls a
-    // day, every one ineligible. Checking `OPENAI_API_KEY` before this
+    // day, every one ineligible. Checking the model key before this
     // check ran it, and its `console.error`, on every one of them; a
     // rotated or missing key would then log an error line per robocall,
     // and an alert that fires on the dominant path stops being read (this
     // branch has already applied that rule twice). Putting eligibility
-    // first means an ineligible call costs no request, no key check and no
+    // first means an ineligible call costs no gateway call, no key check and no
     // log line — the only thing distinguishing "ineligible" from "healthy
     // and quiet" is that neither logs anything at all.
     //
@@ -320,65 +322,46 @@ export async function generateProposals(input: {
       handoffRequested: input.handoffRequested,
     })) return 0;
 
-    // Read inside the body, not at module scope: a missing key at build time
-    // must never break the import (summary-service.ts:7-10's rule). Checked
-    // AFTER eligibility (see above) so a rotated or missing key is only ever
-    // logged for a call this function would otherwise have tried to propose
-    // from.
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      // A rotated or missing key silently disables this feature forever —
-      // against a success criterion that MOST calls propose nothing, that
-      // failure is indistinguishable from a healthy quiet call unless it logs.
-      console.error(`generateProposals: OPENAI_API_KEY not set, skipping call ${input.callId}`);
-      return 0;
-    }
-    const fetchImpl = input.fetchImpl ?? fetch;
-
-    const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        // Deliberate divergence from summary-service.ts's own OpenAI call:
-        // that function consumes PROSE and has a deterministic fact-line
-        // fallback (`composeSummary`) when the completion is unusable, so a
-        // stray code fence in the response costs it nothing. This function
-        // parses JSON with no fallback of its own — an empty proposal list
-        // IS the fallback — and `gpt-4o-mini` routinely wraps JSON in a
-        // ```json fence when asked for JSON without `response_format`,
-        // which would silently zero this feature forever. Forcing JSON mode
-        // removes that failure instead of tolerating it.
-        response_format: { type: "json_object" },
-        // Minor 6 of the fix-wave: with no bound here, nothing states a
-        // ceiling on how many elements the model's own `proposals` array
-        // can contain before the loop below even starts counting attempts
-        // — a flood of UNGROUNDED proposals still costs a full
-        // `groundedEvidence` scan per element (measured: 5,000 elements
-        // against a 120-turn transcript, 565ms). Three short task
-        // proposals fit comfortably inside this; a runaway array does not.
-        max_tokens: 2000,
-        messages: [
-          { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo) },
-          { role: "user", content: transcriptForModel(input.transcript) },
-        ],
-      }),
+    // The one AI door (lib/ai/gateway.ts, item 8a-1): the switches, the budget, the key, the time limit and the
+    // ledger live there, and every refusal or failure comes back as `ok: false`, already logged by the gateway with
+    // this call's id (`ref`) — a rotated or missing key still logs once per ELIGIBLE call (the reason above), never
+    // per robocall. An empty proposal list IS the fallback.
+    const answer = await aiComplete(input.db, {
+      accountId: input.accountId,
+      feature: "call_proposals",
+      model: "gpt-4o-mini",
+      // Deliberate divergence from summary-service.ts's own completion:
+      // that function consumes PROSE and has a deterministic fact-line
+      // fallback (`composeSummary`) when the completion is unusable, so a
+      // stray code fence in the response costs it nothing. This function
+      // parses JSON with no fallback of its own — an empty proposal list
+      // IS the fallback — and `gpt-4o-mini` routinely wraps JSON in a
+      // ```json fence when asked for JSON without `response_format`,
+      // which would silently zero this feature forever. Forcing JSON mode
+      // removes that failure instead of tolerating it.
+      responseFormat: { type: "json_object" },
+      // Minor 6 of the fix-wave: with no bound here, nothing states a
+      // ceiling on how many elements the model's own `proposals` array
+      // can contain before the loop below even starts counting attempts
+      // — a flood of UNGROUNDED proposals still costs a full
+      // `groundedEvidence` scan per element (measured: 5,000 elements
+      // against a 120-turn transcript, 565ms). Three short task
+      // proposals fit comfortably inside this; a runaway array does not.
+      maxTokens: 2000,
+      messages: [
+        { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo) },
+        { role: "user", content: transcriptForModel(input.transcript) },
+      ],
       // Same 10s bound as the summary call. This runs after the row is
       // written so a hang cannot lose the call, but it still shares the
       // invocation's maxDuration budget.
-      signal: AbortSignal.timeout(10_000),
+      timeoutMs: 10_000,
+      timezone: input.timezone,
+      ref: `call ${input.callId}`,
+      fetchImpl: input.fetchImpl,
     });
-    if (!r.ok) {
-      console.error(`generateProposals: model request failed for call ${input.callId}: HTTP ${r.status}`);
-      return 0;
-    }
-    const data = await r.json();
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      console.error(`generateProposals: model response had no content for call ${input.callId}`);
-      return 0;
-    }
-    const parsed = JSON.parse(content);
+    if (!answer.ok) return 0;
+    const parsed = JSON.parse(answer.text);
     if (!Array.isArray(parsed?.proposals)) {
       console.error(`generateProposals: model response had no proposals array for call ${input.callId}`);
       return 0;
@@ -620,7 +603,8 @@ export async function generateProposals(input: {
     // event here: no MORE proposals. But whatever already landed before the
     // failure is real and must be reported — returning 0 here would
     // under-count writes that already reached the database.
-    console.error(`generateProposals: failed for call ${input.callId}: ${String(e)}`);
+    // aiSafeError, never String(e): JSON.parse's SyntaxError quotes the model's words (plan deviation 6).
+    console.error(`generateProposals: failed for call ${input.callId}: ${aiSafeError(e)}`);
     return written;
   }
   return written;

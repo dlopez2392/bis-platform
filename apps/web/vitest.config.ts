@@ -28,8 +28,10 @@ export default defineConfig({
     // likewise (S-07 2a): a developer's shell holding the real worker's
     // values would otherwise turn the cron route's and the sentinel's
     // not-configured counters into a live scan; `scannerConfig` trims and
-    // nulls a blank.
-    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "" },
+    // nulls a blank. AI_PROVIDER / AI_GATEWAY_OFF: a developer's shell or
+    // .env.local must not switch every caller test to the fake or to off
+    // (item 8a-1).
+    env: { APP_ORIGIN: "", SCANNER_URL: "", SCANNER_SECRET: "", AI_PROVIDER: "", AI_GATEWAY_OFF: "" },
   },
   resolve: {
     alias: {

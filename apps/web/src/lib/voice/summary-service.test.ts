@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { generateSummary } from "./summary-service";
 import { classifyOutcome, emptyCallState, withTranscript, withBooking } from "./call-state";
 import { summaryFactLine } from "./summarize";
+import { openGateDb } from "@/lib/ai/testing/open-gate";
 
 beforeEach(() => { process.env.OPENAI_API_KEY = "sk-test"; });
+const GATE = { db: openGateDb().db, accountId: "acct", timezone: undefined as string | undefined };
 
 /** A call the classifier scores `spam`: the assistant spoke, the caller never did. */
 function silentCaller() {
@@ -27,7 +29,7 @@ describe("generateSummary", () => {
       ok: true, json: async () => ({ choices: [{ message: { content: "Caller asked about hours. No appointment was recorded." } }] }),
     });
     const s = withTranscript(emptyCallState(), { role: "caller", text: "what are your hours?", at: "t" });
-    const out = await generateSummary(s, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await generateSummary(s, { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     expect(body.model).toBe("gpt-4o-mini");
     expect(body.messages[0].content).toContain("authoritative");
@@ -36,7 +38,7 @@ describe("generateSummary", () => {
   });
   it("a failed request still yields the fact line", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("down"));
-    const out = await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await generateSummary(callerSpoke(), { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(out).toContain("RECORDED");
     expect(out).toContain("no appointment was recorded");
   });
@@ -44,14 +46,14 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-    await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    await generateSummary(callerSpoke(), { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     const init = fetchImpl.mock.calls[0]![1]!;
     expect(init.signal).toBeDefined();
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
   it("a timeout (AbortSignal firing) still yields the fact-line summary, not a hang", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new DOMException("The operation timed out.", "TimeoutError"));
-    const out = await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await generateSummary(callerSpoke(), { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(out).toContain("RECORDED");
     expect(out).toContain("no appointment was recorded");
   });
@@ -62,7 +64,7 @@ describe("generateSummary", () => {
     const s = withBooking(emptyCallState(), {
       id: "bk1", contactName: "Ana", startsAt: "2026-08-31T14:00:00.000Z", endsAt: "2026-08-31T15:00:00.000Z",
     });
-    await generateSummary(s, { timezone: "America/Chicago", fetchImpl: fetchImpl as unknown as typeof fetch });
+    await generateSummary(s, { ...GATE, timezone: "America/Chicago", fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
     expect(systemContent).toContain("America/Chicago");
@@ -72,7 +74,7 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn();
     const s = silentCaller();
     expect(classifyOutcome(s)).toBe("spam");
-    const out = await generateSummary(s, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await generateSummary(s, { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(out).toBe(summaryFactLine(s));
   });
@@ -80,7 +82,7 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn();
     const s = emptyCallState();
     expect(classifyOutcome(s)).toBe("spam");
-    await generateSummary(s, { timezone: "America/Chicago", fetchImpl: fetchImpl as unknown as typeof fetch });
+    await generateSummary(s, { ...GATE, timezone: "America/Chicago", fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("an abandoned call DOES reach the model — the caller spoke, so there is something to summarize", async () => {
@@ -89,7 +91,7 @@ describe("generateSummary", () => {
     });
     const s = withTranscript(silentCaller(), { role: "caller", text: "how much for a roof?", at: "t" });
     expect(classifyOutcome(s)).toBe("abandoned");
-    const out = await generateSummary(s, { fetchImpl: fetchImpl as unknown as typeof fetch });
+    const out = await generateSummary(s, { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(out).toContain("Caller asked about pricing and hung up.");
   });
@@ -97,7 +99,7 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-    await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    await generateSummary(callerSpoke(), { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
     expect(systemContent).not.toContain("Never present a UTC time as if it were local");
@@ -111,7 +113,7 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-    const opts = { language: "es", fetchImpl } as unknown as Parameters<typeof generateSummary>[1];
+    const opts = { ...GATE, language: "es", fetchImpl } as unknown as Parameters<typeof generateSummary>[1];
     await generateSummary(callerSpoke(), opts);
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
@@ -122,9 +124,23 @@ describe("generateSummary", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
     });
-    await generateSummary(callerSpoke(), { fetchImpl: fetchImpl as unknown as typeof fetch });
+    await generateSummary(callerSpoke(), { ...GATE, fetchImpl: fetchImpl as unknown as typeof fetch });
     const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
     const systemContent = body.messages[0].content as string;
     expect(systemContent).toContain("If you quote the caller, keep the quote in the language the caller spoke.");
+  });
+  it("a switched-off account gets the fact line and makes no request (spec 3.2; mutation: fall through to the fetch when the gateway refuses -> FAILS)", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchImpl = vi.fn();
+    const s = callerSpoke();
+    const out = await generateSummary(s, { ...GATE, db: openGateDb({ gate: { account_enabled: false } }).db, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(out).toBe(summaryFactLine(s));
+  });
+  it("records one call_summary ledger row for this account (mutation: feature 'call_card' -> FAILS)", async () => {
+    const { db, calls } = openGateDb();
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: "x" } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })));
+    await generateSummary(callerSpoke(), { ...GATE, db, fetchImpl: fetchImpl as unknown as typeof fetch });
+    expect(calls.filter((c) => c.fn === "ai_ledger_record").map((c) => [c.args.p_account, c.args.p_feature, c.args.p_outcome])).toEqual([["acct", "call_summary", "ok"]]);
   });
 });

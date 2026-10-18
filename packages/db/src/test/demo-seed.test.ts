@@ -272,9 +272,10 @@ describe("demo tenant seeder", () => {
       expect(dropped).toBe(true);
       const leftovers: string[] = [];
       for (const table of ACCOUNT_OWNED_TABLES) {
-        const { count: n } = await db.from(table)
-          .select("id", { count: "exact", head: true }).eq("account_id", accountId);
-        if (n) leftovers.push(`${table}: ${n}`);
+        const { count: n, error } = await db.from(table)
+          .select("account_id", { count: "exact", head: true }).eq("account_id", accountId);
+        if (error) leftovers.push(`${table}: ${error.message}`);
+        else if (n) leftovers.push(`${table}: ${n}`);
       }
       expect(leftovers).toEqual([]);
       expect(await findDemoAccount(db, THROWAWAY)).toBeNull();

@@ -145,8 +145,8 @@ const MAX_TRANSFER_SECONDS = 3600;
  * carrier retry while still turning a permanently-valid logged credential
  * into a ten-minute one. Anything under five would hang up on a real caller.
  *
- * THE GAP, STATED RATHER THAN CLOSED: the cap clamps at 697s
- * (`incoming/route.ts`), and 697 + ~10 is ~11.8 minutes, past this window.
+ * THE GAP, STATED RATHER THAN CLOSED: the cap clamps at 679s
+ * (`incoming/route.ts`), and 679 + ~10 is ~11.5 minutes, past this window.
  * Ten minutes covers caps up to ~590s. Left at ten on purpose: widening it
  * lengthens the disclosure window of EVERY logged token, every call, to buy a
  * case that needs two things at once — an operator raising

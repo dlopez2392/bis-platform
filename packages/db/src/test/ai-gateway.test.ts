@@ -1,0 +1,219 @@
+import { describe, it, expect } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { withTestAccount } from "./fixtures";
+import {
+  aiGateCheck, recordAiLedger, getAiSettings, setAccountAiSettings, setGlobalAiEnabled,
+  countAiSkipsSince, firstOverBudgetSince, AI_FEATURES, AI_OUTCOMES, type AiLedgerEntry,
+} from "../ai-gateway";
+
+/** Item 8a-1 (spec 3.1, 3.3, 3.6): the wrappers over 0086, through PostgREST, on the service client. */
+const KEYS = { monthKey: "2026-10", dayKey: "2026-10-18" };
+const entry = (accountId: string, o: Partial<AiLedgerEntry> = {}): AiLedgerEntry => ({
+  accountId, feature: "call_summary", model: "gpt-4o-mini", inputTokens: 100, outputTokens: 20,
+  costMicroUsd: 27, outcome: "ok", latencyMs: 5, ...KEYS, ...o,
+});
+
+describe("aiGateCheck / recordAiLedger", () => {
+  it("a fresh account reads the defaults, in numbers (assumption A3; mutation: return budget_microusd as String(...) -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      expect(await aiGateCheck(db, { accountId, ...KEYS })).toEqual({
+        globalEnabled: true, accountEnabled: true, budgetMicroUsd: 10_000_000, monthSpendMicroUsd: 0, recordSummariesToday: 0,
+      });
+    }));
+
+  it("a recorded call is in this month's spend (mutation: pass p_cost: 0 in recordAiLedger -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await recordAiLedger(db, entry(accountId, { costMicroUsd: 720 }));
+      await recordAiLedger(db, entry(accountId, { feature: "record_summary", costMicroUsd: 600 }));
+      expect(await aiGateCheck(db, { accountId, ...KEYS })).toMatchObject({ monthSpendMicroUsd: 1320, recordSummariesToday: 1 });
+      const { data } = await db.from("ai_ledger").select("feature, input_tokens, output_tokens, cost_microusd, outcome").eq("account_id", accountId).order("cost_microusd");
+      expect(data).toEqual([
+        { feature: "record_summary", input_tokens: 100, output_tokens: 20, cost_microusd: 600, outcome: "ok" },
+        { feature: "call_summary", input_tokens: 100, output_tokens: 20, cost_microusd: 720, outcome: "ok" },
+      ]);
+    }));
+
+  it("an aborted signal rejects instead of waiting (assumption A1; mutation: drop the .abortSignal(signal) line -> resolves -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      await expect(aiGateCheck(db, { accountId, ...KEYS, signal: AbortSignal.abort() })).rejects.toThrow();
+      await expect(recordAiLedger(db, { ...entry(accountId), signal: AbortSignal.abort() })).rejects.toThrow();
+    }));
+
+  it("an answer of the wrong shape throws, never reads as open (mutation: drop the shape check -> FAILS)", async () => {
+    const builder = {
+      abortSignal() { return builder; },
+      then: (ok: (v: unknown) => unknown) => Promise.resolve({ data: { global_enabled: "yes" }, error: null }).then(ok),
+    };
+    const odd = { rpc: () => builder } as unknown as SupabaseClient;
+    await expect(aiGateCheck(odd, { accountId: "a", ...KEYS })).rejects.toThrow(/unexpected answer/);
+  });
+
+  // Fix round, review 3: start from a VALID answer and break exactly one field, so each term of the shape
+  // check is pinned on its own (the case above breaks several at once and would survive losing most of them).
+  const VALID = { global_enabled: true, account_enabled: false, budget_microusd: 10_000_000, month_spend_microusd: 720, record_summaries_today: 3 };
+  const answering = (data: unknown) => {
+    const builder = {
+      abortSignal() { return builder; },
+      then: (ok: (v: unknown) => unknown) => Promise.resolve({ data, error: null }).then(ok),
+    };
+    return { rpc: () => builder } as unknown as SupabaseClient;
+  };
+
+  it("the valid answer the one-field cases start from is read as it is (so each case below breaks ONE thing)", async () => {
+    expect(await aiGateCheck(answering(VALID), { accountId: "a", ...KEYS })).toEqual({
+      globalEnabled: true, accountEnabled: false, budgetMicroUsd: 10_000_000, monthSpendMicroUsd: 720, recordSummariesToday: 3,
+    });
+  });
+
+  it.each([
+    ["global_enabled", "true"], ["global_enabled", null],
+    ["account_enabled", "false"], ["account_enabled", undefined],
+    ["budget_microusd", "10000000"], ["budget_microusd", -1], ["budget_microusd", 1.5],
+    ["month_spend_microusd", "720"], ["month_spend_microusd", -1],
+    ["record_summaries_today", "3"], ["record_summaries_today", 2 ** 53],
+  ])("an answer whose %s alone is %j throws (mutation: drop that field's term from the shape check -> FAILS)", async (field, bad) => {
+    await expect(aiGateCheck(answering({ ...VALID, [field]: bad }), { accountId: "a", ...KEYS })).rejects.toThrow("aiGateCheck: unexpected answer");
+  });
+
+  it("a null answer throws (mutation: drop r === null from the shape check -> FAILS)", async () => {
+    await expect(aiGateCheck(answering(null), { accountId: "a", ...KEYS })).rejects.toThrow("aiGateCheck: unexpected answer");
+  });
+
+  it("every AI_FEATURES and AI_OUTCOMES value is one 0086 accepts, through recordAiLedger (review M5; mutation: add 'chat' to AI_FEATURES or 'maybe' to AI_OUTCOMES -> the check constraint refuses it -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      for (const feature of AI_FEATURES) await recordAiLedger(db, entry(accountId, { feature }));
+      for (const outcome of AI_OUTCOMES) await recordAiLedger(db, entry(accountId, { feature: "call_card", outcome }));
+      const { count, error } = await db.from("ai_ledger").select("id", { count: "exact", head: true }).eq("account_id", accountId);
+      expect([error, count]).toEqual([null, AI_FEATURES.length + AI_OUTCOMES.length]);
+    }));
+});
+
+describe("the card's reads and writes", () => {
+  it("no row reads the defaults; a save is read back and never resets the counters, and another account's row never leaks in (mutations: add month_spend_microusd: 0 to the upsert; drop getAiSettings's .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, other) => {
+      // Fix round, review 1: the agency's RLS sees EVERY account, so only the account filter keeps a
+      // second client's settings off this card. The other account has a row with different values first.
+      await recordAiLedger(db, entry(other, { costMicroUsd: 9_999 }));
+      await setAccountAiSettings(db, other, { enabled: true, monthlyBudgetCents: 7700, actorId: "user_other" });
+      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: true, monthlyBudgetCents: 1000, monthKey: null, monthSpendMicroUsd: 0, globalEnabled: true });
+      await recordAiLedger(db, entry(accountId, { costMicroUsd: 720 }));
+      await setAccountAiSettings(db, accountId, { enabled: false, monthlyBudgetCents: 2500, actorId: "user_test" });
+      expect(await getAiSettings(db, accountId)).toEqual({ accountEnabled: false, monthlyBudgetCents: 2500, monthKey: "2026-10", monthSpendMicroUsd: 720, globalEnabled: true });
+      const { data } = await db.from("account_ai_settings").select("updated_by").eq("account_id", accountId).single();
+      expect(data).toEqual({ updated_by: "user_test" });
+      expect(await getAiSettings(db, other)).toEqual({ accountEnabled: true, monthlyBudgetCents: 7700, monthKey: "2026-10", monthSpendMicroUsd: 9_999, globalEnabled: true });
+    })));
+
+  it("the account's Undo is a compare-and-set: it writes back only while the row still holds what its save wrote, else answers 'changed' and writes nothing (Task 7 fix round 4; mutations: drop the enabled filter; drop the budget filter; upsert when expected is given; drop the account filter -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, other) => {
+      // Round 2: another account holds the SAME values the save wrote, so an Undo without its account filter
+      // would match (and rewrite) that row too.
+      await setAccountAiSettings(db, other, { enabled: false, monthlyBudgetCents: 2500, actorId: "user_other" });
+      const undo = { enabled: true, monthlyBudgetCents: 1000, actorId: "user_test" };
+      const wrote = { enabled: false, monthlyBudgetCents: 2500 };
+      // No row yet: an Undo must not create one.
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      expect((await db.from("account_ai_settings").select("account_id").eq("account_id", accountId)).data).toEqual([]);
+      expect(await setAccountAiSettings(db, accountId, { ...wrote, actorId: "user_test" })).toBe("updated");
+      // Someone moved the BUDGET after the save (the switch still matches).
+      await setAccountAiSettings(db, accountId, { enabled: false, monthlyBudgetCents: 3000, actorId: "user_other" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      // Someone moved the SWITCH after the save (the budget matches again).
+      await setAccountAiSettings(db, accountId, { enabled: true, monthlyBudgetCents: 2500, actorId: "user_other" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("changed");
+      expect(await getAiSettings(db, accountId)).toMatchObject({ accountEnabled: true, monthlyBudgetCents: 2500 });
+      // Still exactly what the save wrote: the Undo writes.
+      await setAccountAiSettings(db, accountId, { ...wrote, actorId: "user_test" });
+      expect(await setAccountAiSettings(db, accountId, undo, wrote)).toBe("updated");
+      expect(await getAiSettings(db, accountId)).toMatchObject({ accountEnabled: true, monthlyBudgetCents: 1000 });
+      const { data: otherRow } = await db.from("account_ai_settings").select("enabled, monthly_budget_cents, updated_by").eq("account_id", other).single();
+      expect(otherRow).toEqual({ enabled: false, monthly_budget_cents: 2500, updated_by: "user_other" });
+    })));
+
+  // Review I9: the db suite NEVER writes ai_gateway_settings (one row shared by every account and every
+  // concurrent suite on the project). setGlobalAiEnabled and getAiSettings's missing-row answer are proved on a
+  // recording stub; the real row's behaviour (seeded on, a missing row reads off) is 0086's withRollback SQL tests.
+  // `perTable` answers one table differently (fix round, review 2: the account read and the global read
+  // each fail on their own); every other table gets `answer`.
+  type StubAnswer = Record<string, unknown>;
+  function stubDb(answer: StubAnswer, perTable: Record<string, StubAnswer> = {}) {
+    const seen: unknown[][] = [];
+    const chainFor = (a: StubAnswer) => {
+      const chain = {
+        update: (v: unknown) => { seen.push(["update", v]); return chain; },
+        eq: (c: string, v: unknown) => { seen.push(["eq", c, v]); return chain; },
+        in: (c: string, v: unknown) => { seen.push(["in", c, v]); return chain; },
+        gte: (c: string, v: unknown) => { seen.push(["gte", c, v]); return chain; },
+        select: (c: string) => { seen.push(["select", c]); return chain; },
+        maybeSingle: async () => a,
+        then: (ok: (v: unknown) => unknown) => Promise.resolve(a).then(ok),
+      };
+      return chain;
+    };
+    return { seen, db: { from: (t: string) => { seen.push(["from", t]); return chainFor(perTable[t] ?? answer); } } as unknown as SupabaseClient };
+  }
+
+  it("a head count that answers no count and no error rejects, never reads as zero skips (memory 'Head-count null'; mutation: return count ?? 0 -> FAILS)", async () => {
+    await expect(countAiSkipsSince(stubDb({ count: null, error: null }).db, "a1", "2026-10-01T05:00:00Z")).rejects.toThrow("countAiSkipsSince: no count");
+  });
+
+  it("a failed head count names its code and HTTP status, because a HEAD answer has no body (fix round, review 5; mutation: drop the code from the message -> FAILS)", async () => {
+    const failed = stubDb({ count: null, error: { message: "", code: "42P01", details: null, hint: null }, status: 404 });
+    await expect(countAiSkipsSince(failed.db, "a1", "2026-10-01T05:00:00Z")).rejects.toThrow("countAiSkipsSince failed:  (code 42P01, HTTP 404)");
+  });
+
+  it("getAiSettings rejects when the account read fails, never reads the defaults (mutation: skip the acct.error check -> FAILS)", async () => {
+    const s = stubDb({ data: { enabled: true }, error: null }, { account_ai_settings: { data: null, error: { message: "x" } } });
+    await expect(getAiSettings(s.db, "a1")).rejects.toThrow("getAiSettings: account read failed: x");
+  });
+
+  it("getAiSettings rejects when the global read fails, never reads it as off or on (mutation: skip the global.error check -> FAILS)", async () => {
+    const s = stubDb({ data: null, error: null }, { ai_gateway_settings: { data: null, error: { message: "x" } } });
+    await expect(getAiSettings(s.db, "a1")).rejects.toThrow("getAiSettings: global read failed: x");
+  });
+
+  it("setGlobalAiEnabled updates exactly the one row by id, as the actor, and refuses when no row was updated (mutations: drop .eq('id', true); drop the length check -> FAILS)", async () => {
+    const ok = stubDb({ data: [{ id: true }], error: null });
+    await setGlobalAiEnabled(ok.db, { enabled: false, actorId: "user_test" });
+    expect(ok.seen.map((x) => x.slice(0, 2))).toEqual([["from", "ai_gateway_settings"], ["update", expect.objectContaining({ enabled: false, updated_by: "user_test" })], ["eq", "id"], ["select", "id"]]);
+    expect(ok.seen[2]).toEqual(["eq", "id", true]);
+    await expect(setGlobalAiEnabled(stubDb({ data: [], error: null }).db, { enabled: true, actorId: "user_test" })).rejects.toThrow("the switch row is missing");
+  });
+
+  it("setGlobalAiEnabled's Undo is a compare-and-set: it filters on the state its save wrote and answers 'changed' when the row moved on, never throws (Task 7 fix round 4; mutations: drop the expected filter; throw on zero rows when expected is given -> FAILS)", async () => {
+    const ok = stubDb({ data: [{ id: true }], error: null });
+    expect(await setGlobalAiEnabled(ok.db, { enabled: true, actorId: "user_test" }, false)).toBe("updated");
+    expect(ok.seen.filter((x) => x[0] === "eq")).toEqual([["eq", "id", true], ["eq", "enabled", false]]);
+    const moved = stubDb({ data: [], error: null });
+    expect(await setGlobalAiEnabled(moved.db, { enabled: true, actorId: "user_test" }, false)).toBe("changed");
+    const plain = stubDb({ data: [{ id: true }], error: null });
+    expect(await setGlobalAiEnabled(plain.db, { enabled: false, actorId: "user_test" })).toBe("updated");
+    expect(plain.seen.filter((x) => x[0] === "eq")).toEqual([["eq", "id", true]]);
+  });
+
+  it("getAiSettings reads a missing global row as OFF, as the gate does (plan deviation 13; mutation: g?.enabled ?? true -> FAILS)", async () => {
+    const none = stubDb({ data: null, error: null });
+    expect((await getAiSettings(none.db, "a1")).globalEnabled).toBe(false);
+  });
+
+  it("counts this month's skips (off or over budget, never a failed request) and finds the first over-budget row, for this account only (mutations: .neq('outcome', 'ok') instead of .in(...) -> 4 -> FAILS; order descending -> FAILS; drop either read's .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => withTestAccount(async (_db, other) => {
+      const refused = { inputTokens: null, outputTokens: null, costMicroUsd: 0 };
+      // Fix round, review 1: another account's skips, its over-budget row written FIRST (the earliest of all),
+      // so an unscoped count reads 5 and an unscoped "first" reads the other account's date.
+      await recordAiLedger(db, entry(other, { outcome: "over_budget", ...refused }));
+      await recordAiLedger(db, entry(other, { outcome: "account_off", ...refused }));
+      await recordAiLedger(db, entry(accountId));
+      await recordAiLedger(db, entry(accountId, { outcome: "account_off", ...refused }));
+      await recordAiLedger(db, entry(accountId, { outcome: "provider_error", ...refused }));   // a failure, not a skip: must not count
+      await recordAiLedger(db, entry(accountId, { outcome: "over_budget", ...refused }));
+      await recordAiLedger(db, entry(accountId, { outcome: "over_budget", ...refused }));
+      const since = new Date(Date.now() - 60_000).toISOString();
+      expect(await countAiSkipsSince(db, accountId, since)).toBe(3);
+      expect(await countAiSkipsSince(db, accountId, new Date(Date.now() + 60_000).toISOString())).toBe(0);
+      const { data } = await db.from("ai_ledger").select("created_at").eq("account_id", accountId).eq("outcome", "over_budget").order("created_at");
+      expect(data).toHaveLength(2);
+      expect(await firstOverBudgetSince(db, accountId, since)).toBe(data![0]!.created_at);
+      expect(await countAiSkipsSince(db, other, since)).toBe(2);
+    })));
+});

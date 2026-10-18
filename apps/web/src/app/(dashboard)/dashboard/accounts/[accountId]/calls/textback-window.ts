@@ -12,11 +12,12 @@ import type { CallListRow, TextbackWindow } from "@bis/db";
  * TIME is the only thing that can tie a failed outbound SMS to a particular
  * call. `finishCall` (lib/voice/finish-call.ts) writes the text-back row during
  * its own run, which starts the moment the call ends: `generateSummary` first,
- * which aborts hard at 10s (summary-service.ts), then three Supabase round
+ * which can take 16s through the AI gateway (a 3s gate read, the 10s
+ * completion, a 3s ledger write; lib/ai/gateway.ts), then three Supabase round
  * trips — resolve the contact, ensure the conversation, check the 24h cooldown
- * — and then the insert. Twelve seconds is the realistic ceiling.
+ * — and then the insert. About eighteen seconds is the realistic ceiling.
  *
- * Five minutes is ~25× that. Deliberately generous rather than snug, because
+ * Five minutes is ~16× that. Deliberately generous rather than snug, because
  * the two errors are not symmetrical: too tight and a real failure shows no
  * badge at all, which is the state this whole feature exists to end (nothing
  * else in the product records that a text-back failed). Too loose and an
@@ -84,7 +85,7 @@ export const TEXTBACK_WINDOW_GRACE_MS = 5 * 60 * 1000;
  *
  *    2b. What is left is ONE attempted text under TWO windows. It needs the
  *    redial to begin before the first call's text-back row is written — inside
- *    `finishCall`'s own run, so roughly twelve seconds — because the lower
+ *    `finishCall`'s own run, so roughly eighteen seconds — because the lower
  *    bound is `started_at`, and it needs the second call's own text-back to
  *    have been suppressed by the 24h cooldown, which for a first attempt that
  *    ends up `failed` means the cooldown read had to see it while it was still

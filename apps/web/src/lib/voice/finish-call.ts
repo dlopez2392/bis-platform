@@ -377,7 +377,7 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
  * running out of maxDuration. That is not the default case today (the voice
  * route's ceiling is 800s against a 240s call cap), but it is exactly the
  * case whenever an operator raises `PHONE_MAX_CALL_SECONDS` toward the
- * route's 697s clamp, so the ordering is not something the upgrade retires.
+ * route's 679s clamp, so the ordering is not something the upgrade retires.
  */
 export async function finishCall(
   state: CallState, ctx: FinishContext, meta: FinishMeta,
@@ -401,7 +401,9 @@ export async function finishCall(
 
   let summary: string;
   try {
-    summary = await generateSummary(state, { timezone: ctx.timezone });
+    summary = await generateSummary(state, {
+      db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, ref: `call ${meta.callRowId ?? "(no row)"}`,
+    });
   } catch (e) {
     console.error(`finishCall: generateSummary failed, falling back to fact line: ${String(e)}`);
     summary = summaryFactLine(state);
@@ -572,7 +574,7 @@ export async function finishCall(
   // an invocation whose remaining `maxDuration` budget is whatever the call
   // cap left behind — comfortable at the default 240s cap under the route's
   // 800s ceiling, and nearly nothing once an operator raises
-  // `PHONE_MAX_CALL_SECONDS` toward its 697s clamp — and running it ahead of
+  // `PHONE_MAX_CALL_SECONDS` toward its 679s clamp — and running it ahead of
   // the durable record meant a long abandoned call plus a slow carrier could
   // lose the call row entirely — the row the entire dashboard reads. So this half prepares the send, and the half below `finishCallRow`
   // performs it. Write-then-send is preserved exactly as before: the message
@@ -707,7 +709,7 @@ export async function finishCall(
   // timeout, inside an invocation that may or may not have budget left — the
   // voice route's 800s `maxDuration` leaves plenty at the default 240s call
   // cap, and almost none if `PHONE_MAX_CALL_SECONDS` is ever raised toward
-  // the route's 697s clamp, which is the case this ordering is written for.
+  // the route's 679s clamp, which is the case this ordering is written for.
   // Ahead of the row write it was a way to lose the call record itself, which
   // is the one artefact of the call the dashboard, the KPIs and any later
   // investigation all read. The text is worth less than the record of the
@@ -834,7 +836,7 @@ export async function finishCall(
   if (meta.callRowId && stored) {
     try {
       const reading = cardReadable(state)
-        ? await readCallForCard(state.transcript, { label: `finishCall ${meta.callRowId}` })
+        ? await readCallForCard(state.transcript, { db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, label: `finishCall ${meta.callRowId}` })
         : NO_READING;
       const card = composeCallCard(state, ctx.callerNumber, reading);
       // The stored reason is English today; it follows the reader's language once owners can choose one (F-013 part 1, F-096; owner ruling 2026-10-09).
