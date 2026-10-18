@@ -179,10 +179,14 @@ describe("0087: the claim (spec 4.5, 4.6; plan deviation 5)", () => {
       expect(after!.t).toBe(before!.t);
     }));
 
-  it("refuses nulls, a third language, a malformed digest and another account's customer (mutations: drop any guard -> FAILS)", () =>
+  it("refuses nulls, a third language, a malformed digest and another account's customer (mutations: drop any guard -> FAILS; drop `p_digest is null` -> a null digest wins a lease -> FAILS; drop `p_force is null` -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c);
       await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, null, 'en', $2, false)`, [s.acct, D1])).rejects.toMatchObject({ code: "22004" });
+      // Review fix round: the two nulls the value guards do not catch on their own (a null digest passes
+      // `char_length(...) <> 64 or ... ~ ...` as null, a null force falls through to the fresh/won branches).
+      await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, $2, 'es', null, false)`, [s.acct, s.mine])).rejects.toMatchObject({ code: "22004" });
+      await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, $2, 'es', $3, null)`, [s.acct, s.mine, D1])).rejects.toMatchObject({ code: "22004" });
       await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, $2, 'fr', $3, false)`, [s.acct, s.mine, D1])).rejects.toMatchObject({ code: "22023" });
       await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, $2, 'en', 'xyz', false)`, [s.acct, s.mine])).rejects.toMatchObject({ code: "22023" });
       await expect(attempt(c, `select ${CLAIM.replace(/\(.*\)$/, "")}($1, $2, 'es', $3, false)`, [s.acct, s.other, D1])).rejects.toMatchObject({ code: "23503" });
@@ -228,6 +232,40 @@ describe("0087: one lease under two sessions (spec 8.3; I4)", () => {
       await a.query("rollback").catch(() => {});
       if (acct) {
         await seedC.query("delete from contacts where account_id = $1", [acct]); // record_summaries cascade
+        await seedC.query("delete from accounts where id = $1", [acct]);
+      }
+      await Promise.all([seedC.end(), a.end(), b.end()]);
+    }
+  });
+
+  // Review fix round (Minor, taken before apply): the customer goes between the claim's insert and its
+  // locked select. A holds the row's lock; B's `insert ... do nothing` meets the live committed row (no
+  // wait, no FK check) and then waits at `select ... for update`; A deletes the customer (the row goes by
+  // cascade) and commits; B's locked select finds nothing. Without the `if not found` guard B answers
+  // won with a lease on no row. The FK's own 23503 never names the function, so it cannot pass this.
+  it("a claim whose customer vanished while it waited is refused, not won (mutation: drop `if not found` -> B answers won -> FAILS)", async () => {
+    const seedC = conn(); const a = conn(); const b = conn();
+    await Promise.all([seedC.connect(), a.connect(), b.connect()]);
+    let acct: string | null = null;
+    try {
+      const { rows: [agency] } = await seedC.query<{ id: string }>("select id from agencies limit 1");
+      acct = await one(seedC, "insert into accounts (agency_id, clerk_org_id, name) values ($1,$2,'RSM Gone') returning id", [agency!.id, `${TEST_ORG_ID_PREFIX}rsmgone_${RUN}`]);
+      const contact = await one(seedC, "insert into contacts (account_id, first_name) values ($1,'Gone') returning id", [acct]);
+      await write(seedC, acct, contact, "en", D1);
+      const { rows: [pb] } = await b.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await a.query("begin");
+      await a.query("select 1 from record_summaries where account_id = $1 and contact_id = $2 and language = 'en' for update", [acct, contact]);
+      const waiting = claim(b, acct, contact, D2).then((r) => ({ ok: r }), (e: unknown) => ({ err: e }));
+      await waitUntilBlocked(seedC, pb!.pid);
+      await a.query("delete from contacts where id = $1", [contact]);
+      await a.query("commit");
+      const got = await waiting;
+      expect(got).toMatchObject({ err: { code: "23503", message: expect.stringContaining("claim_record_summary") } });
+      expect((await seedC.query("select 1 from record_summaries where contact_id = $1", [contact])).rowCount).toBe(0);
+    } finally {
+      await a.query("rollback").catch(() => {});
+      if (acct) {
+        await seedC.query("delete from contacts where account_id = $1", [acct]);
         await seedC.query("delete from accounts where id = $1", [acct]);
       }
       await Promise.all([seedC.end(), a.end(), b.end()]);

@@ -88,6 +88,10 @@ begin
   select * into v from public.record_summaries s
     where s.account_id = p_account and s.contact_id = p_contact and s.language = p_language
     for update;
+  -- The customer went (and the row with it, by cascade) between the insert and the lock: no lease on nothing.
+  if not found then
+    raise exception 'claim_record_summary: the customer no longer exists' using errcode = '23503';
+  end if;
   if v.generating_until is not null and v.generating_until > now() then
     return jsonb_build_object('status', 'busy');
   end if;
