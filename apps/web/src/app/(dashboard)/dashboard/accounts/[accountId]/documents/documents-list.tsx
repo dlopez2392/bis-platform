@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FileText, Lock } from "lucide-react";
@@ -27,6 +27,8 @@ export function DocumentsList({ accountId, locale, today, now, rows }: {
 }) {
   const router = useRouter();
   const [openId, setOpenId] = useState<string | null>(null);
+  // Review M3: the button is NAMED by its title and DESCRIBED by its facts line (expiry, scan, Owners only).
+  const factsPrefix = useId();
   const tt = (key: MessageKey, params?: Record<string, string | number>) => t(m, key, locale, params);
   const handlers = documentHandlers({ accountId, locale, reload: () => router.refresh(), reloadRequests: () => {} });
   const open = rows.find((r) => r.doc.id === openId)?.doc ?? null;
@@ -39,10 +41,11 @@ export function DocumentsList({ accountId, locale, today, now, rows }: {
             className="relative flex items-start gap-3 border-t border-[var(--row-line)] px-4 py-3 first:border-t-0 hover:bg-[var(--surface-3)] motion-safe:transition-colors motion-safe:duration-150">
             <FileText aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <button type="button" data-document-open onClick={() => setOpenId(doc.id)} aria-label={tt("documents.open", { title: doc.title })}
+              aria-describedby={`${factsPrefix}-${doc.id}`}
               className={cn("min-w-0 flex-1 text-left outline-none", "after:absolute after:inset-0 after:content-['']",
                 "focus-visible:after:ring-[3px] focus-visible:after:ring-inset focus-visible:after:ring-ring/50")}>
               <span lang="" className="block truncate text-sm font-medium text-card-foreground">{doc.title}</span>
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
+              <span id={`${factsPrefix}-${doc.id}`} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
                 <span>{tt(`documents.category.${doc.category}` as MessageKey)}</span>
                 <ScanStatus scan={rowScan(doc, now)} locale={locale} />
                 <ExpiryLine expiresOn={doc.expiresOn} today={today} locale={locale} />

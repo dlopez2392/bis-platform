@@ -104,6 +104,23 @@ describe("the Documents page's rows (spec 3.1)", () => {
     expect(a).toMatch(/<a[^>]*relative z-10[^>]*focus-visible:ring-\[3px\]/);
   });
 
+  it("the open button's name is the title, and its description is the row's facts line (review M3; mutation: drop aria-describedby -> FAILS)", () => {
+    const html = render();
+    const ids = new Set<string>();
+    for (const id of ["dA", "dB", "dC"]) {
+      const r = row(html, id);
+      const described = /<button[^>]*data-document-open[^>]*aria-describedby="([^"]+)"|<button[^>]*aria-describedby="([^"]+)"[^>]*data-document-open/.exec(r);
+      const factsId = described?.[1] ?? described?.[2];
+      expect(factsId, `row ${id} describes its button`).toBeDefined();
+      ids.add(factsId!);
+      const facts = new RegExp(`<span[^>]*id="${factsId}"[^>]*>`).exec(r);
+      expect(facts, `row ${id} has its facts line`).not.toBeNull();
+      if (id === "dA") expect(renderedText(r.slice(facts!.index))).toContain("Expires in 12 days");
+      if (id === "dC") expect(renderedText(r.slice(facts!.index))).toContain("Owners only");
+    }
+    expect(ids.size).toBe(3);
+  });
+
   it("reads Spanish when the reader does, each against its literal", () => {
     expect(m["documents.ownersOnly.es"]).toBe("Solo dueños");
     const text = renderedText(render("es"));

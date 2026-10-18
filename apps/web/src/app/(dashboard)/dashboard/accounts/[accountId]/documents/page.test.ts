@@ -60,6 +60,13 @@ const listProps = (html: string) => {
   return JSON.parse(raw!.replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/&#x27;/g, "'")) as { rows: unknown[]; today: string; locale: string };
 };
 
+/** The href of the ONE <a> whose content holds `text` (review I2: a bare href check is also met by the Expiring soon pill). */
+function linkHref(html: string, text: string): string | undefined {
+  const links = [...html.matchAll(/<a[^>]*href="([^"]*)"[^>]*>((?:(?!<\/a>)[\s\S])*)<\/a>/g)].filter((x) => x[2]!.includes(text));
+  expect(links, `links reading ${text}`).toHaveLength(1);
+  return links[0]![1]!.replace(/&amp;/g, "&");
+}
+
 beforeEach(() => {
   n = 0;
   listAccountDocuments.mockReset().mockResolvedValue([row(), row()]);
@@ -99,8 +106,7 @@ describe("the Documents page (spec 3.1)", () => {
     const before = encodeCursor({ v: "2030-03-05", id: ID });
     const html = await render({ before });
     expect(listAccountDocuments).toHaveBeenCalledWith(DB, "a1", expect.anything(), { before: { v: "2030-03-05", id: ID }, limit: 51 });
-    expect(renderedText(html)).toContain("Back to the start");
-    expect(html).toContain('href="/dashboard/accounts/a1/documents?show=expiring"');
+    expect(linkHref(html, "Back to the start")).toBe("/dashboard/accounts/a1/documents?show=expiring");
   });
 
   it("an impossible cursor day is page one, never the error state", async () => {
@@ -126,9 +132,8 @@ describe("the Documents page (spec 3.1)", () => {
     listAccountDocuments.mockResolvedValue([]);
     countAccountDocuments.mockResolvedValue(3);
     const html = await render({ show: "expired", before: encodeCursor({ v: "2030-01-01", id: ID }) });
-    const text = renderedText(html);
-    expect(text).toContain("Back to the start");
-    expect(text).not.toContain("Nothing has expired.");
+    expect(linkHref(html, "Back to the start")).toBe("/dashboard/accounts/a1/documents?show=expired");
+    expect(renderedText(html)).not.toContain("Nothing has expired.");
   });
 
   it("the three show pills mark the current one only; ?show=expired marks Expired", async () => {
