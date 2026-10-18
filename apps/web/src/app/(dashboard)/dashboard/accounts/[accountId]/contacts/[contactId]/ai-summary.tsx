@@ -42,7 +42,7 @@ export function AiSummaryView({ view, labels, onRegenerate, onRetry }: {
         <div data-ai-summary data-state="ready" className="space-y-1">
           <p data-ai-summary-text lang={view.language} className="text-sm text-card-foreground [overflow-wrap:anywhere]">{view.text}</p>
           <div className="flex flex-wrap items-center gap-2">
-            <span data-ai-summary-label data-generated-at={view.generatedAt} className={LABEL}>{view.stamp}</span>
+            <span data-ai-summary-label data-generated-at={view.generatedAt} className={`${LABEL} tabular-nums`}>{view.stamp}</span>
             <Button type="button" size="sm" variant="ghost" className={CONTROL} data-ai-regenerate onClick={onRegenerate}>{labels.regenerate}</Button>
           </div>
         </div>
