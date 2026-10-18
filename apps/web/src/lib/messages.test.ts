@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { m, type MessageKey } from "./messages";
-import { t } from "./i18n/t";
+import { t, plural } from "./i18n/t";
 
 /**
  * Internal roadmap labels must not reach a screen a client can open.
@@ -850,5 +850,45 @@ describe("S-07 3b: share links (plan Task 2)", () => {
   it("Spanish is usted, never tu (mutation: 'Intenta' or 'tu' in any .es -> FAILS)", () => {
     const es = KEYS_3B.map((k) => m[`${k}.es` as keyof typeof m] as string);
     for (const s of es) expect(s).not.toMatch(/\b(intenta|pide|abre|usa|tu|tus|contigo)\b/i);
+  });
+});
+
+describe("item 8a-1: the AI card's copy (spec 3.6)", () => {
+  const KEYS_8A1 = [
+    "aiSettings.title", "aiSettings.description", "aiSettings.account.label", "aiSettings.account.help", "aiSettings.budget.label",
+    "aiSettings.budget.help", "aiSettings.spend", "aiSettings.empty", "aiSettings.reached", "aiSettings.reachedNoDate",
+    "aiSettings.skipped", "aiSettings.skippedOne", "aiSettings.save", "aiSettings.saved", "aiSettings.undone",
+    "aiSettings.error.budget", "aiSettings.error.failed", "aiSettings.crashed", "aiSettings.loadError",
+    "aiSettings.global.label", "aiSettings.global.onHelp", "aiSettings.global.offHelp", "aiSettings.global.turnOff",
+    "aiSettings.global.turnOn", "aiSettings.global.confirmTitle", "aiSettings.global.confirmBody", "aiSettings.global.confirmWord",
+    "aiSettings.global.confirmLabel", "aiSettings.global.cancel", "aiSettings.global.turnedOff", "aiSettings.global.turnedOn",
+    "aiSettings.global.wrongWord", "palette.settings.ai",
+  ] as const;
+
+  it("every key has a Spanish twin (mutation: delete any one .es line -> FAILS naming it)", () => {
+    expect(KEYS_8A1.filter((k) => !(k in m) || !(`${k}.es` in m))).toEqual([]);
+  });
+
+  it("the spec's sentences, in both languages (spec 3.6; mutation: change either side of any pair -> FAILS)", () => {
+    expect([t(m, "aiSettings.spend", "en", { spent: "$1.84", budget: "$10.00" }), t(m, "aiSettings.spend", "es", { spent: "$1.84", budget: "$10.00" })])
+      .toEqual(["$1.84 of $10.00 this month, estimated", "$1.84 de $10.00 este mes, estimado"]);
+    expect([t(m, "aiSettings.reached", "en", { date: "Oct 14", resume: "Nov 1" }), t(m, "aiSettings.reached", "es", { date: "14 oct", resume: "1 nov" })])
+      .toEqual(["Budget reached on Oct 14. AI is paused for this account until Nov 1.", "Presupuesto alcanzado el 14 oct. La IA está en pausa en esta cuenta hasta el 1 nov."]);
+    expect([m["aiSettings.empty"], m["aiSettings.empty.es"]]).toEqual(["No AI use yet this month.", "Todavía no hay uso de IA este mes."]);
+    expect([m["aiSettings.global.label"], m["aiSettings.global.label.es"]]).toEqual(["AI for every account", "IA para todas las cuentas"]);
+    expect([m["aiSettings.account.label"], m["aiSettings.account.label.es"]]).toEqual(["AI for this account", "IA para esta cuenta"]);
+    expect([m["aiSettings.global.confirmWord"], m["aiSettings.global.confirmWord.es"]]).toEqual(["OFF", "APAGAR"]);
+    expect([plural(m, "aiSettings.skipped", 1, "en"), plural(m, "aiSettings.skipped", 3, "es", { count: 3 })])
+      .toEqual(["AI was skipped once this month because it was off or over budget.", "La IA se omitió 3 veces este mes porque estaba apagada o sin presupuesto."]);
+  });
+
+  it("no copy names the vendor or the plumbing (mutation: 'OpenAI' or 'tokens' in any value -> FAILS)", () => {
+    const all = KEYS_8A1.flatMap((k) => [m[k], m[`${k}.es` as keyof typeof m] as string]);
+    for (const s of all) expect(s).not.toMatch(/\b(openai|gpt|token|tokens|ledger|gateway|rpc|model|microd[oó]lar)/i);
+  });
+
+  it("Spanish is usted, never tu (mutation: 'Escribe' or 'tu' in any .es -> FAILS)", () => {
+    const es = KEYS_8A1.map((k) => m[`${k}.es` as keyof typeof m] as string);
+    for (const s of es) expect(s).not.toMatch(/\b(escribe|intenta|recarga|tu|tus|contigo)\b/i);
   });
 });
