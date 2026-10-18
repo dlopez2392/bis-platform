@@ -346,6 +346,12 @@ export {
   listReadyVersionScans, shareableVersion, type ReadyVersionScan, type Shareable, type CreateShareOutcome, type RestoreSharesOutcome,
   type DocumentShareRow, type DocumentShareLife, type ShareTarget, type ShareClaim, type TimelineDocumentShare,
 } from "./document-shares";
+// Item 8a-1: the AI gateway's ledger, switches and budget. See ./ai-gateway.ts.
+export {
+  AI_FEATURES, AI_OUTCOMES, DEFAULT_MONTHLY_BUDGET_CENTS, MAX_MONTHLY_BUDGET_CENTS,
+  aiGateCheck, recordAiLedger, getAiSettings, countAiSkipsSince, firstOverBudgetSince, setAccountAiSettings, setGlobalAiEnabled,
+  type AiFeature, type AiOutcome, type AiGate, type AiLedgerEntry, type AiSettingsRead,
+} from "./ai-gateway";
 
 // The contact record page: facts, Next up (S-03 part 1) and the paged timeline (1b). See ./record.ts.
 export {
