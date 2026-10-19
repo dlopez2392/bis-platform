@@ -68,7 +68,7 @@ const TECH_HIDDEN_LAST = `TechHidden ${stamp}`;
 const ALL_LASTS = [CHILD_LAST, MOTHER_LAST, FOUND_LAST, AUNT_LAST, TECH_MINE_LAST, TECH_TOO_LAST, TECH_HIDDEN_LAST];
 /** Every person here is first-named "E2E"; one literal, so the fixture-name walk sees one shape. */
 const named = (last: string) => `E2E ${last}`;
-/** Timestamp-unique on a fictional prefix (call-proposals.spec.ts's shape, its own prefix). */
+/** Timestamp-unique on a fictional prefix (suggestions.spec.ts's shape, its own prefix). */
 const AUNT_PHONE = `+1557${String(stamp).slice(-7)}`;
 
 const relationship = (contactId: string, relatedContactId: string, over: Partial<NewRelationship>): NewRelationship => ({

@@ -24,10 +24,11 @@ import type { BrowserContext } from "@playwright/test";
  *     the POST is signed out: 307 to /sign-in, reason
  *     `session-token-expired-refresh-non-eligible-non-get`.
  *
- * That third window is CI run 36155970934, attempt 1: call-proposals.spec.ts
- * opened its page on a token 4.7 s past expiry (minted 64.7 s earlier, during
- * the agency setup). 0.43 s later the page's OWN server action — the shell
- * posts one on every account-route load, before anyone clicks anything — was
+ * That third window is CI run 36155970934, attempt 1: suggestions.spec.ts
+ * (then call-proposals.spec.ts) opened its page on a token 4.7 s past expiry
+ * (minted 64.7 s earlier, during the agency setup). 0.43 s later the page's
+ * OWN server action — the shell posts one on every account-route load,
+ * before anyone clicks anything — was
  * signed out at 5.1 s past; the Accept click's POST followed at 0.62 s, 5.3 s
  * past, signed out too, so the task was never created. Any spec whose first
  * page load lands in that 5-second window is exposed, clicking or not; which
