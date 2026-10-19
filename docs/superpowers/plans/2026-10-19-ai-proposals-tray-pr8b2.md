@@ -136,7 +136,7 @@ This relaxes the spec's "on both projects" for bis-ci. **Owner answer, 2026-10-1
 
 **Not touched:**
 - `generate.ts`, `finish-call.ts`, `decide.ts`, `actions.ts` (the four actions already revalidate `/dashboard/work` and the record page, `decide.ts:292-300`).
-- The contact drawer (`contacts/contact-drawer.tsx`, `api/…/summary/route.ts`): P20. Its read fence `route.reads.test.ts:72` (`MEASURED = 31`) must pass **unchanged**.
+- The contact drawer (`contacts/contact-drawer.tsx`, `api/…/summary/route.ts`): P20. Its read fence `route.reads.test.ts:72` (`MEASURED = 31`) must pass **unchanged**. **Corrected 2026-10-19 (final review of 8b-2):** `contact-drawer.tsx`, `lib/contacts/drawer-summary.ts` and `lib/record/recent-rows.ts` DO change, by type-only exhaustive entries for the new `suggestion` timeline kind (an icon, a parser kind, an excerpt case), because their kind maps are exhaustive over `TimelineEntry`. The drawer still reads no suggestion source (owner decision 1), and its read fence is unchanged.
 - The group page.
 
 ---
@@ -313,6 +313,8 @@ This relaxes the spec's "on both projects" for bis-ci. **Owner answer, 2026-10-1
   - `apps/web/src/lib/proposals/generate.ts:336`
   - `apps/web/src/lib/proposals/generate.fallback.test.ts:47,52`
   - the rewritten `account-teardown.ts` paragraph
+  - **(corrected 2026-10-19, final review of 8b-2)** `apps/web/src/lib/messages.test.ts:1064` (the plumbing-words guard's regex names `call_proposals` as a word a reader must never see)
+  - **(corrected 2026-10-19, final review of 8b-2)** `packages/db/src/test/proposals-drop.test.ts` (0090's own test names what it proves gone)
 
   Paste it. This is evidence item 3's branch half.
 - [ ] Byte check and md5. Commit `db: drop call_proposals, its mirror, guard and copy, after checking every row was copied (item 8b-2, migration 0090)`, with every path, the two deletions included.
@@ -617,13 +619,14 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
   - **One live call through PostgREST as the service role:** `serviceDb().rpc("list_pending_proposals_for_agency", { p_per_account: 51 })` from a local script on bis-ci's env (memory "Env secret reads": never parse an env value with code that can throw). It answers an array, not a PGRST202.
   - Delete `tmp/8b2-0089`. Ledger line.
 - [ ] **2. Push and CI.** Read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). `suggestions-tray.spec.ts` and `suggestions.spec.ts` must both have run. Then the local gates, one at a time, after checking that no `screenshots.yml` run is in progress.
+- [ ] **2a. The UI's e2e BEFORE the drop** (corrected 2026-10-19, final review I-3/correction 7). The PR's own `e2e` stays red on its migration check until 0090 is on bis-ci (the migration decision), so without this step 8b-2's Playwright specs would first run only after the irreversible drop. Push a throwaway ref whose ONLY difference from the head is that `packages/db/supabase/migrations/0090_drop_call_proposals.sql` is deleted (one commit on top of the head, `tmp/8b2-e2e-no0090`); its migration check then passes with 0089 alone on bis-ci, and its local stack runs every other migration. Read that ref's `e2e` ON ITS HEAD SHA: `suggestions-tray.spec.ts`, `suggestions.spec.ts` and `styleguide.spec.ts` must have run green. Its `verify` is expected red on the retargeted bridge-era db tests (they assume the drop) and is not read. Delete the ref after. Ledger line. Step 5's production 0090 waits for this.
 - [ ] **3. Preview by hand** (bis-ci, a test account, never Test Client One):
   - the grouped tray;
   - the agency page with an account section;
   - the record's Waiting section and timeline row in both themes, English and Spanish, at 360 px;
   - a Technician sees Waiting rows only for an assigned customer.
 - [ ] **4. Production 0089** (MCP `apply_migration`, `tlbkbmlrfafquucsmsmm`, name `agency_suggestions_read`, the exact reviewed text, ONCE). Pre-flight `max(version)` = Task 0's. Post: the `pg_proc` read as in step 1, plus one live call as the service role through MCP, in ONE `execute_sql`: `set local role service_role; select count(*) from public.list_pending_proposals_for_agency(51);`. It is read-only, and no production credential leaves Vercel. The PostgREST path on production is then proven after the merge (step 8): the production function logs for `/dashboard/work` show no `listPendingProposalsForAgency` error. Ledger: `0089 APPLIED … NEVER RE-APPLY`.
-- [ ] **5. Production 0090, gated.** Not before **2026-10-20T05:35:46Z**: check `select now() >= '2026-10-20T05:35:46Z'::timestamptz` is true. Then, read-only:
+- [ ] **5. Production 0090, gated.** Not before step 2a's `e2e` is green on its ref, and not before **2026-10-20T05:35:46Z**: check `select now() >= '2026-10-20T05:35:46Z'::timestamptz` is true. Then, read-only:
   - **E1** (gate: `after_gap = 0`; `created_after_ready` is expected 0, because webhooks are not pinned and the old generator stopped at READY):
     ```sql
     select count(*) as total,
@@ -642,8 +645,10 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
         where c.status <> 'pending' and p.status is distinct from c.status) as differ,
       (select jsonb_object_agg(status, n) from (select status, count(*) n from public.call_proposals group by 1) s) as by_status;
     ```
-  - **E3:** `grep -rn "call_proposals" apps packages/db/src` on `origin/main` returns the allow-list plus the four bridge-era test files (tests do not ship; no runtime code names the table). The same grep on the branch head returns the allow-list only (Task 2's paste). Both go in the ledger.
+  - **E3:** `grep -rn "call_proposals" apps packages/db/src` on `origin/main` returns the allow-list plus the four bridge-era test files (tests do not ship; no runtime code names the table). The same grep on the branch head returns the allow-list only (Task 2's paste, which since the final review's correction includes `messages.test.ts:1064` and `proposals-drop.test.ts`). Both go in the ledger.
   - **If any gate fails:** do not apply anywhere; 0090 has not reached bis-ci either. Move Task 2's commit to a follow-up PR (spec ambiguity 11), record why, and merge with 0089 alone. The branch then holds no unapplied file, and bis-ci and production agree.
+  - **(corrected 2026-10-19, final review M-2)** One expected way E2 fails: a pre-deploy tab Accepted a suggestion through the old code, and a new tab then Undid it. `call_proposals` then reads `accepted` and its `proposals` twin `pending`, so E2 (and 0090's own check) reads `0 missing, 1 differ`, and 0090 refuses, correctly: the old table holds a decision the new one has undone. The remedy is the bullet above: peel 0090 to a follow-up PR. **Never hand-edit either table's rows to make the check pass.**
+  - **(corrected 2026-10-19, final review M-1/M-2) The apply route:** 0090 is applied ONLY through `supabase db push` (the `ci-project-setup.yml` workflow) on bis-ci and MCP `apply_migration` on production, each of which runs the file as one transaction. Never through a SQL editor or a bare `psql -f`. Since the final fix round the drops sit inside 0090's checking block, so a failed check drops nothing even through a bare `psql -f` (proven on a replica), but the route rule stands.
   - **Otherwise, in this order:**
     1. **bis-ci:** run E1 and E2 on bis-ci and write them in the ledger (E2 must be `missing 0, differ 0`; E1 is recorded only, owner decision 2). Then `ci-project-setup.yml --ref feat/item8b2-work-tray -f step=push-dry-run`, which lists exactly `0090_drop_call_proposals.sql`, then `-f step=push`. Its log shows no `0090_not_copied` and no `0090_not_one_transaction`.
     2. **Production:** `apply_migration` name `drop_call_proposals`, ONCE. A `0090_not_copied` or `0090_not_one_transaction` raise means nothing was dropped. Read the counts and STOP.
