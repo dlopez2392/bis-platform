@@ -69,9 +69,9 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
 ## Deviations from the spec, and spec-vs-code mismatches (the source decided; evidence cited)
 
 1. **0088 proves its own transaction.** The spec asks for a `pg_locks` read from a second session, for each apply path (§4.1). The replica can run that check for `psql -1` and for the Supabase CLI path. It cannot run it for MCP `apply_migration`, which only reaches hosted projects, and using bis-ci or production as the test bed would write migration history.
-   - **What 0088 does about it.** It stamps `txid_current()` into a transaction-local setting in its second statement and takes the lock in its third. A `do` block then raises `0088_not_one_transaction` unless the setting still equals `txid_current()`, `lock_timeout` reads `5s`, and `pg_locks` shows this backend holding `ShareRowExclusiveLock` on `call_proposals`. The same check runs again as the file's last statement.
-   - **Why that fails closed.** PostgreSQL refuses `LOCK TABLE` outside a transaction block, which is documented behaviour. If a path runs each statement in its own transaction, the first check fails before any DDL runs.
-   - Task 2 runs the spec's second-session check on the replica for the paths it can reach, and runs a positive control for the self-check.
+   - **What 0088 does about it (plan fix I-1).** Its FIRST statement is a `do` block that sets `lock_timeout` to `5s` and stamps `txid_current()` into `bis.m0088_xid` (both with `set_config(…, true)`, transaction-local) and takes `lock table public.call_proposals in share row exclusive mode`. Inside a `do` block all three always run in the block's own transaction, on every PostgreSQL version and every client protocol. A bare `set local` or `lock table` as the second statement of a multi-statement string is NOT safe on PostgreSQL 17.6 (bis-ci, CI's stacks, production), and the CLI push already warns `SET LOCAL can only be used in transaction blocks`. The SECOND statement, another `do` block, raises `0088_not_one_transaction` unless the setting still equals `txid_current()`, `lock_timeout` reads `5s`, and `pg_locks` shows this backend holding `ShareRowExclusiveLock` on `call_proposals`. The same check runs again as the file's last statement.
+   - **Why that fails closed.** A path that commits between statements (autocommit, or one transaction per statement) loses the transaction-local settings and releases the lock when the first block ends, so the second block raises before any DDL runs. The plan review proved this exact variant on the CLI pipeline, under `psql -1`, as a single simple-query string, and under autocommit (where it refused).
+   - Task 2 runs the spec's second-session check on the replica for the paths it can reach, and runs a positive control for the self-check. **A PG18 replica result does not stand in for 17.6**: the decisive evidence for the CLI path is CI `verify` (PostgreSQL 17) applying 0088, which happens early because Task 1 Step 11 pushes the branch right after Task 1's commit.
 2. **The pure parts live in a new subpath, `@bis/db/proposal-rules`.** That is `PROPOSAL_KINDS`, `PROPOSAL_SOURCES`, `PROPOSAL_STATUSES`, `EXPIRED_REASONS`, `PROPOSAL_MAX_AGE_MS`, `UNDO_WINDOW_MS`, `effectiveStatus`, `proposalExpiresAt`, `parse*` and the payload types. The barrel re-exports them as well. Precedent: `@bis/db/document-rules`, imported by `lib/record/author-mark.ts:2`. Web code imports these values from the subpath, so none of the **63** bare `vi.mock("@bis/db", () => ({` factories can blank them (read 2026-10-18: `grep -rln 'vi.mock("@bis/db", () => ({' apps/web/src apps/web/e2e | wc -l` → 63).
 3. **The function names stay; the type is `Proposal`.** `insertProposal`, `listProposalsForCall`, `listPendingProposals`, `getProposal` and `listPendingProposalsForAgency` keep their names and argument lists, so the two bare factories that name them (`…/calls/[callId]/page.test.ts:77`, `…/work/page.test.ts:58-65`) keep resolving. `markProposalDecided` is replaced by `decideProposal` and its siblings (Task 4). `CallProposal` is renamed `Proposal`. Every literal and reader is fixed in the task that renames it (Task 4's list).
 4. **`insertProposal` takes `expiresAt` explicitly** (`proposalExpiresAt(now)` = `now + 30 days`). The generator passes the call's own instant (`input.now`, which is `meta.endedAt`), not the database's `created_at`. The difference is the seconds between hang-up and insert, and the generator tests stay deterministic. The mirror and the copy follow §4.6 exactly.
@@ -88,7 +88,19 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
     - its catch answers `m["proposals.failed"]` at `:307-322`.
 
     The real pre-deploy tab is Task 12's owed smoke.
-13. **The `call_proposals` grep after 8b-1 has one more allowed hit.** `packages/db/src/test/proposals-bridge.test.ts` tests the mirror, the guard and the copy, so it must name the old table; 0089's PR deletes it with them. So `grep -rn "call_proposals" apps packages/db/src` returns the gateway feature name (`ai-gateway.ts:11`, `ai-gateway-schema.test.ts:75`) and that one file. Comment-only mentions of the hyphenated file name `call-proposals.ts` / `call-proposals-grants.test.ts` (`record-event.test.ts:6`, `automation-log-grants.test.ts:50`, `billing-schema.test.ts:109`, `:248`, `voice-web-sessions-grants.test.ts:19-188`, `sweep-fixtures.ts:66`, `finish-call.ts:258`, `buckets.test.ts:98`, `session-state.ts:27`, `relationships.spec.ts:71`) are retargeted to the new file names by the task that owns each file, so nothing points at a deleted file.
+13. **The `call_proposals` grep after 8b-1 has four more allowed hits, all in `packages/db/src/test`.** The old table still exists until 0089, so its coverage stays (plan fix M2):
+    - `proposals-bridge.test.ts` (the mirror, the guard, the copy);
+    - `call-proposals-grants.test.ts`, kept whole until 8b-2;
+    - `technician-scope.test.ts` and `server-only-writes-grants.test.ts`, which keep their `call_proposals` entries and gain `proposals` entries beside them.
+
+    0089's PR deletes or retargets all four. So `grep -rn "call_proposals" apps packages/db/src` returns the gateway feature name (`ai-gateway.ts:11`, `ai-gateway-schema.test.ts:75`), those four test files, and nothing under `apps`.
+
+    Comment-only mentions of a file that THIS PR deletes are retargeted by the task that owns the mentioning file:
+    - `call-proposals.ts` (`finish-call.ts:258`, Task 4);
+    - `call-proposals.test.ts` (`buckets.test.ts:98`, Task 4);
+    - `call-proposals.spec.ts` (`session-state.ts:27`, `relationships.spec.ts:71`, Task 10).
+
+    Mentions of `call-proposals-grants.test.ts` (`record-event.test.ts:6`, `automation-log-grants.test.ts:50`, `billing-schema.test.ts:109`, `:248`, `voice-web-sessions-grants.test.ts:19-188`) stay true and are left alone.
 14. **The agency Work page also moves to the registry's `describe`.** It is English (an operator), read-only, and still links to the call (spec §4.3). §3 names three copies of the sentence builder; this removes the third (`agency-work-list.tsx:270-300`). The link keeps the `#call-proposals` anchor, so the call page's section keeps `id="call-proposals"`.
 15. **The obsolete `proposals.*` keys stay in `messages.ts`, with no new readers.** All new copy is under `suggestions.*`. `proposals.work.heading` and `proposals.work.body` stay in use on the agency page (English, read-only, unchanged copy). The rest of the `proposals.*` keys lose their last reader in Task 8. They are left for 8b-2 to remove with the old table, so this PR deletes nothing from the catalogue that a baseline pins. Spec §7's "today's `proposals.*` keys gain their Spanish twins" is therefore replaced by new bilingual `suggestions.*` keys.
 16. **Retry uses `common.retry`** (`messages.ts:300-301`, "Retry" / "Intentar de nuevo"), not the spec's "Reintentar". The catalogue already has one Retry, and a second key for the same button is how two words for one action start.
@@ -97,11 +109,12 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
 19. **The tray's cap is read as 201 rows.** `listPendingProposals` asks for 201, filtered to `expires_at > now`. The page shows 200 and says "Showing the newest 200." when it got 201. Today's silent `.limit(500)` is at `call-proposals.ts:139`.
 20. **A test seam: `DecideDeps.afterRead?: () => Promise<void>`**. `decide.ts` awaits it between the read and the compare-and-swap. Only the barrier test sets it. The spec's barrier test (§8.1) needs a point to hold both Accepts at, and the alternative, wrapping supabase-js's builder chain, would test the wrapper.
 21. **The decision tests are live tests on the replica.** They use real PostgREST and real write paths, as `…/calls/[callId]/actions.test.ts` does today (its header, `:41-55`). They run ONLY with the replica kit's `env-run.sh` sourced (Global Constraints). In CI `verify` they run against the runner's local stack, as the existing live tests do.
+22. **`describe` returns `{ parts, detail, pastDue }`, not the spec's `{ before, after, detail }`** (§4.2; plan fix M12). The card must put `lang="en"` on the model's own words inside the line (P18), and a single string cannot carry that, so the line is a list of parts, each with an optional `lang`. `pastDue` tells the card to say "Was due …" and the decision to refuse a plain Accept (P22) from one computation. A contact field's "before" is always "(empty)" by construction (only blank fields are proposed), so it lives in the sentence, not in a field.
 
 ## Assumptions (not verified by reading; each has a named check)
 
 - **A1** Node 22's ICU (CI `verify`) formats the source and decided-by dates exactly as node 24 does here, once `\u00A0` and `\u202F` become spaces. Check: Task 7's cases on CI `verify`. If CI differs, the reviewer pastes CI's output and the literal changes; the assertion's meaning does not.
-- **A2** Supabase CLI `db push` (the `ci-project-setup.yml` path, `packages/db/src/ci/push.ts`) runs each migration file in one transaction. Check: Task 2 on the replica if the CLI connects to it, and in every case 0088's self-check (deviation 1) on CI `verify`, whose `ci-local-supabase.sh:305` applies migrations with that same `supabase db push`.
+- **A2** Supabase CLI `db push` (the `ci-project-setup.yml` path, `packages/db/src/ci/push.ts`) runs each migration file in one transaction on PostgreSQL 17.6, the version bis-ci, CI's stacks and production run. **The local replica is PG18 and does not stand in for 17.6.** Checks: Task 2 Step 2 on the replica (the CLI connects; it is supporting evidence only), and, decisively, 0088's self-check (deviation 1) on CI `verify` (PostgreSQL 17), whose `ci-local-supabase.sh:305` applies migrations with that same `supabase db push`. Task 1 Step 11 pushes the branch right after Task 1's commit, so `verify` applies 0088 long before Task 11, and the orchestrator reads that log in Task 2 Step 4.
 - **A3** MCP `apply_migration` runs the file's text in one transaction. A search did not settle it (`supabase/mcp` issue #241 only says it calls `POST /v1/projects/{ref}/database/migrations`). Check: 0088's self-check fails closed before any DDL if not (deviation 1), and Task 12 step 5 reads the result. If it raises on production, see Question 1.
 - **A4** Vercel's project API returns the skew-protection maximum age as a field of `GET /v9/projects/{idOrName}`, believed to be named `skewProtectionMaxAge`, in seconds. The Vercel MCP `get_project` does not expose it (ledger, 8b spec fix). Check: Task 12 step 1 reads it on the dashboard (Project → Settings → Advanced → Skew Protection), with the API as a cross-check. The spec's own assumption is "about 12 hours".
 - **A5** `record_event` (the user-client path of `emit`, `events.ts:20-22`) accepts any event type string, so `task.deleted` needs no allow-list change. Check: Task 6's to-do Undo case reads the `events` row back.
@@ -152,8 +165,8 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
 
 ### 0088's byte and SQL rules
 
-- ASCII only and no backslash anywhere. The only `$` characters are the `$$` pairs around the six bodies (two `do` blocks and four functions), so 24 `$` characters in 12 `$$`. Character classes are written as `'[^0-9a-f]'`, never with an anchor.
-- The first statements are the self-check (deviation 1), and `set local lock_timeout = '5s'` comes first.
+- ASCII only and no backslash anywhere. The only `$` characters are the `$$` pairs around the seven bodies (three `do` blocks and four functions), so 28 `$` characters in 14 `$$`. Character classes are written as `'[^0-9a-f]'`, never with an anchor.
+- The first two statements are the self-check (deviation 1): a `do` block that sets `lock_timeout` to `5s` and takes the lock, then a `do` block that checks it. There is no bare `set local` and no bare `lock table` anywhere in the file.
 - RLS is on. SELECT for `authenticated` comes through the member policy plus the restrictive contact policy. No INSERT, UPDATE or DELETE for `anon` or `authenticated`; `service_role` holds all four.
 - Every function is `set search_path = ''` with every name schema-qualified. The three bridge functions are `security definer`. Every function has `revoke all … from public, anon, authenticated, service_role`.
 - The rollback note in the header is in §4.1's order.
@@ -167,19 +180,19 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
 
 - Web code imports the pure values (`effectiveStatus`, `PROPOSAL_KINDS`, `proposalExpiresAt`, `UNDO_WINDOW_MS`, `PROPOSAL_MAX_AGE_MS`) ONLY from `@bis/db/proposal-rules` (deviation 2).
 - No module under `lib/proposals/` or `components/proposals/` reads a value from `@bis/db` at import time. A kind module's `apply: (…) => addTask(…)` is a function, never `apply: addTask` (that would be an import-time read under a bare factory).
-- Task 8 runs this and expects only the two files deviation 3 names:
+- **Which bare factories meet the new graph** (plan fix M4). A test file imports the page or list it tests, not `lib/proposals`, so a grep for `lib/proposals` imports inside test files answers EMPTY and proves nothing. The right question is which bare-factory tests import a module that imports the new code. Task 8 runs:
 
   ```
-  grep -rln 'vi.mock("@bis/db", () => ({' apps/web/src | xargs grep -lE "from ['\"][^'\"]*(lib/proposals|components/proposals)|import\(['\"][^'\"]*(lib/proposals|components/proposals)"
+  grep -rln 'vi.mock("@bis/db", () => ({' apps/web/src | xargs grep -lE "from ['\"]\./(page|work-list|agency-work-list)['\"]"
   ```
 
-  For those two (`…/calls/[callId]/page.test.ts`, `…/work/page.test.ts`), list every `@bis/db` value the new import graph CALLS during their tests and add it to the factory.
+  and keeps only results under `…/calls/[callId]/`, `…/tasks/` and `…/work/`. **Expected output: exactly `…/calls/[callId]/page.test.ts` and `…/work/page.test.ts`** (read 2026-10-19: `…/tasks/page.test.ts:105` and `…/tasks/actions.test.ts:32` use `async (importOriginal)` factories; the agency list's test imports `./agency-work-list`, which only Step 3 changes, and it is in the grep's pattern too, so a bare factory there would show). A different output is a finding to read, not a pattern to widen. For each file listed, list every `@bis/db` value the new import graph CALLS during its tests and add it to the factory.
 - The grep matches IMPORTS, not text (the 8a-2 final review: a text grep matched a URL in an assertion and could never answer empty).
 
 ### Ownership (tag on every task; no task edits a file its owner does not own)
 
 - **bis-db-schema:**
-  - Task 1: `packages/db/supabase/migrations/0088_proposals.sql`, `packages/db/src/test/proposals-schema.test.ts`, `packages/db/src/test/proposals-bridge.test.ts`, `packages/db/src/test/call-proposals-grants.test.ts` (deleted; its cases move into `proposals-schema.test.ts`), `packages/db/src/test/technician-scope.test.ts` (`:28`, `:75`), `packages/db/src/test/server-only-writes-grants.test.ts` (`:54`, `:85`, `:154`, `:217`, `:244-245`, `:304-330`), `packages/db/src/account-teardown.ts` (`ACCOUNT_OWNED_TABLES` `:24` and the `call_proposals` paragraph `:62-71`), the comment lines in `record-event.test.ts:6`, `automation-log-grants.test.ts:50`, `billing-schema.test.ts:109`, `:248`, `voice-web-sessions-grants.test.ts` (each `call-proposals-grants.test.ts` mention) and `sweep-fixtures.ts:66`, and `<SCRATCH>/s15c-kit/*`.
+  - Task 1: `packages/db/supabase/migrations/0088_proposals.sql`, `packages/db/src/test/proposals-schema.test.ts`, `packages/db/src/test/proposals-bridge.test.ts`, `packages/db/src/test/technician-scope.test.ts` (`:28`, `:75`, additions only), `packages/db/src/test/server-only-writes-grants.test.ts` (additions beside `:54`, `:85`, `:154`, `:217`, `:244-245`, `:304-330`), `packages/db/src/account-teardown.ts` (`ACCOUNT_OWNED_TABLES` `:24` and the `call_proposals` paragraph `:62-71`), and `<SCRATCH>/s15c-kit/*`. `packages/db/src/test/call-proposals-grants.test.ts` is NOT edited or deleted (plan fix M2; 8b-2 removes it with the table).
   - Task 2: `<SCRATCH>/s15c-t2/*` only; it makes no repo change unless 0088's text must change.
 - **bis-crm:**
   - Task 3: `apps/web/src/lib/messages.ts` and one `describe` appended to `apps/web/src/lib/messages.test.ts`.
@@ -189,8 +202,8 @@ These four notes arrived with the brief. Each is fixed here and cited by the tas
 - **bis-platform:**
   - Task 6: `apps/web/src/lib/proposals/{decide,actions}.ts`, `decide.live.test.ts`, `actions.test.ts`, and one `ALLOWED` line in `ISR`.
 - **bis-frontend:**
-  - Task 7: `apps/web/src/lib/proposals/view.ts` (+ test), `apps/web/src/components/proposals/*` (+ tests), `…/styleguide/page.tsx` (the "Proposal status" section `:594-610` and the `STATUS_TREATMENT` import `:27`, `:75`) and its test if one pins that section.
-  - Task 8: `…/calls/[callId]/{page.tsx,page.test.ts}`; the deletions `…/calls/[callId]/{actions.ts,actions.test.ts,proposals.tsx,proposals.test.ts,proposal-actions.tsx,proposal-actions.test.ts}`; `…/tasks/{page.tsx,page.test.ts,work-list.tsx}`; `…/work/{agency-work-list.tsx,agency-work-list.test.ts,page.tsx,page.test.ts}`; `apps/web/src/lib/work/buckets.test.ts:95-115`; and `ISR` (one line out: `:72`). Task 6's line in `ISR` lands first; Task 8 starts after Task 6.
+  - Task 7: `apps/web/src/lib/proposals/view.ts` (+ test), `apps/web/src/components/proposals/*` (+ tests), `…/styleguide/page.tsx` (the "Proposal status" section `:594-610` and the `STATUS_TREATMENT` import `:27`, `:75`) and its test if one pins that section; `apps/web/src/lib/format.ts:7` (`export` on `tag` only, M11).
+  - Task 8: `…/calls/[callId]/{page.tsx,page.test.ts}`; the deletions `…/calls/[callId]/{actions.ts,actions.test.ts,proposals.tsx,proposals.test.ts,proposal-actions.tsx,proposal-actions.test.ts}`; `…/tasks/{page.tsx,page.test.ts,work-list.tsx,loading.tsx}`; `…/work/{agency-work-list.tsx,agency-work-list.test.ts,page.tsx,page.test.ts}`; `apps/web/src/lib/work/buckets.test.ts:95-115`; and `ISR` (one line out: `:72`). Task 6's line in `ISR` lands first; Task 8 starts after Task 6.
 - **bis-e2e-qa:** Task 10: `apps/web/e2e/suggestions.spec.ts` (replaces `apps/web/e2e/call-proposals.spec.ts`, deleted), and the comment lines `apps/web/e2e/fixtures/session-state.ts:27` and `apps/web/e2e/relationships.spec.ts:71`.
 - **Orchestrator:** Task 0, the ledger, the bis-ci and production applies of 0088, the parity check, the gates, the PR, the merge and the tracker (Task 12).
 
@@ -300,9 +313,14 @@ Stop if `pre` differs from bis-ci. 0088 must leave it UNCHANGED on `post`, becau
 ## Pinned tests this PR changes (stated outright)
 
 - `packages/db/src/test/call-proposals.test.ts` (491 lines) → `proposals.test.ts` (Task 4). Every case is kept and retargeted. The `markProposalDecided` cases (`:115-181`) become `decideProposal` cases with the same mutations (`drop .eq("status","pending")`, `drop .eq("account_id")`). The work-queue no-contamination case (`:426-491`) is kept unchanged in force.
-- `packages/db/src/test/call-proposals-grants.test.ts` (475 lines) → its cases move to `proposals-schema.test.ts` (Task 1), retargeted to `proposals` with the same mutations. "authenticated holds UPDATE on no column" (`:121`) stays. The `:320` "acting on a proposal" block becomes "the client role writes nothing" (no grant at all now). The `:436` cascade case is kept, through the composite FK.
-- `packages/db/src/test/technician-scope.test.ts:28`, `:75`: the `call_proposals` key and seed become `proposals`, with the seed `insert into proposals (account_id, source, call_id, contact_id, kind, payload, evidence, expires_at) values ($1,'call',$2,$3,'task','{}','they asked', now() + interval '30 days') returning id`. The table-by-table case's mutation ("drop any one table's restrictive policy") now covers `proposals_technician_scope`.
-- `packages/db/src/test/server-only-writes-grants.test.ts`: `:54` seeds `proposals`; `:85` becomes `{ table: "proposals", policy: "proposals_member_read", fence: { name: "proposals_technician_scope", cmd: "SELECT" } }` (the fence is FOR SELECT now, not ALL); `:154`, `:217` and `:244-245` move to `proposals`; and `:304-330` becomes "0088: `proposals_decision_complete`", with the constraint name in the regex.
+- `packages/db/src/test/call-proposals-grants.test.ts` (475 lines): UNCHANGED and still run (plan fix M2). With 0088, its inserts are mirrored, which none of its assertions reads. Its cases are also re-stated for `proposals` in `proposals-schema.test.ts` (Task 1). 8b-2 deletes it with the table.
+- `packages/db/src/test/technician-scope.test.ts:28`, `:75` (plan fix M2): `call_proposals` stays, and `PER_CONTACT` gains `proposals: "id"` beside it. The seed inserts ONLY the `call_proposals` row (`:75`, unchanged); the mirror makes its `proposals` twin with the same id, so the seed map gets `proposals` = that same id (one line). The table-by-table case's mutation ("drop any one table's restrictive policy") now also covers `proposals_technician_scope`. That fence reads the row's own contact, which the mirror copied from the call proposal, so the expected visibility is the same as the old table's.
+- `packages/db/src/test/server-only-writes-grants.test.ts` (plan fix M2; every `call_proposals` line stays):
+  - `:54` still seeds `call_proposals`, and the mirror makes the twin (`s.proposalId` names both);
+  - beside `:85`, add `{ table: "proposals", policy: "proposals_member_read", fence: { name: "proposals_technician_scope", cmd: "SELECT" } }` (FOR SELECT, not ALL);
+  - beside `:154`, add `["proposals", "proposalId"]`;
+  - beside `:217` and `:244-245`, add the same refused update against `proposals`;
+  - after `:304-330`, add "0088: `proposals_decision_complete`", a twin of that block with `proposals_decision_complete` in the regex.
 - `apps/web/src/lib/proposals/generate.test.ts`:
   - `base` (`:146`) gains `language: "en"`.
   - The three whole-row `toEqual({`s (`:237`, `:382` and the third) gain `source: "call"`, `evidence_ref: { turn: 1, at: "2026-09-18T12:00:00.000Z" }`, `evidence_lang: "en"` and `expires_at: "<base.now + 30 days, typed out>"`.
@@ -326,6 +344,7 @@ Stop if `pre` differs from bis-ci. 0088 must leave it UNCHANGED on `post`, becau
 
 - §5 whole: the tray's grouping, the agency Work page's actions, the record's "Waiting for you", the timeline row, "See it in the transcript", the agency RPC, and dropping `call_proposals`, the mirror, the guard and the copy function (0089).
 - The drawer (P20), Accept all (P11), the weekly acceptance line (P21), the stop hold's move (P16), new sources or kinds, Spanish model text (P18), Sofía's live writes (P17).
+- **A note for the 8b-2 plan (plan fix M15).** On **bis-ci**, the deploy gap never closes at READY plus the skew age. Every other branch's Vercel Preview still runs pre-8b code against bis-ci until that branch merges `main`, so old-code writes to `call_proposals` on bis-ci can arrive at any time. 0089's evidence item 1 (spec §4.6, "no `call_proposals` row created or decided after READY + max age") can therefore hold on production but not on bis-ci. 8b-2 needs another basis for bis-ci. One option: list the open Preview deployments whose commit predates 8b-1's merge, and apply 0089 to bis-ci only when none is left; or accept that bis-ci's leftover `call_proposals` rows are test data and say so in the ledger. The 8b-2 plan decides; this PR records only the READY time and the skew age (Task 12).
 
 ## File Structure
 
@@ -347,7 +366,7 @@ Stop if `pre` differs from bis-ci. 0088 must leave it UNCHANGED on `post`, becau
 | `apps/web/e2e/suggestions.spec.ts` | bis-e2e-qa | the tray and the call page on the fixture account |
 
 **Deleted:**
-- `packages/db/src/call-proposals.ts`, `packages/db/src/test/call-proposals.test.ts`, `packages/db/src/test/call-proposals-grants.test.ts`;
+- `packages/db/src/call-proposals.ts`, `packages/db/src/test/call-proposals.test.ts`;
 - `…/calls/[callId]/{actions.ts,actions.test.ts,proposals.tsx,proposals.test.ts,proposal-actions.tsx,proposal-actions.test.ts}`;
 - `apps/web/e2e/call-proposals.spec.ts`.
 
@@ -449,7 +468,6 @@ Rollout:              T12 (orchestrator, LAST)
 - Create: `<SCRATCH>/s15c-kit/replica.sh`, `<SCRATCH>/s15c-kit/pgrst.sh` (outside the repo)
 - Create: `packages/db/supabase/migrations/0088_proposals.sql`
 - Create: `packages/db/src/test/proposals-schema.test.ts`, `packages/db/src/test/proposals-bridge.test.ts`
-- Delete: `packages/db/src/test/call-proposals-grants.test.ts` (its cases move into `proposals-schema.test.ts`, retargeted; each one listed in Step 3)
 - Modify: `packages/db/src/account-teardown.ts:24` and `:62-71`; `packages/db/src/test/technician-scope.test.ts:28`, `:75`; `packages/db/src/test/server-only-writes-grants.test.ts:54`, `:85`, `:154`, `:217`, `:244-245`, `:304-330`; the comment mentions listed in deviation 13 that this task owns.
 
 **Interfaces**
@@ -487,7 +505,7 @@ Paste both diffs: only the lines named in "The replica kit" may differ. Run `bas
   - `packages/db/src/test/db.ts` (`withRollback`, `actAs`, `actAsMember`, `actAsOwner`);
   - `sed -n 1,120p packages/db/src/test/record-summaries-schema.test.ts` (the seed with owner, staff, two technicians and a second account; `attempt()` with its savepoint);
   - `sed -n 295,346p packages/db/src/test/document-shares-schema.test.ts` (the two-session pattern: three `Client`s, `waitUntilBlocked`, committed rows deleted in `finally`);
-  - `cat -n packages/db/src/test/call-proposals-grants.test.ts` (whole, since its cases move);
+  - `cat -n packages/db/src/test/call-proposals-grants.test.ts` (whole: its cases are re-stated for `proposals`; the file itself stays);
   - `sed -n 1,140p packages/db/src/test/technician-scope.test.ts`;
   - `sed -n 40,100p;200,335p packages/db/src/test/server-only-writes-grants.test.ts`.
 
@@ -508,7 +526,7 @@ const ins = (c: Client, o: { acct: string; call: string; contact: string | null;
 Cases. **Each refusing case runs in its own `withRollback`** (reviewer note 3), and each names its mutation in its title:
 
 1. "the table exists" (`to_regclass`): guards every case below from vacuity.
-2. "anon holds nothing; authenticated holds exactly SELECT; service_role holds SELECT, INSERT, UPDATE, DELETE; the full grant set across every role including PUBLIC is exactly this". The query is the `information_schema.role_table_grants` one from `call-proposals-grants.test.ts:175-210`, retargeted. Mutation: `grant insert on public.proposals to authenticated` → FAILS.
+2. "anon holds nothing; authenticated holds exactly SELECT; service_role holds DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE; the full grant set across every role including PUBLIC is exactly this". Plan fix M1: the project's default ACL also gives `service_role` REFERENCES, TRIGGER and TRUNCATE, exactly as `call-proposals-grants.test.ts:184-190` lists for the old table. The query is the `information_schema.role_table_grants` one from `call-proposals-grants.test.ts:175-210`, retargeted; the expected list is that file's list with the table name changed. Mutation: `grant insert on public.proposals to authenticated` → FAILS.
 3. "authenticated holds UPDATE on no column" (`information_schema.column_privileges`). Mutation: `grant update (status) on public.proposals to authenticated` → FAILS. This is the spec's probe :362, "Grant `update (payload)` to `authenticated`".
 4. "a client cannot INSERT a proposal, even for its own account and call": `actAs` owner of A, insert → `42501`. Mutation: as in case 2.
 5. "who reads" (one `withRollback`, reads only; nothing refuses). Seed A rows for `Mine`, `Theirs` and a no-contact call, and B's own row.
@@ -586,7 +604,12 @@ Cases (one `withRollback` each unless stated):
 
    Mutation: drop the guard trigger → the old update succeeds, then the mirror's update meets `p.status = 'accepted'` ≠ `old.status 'pending'` and raises `call_proposals_mirror_missed`. **So the case asserts the error BY NAME, `call_proposals_superseded`**, and the mutation FAILS it on the name (spec probe :367; reviewer note 1's logic applies here too).
 10. **The guard lets an old-code revert of its own Accept through.** As case 6 (old Accept, mirrored), then the old revert → 1 row, no raise. Mutation: make the guard raise whenever `v_status <> 'pending'` → FAILS.
-11. **The guard over a missing `proposals` row raises.** `offSql`; insert into `call_proposals` (no mirror, so no `proposals` row); `onSql`; the old Accept update raises `call_proposals_superseded`. Mutations: (a) replace `if not v_found or v_status is distinct from old.status` with `if v_status <> old.status` → a null `v_status` makes the `if` null and the update goes through, FAILS; (b) drop the `not v_found` arm → same (spec probe :369).
+11. **The guard over a missing `proposals` row raises, asserted BY NAME** (plan fix I-6). `offSql`; insert into `call_proposals` (no mirror, so no `proposals` row); `onSql`; in `attempt()`, the old Accept update raises a message matching `/^call_proposals_superseded: /`.
+
+    Mutation (a): replace `if not v_found or v_status is distinct from old.status` with `if v_status <> old.status`. A null `v_status` makes the `if` null, so the guard lets the update through, and the MIRROR's update then matches no row and raises `call_proposals_mirror_missed`. The update still fails, but under the wrong name, so the `toMatch` FAILS (spec probe :369).
+11b. **The same, with the mirror disabled** (its own `withRollback`): `offSql`; insert into `call_proposals`; then `alter table public.call_proposals enable trigger call_proposals_guard` only (the mirror stays off); the old Accept update raises `call_proposals_superseded` by name. Mutation (a) → the update goes through (`rowCount` 1, no error), FAILS. This isolates the guard from the mirror's own refusal.
+
+    **The `not v_found` arm is recorded as redundant, and its probe is dropped.** With no row, `v_status` is null, and `null is distinct from old.status` is already true for every `old.status` (the column is `not null`), so dropping `not v_found` cannot change any outcome. It stays in the function for the reader, and no test claims to pin it.
 12. **The mirror's status condition, with the guard disabled (reviewer note 1).** `alter table public.call_proposals disable trigger call_proposals_guard` (the mirror stays on). Insert (mirrored). New-code compare-and-swap to `accepted` by `'user_new'` (as case 9). Then, in `attempt()`, the old Accept update raises a message matching `/^call_proposals_mirror_missed: /`. After `rollback to savepoint`, `proposals.decided_by` = `'user_new'`. Mutation: drop `and p.status is not distinct from old.status` from the mirror's update → the old update succeeds and overwrites `decided_by` with `'user_old'`, FAILS.
 13. **The guard's lock, two sessions (R1), order 1: the new code first.** NOT in `withRollback`: real commits. Three `Client`s (`seedC`, `a`, `b`) as in `document-shares-schema.test.ts:295-346`.
     1. `seedC` creates a throwaway account, contact, number and call, then inserts a `call_proposals` row. The mirror creates the `proposals` row, and `seedC` commits.
@@ -631,10 +654,10 @@ Cases (one `withRollback` each unless stated):
 -- or wins; it never decides twice).
 --
 -- ONE TRANSACTION (spec 4.1): the share-row-exclusive lock on call_proposals, taken before anything is
--- created, keeps any old-code write from landing between the copy and the triggers. LOCK TABLE refuses
--- to run outside a transaction block, and the two do blocks below raise 0088_not_one_transaction
--- unless the whole file runs in the one transaction that took the lock: a path that splits statements
--- fails before any DDL.
+-- created, keeps any old-code write from landing between the copy and the triggers. The lock and the
+-- settings are taken inside the first do block; the second and the last do blocks raise
+-- 0088_not_one_transaction unless the whole file runs in the one transaction that took the lock: a
+-- path that commits between statements fails before any DDL.
 --
 -- APPLY ORDER: CI project (ci-project-setup.yml: push-dry-run, then push), then production (MCP
 -- apply_migration, once), then the parity check, then merge. The migration goes BEFORE the code: the
@@ -666,10 +689,19 @@ Cases (one `withRollback` each unless stated):
 --
 -- ASCII only, no backslash anywhere.
 
--- 0. One transaction, holding the lock, or nothing at all.
-set local lock_timeout = '5s';
-select pg_catalog.set_config('bis.m0088_xid', pg_catalog.txid_current()::text, true);
-lock table public.call_proposals in share row exclusive mode;
+-- 0. One transaction, holding the lock, or nothing at all. The settings and the lock are taken INSIDE a
+--    do block (plan fix I-1): on PostgreSQL 17 (bis-ci, CI's stacks, production) a bare SET LOCAL or
+--    LOCK TABLE as a later statement of a multi-statement string is not guaranteed to be inside a
+--    transaction block, and the CLI push already warns "SET LOCAL can only be used in transaction blocks".
+--    Inside a do block both always run in the block's transaction. The second do block then proves the
+--    NEXT statement is still that transaction and still holds the lock; a path that commits between
+--    statements (autocommit) has lost the transaction-local settings and fails here, before any DDL.
+do $$
+begin
+  perform pg_catalog.set_config('lock_timeout', '5s', true);
+  perform pg_catalog.set_config('bis.m0088_xid', pg_catalog.txid_current()::text, true);
+  lock table public.call_proposals in share row exclusive mode;
+end $$;
 do $$
 begin
   if pg_catalog.current_setting('bis.m0088_xid', true) is distinct from pg_catalog.txid_current()::text
@@ -883,13 +915,13 @@ end $$;
     ```
 
   - Rewrite the `call_proposals` paragraph (`:62-71`): `call_proposals` (0040) stays off the list until 0089 drops it (its rows ride `calls`' cascade), and `proposals` (0088) is ON it, before `calls`.
-  - Apply the retargets in "Pinned tests" for `technician-scope.test.ts` and `server-only-writes-grants.test.ts`. Retarget the comment mentions of `call-proposals-grants.test.ts` in the four files this task owns (deviation 13) to `proposals-schema.test.ts`.
-  - Delete `call-proposals-grants.test.ts`. List each of its 18 `it`s by title in the report, with the `proposals-schema.test.ts` case that now carries it, or why it no longer applies: the column-level UPDATE grant cases (`:320-435`) no longer apply because no client role holds any UPDATE, and case 3 pins that.
+  - Apply the additions in "Pinned tests" for `technician-scope.test.ts` and `server-only-writes-grants.test.ts`. Every existing `call_proposals` line stays (plan fix M2).
+  - `call-proposals-grants.test.ts` is NOT touched. In the report, list each of its 18 `it`s by title, with the `proposals-schema.test.ts` case that re-states it for `proposals`, or why it has no twin: the column-level UPDATE grant cases (`:320-435`) have none, because no client role holds any UPDATE on `proposals`, and case 3 pins that.
 
 - [ ] **Step 7: Rebuild and run green.**
   - `bash "$S/s15c-kit/replica.sh" 55670 "$S/s15c-t1-impl"` → `post = pre + 0088`.
-  - Run Step 4's command (with `green.*` files) → exit 0. Read the count: 46 tests and 1 todo. That is 32 in `proposals-schema.test.ts` (cases 1–9 one each = 9, case 10 = 13, case 11 = 1, case 12 = 6, case 13 = 3, plus case 14 as the `todo`) and 14 in `proposals-bridge.test.ts`; correct the arithmetic in the report if your count differs, and say why.
-  - Also on `post`: `node node_modules/vitest/vitest.mjs run src/test/schema-grants-guard.test.ts src/test/technician-scope.test.ts src/test/server-only-writes-grants.test.ts src/test/ai-gateway-schema.test.ts src/test/record-summaries-schema.test.ts` → all pass.
+  - Run Step 4's command (with `green.*` files) → exit 0. Read the count: 47 tests and 1 todo. That is 32 in `proposals-schema.test.ts` (cases 1–9 one each = 9, case 10 = 13, case 11 = 1, case 12 = 6, case 13 = 3, plus case 14 as the `todo`) and 15 in `proposals-bridge.test.ts` (cases 1–14 plus 11b); correct the arithmetic in the report if your count differs, and say why.
+  - Also on `post`: `node node_modules/vitest/vitest.mjs run src/test/schema-grants-guard.test.ts src/test/technician-scope.test.ts src/test/server-only-writes-grants.test.ts src/test/ai-gateway-schema.test.ts src/test/record-summaries-schema.test.ts` → all pass. `call-proposals-grants.test.ts` is a `withTestAccount` suite: run it behind a PostgREST on your replica (`pgrst.sh 55670 55678 55679 …`; those ports are free until Task 11) → it passes UNCHANGED, with 0088's mirror firing under it.
   - The Faithfulness query on `post` equals `pre`'s.
 - [ ] **Step 8: Byte check.**
 
@@ -897,9 +929,10 @@ end $$;
   node -e 'const b=require("fs").readFileSync(process.argv[1]);const bad=[...b].filter((x)=>x>127||x===92).length;const s=b.toString();console.log(JSON.stringify({nonAsciiOrBackslash:bad,dollars:(s.match(/\$/g)||[]).length,doubleDollar:(s.match(/\$\$/g)||[]).length}))' packages/db/supabase/migrations/0088_proposals.sql
   ```
 
-  → `{"nonAsciiOrBackslash":0,"dollars":24,"doubleDollar":12}`. Positive control: copy the file to `$S/s15c-t1-impl/ctl.sql`, append byte `0x5c`, rerun → `nonAsciiOrBackslash: 1`. Then `md5sum packages/db/supabase/migrations/0088_proposals.sql` → paste it (Tasks 2, 11 and 12 compare it).
-- [ ] **Step 9: Mutation probes.** Each runs on a copy applied to a fresh `post`: edit the migration, rebuild the replica, run the one case by `-t`, read that its count is 1 and that it FAILS, edit back, and `cmp`. Run every mutation named in Step 3, each by its case. **Paste each failing assertion line.** The ones the spec names (§8.3 :362–:370) are mandatory, and the report lists them by spec line: :362 (case 3), :363 (who reads), :364 (case 14, after Task 4 turns it on: deferred to Task 4's probes), :365 and :366 (bridge 1, 3), :367 (bridge 9), :368 (bridge 13, **failing on the name**), :369 (bridge 11), :370 (bridge 6).
-- [ ] **Step 10: Commit.** `git add -- packages/db/supabase/migrations/0088_proposals.sql packages/db/src/test/proposals-schema.test.ts packages/db/src/test/proposals-bridge.test.ts`, then `git commit -m "db: 0088 proposals, one table for every AI suggestion, with today's call_proposals copied in and a mirror and guard for the deploy gap (item 8b-1)" -- <those three> packages/db/src/test/call-proposals-grants.test.ts packages/db/src/account-teardown.ts packages/db/src/test/technician-scope.test.ts packages/db/src/test/server-only-writes-grants.test.ts <each comment-only file touched>`. **Never apply 0088 anywhere but your replica.** Stop your replica.
+  → `{"nonAsciiOrBackslash":0,"dollars":28,"doubleDollar":14}`. Positive control: copy the file to `$S/s15c-t1-impl/ctl.sql`, append byte `0x5c`, rerun → `nonAsciiOrBackslash: 1`. Then `md5sum packages/db/supabase/migrations/0088_proposals.sql` → paste it (Tasks 2, 11 and 12 compare it).
+- [ ] **Step 9: Mutation probes.** Each runs on a copy applied to a fresh `post`: edit the migration, rebuild the replica, run the one case by `-t`, read that its count is 1 and that it FAILS, edit back, and `cmp`. Run every mutation named in Step 3, each by its case. **Paste each failing assertion line.** The ones the spec names (§8.3 :362–:370) are mandatory, and the report lists them by spec line: :362 (case 3), :363 (who reads), :364 (case 14, after Task 4 turns it on: deferred to Task 4's probes), :365 and :366 (bridge 1, 3), :367 (bridge 9), :368 (bridge 13, **failing on the name**), :369 (bridge 11 by name, and 11b with the mirror off; the `not v_found` arm is redundant and has no probe), :370 (bridge 6).
+- [ ] **Step 10: Commit.** `git add -- packages/db/supabase/migrations/0088_proposals.sql packages/db/src/test/proposals-schema.test.ts packages/db/src/test/proposals-bridge.test.ts`, then `git commit -m "db: 0088 proposals, one table for every AI suggestion, with today's call_proposals copied in and a mirror and guard for the deploy gap (item 8b-1)" -- <those three> packages/db/src/account-teardown.ts packages/db/src/test/technician-scope.test.ts packages/db/src/test/server-only-writes-grants.test.ts`. **Never apply 0088 anywhere but your replica.** Stop your replica.
+- [ ] **Step 11: Push early (orchestrator).** As soon as Task 1's commit lands (before its review finishes), the orchestrator pushes `feat/item8b-review-tray`, so CI `verify` applies 0088 on PostgreSQL 17 through `supabase db push` (`ci-local-supabase.sh:305`) long before Task 11. `e2e` will be red on its migration check (0088 is not on bis-ci); that is expected and named in the reading. `verify`'s db and web suites run on the runner's own stack, never on bis-ci. Task 2 Step 4 reads the result.
 
 ---
 
@@ -922,15 +955,17 @@ This is the spec's §4.1 check, made a task by the brief. It proves, for each pa
   1. Find the binary: `ls packages/db/node_modules/.bin/supabase*` or `pnpm --filter @bis/db exec supabase --version`.
   2. In a scratch workdir (`$S/s15c-t2/cli/supabase/migrations/`), place copies of `0001…0087` named as the repo names them, then `0088_sleep.sql` renamed `0088_proposals.sql`.
   3. Against a fresh EMPTY replica database (`createdb cli`, plus the bootstrap and storage stub `replica.sh:15-29` apply), run `supabase db push --db-url "postgresql://postgres@127.0.0.1:55671/cli?sslmode=disable" --workdir "$S/s15c-t2/cli" --yes`.
-  4. Mid-run, read Step 1's `pg_locks` query from a second session.
+  4. Mid-run, read Step 1's `pg_locks` query from a second session. (The CLI connects to the replica; per the plan review it negotiates a self-signed SSL connection. If it does not, that is a finding to report, not a branch to work around.)
 
-  **If the CLI refuses the connection** (it forces TLS, `push.ts:30-33`; an assumption here), record the refusal verbatim. The evidence for this path is then CI `verify`'s own run of 0088 through `supabase db push --local` (`.github/scripts/ci-local-supabase.sh:305`): 0088's self-check raises `0088_not_one_transaction` there unless the CLI runs the file in one transaction holding the lock. The orchestrator reads that job's log for `0088` in Task 12 step 3.
-- [ ] **Step 3: the self-check's positive controls.** On a fresh `pre`, each of these must fail with `0088_not_one_transaction` (or, for (a), PostgreSQL's own "LOCK TABLE can only be used in transaction blocks"), and `select to_regclass('public.proposals')` must stay null after each:
+  This run is on PG18 and is supporting evidence only (Assumption A2). The decisive evidence is Step 4's read of CI `verify` on PostgreSQL 17.
+- [ ] **Step 3: the self-check's positive controls.** On a fresh `pre`, each of (a) and (b) must fail with `0088_not_one_transaction` raised by the SECOND `do` block (in autocommit, the first block commits on its own and releases the lock and the transaction-local settings), and `select to_regclass('public.proposals')` must stay null after each:
   - **(a)** `psql … -d pre -f 0088_proposals.sql` WITHOUT `-1` and with `ON_ERROR_STOP=1`: autocommit, statement by statement.
-  - **(b)** A scratch copy with `commit; begin;` inserted after the `lock table` line, run with `psql -f`. The lock is released and a new transaction begins, so the first `do` block's xid check fails.
+  - **(b)** A scratch copy with `commit; begin;` inserted between the first and the second `do` block, run with `psql -f`. The lock is released and a new transaction begins, so the second `do` block's xid check fails.
+  - **(c)** The whole file sent as ONE simple-query string (`psql … -d pre -c "$(cat 0088_proposals.sql)"`): this must SUCCEED (one implicit transaction), and a second-session `pg_locks` read mid-run (with the `pg_sleep` copy) shows the lock held. This is the shape the Supabase dashboard's SQL editor sends (Question 1, decided).
 
   Paste each error. These are the evidence that the MCP path (A3) cannot half-apply.
-- [ ] **Step 4: Report** the three paths' results and the md5 of the unchanged 0088 (it equals Task 1's). Make no repo change. If any path shows the lock not held through to commit, STOP: the orchestrator decides with the owner (Question 1), and 0088 changes only through Task 1's owner with a re-review.
+- [ ] **Step 4: Read CI `verify` on PostgreSQL 17 (the orchestrator).** Task 1 Step 11 pushed the branch at Task 1's commit. Read that commit's `verify` run (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`, then the job log): the local stack's `supabase db push` applied `0088_proposals.sql` with no `0088_not_one_transaction` and no `SET LOCAL can only be used in transaction blocks` warning for 0088, and the stack's `select version()` line (or the `server_version_num` check at `ci-local-supabase.sh:296`) names 17. Paste the lines. If `verify` raised `0088_not_one_transaction`, STOP: 0088 changes only through Task 1's owner with a re-review.
+- [ ] **Step 5: Report** the paths' results and the md5 of the unchanged 0088 (it equals Task 1's). Make no repo change. If any path shows the lock not held through to commit, STOP: the orchestrator decides with the owner (Question 1), and 0088 changes only through Task 1's owner with a re-review.
 
 ---
 
@@ -1185,6 +1220,23 @@ describe("suggestions.* keys (item 8b-1)", () => {
   - `…/tasks/page.tsx:8`, `…/tasks/work-list.tsx:11`;
   - `…/work/agency-work-list.tsx:30` and its `AgencyProposal` alias;
   - the five builder literals in "Pinned tests";
+  - **web typecheck includes the e2e specs and the live tests (plan fix I-2):**
+    - `apps/web/e2e/call-proposals.spec.ts:119`: the `insertProposal` call gains `evidenceRef: {}, evidenceLang: "en", expiresAt: proposalExpiresAt(new Date())`, with `proposalExpiresAt` imported from `@bis/db/proposal-rules` (Task 10 deletes the file);
+    - `…/calls/[callId]/actions.test.ts` (live; Task 8 deletes it): `:59` imports `insertProposal as insertProposalRaw`, `decideProposal` and `getProposal` instead of `insertProposal, getProposal, markProposalDecided`. Two local shims are added directly under the imports, so its 30 `insertProposal(` calls (`:322`, `:372`, `:404`, `:425`, … `:767`) and its 2 `markProposalDecided(` calls (`:456`, `:1068`) keep their text:
+
+      ```ts
+      // Item 8b-1 (Task 4): type-only shims so this file, deleted in Task 8, still compiles.
+      const insertProposal = (db: Db, a: string, input: Omit<Parameters<typeof insertProposalRaw>[2], "evidenceRef" | "evidenceLang" | "expiresAt">) =>
+        insertProposalRaw(db, a, { evidenceRef: {}, evidenceLang: "en", expiresAt: proposalExpiresAt(new Date()), ...input } as Parameters<typeof insertProposalRaw>[2]);
+      const markProposalDecided = async (db: Db, a: string, id: string, status: "accepted" | "dismissed", by: string) => {
+        const row = await getProposal(db, a, id);
+        return status === "accepted"
+          ? decideProposal(db, a, id, { to: "accepted", decidedBy: by, appliedPayload: row?.payload ?? null, now: new Date() })
+          : decideProposal(db, a, id, { to: "dismissed", decidedBy: by, now: new Date() });
+      };
+      ```
+
+      (Place them after `type Db = …` at `:87`, which they use, and add `import { proposalExpiresAt } from "@bis/db/proposal-rules";` beside the `@bis/db` import.) The live file is not run until 0088 is on bis-ci; Task 8 deletes it.
   - `apps/web/src/lib/work/buckets.test.ts:95-115`.
 
   This list is exactly what `pnpm --filter web typecheck` reports after the rename (Step 9 proves it). Any other error is a STOP, not an edit.
@@ -1328,6 +1380,7 @@ export function deleteTaskForUndo(db, accountId: string, taskId: string, actorId
   - Rename the body of `fillContactBlanks` to `export async function fillContactBlanksReport(…): Promise<{ fields: string[]; flagged: boolean }>`, which returns `{ fields: [], flagged: false }` where today's returns `[]`, and `{ fields: reportedFields, flagged: await flagDuplicatesAfterWrite(…) }` at the end.
   - `export async function fillContactBlanks(...args) { return (await fillContactBlanksReport(...args)).fields; }` with the same signature and doc.
   - Export `fillContactBlanksReport` from the barrel beside `fillContactBlanks`.
+  - Widen `ContactInput` (`contacts.ts:14-17`): `firstName?: string | null; lastName?: string | null;` (plan fix M16, for Undo's restore of a null name). `toRow` needs no change; every existing caller passes strings. Run `pnpm --filter web typecheck` and `pnpm --filter @bis/db typecheck`; a caller that reads `ContactInput.firstName` as a `string` and now fails is fixed with `?? ""` at that call site, and listed.
   - `deleteTaskForUndo`:
 
 ```ts
@@ -1361,7 +1414,7 @@ export async function deleteTaskForUndo(
   - **`generate.fallback.test.ts:16`:** `base` gains `language: "en" as const`.
 - [ ] **Step 9: Keep web typecheck green.**
   1. Run `pnpm --filter web typecheck > tc.out 2>&1` and paste the error list.
-  2. Fix exactly the files named under "Modify (type and literal only)": the type rename `CallProposal` → `Proposal`; `STATUS_TREATMENT` gains `edited` and `expired`; the five builders gain the new fields (`source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z"`); `actions.ts`'s two decides and the revert; the buckets type test.
+  2. Fix exactly the files named under "Modify (type and literal only)": the type rename `CallProposal` → `Proposal`; `STATUS_TREATMENT` gains `edited` and `expired`; the five builders gain the new fields (`source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z"`); `actions.ts`'s two decides and the revert; the buckets type test; `e2e/call-proposals.spec.ts:119`; and `actions.test.ts`'s import line and two shims (I-2).
   3. Re-run → 0 errors.
 
   **Any error outside that list STOPS the task.**
@@ -1486,9 +1539,9 @@ export type ReservedKind = "consent_hold";
 
     Mutation: `before: null` always → the "Caller" undo case below FAILS.
   - `inverse.undo`:
-    - field still `value` → `updateContact(db, a, c, { [field]: before ?? "" }, userId)`, `"undone"`;
+    - field still `value` → `updateContact(db, a, c, { [field]: before }, userId)`, `"undone"`. **`before` is passed as stored, null included** (plan fix M16): Task 4 widens `ContactInput`'s `firstName` and `lastName` to `string | null` (`contacts.ts:14-17`; `toRow` already passes them through as given, `:119-120`), so a first name that was null is restored to null, not to `""`. Email and phone already map an empty or null value to null (`toRow:121-123`, `phoneFields`);
     - a first name filled over "Caller" restores `"Caller"`;
-    - one filled from null restores `""`;
+    - one filled from null restores null (not `""`; mutation: `before ?? ""` → FAILS);
     - a phone re-saved as `"(899) 000-0000"` whose E.164 is still `ref.value` → `"undone"` (compare `normalisePhone(current)?.e164 ?? current`);
     - a field edited since → `"changed"`, and `updateContact` not called.
 
@@ -1616,7 +1669,9 @@ export async function undoSuggestionAction(accountId: string, id: string): Promi
   22. **Undo's one-pending collision on the row itself** (a new pending row for the same call, kind and contact seeded after the Accept) → the inverse runs, the row goes `expired / superseded`, and the answer is `"Undone."`.
   23. **Undo after Discard** → `pending`, `decided_*` cleared, `undone_*` stamped.
   24. **Undo of a fill that raised a duplicate flag** → `"Undone. The possible duplicate it found is still in Duplicates."`, and the flag row is still there.
-  25. **Generation writes no CRM row** (retargeted, spec §8.1's last item): `generate.test.ts:270`'s `["proposals"]` already proves it at the unit level; nothing here repeats it.
+  25. **A best-effort step after the write fails, and the Accept still answers ok** (plan fix I-4). Accept a phone suggestion while a pending sibling for the same field exists, with a wrapped `writer` whose `expireProposals` path (the first `proposals` update with `expired_reason = 'superseded'`) rejects. The answer is `{ok:true}`; the contact holds the phone exactly once (one `contact.updated` event); and for a to-do variant (a wrapped `writer` whose `setAppliedRef` update rejects), `select count(*) from tasks where title = <the title>` → **exactly 1**, and the row is `accepted`. `console.error` names the id. Mutation: let the throw propagate (remove the `try` around the siblings) → the answer is a failure, FAILS.
+  26. **A kind that needs a customer, with none** (plan fix M8): a `contact_field` row seeded with `contact_id` null (through the service client) → `"That didn't go through. Try again."`, the row still pending, nothing written. Mutation: drop the `needsContact` guard → `kind.apply` is reached with a null contact and throws, so the row is left STRANDED and the answer is `maybeFailed`, FAILS.
+  27. **Generation writes no CRM row** (retargeted, spec §8.1's last item): `generate.test.ts:270`'s `["proposals"]` already proves it at the unit level; nothing here repeats it.
 
 - [ ] **Step 3: Write `actions.test.ts`** (unit, with mocks; not live). `vi.mock("@/lib/auth")`, `vi.mock("@/lib/db")`, `vi.mock("@bis/db", async (io) => ({ ...(await io()), serviceDb: () => SERVICE }))`, `vi.mock("./decide", …)` with spies, and `vi.mock("next/cache")`.
   1. Each action calls `requireAccountAccess(accountId)` before anything else (call-order recorder). Mutation: move it after `dbForRequest` → FAILS.
@@ -1625,6 +1680,8 @@ export async function undoSuggestionAction(accountId: string, id: string): Promi
   4. A successful decision revalidates exactly the paths `revalidateFor` returns: the call page, `/dashboard/accounts/A/tasks`, `/dashboard/work` and the record page `/dashboard/accounts/A/contacts/<contactId>`, read off the row `decide` returns. A `revalidatePath` throw after success still answers ok. Mutation: drop the record page → FAILS.
   5. The locale: `tr` is built from `requestLocale({ account, isOperator, userLanguage })`, so a client user with `users.language = "es"` gets Spanish (the `decide` spy receives a `tr` whose `tr.text("suggestions.accept")` is `"Aceptar"`).
   6. `ISR` passes with the new line, and FAILS without it (the "new importer" case).
+  7. **The test seam is never set in production** (plan fix M7): the deps object each action hands `decide` has EXACTLY the keys `["accountId", "db", "now", "tr", "userId", "writer", "zone"]` (`Object.keys(deps).sort()` `toEqual` that literal). Mutation: pass `afterRead: async () => {}` → FAILS.
+  8. **The answers follow the reader's stored language** (plan fix M14): a client user whose `users.language` is `es` gets `tr.locale === "es"`. The QA override `?locale=` is NOT available to a server action (it has no `searchParams`), so the e2e asserts toast words only in English and checks Spanish on the server-rendered card (Task 10). This is a stated gap, not a defect: a real reader's preference reaches the action.
 - [ ] **Step 4: Run red** (live: `cd apps/web && source $S/s15c-t6-impl/env-run.sh && pnpm exec vitest run src/lib/proposals/decide.live.test.ts`; unit: `pnpm --filter web exec vitest run src/lib/proposals/actions.test.ts`).
 - [ ] **Step 5: Implement `decide.ts`.** Accept, exactly in §4.4's order:
 
@@ -1646,6 +1703,10 @@ export async function acceptSuggestion(d: DecideDeps, id: string, edit?: EditInp
   } else if (row.kind === "task" && row.payload.dueAt
              && localDateKey(new Date(row.payload.dueAt), d.zone) < localDateKey(d.now, d.zone)) {
     return fail(d.tr.text("suggestions.answer.pastDue"));
+  }
+  if (kind.needsContact && !row.contactId) {                                 // plan fix M8: nothing to write to
+    console.error(`acceptSuggestion: proposal ${id} (account ${d.accountId}) of kind ${row.kind} has no customer; refused`);
+    return fail(d.tr.text("suggestions.answer.failed"));
   }
   const holds = await kind.stillHolds(d.db, row as never);                   // 4. still holds
   if (!holds.ok) {
@@ -1671,18 +1732,34 @@ export async function acceptSuggestion(d: DecideDeps, id: string, edit?: EditInp
     await revertProposalDecision(d.writer, d.accountId, id, d.userId);
     return fail(outOfDate(d.tr, applied.noWrite, row));
   }
+  // FROM HERE ON THE WRITE HAS LANDED (plan fix I-4): every step below is best-effort. A failure is
+  // logged with ids only and the answer is still ok, never an error that would invite a second Accept.
   // 8 before 7, so the ref can carry the siblings in one write.
-  const target = kind.targetKey(payload as never, row.contactId);
   let superseded: string[] = [];
-  if (target && row.contactId) {
-    const sibs = (await listPendingSiblings(d.db, d.accountId, { kind: row.kind, contactId: row.contactId, exceptId: id }))
-      .filter((s) => kindOf(s.kind).targetKey(s.payload as never, s.contactId) === target);
-    superseded = await expireProposals(d.writer, d.accountId, sibs.map((s) => s.id), "superseded", decidedAt.toISOString());
+  try {
+    const target = kind.targetKey(payload as never, row.contactId);
+    if (target && row.contactId) {
+      const sibs = (await listPendingSiblings(d.db, d.accountId, { kind: row.kind, contactId: row.contactId, exceptId: id }))
+        .filter((s) => kindOf(s.kind).targetKey(s.payload as never, s.contactId) === target);
+      superseded = await expireProposals(d.writer, d.accountId, sibs.map((s) => s.id), "superseded", decidedAt.toISOString());
+    }
+  } catch (e) {
+    console.error(`acceptSuggestion: siblings not superseded for proposal ${id} (account ${d.accountId}): ${loggableError(e)}`);
   }
-  if (!(await setAppliedRef(d.writer, d.accountId, id, { ...applied.ref, superseded, flagged: !!applied.flagged }))) {
-    console.error(`acceptSuggestion: applied_ref not stored for proposal ${id} (account ${d.accountId}); Undo will answer "changed"`);
+  try {
+    if (!(await setAppliedRef(d.writer, d.accountId, id, { ...applied.ref, superseded, flagged: !!applied.flagged }))) {
+      console.error(`acceptSuggestion: applied_ref not stored for proposal ${id} (account ${d.accountId}); Undo will answer "changed"`);
+    }
+  } catch (e) {
+    console.error(`acceptSuggestion: applied_ref not stored for proposal ${id} (account ${d.accountId}): ${loggableError(e)}`);
   }
-  return { ok: true, status: edited ? "edited" : "accepted", toast: kind.toast(payload as never, d.tr, await stagesFor(d, row)) };
+  let toast = d.tr.text("suggestions.status.accepted");                       // the fallback word if the toast text cannot be built
+  try {
+    toast = kind.toast(payload as never, d.tr, await stagesFor(d, row));
+  } catch (e) {
+    console.error(`acceptSuggestion: toast text not built for proposal ${id} (account ${d.accountId}): ${loggableError(e)}`);
+  }
+  return { ok: true, status: edited ? "edited" : "accepted", toast };
 }
 ```
 
@@ -1698,12 +1775,12 @@ export async function acceptSuggestion(d: DecideDeps, id: string, edit?: EditInp
        - `changed` → `changed`;
        - a throw → STRANDED, `maybeFailed`;
        - `undone` → `undoProposalDecision(… from: ["accepted","edited"] …)`. On `"collision"`, `expireAfterUndoCollision(…)`; on `"missed"` or a thrown error, log "STRANDED - proposal <id>: inverse done, status not moved" and answer `undoStranded`.
-    5. Then `restoreSiblings(d.writer, d.accountId, ref.superseded ?? [], row.decidedAt!)`.
+    5. Then `restoreSiblings(d.writer, d.accountId, ref.superseded ?? [], row.decidedAt!)`. **Best-effort** (plan fix I-4): the row is already undone, so a throw here is logged with ids and the answer stays ok.
     6. The message is `undoneDuplicate` when `ref.flagged`, else `undone`.
 
     Logs carry ids and state words only, never a title, a value or evidence.
 - [ ] **Step 6: Implement `actions.ts`** (`"use server"`):
-  - `requireAccountAccess` → `dbForRequest()` → the account row (`timezone`, `language`) on the request client → `getPersonPrefs()` → `requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language })` with a named variable (`request-locale-callers.test.ts`) → `makeTr(locale)` → `renderZone(account.timezone)` → `serviceDb()` → `decide…`.
+  - The order, stated (plan fix M13): `requireAccountAccess` → `dbForRequest()` → the account row (`timezone`, `language`) on the request client → `getPersonPrefs()` → `requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language })` with a named variable (`request-locale-callers.test.ts`) → `makeTr(locale)` → `renderZone(account.timezone)` → `serviceDb()` → `decide…`.
   - On ok, revalidate `revalidateFor(...)`, each in a `try`; a throw is logged and the action still answers ok.
   - The whole body sits in one `try`; an unexpected throw before the decision answers `failed`.
 - [ ] **Step 7: Green; probes** (every mutation in Steps 2–3; paste each line; revert; `cmp`). `pnpm --filter web exec vitest run "$ISR" src/lib/proposals/actions.test.ts src/lib/i18n/request-locale-callers.test.ts`. The live test is run only as in Step 4. `pnpm --filter web typecheck`; eslint.
@@ -1717,7 +1794,8 @@ export async function acceptSuggestion(d: DecideDeps, id: string, edit?: EditInp
 
 **Files**
 - Create: `apps/web/src/lib/proposals/view.ts` (+ `view.test.ts`)
-- Create: `apps/web/src/components/proposals/suggestion-handlers.ts` (+ test), `suggestion-actions.tsx` (+ test), `suggestion-card.tsx` (+ test), `suggestion-section.tsx` (+ test)
+- Create: `apps/web/src/components/proposals/suggestion-handlers.ts` (+ test), `suggestion-actions.tsx` (+ test), `suggestion-card.tsx` (+ test), `suggestion-section.tsx` (+ test), `suggestion-retry.tsx` (+ test; M6)
+- Modify: `apps/web/src/lib/format.ts:7` (`export` on `tag` only, if not already exported; M11)
 - Modify: `…/styleguide/page.tsx` (`:27`, `:75`, `:594-610`: the "Proposal status" section becomes "Suggestion card", showing the five states in English, Spanish and the pseudo-locale)
 
 **Interfaces**
@@ -1799,19 +1877,19 @@ export async function runDecision(deps: {
   **`suggestion-section.test.ts`**:
   - loaded: a mono-label `<h2>` "Suggestions" / "Sugerencias" with `lang` on the `<section>`, the subhead with the persona, the cards, and **no element wrapping the cards with the card class** (the section has no `rounded-[var(--radius-card)]` of its own). Mutation: wrap the stack in `CARD` → FAILS (spec P12).
   - `capped: true` → "Showing the newest 200." / "Se muestran las 200 más recientes.".
-  - error → "Couldn't load suggestions." / Spanish, with a `common.retry` button, and NO cards.
+  - error → "Couldn't load suggestions." / Spanish, with a `common.retry` button, and NO cards. **Retry** (plan fix M6) is a small client component, `components/proposals/suggestion-retry.tsx` (`"use client"`), whose `onClick` calls `useRouter().refresh()` from `next/navigation`. The page's server reads run again, and no other state is touched. Its test reads the file text: `useRouter` is imported from `next/navigation` and `.refresh()` is called. Mutation: `router.push(…)` → FAILS.
   - empty → renders nothing (`null`).
   - loading (`SuggestionSectionSkeleton`) → two skeleton cards shaped like the card (`data-skeleton`), with a `role="status"` line "Loading suggestions…", and no `animate-spin`. Mutation: render a spinner → FAILS.
 
   **`view.test.ts`**:
-  - The source label: `"From the call on Wed, Oct 14 · Ana López"` / `"De la llamada del mié, 14 de oct · Ana López"` for `callStartedAt` `2026-10-14T14:42:00Z` in America/Chicago (node 24, typed out; A1). With no caller name → `"From the call on Wed, Oct 14"`.
+  - The source label's date is built with `lib/format.ts`'s `tag(locale)` (`format.ts:7`, `en-US` / `es-US`; plan fix M11), never a hand-written locale string. Export `tag` from `format.ts` if it is not exported (one word; `format.ts` is otherwise untouched). The label reads `"From the call on Wed, Oct 14 · Ana López"` / `"De la llamada del mié, 14 de oct · Ana López"` for `callStartedAt` `2026-10-14T14:42:00Z` in America/Chicago (node 24, typed out; A1). With no caller name → `"From the call on Wed, Oct 14"`.
   - The stage edit options are exactly the stages in the deal's pipeline after `fromStageId` and before the last.
   - `canAct` follows `effectiveStatus`.
   - `decidedLine` for `decided_by` = the viewer → "Accepted by You · …" using `provenance.you` (read the key's words).
 
   **Styleguide**: `…/styleguide/page.tsx` renders the "Suggestion card" section with one card per state for each of en, es and pseudo, and the section skeleton and error. If a styleguide test pins section titles (grep `"Proposal status"` under `…/styleguide/`), retarget it.
 - [ ] **Step 3: Run red; implement; run green.**
-  - `suggestion-actions.tsx` is `"use client"`. It holds the mode (`view` | `edit`) and `useTransition` (every button disabled while one runs). Esc in the edit form calls cancel. It binds the four actions passed as props (`accept`, `editAccept(form)`, `discard`, `undo`), each `(id) => Promise<…>` already bound to the account by the page, and calls `runDecision` with `toast` from sonner and `setTimeout` as `schedule`. A field error renders under its field (`aria-describedby`).
+  - `suggestion-actions.tsx` is `"use client"`. It holds the mode (`view` | `edit`) and `useTransition` (every button disabled while one runs). Esc in the edit form calls cancel. It receives the four actions as props (`accept`, `editAccept`, `discard`, `undo`), each a server action the page has bound to the account with `.bind(null, accountId)` (plan fix I-3; a server component cannot pass an inline closure to a client component, which is why today's `proposals.tsx:264-265` binds too), and calls each with the suggestion id (`accept(id)`, `editAccept(id, form)`, …). It calls `runDecision` with `toast` from sonner and `setTimeout` as `schedule`. A field error renders under its field (`aria-describedby`).
   - `suggestion-card.tsx` (server) renders the view, top to bottom: the mono-label source line; the change (`parts`, each part with its `lang`); the `detail`; the evidence ("Because the caller said" plus `<q lang={evidenceLang}>`); the persona mark; the status (dot and word, the reason line, the decided line); and `SuggestionActions` when `canAct`.
   - Classes: `rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--surface-1)] shadow-[var(--shadow-card)] p-5 flex flex-col gap-2.5`. The mono label uses the house class `font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground`. Controls are `min-h-11 md:min-h-8`.
   - Status dots: `bg-primary` (pending), `bg-success` (accepted, edited), `bg-muted-foreground/60` (dismissed, expired), the treatments today's `STATUS_TREATMENT` uses (`proposals.tsx:44-60`).
@@ -1827,7 +1905,7 @@ export async function runDecision(deps: {
 **Files**
 - Modify:
   - `…/calls/[callId]/page.tsx` (`:13-14`, `:35`, the reads at `:131-170`, the slot at `:382-388`) and `page.test.ts`;
-  - `…/tasks/page.tsx` (`:8`, `:104-133`, the props at `:178-194`), `…/tasks/work-list.tsx` (`:11`, `:38-40`, `:182-284`, `:547-569`), `…/tasks/page.test.ts`;
+  - `…/tasks/page.tsx` (`:8`, `:104-133`, the props at `:178-194`), `…/tasks/work-list.tsx` (`:11`, `:38-40`, `:182-284`, `:547-569`), `…/tasks/page.test.ts`, `…/tasks/loading.tsx` (M5);
   - `…/work/agency-work-list.tsx` (`:30`, `:262-360`), `agency-work-list.test.ts`, `…/work/page.tsx` (only if a type moves), `page.test.ts` (the bare factory: add any value the new graph calls);
   - `ISR` (`:72` out).
 - Delete: `…/calls/[callId]/{actions.ts,actions.test.ts,proposals.tsx,proposals.test.ts,proposal-actions.tsx,proposal-actions.test.ts}`.
@@ -1836,16 +1914,35 @@ export async function runDecision(deps: {
   - Replace `CallProposals` with `<SuggestionSection id="call-proposals" …>`. The `id` stays, so the agency's `#call-proposals` links land (deviation 14).
   - The page resolves `requestLocale(...)` (its own named-variable call, with `userLanguage`) and `makeTr(locale, requestPseudoMode(searchParams))` **for this section only**. The rest of the page stays English (spec §4.5).
   - Rows come from `listProposalsForCall` (pending first, as `proposals.tsx:191-197` sorted). The stage names come from today's best-effort read (`:139-170`).
-  - The persona name is already read (`:180-194`). Decider names come from one `listPeopleNames(db, decidedBy ids)`.
-  - The four actions are bound `(id) => action(accountId, id)` here.
+  - The persona name is already read (`:180-194`). Decider names come from one `listPeopleNames(db, decidedBy ids)`. The other reads are in the table under Step 2.
+  - The four actions are passed as `acceptSuggestionAction.bind(null, accountId)`, `editAcceptSuggestionAction.bind(null, accountId)`, `discardSuggestionAction.bind(null, accountId)` and `undoSuggestionAction.bind(null, accountId)` (plan fix I-3; never an inline closure, which a server component cannot hand to a client component; today's `proposals.tsx:264-265` binds the same way). The tray (Step 2) binds them the same way.
   - A failed read renders the section's error state (rule 5), not nothing. `page.test.ts`: replace every assertion on the old block with:
     - the section renders cards for the mocked rows, pending first;
     - a read failure renders "Couldn't load suggestions." and the rest of the page;
     - a Spanish reader gets "Sugerencias" while the page title stays English.
 - [ ] **Step 2: The tray** (`…/tasks/page.tsx`, `work-list.tsx`).
   - `listPendingProposals(db, accountId)` (201 rows, deviation 19). On error, `proposalsError = true` (no longer swallowed to `[]`, spec §4.5).
+  - **Every new read the tray and the call page need, named** (plan fix I-5). All of them run on the REQUEST client, carry `.eq("account_id", accountId)` where the table has the column, and are bounded:
+
+    | Read | Where | Query | Bound |
+    |---|---|---|---|
+    | persona name | tray (new); call page (exists, `page.tsx:180-194`) | `getVoiceProfile(db, accountId)` → `persona_name`, best-effort, falling back to "Sofía" exactly as the call page does | one row |
+    | the calls behind the rows (`callStartedAt`, the caller's contact) | tray (new); call page (exists: the page's own call row) | `db.from("calls").select("id, started_at, contact_id").eq("account_id", accountId).in("id", callIds)` | `.limit(callIds.length)` (≤ 200) |
+    | caller names | tray: the existing contacts batch (`tasks/page.tsx:136-160`), whose `contactIds` gain the calls' `contact_id`s; call page: its own contact read | unchanged query: `.eq("account_id", accountId).in("id", contactIds)` | the id list |
+    | the deals behind stage suggestions (their `pipeline_id`) | both (new) | `db.from("opportunities").select("id, pipeline_id").eq("account_id", accountId).in("id", opportunityIds)` | `.limit(opportunityIds.length)` |
+    | the full stage lists of those pipelines (for `describe`'s names and positions and the Edit options) | both (replaces today's two-id stage read, `tasks/page.tsx:117-128`, `calls/[callId]/page.tsx:139-170`) | `db.from("pipeline_stages").select("id, name, position, pipeline_id").eq("account_id", accountId).in("pipeline_id", pipelineIds)` | `.limit(500)` |
+    | decider names | call page only (the tray shows pending rows only, so it names no decider) | `listPeopleNames(db, decidedByIds)` (`record.ts:496`; `users`, not account-scoped, capped at the ids asked) | the id list |
+
+    A read that fails puts the section into its error state (tray, call page); none of them is silently swallowed.
+
+    **One page-test case per read, each with a second-account case** in the touched `page.test.ts`. The fake request client records each `from(table)` call's filters, and holds rows for BOTH `acct1` and `acct2` with matching ids. Each case asserts:
+    - the read ran with `.eq("account_id", "acct1")` and `.in(<column>, <exactly the ids the rows name>)`;
+    - only `acct1`'s value reaches the render (for example, `acct2`'s stage name "Other Co stage" with the same stage id never appears; `acct2`'s call `started_at` never shapes the source label).
+
+    Mutation: drop `.eq("account_id", …)` from any one read → its case FAILS (the other account's value renders). Run each of the five account-scoped reads' removals separately and paste each line.
   - `WorkList` receives `suggestions: { views: SuggestionView[]; capped: boolean; error: boolean }`. `PendingProposalRow` and `pendingProposalSummary` (`:182-284`) are deleted, and the section at `:547-569` becomes `<SuggestionSection …>`.
   - The empty-state gate at `:494-497` reads `views.length === 0 && !error`.
+  - **Loading (plan fix M5):** the route's skeleton is `…/tasks/loading.tsx` (a route `loading.tsx`; the page awaits its reads, so there is no `Suspense` boundary to mount it in). Task 8 adds `<SuggestionSectionSkeleton />` under the bucket skeleton there, inside the same `aria-busy` region. If `…/calls/[callId]/` has a `loading.tsx` (it has none at `61772cac`), the same line goes there; otherwise the call page is left without one, as today.
   - **No contamination:** suggestions never enter `buckets` (keep and run `work-list.*.test.ts` and the bucket section-isolation assertions in `page.test.ts`; spec §8.1).
   - `page.test.ts`'s proposal cases become:
     - cards with Accept, not links to the call (no `href=".../calls/` inside `[data-suggestion]`);
@@ -1860,7 +1957,7 @@ export async function runDecision(deps: {
   - `pnpm --filter web exec vitest run "$ISR" "<each touched test by path>" "src/app/(dashboard)/dashboard/accounts/[accountId]/tasks/work-list.callback.test.ts" "…/work-list.consent.test.ts" "…/work-list.held.test.ts" "…/work-list.href.test.ts" src/lib/work/buckets.test.ts src/lib/i18n/request-locale-callers.test.ts src/lib/i18n/ratchet.test.ts`.
   - `pnpm --filter web typecheck`.
   - eslint.
-  - `grep -rn "call_proposals" apps packages/db/src` → only `ai-gateway.ts:11`, `ai-gateway-schema.test.ts:75` and `proposals-bridge.test.ts` (deviation 13); paste it.
+  - `grep -rn "call_proposals" apps packages/db/src` → only `ai-gateway.ts:11`, `ai-gateway-schema.test.ts:75`, `proposals-bridge.test.ts`, `call-proposals-grants.test.ts`, `technician-scope.test.ts` and `server-only-writes-grants.test.ts` (deviation 13), and nothing under `apps` except the gateway name's test; paste it.
   - `grep -rn "CallProposals\|proposal-actions\|STATUS_TREATMENT\|acceptProposal\|dismissProposal" apps/web/src` → nothing.
 - [ ] **Step 6: Probes:** the tray's cap (Step 2); render the To do suggestions inside a bucket's `<section>` → the isolation case FAILS; drop the error state (swallow to `[]`) → the error case FAILS. Paste each line.
 - [ ] **Step 7: Commit** `git commit -m "ui: the suggestion card on the call page and in the To do tray, the agency page on the registry's words; the old proposals block removed (item 8b-1)" -- <every path, deleted ones included>`.
@@ -1871,9 +1968,11 @@ export async function runDecision(deps: {
 
 **Review:** sonnet. **After:** Tasks 3, 7 and 8.
 
-- [ ] **Step 1.** Read `apps/web/src/lib/i18n/ratchet.test.ts` and `catalogue-baseline.json`'s header for the regenerate command (8a-2 Task 9 used it). Run it. `git diff --stat apps/web/src/lib/i18n/` shows only the two baseline files.
-- [ ] **Step 2.** `pnpm --filter web exec vitest run src/lib/i18n/ src/lib/messages.test.ts` → pass. Read the diff: every added entry is a `suggestions.*` key, and nothing is removed (deviation 15).
-- [ ] **Step 3: Commit** `git commit -m "i18n: baselines for the suggestion card's keys (item 8b-1)" -- apps/web/src/lib/i18n/catalogue-baseline.json apps/web/src/lib/i18n/ratchet-baseline.json`.
+- [ ] **Step 1.** Read `apps/web/src/lib/i18n/ratchet.test.ts` and `catalogue-baseline.json`'s header for the regenerate command (8a-2 Task 9 used it). Run it. `git diff --stat apps/web/src/lib/i18n/` shows only the two baseline files, OR NOTHING (plan fix M3).
+  - **No diff is a valid outcome.** If the baselines record only English-only keys or ratchet counts, and every new `suggestions.*` key has its `.es` twin, there is nothing to regenerate. 8a-2's Task 9 came out byte-identical for the same reason (ledger: "baselines byte-identical, 1101 keys").
+  - A non-empty diff is read line by line: every added entry is a `suggestions.*` key, and nothing is removed (deviation 15).
+- [ ] **Step 2.** `pnpm --filter web exec vitest run src/lib/i18n/ src/lib/messages.test.ts` → pass.
+- [ ] **Step 3: Commit** only if Step 1 changed a file (otherwise report "no baseline change" and commit nothing): `git commit -m "i18n: baselines for the suggestion card's keys (item 8b-1)" -- apps/web/src/lib/i18n/catalogue-baseline.json apps/web/src/lib/i18n/ratchet-baseline.json`.
 
 ---
 
@@ -1916,8 +2015,8 @@ export async function runDecision(deps: {
   - (b) Any path where Undo writes the status before the inverse; a sibling restore not scoped by `decided_at`; a `23505` on restore that throws or restores.
   - (c) A log line carrying a title, a value, evidence or a payload (grep every `console.` in `lib/proposals/*` and `packages/db/src/proposals.ts`).
   - (d) 0088:
-    - ASCII, no backslash, `$` only in the 12 `$$`;
-    - the self-check first and last;
+    - ASCII, no backslash, `$` only in the 14 `$$`;
+    - the self-check first (the lock taken inside the first `do` block, checked by the second) and last; no bare `set local` or `lock table`;
     - RLS on, both policies, no client write;
     - every function `search_path = ''`, schema-qualified, with execute revoked;
     - the guard's `for update` and `is distinct from`, and the missing-row raise;
@@ -1968,14 +2067,14 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 - [ ] **Step 5. Production** (MCP on `tlbkbmlrfafquucsmsmm`):
   1. Read-only pre-flight: `select max(version) from supabase_migrations.schema_migrations` → the 0087 apply. Task 0's pre-check query → still 0.
   2. `apply_migration` with 0088's exact text, ONCE (its md5 equals Task 11's; memory "MCP SQL escapes": 0088 has no backslash).
-  3. **If it fails with `0088_not_one_transaction`** (Assumption A3), nothing was created (the self-check runs before any DDL). Confirm with `select to_regclass('public.proposals')` → null, and go to Question 1. Do not retry, and do not edit 0088 to pass.
+  3. **If it fails with `0088_not_one_transaction`** (Assumption A3), nothing was created (the self-check runs before any DDL). Confirm with `select to_regclass('public.proposals')` → null, then follow Question 1 (decided): the unchanged file through the SQL editor, then the history row as written there. Do not retry through MCP, and do not edit 0088.
   4. Post-checks, read-only: step 2's reads, and the copy's counts against Task 0's production `by_status`. Do this BEFORE the merge (spec §10).
   5. Ledger line: `0088 APPLIED <date> on bis-ci and production - NEVER RE-APPLY; copy by_status prod …`.
 - [ ] **Step 6. Parity.** `docs/runbooks/ci-supabase-project.md` §5: `fingerprint.sql` on both projects. Equal across both: the table, its constraints, indexes, policies and trigger; the four functions' ACL, `prosecdef`, `proconfig` and bodies; the two triggers on `call_proposals`; the client-write digest.
 - [ ] **Step 7. Merge** through the PR, after the head SHA's `verify` and `e2e` are green and Task 11's findings are closed: `gh pr merge <n> --squash --match-head-commit <sha>`. The PR body names:
   - the owner's approval of P1–P22 at `61772cac`;
   - the four reviewer notes and where they landed;
-  - deviations 1–21 and assumptions A1–A5;
+  - deviations 1–22 and assumptions A1–A5;
   - the pinned tests changed;
   - "Not in this PR";
   - the Preview results and the 0088 apply lines;
@@ -2018,12 +2117,26 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 Only new questions; everything else is decided in P1–P22.
 
-1. **If MCP `apply_migration` turns out not to run 0088 in one transaction on production** (Assumption A3; 0088 then refuses with `0088_not_one_transaction` and creates nothing), how should 0088 reach production? **Recommended default: stop, and have the owner apply the same file once through the Supabase dashboard's SQL editor wrapped in `begin; … commit;`, then insert the migration-history row by hand exactly as the runbook's manual-apply section says.** This keeps the file byte-identical to bis-ci's and touches no code. The alternative, editing 0088 to carry its own `begin`/`commit`, would put a second text on production and break the md5 parity check.
-2. **Task 0's fence-meaning count.** If any production `call_proposals` row has a `contact_id` different from its call's contact, those rows' Technician visibility changes with 0088 (spec §4.1's fence reads the row's customer; 0068's read the call's). **Recommended default: accept it** (the generator has always written the call's contact, so the expected count is 0, and P14 is stated in terms of the suggestion's customer). The plan only reports the number.
+None open. **Both were decided by the owner on 2026-10-18, as recommended** ("go with your recommendations").
+
+1. **If MCP `apply_migration` does not run 0088 in one transaction on production. DECIDED.** 0088 then refuses with `0088_not_one_transaction` before any DDL and creates nothing (Assumption A3). In that case:
+   - The owner pastes the **unchanged** file into the Supabase dashboard's SQL editor and runs it once. The editor sends the text as ONE simple-query message, which PostgreSQL runs as one implicit transaction (Task 2 Step 3 (c) proves this shape on the replica), so **the bytes stay identical** to bis-ci's and the md5 parity holds. No `begin`/`commit` wrapper is added (plan fix M9).
+   - Then the orchestrator, in the same session, records the history row by hand. The runbook has no such section, so the statement is written out here. MCP's own rows use a UTC timestamp as `version` and the file name without its number as `name` (ledger: 0087 is `20261018215623`, `record_summaries`).
+     1. First, read-only: `select column_name, data_type from information_schema.columns where table_schema = 'supabase_migrations' and table_name = 'schema_migrations' order by ordinal_position;` and `select version, name, array_length(statements, 1) from supabase_migrations.schema_migrations where name = 'record_summaries';`. Write the row in the same shape the 0087 row has. If the columns differ from `(version, name, statements)`, STOP and report.
+     2. Then:
+
+        ```sql
+        insert into supabase_migrations.schema_migrations (version, name, statements)
+        values ('<the apply's UTC time as YYYYMMDDHHMMSS>', 'proposals', array[$m0088$<0088's exact text>$m0088$]);
+        ```
+
+        Use the dollar-quote tag `$m0088$`, which 0088 itself never contains (it uses only `$$`).
+     3. Then the post-checks of Task 12 step 5, and the parity check.
+2. **Task 0's fence-meaning count. DECIDED: accept it.** If any production `call_proposals` row has a `contact_id` different from its call's contact, those rows' Technician visibility changes with 0088 (spec §4.1's fence reads the row's customer; 0068's read the call's). The generator has always written the call's contact, so the expected count is 0, and P14 is stated in terms of the suggestion's customer. The plan only reports the number.
 
 ## Self-review notes (the writer's own pass, 2026-10-19)
 
-- **Spec coverage:** every §4 bullet, §6, §7, §8's 8b-1 items and §10's 8b-1 lines map to a row above. Where the code made the spec's words impossible or ambiguous, deviations 1–21 say so, with the file:line that decided it. The most important are 1 (one transaction proven in-file), 2 (the subpath that keeps bare mocks safe), 3 (names kept) and 13 (the grep's one extra hit).
+- **Spec coverage:** every §4 bullet, §6, §7, §8's 8b-1 items and §10's 8b-1 lines map to a row above. Where the code made the spec's words impossible or ambiguous, deviations 1–22 say so, with the file:line that decided it. The most important are 1 (one transaction proven in-file), 2 (the subpath that keeps bare mocks safe), 3 (names kept) and 13 (the grep's four extra hits, all old-table tests that 8b-2 removes).
 - **The brief's four reviewer notes:** note 1 is in bridge cases 12 and 13; note 2 in Task 4 case 10 and Task 6 case 21; note 3 in every refusing case's own `withRollback`; note 4 in the bridge file's header and helpers.
 - **The 8a-2 lessons:**
   - type dependencies wait for commits (T5 on T4; T6 on T7's handlers file);
