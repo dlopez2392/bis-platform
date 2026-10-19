@@ -89,7 +89,8 @@ function decidedStamp(at: Date, zone: string, now: Date, locale: "en" | "es"): s
   return new Intl.DateTimeFormat(tag(locale), opts).format(at);
 }
 
-function describeRow(row: Proposal, ctx: DescribeCtx): Description {
+/** The registry's sentence for one row: the card's, and the agency Work page's read-only row's (8b-1). */
+export function describeRow(row: Proposal, ctx: DescribeCtx): Description {
   switch (row.kind) {
     case "task": return KINDS.task.describe(row.payload, ctx);
     case "contact_field": return KINDS.contact_field.describe(row.payload, ctx);

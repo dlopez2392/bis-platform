@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow, Proposal } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { makeTr } from "@/lib/record/copy";
 
 // This is the first screen whose whole purpose is to span every account
 // (task-6-brief.md), and the boundary — requireAgency() on the very first
@@ -261,7 +262,7 @@ describe("AgencyWorkPage", () => {
   it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAgencyWorkMock.mockResolvedValueOnce([row()]);
-    listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
+    listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table proposals"));
 
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
@@ -338,7 +339,7 @@ describe("AgencyWorkPage", () => {
 
     expect(html).not.toContain(m["work.empty"]);
     expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(m["proposals.stage.unresolved"]);
+    expect(renderedText(html)).toContain(makeTr("en").text("suggestions.stage.unresolved"));
     expect(html).not.toContain("stage_1");
     expect(html).not.toContain("stage_2");
     spy.mockRestore();

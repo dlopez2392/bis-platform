@@ -17,7 +17,7 @@ export const SUGGESTION_CARD =
   "rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--surface-1)] shadow-[var(--shadow-card)] p-5 flex flex-col gap-2.5";
 /** DESIGN.md's Label role. */
 export const MONO_LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
-/** The status dot per state: today's STATUS_TREATMENT treatments (rule 3: always beside its word). */
+/** The status dot per state: the old proposals block's own treatments (rule 3: always beside its word). */
 const DOT: Record<SuggestionView["status"], string> = {
   pending: "bg-primary",
   accepted: "bg-success",

@@ -69,10 +69,6 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
-  "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.ts": "proven-target",
-  // The suggestion actions (item 8b-1): decide.ts writes proposals on the service client only after getProposal
-  // on the request client (0088's RLS) found the row; every CRM write and its inverse stays on the request client.
-  "lib/proposals/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/checklist/actions.ts": "agency-only",
@@ -176,6 +172,9 @@ const ALLOWED: Record<string, Reason> = {
   // The webhook routes' heartbeat (dynamic import): writes ops_heartbeats, never reads customer data.
   "lib/ops/stamp.ts": "public-or-cron",
   "lib/preferences/person-prefs.ts": "before-trust",
+  // The suggestion actions (item 8b-1): decide.ts writes proposals on the service client only after getProposal
+  // on the request client (0088's RLS) found the row; every CRM write and its inverse stays on the request client.
+  "lib/proposals/actions.ts": "proven-target",
   // loadPrimaryText (the group page's Text): ledgerDb only after getContact on the request client
   // proved the call-first member (S-03 part 2, C14).
   "lib/record/group-loaders.ts": "proven-target",

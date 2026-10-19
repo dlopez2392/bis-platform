@@ -18,7 +18,7 @@ import { bucketAgencyWork } from "@/lib/work/agency-buckets";
 import { contactDisplayName } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { AgencyWorkList } from "./agency-work-list";
-import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
+import type { DescribeCtx } from "@/lib/proposals/kinds/types";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +57,7 @@ export default async function AgencyWorkPage() {
   // never work itself, so its rows travel in their OWN array all the way to
   // `AgencyWorkList` and are NEVER concatenated into `rows` below — doing so
   // would hand `bucketAgencyWork` a proposal-derived row indistinguishable
-  // from a real task. Swallowed the same best-effort way: a `call_proposals`
+  // from a real task. Swallowed the same best-effort way: a `proposals`
   // hiccup must never cost the agency their real work list, so this degrades
   // to no suggestions section rather than a broken page.
   // The stale-usage read (client billing) joins the same Promise.all, and is
@@ -121,13 +121,13 @@ export default async function AgencyWorkPage() {
   // never a per-account join and never N queries. Best-effort, same shape
   // as the lines-down and proposals reads above: a `pipeline_stages` hiccup
   // must never cost the agency the rest of its queue, and degrades to no
-  // resolved names at all — `AgencyWorkList`'s own `proposalSummary` then
+  // resolved names at all — `AgencyWorkList`'s own `agencyDescription` then
   // renders an honest summary that names no stage, for exactly the rows
   // this read could not resolve, rather than dropping them.
   const stageIds = [...new Set(
     proposals.flatMap((p) => (p.kind === "opportunity_stage" ? [p.payload.fromStageId, p.payload.toStageId] : [])),
   )];
-  const stageNames: Record<string, ResolvedStage> = {};
+  const stageNames: Record<string, DescribeCtx["stages"][string]> = {};
   if (stageIds.length > 0) {
     try {
       const { data, error } = await db.from("pipeline_stages")

@@ -5,6 +5,7 @@ import type { Proposal, WorkRow } from "@bis/db";
 import { bucketWork, type BucketedWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { makeTr } from "@/lib/record/copy";
 import { visibleBuckets, WorkList } from "./work-list";
 
 // --- Mocks for the TasksPage composition tests below (the "zone reaches the
@@ -30,37 +31,62 @@ vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => (
  *  without a fresh `vi.mock` per test — assigned in `beforeEach` before the
  *  dynamic `import("./page")` below ever resolves this factory. */
 let accountTimezone = "America/Chicago";
-// Fix-wave Important 3 (task-11-brief): the pending-proposals read added by
-// this task issues two MORE reads through this same fake — the contacts
-// lookup already existed (`in`, below) but was never exercised with a
-// non-empty result, and `pipeline_stages` is new. Table-branched, same
-// shape as work/page.test.ts's own `FAKE_DB` — the accounts read is the
-// only one that needs `maybeSingle`; the other two share `.eq().in()`.
-const contactsInMock = vi.fn<
-  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
->(async () => ({ data: [], error: null }));
-const pipelineStagesInMock = vi.fn<
-  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
->(async () => ({ data: [], error: null }));
-vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({
-    from: (table: string) => {
-      if (table === "pipeline_stages") {
-        return { select: () => ({ eq: () => ({ in: (...args: unknown[]) => pipelineStagesInMock(...args) }) }) };
-      }
-      if (table === "contacts") {
-        return { select: () => ({ eq: () => ({ in: (...args: unknown[]) => contactsInMock(...args) }) }) };
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: async () => ({ data: { timezone: accountTimezone }, error: null }),
-            in: async () => ({ data: [], error: null }),
-          }),
-        }),
-      };
-    },
-  }),
+/**
+ * The request client, as a recording two-account fake (item 8b-1, plan fix I-5). Every `from(table)`
+ * call logs its `.eq`/`.in`/`.limit` filters and answers rows FILTERED by them, so a read that drops its
+ * `.eq("account_id", …)` really does receive the other account's rows (same ids) and draws them: each
+ * read's case below asserts both the filter and that only acct1's value reaches the render. The
+ * accounts row is built at read time from `accountTimezone`, which the zone tests set per test.
+ */
+type FakeRow = Record<string, unknown>;
+type FakeQuery = { table: string; eq: [string, unknown][]; in: [string, unknown[]][]; limit: number | null };
+const fake = {
+  tables: {} as Record<string, FakeRow[]>,
+  fail: new Set<string>(),
+  log: [] as FakeQuery[],
+};
+function resetFake() {
+  fake.tables = {};
+  fake.fail.clear();
+  fake.log.length = 0;
+}
+const REQUEST = {
+  from(table: string) {
+    const entry: FakeQuery = { table, eq: [], in: [], limit: null };
+    fake.log.push(entry);
+    const run = (): { data: FakeRow[] | null; error: { message: string } | null } => {
+      if (fake.fail.has(table)) return { data: null, error: { message: `permission denied for table ${table}` } };
+      const source = table === "accounts"
+        ? [{ id: "acct2", timezone: "Asia/Tokyo", language: "es" }, { id: "acct1", timezone: accountTimezone, language: null }]
+        : fake.tables[table] ?? [];
+      const rows = source
+        .filter((r: FakeRow) => entry.eq.every(([c, v]) => r[c] === v) && entry.in.every(([c, vs]) => vs.includes(r[c])));
+      return { data: entry.limit === null ? rows : rows.slice(0, entry.limit), error: null };
+    };
+    const q = {
+      select: () => q,
+      eq: (c: string, v: unknown) => { entry.eq.push([c, v]); return q; },
+      in: (c: string, vs: unknown[]) => { entry.in.push([c, vs]); return q; },
+      limit: (n: number) => { entry.limit = n; return q; },
+      order: () => q,
+      gt: () => q,
+      maybeSingle: async () => {
+        const r = run();
+        if (r.error) return r;
+        if (r.data!.length > 1) return { data: null, error: { message: "more than one row" } };
+        return { data: r.data![0] ?? null, error: null };
+      },
+      then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, ko),
+    };
+    return q;
+  },
+};
+const readsOf = (table: string) => fake.log.filter((q) => q.table === table);
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
+// The Suggestions section's Retry refreshes through the app router, which a static render has not mounted.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {}, push: () => {} }),
 }));
 
 // Task 7 fix round 1 (I3): the task picker is a client component whose own
@@ -84,7 +110,7 @@ let workRows: WorkRow[] = [];
  *  the "degrades on failure" test can override it with a rejection for
  *  exactly one call. */
 let pendingProposals: Proposal[] = [];
-const listPendingProposalsMock = vi.fn(async (): Promise<Proposal[]> => pendingProposals);
+const listPendingProposalsMock = vi.fn<(...a: unknown[]) => Promise<Proposal[]>>(async () => pendingProposals);
 /** The agency's own zone, as `lib/zone.ts` reads it through `serviceDb`.
  *  Only `serviceDb` and `listAccountWork` are stubbed — `resolveZone` stays
  *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
@@ -107,7 +133,7 @@ vi.mock("@bis/db", async (importOriginal) => {
   return {
     ...actual,
     listAccountWork: (...args: unknown[]) => listAccountWorkMock(...args),
-    listPendingProposals: () => listPendingProposalsMock(),
+    listPendingProposals: (...args: unknown[]) => listPendingProposalsMock(...args),
     readPersonId: (...args: unknown[]) => readPersonIdMock(...args),
     listAccountTeam: (...args: unknown[]) => listAccountTeamMock(...args),
     countHeldInboundEmails: () => countHeldInboundEmailsMock(),
@@ -174,7 +200,7 @@ function proposal(overrides: Partial<Proposal> = {}): Proposal {
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
-    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2099-01-01T00:00:00Z",
     ...overrides,
   } as Proposal;
 }
@@ -386,8 +412,7 @@ describe("TasksPage — an unusable account zone is named, never silently guesse
     workRows = [];
     pendingProposals = [];
     listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
-    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    resetFake();
   });
 
   it("renders the date AND names the agency's zone when the account's own is unusable (mutation: drop the agency step from resolveZone so it falls to UTC -> date moves to Sep 1 and the note names UTC -> FAILS)", async () => {
@@ -481,117 +506,214 @@ describe("TasksPage — an unusable account zone is named, never silently guesse
 });
 
 /**
- * Fix-wave Important 3 (task-11-brief): "Both audiences see both surfaces"
- * — the spec's own words. The agency's cross-tenant work queue already
- * rendered pending proposals; `listPendingProposals` (packages/db's own
- * per-account accessor, written and tested for exactly this) had no caller
- * anywhere until this task. A client who never opens a specific call never
- * learns a suggestion exists.
+ * The tray (item 8b-1, spec 4.5): this account's pending suggestions as cards with their actions, never
+ * folded into the buckets. Newest 200 with a stated cap, an error state with Retry when a read fails
+ * (no longer swallowed to nothing), and every read behind a card on the request client, scoped to the
+ * URL's account and bounded.
  */
-describe("TasksPage — pending proposals (Important 3)", () => {
-  beforeEach(() => {
+describe("TasksPage — the Suggestions section (item 8b-1)", () => {
+  const T = makeTr("en");
+  const render = async () => renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+  let TasksPage: (typeof import("./page"))["default"];
+  const cardsIn = (html: string) => html.match(/<article[^>]*data-suggestion[\s\S]*?<\/article>/g) ?? [];
+
+  beforeEach(async () => {
+    ({ default: TasksPage } = await import("./page"));
     accountTimezone = "America/Chicago";
     agencyTimezone = "America/Chicago";
     isAgency = true;
     workRows = [];
     pendingProposals = [];
     listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
-    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    resetFake();
   });
 
-  it("renders a pending proposal in its own suggestions section", async () => {
+  it("renders each suggestion as a card with Accept, never a link to the call (spec 4.5)", async () => {
     pendingProposals = [proposal()];
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
-    expect(html).toContain(m["proposals.work.heading"]);
+    const html = await render();
+    const cards = cardsIn(html);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toContain(">Accept<");
+    expect(cards[0]).not.toContain('href="/dashboard/accounts/acct1/calls/');
+    expect(renderedText(html)).toContain(T.text("suggestions.heading"));
     expect(renderedText(html)).toContain("the caller asked for a callback");
   });
 
-  it("renders no suggestions section when there are no pending proposals", async () => {
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
-    expect(html).not.toContain(m["proposals.work.heading"]);
+  it("shows the newest 200 and says so when 201 come back (mutation: drop the slice -> 201 cards, FAILS)", async () => {
+    pendingProposals = Array.from({ length: 201 }, (_, i) => proposal({ id: `prop-${i}` }));
+    const html = await render();
+    expect(cardsIn(html)).toHaveLength(200);
+    expect(renderedText(html)).toContain("Showing the newest 200.");
   });
 
-  // Mirrors work/page.test.ts's own identically-named test: a real bucketed
-  // task ("Call about the estimate") sits beside a genuinely distinct
-  // proposal, and the waiting section's own row COUNT — never a content
-  // grep — proves the proposal never contaminated `buckets.waiting`.
-  it("keeps the waiting section's own <li> count exactly at the real bucketed rows, even with a distinct proposal rendered alongside it (mutation: concat proposal-derived rows into the bucketed rows before rendering -> FAILS)", async () => {
-    // Well beyond any realistic "today" in America/Chicago, regardless of
-    // when this suite happens to run — a fixture close to "now" (as this
-    // test's own first draft used) can collapse to TODAY once converted
-    // from UTC midnight into a negative-offset zone, landing in the wrong
-    // bucket and asserting nothing about the section this test names.
+  it("states no cap at 200 or fewer", async () => {
+    pendingProposals = Array.from({ length: 200 }, (_, i) => proposal({ id: `prop-${i}` }));
+    const html = await render();
+    expect(cardsIn(html)).toHaveLength(200);
+    expect(renderedText(html)).not.toContain("Showing the newest");
+  });
+
+  it("asks listPendingProposals for the URL's account only, on the request client", async () => {
+    await render();
+    expect(listPendingProposalsMock).toHaveBeenCalledTimes(1);
+    expect(listPendingProposalsMock).toHaveBeenCalledWith(REQUEST, "acct1");
+  });
+
+  it("renders no section when nothing is pending", async () => {
+    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2099-01-01T12:00:00Z" })];
+    const html = await render();
+    expect(renderedText(html)).not.toContain(T.text("suggestions.heading"));
+    expect(html).not.toContain("data-suggestion");
+  });
+
+  it("a failed read is the section's error state with Retry, and the buckets still render (rule 5; mutation: swallow to [] -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2099-01-01T12:00:00Z" })];
+    listPendingProposalsMock.mockRejectedValueOnce(new Error("permission denied for table proposals"));
+    const html = await render();
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
+    expect(renderedText(html)).toContain(T.text("common.retry"));
+    expect(html).toContain("Call about the estimate");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("suggestions read failed"));
+    spy.mockRestore();
+  });
+
+  it("a failed read with an empty queue shows the error, never 'nothing needs you'", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    listPendingProposalsMock.mockRejectedValueOnce(new Error("boom"));
+    const html = await render();
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
+    expect(html).not.toContain(m["work.empty"]);
+    spy.mockRestore();
+  });
+
+  it("a failed calls read is the section's error state too", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    pendingProposals = [proposal()];
+    fake.fail.add("calls");
+    const html = await render();
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
+    expect(html).not.toContain("data-suggestion=");
+    spy.mockRestore();
+  });
+
+  it("never claims the queue is clear when a suggestion is pending", async () => {
+    pendingProposals = [proposal()];
+    const html = await render();
+    expect(html).not.toContain(m["work.empty"]);
+    expect(cardsIn(html)).toHaveLength(1);
+  });
+
+  // A real bucketed task sits beside a distinct suggestion; the waiting section's own HTML carries
+  // exactly its one row and no card (spec 8.1). The section regex stops at the first </section>, so a
+  // card rendered INSIDE a bucket's section lands in `waitingSection` and fails the second line.
+  it("keeps suggestions out of the buckets (mutation: render the section inside a bucket's <section> -> FAILS)", async () => {
     workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2099-01-01T12:00:00Z" })];
     pendingProposals = [proposal({
-      id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
-      evidence: "UNIQUE_CALLER_QUOTE_1234",
+      id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null }, evidence: "UNIQUE_CALLER_QUOTE_1234",
     })];
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
-
+    const html = await render();
     const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
     expect((waitingSection.match(/<li[ >]/g) ?? []).length).toBe(1);
+    expect(waitingSection).not.toContain("data-suggestion");
+    expect(waitingSection).not.toContain("UNIQUE_CALLER_QUOTE_1234");
     expect(html).toContain("UNIQUE_TASK_TITLE_5678");
     expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
   });
 
-  it("never claims the queue is clear when a pending proposal exists, even though the real to-do queue is empty", async () => {
-    pendingProposals = [proposal()];
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
-    expect(html).not.toContain(m["work.empty"]);
-    expect(html).toContain(m["proposals.work.heading"]);
-  });
-
-  it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2026-09-20T00:00:00Z" })];
-    listPendingProposalsMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
-
-    expect(html).toContain("Call about the estimate");
-    expect(html).not.toContain(m["proposals.work.heading"]);
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
-    spy.mockRestore();
-  });
-
-  it("resolves an opportunity_stage proposal's real stage names via a scoped pipeline_stages read", async () => {
-    pendingProposals = [proposal({
-      kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
-      evidence: "move this forward",
-    })];
-    pipelineStagesInMock.mockResolvedValueOnce({
-      data: [
-        { id: "stage_1", name: "New", position: 0 },
-        { id: "stage_2", name: "Booked", position: 3 },
-      ],
-      error: null,
+  describe("every read behind a card: the URL's account only, exactly the rows' ids, bounded (plan fix I-5)", () => {
+    const TASK = () => proposal({ id: "prop-task", callId: "call-1", contactId: null });
+    const STAGE = () => proposal({
+      id: "prop-stage", callId: "call-1", contactId: null, kind: "opportunity_stage",
+      payload: { opportunityId: "opp-1", fromStageId: "st-a", toStageId: "st-b" }, evidence: "move it along",
     });
-    const { default: TasksPage } = await import("./page");
-    const html = renderToStaticMarkup(
-      await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }),
-    );
+    // Both accounts hold rows with the SAME ids. Where the read is limited, acct2's row comes first (a
+    // lost filter draws it); where a map is built last-wins, acct2's row comes last (a lost filter
+    // overwrites with it). A lost filter on the persona's single-row read reads two rows and errors.
+    beforeEach(() => {
+      pendingProposals = [TASK(), STAGE()];
+      fake.tables = {
+        voice_profiles: [
+          { account_id: "acct2", persona_name: "Other Persona" },
+          { account_id: "acct1", persona_name: "Lupe" },
+        ],
+        calls: [
+          { id: "call-1", account_id: "acct2", started_at: "2026-10-20T15:00:00Z", contact_id: "ct-1" },
+          { id: "call-1", account_id: "acct1", started_at: "2026-10-14T15:00:00Z", contact_id: "ct-1" },
+        ],
+        contacts: [
+          { id: "ct-1", account_id: "acct1", first_name: "Ana", last_name: "López" },
+          { id: "ct-1", account_id: "acct2", first_name: "Other", last_name: "Person" },
+        ],
+        opportunities: [
+          { id: "opp-1", account_id: "acct2", pipeline_id: "pipe-2" },
+          { id: "opp-1", account_id: "acct1", pipeline_id: "pipe-1" },
+        ],
+        pipeline_stages: [
+          { id: "st-a", account_id: "acct1", pipeline_id: "pipe-1", name: "New", position: 0 },
+          { id: "st-b", account_id: "acct1", pipeline_id: "pipe-1", name: "Quote sent", position: 1 },
+          { id: "st-c", account_id: "acct1", pipeline_id: "pipe-1", name: "Won", position: 2 },
+          { id: "st-a", account_id: "acct2", pipeline_id: "pipe-1", name: "Other Co stage", position: 0 },
+          { id: "st-b", account_id: "acct2", pipeline_id: "pipe-1", name: "Other Co stage", position: 1 },
+          { id: "st-x", account_id: "acct2", pipeline_id: "pipe-2", name: "Other Co stage", position: 0 },
+        ],
+      };
+    });
 
-    expect(html).toContain(
-      m["proposals.stage.label"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
-    );
-    expect(pipelineStagesInMock).toHaveBeenCalledTimes(1);
-    expect(pipelineStagesInMock).toHaveBeenCalledWith("id", ["stage_1", "stage_2"]);
+    it("the persona: this account's voice profile (mutation: drop its account filter -> FAILS)", async () => {
+      const text = renderedText(await render());
+      expect(readsOf("voice_profiles")[0]?.eq).toContainEqual(["account_id", "acct1"]);
+      expect(text).toContain("Lupe · AI");
+      expect(text).not.toContain("Other Persona");
+    });
+
+    it("a failed persona read costs the name only (Sofía), never the section", async () => {
+      fake.fail.add("voice_profiles");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const html = await render();
+      expect(renderedText(html)).toContain("Sofía · AI");
+      expect(cardsIn(html)).toHaveLength(2);
+      spy.mockRestore();
+    });
+
+    it("the calls behind the rows: this account's call, for exactly the rows' call ids (mutation: drop its account filter -> FAILS)", async () => {
+      const text = renderedText(await render());
+      const [calls] = readsOf("calls");
+      expect(calls?.eq).toContainEqual(["account_id", "acct1"]);
+      expect(calls?.in).toEqual([["id", ["call-1"]]]);
+      expect(calls?.limit).toBe(1);
+      expect(text).toContain("From the call on Wed, Oct 14 · Ana López");
+      expect(text).not.toContain("Oct 20");
+    });
+
+    it("the caller names: this account's contacts, for the calls' contact ids (mutation: drop its account filter -> FAILS)", async () => {
+      const text = renderedText(await render());
+      const [contacts] = readsOf("contacts");
+      expect(contacts?.eq).toContainEqual(["account_id", "acct1"]);
+      expect(contacts?.in).toEqual([["id", ["ct-1"]]]);
+      expect(text).toContain("Ana López");
+      expect(text).not.toContain("Other Person");
+    });
+
+    it("the deals behind stage suggestions: this account's, for exactly the rows' deal ids (mutation: drop its account filter -> FAILS)", async () => {
+      const text = renderedText(await render());
+      const [deals] = readsOf("opportunities");
+      expect(deals?.eq).toContainEqual(["account_id", "acct1"]);
+      expect(deals?.in).toEqual([["id", ["opp-1"]]]);
+      expect(deals?.limit).toBe(1);
+      expect(text).toContain(T.text("suggestions.stage", { from: "New", to: "Quote sent" }));
+      expect(text).not.toContain("Other Co stage");
+    });
+
+    it("the stage lists: this account's, the whole pipeline of each deal (mutation: drop its account filter -> FAILS)", async () => {
+      const text = renderedText(await render());
+      const [stages] = readsOf("pipeline_stages");
+      expect(stages?.eq).toContainEqual(["account_id", "acct1"]);
+      expect(stages?.in).toEqual([["pipeline_id", ["pipe-1"]]]);
+      expect(stages?.limit).toBe(500);
+      expect(text).toContain(T.text("suggestions.stage", { from: "New", to: "Quote sent" }));
+      expect(text).not.toContain("Other Co stage");
+    });
   });
 });
 
@@ -606,8 +728,7 @@ describe("TasksPage — ?who= (Mine / Unassigned)", () => {
     workRows = [];
     pendingProposals = [];
     listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
-    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    resetFake();
     listAccountWorkMock.mockClear();
     readPersonIdMock.mockClear();
     listAccountTeamMock.mockClear();
@@ -727,7 +848,7 @@ describe("TasksPage — the All · Mine · Unassigned row (F-085)", () => {
     workRows = [];
     pendingProposals = [];
     listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    resetFake();
   });
   afterEach(() => {
     isAgency = true;
@@ -774,8 +895,7 @@ describe("TasksPage — the held-emails row (Task 12)", () => {
     pendingProposals = [];
     heldEmailsCount = 0;
     listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
-    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    resetFake();
   });
   afterEach(() => {
     heldEmailsCount = 0;
@@ -811,5 +931,16 @@ describe("TasksPage — the held-emails row (Task 12)", () => {
     expect(html).not.toContain("data-held-emails-row");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("held count read failed"));
     spy.mockRestore();
+  });
+});
+
+describe("the To do route's loading skeleton (rule 7, plan fix M5)", () => {
+  it("carries the Suggestions skeleton under the bucket skeleton, inside the one aria-busy region", async () => {
+    const { default: Loading } = await import("./loading");
+    const html = renderToStaticMarkup(createElement(Loading));
+    const busy = html.slice(html.indexOf('aria-busy="true"'));
+    expect(html.indexOf('aria-busy="true"')).toBeGreaterThanOrEqual(0);
+    expect((busy.match(/data-skeleton/g) ?? []).length).toBe(2);
+    expect(renderedText(busy)).toContain(makeTr("en").text("suggestions.loading"));
   });
 });
