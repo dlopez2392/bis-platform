@@ -228,19 +228,36 @@ describe("0088: the CHECKs (spec 4.1, 8.2)", () => {
 });
 
 describe("0088: what was proposed never changes, from the service role too (spec 4.1)", () => {
-  const FIXED: [string, string][] = [
-    ["payload", `payload = '{"title":"Something else","dueAt":null}'::jsonb`],
-    ["evidence", "evidence = 'I said something else'"],
-    ["expires_at", "expires_at = expires_at + interval '1 day'"],
-    ["contact_id", "contact_id = $2"],
-    ["kind", "kind = 'contact_field'"],
+  // Every column the trigger compares: the spec's eleven (4.1) and the id. Each value is one the column's
+  // own CHECK or FK would also refuse or accept; the BEFORE trigger fires first either way, so the answer
+  // is the trigger's P0001, never a 23514 or 23503 that would pass for the wrong reason.
+  const FIXED: { col: string; set: string; arg?: "theirs" | "theirCall" | "acctB" }[] = [
+    { col: "id", set: "id = gen_random_uuid()" },
+    { col: "account_id", set: "account_id = $2", arg: "acctB" },
+    { col: "source", set: "source = 'web'" },
+    { col: "call_id", set: "call_id = $2", arg: "theirCall" },
+    { col: "contact_id", set: "contact_id = $2", arg: "theirs" },
+    { col: "kind", set: "kind = 'contact_field'" },
+    { col: "payload", set: `payload = '{"title":"Something else","dueAt":null}'::jsonb` },
+    { col: "evidence", set: "evidence = 'I said something else'" },
+    { col: "evidence_ref", set: `evidence_ref = '{"turn":1,"at":"2026-10-19T10:00:00.000Z"}'::jsonb` },
+    { col: "evidence_lang", set: "evidence_lang = 'es'" },
+    { col: "created_at", set: "created_at = created_at - interval '1 day'" },
+    { col: "expires_at", set: "expires_at = expires_at + interval '1 day'" },
   ];
-  it.each(FIXED)("refuses a change to %s (mutation: drop the payload line from the trigger -> the payload case FAILS)", (_col, set) =>
+  it("the list is every column the trigger compares, and nothing else (guards the cases below from a forgotten column)", () => {
+    expect(FIXED.map((f) => f.col).sort()).toEqual([
+      "account_id", "call_id", "contact_id", "created_at", "evidence", "evidence_lang", "evidence_ref",
+      "expires_at", "id", "kind", "payload", "source",
+    ]);
+  });
+  it.each(FIXED)("refuses a change to $col (mutation: drop the $col comparison from the trigger -> this case FAILS)", ({ set, arg }) =>
     withRollback(async (c) => {
       const s = await seed(c);
       const id = (await ins(c, row(s.acct, s.calls.mine, s.mine))).rows[0]!.id;
       await c.query("set local role service_role");
-      const args = set.includes("$2") ? [id, s.theirs] : [id];
+      const value = arg === "theirs" ? s.theirs : arg === "theirCall" ? s.calls.theirs : arg === "acctB" ? s.acctB : null;
+      const args = value === null ? [id] : [id, value];
       await expect(c.query(`update proposals set ${set} where id = $1`, args))
         .rejects.toMatchObject({ code: "P0001", message: expect.stringMatching(/proposals_proposed_is_fixed/) });
     }));

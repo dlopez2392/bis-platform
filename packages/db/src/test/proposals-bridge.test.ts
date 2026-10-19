@@ -98,7 +98,7 @@ async function seedForCopy(c: Client) {
   return { s, ids, all: Object.values(ids) };
 }
 
-describe("0088: the copy (spec 4.6; seeded with the mirror and guard off, spec 8.2)", () => {
+describe("0088: the copy (spec 4.6; seeded with the mirror and guard off, spec 8.2, except the post-check case, which needs the mirror on)", () => {
   it("copies every row by status, with ids, decisions, applied_payload, evidence and a fresh 30-day expiry (mutations: map accepted to pending -> FAILS; expires_at = cp.created_at + 30 days -> the 40-day-old row FAILS)", () =>
     withRollback(async (c) => {
       const { ids, all } = await seedForCopy(c);

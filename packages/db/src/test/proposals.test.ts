@@ -294,6 +294,32 @@ describe("proposals accessors", () => {
     });
   });
 
+  // A due date that is a string but not a date ("next week") fits the shape and would reach a screen as an
+  // Invalid Date, where formatting it throws a RangeError and takes the whole section down (final review
+  // M-1). The read boundary refuses it like any other row that does not fit, by id and never the payload.
+  it("parse at the read boundary: a to-do whose dueAt is not a date is skipped and logged by id (mutation: drop parseTaskPayload's Date.parse check -> the row is returned -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const callId = await seedCall(db, accountId);
+      const good = await taskOn(db, accountId, callId);
+      const bad = await db.from("proposals").insert({
+        account_id: accountId, source: "call", call_id: callId, contact_id: await seedContact(db, accountId), kind: "task",
+        payload: { title: "SECRET-TITLE-TEXT", dueAt: "next week" }, evidence: "call me next week", expires_at: FUTURE,
+      }).select("id").single();
+      expect(bad.error, bad.error?.message).toBeNull();
+      const badId = bad.data!.id as string;
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect((await listProposalsForCall(db, accountId, callId)).map((r) => r.id)).toEqual([good]);
+        expect((await listPendingProposals(db, accountId)).map((r) => r.id)).toEqual([good]);
+        const messages = spy.mock.calls.map((args) => String(args[0]));
+        expect(messages.filter((m) => m.includes(badId))).toHaveLength(2);
+        expect(messages.some((m) => m.includes("SECRET-TITLE-TEXT") || m.includes("next week"))).toBe(false);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("round-trips each kind with its own payload shape", async () => {
     await withTestAccount(async (db, accountId) => {
       const callId = await seedCall(db, accountId);

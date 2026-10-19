@@ -86,11 +86,12 @@ const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typ
 const CONTACT_FIELD_NAMES: readonly string[] = ["firstName", "lastName", "email", "phone"] satisfies ContactFieldName[];
 
 /** The read boundary for a task payload: null when the shape is wrong. Only the known keys come back;
- *  an absent `dueAt` reads as null (no due date), a non-string one is a wrong shape. */
+ *  an absent `dueAt` reads as null (no due date), a non-string one is a wrong shape, and so is a string
+ *  that is not an instant ("next week", ""): every screen formats it, and an Invalid Date throws there. */
 export function parseTaskPayload(v: unknown): TaskPayload | null {
   if (!isObject(v) || typeof v.title !== "string") return null;
   const dueAt = v.dueAt ?? null;
-  if (dueAt !== null && typeof dueAt !== "string") return null;
+  if (dueAt !== null && (typeof dueAt !== "string" || Number.isNaN(Date.parse(dueAt)))) return null;
   return { title: v.title, dueAt };
 }
 
