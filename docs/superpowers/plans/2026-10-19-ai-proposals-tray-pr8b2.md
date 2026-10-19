@@ -47,15 +47,22 @@ This deviates from the spec's single "0089" (§1, §5.2, §4.6). The contents an
    - In one file, the UI would be held hostage by the drop's evidence. A surprise in that evidence (an unexplained late write) would also block shipping placement work that has nothing to do with it.
 2. **The drop does not depend on 8b-2's code.** 8b-1's code already reads and writes only `proposals`. The `call_proposals` hits in `apps` are the gateway feature's name and nothing else (`generate.ts:336`, `generate.fallback.test.ts:47,52`; §4.3's allow-list).
    - So 0090 can land on production before or after 8b-2's code.
-   - If its evidence fails at merge time, Task 2's commit (0090 plus the bridge-era test edits, one commit by rule) is moved to a follow-up PR without touching 0089 or any UI.
+   - If its evidence fails at merge time, Task 2's commit (0090 plus the bridge-era test edits, one commit by rule) is moved to a follow-up PR without touching 0089 or any UI. Because 0090 reaches bis-ci only after production's E1 and E2 read green (Task 10 step 5), a peeled-off 0090 has not reached bis-ci either, so bis-ci never runs ahead of `main`.
 3. **The review is cleaner.**
    - 0089 is a small invoker function with a grants proof.
    - 0090 is the irreversible step, the "point of no rollback to pre-8b code" (§4.6).
    - Each gets its own md5, its own HIGH review and its own apply line in the ledger.
 
-**Rollout order** (Task 10): 0089 to bis-ci, then 0090 to bis-ci; 0089 to production at any time after its review; **0090 to production only at or after 2026-10-20T05:35:46Z with the evidence recorded**; then parity, then merge.
-- `ci-project-setup.yml`'s `push` applies whatever is pending, so the dry-run must list exactly the files reviewed so far.
-- The branch's e2e migration check (`.github/scripts/ci-migrations-applied.sh`) needs both files on bis-ci before the PR's `e2e` can be green.
+**Rollout order** (Task 10; corrected 2026-10-19 after the plan review):
+1. 0089 to bis-ci, ALONE, as soon as it is reviewed.
+2. 0089 to production at any time after that.
+3. At or after **2026-10-20T05:35:46Z**, production's E1 and E2 are read. Only when they read green does 0090 go to bis-ci, then to production.
+4. The PR's `e2e` is re-run.
+5. Parity, then merge.
+
+Why 0090 does not go to bis-ci early: bis-ci would then be ahead of `main`. The four bridge-era test files on `main` (and on every other lane) would fail any local run against bis-ci. And **(Assumption A9)** another lane's `supabase db push` may refuse a remote history holding a version its branch does not have.
+- `ci-project-setup.yml`'s `push` applies whatever is pending. The 0089 push is therefore made from a ref that holds 0089 and NOT 0090: Task 1's commit, or a throwaway ref at it (`git push origin <task1-sha>:refs/heads/tmp/8b2-0089`, deleted after). The dry-run must list exactly the files intended.
+- The branch's e2e migration check (`.github/scripts/ci-migrations-applied.sh`) needs both files on bis-ci, so the PR's `e2e` is red on that check until step 3. That is expected. `verify` (local stacks, all migrations) is the signal until then.
 - **Do not enable auto-merge on this PR until 0090 is on production** (memory "Speed process": auto-merge on green). A green PR must not merge with an unapplied migration on `main`.
 
 **The basis for bis-ci (the 8b-1 plan's note M15, `…pr8b1.md:349`):** on bis-ci the gap never closes. Every other branch's Preview runs pre-8b code against bis-ci until that branch merges `main`, so a `call_proposals` write can arrive at any time. Waiting for every such Preview to disappear is not a gate anyone can read. **Recommendation:**
@@ -64,7 +71,7 @@ This deviates from the spec's single "0089" (§1, §5.2, §4.6). The contents an
 - The ledger line states that bis-ci's leftover `call_proposals` rows are test data from pre-8b Previews. A pre-8b Preview opened after the drop fails on its call and To do pages, on bis-ci only. That is the accepted cost.
 - Production keeps all three items as gates.
 
-This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for the owner** below. The default, if the owner says nothing, is this recommendation.
+This relaxes the spec's "on both projects" for bis-ci. **Owner answer, 2026-10-19: YES.** The copy check and the grep gate 0090 on bis-ci; "no late writes" (E1) is recorded only.
 
 ---
 
@@ -103,8 +110,8 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 | `packages/db/supabase/migrations/0090_drop_call_proposals.sql` | 2 | new |
 | `packages/db/src/test/proposals-drop.test.ts` | 2 | new |
 | `packages/db/src/test/proposals-bridge.test.ts` (357 lines), `call-proposals-grants.test.ts` (475 lines) | 2 | **deleted** |
-| `packages/db/src/test/server-only-writes-grants.test.ts` | 2 | the seed at `:53-55` inserts into `proposals` directly. These go: the `call_proposals` rows at `:85`, `:156`, `:221` and `:249-250`, and the 0053 describe at `:311-342`. The 0088 describe's seed read (`:353`) is retargeted |
-| `packages/db/src/test/technician-scope.test.ts` | 2 | the `call_proposals` entries at `:28`, `:67` and `:76` go |
+| `packages/db/src/test/server-only-writes-grants.test.ts` | 2 | the seed at `:53-55` inserts into `proposals` directly. These go: the `call_proposals` rows at `:85`, `:156`, `:221` and `:249-250`, and the 0053 describe at `:311-342`. The 0088 describe's seed read (`:353`) is retargeted. The comment at `:179` that cites `call-proposals-grants.test.ts` is re-pointed |
+| `packages/db/src/test/technician-scope.test.ts` | 2 | the `call_proposals` entries at `:28`, `:67` and `:76` go; the `proposals` case at `:78`, which reused `callProposal` (the mirrored twin), inserts into `proposals` directly with `contact_id` set |
 | `packages/db/src/account-teardown.ts` | 2 | the paragraph at `:64-72` is rewritten in the past tense ("dropped by 0090"); it still names the table, so it stays on the allow-list |
 | `packages/db/src/test/proposals-schema.test.ts:16` | 2 | the comment saying the old test "stays (the old table lives until 0089)" |
 | comments citing the deleted test file: `automation-log-grants.test.ts:50`, `billing-schema.test.ts:109,248`, `record-event.test.ts:6`, `voice-web-sessions-grants.test.ts:19,42,49,66,188` | 2 | point at `proposals-schema.test.ts` (or say "the deleted 0040-era grants test") |
@@ -113,7 +120,8 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 | `packages/db/src/proposals.ts` | 4 | `listPendingProposalsForAgency` on the RPC (`:156-191`); new `listPendingProposalsForContact`; export the payload parser for `applied_payload` |
 | `packages/db/src/record.ts` | 4 | `TimelineSource` adds `"suggestions"` (`:272-273`); new `TimelineEntry` kind `suggestion`; `listTimelinePage` gets `opts.suggestions` and returns `sources` (`:400-481`) |
 | `packages/db/src/index.ts` | 4 | export the new read |
-| `packages/db/src/test/proposals.test.ts`, `packages/db/src/test/record-timeline*.test.ts` (whichever file holds `listTimelinePage`'s cases; Task 4 greps for it) | 4 | cases |
+| `packages/db/src/test/proposals.test.ts`, `packages/db/src/test/timeline-merge.test.ts` (`:197`'s exact `toEqual` gains `sources`) | 4 | cases |
+| mocked timeline pages that must carry `sources`: `apps/web/src/lib/record/loaders.test.ts:20`, `group-loaders.test.ts:26`, `…/[contactId]/page.test.ts`, `…/groups/[groupId]/page.test.ts`, `apps/web/src/app/api/accounts/[accountId]/contacts/[contactId]/summary/route.test.ts:36` | 4 | add `sources` (the drawer's route TEST changes; its UI and `route.reads.test.ts` do not) |
 | `apps/web/src/lib/record/author-mark.ts` (`:26-75`), `timeline-rows.ts` (`:40-44`, `:66`, `:153-173`) | 4 | the exhaustive cases, so web typecheck stays green |
 | `apps/web/src/lib/record/loaders.ts` | 5 | `loadTimeline` (`:51-82`) passes `suggestions: true` and reads the stage names softly; new `loadWaitingSuggestions` |
 | `apps/web/src/lib/proposals/group.ts` (+ test) | 5 | new: `groupSuggestions`, `groupByAccount` |
@@ -136,15 +144,16 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 ## Assumptions (each with its check)
 
 - **A1** `evidence_ref.turn` indexes the transcript array exactly as `calls.transcript` stores it.
-  - Read so far: `groundedEvidence` returns `transcript.findLastIndex(…)` over the array it is given (`grounding.ts:149-159`). `finishCall` passes `state.transcript` (`finish-call.ts:932`), the same array it writes to the row (`:642`).
+  - Read so far: `groundedTurn` (`grounding.ts:147`, of which `groundedEvidence` at `:164` keeps only the text) returns `transcript.findLastIndex(…)` over the array it is given. `finishCall` passes `state.transcript` (`finish-call.ts:932`), the same array it writes to the row (`:642`).
   - `TranscriptView` renders `usableTurns(transcript)`, a FILTERED copy (`transcript-view.tsx:38-44`), and keys by the filtered `i` (`:84-99`). The anchor must therefore carry the raw index.
   - Check: Task 5 reads `finishCallRow` to confirm it stores the array unchanged. Task 6's test renders a transcript with an empty turn before the cited one and asserts the anchor lands on the raw index.
 - **A2** supabase-js `db.rpc(fn, args)` on a function that `returns setof public.proposals` accepts `.select(COLS)`. Check: Task 4's `withTestAccount` case on the replica's PostgREST.
-- **A3** MCP `apply_migration` runs a file in one transaction. This was evidenced on production by 0088: its in-file self-check (`0088_proposals.sql:65-80`, `:260-269`) passed (ledger: "0088 APPLIED … MCP version 20261019173226"). 0090 takes its lock inside a `do` block anyway. If a path were not one transaction, the check still runs before the drop.
+- **A3** MCP `apply_migration` runs a file in one transaction. This was evidenced on production by 0088: its in-file self-check (`0088_proposals.sql:65-80`, `:260-269`) passed (ledger: "0088 APPLIED … MCP version 20261019173226"). 0090 nevertheless carries 0088's one-transaction proof (the `bis.m0090_xid` stamp; Task 2). A path that is not one transaction then fails before anything is dropped.
 - **A4** A full document reload reaches the newest deployment, while `router.refresh()` from a skew-pinned tab fetches from the tab's own deployment. Check: Task 10's owner smoke step 6.
 - **A5** No other lane has claimed migration number 0089 or 0090. Check: Task 0 runs `git log --all --oneline -- 'packages/db/supabase/migrations/0089*' 'packages/db/supabase/migrations/0090*'`, which must print nothing.
 - **A6 (read, no longer an assumption)** `voice_profiles` has at most one row per account: `account_id uuid not null unique` (`0019_voice_core.sql:24`). `getVoiceProfile` reads it `.maybeSingle()` (`voice.ts:159-166`), so one batch read keyed by `account_id` is exact.
 - **A7** Supabase grants EXECUTE on a new `public` function to `anon` and `authenticated` by default privilege. Check: Task 1's grants case. The revoke must name `public, anon, authenticated`, as `0080_document_requests.sql:185-187` does.
+- **A9** Another lane's `supabase db push` (the CLI) may refuse to push when the remote history holds a version its own `migrations` folder lacks. This is why 0090 reaches bis-ci only when it can reach production the same day (Task 10). Check: none needed; the ordering avoids the case.
 - **A8** A suggestion in production for the owner's smoke needs one real call to the BIS account's own line, as in the 8b-1 smoke (ledger 2026-10-19). Check: Task 10 step 6 reads `proposals` for a new pending row before the smoke.
 
 ---
@@ -242,7 +251,7 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 **Steps:**
 - [ ] Build the kit (Global constraints). `pre` digest = Task 0's value.
 - [ ] Write the tests first, `withRollback` on `post`, each with its mutation:
-  1. "returns at most p_per_account pending rows per account, newest first, for every account at once". Three accounts with 3, 1 and 0 pending rows, called with 2: rows A3, A2, B1 in that order. **Mutation:** `<= p_per_account` → `<` **FAILS**; drop the `partition by` **FAILS**.
+  1. "returns at most p_per_account pending rows per account, newest first, for every account at once". Three accounts with 3, 1 and 0 pending rows, with account ids chosen so A sorts before B (fixed uuids ending `…0a` and `…0b`), called with 2: rows A3, A2, B1 in that order. **Mutation:** `<= p_per_account` → `<` **FAILS**; drop the `partition by` **FAILS**.
   2. "leaves out a pending row past expires_at and every decided row". A pending row with `expires_at = now() - 1 minute`, one accepted, one dismissed, one expired; only the fresh pending row returns. **Mutation:** drop the `expires_at` filter **FAILS**.
   3. "a tie on created_at is broken by id, so the cap never returns a different row on a second call". Two rows with equal `created_at`, called with 1, twice: same id both times, the greater id. **Mutation:** drop `id desc` **FAILS** (assert the id, not the count).
   4. "refuses 0 and null". `22023` both times. **Mutation:** drop the guard **FAILS**.
@@ -264,13 +273,14 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 
 **The file:**
 1. **One `do` block:**
-   - `set_config('lock_timeout','5s',true)`.
+   - `set_config('lock_timeout','5s',true)`, and `set_config('bis.m0090_xid', txid_current()::text, true)` (0088's pattern, `0088_proposals.sql:65-80`).
    - `lock table public.call_proposals in access exclusive mode`.
    - **Evidence item 2, enforced:**
      - count the `call_proposals` ids with no `proposals` row (`missing`);
      - count the `call_proposals` rows with `status <> 'pending'` whose `proposals` twin's status `is distinct from` theirs (`differ`);
      - if either is non-zero, `raise exception '0090_not_copied: % missing, % differ', missing, differ using errcode = 'P0001'`.
    - A pending `call_proposals` row whose twin the new code decided is expected, never a difference. Production holds two such rows from the 8b-1 smoke: f59881f9 accepted, 78281abd edited.
+   A second `do` block raises `0090_not_one_transaction` unless the stamp equals `txid_current()`, `lock_timeout` reads `5s`, and `pg_locks` shows this backend holding `AccessExclusiveLock` on `call_proposals`. A path that commits between statements therefore fails before any drop (A3).
 2. `drop table public.call_proposals;`. This takes `call_proposals_guard`, `call_proposals_mirror`, 0053's and 0068's policies, its indexes and its constraints.
 3. `drop function app.mirror_call_proposal(); drop function app.guard_call_proposal(); drop function app.copy_call_proposals();`
 4. No `cascade` anywhere.
@@ -283,7 +293,7 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 - [ ] Build your own kit (55682). `post` = pre + 0089 (if Task 1 has committed it; otherwise pre + 0090 alone) + 0090.
 - [ ] `proposals-drop.test.ts` on `post`:
   1. "call_proposals and the three bridge functions are gone". `to_regclass('public.call_proposals')` is null; `to_regprocedure('app.copy_call_proposals()')` and the other two are null.
-  2. "proposals, its trigger, its two policies and its five indexes are untouched". Name each, read off `pg_trigger`, `pg_policy` and `pg_indexes`.
+  2. "proposals, its trigger, its two policies and its six indexes (five, plus `proposals_pkey`) are untouched". Name each, read off `pg_trigger`, `pg_policy` and `pg_indexes`.
   3. "the client-write digest is unchanged".
 - [ ] **The self-check, proven by the implementer on the replica (not vitest, which runs after the drop):**
   - Make `chk` from `pre` (+0089).
@@ -294,7 +304,8 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 - [ ] The retargets:
   - `server-only-writes-grants.test.ts`'s seed inserts `proposals` directly (`source 'call'`, `expires_at now() + interval '30 days'`), so `proposalId` keeps naming a row every remaining case reads.
   - Delete the `call_proposals` entries listed in the File map, and the `describe("0053: call_proposals_decision_complete")` block at `:311-342`.
-  - `technician-scope.test.ts`: the `call_proposals` key and seed go; the `proposals` case stays.
+  - `technician-scope.test.ts`: the `call_proposals` key (`:28`), seed (`:67`) and entry (`:76`) go. The `proposals` case (`:78`) reused `callProposal`, the mirrored twin, so it now inserts into `proposals` directly with `contact_id` set to the case's customer.
+- [ ] Prove the one-transaction check: running 0090 through `psql` WITHOUT `-1` (autocommit) on a fresh `chk` raises `0090_not_one_transaction` and drops nothing. Paste the output.
 - [ ] Run on `post`: `proposals-drop`, `proposals-schema`, `proposals`, `server-only-writes-grants`, `technician-scope`, `schema-grants-guard`, `record-event`, `automation-log-grants`, `billing-schema`, `voice-web-sessions-grants`. All green.
 - [ ] `grep -rn "call_proposals" apps packages/db/src` → exactly the allow-list:
   - `packages/db/src/ai-gateway.ts:11`
@@ -345,11 +356,13 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 **Files:**
 - `packages/db/src/proposal-rules.ts`, `proposals.ts`, `record.ts`, `index.ts`;
 - `packages/db/src/test/proposals.test.ts`, plus the `listTimelinePage` test file (`grep -ln "listTimelinePage" packages/db/src/test`);
-- `apps/web/src/lib/record/author-mark.ts`, `timeline-rows.ts`, the three "all failed" lines (`loaders.ts:63`, `:108`, `group-loaders.ts:149`) and their tests.
+- `apps/web/src/lib/record/author-mark.ts`, `timeline-rows.ts`, the three "all failed" lines (`loaders.ts:63`, `:108`, `group-loaders.ts:149`) and their tests;
+- every mocked timeline page in the File map's `sources` row (without `sources`, `page.sources.length` throws a TypeError in `loadRecent`'s tests).
 
 **What:**
 1. **`listPendingProposalsForAgency(db, now?)`** (`proposals.ts:156-191`):
-   - It calls `db.rpc("list_pending_proposals_for_agency", { p_per_account: AGENCY_PER_ACCOUNT + 1 }).select(COLS)` (A2), keeps the newest `AGENCY_PER_ACCOUNT` per account, and returns each row with `accountCapped: boolean` beside `brandName` and `timezone` (the field is additive, so `work/page.tsx` still compiles).
+   - **PostgREST caps every response at `max_rows = 1000`** (`packages/db/supabase/config.toml:18`), the RPC included. With 51 per account, past about 19 busy accounts the later accounts would be cut off silently, with `accountCapped` false. So the read PAGES with `.range(from, from + 999)` over the RPC's own order (`account_id, created_at desc, id desc`) until an EMPTY page. That is `billing.ts:145-160`'s precedent: a page shorter than asked is not proof of the end under a lower `max_rows`. A hard stop after 20 pages throws (fail closed: the page's existing catch turns it into no suggestions section, logged).
+   - Each page calls `db.rpc("list_pending_proposals_for_agency", { p_per_account: AGENCY_PER_ACCOUNT + 1 }).select(COLS)` (A2). The read keeps the newest `AGENCY_PER_ACCOUNT` per account, and returns each row with `accountCapped: boolean` beside `brandName` and `timezone` (the field is additive, so `work/page.tsx` still compiles).
    - Asking for 51 to state a cap of 50 is the tray's own 201/200 shape (`proposals.ts:133-141`).
    - Rewrite the doc paragraph at `:153-155`: the cap is per account now.
 2. **`listPendingProposalsForContact(db, accountId, contactId, now?)`:**
@@ -360,8 +373,8 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
    - `TimelineSource` and `TIMELINE_SOURCES` gain `"suggestions"`.
    - The new entry kind is `{ kind: "suggestion"; id; at: decided_at; contactId; suggestion: { proposal: Proposal; applied: <that kind's payload> | null } }`. `applied` is `applied_payload` parsed by the row's kind with the same `@bis/db/proposal-rules` parsers; null when it does not parse, and then the row describes `payload`.
    - The read: `status in ('accepted','edited')`, `forContacts`, `withTimelinePage(…, "decided_at", page)` (the `listContactChats` shape, `record.ts:351-365`), on `proposals_contact_decided_idx`.
-   - It runs **only when `opts.suggestions === true`** (Question 1).
-   - `TimelinePage` gains `sources: readonly TimelineSource[]`, the sources actually read. Every "all failed" comparison uses `page.sources.length`, not `TIMELINE_SOURCES.length`. Read 2026-10-19, there are three: `loaders.ts:63` (`loadTimeline`), `loaders.ts:108` (`loadRecent`) and `group-loaders.ts:149`. Without this, the drawer and the group page, which do not read the tenth source, could never reach their "every source failed" error state.
+   - It runs **only when `opts.suggestions === true`** (owner decision 1, 2026-10-19: not on the drawer or household timelines). `listContactTimelinePage`'s opts type (`record.ts:483-488`) widens to carry `suggestions`, because `loadTimeline` calls it, not `listTimelinePage`.
+   - `TimelinePage` gains `sources: readonly TimelineSource[]`, the sources actually read. Every "all failed" comparison becomes `page.failed.length > 0 && page.failed.length >= page.sources.length`. The `> 0` is load-bearing: `listTimelinePage` returns early with no source read when `contactIds` is empty (`record.ts:406`), which the household page passes when the reader sees no members (`groups/[groupId]/page.tsx:96`, `:112`), and `0 >= 0` would turn that empty timeline into the error state. The early return names `sources: []`. Read 2026-10-19, there are three: `loaders.ts:63` (`loadTimeline`), `loaders.ts:108` (`loadRecent`) and `group-loaders.ts:149`. Without this, the drawer and the group page, which do not read the tenth source, could never reach their "every source failed" error state.
 4. **Web, so typecheck stays green:**
    - `authorOf` gets `case "suggestion": return { kind: "person", personId: entry.suggestion.proposal.decidedBy }`, so the person mark is from the closed set and "Someone on the team" applies when unnamed.
    - `SOURCE_KEY` gets `suggestions: "timeline.what.suggestions"`.
@@ -370,6 +383,7 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
 
 **Tests (each with its mutation, run):**
 - **Agency read:**
+  - a stubbed client whose first page answers exactly 1000 rows, whose second answers 3 and whose third is empty: all 1003 are read, and the second page's account is present (**mutation:** read one page only → **FAILS**); a stub that never answers an empty page throws after 20 pages;
   - a per-account cap with `accountCapped` true for the account that had 51 and false for one with 50 (**mutation:** pass `AGENCY_PER_ACCOUNT` instead of `+ 1` → **FAILS**);
   - a quiet account still listed beside a busy one;
   - brand and zone per account (existing cases kept).
@@ -380,6 +394,8 @@ This relaxes the spec's "on both projects" for bis-ci, so it is **Question 2 for
   - at most 5, newest first.
   - **Mutation:** drop `.eq("account_id")` → the second-account case **FAILS**.
 - **Timeline source:**
+  - an empty contact set returns `{ items: [], older: null, failed: [], sources: [] }`, and the group loader reads it as an empty timeline, not an error (**mutation:** drop the `> 0` → **FAILS**);
+  - `timeline-merge.test.ts:197`'s every-source-failing case asserts the exact `sources` too;
   - one row per accepted and per edited suggestion, at `decided_at`, none for dismissed, expired or pending;
   - an Undo (status back to pending) removes the row;
   - cursor paging across the boundary;
@@ -593,23 +609,20 @@ Every mutation is named in its test's title and run.
 
 Each step reads its own evidence; nothing is inferred from an earlier run.
 
-- [ ] **1. bis-ci, 0089 and 0090** (after Task 9's fix-review):
-  - `gh workflow run ci-project-setup.yml --ref feat/item8b2-work-tray -f step=push-dry-run`. Its log lists exactly `0089_agency_suggestions_read.sql` and `0090_drop_call_proposals.sql`.
-  - **Immediately before the push**, run E1 and E2 (below) on bis-ci and write them in the ledger. E2 must be `missing 0, differ 0`; E1 is recorded (Question 2).
-  - Then `-f step=push`. The log shows both applied and no `0090_not_copied`.
+- [ ] **1. bis-ci, 0089 ONLY** (after Task 1's review approves it; it need not wait for Task 9):
+  - From a ref holding 0089 and not 0090 (the migration decision): `gh workflow run ci-project-setup.yml --ref tmp/8b2-0089 -f step=push-dry-run`. Its log lists exactly `0089_agency_suggestions_read.sql`. Then `-f step=push`.
   - Read-only MCP post-checks:
-    - `to_regclass('public.call_proposals')` is null;
-    - the three `to_regprocedure`s are null;
     - `select proname, prosecdef, proconfig, proacl from pg_proc where proname = 'list_pending_proposals_for_agency'`;
     - the digest is unchanged.
-  - Ledger line.
+  - **One live call through PostgREST as the service role:** `serviceDb().rpc("list_pending_proposals_for_agency", { p_per_account: 51 })` from a local script on bis-ci's env (memory "Env secret reads": never parse an env value with code that can throw). It answers an array, not a PGRST202.
+  - Delete `tmp/8b2-0089`. Ledger line.
 - [ ] **2. Push and CI.** Read `verify` and `e2e` ON THE HEAD SHA (`gh api repos/{owner}/{repo}/commits/<sha>/check-runs`). `suggestions-tray.spec.ts` and `suggestions.spec.ts` must both have run. Then the local gates, one at a time, after checking that no `screenshots.yml` run is in progress.
 - [ ] **3. Preview by hand** (bis-ci, a test account, never Test Client One):
   - the grouped tray;
   - the agency page with an account section;
   - the record's Waiting section and timeline row in both themes, English and Spanish, at 360 px;
   - a Technician sees Waiting rows only for an assigned customer.
-- [ ] **4. Production 0089** (MCP `apply_migration`, `tlbkbmlrfafquucsmsmm`, name `agency_suggestions_read`, the exact reviewed text, ONCE). Pre-flight `max(version)` = Task 0's. Post: the `pg_proc` read as in step 1. Ledger: `0089 APPLIED … NEVER RE-APPLY`.
+- [ ] **4. Production 0089** (MCP `apply_migration`, `tlbkbmlrfafquucsmsmm`, name `agency_suggestions_read`, the exact reviewed text, ONCE). Pre-flight `max(version)` = Task 0's. Post: the `pg_proc` read as in step 1, plus one live call as the service role through MCP, in ONE `execute_sql`: `set local role service_role; select count(*) from public.list_pending_proposals_for_agency(51);`. It is read-only, and no production credential leaves Vercel. The PostgREST path on production is then proven after the merge (step 8): the production function logs for `/dashboard/work` show no `listPendingProposalsForAgency` error. Ledger: `0089 APPLIED … NEVER RE-APPLY`.
 - [ ] **5. Production 0090, gated.** Not before **2026-10-20T05:35:46Z**: check `select now() >= '2026-10-20T05:35:46Z'::timestamptz` is true. Then, read-only:
   - **E1** (gate: `after_gap = 0`; `created_after_ready` is expected 0, because webhooks are not pinned and the old generator stopped at READY):
     ```sql
@@ -630,13 +643,16 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
       (select jsonb_object_agg(status, n) from (select status, count(*) n from public.call_proposals group by 1) s) as by_status;
     ```
   - **E3:** `grep -rn "call_proposals" apps packages/db/src` on `origin/main` returns the allow-list plus the four bridge-era test files (tests do not ship; no runtime code names the table). The same grep on the branch head returns the allow-list only (Task 2's paste). Both go in the ledger.
-  - **If any gate fails:** do not apply. Move Task 2's commit to a follow-up PR (spec ambiguity 11), record why, and continue the merge with 0089 alone. bis-ci then stays ahead of production by one dropped table, a recorded parity difference.
-  - **Otherwise:** `apply_migration` name `drop_call_proposals`, ONCE. A `0090_not_copied` raise means nothing was dropped. Read the counts and STOP.
-  - Post-check: as in step 1. Ledger: `0090 APPLIED … NEVER RE-APPLY; point of no rollback to pre-8b code`.
-- [ ] **6. Parity.** Runbook §5 (`docs/runbooks/ci-supabase-project.md:184-206`): `-f step=fingerprint` on bis-ci, and `packages/db/supabase/parity/fingerprint.sql` on production. Equal: no `call_proposals` on either, none of the three bridge functions on either, and the RPC's `prosrc` md5, `prosecdef`, `proconfig` and ACL. The documented cosmetic kinds may differ (8b-1 step 6).
+  - **If any gate fails:** do not apply anywhere; 0090 has not reached bis-ci either. Move Task 2's commit to a follow-up PR (spec ambiguity 11), record why, and merge with 0089 alone. The branch then holds no unapplied file, and bis-ci and production agree.
+  - **Otherwise, in this order:**
+    1. **bis-ci:** run E1 and E2 on bis-ci and write them in the ledger (E2 must be `missing 0, differ 0`; E1 is recorded only, owner decision 2). Then `ci-project-setup.yml --ref feat/item8b2-work-tray -f step=push-dry-run`, which lists exactly `0090_drop_call_proposals.sql`, then `-f step=push`. Its log shows no `0090_not_copied` and no `0090_not_one_transaction`.
+    2. **Production:** `apply_migration` name `drop_call_proposals`, ONCE. A `0090_not_copied` or `0090_not_one_transaction` raise means nothing was dropped. Read the counts and STOP.
+    3. **Re-run the PR's `e2e`**: its migration check now passes. Read it on the head SHA.
+  - Post-check on both projects: `to_regclass('public.call_proposals')` is null; the three `to_regprocedure`s are null; the digest is unchanged. Ledger: `0090 APPLIED … NEVER RE-APPLY; point of no rollback to pre-8b code`.
+- [ ] **6. Parity.** Runbook §5 (`docs/runbooks/ci-supabase-project.md:184-206`): `-f step=fingerprint` on bis-ci, and `packages/db/supabase/parity/fingerprint.sql` on production. Equal: no `call_proposals` on either, none of the three bridge functions on either, and the RPC's `prosrc` md5, `prosecdef`, `proconfig` and ACL. The documented cosmetic kinds may differ (8b-1 step 6). After the fingerprint, one more live call of the RPC as the service role on each project, as in steps 1 and 4.
 - [ ] **7. PR and merge.** The PR body names:
   - P1–P22 (owner-approved);
-  - the split decision and the bis-ci basis (with the owner's answer to Question 2);
+  - the split decision and the bis-ci basis (owner decision 2, 2026-10-19);
   - the follow-ups folded in;
   - the deviations below;
   - E1–E3 for both projects;
@@ -662,15 +678,15 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 ## Deviations from the spec (each decided here; the spec's text is corrected in the final fix round's docs commit)
 
 1. **Two files, 0089 and 0090, not one 0089** (§1, §5.2, §4.6). See the decision above.
-2. **The bis-ci basis** for evidence item 1 (§4.6, §10 "on both projects"): recorded, not gating, on bis-ci. **Question 2.**
+2. **The bis-ci basis** for evidence item 1 (§4.6, §10 "on both projects"): recorded, not gating, on bis-ci. **Owner decision 2, 2026-10-19: yes.**
 3. **Evidence item 2 is enforced inside 0090** (§4.6 lists it as a ledger check only). The file refuses to drop if it fails.
 4. **The agency RPC is called with 51 to state a cap of 50** (§5.2 says `<= p_per_account`). The function is as specified; the caller asks for one more, as the tray does.
 5. **`proposals.work.heading`/`.body` are deleted** (§7 kept them for the read-only agency page, which this PR replaces with cards).
-6. **The `suggestions` timeline source is read on the customer record page only**, not by the drawer's Recent or the group page's timeline. **Question 1.**
+6. **The `suggestions` timeline source is read on the customer record page only**, not by the drawer's Recent or the group page's timeline. **Owner decision 1, 2026-10-19: record page only.**
 
 ## Spec ambiguities resolved here (not owner-level unless marked)
 
-1. **Owner-level, Question 1:** does the drawer's Recent (and the household page's timeline) show accepted-suggestion rows? P20 says the drawer does not change in 8b, and 8a §7 treats its unchanged fence as proof. DESIGN.md says the drawer shows "the five newest timeline rows", and every earlier timeline source raised `MEASURED` (`route.reads.test.ts:72`). Default: record page only.
+1. **Owner-level, decided 2026-10-19 (owner decision 1: record page only):** does the drawer's Recent (and the household page's timeline) show accepted-suggestion rows? P20 says the drawer does not change in 8b, and 8a §7 treats its unchanged fence as proof. DESIGN.md says the drawer shows "the five newest timeline rows", and every earlier timeline source raised `MEASURED` (`route.reads.test.ts:72`). Default: record page only.
 2. Inside a tray group, the card's own source label ("From the call on Tue, Oct 14 · Ana López") repeats the group heading. Default: keep the card unchanged (§4.5); the design review judges.
 3. "See it in the transcript · 2:14": the time is elapsed since the call's start (`m:ss`), from `evidence_ref.at` minus `calls.started_at`. The turn index is the raw transcript index, not `TranscriptView`'s filtered one (A1).
 4. A copied row (no turn) links to the call with no time, and shows no link on the call page itself.
@@ -680,12 +696,12 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 8. "By customer" uses the row's `contact_id` (P14's customer); the card's source label still names the call's caller. They differ only where the fence-meaning count was non-zero (0 on production, 8b-1 Task 0).
 9. The agency page's cards follow `requestLocale` for an operator: English unless the operator has their own language set.
 10. The agency persona is per account (one batch read), never the agency's own.
-11. If 0090's gate fails at merge time, the drop moves to a follow-up PR and 8b-2 ships with 0089 only. S-14 and F-019 then wait for that PR before `done`.
+11. If 0090's gate fails at merge time, the drop moves to a follow-up PR and 8b-2 ships with 0089 only. 0090 never reached bis-ci, so nothing is ahead of `main`. S-14 and F-019 then wait for that PR before `done`.
 
-## Questions for the owner
+## Owner decisions (2026-10-19)
 
-1. **Should accepted suggestions show in the contact drawer's five newest rows and on household and business timelines?** Recommendation: **not in 8b-2.** That keeps P20's drawer and its measured read fence unchanged; it could be revisited with Surface 6's "the same card in the drawer". Default if unanswered: the recommendation.
-2. **On bis-ci, may 0090 drop the table on evidence items 2 and 3 alone, with item 1 recorded as test data from pre-8b Previews?** Recommendation: **yes.** Old branch Previews can write `call_proposals` on bis-ci indefinitely, so the gap there never closes; the mirror kept every such write copied, and 0090 itself refuses if one was not. Production keeps all three gates. Default if unanswered: the recommendation.
+1. **Accepted suggestions in the contact drawer's five newest rows and on household and business timelines: NOT in 8b-2** (owner, 2026-10-19; the plan's recommendation). The `suggestions` source is read on the customer record page only. P20's drawer and its measured read fence (`MEASURED = 31`) stay unchanged. It may be revisited with Surface 6's "the same card in the drawer".
+2. **bis-ci's 0090 gate: YES, relaxed** (owner, 2026-10-19). On bis-ci the copy check (E2, also enforced inside 0090) and the grep (E3) gate the drop. "No late writes" (E1) is recorded only, as test data from pre-8b Previews. Production keeps all three gates.
 
 ## Spec coverage
 
