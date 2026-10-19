@@ -70,6 +70,9 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.ts": "proven-target",
+  // The suggestion actions (item 8b-1): decide.ts writes proposals on the service client only after getProposal
+  // on the request client (0088's RLS) found the row; every CRM write and its inverse stays on the request client.
+  "lib/proposals/actions.ts": "proven-target",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/checklist/actions.ts": "agency-only",

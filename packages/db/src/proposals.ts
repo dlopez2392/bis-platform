@@ -307,18 +307,24 @@ export async function expireProposals(
  * Undo (P8, P9): the row goes back to pending, `decided_*`, `applied_*` and `expired_reason` cleared,
  * `undone_*` stamped, only while it is in one of `u.from` and still decided by `u.decidedBy`. `23505`
  * (a fresh pending suggestion for the same call, kind and customer) is `"collision"`, logged.
+ *
+ * `u.decidedAt` (item 8b-1, Task 4 review minor 4): the decision instant the Undo READ. When given, the
+ * row must still carry exactly that `decided_at`, so a stale Undo can never undo a later decision of the
+ * same person on the same row (an Undo and a fresh Accept in between) with the old one's applied_ref.
+ * decide.ts always passes it.
  */
 export async function undoProposalDecision(
   writer: SupabaseClient, accountId: string, id: string,
-  u: { decidedBy: string; from: ProposalStatus[]; now: Date },
+  u: { decidedBy: string; from: ProposalStatus[]; now: Date; decidedAt?: string },
 ): Promise<"undone" | "missed" | "collision"> {
-  const { data, error } = await writer.from("proposals")
+  let q = writer.from("proposals")
     .update({
       status: "pending", decided_at: null, decided_by: null, applied_payload: null, applied_ref: null,
       expired_reason: null, undone_at: u.now.toISOString(), undone_by: u.decidedBy,
     })
-    .eq("account_id", accountId).eq("id", id).in("status", u.from).eq("decided_by", u.decidedBy)
-    .select("id");
+    .eq("account_id", accountId).eq("id", id).in("status", u.from).eq("decided_by", u.decidedBy);
+  if (u.decidedAt !== undefined) q = q.eq("decided_at", u.decidedAt);
+  const { data, error } = await q.select("id");
   if (error) {
     if (codeOf(error) === "23505") {
       console.error(
@@ -335,18 +341,20 @@ export async function undoProposalDecision(
 /**
  * After an Undo met `"collision"`: the CRM write was already reversed, so the row is no longer the
  * decider's Accept. It becomes out of date (superseded by the newer pending suggestion), applied
- * columns cleared, only while it is still accepted|edited by that decider.
+ * columns cleared, only while it is still accepted|edited by that decider (and, when `decidedAt` is
+ * given, still at that decision instant: `undoProposalDecision`'s reason).
  */
 export async function expireAfterUndoCollision(
-  writer: SupabaseClient, accountId: string, id: string, decidedBy: string, now: Date,
+  writer: SupabaseClient, accountId: string, id: string, decidedBy: string, now: Date, decidedAt?: string,
 ): Promise<boolean> {
-  const { data, error } = await writer.from("proposals")
+  let q = writer.from("proposals")
     .update({
       status: "expired", expired_reason: "superseded", decided_by: SYSTEM_DECIDER, decided_at: now.toISOString(),
       applied_payload: null, applied_ref: null,
     })
-    .eq("account_id", accountId).eq("id", id).in("status", ["accepted", "edited"]).eq("decided_by", decidedBy)
-    .select("id");
+    .eq("account_id", accountId).eq("id", id).in("status", ["accepted", "edited"]).eq("decided_by", decidedBy);
+  if (decidedAt !== undefined) q = q.eq("decided_at", decidedAt);
+  const { data, error } = await q.select("id");
   if (error) throw new Error(`expireAfterUndoCollision failed: ${error.message}`);
   return (data ?? []).length > 0;
 }
