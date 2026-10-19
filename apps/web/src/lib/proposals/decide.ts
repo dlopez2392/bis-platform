@@ -164,7 +164,13 @@ export async function acceptSuggestion(d: DecideDeps, id: string, edit?: EditInp
   }
   if (applied.noWrite) {
     try {
-      await revertProposalDecision(d.writer, d.accountId, id, d.userId);
+      // A collision (a fresh pending suggestion for the same call, kind and customer landed meanwhile) cannot
+      // go back to pending; it would otherwise stay "accepted" with nothing written. It is out of date instead,
+      // covered by the newer one, scoped to this decision's own instant.
+      if ((await revertProposalDecision(d.writer, d.accountId, id, d.userId)) === "collision"
+          && !(await expireAfterUndoCollision(d.writer, d.accountId, id, d.userId, d.now, decidedAt.toISOString()))) {
+        console.error(`acceptSuggestion: proposal ${id} (account ${d.accountId}) wrote nothing, collided, and was not expired`);
+      }
     } catch (e) {
       console.error(`acceptSuggestion: proposal ${id} (account ${d.accountId}) wrote nothing and was not given back: ${loggableError(e)}`);
     }

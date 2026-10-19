@@ -572,6 +572,38 @@ describe("the status condition of the Undo-side writes (a row this decider dismi
 });
 
 /**
+ * The decision instant the Undo read (Task 4 review minor 4, Task 6 review I1). Each Undo-side write is
+ * scoped by it when given: one Undo's read-to-write gap cannot land on a decision made after its read.
+ * The row is accepted at NOW; an Undo that read a decision 1 s earlier matches nothing.
+ */
+describe("the decided_at scope of the Undo-side writes", () => {
+  const ONE_SECOND_OFF = "2026-10-19T09:59:59.000Z";
+
+  it("undoProposalDecision with a decidedAt 1 s off answers missed and the row stays decided; with the exact one, undone " +
+    "(mutation: drop .eq(\"decided_at\", u.decidedAt) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const id = await taskOn(db, accountId, await seedCall(db, accountId));
+      await acceptAs(db, accountId, id, "user_a");
+      const u = { decidedBy: "user_a", from: ["accepted", "edited"] as ("accepted" | "edited")[], now: NOW };
+      expect(await undoProposalDecision(db, accountId, id, { ...u, decidedAt: ONE_SECOND_OFF })).toBe("missed");
+      expect(await raw(db, id)).toMatchObject({ status: "accepted", decided_by: "user_a", decided_at: "2026-10-19T10:00:00+00:00", undone_at: null });
+      expect(await undoProposalDecision(db, accountId, id, { ...u, decidedAt: T })).toBe("undone");
+    });
+  });
+
+  it("expireAfterUndoCollision with a decidedAt 1 s off answers false and the row stays decided; with the exact one, true " +
+    "(mutation: drop .eq(\"decided_at\", decidedAt) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const id = await taskOn(db, accountId, await seedCall(db, accountId));
+      await acceptAs(db, accountId, id, "user_a");
+      expect(await expireAfterUndoCollision(db, accountId, id, "user_a", NOW, ONE_SECOND_OFF)).toBe(false);
+      expect(await raw(db, id)).toMatchObject({ status: "accepted", decided_by: "user_a", expired_reason: null });
+      expect(await expireAfterUndoCollision(db, accountId, id, "user_a", NOW, T)).toBe(true);
+    });
+  });
+});
+
+/**
  * Plan Task 4 case 6: the account filter is the tenant barrier on every accessor. Account A and
  * account B each hold matching rows; every B-scoped call answers nothing of A's and moves nothing of
  * A's, while B's own row is there to be found. Each `it` is one function, so dropping

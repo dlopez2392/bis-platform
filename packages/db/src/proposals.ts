@@ -309,9 +309,10 @@ export async function expireProposals(
  * (a fresh pending suggestion for the same call, kind and customer) is `"collision"`, logged.
  *
  * `u.decidedAt` (item 8b-1, Task 4 review minor 4): the decision instant the Undo READ. When given, the
- * row must still carry exactly that `decided_at`, so a stale Undo can never undo a later decision of the
- * same person on the same row (an Undo and a fresh Accept in between) with the old one's applied_ref.
- * decide.ts always passes it.
+ * row must still carry exactly that `decided_at`. That closes the gap between ONE Undo's read and this
+ * write: a decision landing in between (an Undo and a fresh Accept by the same person) is not moved with
+ * the old one's applied_ref. It does nothing about a later Undo, which re-reads the current decision and
+ * scopes by that. decide.ts always passes it.
  */
 export async function undoProposalDecision(
   writer: SupabaseClient, accountId: string, id: string,

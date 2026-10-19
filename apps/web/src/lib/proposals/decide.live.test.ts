@@ -339,6 +339,29 @@ describe("Accept", () => {
     });
   });
 
+  it("6b. a no-write whose give-back meets a fresh pending suggestion for the same call goes out of date (superseded), never " +
+    "stays accepted with nothing written (mutation: drop the collision branch -> the row stays accepted, FAILS)", async () => {
+    await withAccount(async (db, a) => {
+      const callId = await seedCall(db, a);
+      const k = await seedContact(db, a, { firstName: "Roberto" });
+      const id = await seed(db, a, { callId, contactId: k, kind: "contact_field", payload: { field: "lastName", value: "Garza" } });
+      let fresh = "";
+      // Just before the give-back (the revert: status pending, no undone_by), a re-delivered webhook makes the same suggestion.
+      const writer = intercept(db, "proposals", "update", (v) => v?.status === "pending" && !!v && !("undone_by" in v),
+        (values) => realAfter(db, "proposals", values, async () => {
+          fresh = await seed(db, a, { callId, contactId: k, kind: "contact_field", payload: { field: "lastName", value: "Garza" } });
+        }));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(await acceptSuggestion(deps(a, { writer: writer.client }), id))
+        .toEqual({ ok: false, error: "Out of date: the name on file doesn't match this caller." });
+      expect(writer.stats.fired).toBe(1);
+      const row = await rowOf(db, a, id);
+      expect([row.status, row.expiredReason, row.decidedBy, row.appliedPayload, row.appliedRef]).toEqual(["expired", "superseded", "system", null, null]);
+      expect((await rowOf(db, a, fresh)).status).toBe("pending");
+      expect((await getContact(db, a, k))!.last_name).toBeNull();
+    });
+  });
+
   it("7. a write that throws is STRANDED: maybe-failed answer, the row left accepted, logged by id (mutation: revert on a throw -> FAILS)", async () => {
     await withAccount(async (db, a) => {
       const callId = await seedCall(db, a);
