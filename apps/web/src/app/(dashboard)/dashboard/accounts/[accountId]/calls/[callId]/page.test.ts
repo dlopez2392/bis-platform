@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
-import type { CallDetailRow, CallProposal } from "@bis/db";
+import type { CallDetailRow, Proposal } from "@bis/db";
 import { emptyCallState } from "@/lib/voice/call-state";
 import { composeSummary } from "@/lib/voice/summarize";
 
@@ -172,7 +172,7 @@ const TEXTBACK_STATUS_DOT =
 function render(
   row: CallDetailRow | null,
   failed: (typeof FAILED_TEXTBACK)[] = [],
-  proposals: CallProposal[] = [],
+  proposals: Proposal[] = [],
   stageRows: { id: string; name: string; position: number }[] = [],
 ) {
   getCallMock.mockResolvedValue(row);
@@ -493,21 +493,23 @@ describe("CallDetailPage — the zone note", () => {
  * plain language, evidence clamp, stage names) is `proposals.test.ts`'s job.
  */
 describe("CallDetailPage — proposals", () => {
-  const TASK_PROPOSAL: CallProposal = {
+  const TASK_PROPOSAL: Proposal = {
     id: "prop1", accountId: "acct1", callId: "call1", contactId: "ct1",
     kind: "task", payload: { title: "Call back about the quote", dueAt: null },
     evidence: "Can you call me back about the quote tomorrow?",
     status: "pending", decidedAt: null, decidedBy: null,
     createdAt: "2026-08-25T19:16:00.000000+00:00",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
   };
 
-  const STAGE_PROPOSAL: CallProposal = {
+  const STAGE_PROPOSAL: Proposal = {
     id: "prop2", accountId: "acct1", callId: "call1", contactId: "ct1",
     kind: "opportunity_stage",
     payload: { opportunityId: "opp1", fromStageId: "stage-a", toStageId: "stage-b" },
     evidence: "Let's move this one to won.",
     status: "pending", decidedAt: null, decidedBy: null,
     createdAt: "2026-08-25T19:16:00.000000+00:00",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
   };
 
   beforeEach(() => {

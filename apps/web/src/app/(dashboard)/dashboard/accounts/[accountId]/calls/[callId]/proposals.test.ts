@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { CallProposal, ProposalStatus } from "@bis/db";
+import type { Proposal, ProposalStatus, ExpiredReason, EvidenceRef } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 import { CallProposals, acceptedToastFor, type ResolvedStage } from "./proposals";
@@ -17,9 +17,12 @@ const BASE = {
   status: "pending" as ProposalStatus,
   decidedAt: null as string | null, decidedBy: null as string | null,
   createdAt: "2026-08-25T19:16:00.000000+00:00",
+  source: "call" as const, evidenceRef: {} as EvidenceRef, evidenceLang: "en" as "en" | "es" | null,
+  expiredReason: null as ExpiredReason | null, appliedPayload: null as unknown, appliedRef: null as unknown,
+  undoneAt: null as string | null, undoneBy: null as string | null, expiresAt: "2026-10-01T00:00:00Z",
 };
 
-function taskProposal(overrides: Partial<typeof BASE> & { title?: string; dueAt?: string | null } = {}): CallProposal {
+function taskProposal(overrides: Partial<typeof BASE> & { title?: string; dueAt?: string | null } = {}): Proposal {
   const { title = "Call back Tuesday", dueAt = null, ...base } = overrides;
   return { ...BASE, ...base, kind: "task", payload: { title, dueAt } };
 }
@@ -28,7 +31,7 @@ function contactFieldProposal(
   field: "firstName" | "lastName" | "email" | "phone",
   value: string,
   overrides: Partial<typeof BASE> = {},
-): CallProposal {
+): Proposal {
   return { ...BASE, ...overrides, kind: "contact_field", payload: { field, value } };
 }
 
@@ -36,7 +39,7 @@ function stageProposal(
   fromStageId: string,
   toStageId: string,
   overrides: Partial<typeof BASE> = {},
-): CallProposal {
+): Proposal {
   return {
     ...BASE, ...overrides, kind: "opportunity_stage",
     payload: { opportunityId: "opp1", fromStageId, toStageId },
@@ -44,7 +47,7 @@ function stageProposal(
 }
 
 function render(
-  proposals: CallProposal[],
+  proposals: Proposal[],
   stageNames: Record<string, ResolvedStage> = {},
   timezone = "America/Chicago",
 ): string {

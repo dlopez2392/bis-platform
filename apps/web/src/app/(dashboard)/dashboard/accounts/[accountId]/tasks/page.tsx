@@ -5,7 +5,7 @@
 // `WorkRowActions`). This page itself still only reads and buckets
 // `listAccountWork`'s three sources and renders them — the writes live in
 // the files below it, not here.
-import { listAccountWork, listPendingProposals, countHeldInboundEmails, type CallProposal } from "@bis/db";
+import { listAccountWork, listPendingProposals, countHeldInboundEmails, type Proposal } from "@bis/db";
 import { PageHeader } from "@/components/page-header";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { requireAccountAccess } from "@/lib/auth";
@@ -105,7 +105,7 @@ export default async function TasksPage({
   // `call_proposals`/`pipeline_stages` hiccup must never cost this screen
   // its real to-do queue, and degrades to no suggestions section rather than
   // a broken page.
-  let proposals: CallProposal[] = [];
+  let proposals: Proposal[] = [];
   let stageNames: Record<string, ResolvedStage> = {};
   try {
     proposals = await listPendingProposals(db, accountId);

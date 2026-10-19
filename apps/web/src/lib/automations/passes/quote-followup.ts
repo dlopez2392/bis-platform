@@ -31,7 +31,7 @@ type Target =
  * permanent).
  *
  * NOTHING CREATES AN OPPORTUNITY AUTOMATICALLY — the pipeline dialog, the
- * demo seed and an accepted `call_proposals` row are the only three writers —
+ * demo seed and an accepted `proposals` row are the only three writers —
  * so this recipe can only ever act on a deal a human put in front of it. The
  * card's own copy says so; it is the operator-facing half of the same fact.
  *

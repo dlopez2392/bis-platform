@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import {
-  getProposal, markProposalDecided, addTask, fillContactBlanks, getContact,
+  getProposal, decideProposal, revertProposalDecision, addTask, fillContactBlanks, getContact,
   moveOpportunityToStage, serviceDb, readPersonId, taskAssigneeFor,
   type ContactFieldPayload, type SupabaseClient,
 } from "@bis/db";
@@ -22,64 +22,6 @@ const CONTACT_FIELD_COLUMN: Record<ContactFieldPayload["field"], "first_name" | 
 
 function isBlank(v: unknown): boolean {
   return v == null || String(v).trim() === "";
-}
-
-/**
- * Puts an accepted proposal back to `pending` after the CRM write that was
- * supposed to follow the accept never landed — a thrown exception, or one
- * of this action's own "there is nothing to write" refusals reached AFTER
- * the compare-and-swap already ran. Scoped to THIS decision (`status =
- * 'accepted'` AND `decided_by = decidedBy`), so it can never claw back a
- * different, later, legitimate accept of the same proposal, and callers
- * only invoke this when they know the write did not land. Best-effort: if
- * the revert itself fails, the accept was already going to report failure
- * either way — this only logs so an operator can find the stranded row.
- * Runs on the service client (0053).
- */
-async function revertToPending(
-  db: SupabaseClient, accountId: string, proposalId: string, decidedBy: string,
-): Promise<void> {
-  // `.select("id")` is what makes a no-op revert knowable: PostgREST
-  // returns no error and no rows for an update matching nothing, which
-  // would otherwise read as success (the identical trap `markProposalDecided`,
-  // packages/db/src/call-proposals.ts, documents and this file failed to
-  // copy). A revert that matches nothing is not a bug on its own — a
-  // legitimate later decision may have already moved the row past this
-  // one's scope — but it must never pass in silence.
-  const { data, error } = await db.from("call_proposals")
-    .update({ status: "pending", decided_at: null, decided_by: null })
-    .eq("account_id", accountId).eq("id", proposalId)
-    .eq("status", "accepted").eq("decided_by", decidedBy)
-    .select("id");
-  if (error) {
-    const code = (error as { code?: string }).code;
-    if (code === "23505") {
-      // `call_proposals_one_pending_unique` (0040) constrains at most one
-      // PENDING row per (call_id, kind, contact_id). A re-delivered hangup
-      // webhook can re-run `generateProposals` while this one sits
-      // `accepted` and insert a fresh pending row for the same trio; if
-      // that lands inside this failure window, giving THIS row back to
-      // `pending` too collides with it. The row stays `accepted` — stranded,
-      // not silently swallowed.
-      console.error(
-        `acceptProposal: revert for proposal ${proposalId} (account ${accountId}) hit the one-pending ` +
-        `unique index — a fresh pending proposal for the same call/kind/contact was likely generated ` +
-        `while this one sat accepted; this row is stranded accepted: ${error.message}`,
-      );
-    } else {
-      console.error(
-        `acceptProposal: failed to revert proposal ${proposalId} (account ${accountId}) back to pending: ` +
-        error.message,
-      );
-    }
-    return;
-  }
-  if ((data ?? []).length === 0) {
-    console.error(
-      `acceptProposal: revert for proposal ${proposalId} (account ${accountId}, decided_by ${decidedBy}) ` +
-      `matched no row — a different, later decision likely already moved it; nothing reverted.`,
-    );
-  }
 }
 
 /**
@@ -208,7 +150,7 @@ export async function acceptProposal(
     // two reviewers racing produce exactly one winner. Writing the CRM
     // record first and stamping afterwards would let a double-click create
     // two tasks and then stamp one row twice.
-    if (!await markProposalDecided(writer, accountId, proposalId, "accepted", userId)) {
+    if (!await decideProposal(writer, accountId, proposalId, { to: "accepted", decidedBy: userId, appliedPayload: proposal.payload, now: new Date() })) {
       return { ok: false, error: m["proposals.gone"] };
     }
     decided = true;
@@ -248,7 +190,7 @@ export async function acceptProposal(
     } else if (proposal.kind === "contact_field") {
       const p = proposal.payload;
       if (!proposal.contactId) {
-        await revertToPending(writer, accountId, proposalId, userId);
+        await revertProposalDecision(writer, accountId, proposalId, userId);
         return { ok: false, error: m["proposals.failed"] };
       }
       // Read the field's CURRENT value before the re-check below so an
@@ -276,7 +218,7 @@ export async function acceptProposal(
         return stranded(proposalId, callId, accountId, e);
       }
       if (filled.length === 0) {
-        await revertToPending(writer, accountId, proposalId, userId);
+        await revertProposalDecision(writer, accountId, proposalId, userId);
         return {
           ok: false,
           error: alreadyFilled ? m["proposals.contactFilled"] : m["proposals.contactMismatch"],
@@ -306,7 +248,7 @@ export async function acceptProposal(
     revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   } catch (e) {
     if (decided && !written && writer) {
-      await revertToPending(writer, accountId, proposalId, userId);
+      await revertProposalDecision(writer, accountId, proposalId, userId);
     }
     // Whether the compare-and-swap already ran, and whether the write
     // landed, are the two facts an operator needs before touching this row
@@ -351,7 +293,7 @@ export async function dismissProposal(
     }
     // 0053: the decision is server-written, like acceptProposal's; the read
     // above, under RLS, is what authorises it.
-    if (!await markProposalDecided(serviceDb(), accountId, proposalId, "dismissed", userId)) {
+    if (!await decideProposal(serviceDb(), accountId, proposalId, { to: "dismissed", decidedBy: userId, now: new Date() })) {
       return { ok: false, error: m["proposals.gone"] };
     }
     dismissed = true;

@@ -78,8 +78,10 @@ function prepareNeedle(quote: string): string {
 }
 
 /**
- * Returns the CALLER's whole turn that contains `quote`, untouched, or
- * `null` if no caller turn does.
+ * Returns the CALLER's whole turn that contains `quote` (untouched), its
+ * index in `transcript` and its `at`, or `null` if no caller turn does.
+ * The index and instant are where the evidence was said: the generator stores
+ * them as `evidence_ref` (item 8b-1, plan deviation 5).
  *
  * The MODEL's excerpt is never what comes back — only the caller's own
  * complete sentence, verbatim from the transcript. Matching normalises case
@@ -142,11 +144,23 @@ function prepareNeedle(quote: string): string {
  *   database's evidence CHECK constraint uses `btrim`, so a padded turn is
  *   still valid stored evidence either way).
  */
-export function groundedEvidence(quote: string, transcript: TranscriptEvent[]): string | null {
+export function groundedTurn(
+  quote: string, transcript: TranscriptEvent[],
+): { text: string; index: number; at: string } | null {
   const needle = prepareNeedle(quote);
+  // The word floor is also what keeps a blank out of the database: 0088's evidence CHECK is
+  // `length(btrim(evidence)) > 0`, and btrim strips only ASCII spaces, so a tab- or NBSP-only turn
+  // would pass it. An empty needle would match every caller turn; three letter/digit runs cannot.
   if (countWords(needle) < MIN_EVIDENCE_WORDS) return null;
-  const turn = transcript.findLast(
+  const index = transcript.findLastIndex(
     (e) => e.role === "caller" && foldForMatch(e.text).includes(needle),
   );
-  return turn ? turn.text : null;
+  if (index < 0) return null;
+  const turn = transcript[index]!;
+  return { text: turn.text, index, at: turn.at };
+}
+
+/** The grounding turn's text only (`groundedTurn`'s doc above holds the rules). */
+export function groundedEvidence(quote: string, transcript: TranscriptEvent[]): string | null {
+  return groundedTurn(quote, transcript)?.text ?? null;
 }

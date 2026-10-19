@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow, CallProposal } from "@bis/db";
+import type { AgencyWorkRow, Proposal } from "@bis/db";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { m } from "@/lib/messages";
@@ -41,6 +41,7 @@ function proposal(overrides: Partial<AgencyProposal> = {}): AgencyProposal {
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
     brandName: "Rio Roofing", timezone: "America/Chicago",
     ...overrides,
   } as AgencyProposal;
@@ -273,7 +274,7 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
   //
   // Fix-wave (task-10-brief.md, Important 2): the prior version of this
   // test only grepped the waiting section for the proposal's OWN
-  // `payload.title`/`evidence` strings. A bare `CallProposal` folded
+  // `payload.title`/`evidence` strings. A bare `Proposal` folded
   // directly into `buckets.waiting` carries neither into `primaryLabel`
   // (`row.source` is `undefined` there, so it falls through to the generic
   // `m["work.booking"]` label) — so that exact mutation left every
@@ -430,10 +431,11 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
 });
 
 // Real mitigation, kept rather than relied on alone (fix-wave report,
-// Important 2): a BARE `CallProposal` cannot enter `AgencyBucketedWork`'s
-// arrays without an explicit cast — `AgencyWorkRow` requires `source`,
-// `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` and `suppressed`,
-// none of which a `CallProposal` carries. Same precedent as
+// Important 2): a BARE `Proposal` cannot enter `AgencyBucketedWork`'s
+// arrays without an explicit cast — `AgencyWorkRow` requires `title`,
+// `dueAt`, `occurredAt`, `brandName`, `timezone` and `suppressed`, none of
+// which a `Proposal` carries (since 0088 a `Proposal` has a `source`, but
+// "call", which is no `WorkSource`). Same precedent as
 // `lib/work/buckets.test.ts`'s own
 // `_typeOnly_bucketedWorkCannotHoldAProposal`, restated here for
 // `AgencyBucketedWork` specifically — a DIFFERENT type (`AgencyWorkRow[]`,
@@ -443,10 +445,9 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
 // for `BucketedWork` would turn the `@ts-expect-error` below unused, which
 // `tsc --noEmit` reports as TS2578 on this exact line, red BY NAME.
 export function _typeOnly_agencyBucketedWorkCannotHoldAProposal(
-  b: AgencyBucketedWork, p: CallProposal,
+  b: AgencyBucketedWork, p: Proposal,
 ): void {
-  // @ts-expect-error a CallProposal is not an AgencyWorkRow (no `source`,
-  // `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` or
+  // @ts-expect-error a Proposal is not an AgencyWorkRow (no `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` or
   // `suppressed`) — pushing one into `buckets.waiting` cannot typecheck,
   // which is what keeps a proposal out of Overdue/Today/Waiting
   // structurally, not just by convention.

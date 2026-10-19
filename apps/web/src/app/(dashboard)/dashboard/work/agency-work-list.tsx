@@ -27,7 +27,7 @@
 //     acting on it means following its own link into that account.
 import Link from "next/link";
 import { ListTodo } from "lucide-react";
-import type { AgencyWorkRow, CallProposal, ContactFieldPayload } from "@bis/db";
+import type { AgencyWorkRow, Proposal, ContactFieldPayload } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { Badge } from "@/components/ui/badge";
@@ -209,10 +209,10 @@ function AgencyWorkRowItem({
 // A proposal is a QUESTION about work, not work — it is rendered as its own
 // sibling `<section>`, never folded into `buckets` (task-10-brief.md's own
 // binding constraint on `Bucket`/`BucketedWork`, `lib/work/buckets.ts`).
-// `listPendingProposalsForAgency` (packages/db/src/call-proposals.ts) is
+// `listPendingProposalsForAgency` (packages/db/src/proposals.ts) is
 // this screen's cross-tenant twin of `listPendingProposals`, carrying the
 // same `brandName` field every other row on this page already does.
-export type AgencyProposal = CallProposal & { brandName: string; timezone: string };
+export type AgencyProposal = Proposal & { brandName: string; timezone: string };
 
 /**
  * Fix-wave Important 1: same rule as `rowDateText` above (`AgencyWorkRow`'s
@@ -267,7 +267,7 @@ const PROPOSAL_FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey>
  * than dropping the row: a proposal this screen cannot name in full is
  * still a proposal that needs a human's attention.
  */
-function proposalSummary(p: CallProposal, stages: Record<string, ResolvedStage>): string {
+function proposalSummary(p: Proposal, stages: Record<string, ResolvedStage>): string {
   if (p.kind === "task") {
     return m["proposals.task.label"].replace("{title}", () => p.payload.title);
   }

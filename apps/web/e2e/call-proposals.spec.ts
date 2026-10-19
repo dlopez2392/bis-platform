@@ -4,6 +4,7 @@ import {
   serviceDb, createContact, assignPhoneNumber, startCallRow, finishCallRow,
   insertProposal, listContactTasks, type TranscriptEvent,
 } from "@bis/db";
+import { proposalExpiresAt } from "@bis/db/proposal-rules";
 import { m } from "../src/lib/messages";
 import { readClientFixture } from "./support";
 
@@ -118,6 +119,7 @@ test("a proposal becomes a task only when a human clicks Accept", async ({ page 
     // ACCEPT path, not the model pass that would normally produce this row.
     const proposal = await insertProposal(db, accountId, {
       callId, contactId, evidence: CALLER_TURN,
+      evidenceRef: {}, evidenceLang: "en", expiresAt: proposalExpiresAt(new Date()),
       kind: "task", payload: { title: taskTitle, dueAt: null },
     });
     if (!proposal) {

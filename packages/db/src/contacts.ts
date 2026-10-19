@@ -12,7 +12,8 @@ import type { AssigneeFilter } from "./assignment";
  * the trigger for it.
  */
 export type ContactInput = {
-  firstName?: string; lastName?: string; email?: string; phone?: string;
+  // `| null` on the names (item 8b-1, plan fix M16): Undo of a filled name restores the null it found.
+  firstName?: string | null; lastName?: string | null; email?: string; phone?: string;
   source?: string; custom?: Record<string, unknown>;
 };
 
@@ -572,6 +573,19 @@ export async function fillContactBlanks(
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
   actorId: string, actorType: ActorType = "user",
 ): Promise<string[]> {
+  return (await fillContactBlanksReport(db, accountId, contactId, input, actorId, actorType)).fields;
+}
+
+/**
+ * `fillContactBlanks`'s body, also answering whether the fill raised a duplicate flag (item 8b-1, plan
+ * deviation 11): Undo of an accepted contact-field suggestion tells the person the possible duplicate it
+ * found is still in Duplicates. One write path; `fillContactBlanks` reads `.fields` off this.
+ */
+export async function fillContactBlanksReport(
+  db: SupabaseClient, accountId: string, contactId: string,
+  input: { firstName?: string; lastName?: string; email?: string; phone?: string },
+  actorId: string, actorType: ActorType = "user",
+): Promise<{ fields: string[]; flagged: boolean }> {
   const row = await getContact(db, accountId, contactId);
   if (!row) throw new Error("fillContactBlanks: no such contact");
   const blank = (v: unknown) => v == null || String(v).trim() === "";
@@ -607,7 +621,7 @@ export async function fillContactBlanks(
   if (incomingPhone && blank(row.phone)) patch.phone = incomingPhone;
 
   const filled = Object.keys(patch);
-  if (filled.length === 0) return [];
+  if (filled.length === 0) return { fields: [], flagged: false };
   // The phone is stored as every write stores it, with its country flag —
   // and that flag is a column this call actually writes, so it belongs in
   // the reported/emitted field list too (review m7), not just in `written`.
@@ -626,8 +640,8 @@ export async function fillContactBlanks(
   // only the columns THIS call is actually about to write — `email`/`phone`
   // are absent from it whenever `patch` never named them — so the shared
   // check below runs for no more than those.
-  await flagDuplicatesAfterWrite(db, accountId, contactId, written);
-  return reportedFields;
+  const flagged = await flagDuplicatesAfterWrite(db, accountId, contactId, written);
+  return { fields: reportedFields, flagged };
 }
 
 /** The three columns the contacts list can be sorted by, and the two

@@ -8,7 +8,7 @@
 // rendering an empty heading for a bucket with no rows is something a test
 // can catch by name (page.test.ts) rather than by reading rendered output.
 import Link from "next/link";
-import type { CallProposal, ContactFieldPayload, WorkRow, WorkSource } from "@bis/db";
+import type { Proposal, ContactFieldPayload, WorkRow, WorkSource } from "@bis/db";
 import { Inbox, ListTodo } from "lucide-react";
 import type { Bucket, BucketedWork } from "@/lib/work/buckets";
 import { Badge } from "@/components/ui/badge";
@@ -197,7 +197,7 @@ const PENDING_FIELD_LABEL_KEY: Record<ContactFieldPayload["field"], MessageKey> 
  *  why an unresolved opportunity_stage pair still shows a row rather than
  *  being dropped: a proposal this screen cannot name in full is still a
  *  proposal that needs a human's attention). */
-function pendingProposalSummary(p: CallProposal, stages: Record<string, ResolvedStage>): string {
+function pendingProposalSummary(p: Proposal, stages: Record<string, ResolvedStage>): string {
   if (p.kind === "task") {
     return m["proposals.task.label"].replace("{title}", () => p.payload.title);
   }
@@ -227,7 +227,7 @@ function pendingProposalSummary(p: CallProposal, stages: Record<string, Resolved
  *  `null` for every non-`task` kind and for a `task` whose `dueAt` is itself
  *  `null` (generate.ts's own forward-window check already rejected anything
  *  that could not be real). */
-function pendingProposalDueAtText(p: CallProposal, timezone: string): string | null {
+function pendingProposalDueAtText(p: Proposal, timezone: string): string | null {
   if (p.kind !== "task" || !p.payload.dueAt) return null;
   try {
     return formatDateInZone(p.payload.dueAt, timezone);
@@ -240,7 +240,7 @@ function pendingProposalDueAtText(p: CallProposal, timezone: string): string | n
 function PendingProposalRow({
   proposal, accountId, contactName, stageNames, timezone,
 }: {
-  proposal: CallProposal;
+  proposal: Proposal;
   accountId: string;
   /** `null` when the proposal carries no contact — never rendered, matching
    *  the agency screen's own row. */
@@ -454,7 +454,7 @@ export function WorkList({
    *  the agency screen's identical rule for `AgencyBucketedWork`). Optional
    *  (defaults to none) so every existing call site — and every existing
    *  test — is unaffected by this prop's addition. */
-  proposals?: CallProposal[];
+  proposals?: Proposal[];
   /** page.tsx's own batched `pipeline_stages` read, keyed by stage id —
    *  see `pendingProposalSummary`'s own doc comment. Optional for the same
    *  reason `proposals` is. */

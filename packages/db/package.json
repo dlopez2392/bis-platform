@@ -11,6 +11,7 @@
     "./profile-ready": "./src/profile-ready.ts",
     "./relationship-keys": "./src/relationship-keys.ts",
     "./document-rules": "./src/document-rules.ts",
+    "./proposal-rules": "./src/proposal-rules.ts",
     "./never-log-rules": "./src/never-log-rules.ts",
     "./webchat-plan": "./src/webchat-plan.ts"
   },

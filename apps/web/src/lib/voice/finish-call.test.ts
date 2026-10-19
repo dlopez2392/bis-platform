@@ -1116,6 +1116,9 @@ describe("finishCall — proposal generation", () => {
     expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({
       accountId: "a1", callId: "call1", contactId: "ct1", outcome: "lead",
       transcript: s.transcript, handoffRequested: true,
+      // The call's spoken language (`spokenLanguage`, the same value as calls.language): "hi" with
+      // profileLanguage "both" detects English. The generator stores it as evidence_lang.
+      language: "en",
     }));
   });
 

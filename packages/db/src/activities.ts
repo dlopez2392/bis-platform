@@ -47,6 +47,22 @@ export async function addTask(
   return { id: data.id };
 }
 
+/** Undo of an accepted to-do suggestion (item 8b-1, spec 4.4): deletes the task only while it is still
+ *  open and still has the title and due date the Accept wrote; true when it deleted. Request client. */
+export async function deleteTaskForUndo(
+  db: SupabaseClient, accountId: string, taskId: string, actorId: string,
+  expect: { title: string; dueAt: string | null },
+): Promise<boolean> {
+  let q = db.from("tasks").delete()
+    .eq("account_id", accountId).eq("id", taskId).is("completed_at", null).eq("title", expect.title);
+  q = expect.dueAt === null ? q.is("due_at", null) : q.eq("due_at", expect.dueAt);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`deleteTaskForUndo failed: ${error.message}`);
+  if ((data ?? []).length === 0) return false;
+  await emit(db, accountId, "task.deleted", actorId, { taskId });
+  return true;
+}
+
 const TASK_COLS = "id, contact_id, title, due_at, completed_at, created_at, consent_event_id, call_id, assigned_to, document_request_id, document_expiry_id";
 
 export async function listContactTasks(

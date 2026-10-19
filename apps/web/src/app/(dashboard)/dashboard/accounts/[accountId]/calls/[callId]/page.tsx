@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   getCall, listFailedOutboundSms, listProposalsForCall, getContact, getCallCard, getVoiceProfile,
-  type FailedOutboundSms, type CallProposal, type CallCard,
+  type FailedOutboundSms, type Proposal, type CallCard,
 } from "@bis/db";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { ledgerDb } from "@/lib/consent/ledger-db";
@@ -136,7 +136,7 @@ export default async function CallDetailPage({
   // stage id it cannot resolve to a name (which it has no way to render
   // honestly — DESIGN.md rules out both the raw uuid and the destination
   // alone).
-  let proposals: CallProposal[] = [];
+  let proposals: Proposal[] = [];
   let stageNames: Record<string, ResolvedStage> = {};
   try {
     proposals = await listProposalsForCall(db, accountId, callId);

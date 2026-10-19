@@ -16,7 +16,7 @@ export { ALERT_CODE_DIGITS, ALERT_CODE_MAX_ATTEMPTS, ALERT_CODE_TTL_MINUTES,
          discardAlertPhoneVerification,
          verifyAlertPhoneCode, type AlertPhoneVerificationOutcome } from "./alert-phone-verification";
 export { createContact, updateContact, listContacts, getContact,
-         addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks,
+         addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks, fillContactBlanksReport,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          listTagNamesForContacts, flagMatchesOf,
          type ContactInput, type SortKey, type SortDir } from "./contacts";
@@ -36,7 +36,7 @@ export { buildMatchIndex, applyImportBatch,
          type MatchIndex, type ImportRow } from "./contact-import";
 export { addNote, listNotes, addTask, listContactTasks, completeTask, reopenTask,
          ensureConsentTask, completeTasksForConsentEvents, reopenTasks,
-         HoldUndecidedError, holdOpenTaskIds, readTaskContact } from "./activities";
+         HoldUndecidedError, holdOpenTaskIds, readTaskContact, deleteTaskForUndo } from "./activities";
 export { listAccountWork, listAgencyWork, type WorkRow, type WorkSource, type AgencyWorkRow } from "./work-queue";
 export { listCustomFields, createCustomField, listCustomValues, upsertCustomValue,
          ensureDefaultPipeline, listPipelinesWithStages, type CustomFieldDef } from "./crm-config";
@@ -160,13 +160,14 @@ export {
 } from "./demo/fiction";
 export * from "./timezone";
 export * from "./zone-resolution";
+// Item 8b-1: one table for every AI suggestion (0088). The pure rules are also the subpath
+// `@bis/db/proposal-rules`, which web code imports them from (no bare vi.mock factory can blank them).
+export * from "./proposal-rules";
 export {
-  insertProposal, listProposalsForCall, listPendingProposals, getProposal,
-  markProposalDecided, listPendingProposalsForAgency,
-  type CallProposal, type ProposalKind, type ProposalStatus,
-  type ProposalPayload, type ProposalInput, type TaskPayload,
-  type ContactFieldPayload, type OpportunityStagePayload,
-} from "./call-proposals";
+  insertProposal, listProposalsForCall, listPendingProposals, listPendingProposalsForAgency, getProposal,
+  listPendingSiblings, decideProposal, revertProposalDecision, setAppliedRef, expireProposals,
+  undoProposalDecision, expireAfterUndoCollision, restoreSiblings,
+} from "./proposals";
 export * from "./voice-web-sessions";
 export * from "./concierge";
 // S-06 part 3: a lead's website chat on the customer's thread. See ./webchat.ts and ./webchat-plan.ts.

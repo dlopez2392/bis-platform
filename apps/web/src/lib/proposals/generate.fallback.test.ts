@@ -17,7 +17,7 @@ const base = {
   accountId: "acct", callId: "call1", contactId: null, outcome: "lead" as const,
   transcript: [t("assistant", "How can I help?"), t("caller", "Can someone call me back about a quote?")],
   handoffRequested: false, blankFields: [], openOpportunity: null, callbackTodo: false,
-  now: new Date("2026-09-18T13:00:00.000Z"), timezone: "America/Chicago",
+  now: new Date("2026-09-18T13:00:00.000Z"), timezone: "America/Chicago", language: "en" as const,
 };
 
 // No real model call, even on the RED run against today's code (which would reach the global fetch):

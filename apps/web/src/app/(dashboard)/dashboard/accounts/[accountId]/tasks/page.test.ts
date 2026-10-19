@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { CallProposal, WorkRow } from "@bis/db";
+import type { Proposal, WorkRow } from "@bis/db";
 import { bucketWork, type BucketedWork } from "@/lib/work/buckets";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -83,8 +83,8 @@ let workRows: WorkRow[] = [];
  *  real `vi.fn()` (not a bare closure, unlike `listAccountWork` above) so
  *  the "degrades on failure" test can override it with a rejection for
  *  exactly one call. */
-let pendingProposals: CallProposal[] = [];
-const listPendingProposalsMock = vi.fn(async (): Promise<CallProposal[]> => pendingProposals);
+let pendingProposals: Proposal[] = [];
+const listPendingProposalsMock = vi.fn(async (): Promise<Proposal[]> => pendingProposals);
 /** The agency's own zone, as `lib/zone.ts` reads it through `serviceDb`.
  *  Only `serviceDb` and `listAccountWork` are stubbed — `resolveZone` stays
  *  REAL, so these tests exercise the actual chain (account -> agency -> UTC)
@@ -168,14 +168,15 @@ function bookingRow(overrides: Partial<WorkRow> = {}): WorkRow {
 
 /** Fix-wave Important 3 — a pending proposal fixture for the composition
  *  tests below, same shape as work/page.test.ts's own `proposal()`. */
-function proposal(overrides: Partial<CallProposal> = {}): CallProposal {
+function proposal(overrides: Partial<Proposal> = {}): Proposal {
   return {
     id: "prop-1", accountId: "acct1", callId: "call-1", contactId: null,
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
     ...overrides,
-  } as CallProposal;
+  } as Proposal;
 }
 
 /**

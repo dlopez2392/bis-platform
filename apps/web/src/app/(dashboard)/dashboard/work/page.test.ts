@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow, CallProposal } from "@bis/db";
+import type { AgencyWorkRow, Proposal } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 
@@ -23,9 +23,9 @@ const countLinesTurningCallersAwayMock = vi.fn<
 >(async () => 0);
 // Work Queue Task 10's own read — defaults to [] (no suggestions section)
 // so every pre-existing case below is unaffected by its addition. Real
-// signature read from packages/db/src/call-proposals.ts.
+// signature read from packages/db/src/proposals.ts.
 const listPendingProposalsForAgencyMock = vi.fn(
-  async (): Promise<(CallProposal & { brandName: string })[]> => [],
+  async (): Promise<(Proposal & { brandName: string })[]> => [],
 );
 // The stale-usage banner's read (client billing) — defaults to [] (no
 // banner) so every case above is unaffected. Real signature:
@@ -73,15 +73,16 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   };
 }
 
-function proposal(overrides: Partial<CallProposal & { brandName: string }> = {}): CallProposal & { brandName: string } {
+function proposal(overrides: Partial<Proposal & { brandName: string }> = {}): Proposal & { brandName: string } {
   return {
     id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
     brandName: "Rio Roofing",
     ...overrides,
-  } as CallProposal & { brandName: string };
+  } as Proposal & { brandName: string };
 }
 
 describe("AgencyWorkPage", () => {
@@ -234,7 +235,7 @@ describe("AgencyWorkPage", () => {
   //
   // Fix-wave (task-10-brief.md, Important 2): the prior version only
   // grepped the waiting section for the proposal's own
-  // `payload.title`/`evidence` strings, which a bare `CallProposal` folded
+  // `payload.title`/`evidence` strings, which a bare `Proposal` folded
   // into `buckets.waiting` never carries into `primaryLabel` (`row.source`
   // is `undefined` there, so it falls through to the generic
   // `m["work.booking"]` label) — a real phantom row could ship with every

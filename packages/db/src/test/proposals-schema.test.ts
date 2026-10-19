@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Client } from "pg";
 import { withRollback, actAs } from "./db";
 import { ACCOUNT_OWNED_TABLES } from "../account-teardown";
+import { PROPOSAL_KINDS, PROPOSAL_SOURCES } from "../proposal-rules";
 
 /**
  * 0088 (item 8b-1, spec 4.1 and 8.2; plan Task 1): one table for every AI suggestion. Server-written
@@ -281,5 +282,18 @@ describe("0088: one pending row per call, kind and customer (spec 4.1; 0040's co
 });
 
 describe("0088: the CHECK lists equal the code's lists (spec 8.3 :364)", () => {
-  it.todo("parity with proposal-rules (Task 4 turns this on)");
+  // Task 4 turns this on (it was Task 1's it.todo). Both directions fail by name: a kind added to
+  // PROPOSAL_KINDS without the CHECK, and a kind added to the CHECK without PROPOSAL_KINDS.
+  it("proposals_kind_check and proposals_source_check name exactly PROPOSAL_KINDS and PROPOSAL_SOURCES (mutation: add \"note\" to PROPOSAL_KINDS -> FAILS; add 'note' to the CHECK -> FAILS)", () =>
+    withRollback(async (c) => {
+      const values = async (name: string) => {
+        const { rows } = await c.query<{ def: string }>(
+          "select pg_get_constraintdef(oid) as def from pg_constraint where conrelid = 'public.proposals'::regclass and conname = $1",
+          [name]);
+        expect(rows, name).toHaveLength(1);
+        return [...rows[0]!.def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!).sort();
+      };
+      expect(await values("proposals_kind_check")).toEqual([...PROPOSAL_KINDS].sort());
+      expect(await values("proposals_source_check")).toEqual([...PROPOSAL_SOURCES].sort());
+    }));
 });

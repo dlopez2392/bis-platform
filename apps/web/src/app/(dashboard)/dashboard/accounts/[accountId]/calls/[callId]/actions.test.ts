@@ -56,10 +56,11 @@ vi.mock("@bis/db", async (importOriginal) => {
  */
 import {
   createAccount, createContact, getContact,
-  insertProposal, getProposal, markProposalDecided,
+  insertProposal as insertProposalRaw, decideProposal, getProposal,
   ensureDefaultPipeline, createOpportunity, listBoard, moveOpportunityToStage,
   setOpportunityStatus, deleteAccountCascade, ACCOUNT_OWNED_TABLES,
 } from "@bis/db";
+import { proposalExpiresAt } from "@bis/db/proposal-rules";
 import { acceptProposal, dismissProposal } from "./actions";
 import { m } from "@/lib/messages";
 
@@ -85,6 +86,16 @@ vi.setConfig({ testTimeout: 30_000 });
 // same boundary and solves it the same way: alias the type off the one
 // function whose declared return type IS `SupabaseClient`.
 type Db = ReturnType<typeof realServiceDb>;
+
+// Item 8b-1 (Task 4): type-only shims so this file, deleted in Task 8, still compiles.
+const insertProposal = (db: Db, a: string, input: Omit<Parameters<typeof insertProposalRaw>[2], "evidenceRef" | "evidenceLang" | "expiresAt">) =>
+  insertProposalRaw(db, a, { evidenceRef: {}, evidenceLang: "en", expiresAt: proposalExpiresAt(new Date()), ...input } as Parameters<typeof insertProposalRaw>[2]);
+const markProposalDecided = async (db: Db, a: string, id: string, status: "accepted" | "dismissed", by: string) => {
+  const row = await getProposal(db, a, id);
+  return status === "accepted"
+    ? decideProposal(db, a, id, { to: "accepted", decidedBy: by, appliedPayload: row?.payload ?? null, now: new Date() })
+    : decideProposal(db, a, id, { to: "dismissed", decidedBy: by, now: new Date() });
+};
 
 beforeAll(() => {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {

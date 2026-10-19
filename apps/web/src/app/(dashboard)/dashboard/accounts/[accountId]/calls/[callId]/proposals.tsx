@@ -9,7 +9,7 @@
 // A pure presentational server component: every read (`listProposalsForCall`,
 // the pipeline_stages name lookup) happens in page.tsx, best-effort, exactly
 // like the text-back panel above it — this file never touches the database.
-import type { CallProposal, ContactFieldPayload, ProposalKind, ProposalStatus } from "@bis/db";
+import type { Proposal, ContactFieldPayload, ProposalKind, ProposalStatus } from "@bis/db";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { formatDateInZone } from "@/lib/format";
@@ -54,10 +54,22 @@ export const STATUS_TREATMENT: Record<ProposalStatus, { dot: string; chip: strin
     chip: "border-success/30 bg-success/10 text-foreground",
     labelKey: "proposals.status.accepted",
   },
+  // Item 8b-1 (Task 4, type only; Task 8 replaces this file): 0088's two new statuses, each
+  // treated as its nearest old one, and worded by the new suggestions.* keys.
+  edited: {
+    dot: "bg-success",
+    chip: "border-success/30 bg-success/10 text-foreground",
+    labelKey: "suggestions.status.edited",
+  },
   dismissed: {
     dot: "bg-muted-foreground/60",
     chip: "border-border bg-transparent text-muted-foreground",
     labelKey: "proposals.status.dismissed",
+  },
+  expired: {
+    dot: "bg-muted-foreground/60",
+    chip: "border-border bg-transparent text-muted-foreground",
+    labelKey: "suggestions.status.expired",
   },
 };
 
@@ -123,7 +135,7 @@ function dueAtText(dueAt: string | null, timezone: string): string | null {
  * `work-list.tsx`'s `primaryLabel` uses a replacer function for a contact's
  * name instead of the two-argument form.
  */
-function buildLabel(p: CallProposal, stages: Record<string, ResolvedStage>): string | null {
+function buildLabel(p: Proposal, stages: Record<string, ResolvedStage>): string | null {
   if (p.kind === "task") {
     return m["proposals.task.label"].replace("{title}", () => p.payload.title);
   }
@@ -159,7 +171,7 @@ function buildLabel(p: CallProposal, stages: Record<string, ResolvedStage>): str
   return label;
 }
 
-function buildEntry(p: CallProposal, stages: Record<string, ResolvedStage>, timezone: string): Entry | null {
+function buildEntry(p: Proposal, stages: Record<string, ResolvedStage>, timezone: string): Entry | null {
   const label = buildLabel(p, stages);
   if (label === null) return null;
   return {
@@ -171,7 +183,7 @@ function buildEntry(p: CallProposal, stages: Record<string, ResolvedStage>, time
 export function CallProposals({
   proposals, accountId, callId, stageNames, timezone,
 }: {
-  proposals: CallProposal[];
+  proposals: Proposal[];
   accountId: string;
   callId: string;
   /** stage id -> resolved name/position, built by page.tsx's best-effort

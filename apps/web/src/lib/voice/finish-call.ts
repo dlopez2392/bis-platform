@@ -255,7 +255,7 @@ async function resolveOpenOpportunity(
     // answers is "exactly one?", not "give me one": a `.limit(1)` result
     // would silently discard evidence of a SECOND open opportunity and this
     // function would then guess between them (fix-wave Minor). Matches
-    // `packages/db`'s own idiom (`call-proposals.ts`'s `.limit(500)`):
+    // `packages/db`'s own idiom (`proposals.ts`'s `.limit(500)`):
     // service_role's rolconfig carries no statement_timeout and
     // PostgREST's db-max-rows is unset, so an unbounded read is unbounded
     // in production.
@@ -938,6 +938,7 @@ export async function finishCall(
         // ctx). Without these, a machine-proposed `dueAt` is a guess against
         // the model's training-era clock (generate.ts's own doc).
         now: meta.endedAt, timezone: ctx.timezone,
+        language: spokenLanguage,
         callbackTodo,
       });
       if (n > 0) console.log(`finishCall ${meta.callRowId}: proposals wrote ${n}`);
