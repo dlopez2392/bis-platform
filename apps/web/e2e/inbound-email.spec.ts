@@ -112,6 +112,21 @@ test("filed for real, it reads on the thread as the customer's email, with its a
   await page.goto(inbox("?view=held"));
   await item(page).getByRole("button", { name: m["conversations.held.fileOn"].replace("{name}", `Respuesta ${STAMP}`) }).click();
   await expect(item(page)).toHaveCount(0);
+  // Wait for the File to LAND before leaving the page. The row leaves the list optimistically, at the
+  // click and before fileHeldEmailAction is even sent (held-email-list.tsx's runFile calls onHide()
+  // first), so `toHaveCount(0)` alone passes at once and the goto below raced the action: either it
+  // cancelled the action's request, or the thread rendered before the message existed and nothing
+  // re-read it. That race was this test's intermittent "element(s) not found" on the bubble: CI runs
+  // 39050045568 and 39094288407 on main, 39267488188 and 39277988173 on feat/item8b-review-tray, and most
+  // likely 38982614726 too, the getByRole("paragraph") failure the comment below puts down to Chromium's
+  // role mapping (same symptom, same step, before the locator changed). The success
+  // toast fires only after the action resolves ok (held-email-handlers.ts's runHeldAction), and the
+  // stored status is then read back, the same two steps the File-then-Undo test above takes.
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["conversations.held.filed"].replace("{name}", `Respuesta ${STAMP}`) })).toBeVisible();
+  const { data: filed, error: filedErr } = await db().from("inbound_emails").select("status, message_id").eq("id", inboundId).single();
+  expect(filedErr).toBeNull();
+  expect(filed?.status).toBe("filed");
+  expect(filed?.message_id, "File must have written the thread's message").toBeTruthy();
   await page.goto(inbox(`?c=${conversationId}`));
   // CI fix (strict-mode violation): the inbox's own list panel truncates the
   // SAME body text into its row preview (<span class="truncate ...">), so a

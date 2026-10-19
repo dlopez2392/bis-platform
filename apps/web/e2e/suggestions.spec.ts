@@ -200,9 +200,20 @@ test.afterAll(async () => {
   }
 });
 
-function card(page: import("@playwright/test").Page, id: string) {
-  return page.locator(`[data-suggestion="${id}"]`);
+/**
+ * A suggestion card, by id. On /tasks pass `tray(page)`, never `page`, for any PRESENCE check or action:
+ * the tasks route has a loading.tsx, and React 19.2's streamed reveal can leave a hidden copy of the
+ * whole tray outside <main> (support.ts's RECORD_PAGE CONVENTION). CI run 39283437434 (attempt 1) met
+ * it here: `[data-suggestion]` resolved to 2 identical <article>s at "Discard the stage move"'s first
+ * toBeVisible, one inside <main> and one outside. Absence checks (toHaveCount(0)) stay page-wide, the
+ * stricter reading; toasts are portals and stay page-wide by design. The call page has no loading.tsx
+ * (calls/[callId] or any segment above it), so its reads stay as they were.
+ */
+function card(scope: import("@playwright/test").Page | import("@playwright/test").Locator, id: string) {
+  return scope.locator(`[data-suggestion="${id}"]`);
 }
+/** The To do page's own content: the rendered <main>, never the streamed copy parked outside it. */
+const tray = (page: import("@playwright/test").Page) => page.getByRole("main");
 const callUrl = () => `/dashboard/accounts/${accountId}/calls/${callId}`;
 /** The call page's Suggestions section: labelled by its #call-proposals heading (the agency links' anchor). */
 const callSection = (page: import("@playwright/test").Page) => page.locator('section[aria-labelledby="call-proposals"]');
@@ -221,7 +232,7 @@ async function proposalStatus(id: string): Promise<string> {
 
 test("Accept the to-do, then Undo from the toast", async ({ page }) => {
   await page.goto(tasksUrl());
-  const taskCard = card(page, taskProposalId);
+  const taskCard = card(tray(page), taskProposalId);
   await expect(taskCard).toBeVisible();
   await expect(taskCard).toHaveAttribute("data-status", "pending");
 
@@ -229,7 +240,7 @@ test("Accept the to-do, then Undo from the toast", async ({ page }) => {
   const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.toast.task") });
   await expect(toast).toBeVisible();
   // Decided, it leaves the tray (pending only); its status is the call page's to show (test 4).
-  await expect(taskCard).toHaveCount(0);
+  await expect(card(page, taskProposalId)).toHaveCount(0);
 
   // The click, not the seed, made this row (the seed made no task at all): the containment this file
   // exists to prove.
@@ -255,7 +266,7 @@ test("Accept the to-do, then Undo from the toast", async ({ page }) => {
 
 test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one is saved", async ({ page }) => {
   await page.goto(tasksUrl());
-  const phoneCard = card(page, phoneProposalId);
+  const phoneCard = card(tray(page), phoneProposalId);
   await expect(phoneCard).toBeVisible();
   const editButton = phoneCard.getByRole("button", { name: m["suggestions.editAccept"], exact: true });
   const valueField = phoneCard.locator('input[name="value"]');
@@ -284,8 +295,8 @@ test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one
   await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"], exact: true }).click();
   // Edited, it leaves the tray; focus goes to the next card's Accept, never to <body> (design review
   // minor 5). The tray is newest first: stage, phone, to-do; the card after the phone is the to-do.
-  await expect(phoneCard).toHaveCount(0);
-  await expect(card(page, taskProposalId).getByRole("button", { name: m["suggestions.accept"], exact: true })).toBeFocused();
+  await expect(card(page, phoneProposalId)).toHaveCount(0);
+  await expect(card(tray(page), taskProposalId).getByRole("button", { name: m["suggestions.accept"], exact: true })).toBeFocused();
   expect(await proposalStatus(phoneProposalId)).toBe("edited");
 
   const { data: saved, error: savedErr } = await serviceDb()
@@ -298,13 +309,13 @@ test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one
 
 test("Discard the stage move, then Undo", async ({ page }) => {
   await page.goto(tasksUrl());
-  const stageCard = card(page, stageProposalId);
+  const stageCard = card(tray(page), stageProposalId);
   await expect(stageCard).toBeVisible();
 
   await stageCard.getByRole("button", { name: m["suggestions.discard"], exact: true }).click();
   const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.toast.dismissed") });
   await expect(toast).toBeVisible();
-  await expect(stageCard).toHaveCount(0);
+  await expect(card(page, stageProposalId)).toHaveCount(0);
   expect(await proposalStatus(stageProposalId)).toBe("dismissed");
   expect(await dealStage()).toBe(stage0Id);
 
@@ -351,9 +362,9 @@ test("the call page: every suggestion in its #call-proposals section, pending fi
 test("the reader in Spanish", async ({ page }) => {
   await page.goto(`${tasksUrl()}?locale=es`);
 
-  await expect(page.getByRole("heading", { name: w("suggestions.heading", "es"), exact: true })).toBeVisible();
+  await expect(tray(page).getByRole("heading", { name: w("suggestions.heading", "es"), exact: true })).toBeVisible();
 
-  const taskCard = card(page, taskProposalId);
+  const taskCard = card(tray(page), taskProposalId);
   await expect(taskCard.getByRole("button", { name: w("suggestions.accept", "es"), exact: true })).toBeVisible();
   await expect(taskCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.pending", "es"));
   // The model's own English title keeps its own `lang`, inside an otherwise-Spanish sentence (P18).
@@ -368,8 +379,9 @@ test("the reader in Spanish", async ({ page }) => {
 
 test("at 360 px in the pseudo-locale, no element inside a suggestion card overflows", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
-  const noOverflow = async (id: string) => {
-    const el = card(page, id);
+  // `scope`: the tray's <main> on /tasks (streamed), the page on the call page (not streamed).
+  const noOverflow = async (scope: import("@playwright/test").Page | import("@playwright/test").Locator, id: string) => {
+    const el = card(scope, id);
     await expect(el).toBeVisible();
     // A screen-reader-only run (the arrow spoken as "to" / "a", design review minor 3) is clipped to 1px by
     // design, so its scrollWidth always exceeds its clientWidth; it is not visible overflow.
@@ -380,7 +392,7 @@ test("at 360 px in the pseudo-locale, no element inside a suggestion card overfl
   };
   // The tray holds the two still pending; the call page holds all three, the edited phone included.
   await page.goto(`${tasksUrl()}?locale=pseudo`);
-  for (const id of [taskProposalId, stageProposalId]) await noOverflow(id);
+  for (const id of [taskProposalId, stageProposalId]) await noOverflow(tray(page), id);
   await page.goto(`${callUrl()}?locale=pseudo`);
-  for (const id of [taskProposalId, phoneProposalId, stageProposalId]) await noOverflow(id);
+  for (const id of [taskProposalId, phoneProposalId, stageProposalId]) await noOverflow(page, id);
 });

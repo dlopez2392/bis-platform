@@ -71,6 +71,17 @@ function toastWithText(page: Page, text: string) {
 }
 
 /**
+ * The Preferences page's own content. /dashboard/preferences has a loading.tsx, and React 19.2's
+ * streamed reveal can leave a hidden copy of the page outside <main> (support.ts's RECORD_PAGE
+ * CONVENTION; the same duplicate met on /tasks, /team and /documents), which would make an unscoped
+ * radio click or heading check resolve to 2 elements. Every presence check and every click on the page
+ * goes through <main>; the sidebar, the user menu, the palette and toasts live outside it by design.
+ */
+function prefs(page: Page) {
+  return page.getByRole("main");
+}
+
+/**
  * The literal `defaultTheme` argument next-themes' own no-flash bootstrap
  * script bakes into the raw SSR response — see the file-level comment for
  * why this, and not the <html> tag's class attribute, is the real pre-
@@ -109,16 +120,16 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     await page.locator(".cl-userButtonTrigger").click();
     await page.getByText(m["prefs.menuItem"], { exact: true }).click();
     await expect(page).toHaveURL(/\/dashboard\/preferences$/);
-    await expect(page.locator("[data-prefs-page]")).toBeVisible();
+    await expect(prefs(page).locator("[data-prefs-page]")).toBeVisible();
 
-    await page.getByRole("radio", { name: "Español", exact: true }).click();
+    await prefs(page).getByRole("radio", { name: "Español", exact: true }).click();
     // Expect the page title AFTER THE REFRESH: the title is sourced from
     // useLocale(), a context the server supplies, which only changes once
     // the save has landed and router.refresh() has re-rendered this page —
     // never from the radio's own optimistic local state. A generous timeout
     // covers the save's 600ms debounce (preference-handlers.ts's
     // PREFS_SAVE_DEBOUNCE_MS) plus the round trip.
-    await expect(page.getByRole("heading", { level: 1, name: "Tus preferencias" })).toBeVisible({ timeout: 15_000 });
+    await expect(prefs(page).getByRole("heading", { level: 1, name: "Tus preferencias" })).toBeVisible({ timeout: 15_000 });
 
     // The agency's OWN language, not the account's: viewing a DIFFERENT
     // account's dashboard must still show the agency's chrome in Spanish.
@@ -135,8 +146,8 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     await expect(nav.getByText("Overview", { exact: true })).toHaveCount(0);
 
     await page.goto("/dashboard/preferences");
-    await page.getByRole("radio", { name: "English", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
+    await prefs(page).getByRole("radio", { name: "English", exact: true }).click();
+    await expect(prefs(page).getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
   });
 
   // Step 2. Starts on English (step 1's own end state) — a spec that only
@@ -147,7 +158,7 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
   test("Undo returns the language to what it was, and speaks the language it lands on", async ({ page }) => {
     await page.goto("/dashboard/preferences");
 
-    await page.getByRole("radio", { name: "Español", exact: true }).click();
+    await prefs(page).getByRole("radio", { name: "Español", exact: true }).click();
     const savedToast = toastWithText(
       page, fillTemplate(m["prefs.saved.language.es"], { language: m["prefs.languageName.spanish.es"] }),
     );
@@ -160,8 +171,8 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // Mutation: an Undo that calls the save action with the wrong previous
     // value (or none) leaves the Español radio checked here instead of
     // English, or leaves nothing checked at all.
-    await expect(page.getByRole("radio", { name: "English", exact: true })).toBeChecked();
-    await expect(page.getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
+    await expect(prefs(page).getByRole("radio", { name: "English", exact: true })).toBeChecked();
+    await expect(prefs(page).getByRole("heading", { level: 1, name: "Your preferences" })).toBeVisible({ timeout: 15_000 });
     await expect(toastWithText(page, m["prefs.undone"])).toBeVisible();
   });
 
@@ -171,7 +182,7 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
   test("a saved theme outranks a disagreeing cookie in the server's own first paint", async ({ page, baseURL }) => {
     await page.goto("/dashboard/preferences");
 
-    await page.getByRole("radio", { name: "Light", exact: true }).click();
+    await prefs(page).getByRole("radio", { name: "Light", exact: true }).click();
     await expect(toastWithText(page, m["prefs.saved.theme.light"])).toBeVisible({ timeout: 15_000 });
     // Manufacture the disagreement: without this, the cookie ThemeCookieSync
     // itself just wrote already matches the choice, and the test could pass
@@ -194,7 +205,7 @@ test.describe.serial("the agency's own language and theme (user menu, title, sid
     // the disagreeing cookie's "dark" instead of the saved "light" → FAILS.
     expect(rawServerThemeDefault(litHtml)).toBe("light");
 
-    await page.getByRole("radio", { name: "Dark", exact: true }).click();
+    await prefs(page).getByRole("radio", { name: "Dark", exact: true }).click();
     await expect(toastWithText(page, m["prefs.saved.theme.dark"])).toBeVisible({ timeout: 15_000 });
     await page.context().addCookies([{ name: THEME_COOKIE, value: "light", url: baseURL }]);
     const darkUrl = page.url();
@@ -245,9 +256,9 @@ test.describe("the client Owner's own preferences page", () => {
     await page.goto("/dashboard/preferences");
     // Positive control: the page genuinely loaded for this login, before the
     // count below is asked to mean anything.
-    await expect(page.locator("[data-prefs-page]")).toBeVisible();
+    await expect(prefs(page).locator("[data-prefs-page]")).toBeVisible();
 
-    const languageCard = page.locator('[data-prefs-card="language"]');
+    const languageCard = prefs(page).locator('[data-prefs-card="language"]');
     const radios = languageCard.getByRole("radio");
     // Mutation: languageChoicesFor returning the agency's two-option list for
     // a client (dropping the isAgency branch) leaves this at 2, with no
