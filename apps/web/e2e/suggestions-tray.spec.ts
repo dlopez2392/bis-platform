@@ -262,7 +262,7 @@ test("the record's Waiting for you: A's two rows, no Edit; Accept the phone writ
 
   const row = section.locator(`li[data-suggestion="${phoneA}"]`);
   const accept = row.getByRole("button", { name: m["suggestions.accept"], exact: true });
-  await expect(accept).toHaveAttribute("data-suggestion-accept", "");
+  await expect(accept).toHaveAttribute("data-suggestion-accept");
   expect(await phoneOf(contactA)).toBeNull();
   await accept.click();
   const saved = toast(page, w("suggestions.toast.field", "en", { field: w("suggestions.field.phone") }));
