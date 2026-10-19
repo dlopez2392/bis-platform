@@ -1,6 +1,6 @@
 import { moveOpportunityToStage } from "@bis/db";
 import { parseOpportunityStagePayload, type OpportunityStagePayload } from "@bis/db/proposal-rules";
-import type { Db, KindDef } from "./types";
+import type { Db, DescribeCtx, KindDef } from "./types";
 
 /** The deal as the move reads it. A read error throws: it is not the deal being gone. */
 async function readDeal(db: Db, accountId: string, opportunityId: string) {
@@ -8,6 +8,11 @@ async function readDeal(db: Db, accountId: string, opportunityId: string) {
     .select("stage_id, status").eq("account_id", accountId).eq("id", opportunityId).maybeSingle();
   if (error) throw new Error(`opportunity_stage: deal read failed: ${error.message}`);
   return data as { stage_id: string; status: string } | null;
+}
+
+/** Own keys only: a stage id of "constructor" or "toString" must not resolve to Object.prototype's. */
+function stageOf(stages: DescribeCtx["stages"], id: string) {
+  return Object.hasOwn(stages, id) ? stages[id] : undefined;
 }
 
 function readRef(ref: unknown): OpportunityStagePayload | null {
@@ -22,8 +27,8 @@ export const opportunityStageKind: KindDef<"opportunity_stage", OpportunityStage
   parse: parseOpportunityStagePayload,
 
   describe(p, { tr, stages }) {
-    const from = stages[p.fromStageId];
-    const to = stages[p.toStageId];
+    const from = stageOf(stages, p.fromStageId);
+    const to = stageOf(stages, p.toStageId);
     // Shown, never hidden and never as an id (plan deviation 9): Accept still reads the deal itself.
     if (!from || !to) return { parts: [{ text: tr.text("suggestions.stage.unresolved") }], detail: null, pastDue: false };
     // No stage is skipped silently: the stages the move passes over, in either direction.
@@ -79,7 +84,7 @@ export const opportunityStageKind: KindDef<"opportunity_stage", OpportunityStage
   },
 
   toast(p, tr, stages) {
-    const to = stages[p.toStageId];
+    const to = stageOf(stages, p.toStageId);
     return to ? tr.text("suggestions.toast.stage", { stage: to.name }) : tr.text("suggestions.status.accepted");
   },
   targetKey: (p) => `deal:${p.opportunityId}`,

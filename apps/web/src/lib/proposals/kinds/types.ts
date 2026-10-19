@@ -21,7 +21,8 @@ export type EditCtx = {
   stages: ReadonlyArray<{ id: string; position: number; pipelineId: string }>;
   pipelineIdOfDeal: string | null;
 };
-export type EditError = { field: string; key: MessageKey };
+/** `params` fill the message's placeholders ("Keep it to {max} characters."); the card passes them to `tr.text`. */
+export type EditError = { field: string; key: MessageKey; params?: Record<string, string | number> };
 export type StillHolds = { ok: true } | { ok: false; reason: ExpiredReason };
 export type ApplyCtx = { db: Db; accountId: string; userId: string; contactId: string | null };
 /** `ref` is stored as `applied_ref`; `noWrite` is a known no-op the decision reverts and explains. */
@@ -42,7 +43,13 @@ export type KindDef<K extends ProposalKind, P> = {
   /** task: title, dueAt; contact_field: value; opportunity_stage: toStageId. */
   editable: readonly string[];
   validateEdit(stored: P, input: EditInput, ctx: EditCtx): { ok: true; payload: P } | { ok: false; error: EditError };
-  normalise(p: P): P;
+  /**
+   * The stored form, for Edit and accept's "did anything change" (spec 4.4 step 5). Task 6 passes the
+   * account's zone; only the task kind reads it, because a due date compares as its local DAY (the
+   * model's 10:14 instant and the form's same date are equal). When `normalise(edit)` equals
+   * `normalise(stored)`, decide records `accepted` and applies the STORED payload, not the edit.
+   */
+  normalise(p: P, ctx: { zone: string }): P;
   stillHolds(db: Db, row: Proposal & { kind: K }): Promise<StillHolds>;
   apply(ctx: ApplyCtx, p: P): Promise<Applied>;
   inverse: Inverse;

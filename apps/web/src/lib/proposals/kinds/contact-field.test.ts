@@ -68,6 +68,14 @@ describe("contact_field: validateEdit", () => {
       .toEqual({ ok: false, error: { field: "value", key: "suggestions.edit.valueRequired" } });
   });
 
+  it("a value over 200 characters is refused, never cut short", () => {
+    // Mutation: slice to 200 instead -> ok with a truncated value, FAILS.
+    expect(contactFieldKind.validateEdit({ field: "lastName", value: "Smith" }, { value: "x".repeat(201) }, ectx))
+      .toEqual({ ok: false, error: { field: "value", key: "inline.rule.tooLong", params: { max: 200 } } });
+    expect(contactFieldKind.validateEdit({ field: "lastName", value: "Smith" }, { value: ` ${"x".repeat(200)} ` }, ectx))
+      .toEqual({ ok: true, payload: { field: "lastName", value: "x".repeat(200) } });
+  });
+
   it("the field always comes from the stored payload, whatever the form posted (spec probe :352)", () => {
     // Mutation: read `field` from the input -> field "email", FAILS.
     expect(contactFieldKind.validateEdit(phone, { field: "email", value: "899 000 0000" }, ectx))
@@ -77,7 +85,8 @@ describe("contact_field: validateEdit", () => {
   it("normalise: an unchanged edit equals the stored payload", () => {
     const e = contactFieldKind.validateEdit({ field: "email", value: "sam@example.com" }, { value: "SAM@example.com " }, ectx);
     if (!e.ok) throw new Error("refused");
-    expect(contactFieldKind.normalise(e.payload)).toEqual(contactFieldKind.normalise({ field: "email", value: "sam@example.com" }));
+    const z = { zone: "America/Chicago" };
+    expect(contactFieldKind.normalise(e.payload, z)).toEqual(contactFieldKind.normalise({ field: "email", value: "sam@example.com" }, z));
   });
 });
 
@@ -142,6 +151,16 @@ describe("contact_field: apply", () => {
     expect((await contactFieldKind.apply(actx, phone)).noWrite).toBe("field_filled");
     db.getContact.mockResolvedValueOnce(contact({ first_name: "Roberto", last_name: null }));
     expect((await contactFieldKind.apply(actx, { field: "lastName", value: "Smith" })).noWrite).toBe("name_mismatch");
+  });
+
+  it("a blank first name, email or phone that the fill did not write was filled in between: never a name mismatch", async () => {
+    // Only a last name can be refused for not matching the first name on file (fillContactBlanksReport).
+    // Mutation: answer name_mismatch whenever the field read blank -> FAILS.
+    db.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false });
+    for (const p of [{ field: "firstName", value: "Ana" }, { field: "email", value: "a@b.co" }, phone] as const) {
+      db.getContact.mockResolvedValueOnce(contact({}));
+      expect((await contactFieldKind.apply(actx, p)).noWrite, p.field).toBe("field_filled");
+    }
   });
 });
 

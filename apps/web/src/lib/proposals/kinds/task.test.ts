@@ -117,7 +117,53 @@ describe("task: normalise", () => {
     const spaced = { title: " Send the quote", dueAt: "2026-10-21T05:00:00+00:00" };
     const edit = taskKind.validateEdit(spaced, { title: "Send the quote ", dueAt: "2026-10-21" }, ectx);
     if (!edit.ok) throw new Error("edit refused");
-    expect(taskKind.normalise(edit.payload)).toEqual(taskKind.normalise(spaced));
+    expect(taskKind.normalise(edit.payload, { zone: ZONE })).toEqual(taskKind.normalise(spaced, { zone: ZONE }));
+  });
+
+  // A due date compares as its local DAY in the account's zone (orchestrator ruling: an unchanged date
+  // is accepted, not edited). The edits below are what validateEdit stores for the posted date.
+  // Mutation: compare instants again -> each "equal" case below FAILS.
+  const same = (stored: string, edited: string) =>
+    expect(taskKind.normalise({ title: "Call", dueAt: edited }, { zone: ZONE }))
+      .toEqual(taskKind.normalise({ title: "Call", dueAt: stored }, { zone: ZONE }));
+
+  it("production's shape: the model's 10:14 instant and the form's same date are the same due date", () => {
+    // validateEdit("2026-10-10") in Chicago stores 2026-10-10T05:00:00.000Z.
+    same("2026-10-10T10:14:41.761Z", "2026-10-10T05:00:00.000Z");
+  });
+
+  it("late evening: 23:30 on Oct 20 in Chicago is Oct 20, not the UTC day's Oct 21", () => {
+    same("2026-10-21T04:30:00Z", "2026-10-20T05:00:00.000Z");
+    expect(taskKind.normalise({ title: "Call", dueAt: "2026-10-21T05:00:00.000Z" }, { zone: ZONE }))
+      .not.toEqual(taskKind.normalise({ title: "Call", dueAt: "2026-10-21T04:30:00Z" }, { zone: ZONE }));
+  });
+
+  it("a Havana fall-back day: 00:30 in the second midnight hour is the day whose first instant is 04:00Z", () => {
+    // 2026-11-01T05:30Z is 00:30 CST on Nov 1, after the clocks fell back; the day starts at 04:00Z.
+    expect(taskKind.normalise({ title: "Call", dueAt: "2026-11-01T05:30:00Z" }, { zone: "America/Havana" }))
+      .toEqual({ title: "Call", dueAt: "2026-11-01T04:00:00.000Z" });
+  });
+
+  it("refuses a due date that is not a date rather than inventing one", () => {
+    expect(() => taskKind.normalise({ title: "Call", dueAt: "next week" }, { zone: ZONE })).toThrow();
+  });
+});
+
+describe("task: a due date that is not a date", () => {
+  it("parse refuses it, so describe and normalise never meet an Invalid Date", () => {
+    // Mutation: parse = parseTaskPayload -> this payload parses, FAILS.
+    expect(taskKind.parse({ title: "Call", dueAt: "next week" })).toBeNull();
+    expect(taskKind.parse({ title: "Call", dueAt: "" })).toBeNull();
+    expect(taskKind.parse({ title: "Call", dueAt: "2026-10-10T10:14:41.761Z" }))
+      .toEqual({ title: "Call", dueAt: "2026-10-10T10:14:41.761Z" });
+  });
+});
+
+describe("task: an edit that keeps a date already past", () => {
+  it("is still refused, as a plain Accept of it is (P22)", () => {
+    const past = { title: "Call", dueAt: "2026-10-14T05:00:00.000Z" };
+    expect(taskKind.validateEdit(past, { title: "Call", dueAt: "2026-10-14" }, ectx))
+      .toEqual({ ok: false, error: { field: "dueAt", key: "suggestions.edit.dueInvalid" } });
   });
 });
 

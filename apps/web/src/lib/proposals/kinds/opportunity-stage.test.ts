@@ -76,6 +76,19 @@ describe("opportunity_stage: parse and describe", () => {
   });
 });
 
+describe("opportunity_stage: an id that names an Object.prototype member", () => {
+  it("is not a stage: 'constructor' and 'toString' read as unresolved, in the sentence and the toast", () => {
+    // Mutation: look up with stages[id] -> the prototype's function resolves as a stage, FAILS.
+    for (const id of ["constructor", "toString", "__proto__"]) {
+      expect(opportunityStageKind.describe({ ...stored, toStageId: id }, dctx()).parts, id)
+        .toEqual([{ text: "Review the stage change on this deal." }]);
+      expect(opportunityStageKind.describe({ ...stored, fromStageId: id }, dctx()).parts, id)
+        .toEqual([{ text: "Review the stage change on this deal." }]);
+      expect(opportunityStageKind.toast({ ...stored, toStageId: id }, en, stagesById), id).toBe("Accepted");
+    }
+  });
+});
+
 describe("opportunity_stage: validateEdit (forward only, never the last stage, the deal's own pipeline)", () => {
   const bad = { ok: false, error: { field: "toStageId", key: "suggestions.edit.stageInvalid" } };
 

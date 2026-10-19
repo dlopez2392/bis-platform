@@ -27,6 +27,14 @@ function isPastDue(dueAt: string | null, zone: string, now: Date): boolean {
   return dueAt !== null && localDateKey(new Date(dueAt), zone) < localDateKey(now, zone);
 }
 
+/** parseTaskPayload, plus: a due date must be a real instant. A stored "next week" is refused here, so
+ *  describe and normalise never meet an Invalid Date (formatDateInZone throws a RangeError on one). */
+function parseTask(v: unknown): TaskPayload | null {
+  const p = parseTaskPayload(v);
+  if (p && p.dueAt !== null && Number.isNaN(Date.parse(p.dueAt))) return null;
+  return p;
+}
+
 type RefT = { taskId: string; title: string; dueAt: string | null };
 function readRef(ref: unknown): RefT | null {
   if (ref === null || typeof ref !== "object") return null;
@@ -41,7 +49,7 @@ export const taskKind: KindDef<"task", TaskPayload> = {
   sources: ["call"],
   needsContact: false,
   dataClass: "facts",
-  parse: parseTaskPayload,
+  parse: parseTask,
 
   describe(p, { tr, zone, now }) {
     const pastDue = isPastDue(p.dueAt, zone, now);
@@ -65,6 +73,8 @@ export const taskKind: KindDef<"task", TaskPayload> = {
     const key = raw.trim();
     if (key) {
       const today = localDateKey(now, zone);
+      // An edit that keeps a date already past is refused too, as a plain Accept of it is (P22): the
+      // card says "Was due ...", and the person picks a date from today on.
       // addLocalDays(key, 0) round-trips only a real calendar day ("2026-02-30" comes back as March 2nd).
       const real = DATE_KEY.test(key) && addLocalDays(key, 0) === key;
       if (!real || key < today || key > addLocalDays(today, MAX_DUE_DAYS)) {
@@ -75,8 +85,13 @@ export const taskKind: KindDef<"task", TaskPayload> = {
     return { ok: true, payload: { title, dueAt } };
   },
 
-  normalise(p) {
-    return { title: p.title.trim(), dueAt: p.dueAt === null ? null : new Date(p.dueAt).toISOString() };
+  // The due date as its local DAY (orchestrator ruling): the model's 10:14 instant and the same date
+  // posted by the form normalise equal, so an untouched date is "accepted", not "edited".
+  normalise(p, { zone }) {
+    if (p.dueAt === null) return { title: p.title.trim(), dueAt: null };
+    const at = new Date(p.dueAt);
+    if (Number.isNaN(at.getTime())) throw new RangeError(`task: due date is not a date: ${p.dueAt}`);
+    return { title: p.title.trim(), dueAt: firstInstantOfLocalDay(localDateKey(at, zone), zone) };
   },
 
   async stillHolds() {

@@ -7,7 +7,7 @@ import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
 import type { Db, KindDef } from "./types";
 
-/** generate.ts's clamp on a contact-field value (MAX_TITLE_LEN, shared for the same review card). */
+/** generate.ts's limit on a contact-field value (MAX_TITLE_LEN). The generator clamps; an edit is told. */
 const MAX_VALUE_LEN = 200;
 const COLUMN: Record<ContactFieldName, "first_name" | "last_name" | "email" | "phone"> = {
   firstName: "first_name", lastName: "last_name", email: "email", phone: "phone",
@@ -78,8 +78,11 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
 
   validateEdit(stored, input) {
     const field = stored.field;
-    const value = typeof input.value === "string" ? input.value.trim().slice(0, MAX_VALUE_LEN) : "";
+    const value = typeof input.value === "string" ? input.value.trim() : "";
     if (!value) return { ok: false, error: { field: "value", key: "suggestions.edit.valueRequired" } };
+    if (value.length > MAX_VALUE_LEN) {
+      return { ok: false, error: { field: "value", key: "inline.rule.tooLong", params: { max: MAX_VALUE_LEN } } };
+    }
     if (field === "phone") {
       // As the generator stores it: as said, once it parses (generate.ts, review R2-C1).
       const said = spokenPhone(value, null);
@@ -114,8 +117,10 @@ export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
     const report = await fillContactBlanksReport(db, accountId, contactId!, { [p.field]: p.value }, userId);
     if (report.fields.length === 0) {
       // The fill writes nothing for two reasons, and they are told apart (the old action's split): the
-      // field was filled already, or a last name would graft onto a different first name on file.
-      return { ref, noWrite: isBlankOn(contact, p.field) ? "name_mismatch" : "field_filled" };
+      // field was filled already, or a last name would graft onto a different first name on file. Only
+      // a last name has the second reason; any other field that read blank was filled in between.
+      const mismatch = p.field === "lastName" && isBlankOn(contact, "lastName");
+      return { ref, noWrite: mismatch ? "name_mismatch" : "field_filled" };
     }
     return { ref, flagged: report.flagged };
   },
