@@ -41,8 +41,17 @@ loadEnv({ path: ".env.local" });
  * stage 2 ("Appointment") on a 5-stage pipeline `ensureDefaultPipeline` makes.
  *
  * ONE run through the three cards, in order: tests share the seed (test.describe.configure("serial")) so
- * each test's starting state is the previous test's ending state, exactly as the brief lays out the
- * sequence (Accept → Undo; Edit and accept refused then saved; Discard → Undo; Spanish; 360 px pseudo).
+ * each test's starting state is the previous test's ending state (Accept → Undo; Edit and accept refused
+ * then saved; Discard → Undo; the call page; Spanish; 360 px pseudo).
+ *
+ * TWO SURFACES, TWO BEHAVIOURS (final review I-1, and CI run 39267488188). The To do tray lists PENDING
+ * suggestions only and a decision revalidates it, so a decided card LEAVES the tray (and Undo brings it
+ * back); its status after a decision is read on the call page, which lists every status in place. After
+ * test 2 the phone card is edited, so the Spanish and 360 px tests read it on the call page.
+ *
+ * EXACT NAMES. Every role-name locator passes `exact: true`: Playwright matches a name as a substring by
+ * default, so "Accept" also matched "Edit and accept" (the strict-mode failure in that CI run), and
+ * "Aceptar" would match "Editar y aceptar".
  */
 test.describe.configure({ mode: "serial", timeout: 90_000 });
 
@@ -84,6 +93,8 @@ let contactId = "";
 let callId = "";
 let opportunityId = "";
 let stage0Id = "";
+let stage2Id = "";
+let stage2Name = "";
 let taskProposalId = "";
 let phoneProposalId = "";
 let stageProposalId = "";
@@ -118,7 +129,8 @@ test.beforeAll(async () => {
     throw new Error(`suggestions e2e: expected >=4 pipeline stages, got ${stages?.length ?? 0} (${stagesErr?.message ?? "no error"})`);
   }
   stage0Id = (stages[0] as { id: string }).id;
-  const stage2Id = (stages[2] as { id: string }).id;
+  stage2Id = (stages[2] as { id: string }).id;
+  stage2Name = (stages[2] as { name: string }).name;
 
   const opp = await createOpportunity(
     db, accountId, { contactId, pipelineId, name: `Deal ${stamp}` }, ACTOR,
@@ -191,6 +203,21 @@ test.afterAll(async () => {
 function card(page: import("@playwright/test").Page, id: string) {
   return page.locator(`[data-suggestion="${id}"]`);
 }
+const callUrl = () => `/dashboard/accounts/${accountId}/calls/${callId}`;
+/** The call page's Suggestions section: labelled by its #call-proposals heading (the agency links' anchor). */
+const callSection = (page: import("@playwright/test").Page) => page.locator('section[aria-labelledby="call-proposals"]');
+async function dealStage(): Promise<string> {
+  const { data, error } = await serviceDb()
+    .from("opportunities").select("stage_id").eq("account_id", accountId).eq("id", opportunityId).single();
+  if (error) throw new Error(`suggestions e2e: deal read failed: ${error.message}`);
+  return (data as { stage_id: string }).stage_id;
+}
+async function proposalStatus(id: string): Promise<string> {
+  const { data, error } = await serviceDb()
+    .from("proposals").select("status").eq("account_id", accountId).eq("id", id).single();
+  if (error) throw new Error(`suggestions e2e: proposal read failed: ${error.message}`);
+  return (data as { status: string }).status;
+}
 
 test("Accept the to-do, then Undo from the toast", async ({ page }) => {
   await page.goto(tasksUrl());
@@ -198,9 +225,11 @@ test("Accept the to-do, then Undo from the toast", async ({ page }) => {
   await expect(taskCard).toBeVisible();
   await expect(taskCard).toHaveAttribute("data-status", "pending");
 
-  await taskCard.getByRole("button", { name: m["suggestions.accept"] }).click();
+  await taskCard.getByRole("button", { name: m["suggestions.accept"], exact: true }).click();
   const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.toast.task") });
   await expect(toast).toBeVisible();
+  // Decided, it leaves the tray (pending only); its status is the call page's to show (test 4).
+  await expect(taskCard).toHaveCount(0);
 
   // The click, not the seed, made this row (the seed made no task at all): the containment this file
   // exists to prove.
@@ -209,30 +238,39 @@ test("Accept the to-do, then Undo from the toast", async ({ page }) => {
   expect(made, "Accept must create a real tasks row with this exact title").toBeTruthy();
   liveTaskId = made!.id;
   expect(made!.due_at).toBeNull();
+  expect(await proposalStatus(taskProposalId)).toBe("accepted");
 
   // Undo, within the toast's 10-second window.
-  await toast.getByRole("button", { name: w("common.undo") }).click();
+  await toast.getByRole("button", { name: w("common.undo"), exact: true }).click();
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.undone") })).toBeVisible();
 
   const afterUndo = await listContactTasks(serviceDb(), accountId, contactId);
   expect(afterUndo.some((t) => t.id === liveTaskId), "Undo must delete the row Accept created").toBe(false);
   liveTaskId = null;
 
+  // Pending again, it is back in the tray.
   await expect(taskCard).toHaveAttribute("data-status", "pending");
   await expect(taskCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.pending"));
 });
 
-test("Edit and accept the phone: a bad value is refused, a good one is saved", async ({ page }) => {
+test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one is saved", async ({ page }) => {
   await page.goto(tasksUrl());
   const phoneCard = card(page, phoneProposalId);
   await expect(phoneCard).toBeVisible();
-
-  await phoneCard.getByRole("button", { name: m["suggestions.editAccept"] }).click();
+  const editButton = phoneCard.getByRole("button", { name: m["suggestions.editAccept"], exact: true });
   const valueField = phoneCard.locator('input[name="value"]');
-  await expect(valueField).toBeFocused(); // focus follows the edit into the first field
 
+  // Esc in the field cancels the edit and hands focus back to Edit and accept (design review minor 6).
+  await editButton.click();
+  await expect(valueField).toBeFocused(); // focus follows the edit into the first field
+  await valueField.press("Escape");
+  await expect(valueField).toHaveCount(0);
+  await expect(editButton).toBeFocused();
+
+  await editButton.click();
+  await expect(valueField).toBeFocused();
   await valueField.fill("abc");
-  await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"] }).click();
+  await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"], exact: true }).click();
   await expect(phoneCard.getByText(w("suggestions.edit.phoneInvalid"))).toBeVisible();
 
   const { data: stillBlank, error: blankErr } = await serviceDb()
@@ -241,9 +279,12 @@ test("Edit and accept the phone: a bad value is refused, a good one is saved", a
   expect((stillBlank as { phone: string | null }).phone).toBeNull();
 
   await valueField.fill("899 000 0000");
-  await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"] }).click();
-  await expect(phoneCard).toHaveAttribute("data-status", "edited");
-  await expect(phoneCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.edited"));
+  await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"], exact: true }).click();
+  // Edited, it leaves the tray; focus goes to the next card's Accept, never to <body> (design review
+  // minor 5). The tray is newest first: stage, phone, to-do; the card after the phone is the to-do.
+  await expect(phoneCard).toHaveCount(0);
+  await expect(card(page, taskProposalId).getByRole("button", { name: m["suggestions.accept"], exact: true })).toBeFocused();
+  expect(await proposalStatus(phoneProposalId)).toBe("edited");
 
   const { data: saved, error: savedErr } = await serviceDb()
     .from("contacts").select("phone").eq("account_id", accountId).eq("id", contactId).single();
@@ -258,50 +299,83 @@ test("Discard the stage move, then Undo", async ({ page }) => {
   const stageCard = card(page, stageProposalId);
   await expect(stageCard).toBeVisible();
 
-  await stageCard.getByRole("button", { name: m["suggestions.discard"] }).click();
+  await stageCard.getByRole("button", { name: m["suggestions.discard"], exact: true }).click();
   const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.toast.dismissed") });
   await expect(toast).toBeVisible();
-  await expect(stageCard).toHaveAttribute("data-status", "dismissed");
+  await expect(stageCard).toHaveCount(0);
+  expect(await proposalStatus(stageProposalId)).toBe("dismissed");
+  expect(await dealStage()).toBe(stage0Id);
 
-  const { data: dealAfterDiscard, error: e1 } = await serviceDb()
-    .from("opportunities").select("stage_id").eq("account_id", accountId).eq("id", opportunityId).single();
-  if (e1) throw new Error(`suggestions e2e: deal read failed: ${e1.message}`);
-  expect((dealAfterDiscard as { stage_id: string }).stage_id).toBe(stage0Id);
-
-  await toast.getByRole("button", { name: w("common.undo") }).click();
+  await toast.getByRole("button", { name: w("common.undo"), exact: true }).click();
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.undone") })).toBeVisible();
   await expect(stageCard).toHaveAttribute("data-status", "pending");
   await expect(stageCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.pending"));
+  expect(await proposalStatus(stageProposalId)).toBe("pending");
+  expect(await dealStage()).toBe(stage0Id);
+});
 
-  const { data: dealAfterUndo, error: e2 } = await serviceDb()
-    .from("opportunities").select("stage_id").eq("account_id", accountId).eq("id", opportunityId).single();
-  if (e2) throw new Error(`suggestions e2e: deal re-read failed: ${e2.message}`);
-  expect((dealAfterUndo as { stage_id: string }).stage_id).toBe(stage0Id);
+// Final review I-1: the call page's own section (calls/[callId]/page.tsx: listProposalsForCall,
+// readSuggestionStages, listPeopleNames, pending first), never visited by tests 1-3.
+test("the call page: every suggestion in its #call-proposals section, pending first; Accept and Undo in place", async ({ page }) => {
+  await page.goto(callUrl());
+  await expect(page.locator("#call-proposals")).toBeVisible();
+  const section = callSection(page);
+  for (const id of [taskProposalId, phoneProposalId, stageProposalId]) {
+    await expect(section.locator(`[data-suggestion="${id}"]`)).toHaveCount(1);
+  }
+  // Pending first (the two still pending: the stage move, newest, then the to-do), then the edited phone.
+  expect(await section.locator("[data-suggestion]").evaluateAll((els) => els.map((e) => e.getAttribute("data-suggestion"))))
+    .toEqual([stageProposalId, taskProposalId, phoneProposalId]);
+  await expect(card(page, phoneProposalId).locator("[data-status-word]")).toHaveText(w("suggestions.status.edited"));
+
+  // Accept the stage move here: on this page the card stays, decided, and its status line takes focus.
+  const stageCard = section.locator(`[data-suggestion="${stageProposalId}"]`);
+  await stageCard.getByRole("button", { name: m["suggestions.accept"], exact: true }).click();
+  const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.toast.stage", "en", { stage: stage2Name }) });
+  await expect(toast).toBeVisible();
+  await expect(stageCard).toHaveAttribute("data-status", "accepted");
+  await expect(stageCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.accepted"));
+  await expect(stageCard.locator("[data-status-line]")).toBeFocused();
+  expect(await dealStage()).toBe(stage2Id);
+  expect(await proposalStatus(stageProposalId)).toBe("accepted");
+
+  await toast.getByRole("button", { name: w("common.undo"), exact: true }).click();
+  await expect(page.locator("[data-sonner-toast]").filter({ hasText: w("suggestions.undone") })).toBeVisible();
+  await expect(stageCard).toHaveAttribute("data-status", "pending");
+  expect(await dealStage()).toBe(stage0Id);
+  expect(await proposalStatus(stageProposalId)).toBe("pending");
 });
 
 test("the reader in Spanish", async ({ page }) => {
   await page.goto(`${tasksUrl()}?locale=es`);
 
-  await expect(page.getByRole("heading", { name: w("suggestions.heading", "es") })).toBeVisible();
+  await expect(page.getByRole("heading", { name: w("suggestions.heading", "es"), exact: true })).toBeVisible();
 
   const taskCard = card(page, taskProposalId);
-  await expect(taskCard.getByRole("button", { name: w("suggestions.accept", "es") })).toBeVisible();
+  await expect(taskCard.getByRole("button", { name: w("suggestions.accept", "es"), exact: true })).toBeVisible();
+  await expect(taskCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.pending", "es"));
   // The model's own English title keeps its own `lang`, inside an otherwise-Spanish sentence (P18).
   await expect(taskCard.locator('[lang="en"]').filter({ hasText: taskTitle })).toHaveCount(1);
 
+  // The phone card is edited (test 2), so it is the call page's: the caller's Spanish words keep lang="es".
+  await page.goto(`${callUrl()}?locale=es`);
   const phoneCard = card(page, phoneProposalId);
+  await expect(phoneCard.locator("[data-status-word]")).toHaveText(w("suggestions.status.edited", "es"));
   await expect(phoneCard.locator("q").filter({ hasText: CALLER_TURN_ES })).toHaveAttribute("lang", "es");
 });
 
 test("at 360 px in the pseudo-locale, no element inside a suggestion card overflows", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
-  await page.goto(`${tasksUrl()}?locale=pseudo`);
-
-  for (const id of [taskProposalId, phoneProposalId, stageProposalId]) {
+  const noOverflow = async (id: string) => {
     const el = card(page, id);
     await expect(el).toBeVisible();
     const over = await el.evaluate((root) => [root, ...root.querySelectorAll("*")]
       .filter((n) => (n as HTMLElement).scrollWidth > (n as HTMLElement).clientWidth + 1).length);
     expect(over, `suggestion card ${id} overflows at 360px in the pseudo-locale`).toBe(0);
-  }
+  };
+  // The tray holds the two still pending; the call page holds all three, the edited phone included.
+  await page.goto(`${tasksUrl()}?locale=pseudo`);
+  for (const id of [taskProposalId, stageProposalId]) await noOverflow(id);
+  await page.goto(`${callUrl()}?locale=pseudo`);
+  for (const id of [taskProposalId, phoneProposalId, stageProposalId]) await noOverflow(id);
 });
