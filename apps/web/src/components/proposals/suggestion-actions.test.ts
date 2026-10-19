@@ -10,7 +10,7 @@ import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
  *  suggestion-handlers.test.ts's, and in the browser the e2e's (Task 10). */
 const labels: SuggestionLabels = {
   accept: "Accept", editAccept: "Edit and accept", discard: "Discard", saveAccept: "Save and accept", cancel: "Cancel",
-  undo: "Undo", title: "Title", due: "Due date", stage: "Stage", crashed: "That may not have gone through.",
+  undo: "Undo", title: "Title", due: "Due date", stage: "Stage", crashed: "That may not have gone through.", reload: "Reload",
   because: "Because the caller said", lang: "es",
 };
 const ok = async () => ({ ok: true as const, status: "accepted" as const, toast: "Done" });

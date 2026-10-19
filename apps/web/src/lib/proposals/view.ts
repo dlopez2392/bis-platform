@@ -19,7 +19,12 @@ export type SuggestionEdit =
 
 export type SuggestionLabels = {
   accept: string; editAccept: string; discard: string; saveAccept: string; cancel: string;
-  undo: string; title: string; due: string; stage: string; crashed: string;
+  undo: string; title: string; due: string; stage: string;
+  /** A client-side rejection (the request never reached us, or a tab older than the deployment): "Reload
+   *  the page, then check" (8b-1 follow-up 1). The action's own "may not have gone through" is unchanged. */
+  crashed: string;
+  /** The rejection toast's Reload action. */
+  reload: string;
   /** "Because the caller said", the words before the caller's quote. */
   because: string;
   /** The words' language, which every toast carries (design review I3). */
@@ -38,6 +43,9 @@ export type SuggestionView = {
   /** effectiveStatus === "pending": an aged row shows no buttons. */
   canAct: boolean;
   edit: SuggestionEdit;
+  /** "See it in the transcript · 2:14" (item 8b-2, spec 5.5): the cited turn on the call page, or the call
+   *  page itself for a copied row; null when there is nowhere to go. */
+  transcript: { href: string; label: string } | null;
   labels: SuggestionLabels;
 };
 
@@ -47,6 +55,8 @@ export type SuggestionViewCtx = {
   callerName: string | null; callStartedAt: string | null; personaName: string;
   names: Readonly<Record<string, string>>;
   viewerId: string | null;
+  /** On the call page itself the link is the turn's own anchor, and a copied row has no link. */
+  onCallPage?: boolean;
 };
 
 const FIELD_LABEL: Record<"firstName" | "lastName" | "email" | "phone", MessageKey> = {
@@ -118,12 +128,45 @@ function editOf(row: Proposal, ctx: SuggestionViewCtx): SuggestionEdit {
   }
 }
 
+/** "Wed, Oct 14": a call's day in the account's zone; the card's source label's and a tray group's (group.ts). */
+export function callDay(locale: "en" | "es", zone: string, at: string): string {
+  return new Intl.DateTimeFormat(tag(locale), { timeZone: zone, weekday: "short", month: "short", day: "numeric" })
+    .format(new Date(at));
+}
+
+/** "2:14", minutes and seconds since the call began; null when either instant is missing or the turn is before it. */
+function sinceStart(at: string | null, startedAt: string | null): string | null {
+  if (!at || !startedAt) return null;
+  const ms = Date.parse(at) - Date.parse(startedAt);
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const secs = Math.floor(ms / 1000);
+  return `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The transcript link (spec 5.5; plan ambiguities 3 and 4). `evidenceRef.turn` is the RAW index into the
+ * call's stored transcript (`groundedTurn`'s `findLastIndex`, stored unchanged by `finishCallRow`), so the
+ * transcript's anchor carries the raw index too, never a filtered position. A copied row (`{}`: no turn)
+ * links to the call page, and on the call page has no link at all.
+ */
+function transcriptLink(row: Proposal, ctx: SuggestionViewCtx): SuggestionView["transcript"] {
+  if (!row.callId) return null;
+  const ref = row.evidenceRef as { turn?: unknown; at?: unknown };
+  const turn = typeof ref.turn === "number" && Number.isInteger(ref.turn) && ref.turn >= 0 ? ref.turn : null;
+  const page = `/dashboard/accounts/${row.accountId}/calls/${row.callId}`;
+  if (turn === null) return ctx.onCallPage ? null : { href: page, label: ctx.tr.text("suggestions.transcript.noTime") };
+  const time = sinceStart(typeof ref.at === "string" ? ref.at : null, ctx.callStartedAt);
+  return {
+    href: ctx.onCallPage ? `#turn-${turn}` : `${page}#turn-${turn}`,
+    label: time ? ctx.tr.text("suggestions.transcript", { time }) : ctx.tr.text("suggestions.transcript.noTime"),
+  };
+}
+
 export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): SuggestionView {
   const { tr, zone, now } = ctx;
   const locale = tr.locale;
 
-  const day = new Intl.DateTimeFormat(tag(locale), { timeZone: zone, weekday: "short", month: "short", day: "numeric" })
-    .format(new Date(ctx.callStartedAt ?? row.createdAt));
+  const day = callDay(locale, zone, ctx.callStartedAt ?? row.createdAt);
   const caller = ctx.callerName?.trim();
   const sourceLabel = caller
     ? tr.text("suggestions.source.call", { date: day, caller })
@@ -167,6 +210,7 @@ export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): Sugg
     decidedLine,
     canAct: status === "pending",
     edit: editOf(row, ctx),
+    transcript: transcriptLink(row, ctx),
     labels: {
       accept: tr.text("suggestions.accept"),
       editAccept: tr.text("suggestions.editAccept"),
@@ -177,7 +221,8 @@ export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): Sugg
       title: tr.text("suggestions.edit.title"),
       due: tr.text("suggestions.edit.due"),
       stage: tr.text("suggestions.edit.stage"),
-      crashed: tr.text("suggestions.answer.maybeFailed"),
+      crashed: tr.text("suggestions.answer.unreachable"),
+      reload: tr.text("suggestions.reload"),
       because: tr.text("suggestions.evidence"),
       lang: locale,
     },
