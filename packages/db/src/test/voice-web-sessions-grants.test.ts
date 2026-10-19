@@ -16,7 +16,7 @@ import { withTestAccount } from "./fixtures";
  * There is no `fixture` object and no chained `.from()` client; `actAs`
  * mutates the pg session in place via `set local role authenticated` and
  * returns nothing. This file is written against the real signatures
- * instead, modelled on call-proposals-grants.test.ts (the brief's own
+ * instead, modelled on the deleted 0040-era grants test (the brief's own
  * named worked example) and screened-calls-grants.test.ts (the file the
  * brief says this table's grant SHAPE matches: service-role only, no
  * `authenticated` grant at all).
@@ -39,14 +39,14 @@ import { withTestAccount } from "./fixtures";
  * Supabase project this suite shares with production. Everything here runs
  * inside `withRollback` so nothing PERSISTS, but two concurrent runs would
  * still block each other on the unique index for the lifetime of both open
- * transactions. Shape copied from call-proposals-grants.test.ts's `orgId`.
+ * transactions. Shape copied from the deleted 0040-era grants test's `orgId`.
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 const orgId = (label: string) => `org_WS_${label}_${RUN}`;
 
 /**
  * A throwaway account, inserted with the raw (owner) connection
- * `withRollback` hands every test — call-proposals-grants.test.ts's
+ * `withRollback` hands every test — the deleted 0040-era grants test's
  * `seedAccountWithCall`, minus the phone/call rows this table has no FK
  * to.
  */
@@ -63,7 +63,7 @@ describe("voice_web_sessions grants", () => {
   // EXISTENCE FIRST, and not as ceremony: "no rows in role_table_grants" is
   // also true of a table that was never created, so without this the whole
   // file is vacuously green before the migration is applied. Precedent:
-  // call-proposals-grants.test.ts:74-83.
+  // proposals-schema.test.ts, "the table exists".
   it("the table exists (guards every assertion below from vacuity)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ oid: string | null }>(
@@ -185,8 +185,8 @@ describe("voice_web_sessions grants", () => {
 
   // The brief's fourth claim, provable purely at the constraint level (no
   // grant or RLS involved — a unique index applies to the table owner too)
-  // so this runs as the owner connection, like call-proposals-grants.
-  // test.ts's kind/status CHECK tests.
+  // so this runs as the owner connection, like proposals-schema.test.ts's
+  // CHECK cases.
   it("the same ticket nonce cannot be inserted twice — this is the replay guard (mutation: drop voice_web_sessions_nonce_key -> FAILS)", () =>
     withRollback(async (c) => {
       const accountId = await seedAccount(c, orgId("REPLAY"));

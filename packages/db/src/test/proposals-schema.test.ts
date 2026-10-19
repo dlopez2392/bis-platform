@@ -13,9 +13,9 @@ import { PROPOSAL_KINDS, PROPOSAL_SOURCES, PROPOSAL_STATUSES, EXPIRED_REASONS } 
  * ONE REFUSED STATEMENT PER withRollback: a refusal aborts the transaction (25P02), so every refusing
  * case below has its own block (plan reviewer note 3).
  *
- * call-proposals-grants.test.ts stays (the old table lives until 0089); its cases are re-stated here for
- * proposals. Its column-level UPDATE cases have no twin: no client role holds any UPDATE on proposals,
- * which "authenticated holds UPDATE on no column" pins.
+ * The old table's grants test (call-proposals-grants.test.ts, 0040) went with the table (0090); its cases
+ * were re-stated here for proposals. Its column-level UPDATE cases have no twin: no client role holds any
+ * UPDATE on proposals, which "authenticated holds UPDATE on no column" pins.
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 const ORG = `org_prp_${RUN}`;

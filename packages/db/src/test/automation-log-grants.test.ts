@@ -47,7 +47,7 @@ describe("0046 tables exist (guards every grants assertion below from vacuity)",
 describe("0046 grants", () => {
   for (const table of TABLES) {
     // EXACT set, not containment: the default ACL hands TRUNCATE to
-    // authenticated on every new table (call-proposals-grants.test.ts:104-118).
+    // authenticated on every new table (proposals-schema.test.ts, the full grant set case).
     it(`${table}: authenticated holds EXACTLY select (mutation: grant insert to authenticated → FAILS)`, () =>
       withRollback(async (c) => {
         const { rows } = await c.query(
