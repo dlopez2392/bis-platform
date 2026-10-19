@@ -354,7 +354,6 @@ export async function expireAfterUndoCollision(
       applied_payload: null, applied_ref: null,
     })
     .eq("account_id", accountId).eq("id", id).in("status", ["accepted", "edited"]).eq("decided_by", decidedBy);
-  if (decidedAt !== undefined) q = q.eq("decided_at", decidedAt);
   const { data, error } = await q.select("id");
   if (error) throw new Error(`expireAfterUndoCollision failed: ${error.message}`);
   return (data ?? []).length > 0;

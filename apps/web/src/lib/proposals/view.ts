@@ -65,6 +65,30 @@ const DECIDED: Record<"accepted" | "edited" | "dismissed" | "expired", MessageKe
   dismissed: "suggestions.decided.dismissed", expired: "suggestions.decided.expired",
 };
 
+/** The reader's own decision reads as its own sentence ("Accepted by you"), never "by You" mid-sentence. */
+const DECIDED_BY_YOU: Record<"accepted" | "edited" | "dismissed", MessageKey> = {
+  accepted: "suggestions.decided.acceptedByYou", edited: "suggestions.decided.editedByYou",
+  dismissed: "suggestions.decided.dismissedByYou",
+};
+
+/** The account's own calendar day ("2026-10-14"), never UTC's. */
+const dayIn = (d: Date, zone: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+
+/**
+ * "9:42 AM" for a decision made today in the account's zone; "Oct 14, 9:42 AM" before today; with the year
+ * when it is not this year (the orchestrator's ruling on spec 4.5; the 8a label's rule, aiSummaryStamp).
+ */
+function decidedStamp(at: Date, zone: string, now: Date, locale: "en" | "es"): string {
+  const day = dayIn(at, zone);
+  const today = dayIn(now, zone);
+  const opts: Intl.DateTimeFormatOptions = day === today
+    ? { timeZone: zone, hour: "numeric", minute: "2-digit" }
+    : { timeZone: zone, ...(day.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" as const }),
+      month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+  return new Intl.DateTimeFormat(tag(locale), opts).format(at);
+}
+
 function describeRow(row: Proposal, ctx: DescribeCtx): Description {
   switch (row.kind) {
     case "task": return KINDS.task.describe(row.payload, ctx);
@@ -115,14 +139,14 @@ export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): Sugg
 
   let decidedLine: string | null = null;
   if (status !== "pending" && row.decidedAt && row.decidedBy) {
-    const time = new Intl.DateTimeFormat(tag(locale), { timeZone: zone, hour: "numeric", minute: "2-digit" })
-      .format(new Date(row.decidedAt));
+    const time = decidedStamp(new Date(row.decidedAt), zone, now, locale);
+    const by = row.decidedBy;
     if (status === "expired") {
       decidedLine = tr.text(DECIDED.expired, { time });
+    } else if (ctx.viewerId && by === ctx.viewerId) {
+      decidedLine = tr.text(DECIDED_BY_YOU[status], { time });
     } else {
-      const by = row.decidedBy;
-      const name = ctx.viewerId && by === ctx.viewerId ? tr.text("provenance.you")
-        : (Object.hasOwn(ctx.names, by) ? ctx.names[by] : undefined) || tr.text("assign.someone");
+      const name = (Object.hasOwn(ctx.names, by) ? ctx.names[by] : undefined) || tr.text("assign.someone");
       decidedLine = tr.text(DECIDED[status], { name, time });
     }
   }

@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import { cn } from "@/lib/utils";
+// AiAuthorMark's chip, worded by the view so it reads in either language.
+import { AI_MARK_CLASS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/ai-author-mark";
 import type { SuggestionView } from "@/lib/proposals/view";
 import { SuggestionActions, type SuggestionActionProps } from "./suggestion-actions";
 
@@ -23,8 +25,6 @@ const DOT: Record<SuggestionView["status"], string> = {
   dismissed: "bg-muted-foreground/60",
   expired: "bg-muted-foreground/60",
 };
-/** AiAuthorMark's chip (`…/calls/ai-author-mark.tsx`), worded by the view so it reads in either language. */
-const AI_MARK = "inline-flex shrink-0 items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-1.5 text-[10px] leading-4 font-medium text-[var(--chip-text)]";
 
 export function SuggestionCard({ view, ...actions }: { view: SuggestionView } & SuggestionActionProps) {
   return (
@@ -43,7 +43,7 @@ export function SuggestionCard({ view, ...actions }: { view: SuggestionView } & 
         <q lang={view.evidenceLang} className="text-foreground">{view.evidence}</q>
       </p>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span data-ai-mark className={AI_MARK}>{view.personaMark}</span>
+        <span data-ai-mark className={AI_MARK_CLASS}>{view.personaMark}</span>
         <p className="inline-flex items-center gap-1.5 text-xs text-foreground">
           <span data-status-dot className={cn("size-[7px] shrink-0 rounded-full", DOT[view.status])} aria-hidden />
           <span data-status-word>{view.statusWord}</span>

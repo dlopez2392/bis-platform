@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { SuggestionActions } from "./suggestion-actions";
+import { readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { SuggestionActions, escCancelsEdit } from "./suggestion-actions";
 import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
 
 /** No DOM here (no jsdom): the markup a reader and a keyboard get, per mode. What the buttons DO is
@@ -51,6 +51,17 @@ describe("SuggestionActions: one primary per card (rule 8, P12)", () => {
 });
 
 describe("SuggestionActions: the edit forms", () => {
+  it("the editable title carries no lang of its own: the reader may write in either language (review minor 3)", () => {
+    expect(html(TASK, "edit")).not.toMatch(/<input(?=[^>]*name="title")[^>]*\slang=/);
+  });
+  it("a stage move with no later stage to pick offers no Edit and accept (review minor 4)", () => {
+    const b = buttons(html({ kind: "opportunity_stage", options: [], toStageId: "st_quote" }));
+    expect(b.map(text)).toEqual(["Accept", "Discard"]);
+  });
+  it("Esc cancels the edit from a field, but not from the stage select, whose own Esc closes its list (review minor 8)", () => {
+    expect([escCancelsEdit("Escape", "INPUT"), escCancelsEdit("Escape", "SELECT"), escCancelsEdit("Enter", "INPUT")])
+      .toEqual([true, false, false]);
+  });
   it("a to-do's form has its title and an <input type=date> holding the view's due date", () => {
     const h = html(TASK, "edit");
     expect(h).toMatch(/<input[^>]*name="title"[^>]*value="Call back about the quote"/);
@@ -69,10 +80,34 @@ describe("SuggestionActions: the edit forms", () => {
   });
 });
 
-describe("SuggestionActions stays off the registry and the database", () => {
-  it("imports no value from @bis/db or lib/proposals/kinds (it is a client file)", () => {
-    const src = readFileSync(join(__dirname, "suggestion-actions.tsx"), "utf8");
-    expect(src).toMatch(/^"use client";/);
-    expect(src).not.toMatch(/from ["']@bis\/db["']|lib\/proposals\/kinds/);
+/**
+ * The client files of the suggestion card reach no `@bis/db` value (barrel or subpath: a bare
+ * vi.mock("@bis/db") factory, and the browser bundle) and no server-only registry or view value. The
+ * client-boundary.test.ts shape: a VALUE import counts, an `import type` is erased and does not.
+ */
+const SERVER_VALUE_IMPORT =
+  /import\s+(?!type\b)[^;'"]*?\s*from\s+["'](?:@bis\/db(?:\/[^"']*)?|[^"']*lib\/proposals\/(?:kinds|view)(?:\/[^"']*)?)["']/;
+const CLIENT_FILES = [
+  ...readdirSync(__dirname).filter((n) => /\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n)).map((n) => join(__dirname, n)),
+  join(__dirname, "../../app/(dashboard)/dashboard/styleguide/suggestion-demo.tsx"),
+].filter((p) => /^\s*["']use client["']/.test(readFileSync(p, "utf8")));
+
+describe("the suggestion card's client files stay off the registry and the database", () => {
+  it("scans every \"use client\" file in components/proposals and the styleguide demo", () => {
+    expect(CLIENT_FILES.map((p) => basename(p)).sort())
+      .toEqual(["suggestion-actions.tsx", "suggestion-demo.tsx", "suggestion-retry.tsx"]);
+  });
+  it("none imports a value from @bis/db, any @bis/db subpath, lib/proposals/kinds or lib/proposals/view", () => {
+    expect(CLIENT_FILES.filter((p) => SERVER_VALUE_IMPORT.test(readFileSync(p, "utf8")))).toEqual([]);
+  });
+  it("the scan's own shapes: barrel and subpath value imports count, multi-line counts, a type import does not", () => {
+    expect([
+      `import { addTask } from "@bis/db";`,
+      `import { effectiveStatus } from "@bis/db/proposal-rules";`,
+      `import {\n  KINDS,\n} from "@/lib/proposals/kinds";`,
+      `import { buildSuggestionView } from "@/lib/proposals/view";`,
+      `import type { SuggestionView } from "@/lib/proposals/view";`,
+      `import type { Proposal } from "@bis/db/proposal-rules";`,
+    ].map((s) => SERVER_VALUE_IMPORT.test(s))).toEqual([true, true, true, true, false, false]);
   });
 });

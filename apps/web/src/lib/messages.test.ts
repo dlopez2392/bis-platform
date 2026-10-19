@@ -936,6 +936,7 @@ describe("suggestions.* keys (item 8b-1)", () => {
     "suggestions.status.pending", "suggestions.status.accepted", "suggestions.status.edited",
     "suggestions.status.dismissed", "suggestions.status.expired",
     "suggestions.decided.accepted", "suggestions.decided.edited", "suggestions.decided.dismissed", "suggestions.decided.expired",
+    "suggestions.decided.acceptedByYou", "suggestions.decided.editedByYou", "suggestions.decided.dismissedByYou",
     "suggestions.accept", "suggestions.editAccept", "suggestions.discard", "suggestions.saveAccept", "suggestions.cancel",
     "suggestions.task", "suggestions.due", "suggestions.wasDue", "suggestions.field",
     "suggestions.field.firstName", "suggestions.field.lastName", "suggestions.field.email", "suggestions.field.phone",
@@ -973,6 +974,13 @@ describe("suggestions.* keys (item 8b-1)", () => {
     expect([m["suggestions.answer.undoStranded"], m["suggestions.answer.undoStranded.es"]]).toEqual([
       "The change was undone, but this suggestion didn't update. Refresh before doing anything else.",
       "El cambio se deshizo, pero esta sugerencia no se actualizó. Actualice la página antes de hacer otra cosa."]);
+  });
+  it("a decision the reader made reads you, lower case mid-sentence, in both languages (Task 7 review I3)", () => {
+    expect([m["suggestions.decided.acceptedByYou"], m["suggestions.decided.acceptedByYou.es"],
+      m["suggestions.decided.editedByYou"], m["suggestions.decided.editedByYou.es"],
+      m["suggestions.decided.dismissedByYou"], m["suggestions.decided.dismissedByYou.es"]]).toEqual([
+      "Accepted by you · {time}", "Aceptada por usted · {time}", "Edited by you · {time}", "Editada por usted · {time}",
+      "Discarded by you · {time}", "Descartada por usted · {time}"]);
   });
   it("no plumbing words reach the reader (mutation: write 'proposal' into one key -> FAILS)", () => {
     const cat = m as Record<string, string>;

@@ -25,7 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SCREENED_REASONS, screenedClass } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
 import { SuggestionSection, SuggestionSectionSkeleton } from "@/components/proposals/suggestion-section";
-import { CALL_AT, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows as SUGGESTION_ROWS } from "@/components/proposals/suggestion-specimens";
+import { CALL_AT, EDITS, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows as SUGGESTION_ROWS } from "@/components/proposals/suggestion-specimens";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { makeTr } from "@/lib/record/copy";
 import { SuggestionDemo } from "./suggestion-demo";
@@ -81,13 +81,13 @@ export const dynamic = "force-dynamic";
 const SUGGESTION_TRS = [
   { key: "en", tr: makeTr("en") }, { key: "es", tr: makeTr("es") }, { key: "pseudo", tr: makeTr("en", true) },
 ] as const;
-const suggestionColumns = () => SUGGESTION_TRS.map(({ key, tr }) => ({
-  key, caption: key,
-  views: [...FIVE, "aged" as const].map((s) => buildSuggestionView(SUGGESTION_ROWS[s], {
-    tr, zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES, callerName: "Ana López",
-    callStartedAt: CALL_AT, personaName: "Sofía", names: NAMES, viewerId: null,
-  })),
-}));
+const suggestionColumns = () => SUGGESTION_TRS.map(({ key, tr }) => {
+  const build = (s: keyof typeof SUGGESTION_ROWS) => buildSuggestionView(SUGGESTION_ROWS[s], {
+    tr, zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES, callerName: "Ana Lopez",
+    callStartedAt: CALL_AT, personaName: "Sofia", names: NAMES, viewerId: null,
+  });
+  return { key, caption: key, views: [...FIVE, "aged" as const].map(build), edits: EDITS.map(build) };
+});
 /** The section's error state renders no card, so these are never called or sent to the browser. */
 const NO_SUGGESTION_ACTIONS = {
   accept: async () => ({ ok: false as const, error: "" }), editAccept: async () => ({ ok: false as const, error: "" }),
@@ -617,7 +617,7 @@ export default async function StyleguidePage({
             <div className="grid w-full gap-6 md:grid-cols-2">
               {(["en", "es"] as const).map((locale) => (
                 <div key={locale} data-sg-suggestions-states={locale} className="flex max-w-[360px] flex-col gap-6">
-                  <SuggestionSection tr={makeTr(locale)} personaName="Sofía" data={{ ok: false }} {...NO_SUGGESTION_ACTIONS} />
+                  <SuggestionSection tr={makeTr(locale)} personaName="Sofia" data={{ ok: false }} {...NO_SUGGESTION_ACTIONS} />
                   <SuggestionSectionSkeleton tr={makeTr(locale)} />
                 </div>
               ))}

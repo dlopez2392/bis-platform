@@ -9,7 +9,7 @@ export const CALL_AT = "2026-10-14T14:42:00.000Z";
 /** The day after the call, mid-morning in Chicago. */
 export const NOW = new Date("2026-10-15T15:00:00.000Z");
 export const ANA = "user_ana";
-export const NAMES: Readonly<Record<string, string>> = { [ANA]: "Ana López" };
+export const NAMES: Readonly<Record<string, string>> = { [ANA]: "Ana Lopez" };
 export const STAGES = {
   st_new: { name: "New lead", position: 0 },
   st_quote: { name: "Quote sent", position: 1 },
@@ -31,7 +31,9 @@ const base = {
   decidedAt: null, decidedBy: null, undoneAt: null, undoneBy: null,
   expiresAt: "2026-11-13T14:42:00.000Z", createdAt: CALL_AT,
 };
-const decided = { decidedAt: CALL_AT, decidedBy: ANA };
+/** Decided at 9:42 AM on NOW's own day, so the decided line reads the time alone. */
+export const DECIDED_AT = "2026-10-15T14:42:00.000Z";
+const decided = { decidedAt: DECIDED_AT, decidedBy: ANA };
 
 export const TITLE = "Call back about the quote";
 export const rows = {
@@ -43,7 +45,7 @@ export const rows = {
     payload: { title: TITLE, dueAt: null } },
   dismissed: { ...base, ...decided, id: "sg_dismissed", status: "dismissed", kind: "contact_field",
     payload: { field: "email", value: "rio@example.com" } },
-  expired: { ...base, id: "sg_expired", status: "expired", expiredReason: "deal_moved", decidedAt: CALL_AT,
+  expired: { ...base, id: "sg_expired", status: "expired", expiredReason: "deal_moved", decidedAt: DECIDED_AT,
     decidedBy: "system", kind: "opportunity_stage",
     payload: { opportunityId: "opp_1", fromStageId: "st_new", toStageId: "st_quote" } },
   /** Pending in storage, past `expiresAt`: out of date to every reader (effectiveStatus). */
@@ -51,9 +53,13 @@ export const rows = {
     payload: { opportunityId: "opp_1", fromStageId: "st_new", toStageId: "st_quote" } },
   stage: { ...base, id: "sg_stage", status: "pending", kind: "opportunity_stage",
     payload: { opportunityId: "opp_1", fromStageId: "st_new", toStageId: "st_quote" } },
+  field: { ...base, id: "sg_field", status: "pending", kind: "contact_field",
+    payload: { field: "email", value: "rio@example.com" } },
   spanishEvidence: { ...base, id: "sg_es", status: "pending", evidenceLang: "es",
     evidence: "¿Me puede llamar el jueves?", kind: "task", payload: { title: TITLE, dueAt: null } },
 } satisfies Record<string, Proposal>;
 
 /** Every state the card shows, in the order a reader meets them. */
 export const FIVE = ["pending", "accepted", "edited", "dismissed", "expired"] as const;
+/** One pending row of each kind, for the three edit forms (to-do, field, stage). */
+export const EDITS = ["pending", "field", "stage"] as const;

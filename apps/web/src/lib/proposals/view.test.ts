@@ -13,14 +13,14 @@ const plain = (s: string | null) => s?.replace(/[  ]/g, " ") ?? null;
 function view(row: Proposal, locale: Locale = "en", over: Partial<Parameters<typeof buildSuggestionView>[1]> = {}) {
   return buildSuggestionView(row, {
     tr: makeTr(locale), zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES,
-    callerName: "Ana López", callStartedAt: CALL_AT, personaName: "Sofía", names: NAMES, viewerId: null, ...over,
+    callerName: "Ana Lopez", callStartedAt: CALL_AT, personaName: "Sofia", names: NAMES, viewerId: null, ...over,
   });
 }
 
 describe("buildSuggestionView: the source label", () => {
   it("names the call's day in the account's zone and the caller, in English and Spanish", () => {
-    expect(plain(view(rows.pending).sourceLabel)).toBe("From the call on Wed, Oct 14 · Ana López");
-    expect(plain(view(rows.pending, "es").sourceLabel)).toBe("De la llamada del mié, 14 de oct · Ana López");
+    expect(plain(view(rows.pending).sourceLabel)).toBe("From the call on Wed, Oct 14 · Ana Lopez");
+    expect(plain(view(rows.pending, "es").sourceLabel)).toBe("De la llamada del mié, 14 de oct · Ana Lopez");
   });
   it("with no caller name, names the day alone", () => {
     expect(plain(view(rows.pending, "en", { callerName: null }).sourceLabel)).toBe("From the call on Wed, Oct 14");
@@ -29,7 +29,7 @@ describe("buildSuggestionView: the source label", () => {
   it("a call late in the evening is that evening's day in the account's zone, not the next UTC day", () => {
     // 02:30 UTC on Thu Oct 15 is 9:30 PM on Wed Oct 14 in Chicago.
     expect(plain(view(rows.pending, "en", { callStartedAt: "2026-10-15T02:30:00.000Z" }).sourceLabel))
-      .toBe("From the call on Wed, Oct 14 · Ana López");
+      .toBe("From the call on Wed, Oct 14 · Ana Lopez");
   });
   it("formats through format.ts's tag(), never a hand-written locale string (plan fix M11)", () => {
     const src = readFileSync(join(__dirname, "view.ts"), "utf8");
@@ -74,10 +74,22 @@ describe("buildSuggestionView: status, canAct and who decided", () => {
     expect([aged.canAct, aged.status, aged.statusWord, aged.reasonLine]).toEqual([false, "expired", "Out of date", "More than 30 days old."]);
     expect(view(rows.accepted).canAct).toBe(false);
   });
-  it("a decision by the viewer reads You; by a named person, their name; by nobody we can name, Someone on the team", () => {
-    expect(plain(view(rows.accepted, "en", { viewerId: ANA }).decidedLine)).toBe("Accepted by You · 9:42 AM");
-    expect(plain(view(rows.accepted, "es", { viewerId: ANA }).decidedLine)).toBe("Aceptada por Usted · 9:42 a.m.");
-    expect(plain(view(rows.edited).decidedLine)).toBe("Edited by Ana López · 9:42 AM");
+  it("a decision by the viewer reads its own sentence, by you / por usted, for each of the three decisions", () => {
+    expect(plain(view(rows.accepted, "en", { viewerId: ANA }).decidedLine)).toBe("Accepted by you · 9:42 AM");
+    expect(plain(view(rows.accepted, "es", { viewerId: ANA }).decidedLine)).toBe("Aceptada por usted · 9:42 a.m.");
+    expect(plain(view(rows.edited, "en", { viewerId: ANA }).decidedLine)).toBe("Edited by you · 9:42 AM");
+    expect(plain(view(rows.dismissed, "es", { viewerId: ANA }).decidedLine)).toBe("Descartada por usted · 9:42 a.m.");
+  });
+  it("a decision made before today in the account's zone carries its date, and the year when it is not this year", () => {
+    // 02:30 UTC on Oct 15 is 9:30 PM on Oct 14 in Chicago: yesterday there, though today in UTC.
+    const lastNight = { ...rows.accepted, decidedAt: "2026-10-15T02:30:00.000Z" };
+    expect(plain(view(lastNight).decidedLine)).toBe("Accepted by Ana Lopez · Oct 14, 9:30 PM");
+    expect(plain(view(lastNight, "es").decidedLine)).toBe("Aceptada por Ana Lopez · 14 oct, 9:30 p.m.");
+    const lastYear = { ...rows.accepted, decidedAt: "2025-10-14T14:42:00.000Z" };
+    expect(plain(view(lastYear).decidedLine)).toBe("Accepted by Ana Lopez · Oct 14, 2025, 9:42 AM");
+  });
+  it("a decision by a named person reads their name; by nobody we can name, Someone on the team", () => {
+    expect(plain(view(rows.edited).decidedLine)).toBe("Edited by Ana Lopez · 9:42 AM");
     expect(plain(view(rows.dismissed, "en", { names: {} }).decidedLine)).toBe("Discarded by Someone on the team · 9:42 AM");
     expect(plain(view(rows.expired).decidedLine)).toBe("Marked out of date · 9:42 AM");
     expect(view(rows.pending).decidedLine).toBeNull();

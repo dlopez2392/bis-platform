@@ -40,10 +40,14 @@ export async function runDecision(deps: {
     toast.error(r.error);
     return r.field === undefined ? { ok: false, error: r.error } : { ok: false, error: r.error, field: r.field };
   }
+  // Once per toast: a double click must not send a second Undo (the first may already have restored it).
+  let fired = false;
   const id = toast.success(r.toast, {
     action: {
       label: labels.undo,
       onClick: () => {
+        if (fired) return;
+        fired = true;
         void (async () => {
           let u: UndoResult;
           try {

@@ -17,11 +17,11 @@ const actions = { accept: ok, editAccept: ok, discard: ok, undo: async () => ({ 
 function views(locale: Locale) {
   return [rows.pending, rows.stage].map((r) => buildSuggestionView(r, {
     tr: makeTr(locale), zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES,
-    callerName: "Ana López", callStartedAt: CALL_AT, personaName: "Sofía", names: NAMES, viewerId: null,
+    callerName: "Ana Lopez", callStartedAt: CALL_AT, personaName: "Sofia", names: NAMES, viewerId: null,
   }));
 }
 function section(data: SuggestionSectionData, locale: Locale = "en") {
-  return renderToStaticMarkup(createElement(SuggestionSection, { tr: makeTr(locale), personaName: "Sofía", data, ...actions }));
+  return renderToStaticMarkup(createElement(SuggestionSection, { tr: makeTr(locale), personaName: "Sofia", data, ...actions }));
 }
 const loaded = (locale: Locale, capped = false): SuggestionSectionData => ({ ok: true, views: views(locale), capped });
 const plain = (h: string) => renderedText(h).replace(/\s+/g, " ").trim();
@@ -30,8 +30,8 @@ const outsideCards = (h: string) => h.replace(/<article[\s\S]*?<\/article>/g, ""
 
 describe("SuggestionSection: loaded", () => {
   it.each([
-    ["en", "Suggestions", "From Sofía. Nothing changes until you accept."],
-    ["es", "Sugerencias", "De Sofía. Nada cambia hasta que usted acepte."],
+    ["en", "Suggestions", "From Sofia. Nothing changes until you accept."],
+    ["es", "Sugerencias", "De Sofia. Nada cambia hasta que usted acepte."],
   ] as const)("%s: lang on the section, a mono-label h2, the subhead with the persona, and the cards", (locale, heading, subhead) => {
     const h = section(loaded(locale), locale);
     expect(h).toMatch(new RegExp(`^<section[^>]*lang="${locale}"`));

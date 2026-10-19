@@ -7,7 +7,7 @@
 //
 // Rule 8 (P12): each card is its own view with ONE primary, Accept, or Save and accept while editing;
 // everything else is ghost. `useTransition` disables every button while any one runs.
-import { useId, useState, useTransition, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,12 @@ const FIELD = "flex flex-col gap-1";
 const ERROR = "text-xs text-destructive";
 const SELECT = "min-h-11 md:min-h-8 w-full rounded-[var(--radius-ctl)] border border-input bg-[var(--surface-2)] px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
+/** Esc cancels the edit from any field but the stage <select>, whose own Esc closes its open list
+ *  (review minor 8). Pure, so it is unit-tested without a DOM. */
+export function escCancelsEdit(key: string, targetTag: string): boolean {
+  return key === "Escape" && targetTag !== "SELECT";
+}
+
 export function SuggestionActions({
   id, edit, labels, accept, editAccept, discard, undo, initialMode = "view",
 }: SuggestionActionProps & {
@@ -38,6 +44,22 @@ export function SuggestionActions({
   const [fieldError, setFieldError] = useState<{ field: string; text: string } | null>(null);
   const [pending, startTransition] = useTransition();
   const uid = useId();
+  const formRef = useRef<HTMLFormElement>(null);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  /** Set by Cancel / Esc only, so focus returns to Edit and accept then, and never on the first render. */
+  const returnFocus = useRef(false);
+  // Focus follows the mode (review minor 2): into the first field when the edit opens, back to Edit and
+  // accept when it is cancelled. Proven in the browser by the e2e; there is no DOM in the unit tests.
+  useEffect(() => {
+    if (mode === "edit") {
+      formRef.current?.querySelector<HTMLElement>("input, select")?.focus();
+    } else if (returnFocus.current) {
+      returnFocus.current = false;
+      editButtonRef.current?.focus();
+    }
+  }, [mode]);
+  /** A stage move with no later stage to pick has nothing to edit (review minor 4). */
+  const editable = edit.kind !== "opportunity_stage" || edit.options.length > 0;
 
   function run(act: () => Promise<SuggestionActionResult>) {
     startTransition(async () => {
@@ -51,6 +73,7 @@ export function SuggestionActions({
   }
 
   function cancel() {
+    returnFocus.current = true;
     setFieldError(null);
     setMode("view");
   }
@@ -61,9 +84,12 @@ export function SuggestionActions({
         <Button type="button" size="sm" className={CTL} disabled={pending} onClick={() => run(() => accept(id))}>
           {labels.accept}
         </Button>
-        <Button type="button" size="sm" variant="ghost" className={CTL} disabled={pending} onClick={() => setMode("edit")}>
-          {labels.editAccept}
-        </Button>
+        {editable ? (
+          <Button ref={editButtonRef} type="button" size="sm" variant="ghost" className={CTL} disabled={pending}
+            onClick={() => setMode("edit")}>
+            {labels.editAccept}
+          </Button>
+        ) : null}
         <Button type="button" size="sm" variant="ghost" className={CTL} disabled={pending} onClick={() => run(() => discard(id))}>
           {labels.discard}
         </Button>
@@ -79,7 +105,7 @@ export function SuggestionActions({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLFormElement>) {
-    if (e.key === "Escape") { e.preventDefault(); cancel(); }
+    if (escCancelsEdit(e.key, (e.target as HTMLElement).tagName)) { e.preventDefault(); cancel(); }
   }
 
   /** One field's control props: its id, and the error under it named by aria-describedby. */
@@ -96,12 +122,12 @@ export function SuggestionActions({
     : null);
 
   return (
-    <form className="flex flex-col gap-3" onSubmit={submit} onKeyDown={onKeyDown}>
+    <form ref={formRef} className="flex flex-col gap-3" onSubmit={submit} onKeyDown={onKeyDown}>
       {edit.kind === "task" ? (
         <>
           <div className={FIELD}>
             <Label htmlFor={`${uid}-title`}>{labels.title}</Label>
-            <Input {...fieldProps("title")} type="text" lang="en" defaultValue={edit.title} className={CTL} />
+            <Input {...fieldProps("title")} type="text" defaultValue={edit.title} className={CTL} />
             {errorUnder("title")}
           </div>
           <div className={FIELD}>

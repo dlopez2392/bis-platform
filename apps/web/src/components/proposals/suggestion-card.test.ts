@@ -7,6 +7,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { renderedText } from "@/lib/rendered-text";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { SuggestionCard } from "./suggestion-card";
+import { AI_MARK_CLASS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/ai-author-mark";
 import { CALL_AT, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, TITLE, ZONE, rows } from "./suggestion-specimens";
 
 /** Views built by the real builder from typed-out rows; markup by renderToStaticMarkup (no DOM). */
@@ -15,7 +16,7 @@ const actions = { accept: ok, editAccept: ok, discard: ok, undo: async () => ({ 
 function card(row: Proposal, locale: Locale = "en", opts: { pseudo?: boolean; persona?: string } = {}) {
   const view = buildSuggestionView(row, {
     tr: makeTr(locale, opts.pseudo ?? false), zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES,
-    callerName: "Ana López", callStartedAt: CALL_AT, personaName: opts.persona ?? "Sofía", names: NAMES, viewerId: null,
+    callerName: "Ana Lopez", callStartedAt: CALL_AT, personaName: opts.persona ?? "Sofia", names: NAMES, viewerId: null,
   });
   return renderToStaticMarkup(createElement(SuggestionCard, { view, ...actions }));
 }
@@ -30,9 +31,9 @@ const buttonCount = (h: string) => (h.match(/<button\b/g) ?? []).length;
 describe("SuggestionCard: the five states in English (rule 3: dot and word)", () => {
   it.each([
     ["pending", "Suggested", null],
-    ["accepted", "Accepted", "Accepted by Ana López · 9:42 AM"],
-    ["edited", "Edited", "Edited by Ana López · 9:42 AM"],
-    ["dismissed", "Discarded", "Discarded by Ana López · 9:42 AM"],
+    ["accepted", "Accepted", "Accepted by Ana Lopez · 9:42 AM"],
+    ["edited", "Edited", "Edited by Ana Lopez · 9:42 AM"],
+    ["dismissed", "Discarded", "Discarded by Ana Lopez · 9:42 AM"],
     ["expired", "Out of date", "Marked out of date · 9:42 AM"],
   ] as const)("%s reads %s, with its decided line", (state, word, decided) => {
     const h = card(rows[state]);
@@ -56,7 +57,7 @@ describe("SuggestionCard: the five states in English (rule 3: dot and word)", ()
 describe("SuggestionCard: the same five in Spanish", () => {
   it("each status word is the Spanish one, and the decided line is Spanish", () => {
     expect(FIVE.map((s) => statusOf(card(rows[s], "es")))).toEqual(["Pendiente", "Aceptada", "Editada", "Descartada", "Vencida"]);
-    expect(plain(card(rows.accepted, "es"))).toContain("Aceptada por Ana López · 9:42 a.m.");
+    expect(plain(card(rows.accepted, "es"))).toContain("Aceptada por Ana Lopez · 9:42 a.m.");
     expect(plain(card(rows.pending, "es"))).toContain("Porque quien llamó dijo");
   });
 });
@@ -76,6 +77,7 @@ describe("SuggestionCard: the persona mark", () => {
   it("names the account's persona, never a hard-coded Sofía, in both languages", () => {
     expect(card(rows.pending, "en", { persona: "Ana" })).toMatch(/data-ai-mark[^>]*>Ana · AI</);
     expect(card(rows.pending, "es", { persona: "Ana" })).toMatch(/data-ai-mark[^>]*>Ana · IA</);
+    expect(card(rows.pending)).toContain(`class="${AI_MARK_CLASS}">Sofia · AI</span>`);
   });
 });
 
@@ -92,7 +94,9 @@ describe("SuggestionCard: the pseudo-locale", () => {
       const nodes = h.split(/<[^>]*>/).map((x) => x.trim()).filter(Boolean);
       const own = nodes.filter((x) => x !== TITLE && x !== rows[s].evidence);
       expect(own.length).toBeGreaterThan(3);
-      expect(own.filter((x) => !/[[\]ẊẋṾṿáéíóúÁÉÍÓÚ]/.test(x))).toEqual([]);
+      // The module's own marker (its [ ] wrapper or a pad word), never a bare accent: an accented specimen
+      // name would pass raw (Task 7 review I1), so the specimens are accent-free.
+      expect(own.filter((x) => !/[[\]]|Ẋẋ|Ṿṿ/.test(x))).toEqual([]);
     }
   });
 });

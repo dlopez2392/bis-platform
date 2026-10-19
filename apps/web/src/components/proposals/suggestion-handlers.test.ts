@@ -62,6 +62,16 @@ describe("runDecision", () => {
     expect(t.toast.error).not.toHaveBeenCalled();
   });
 
+  it("a second click on the same toast's Undo does nothing: undo runs once", async () => {
+    const { t, d, undo } = deps();
+    await runDecision(d);
+    t.clickUndo();
+    t.clickUndo();
+    await flush();
+    expect(undo).toHaveBeenCalledTimes(1);
+    expect(t.toast.success).toHaveBeenCalledTimes(2);
+  });
+
   it("an Undo the server refuses is toasted as an error with its own words", async () => {
     const { t, d } = deps({ undo: async () => ({ ok: false, error: "Too late to undo here. Change it by hand." }) });
     await runDecision(d);
