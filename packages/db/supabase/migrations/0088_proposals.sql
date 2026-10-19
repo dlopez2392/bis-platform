@@ -30,7 +30,17 @@
 -- still exists):
 --   1. drop trigger call_proposals_mirror on public.call_proposals;
 --      drop trigger call_proposals_guard on public.call_proposals;
---   2. insert into public.call_proposals (id, account_id, call_id, contact_id, kind, payload, evidence,
+--   2. update public.call_proposals c set
+--        status = case p.status when 'pending' then 'pending' when 'dismissed' then 'dismissed'
+--          when 'expired' then 'dismissed' else 'accepted' end,
+--        decided_at = case when p.status = 'pending' then null else p.decided_at end,
+--        decided_by = case when p.status = 'pending' then null else p.decided_by end
+--      from public.proposals p where p.id = c.id;
+--      (payload stays the proposed one: an edited Accept's applied form is lost to the old code.)
+--      UPDATE BEFORE INSERT: an old pending row the new code has since decided must leave pending
+--      first, or a generator-only pending row for the same call, kind and customer meets
+--      call_proposals_one_pending_unique on the insert.
+--   3. insert into public.call_proposals (id, account_id, call_id, contact_id, kind, payload, evidence,
 --        status, decided_at, decided_by, created_at)
 --      select p.id, p.account_id, p.call_id, p.contact_id, p.kind, p.payload, p.evidence,
 --        case p.status when 'pending' then 'pending' when 'dismissed' then 'dismissed'
@@ -39,13 +49,6 @@
 --        case when p.status = 'pending' then null else p.decided_by end, p.created_at
 --      from public.proposals p where p.source = 'call'
 --        and not exists (select 1 from public.call_proposals c where c.id = p.id);
---   3. update public.call_proposals c set
---        status = case p.status when 'pending' then 'pending' when 'dismissed' then 'dismissed'
---          when 'expired' then 'dismissed' else 'accepted' end,
---        decided_at = case when p.status = 'pending' then null else p.decided_at end,
---        decided_by = case when p.status = 'pending' then null else p.decided_by end
---      from public.proposals p where p.id = c.id;
---      (payload stays the proposed one: an edited Accept's applied form is lost to the old code.)
 --   4. optionally: drop table public.proposals; drop function app.copy_call_proposals();
 --      drop function app.mirror_call_proposal(); drop function app.guard_call_proposal();
 --      drop function app.proposals_proposed_is_fixed();

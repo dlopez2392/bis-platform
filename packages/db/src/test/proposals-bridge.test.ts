@@ -152,6 +152,18 @@ describe("0088: the copy (spec 4.6; seeded with the mirror and guard off, spec 8
       expect(await countIn(c, "proposals", [good, bad])).toBe(0);
     }));
 
+  // The post-check (spec 4.6 step 3). A mirrored row the new code then decided in proposals alone leaves
+  // the two tables with different statuses for one id; the insert skips it (on conflict), so only the
+  // post-check can see it. Triggers on throughout: nothing here is seeded around the mirror.
+  it("refuses, by name, when a copied id's status differs from its source (mutation: the post-check's `if` -> `if false` -> the copy returns normally -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const id = await cp(c, s.a.acct, s.a.call, s.a.contact);
+      expect((await c.query(NEW_ACCEPT, [id])).rowCount).toBe(1);
+      await expect(c.query("select app.copy_call_proposals()"))
+        .rejects.toMatchObject({ code: "P0001", message: expect.stringMatching(/^proposals_copy_mismatch: /) });
+    }));
+
   it("refuses a row whose contact belongs to another account, by name (mutation: drop the contact half of the pre-check -> FAILS)", () =>
     withRollback(async (c) => {
       await c.query(offSql);
