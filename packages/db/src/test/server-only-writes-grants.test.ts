@@ -83,6 +83,8 @@ const SERVER_ONLY = [
   { table: "messages", policy: "messages_member_read", fence: { name: "messages_technician_scope", cmd: "ALL" } },
   { table: "bookings", policy: "bookings_tenant_read", fence: { name: "bookings_technician_scope", cmd: "ALL" } },
   { table: "call_proposals", policy: "call_proposals_member_read", fence: { name: "call_proposals_technician_scope", cmd: "ALL" } },
+  // 0088: the one table for every AI suggestion. Its fence is FOR SELECT (there is no client write to fence).
+  { table: "proposals", policy: "proposals_member_read", fence: { name: "proposals_technician_scope", cmd: "SELECT" } },
 ] as const;
 
 describe("0053: server-only tables, at the catalogue", () => {
@@ -152,6 +154,8 @@ describe("0053: server-only tables, at the catalogue", () => {
 const READ_CASES = [
   ["events", "eventId"], ["form_submissions", "submissionId"], ["conversations", "conversationId"],
   ["messages", "messageId"], ["bookings", "bookingId"], ["call_proposals", "proposalId"],
+  // 0088's mirror makes the seeded call proposal's twin with the same id, so proposalId names both.
+  ["proposals", "proposalId"],
 ] as const;
 
 describe("0053: a member reads its own account's rows and never another account's (green before AND after)", () => {
@@ -215,6 +219,7 @@ describe("0053: a member of a real account is refused every write by privilege",
         ["conversations", "update conversations set unread_count = 0 where id = $1", [s.conversationId]],
         ["messages", "update messages set body = 'edited' where id = $1", [s.messageId]],
         ["call_proposals", "update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_x' where id = $1", [s.proposalId]],
+        ["proposals", "update proposals set status = 'accepted', decided_at = now(), decided_by = 'user_x', applied_payload = payload where id = $1", [s.proposalId]],
         ["contacts", "update contacts set reactivation_sent_at = null where id = $1", [s.contactId]],
         ["opportunities", "update opportunities set quote_followup_sent_at = null where id = $1", [s.opportunityId]],
         ["opportunities", "update opportunities set quote_followup_sms_failed_at = null where id = $1", [s.opportunityId]],
@@ -243,6 +248,8 @@ describe("0053: a member of a real account is refused every write by privilege",
         .toMatchObject(byPrivilege("events"));
       expect(await refused(c, "update call_proposals set status = 'dismissed', decided_at = now(), decided_by = 'u' where id = $1", [s.proposalId]))
         .toMatchObject(byPrivilege("call_proposals"));
+      expect(await refused(c, "update proposals set status = 'dismissed', decided_at = now(), decided_by = 'u' where id = $1", [s.proposalId]))
+        .toMatchObject(byPrivilege("proposals"));
     }));
 });
 
@@ -327,6 +334,37 @@ describe("0053: call_proposals_decision_complete", () => {
       expect(await ins("accepted", null, "user_x"), "decided, no time").toMatchObject(byCheck);
       expect(await ins("accepted", at, null), "decided, no decider").toMatchObject(byCheck);
       expect(await ins("accepted", at, " "), "decided, blank decider").toMatchObject(byCheck);
+      expect(await ins("pending", null, "user_x"), "pending, names a decider").toMatchObject(byCheck);
+      expect(await ins("pending", at, null), "pending, names a time").toMatchObject(byCheck);
+      expect(await ins("pending", at, "user_x"), "pending, names both").toMatchObject(byCheck);
+      expect(await ins("dismissed", at, "user_x"), "decided, names both").toBeNull();
+      expect(await ins("pending", null, null), "pending, names neither").toBeNull();
+    }));
+});
+
+describe("0088: proposals_decision_complete", () => {
+  // The twin of 0053's block above, on the new table: every condition has a case only it refuses, each on
+  // a call of its own (so proposals_one_pending_per_call never decides one), each matched on the
+  // constraint's NAME (the status and kind lists raise 23514 too). A decided row here is dismissed, so
+  // proposals_applied_when_accepted (applied_payload only when accepted or edited) is satisfied throughout.
+  it("a decided suggestion names its decider and time; a pending one names neither (mutation: drop the CHECK, or any one of its conditions -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c, "PCHK");
+      const { rows: [seeded] } = await c.query("select call_id from call_proposals where id = $1", [s.proposalId]);
+      const ins = async (status: string, at: string | null, by: string | null) => {
+        const { rows: [call] } = await c.query(
+          `insert into calls (account_id, phone_number_id)
+             select account_id, phone_number_id from calls where id = $1 returning id`, [seeded.call_id]);
+        return refused(c,
+          `insert into proposals (account_id, source, call_id, kind, payload, evidence, status, decided_at, decided_by, expires_at)
+             values ($1,'call',$2,'task','{}'::jsonb,'evidence',$3,$4,$5, now() + interval '30 days')`, [s.accountId, call.id, status, at, by]);
+      };
+      const byCheck = { code: "23514", message: expect.stringMatching(/proposals_decision_complete/) };
+      const at = "2026-10-19T00:00:00Z";
+      expect(await ins("dismissed", null, null), "decided, names neither").toMatchObject(byCheck);
+      expect(await ins("dismissed", null, "user_x"), "decided, no time").toMatchObject(byCheck);
+      expect(await ins("dismissed", at, null), "decided, no decider").toMatchObject(byCheck);
+      expect(await ins("dismissed", at, " "), "decided, blank decider").toMatchObject(byCheck);
       expect(await ins("pending", null, "user_x"), "pending, names a decider").toMatchObject(byCheck);
       expect(await ins("pending", at, null), "pending, names a time").toMatchObject(byCheck);
       expect(await ins("pending", at, "user_x"), "pending, names both").toMatchObject(byCheck);
