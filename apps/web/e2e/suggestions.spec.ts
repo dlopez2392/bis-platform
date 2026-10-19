@@ -278,7 +278,9 @@ test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one
   if (blankErr) throw new Error(`suggestions e2e: contact read failed: ${blankErr.message}`);
   expect((stillBlank as { phone: string | null }).phone).toBeNull();
 
-  await valueField.fill("899 000 0000");
+  // A number different from the suggested 899 000 0000: an edit that changes nothing is recorded as
+  // accepted, not edited (the orchestrator ruling in Task 5), so it would not prove the edited path.
+  await valueField.fill("899 000 1111");
   await phoneCard.getByRole("button", { name: m["suggestions.saveAccept"], exact: true }).click();
   // Edited, it leaves the tray; focus goes to the next card's Accept, never to <body> (design review
   // minor 5). The tray is newest first: stage, phone, to-do; the card after the phone is the to-do.
@@ -289,9 +291,9 @@ test("Edit and accept the phone: Esc cancels, a bad value is refused, a good one
   const { data: saved, error: savedErr } = await serviceDb()
     .from("contacts").select("phone").eq("account_id", accountId).eq("id", contactId).single();
   if (savedErr) throw new Error(`suggestions e2e: contact re-read failed: ${savedErr.message}`);
-  // What "899 000 0000" normalises to (packages/db's phoneFields, under its own tests) — typed out, not
+  // What "899 000 1111" normalises to (packages/db's phoneFields, under its own tests) — typed out, not
   // computed here from the function under test.
-  expect((saved as { phone: string | null }).phone).toBe("+528990000000");
+  expect((saved as { phone: string | null }).phone).toBe("+528990001111");
 });
 
 test("Discard the stage move, then Undo", async ({ page }) => {
