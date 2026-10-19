@@ -10,7 +10,7 @@ import { userDb, type SupabaseClient } from "@bis/db";
  *
  * Tables whose writes 0053 took from the client role (events,
  * conversations, messages, form_submissions, bookings, calendars' identity,
- * call_proposals decisions, the once-ever automation stamps) are written by
+ * suggestion decisions (proposals), the once-ever automation stamps) are written by
  * server code: a server action checks access with
  * requireAccountAccess(accountId), reads through this client where it needs
  * RLS to vouch for a row, and writes with serviceDb() scoped to that same

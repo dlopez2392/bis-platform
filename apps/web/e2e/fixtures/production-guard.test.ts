@@ -106,7 +106,7 @@ describe("live web unit tests refuse production", () => {
 
   it("finds the live files it exists to police (a scan that finds nothing proves nothing)", () => {
     expect(liveFiles.map((f) => f.rel)).toEqual(expect.arrayContaining([
-      "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/actions.test.ts",
+      "lib/proposals/decide.live.test.ts",
       "app/f/[publicId]/actions.returning-lead.test.ts",
     ]));
   });

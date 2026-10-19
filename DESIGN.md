@@ -129,6 +129,14 @@ they re-resolve against the accent each element inherits.
    writes, and the cards below keep their own. The drawer's header is the
    same view: Call is its one primary, and an inline form inside the
    drawer keeps its own.
+   A review stack is views stacked in a column (decided 2026-10-19, item
+   8b-1): each suggestion card on the call page and in the To do tray
+   decides one suggestion through its own action, so each carries its one
+   primary, Accept (Save and accept while editing). Two cards that propose
+   the same change are still two views: accepting one does not write the
+   other's change, it marks the other out of date with that reason in
+   words, so nothing is written twice. A flat suggestion row inside a record
+   card has no primary at all.
 9. Client-customer surfaces (booking page, forms, emails) always carry the
    client's logo + brand color from the theming engine. **Login is the one
    exception and carries the platform's mark and accent instead** — nobody is

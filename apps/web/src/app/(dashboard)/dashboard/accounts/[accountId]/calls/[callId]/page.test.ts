@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
-import type { CallDetailRow, CallProposal } from "@bis/db";
+import { makeTr } from "@/lib/record/copy";
+import type { CallDetailRow, Proposal } from "@bis/db";
 import { emptyCallState } from "@/lib/voice/call-state";
 import { composeSummary } from "@/lib/voice/summarize";
 
@@ -19,45 +20,54 @@ vi.mock("@/lib/auth", () => ({
   requireAccountAccess: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
 }));
 
-/** The proposals block's OWN read, `db.from("pipeline_stages")...` — a raw
- *  chain, same as the account-timezone lookup below, because there is no
- *  exported `@bis/db` accessor for "resolve these stage ids to names" and
- *  page.tsx follows the account-lookup's own existing precedent rather than
- *  reach into another agent's package for one. Bare, like
- *  `listFailedOutboundSmsMock` below it — every `render()` call sets its
- *  resolved value explicitly, so a test that says nothing about stages gets
- *  no rows back rather than a stale value left over from a previous test. */
-const pipelineStagesMock = vi.fn();
-/** Captures the `.eq(...)` call the raw chain's own args would otherwise
- *  swallow. RLS does not backstop this read on its own: the live policy is
- *  `app.is_agency() OR account_id = app.current_account_id()`, so for an
- *  agency session every tenant's stages are readable and there is no
- *  composite FK tying a proposal's account to its call — this `.eq` is the
- *  only thing standing there, and a mock whose `.eq()` ignores its
- *  arguments can never prove it is still called correctly. */
-const pipelineStagesEqMock = vi.fn();
-vi.mock("@/lib/db", () => ({
-  dbForRequest: async () => ({
-    from: (table: string) => {
-      if (table === "pipeline_stages") {
-        return {
-          select: () => ({
-            eq: (...eqArgs: unknown[]) => {
-              pipelineStagesEqMock(...eqArgs);
-              return { in: (...args: unknown[]) => pipelineStagesMock(...args) };
-            },
-          }),
-        };
-      }
-      return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: async () => ({ data: { timezone: "America/Chicago" }, error: null }),
-          }),
-        }),
-      };
-    },
-  }),
+/**
+ * The request client, as a recording two-account fake (item 8b-1, plan fix I-5). Every `from(table)`
+ * call logs its `.eq`/`.in`/`.limit` filters and answers rows FILTERED by them, so a read that drops
+ * its `.eq("account_id", …)` really does receive the other account's rows (same ids) and draws them:
+ * each read's case asserts both the filter and that only acct1's value reaches the render. RLS does not
+ * backstop these reads on its own (an agency session reads every tenant's rows).
+ */
+type FakeRow = Record<string, unknown>;
+type FakeQuery = { table: string; eq: [string, unknown][]; in: [string, unknown[]][]; limit: number | null };
+const fake = vi.hoisted(() => ({
+  tables: {} as Record<string, FakeRow[]>,
+  fail: new Set<string>(),
+  log: [] as FakeQuery[],
+}));
+const REQUEST = vi.hoisted(() => ({
+  from(table: string) {
+    const entry: FakeQuery = { table, eq: [], in: [], limit: null };
+    fake.log.push(entry);
+    const run = (): { data: FakeRow[] | null; error: { message: string } | null } => {
+      if (fake.fail.has(table)) return { data: null, error: { message: `permission denied for table ${table}` } };
+      const rows = (fake.tables[table] ?? [])
+        .filter((r) => entry.eq.every(([c, v]) => r[c] === v) && entry.in.every(([c, vs]) => vs.includes(r[c])));
+      return { data: entry.limit === null ? rows : rows.slice(0, entry.limit), error: null };
+    };
+    const q = {
+      select: () => q,
+      eq: (c: string, v: unknown) => { entry.eq.push([c, v]); return q; },
+      in: (c: string, vs: unknown[]) => { entry.in.push([c, vs]); return q; },
+      limit: (n: number) => { entry.limit = n; return q; },
+      order: () => q,
+      gt: () => q,
+      maybeSingle: async () => {
+        const r = run();
+        if (r.error) return r;
+        if (r.data!.length > 1) return { data: null, error: { message: "more than one row" } };
+        return { data: r.data![0] ?? null, error: null };
+      },
+      then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, ko),
+    };
+    return q;
+  },
+}));
+const readsOf = (table: string) => fake.log.filter((q) => q.table === table);
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
+/** The reader's own language (getPersonPrefs): the Suggestions section follows it, the page does not. */
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language, theme: null }),
 }));
 
 const getCallMock = vi.fn();
@@ -69,7 +79,10 @@ const getContactMock = vi.fn();
  *  before the card renders exactly what it rendered before. */
 const getCallCardMock = vi.fn();
 const getVoiceProfileMock = vi.fn();
+/** Decider names on decided suggestions (`users`, not account-scoped, capped at the ids asked). */
+const listPeopleNamesMock = vi.fn<(...a: unknown[]) => Promise<Record<string, string>>>(async () => ({}));
 vi.mock("@bis/db", () => ({
+  listPeopleNames: (...args: unknown[]) => listPeopleNamesMock(...args),
   getCallCard: (...args: unknown[]) => getCallCardMock(...args),
   getVoiceProfile: (...args: unknown[]) => getVoiceProfileMock(...args),
   getCall: (...args: unknown[]) => getCallMock(...args),
@@ -167,18 +180,29 @@ const WINDOW = {
 const TEXTBACK_STATUS_DOT =
   /<span\b[^>]*\bclass="(?=[^"]*\brounded-full\b)(?=[^"]*\bbg-destructive(?![\w/-]))[^"]*"/;
 
-/** `stageRows` defaults to none — only tests exercising an
- *  `opportunity_stage` proposal need to supply pipeline_stages fixture rows. */
+// Every test in this file starts from one account row per account and no other rows: a test that says
+// nothing about deals or stages gets none back, never a value left over from a previous test.
+beforeEach(() => {
+  fake.log.length = 0;
+  fake.fail.clear();
+  fake.tables = {
+    accounts: [
+      { id: "acct2", timezone: "Asia/Tokyo", language: "es" },
+      { id: "acct1", timezone: "America/Chicago", language: null },
+    ],
+  };
+  prefsFixture.language = null;
+  listPeopleNamesMock.mockReset().mockResolvedValue({});
+});
+
 function render(
   row: CallDetailRow | null,
   failed: (typeof FAILED_TEXTBACK)[] = [],
-  proposals: CallProposal[] = [],
-  stageRows: { id: string; name: string; position: number }[] = [],
+  proposals: Proposal[] = [],
 ) {
   getCallMock.mockResolvedValue(row);
   listFailedOutboundSmsMock.mockResolvedValue(failed);
   listProposalsForCallMock.mockResolvedValue(proposals);
-  pipelineStagesMock.mockResolvedValue({ data: stageRows, error: null });
   return CallDetailPage({
     params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
   }).then(renderToStaticMarkup);
@@ -194,7 +218,6 @@ describe("CallDetailPage", () => {
   beforeEach(() => {
     listFailedOutboundSmsMock.mockClear();
     listProposalsForCallMock.mockClear();
-    pipelineStagesMock.mockClear();
     // Review R3-M8: every existing case in this file exercises a contact who
     // CAN be texted, so the resend renders exactly as it did before that
     // review — only the new describe block below overrides these.
@@ -492,122 +515,162 @@ describe("CallDetailPage — the zone note", () => {
  * fetch, place and degrade; the per-proposal rendering itself (status chip,
  * plain language, evidence clamp, stage names) is `proposals.test.ts`'s job.
  */
-describe("CallDetailPage — proposals", () => {
-  const TASK_PROPOSAL: CallProposal = {
-    id: "prop1", accountId: "acct1", callId: "call1", contactId: "ct1",
-    kind: "task", payload: { title: "Call back about the quote", dueAt: null },
-    evidence: "Can you call me back about the quote tomorrow?",
-    status: "pending", decidedAt: null, decidedBy: null,
-    createdAt: "2026-08-25T19:16:00.000000+00:00",
+describe("CallDetailPage — the Suggestions section (item 8b-1)", () => {
+  const T = makeTr("en");
+  const base = {
+    accountId: "acct1", callId: "call1", contactId: "ct1", source: "call" as const,
+    evidenceRef: {}, evidenceLang: "en" as const, expiredReason: null, appliedPayload: null, appliedRef: null,
+    undoneAt: null, undoneBy: null, decidedAt: null, decidedBy: null,
+    createdAt: "2026-08-25T19:16:00.000000+00:00", expiresAt: "2099-01-01T00:00:00Z",
   };
-
-  const STAGE_PROPOSAL: CallProposal = {
-    id: "prop2", accountId: "acct1", callId: "call1", contactId: "ct1",
-    kind: "opportunity_stage",
-    payload: { opportunityId: "opp1", fromStageId: "stage-a", toStageId: "stage-b" },
-    evidence: "Let's move this one to won.",
-    status: "pending", decidedAt: null, decidedBy: null,
-    createdAt: "2026-08-25T19:16:00.000000+00:00",
+  const TASK: Proposal = {
+    ...base, id: "prop1", kind: "task", payload: { title: "Call back about the quote", dueAt: null },
+    evidence: "Can you call me back about the quote tomorrow?", status: "pending",
   };
+  const DECIDED: Proposal = {
+    ...base, id: "prop0", kind: "task", payload: { title: "Send the brochure", dueAt: null },
+    evidence: "Send me the brochure.", status: "accepted",
+    decidedAt: "2026-08-25T20:00:00Z", decidedBy: "user_ana",
+  };
+  const STAGE: Proposal = {
+    ...base, id: "prop2", kind: "opportunity_stage",
+    payload: { opportunityId: "opp1", fromStageId: "st-a", toStageId: "st-b" },
+    evidence: "Let's move this one along.", status: "pending",
+  };
+  /** Both accounts hold a deal and stages with the SAME ids; acct2's deal is listed first, so a read that
+   *  lost its account filter (and keeps its limit) draws acct2's, and acct2's stages come last, so a map
+   *  built last-wins draws theirs too. */
+  const stageTables = () => ({
+    opportunities: [
+      { id: "opp1", account_id: "acct2", pipeline_id: "pipe-2" },
+      { id: "opp1", account_id: "acct1", pipeline_id: "pipe-1" },
+    ],
+    pipeline_stages: [
+      { id: "st-a", account_id: "acct1", pipeline_id: "pipe-1", name: "New", position: 0 },
+      { id: "st-b", account_id: "acct1", pipeline_id: "pipe-1", name: "Quote sent", position: 1 },
+      { id: "st-c", account_id: "acct1", pipeline_id: "pipe-1", name: "Won", position: 2 },
+      { id: "st-a", account_id: "acct2", pipeline_id: "pipe-1", name: "Other Co stage", position: 0 },
+      { id: "st-b", account_id: "acct2", pipeline_id: "pipe-1", name: "Other Co stage", position: 1 },
+      { id: "st-x", account_id: "acct2", pipeline_id: "pipe-2", name: "Other Co stage", position: 0 },
+    ],
+  });
+  const cards = (html: string) => [...html.matchAll(/data-suggestion="([^"]+)"/g)].map((x) => x[1]);
 
-  beforeEach(() => {
-    pipelineStagesEqMock.mockClear();
+  it("renders a card per row, pending first, under the section's heading and the call page's #call-proposals anchor", async () => {
+    const html = await render(CALL, [], [DECIDED, TASK]);
+    expect(cards(html)).toEqual(["prop1", "prop0"]);
+    expect(html).toContain('id="call-proposals"');
+    expect(renderedText(html)).toContain(T.text("suggestions.heading"));
+    expect(renderedText(html)).toContain("Can you call me back about the quote tomorrow?");
+    expect(html).toContain(">Accept<");
   });
 
-  /**
-   * RLS does NOT backstop this on its own — the live policy is
-   * `app.is_agency() OR account_id = app.current_account_id()`, so for an
-   * agency session every tenant's pipeline_stages rows are readable, and
-   * there is no composite FK tying a proposal's account to its call. The
-   * `.eq("account_id", accountId)` in page.tsx is the only thing standing
-   * there.
-   */
-  it("scopes the raw pipeline_stages read to the page's own account (mutation: drop .eq(\"account_id\", accountId) from the stage lookup -> FAILS)", async () => {
-    await render(
-      CALL, [], [STAGE_PROPOSAL],
-      [
-        { id: "stage-a", name: "Contacted", position: 1 },
-        { id: "stage-b", name: "Won", position: 2 },
-      ],
-    );
-    expect(pipelineStagesEqMock).toHaveBeenCalledWith("account_id", "acct1");
-  });
-
-  it("renders no proposals section at all when the call has none", async () => {
-    const html = await render(CALL, [], []);
-    expect(renderedText(html)).not.toContain(m["proposals.heading"]);
-  });
-
-  it("places the proposals section between the summary and the transcript when there are pending ones", async () => {
-    const html = await render(CALL, [], [TASK_PROPOSAL]);
-    const text = renderedText(html);
+  it("sits between the summary and the transcript", async () => {
+    const text = renderedText(await render(CALL, [], [TASK]));
     const summaryAt = text.indexOf(m["calls.detail.summary"]);
-    const proposalsAt = text.indexOf(m["proposals.heading"]);
-    const transcriptAt = text.indexOf(m["calls.detail.transcript"]);
+    const sectionAt = text.indexOf(T.text("suggestions.heading"));
     expect(summaryAt).toBeGreaterThanOrEqual(0);
-    expect(proposalsAt).toBeGreaterThan(summaryAt);
-    expect(transcriptAt).toBeGreaterThan(proposalsAt);
-    // The evidence itself, quoted, reads against the transcript a few
-    // inches below it — the whole reason this section sits where it does.
-    expect(text).toContain("Can you call me back about the quote tomorrow?");
+    expect(sectionAt).toBeGreaterThan(summaryAt);
+    expect(text.indexOf(m["calls.detail.transcript"])).toBeGreaterThan(sectionAt);
   });
 
-  /**
-   * The read is best-effort (page.tsx:90-100's own text-back panel is the
-   * precedent this mirrors): a blown-up proposals read must degrade this
-   * ONE block to absent, never take the call record down.
-   * Mutation: delete the try/catch around the proposals read in page.tsx ->
-   * FAILS (the whole page throws instead of rendering the Transcript).
-   */
-  it("still renders the call when the proposals read blows up", async () => {
-    // Bypasses the `render()` helper on purpose — it unconditionally sets
-    // `listProposalsForCallMock` to a RESOLVED value on every call, which
-    // would stomp the rejection this test needs. Same reason the sibling
-    // text-back-blows-up test above bypasses it too.
+  it("renders no section at all when the call has none", async () => {
+    const html = await render(CALL, [], []);
+    expect(renderedText(html)).not.toContain(T.text("suggestions.heading"));
+    expect(html).not.toContain("data-suggestion");
+  });
+
+  it("a failed read renders the section's error state and the rest of the page (rule 5; mutation: swallow to [] -> FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     getCallMock.mockResolvedValue(CALL);
     listFailedOutboundSmsMock.mockResolvedValue([]);
-    listProposalsForCallMock.mockRejectedValue(new Error("permission denied for table call_proposals"));
-
-    const html = await CallDetailPage({
-      params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
-    }).then(renderToStaticMarkup);
-
-    expect(html).toContain("Transcript");
+    listProposalsForCallMock.mockRejectedValue(new Error("permission denied for table proposals"));
+    const html = await CallDetailPage({ params: Promise.resolve({ accountId: "acct1", callId: "call1" }) })
+      .then(renderToStaticMarkup);
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
     expect(html).toContain("I need a roof inspection.");
-    expect(renderedText(html)).not.toContain(m["proposals.heading"]);
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("suggestions read failed"));
     spy.mockRestore();
   });
 
-  /**
-   * The two reads (`listProposalsForCall`, then — only when an
-   * opportunity_stage proposal needs one — the raw `pipeline_stages` name
-   * lookup) are ONE best-effort unit, per page.tsx's own comment: a failure
-   * in EITHER degrades the WHOLE block to absent. `if (error) throw` on the
-   * stage read is what makes that true; replacing it with `void error`
-   * would let the stage read's error pass in silence while the unrelated
-   * TASK proposal in the same batch kept rendering.
-   */
-  it("degrades the WHOLE proposals block to absent when the pipeline_stages read itself errors (mutation: replace `if (error) throw` with `void error` on the stage read -> FAILS)", async () => {
+  it("the failed read's log line goes through loggableError: an address in the error never reaches the log (mutation: String(e) -> FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     getCallMock.mockResolvedValue(CALL);
     listFailedOutboundSmsMock.mockResolvedValue([]);
-    listProposalsForCallMock.mockResolvedValue([TASK_PROPOSAL, STAGE_PROPOSAL]);
-    pipelineStagesMock.mockResolvedValue({
-      data: null, error: { message: "permission denied for table pipeline_stages" },
-    });
-
-    const html = await CallDetailPage({
-      params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
-    }).then(renderToStaticMarkup);
-
-    expect(html).toContain("Transcript");
-    // The WHOLE section is gone — including the unrelated TASK proposal —
-    // not just the one stage entry the failed lookup could not resolve.
-    expect(renderedText(html)).not.toContain(m["proposals.heading"]);
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    listProposalsForCallMock.mockRejectedValue(new Error("row for ana.caller@example.com refused"));
+    await CallDetailPage({ params: Promise.resolve({ accountId: "acct1", callId: "call1" }) }).then(renderToStaticMarkup);
+    const line = spy.mock.calls.map((a) => String(a[0])).find((l) => l.includes("suggestions read failed")) ?? "";
+    expect(line).toContain("Error: row for [email] refused");
+    expect(line).not.toContain("ana.caller@example.com");
     spy.mockRestore();
+  });
+
+  it("a failed stage read is the section's error state too, never a card it cannot name", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fake.tables = { ...fake.tables, ...stageTables() };
+    fake.fail.add("pipeline_stages");
+    const html = await render(CALL, [], [TASK, STAGE]);
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
+    expect(html).not.toContain("data-suggestion=");
+    expect(html).toContain("I need a roof inspection.");
+    spy.mockRestore();
+  });
+
+  it("a Spanish reader gets the section in Spanish while the page title stays English (spec 4.5)", async () => {
+    prefsFixture.language = "es";
+    const html = await render(CALL, [], [TASK]);
+    const text = renderedText(html);
+    expect(text).toContain("Sugerencias");
+    expect(html).toContain('lang="es"');
+    expect(text).toContain(m["calls.detail.title"]);
+    expect(text).toContain(m["calls.detail.transcript"]);
+  });
+
+  it("the deals read: this account's deals only, for exactly the rows' deal ids (mutation: drop its account filter -> FAILS)", async () => {
+    fake.tables = { ...fake.tables, ...stageTables() };
+    const html = await render(CALL, [], [STAGE]);
+    const [deals] = readsOf("opportunities");
+    expect(deals?.eq).toContainEqual(["account_id", "acct1"]);
+    expect(deals?.in).toEqual([["id", ["opp1"]]]);
+    expect(deals?.limit).toBe(1);
+    expect(renderedText(html)).toContain(T.text("suggestions.stage", { from: "New", to: "Quote sent" }));
+    expect(html).not.toContain("Other Co stage");
+  });
+
+  it("the stages read: this account's stages only, the whole pipeline of each deal (mutation: drop its account filter -> FAILS)", async () => {
+    fake.tables = { ...fake.tables, ...stageTables() };
+    const html = await render(CALL, [], [STAGE]);
+    const [stages] = readsOf("pipeline_stages");
+    expect(stages?.eq).toContainEqual(["account_id", "acct1"]);
+    expect(stages?.in).toEqual([["pipeline_id", ["pipe-1"]]]);
+    expect(stages?.limit).toBe(500);
+    expect(renderedText(html)).toContain(T.text("suggestions.stage", { from: "New", to: "Quote sent" }));
+    expect(html).not.toContain("Other Co stage");
+  });
+
+  it("no stage suggestion reads no deals and no stages", async () => {
+    await render(CALL, [], [TASK]);
+    expect(readsOf("opportunities")).toEqual([]);
+    expect(readsOf("pipeline_stages")).toEqual([]);
+  });
+
+  it("names the decider from one listPeopleNames read for exactly the decided rows' ids", async () => {
+    listPeopleNamesMock.mockResolvedValue({ user_ana: "Ana Ruiz" });
+    const html = await render(CALL, [], [DECIDED, TASK]);
+    expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
+    expect(listPeopleNamesMock).toHaveBeenCalledWith(REQUEST, ["user_ana"]);
+    expect(renderedText(html)).toContain("Accepted by Ana Ruiz");
+  });
+
+  it("the source label names this call's own day and caller", async () => {
+    const html = await render(CALL, [], [TASK]);
+    expect(renderedText(html)).toContain("From the call on Tue, Aug 25 · Ana Reyes");
+  });
+
+  it("marks the cards with the account's persona", async () => {
+    getVoiceProfileMock.mockResolvedValue({ persona_name: "Lupe" });
+    const html = await render(CALL, [], [TASK]);
+    expect(renderedText(html)).toContain("Lupe · AI");
   });
 });
 

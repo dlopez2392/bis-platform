@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { bucketWork, type BucketedWork } from "./buckets";
-import type { WorkRow, CallProposal } from "@bis/db";
+import type { WorkRow, Proposal } from "@bis/db";
 
 const task = (id: string, dueAt: string | null, occurredAt = "2026-09-01T00:00:00Z"): WorkRow => ({
   id: `task:${id}`, source: "task", accountId: "a", contactId: null,
@@ -95,19 +95,20 @@ describe("bucketWork", () => {
 // fourth key." A proposal is a QUESTION about work, not work — it must never
 // be capable of landing in Overdue/Today/Waiting, not merely by convention
 // but by the type system, the same way Important 5 in
-// call-proposals.test.ts pins a kind/payload mismatch as unrepresentable at
+// proposals.test.ts pins a kind/payload mismatch as unrepresentable at
 // `insertProposal`'s own call site rather than only on a standalone type.
 // Never called; only `tsc --noEmit` exercises it.
 //
 // Proved live (this task's report): widening `BucketedWork`'s array element
-// type to `(WorkRow | CallProposal)[]` makes the `@ts-expect-error` below
+// type to `(WorkRow | Proposal)[]` makes the `@ts-expect-error` below
 // unused — `tsc --noEmit` then reports TS2578 on this exact line — turning
 // this compile-time guard red BY NAME. Restoring `BucketedWork`'s real type
 // (WorkRow[] on every key) makes the mismatch a real error again, which is
 // what the directive is there to expect.
-export function _typeOnly_bucketedWorkCannotHoldAProposal(b: BucketedWork, p: CallProposal): void {
-  // @ts-expect-error a CallProposal is not a WorkRow (no `source`, `title`,
-  // `dueAt` or `occurredAt`) — pushing one into a bucket's own array cannot
+export function _typeOnly_bucketedWorkCannotHoldAProposal(b: BucketedWork, p: Proposal): void {
+  // @ts-expect-error a Proposal is not a WorkRow (no `title`, `dueAt` or
+  // `occurredAt`; since 0088 it has a `source`, but "call", which is no
+  // `WorkSource`) — pushing one into a bucket's own array cannot
   // typecheck, which is what keeps a proposal out of Overdue/Today/Waiting
   // structurally, not just by convention.
   b.waiting.push(p);

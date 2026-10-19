@@ -57,7 +57,7 @@ const DEFAULT_CONTACT_SENTINEL = "00000000-0000-0000-0000-000000000000";
 
 /**
  * Enforces the LIVE partial unique index
- * (`call_proposals_one_pending_unique`, 0040_call_proposals.sql):
+ * (`proposals_one_pending_per_call`, 0088_proposals.sql):
  * `(call_id, kind, coalesce(contact_id, sentinel)) where status='pending'`.
  * The original fake had no such thing and let every insert "succeed",
  * which is exactly why `generate.test.ts:138`'s old cap test asserted a
@@ -72,7 +72,7 @@ function fakeDb() {
   // proposals writes nothing to `tasks`, `contacts` or `opportunities`" —
   // had NOTHING checking it, because the original `from: () => ({ … })`
   // ignored the table-name argument entirely and could not tell
-  // `from("call_proposals")` from `from("tasks")`. `tablesTouched` records
+  // `from("proposals")` from `from("tasks")`. `tablesTouched` records
   // every table name the generator ever asks `db.from()` for, in call
   // order, so a test can assert the whole list rather than trust that only
   // the one branch it's looking at ran.
@@ -147,6 +147,8 @@ const base = {
   accountId: "acct", callId: "call1", contactId: null,
   outcome: "lead" as const, transcript, handoffRequested: false,
   now: NOW, timezone: "America/Chicago",
+  // The call's spoken language (finishCall's `spokenLanguage`); it becomes evidence_lang.
+  language: "en" as "en" | "es",
   // Default is "nothing is blank" — matching `contactId: null` above, no
   // test below is exercising the contact_field boundary unless it opts in
   // by overriding this.
@@ -247,6 +249,11 @@ describe("generateProposals", () => {
       // qualifier outside the excerpt would be invisible to the reviewer.
       evidence: "I need a quote for a dining table. Call me Tuesday morning.",
       payload: { title: "Send a dining table quote", dueAt: null },
+      source: "call",
+      evidence_ref: { turn: 1, at: "2026-09-18T12:00:00.000Z" },
+      evidence_lang: "en",
+      // base.now (2026-09-18T13:00:00.000Z) plus 30 days, typed out.
+      expires_at: "2026-10-18T13:00:00.000Z",
     });
   });
 
@@ -257,7 +264,7 @@ describe("generateProposals", () => {
   // `from: () => ({ … })` discarded its table-name argument, so a mutation
   // that ALSO wrote a real row to `tasks` after every successful insert left
   // every test in this file green, including this one's neighbors above.
-  it("touches call_proposals and NO OTHER TABLE (mutation: also insert a row into \"tasks\" after a successful proposal -> FAILS)", async () => {
+  it("touches proposals and NO OTHER TABLE (mutation: also insert a row into \"tasks\" after a successful proposal -> FAILS)", async () => {
     const db = fakeDb();
     const n = await generateProposals({
       ...base, db, contactId: "contact-1",
@@ -267,7 +274,55 @@ describe("generateProposals", () => {
       }),
     });
     expect(n).toBe(1);
-    expect(db.tablesTouched).toEqual(["call_proposals"]);
+    expect(db.tablesTouched).toEqual(["proposals"]);
+  });
+
+  // Item 8b-1 (plan Task 4, deviations 5 and 6): the row says which turn grounds it and in which
+  // language the call was spoken, so the card can mark the evidence's `lang` and point at the turn.
+  it("stores the caller's turn index and the call's language: a Spanish call's row has evidence_lang 'es' and evidence_ref {turn, at} of the grounded turn (mutation: store evidenceLang \"en\" always -> FAILS; store turn: 0 -> FAILS)", async () => {
+    const db = fakeDb();
+    const spanish: TranscriptEvent[] = [
+      { role: "assistant", text: "Gracias por llamar. ¿En qué le ayudo?", at: "2026-09-18T12:00:00.000Z" },
+      { role: "caller", text: "Necesito una cotización para una mesa de comedor.", at: "2026-09-18T12:00:07.000Z" },
+    ];
+    const n = await generateProposals({
+      ...base, db, language: "es", transcript: spanish,
+      fetchImpl: modelReturning({
+        proposals: [{ kind: "task", title: "Send a dining table quote", dueAt: null,
+                      evidence: "una cotización para una mesa" }],
+      }),
+    });
+    expect(n).toBe(1);
+    expect(db.rows[0].evidence_lang).toBe("es");
+    expect(db.rows[0].evidence_ref).toEqual({ turn: 1, at: "2026-09-18T12:00:07.000Z" });
+    expect(db.rows[0].evidence).toBe("Necesito una cotización para una mesa de comedor.");
+  });
+
+  // Task 4 fix round (Minor 2): the same for the other two kinds, each its own branch in generate.ts.
+  it("a Spanish call's contact-field and stage-move rows carry evidence_lang 'es' and their own turn (mutation: evidenceLang \"en\" in either branch -> FAILS)", async () => {
+    const db = fakeDb();
+    const spanish: TranscriptEvent[] = [
+      { role: "assistant", text: "Gracias por llamar. ¿En qué le ayudo?", at: "2026-09-18T12:00:00.000Z" },
+      { role: "caller", text: "Mi correo es sam arroba example punto com.", at: "2026-09-18T12:00:04.000Z" },
+      { role: "assistant", text: "Perfecto, ¿algo más?", at: "2026-09-18T12:00:08.000Z" },
+      { role: "caller", text: "Sí, ya hablamos con su equipo la semana pasada.", at: "2026-09-18T12:00:12.000Z" },
+    ];
+    const n = await generateProposals({
+      ...base, db, language: "es", transcript: spanish, contactId: "c1",
+      blankFields: ["email"], openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [
+          { kind: "contact_field", field: "email", value: "sam@example.com", evidence: "mi correo es sam arroba example" },
+          { kind: "opportunity_stage", toStage: "Contacted", evidence: "ya hablamos con su equipo" },
+        ],
+      }),
+    });
+    expect(n).toBe(2);
+    const byKind = Object.fromEntries(db.rows.map((r: any) => [r.kind, r]));
+    expect(byKind.contact_field.evidence_lang).toBe("es");
+    expect(byKind.contact_field.evidence_ref).toEqual({ turn: 1, at: "2026-09-18T12:00:04.000Z" });
+    expect(byKind.opportunity_stage.evidence_lang).toBe("es");
+    expect(byKind.opportunity_stage.evidence_ref).toEqual({ turn: 3, at: "2026-09-18T12:00:12.000Z" });
   });
 
   // THE CENTRAL SAFETY PROPERTY. A model that invents a quote must produce
@@ -386,6 +441,11 @@ describe("generateProposals", () => {
       kind: "contact_field",
       evidence: "My email is sam at example dot com.",
       payload: { field: "email", value: "sam@example.com" },
+      source: "call",
+      evidence_ref: { turn: 1, at: "2026-09-18T12:00:00.000Z" },
+      evidence_lang: "en",
+      // base.now (2026-09-18T13:00:00.000Z) plus 30 days, typed out.
+      expires_at: "2026-10-18T13:00:00.000Z",
     });
   });
 
@@ -1080,6 +1140,11 @@ describe("generateProposals — opportunity_stage", () => {
       kind: "opportunity_stage",
       evidence: "I need a quote for a dining table. Call me Tuesday morning.",
       payload: { opportunityId: "o1", fromStageId: "s1", toStageId: "s2" },
+      source: "call",
+      evidence_ref: { turn: 1, at: "2026-09-18T12:00:00.000Z" },
+      evidence_lang: "en",
+      // base.now (2026-09-18T13:00:00.000Z) plus 30 days, typed out.
+      expires_at: "2026-10-18T13:00:00.000Z",
     });
   });
 
@@ -1354,12 +1419,15 @@ describe("generateProposals — no callback suggestion beside a callback To do",
     expect(db.rows[0].payload.title).toBe("Call Ana back about the dining table");
   });
 
-  it("each dropped title is logged once, by its title only (mutation: drop the log → FAILS)", async () => {
+  // The title is the caller's own words read back by the model (a name, an address), so the line names the
+  // call only (final review M-4): the call id is enough to find the call and read the title there.
+  it("each dropped suggestion is logged once, by the call id only, never its title (mutation: drop the log → FAILS; log the title → FAILS)", async () => {
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
     await generateProposals({ ...base, db: fakeDb(), contactId: "c1", callbackTodo: true,
       fetchImpl: modelReturning({ proposals: [callback, quote] }) });
     const lines = info.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("callback To do"));
-    expect(lines).toEqual([`generateProposals: dropped "Call Ana back about the dining table" for call call1: the callback To do already exists`]);
+    expect(lines).toEqual(["generateProposals: dropped a callback suggestion for call call1: the callback To do already exists"]);
+    expect(info.mock.calls.map((c) => String(c[0])).some((l) => l.includes("dining table"))).toBe(false);
   });
 
   it("the model is told, only when the To do exists (mutation: always say it → FAILS; never → FAILS)", async () => {

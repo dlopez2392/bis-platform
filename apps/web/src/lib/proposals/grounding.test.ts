@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groundedEvidence } from "./grounding";
+import { groundedEvidence, groundedTurn } from "./grounding";
 import type { TranscriptEvent } from "@bis/db";
 
 const t = (role: "caller" | "assistant", text: string): TranscriptEvent =>
@@ -173,5 +173,80 @@ describe("groundedEvidence", () => {
     expect(groundedEvidence("I don’t need a quote for a dining table", negated)).toBe(
       "I don't need a quote for a dining table right now.",
     );
+  });
+});
+
+// Item 8b-1 (plan Task 4, deviation 5): the generator stores WHERE the evidence came from, so the turn
+// itself is returned beside its text. groundedEvidence is now groundedTurn(...)?.text.
+describe("groundedTurn", () => {
+  const at = (role: "caller" | "assistant", text: string, when: string): TranscriptEvent => ({ role, text, at: when });
+
+  it("returns the LAST matching caller turn's text, index and at (mutation: findIndex for findLastIndex -> FAILS)", () => {
+    const transcript = [
+      at("assistant", "Thanks for calling. How can I help?", "2026-09-18T12:00:00.000Z"),
+      at("caller", "I need a quote for a dining table.", "2026-09-18T12:00:05.000Z"),
+      at("assistant", "Sure, anything else?", "2026-09-18T12:00:09.000Z"),
+      at("caller", "Yes, I need a quote for a dining table and chairs.", "2026-09-18T12:00:14.000Z"),
+    ];
+    expect(groundedTurn("need a quote for a dining table", transcript)).toEqual({
+      text: "Yes, I need a quote for a dining table and chairs.", index: 3, at: "2026-09-18T12:00:14.000Z",
+    });
+  });
+
+  it("returns null where groundedEvidence does", () => {
+    const transcript = [t("caller", "I need a quote for a dining table.")];
+    expect(groundedTurn("Call me Thursday morning", transcript)).toBeNull();
+    expect(groundedTurn("call me", transcript)).toBeNull();
+  });
+
+  // Parity with 0088's evidence CHECK, `length(btrim(evidence)) > 0`: btrim strips only ASCII
+  // spaces, so the database ACCEPTS a tab-only or NBSP-only string. Nothing this matcher returns is
+  // ever such a string, because the needle must hold three runs of letters or digits and the turn
+  // must contain it. Dropping the word floor would let an empty needle match the last caller turn,
+  // here a tab-only one, which the CHECK would then store as evidence.
+  it("never grounds on whitespace of any class, so it never hands the database a blank the CHECK lets through (mutation: drop the word floor -> FAILS)", () => {
+    const blankTurns = [t("caller", "I need a quote for a dining table."), t("caller", "\u00a0\n"), t("caller", "\t\t")];
+    for (const quote of ["", "   ", "\t", "\t \n", "\u00a0", "\u2003\u00a0"]) {
+      expect(groundedTurn(quote, blankTurns)).toBeNull();
+    }
+  });
+
+  // Every existing groundedEvidence case above, through groundedTurn: the text is the same turn, typed
+  // out, and groundedEvidence answers exactly that text.
+  it("groundedEvidence equals groundedTurn(...)?.text for every existing case (mutation: return the needle -> FAILS)", () => {
+    const base = [
+      t("assistant", "Thanks for calling 956 Woodworks. How can I help?"),
+      t("caller", "I need a quote for a dining table. Call me Tuesday morning."),
+    ];
+    const cases: [string, TranscriptEvent[], string | null][] = [
+      ["Call me Tuesday morning", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["  call me TUESDAY morning  ", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["call me tuesday morning", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["need a quote for a dining table", [t("caller", "I don't need a quote for a dining table right now.")], "I don't need a quote for a dining table right now."],
+      ["Call me Thursday morning", base, null],
+      ["How can I help? I need a quote", base, null],
+      ["table. Call me Tuesday", [t("caller", "I need a quote for a dining table."), t("caller", "Call me Tuesday morning.")], null],
+      ["", base, null],
+      ["   ", base, null],
+      ["call me Tuesday", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["call me", base, null],
+      ["Call me Tuesday morning", [], null],
+      ["Thanks for calling 956 Woodworks", base, null],
+      ["Call   me\n Tuesday   morning", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["need a quote for a dining table", [
+        t("caller", "I don't need a quote for a dining table."), t("assistant", "No problem, anything else?"),
+        t("caller", "Actually, yes, I need a quote for a dining table after all."),
+      ], "Actually, yes, I need a quote for a dining table after all."],
+      ["Call me Tuesday morning", [t("caller", "  I need a quote for a dining table. Call me Tuesday morning.  ")], "  I need a quote for a dining table. Call me Tuesday morning.  "],
+      ["Yes — Tuesday", [t("caller", "Yes — Tuesday works for me.")], null],
+      ["walk-in appointment", [t("caller", "I'd like a walk-in appointment please.")], "I'd like a walk-in appointment please."],
+      ['"Call me Tuesday morning"', base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["...call me Tuesday morning", base, "I need a quote for a dining table. Call me Tuesday morning."],
+      ["I don’t need a quote for a dining table", [t("caller", "I don't need a quote for a dining table right now.")], "I don't need a quote for a dining table right now."],
+    ];
+    for (const [quote, transcript, want] of cases) {
+      expect(groundedTurn(quote, transcript)?.text ?? null, quote).toBe(want);
+      expect(groundedEvidence(quote, transcript), quote).toBe(want);
+    }
   });
 });

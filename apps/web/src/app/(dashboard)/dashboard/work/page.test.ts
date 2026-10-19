@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow, CallProposal } from "@bis/db";
+import type { AgencyWorkRow, Proposal } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
+import { makeTr } from "@/lib/record/copy";
 
 // This is the first screen whose whole purpose is to span every account
 // (task-6-brief.md), and the boundary — requireAgency() on the very first
@@ -23,9 +24,9 @@ const countLinesTurningCallersAwayMock = vi.fn<
 >(async () => 0);
 // Work Queue Task 10's own read — defaults to [] (no suggestions section)
 // so every pre-existing case below is unaffected by its addition. Real
-// signature read from packages/db/src/call-proposals.ts.
+// signature read from packages/db/src/proposals.ts.
 const listPendingProposalsForAgencyMock = vi.fn(
-  async (): Promise<(CallProposal & { brandName: string })[]> => [],
+  async (): Promise<(Proposal & { brandName: string })[]> => [],
 );
 // The stale-usage banner's read (client billing) — defaults to [] (no
 // banner) so every case above is unaffected. Real signature:
@@ -73,15 +74,16 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   };
 }
 
-function proposal(overrides: Partial<CallProposal & { brandName: string }> = {}): CallProposal & { brandName: string } {
+function proposal(overrides: Partial<Proposal & { brandName: string }> = {}): Proposal & { brandName: string } {
   return {
     id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
     brandName: "Rio Roofing",
     ...overrides,
-  } as CallProposal & { brandName: string };
+  } as Proposal & { brandName: string };
 }
 
 describe("AgencyWorkPage", () => {
@@ -234,7 +236,7 @@ describe("AgencyWorkPage", () => {
   //
   // Fix-wave (task-10-brief.md, Important 2): the prior version only
   // grepped the waiting section for the proposal's own
-  // `payload.title`/`evidence` strings, which a bare `CallProposal` folded
+  // `payload.title`/`evidence` strings, which a bare `Proposal` folded
   // into `buckets.waiting` never carries into `primaryLabel` (`row.source`
   // is `undefined` there, so it falls through to the generic
   // `m["work.booking"]` label) — a real phantom row could ship with every
@@ -260,7 +262,7 @@ describe("AgencyWorkPage", () => {
   it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAgencyWorkMock.mockResolvedValueOnce([row()]);
-    listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table call_proposals"));
+    listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table proposals"));
 
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
@@ -315,7 +317,7 @@ describe("AgencyWorkPage", () => {
     expect(html).not.toContain(m["work.empty"]);
     expect(html).toContain(m["proposals.work.heading"]);
     expect(html).toContain(
-      m["proposals.stage.label"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
+      m["suggestions.stage"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
     );
     expect(html).toContain("move this to booked now");
     // ONE batched read — not one per proposal, not one per account.
@@ -337,7 +339,7 @@ describe("AgencyWorkPage", () => {
 
     expect(html).not.toContain(m["work.empty"]);
     expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(m["proposals.stage.unresolved"]);
+    expect(renderedText(html)).toContain(makeTr("en").text("suggestions.stage.unresolved"));
     expect(html).not.toContain("stage_1");
     expect(html).not.toContain("stage_2");
     spy.mockRestore();

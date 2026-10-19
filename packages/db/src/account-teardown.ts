@@ -21,6 +21,8 @@ export const ACCOUNT_OWNED_TABLES = [
   // Item 8a-1 (0086): the AI ledger and the account's AI settings (both cascade too; spec 3.3 lists them).
   "ai_ledger", "account_ai_settings",
   "site_traffic_breakdown", "site_traffic_daily", "sites",
+  // Item 8b-1 (0088): AI suggestions, before calls (call_id and contact_id cascade too; spec 4.1 lists it).
+  "proposals",
   "calls", "bookings", "calendars", "events",
   "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
@@ -59,16 +61,16 @@ export const ACCOUNT_OWNED_TABLES = [
  * `account_billing.plan_id` and `billing_links.plan_id` are both `restrict`
  * toward it, not toward the account.)
  *
- * `call_proposals` (0040) is ALSO not on that list, but for a different
- * reason, and it needs no `account_id`-cascade proof of its own: `call_id`
- * is `not null … on delete cascade`, and `calls` IS on `ACCOUNT_OWNED_TABLES`
- * above and is deleted long before `accounts` itself. So by the time this
- * function ever reaches the `accounts` row, every `call_proposals` row that
- * pointed at one of this account's calls is already gone via `call_id`'s
- * cascade — `account_id`'s own `on delete cascade` is a backstop for a direct
- * `accounts` delete (e.g. from the Studio UI), not the mechanism this
- * function exercises. `call-proposals-grants.test.ts` proves the row is gone
- * after teardown without assuming which FK did it.
+ * `call_proposals` (0040) stays OFF that list until 0089 drops the table,
+ * and it needs no `account_id`-cascade proof of its own: `call_id` is
+ * `not null … on delete cascade`, and `calls` IS on `ACCOUNT_OWNED_TABLES`
+ * above, so its rows ride `calls`' cascade long before `accounts` itself is
+ * reached (`account_id`'s own cascade is a backstop for a direct `accounts`
+ * delete). `call-proposals-grants.test.ts` proves the row is gone after
+ * teardown without assuming which FK did it. Its successor `proposals`
+ * (0088) is ON the list, directly before `calls`: it cascades with its call
+ * and its contact too, but listed, every caller of this list deletes it
+ * explicitly and reports its error by name (spec 4.1 names it).
  *
  * `consent_events` (0054) is off this list for a DIFFERENT, load-bearing
  * reason: it is NOT derived or scratch state — it is the append-only

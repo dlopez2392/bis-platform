@@ -1,5 +1,6 @@
 import { insertProposal, type CallOutcome, type TranscriptEvent, type serviceDb } from "@bis/db";
-import { groundedEvidence } from "./grounding";
+import { proposalExpiresAt } from "@bis/db/proposal-rules";
+import { groundedTurn } from "./grounding";
 import { callIsEligible } from "./eligibility";
 import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
@@ -9,7 +10,7 @@ import { aiSafeError } from "@/lib/ai/log";
 /**
  * At most three per call — a per-call BUDGET SHARED ACROSS KINDS, not three
  * of one kind. The live partial unique index
- * (`call_proposals_one_pending_unique`, 0040_call_proposals.sql) is keyed on
+ * (`proposals_one_pending_per_call`, 0088_proposals.sql) is keyed on
  * `(call_id, kind, coalesce(contact_id, sentinel))`, and every proposal this
  * generator writes for one call shares that call's id AND that call's one
  * contact — so the second and third proposal OF THE SAME KIND for that
@@ -32,9 +33,10 @@ const MAX_PER_CALL = 3;
  * proposal here would be a silent drop of the caller's actual request.
  *
  * Shared with `contact_field`'s `value` for the identical reason (fix-wave
- * Minor): that value lands on the same review card `proposals.tsx`
- * interpolates straight into its sentence, so an unclamped 5,000-character
- * value is the same defect as an unclamped title, not a new one.
+ * Minor): that value lands on the same suggestion card
+ * (`components/proposals/suggestion-card.tsx`), straight inside its
+ * sentence, so an unclamped 5,000-character value is the same defect as an
+ * unclamped title, not a new one.
  */
 const MAX_TITLE_LEN = 200;
 
@@ -232,11 +234,10 @@ function asRawProposal(v: unknown): RawProposal | null {
  * CallDetailRow`) — that cast is exactly what a future caller does, so this
  * function cannot assume the type-checker already made the input safe.
  *
- * `accountId` and `callId` are independent parameters with no
- * composite-FK check tying `(account_id, call_id)` together (see
- * `insertProposal`'s own doc in `@bis/db`'s `call-proposals.ts`) — a caller
- * that mismatches them writes a real, RLS-visible row, carrying a verbatim
- * caller quote, to the wrong account.
+ * `accountId` and `callId` must belong together. 0088's composite FK
+ * `(account_id, call_id) -> calls (account_id, id)` refuses a mismatched pair
+ * (see `insertProposal`'s own doc in `@bis/db`'s `proposals.ts`): the
+ * suggestion is lost and logged as a fault, never written to the wrong account.
  */
 export async function generateProposals(input: {
   // Not `SupabaseClient` from `@supabase/supabase-js` directly: apps/web has
@@ -292,6 +293,10 @@ export async function generateProposals(input: {
    *  the model alongside `now` so "the account's own time zone" in the
    *  prompt names something real, not a placeholder. */
   timezone: string;
+  /** The call's spoken language: `finishCall`'s `spokenLanguage`, the same value it writes to
+   *  `calls.language` ("computed once, read twice"). Stored as each row's `evidence_lang`, since the
+   *  evidence is the caller's own words in that language. */
+  language: "en" | "es";
   fetchImpl?: typeof fetch;
 }): Promise<number> {
   let written = 0;
@@ -344,7 +349,7 @@ export async function generateProposals(input: {
       // ceiling on how many elements the model's own `proposals` array
       // can contain before the loop below even starts counting attempts
       // — a flood of UNGROUNDED proposals still costs a full
-      // `groundedEvidence` scan per element (measured: 5,000 elements
+      // `groundedTurn` scan per element (measured: 5,000 elements
       // against a 120-turn transcript, 565ms). Three short task
       // proposals fit comfortably inside this; a runaway array does not.
       maxTokens: 2000,
@@ -436,15 +441,17 @@ export async function generateProposals(input: {
           storedValue = value.toLowerCase();
         }
 
-        const grounded = groundedEvidence(evidence, input.transcript);
-        if (grounded === null) continue;
+        const turn = groundedTurn(evidence, input.transcript);
+        if (turn === null) continue;
         // Same budget as `task` below: this counts as an ATTEMPT the moment
         // it reaches the database, win or lose (MAX_PER_CALL's own doc — the
         // cap is on attempts considered, shared across kinds, not per kind).
         attempts++;
         const created = await insertProposal(input.db, input.accountId, {
           callId: input.callId, contactId: input.contactId, kind: "contact_field",
-          payload: { field, value: storedValue }, evidence: grounded,
+          payload: { field, value: storedValue }, evidence: turn.text,
+          evidenceRef: { turn: turn.index, at: turn.at }, evidenceLang: input.language,
+          expiresAt: proposalExpiresAt(input.now),
         });
         if (created) written++;
         continue;
@@ -508,8 +515,8 @@ export async function generateProposals(input: {
         // `contact_field`'s own `!input.contactId` refusal above, this
         // generator's other kind that writes a `contact_id`.
         if (!input.contactId) continue;
-        const grounded = groundedEvidence(evidence, input.transcript);
-        if (grounded === null) continue;
+        const turn = groundedTurn(evidence, input.transcript);
+        if (turn === null) continue;
         // Same budget as the other two kinds: an ATTEMPT the moment it
         // reaches the database, win or lose (MAX_PER_CALL's own doc — the
         // cap is on attempts considered, shared across kinds).
@@ -520,7 +527,9 @@ export async function generateProposals(input: {
           // and so the accept path (actions.ts) can refuse a proposal whose
           // starting point has since changed underneath it.
           payload: { opportunityId: opp.id, fromStageId: current.id, toStageId: target.id },
-          evidence: grounded,
+          evidence: turn.text,
+          evidenceRef: { turn: turn.index, at: turn.at }, evidenceLang: input.language,
+          expiresAt: proposalExpiresAt(input.now),
         });
         if (created) written++;
         continue;
@@ -536,13 +545,14 @@ export async function generateProposals(input: {
       // isCallbackTitle). Before `attempts++`: a dropped duplicate must not
       // spend a slot a real proposal could use.
       if (input.callbackTodo && isCallbackTitle(title)) {
-        // One info line per drop, the title only: a dropped suggestion is
-        // otherwise invisible, and a matcher that drops a real task has to
-        // be findable from the logs.
-        console.log(`generateProposals: dropped "${title}" for call ${input.callId}: the callback To do already exists`);
+        // One info line per drop, by the call id only: a dropped suggestion
+        // is otherwise invisible, and a matcher that drops a real task has to
+        // be findable from the logs. Never the title: it is the caller's own
+        // words read back by the model (final review M-4).
+        console.log(`generateProposals: dropped a callback suggestion for call ${input.callId}: the callback To do already exists`);
         continue;
       }
-      // THE BOUNDARY, and note WHAT IS STORED. `groundedEvidence` returns the
+      // THE BOUNDARY, and note WHAT IS STORED. `groundedTurn` returns the
       // caller's WHOLE TURN, not the model's excerpt of it, and that turn is
       // what the reviewer sees.
       //
@@ -555,8 +565,8 @@ export async function generateProposals(input: {
       // corner. Storing the turn also ends a second divergence: matching
       // normalises case and whitespace, so the model's excerpt could differ
       // from the transcript printed directly above it.
-      const grounded = groundedEvidence(evidence, input.transcript);
-      if (grounded === null) continue;
+      const turn = groundedTurn(evidence, input.transcript);
+      if (turn === null) continue;
       // Reject, never store, free text: a `dueAt` that does not parse would
       // reach the accept path as garbage a task write cannot use. Stored as
       // null instead of dropping the whole proposal — the caller's request
@@ -594,7 +604,9 @@ export async function generateProposals(input: {
       attempts++;
       const created = await insertProposal(input.db, input.accountId, {
         callId: input.callId, contactId: input.contactId, kind: "task",
-        payload: { title, dueAt }, evidence: grounded,
+        payload: { title, dueAt }, evidence: turn.text,
+        evidenceRef: { turn: turn.index, at: turn.at }, evidenceLang: input.language,
+        expiresAt: proposalExpiresAt(input.now),
       });
       if (created) written++;
     }

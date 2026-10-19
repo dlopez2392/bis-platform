@@ -1,4 +1,5 @@
 import { aiAuthorMark } from "@/lib/voice/provenance";
+import { AI_MARK_CLASS } from "@/components/ai-mark";
 
 /**
  * DESIGN.md's author mark for the receptionist's work ("Sofía · AI",
@@ -11,7 +12,7 @@ export function AiAuthorMark({ personaName }: { personaName?: string | null }) {
   return (
     <span
       data-ai-mark
-      className="inline-flex shrink-0 items-center rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-1.5 text-[10px] leading-4 font-medium text-[var(--chip-text)]"
+      className={AI_MARK_CLASS}
     >
       {aiAuthorMark(personaName)}
     </span>

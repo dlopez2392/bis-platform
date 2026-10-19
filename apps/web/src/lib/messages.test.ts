@@ -928,3 +928,63 @@ describe("item 8a-2: the record summary's copy (spec 4.6, 4.8, 3.6)", () => {
     for (const s of es) expect(s).not.toMatch(/\b(escribe|intenta|recarga|tu|tus|contigo)\b/i);
   });
 });
+
+describe("suggestions.* keys (item 8b-1)", () => {
+  const KEYS = [
+    "suggestions.heading", "suggestions.subhead", "suggestions.cap", "suggestions.loadFailed",
+    "suggestions.loading", "suggestions.source.call", "suggestions.source.callNoName", "suggestions.evidence",
+    "suggestions.status.pending", "suggestions.status.accepted", "suggestions.status.edited",
+    "suggestions.status.dismissed", "suggestions.status.expired",
+    "suggestions.decided.accepted", "suggestions.decided.edited", "suggestions.decided.dismissed", "suggestions.decided.expired",
+    "suggestions.decided.acceptedByYou", "suggestions.decided.editedByYou", "suggestions.decided.dismissedByYou",
+    "suggestions.accept", "suggestions.editAccept", "suggestions.discard", "suggestions.saveAccept", "suggestions.cancel",
+    "suggestions.task", "suggestions.due", "suggestions.wasDue", "suggestions.field",
+    "suggestions.field.firstName", "suggestions.field.lastName", "suggestions.field.email", "suggestions.field.phone",
+    "suggestions.stage", "suggestions.stage.skipped", "suggestions.stage.skippedOne", "suggestions.stage.unresolved",
+    "suggestions.toast.task", "suggestions.toast.field", "suggestions.toast.stage", "suggestions.toast.dismissed",
+    "suggestions.undone", "suggestions.undoneDuplicate",
+    "suggestions.answer.unavailable", "suggestions.answer.answeredBy", "suggestions.answer.answeredBySomeone",
+    "suggestions.answer.pastDue", "suggestions.answer.maybeFailed", "suggestions.answer.failed",
+    "suggestions.answer.tooLate", "suggestions.answer.changed", "suggestions.answer.undoStranded",
+    "suggestions.out.field_filled", "suggestions.out.name_mismatch", "suggestions.out.deal_moved",
+    "suggestions.out.deal_closed", "suggestions.out.deal_gone", "suggestions.out.aged", "suggestions.out.superseded",
+    "suggestions.reason.field_filled", "suggestions.reason.name_mismatch", "suggestions.reason.deal_moved",
+    "suggestions.reason.deal_closed", "suggestions.reason.deal_gone", "suggestions.reason.aged", "suggestions.reason.superseded",
+    "suggestions.edit.title", "suggestions.edit.due", "suggestions.edit.stage",
+    "suggestions.edit.titleRequired", "suggestions.edit.titleTooLong", "suggestions.edit.dueInvalid",
+    "suggestions.edit.valueRequired", "suggestions.edit.phoneInvalid", "suggestions.edit.emailInvalid",
+    "suggestions.edit.stageInvalid",
+  ] as const;
+  it("every key has a Spanish twin that differs from the English (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const missing = KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`]);
+    expect(missing).toEqual([]);
+  });
+  it("pins the spec's own sentences, both languages (mutation: change one word -> FAILS)", () => {
+    expect([m["suggestions.heading"], m["suggestions.heading.es"]]).toEqual(["Suggestions", "Sugerencias"]);
+    expect([m["suggestions.subhead"], m["suggestions.subhead.es"]]).toEqual([
+      "From {persona}. Nothing changes until you accept.", "De {persona}. Nada cambia hasta que usted acepte."]);
+    expect([m["suggestions.answer.answeredBy"], m["suggestions.answer.answeredBy.es"]]).toEqual([
+      "{name} already answered this one.", "{name} ya respondió esta."]);
+    expect([m["suggestions.answer.pastDue"], m["suggestions.answer.pastDue.es"]]).toEqual([
+      "Its due date has passed. Use Edit and accept to pick a new one.",
+      "Su fecha ya pasó. Use Editar y aceptar para elegir otra."]);
+    expect([m["suggestions.out.aged"], m["suggestions.out.aged.es"]]).toEqual([
+      "Out of date: this suggestion is more than 30 days old.", "Ya no aplica: esta sugerencia tiene más de 30 días."]);
+    expect([m["suggestions.answer.undoStranded"], m["suggestions.answer.undoStranded.es"]]).toEqual([
+      "The change was undone, but this suggestion didn't update. Refresh before doing anything else.",
+      "El cambio se deshizo, pero esta sugerencia no se actualizó. Actualice la página antes de hacer otra cosa."]);
+  });
+  it("a decision the reader made reads you, lower case mid-sentence, in both languages (Task 7 review I3)", () => {
+    expect([m["suggestions.decided.acceptedByYou"], m["suggestions.decided.acceptedByYou.es"],
+      m["suggestions.decided.editedByYou"], m["suggestions.decided.editedByYou.es"],
+      m["suggestions.decided.dismissedByYou"], m["suggestions.decided.dismissedByYou.es"]]).toEqual([
+      "Accepted by you · {time}", "Aceptada por usted · {time}", "Edited by you · {time}", "Editada por usted · {time}",
+      "Discarded by you · {time}", "Descartada por usted · {time}"]);
+  });
+  it("no plumbing words reach the reader (mutation: write 'proposal' into one key -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const bad = KEYS.flatMap((k) => [cat[k], cat[`${k}.es`]]).filter((s) => /proposal|payload|model|registry|token/i.test(s ?? ""));
+    expect(bad).toEqual([]);
+  });
+});

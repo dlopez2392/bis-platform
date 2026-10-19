@@ -3189,102 +3189,12 @@ export const m = {
   "work.usageStale.many": "Usage for {n} clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes.",
   "work.usageStale.action": "Check the Stripe connection",
 
-  // Call proposals — a finished call's machine-suggested next step. Nothing
-  // in this namespace commits anything until a human accepts it (Task 6's
-  // acceptProposal/dismissProposal).
-  "proposals.heading": "Suggested next steps",
-  "proposals.subhead": "From this call. Nothing happens until you accept.",
-  "proposals.evidence": "Because the caller said",
-  "proposals.accept": "Accept",
-  "proposals.dismiss": "Dismiss",
-  "proposals.status.pending": "Suggested",
-  "proposals.status.accepted": "Accepted",
-  "proposals.status.dismissed": "Dismissed",
-  "proposals.accepted.toast": "Added to your to-do list",
-  "proposals.dismissed.toast": "Dismissed",
-  "proposals.gone": "Someone already answered this one.",
-  "proposals.contactFilled":
-    "That detail was already filled in, so nothing was changed.",
-  "proposals.contactMismatch":
-    "That doesn't match the name already on file, so nothing was changed.",
-  "proposals.opportunityGone":
-    "This opportunity isn't on the board anymore, so nothing was changed.",
-  "proposals.stageMoved":
-    "This opportunity has moved since the suggestion was made, so nothing was changed.",
-  // Distinct from "proposals.stageMoved" on purpose (fix-wave Important 4):
-  // a deal a human already marked won or lost did not merely move to
-  // another stage — closing it is the fact that changed, and telling the
-  // reviewer it "moved" would be false.
-  "proposals.opportunityClosed":
-    "This opportunity has been closed since the suggestion was made, so nothing was changed.",
-  "proposals.failed": "That didn't go through. Try again.",
-  // The write itself may have landed before the failure — reverting the
-  // proposal here would invite a retry that creates a SECOND record, so it
-  // is left accepted and this says so honestly instead of promising a
-  // clean retry the way "proposals.failed" does.
-  "proposals.maybeFailed": "That may not have gone through. Check before trying again.",
+  // The agency Work page's read-only Suggestions section (item 8b-1): the one reader left in this
+  // namespace. Every other proposals.* key went with the old call-page block (final review: zero
+  // readers); the card's words are suggestions.*. The section has no decision of its own, so acting
+  // means opening the account, where each suggestion is a card.
   "proposals.work.heading": "Suggestions",
-  // Fix-wave (task-10-brief.md, Minor): the old copy ("Questions about
-  // work, not work yet.") restated the engineering invariant instead of
-  // telling the agency what to do — this screen has no accept/dismiss of
-  // its own, so acting means opening the account, which the old copy never
-  // said. "proposals.subhead" (the call-detail page's own sibling copy) is
-  // the concrete version this one now matches.
-  "proposals.work.body": "Open the account to accept or dismiss. Nothing changes from this screen.",
-  // Fix-wave Important 3 (task-11-brief): the per-account "To do" screen's
-  // own twin of "proposals.work.body" — a reader here is already INSIDE the
-  // account, so "open the account" would be nonsense; the next step is
-  // opening the call itself, exactly where every row on this section links.
-  "proposals.account.body": "Open the call to accept or dismiss. Nothing changes from this screen.",
-
-  // Per-kind plain-language sentences for the call-detail proposals block
-  // (Task 7). "{title}"/"{value}" are the house untrusted-placeholder shape —
-  // filled with a `.replace(..., () => x)` call, never the two-argument
-  // form, because both originate in a caller's own words read back by the
-  // model. "{field}" is filled from this app's own static field labels
-  // (contacts.firstName etc.), not the caller — safe either way.
-  "proposals.task.label": "Add a task: {title}",
-  // Fix-wave Important 1: rendered only for a `task` proposal that survived
-  // `generate.ts`'s own forward-window check — a `dueAt` reaching this label
-  // is always a real, near-future moment a human can see BEFORE accepting
-  // it, in the account's own zone, never the raw UTC instant.
-  "proposals.task.due": "Due {date}",
-  "proposals.contactField.label": "Add their {field}: {value}",
-  // "{from}"/"{to}" are stage NAMES, resolved from the payload's uuids
-  // before this ever reaches copy — never the destination alone.
-  "proposals.stage.label": "Move from {from} to {to}",
-  // No stage is skipped silently: a bypass of even ONE stage speaks up, not
-  // just a bypass of two or more — a customer who books on the first call
-  // skips exactly one ("Contacted") and is the single most likely case this
-  // feature will ever produce. Split singular/plural rather than
-  // interpolating a count into a sentence that would read "1 stages".
-  "proposals.stage.skip.one": "A stage is skipped in between.",
-  "proposals.stage.skip.many": "{n} stages are skipped in between.",
-  // Fix-wave (task-10-brief.md, Important 1): the agency work queue's own
-  // opportunity_stage proposals resolve `fromStageId`/`toStageId` against a
-  // batched read (work/page.tsx) that can come back short for one specific
-  // pair — a real fault, or a stage since deleted. Never the raw uuid, never
-  // the destination alone (this file's own rule for the kind), but the row
-  // still shows: an honest sentence that names no stage, rather than
-  // dropping the row and leaving the queue looking clear when it is not.
-  // Fix-wave Minor: past tense ("moved") asserted something that had not
-  // happened — nothing moves until a human accepts, and every sibling label
-  // in this namespace ("Add a task…", "Add their…", "Move from…") is
-  // imperative. Rewritten to match, without changing what it is honestly
-  // able to say (page.tsx's own batched pipeline_stages read came back short
-  // for this one pair). No apostrophe on purpose: several call sites still
-  // compare raw `renderToStaticMarkup` output rather than decoded text, and
-  // React escapes an apostrophe to `&#x27;` in that output.
-  "proposals.stage.unresolved": "Review the stage change on this opportunity.",
-  // "proposals.accepted.toast" ("Added to your to-do list") is true only of
-  // a `task` proposal — accepting the other two kinds doesn't add anything
-  // to a to-do list, and reporting that it did would be exactly the false
-  // confirmation copy the "landscaper at 7am" read rules out.
-  // "Saved" named nothing — the sibling toast it was modelled on names its
-  // own destination. "Moved on the board" used a word this product never
-  // uses; the nav item and the screen title both say "Opportunities".
-  "proposals.accepted.contactField.toast": "Added to the contact.",
-  "proposals.accepted.stage.toast": "Moved in Opportunities",
+  "proposals.work.body": "Open the account to accept or discard. Nothing changes from this screen.",
 
   // Agency Plans page (/dashboard/plans), client billing rollout step 1.
   // Agency-only screen (requireAgency); the env-var names in the
@@ -5047,6 +4957,167 @@ export const m = {
   "record.ai.writing.es": "Escribiendo el resumen…",
   "aiSettings.summariesToday": "{count} of {cap} customer summaries written today",
   "aiSettings.summariesToday.es": "{count} de {cap} resúmenes de clientes escritos hoy",
+
+  // Item 8b-1: the suggestion card, the tray and every answer a decision gives (spec 4.5, 4.7, 7).
+  "suggestions.heading": "Suggestions",
+  "suggestions.heading.es": "Sugerencias",
+  "suggestions.subhead": "From {persona}. Nothing changes until you accept.",
+  "suggestions.subhead.es": "De {persona}. Nada cambia hasta que usted acepte.",
+  "suggestions.cap": "Showing the newest {n}.",
+  "suggestions.cap.es": "Se muestran las {n} más recientes.",
+  "suggestions.loadFailed": "Couldn't load suggestions.",
+  "suggestions.loadFailed.es": "No se pudieron cargar las sugerencias.",
+  "suggestions.loading": "Loading suggestions…",
+  "suggestions.loading.es": "Cargando sugerencias…",
+  "suggestions.source.call": "From the call on {date} · {caller}",
+  "suggestions.source.call.es": "De la llamada del {date} · {caller}",
+  "suggestions.source.callNoName": "From the call on {date}",
+  "suggestions.source.callNoName.es": "De la llamada del {date}",
+  "suggestions.evidence": "Because the caller said",
+  "suggestions.evidence.es": "Porque quien llamó dijo",
+  "suggestions.status.pending": "Suggested",
+  "suggestions.status.pending.es": "Sugerida",
+  "suggestions.status.accepted": "Accepted",
+  "suggestions.status.accepted.es": "Aceptada",
+  "suggestions.status.edited": "Edited",
+  "suggestions.status.edited.es": "Editada",
+  "suggestions.status.dismissed": "Discarded",
+  "suggestions.status.dismissed.es": "Descartada",
+  "suggestions.status.expired": "Out of date",
+  "suggestions.status.expired.es": "Ya no aplica",
+  "suggestions.decided.accepted": "Accepted by {name} · {time}",
+  "suggestions.decided.accepted.es": "Aceptada por {name} · {time}",
+  "suggestions.decided.edited": "Edited by {name} · {time}",
+  "suggestions.decided.edited.es": "Editada por {name} · {time}",
+  "suggestions.decided.dismissed": "Discarded by {name} · {time}",
+  "suggestions.decided.dismissed.es": "Descartada por {name} · {time}",
+  "suggestions.decided.expired": "Marked out of date · {time}",
+  "suggestions.decided.expired.es": "Se marcó que ya no aplica · {time}",
+  // The unnamed decider inside a decided line ("Discarded by someone on the team"): lowercase, because
+  // it is mid-sentence. The standalone author mark keeps assign.someone's capital (DESIGN.md, Provenance).
+  "suggestions.decided.someone": "someone on the team",
+  "suggestions.decided.someone.es": "alguien del equipo",
+  "suggestions.decided.acceptedByYou": "Accepted by you · {time}",
+  "suggestions.decided.acceptedByYou.es": "Aceptada por usted · {time}",
+  "suggestions.decided.editedByYou": "Edited by you · {time}",
+  "suggestions.decided.editedByYou.es": "Editada por usted · {time}",
+  "suggestions.decided.dismissedByYou": "Discarded by you · {time}",
+  "suggestions.decided.dismissedByYou.es": "Descartada por usted · {time}",
+  "suggestions.accept": "Accept",
+  "suggestions.accept.es": "Aceptar",
+  "suggestions.editAccept": "Edit and accept",
+  "suggestions.editAccept.es": "Editar y aceptar",
+  "suggestions.discard": "Discard",
+  "suggestions.discard.es": "Descartar",
+  "suggestions.saveAccept": "Save and accept",
+  "suggestions.saveAccept.es": "Guardar y aceptar",
+  "suggestions.cancel": "Cancel",
+  "suggestions.cancel.es": "Cancelar",
+  "suggestions.task": "Add a to-do: {title}",
+  "suggestions.task.es": "Agregar un pendiente: {title}",
+  "suggestions.due": "Due {date}",
+  "suggestions.due.es": "Vence el {date}",
+  "suggestions.wasDue": "Was due {date}",
+  "suggestions.wasDue.es": "Vencía el {date}",
+  "suggestions.field": "{field}: (empty) → {value}",
+  "suggestions.field.es": "{field}: (vacío) → {value}",
+  // What a screen reader hears in place of the drawn arrow in "{field}: (empty) → {value}".
+  "suggestions.field.arrow": "to",
+  "suggestions.field.arrow.es": "a",
+  "suggestions.field.firstName": "First name",
+  "suggestions.field.firstName.es": "Nombre",
+  "suggestions.field.lastName": "Last name",
+  "suggestions.field.lastName.es": "Apellido",
+  "suggestions.field.email": "Email",
+  "suggestions.field.email.es": "Correo",
+  "suggestions.field.phone": "Phone",
+  "suggestions.field.phone.es": "Teléfono",
+  "suggestions.stage": "Move from {from} to {to}",
+  "suggestions.stage.es": "Mover de {from} a {to}",
+  "suggestions.stage.skipped": "{count} stages are skipped in between.",
+  "suggestions.stage.skipped.es": "Se saltan {count} etapas.",
+  "suggestions.stage.skippedOne": "A stage is skipped in between.",
+  "suggestions.stage.skippedOne.es": "Se salta una etapa.",
+  "suggestions.stage.unresolved": "Review the stage change on this deal.",
+  "suggestions.stage.unresolved.es": "Revise el cambio de etapa de esta oportunidad.",
+  "suggestions.toast.task": "Added to your to-do list",
+  "suggestions.toast.task.es": "Agregado a sus pendientes",
+  "suggestions.toast.field": "{field} saved",
+  "suggestions.toast.field.es": "{field} guardado",
+  "suggestions.toast.stage": "Moved to {stage}",
+  "suggestions.toast.stage.es": "Movido a {stage}",
+  "suggestions.toast.dismissed": "Discarded",
+  "suggestions.toast.dismissed.es": "Descartada",
+  "suggestions.undone": "Undone.",
+  "suggestions.undone.es": "Se deshizo.",
+  "suggestions.undoneDuplicate": "Undone. The possible duplicate it found is still in Duplicates.",
+  "suggestions.undoneDuplicate.es": "Se deshizo. El posible duplicado que encontró sigue en Duplicados.",
+  "suggestions.answer.unavailable": "This suggestion isn't available.",
+  "suggestions.answer.unavailable.es": "Esta sugerencia no está disponible.",
+  "suggestions.answer.answeredBy": "{name} already answered this one.",
+  "suggestions.answer.answeredBy.es": "{name} ya respondió esta.",
+  "suggestions.answer.answeredBySomeone": "Someone on the team already answered this one.",
+  "suggestions.answer.answeredBySomeone.es": "Alguien del equipo ya respondió esta.",
+  "suggestions.answer.pastDue": "Its due date has passed. Use Edit and accept to pick a new one.",
+  "suggestions.answer.pastDue.es": "Su fecha ya pasó. Use Editar y aceptar para elegir otra.",
+  "suggestions.answer.maybeFailed": "That may not have gone through. Check before trying again.",
+  "suggestions.answer.maybeFailed.es": "Puede que no se haya guardado. Revise antes de intentarlo otra vez.",
+  "suggestions.answer.failed": "That didn't go through. Try again.",
+  "suggestions.answer.failed.es": "No se guardó. Inténtelo otra vez.",
+  "suggestions.answer.tooLate": "Too late to undo here. Change it by hand.",
+  "suggestions.answer.tooLate.es": "Ya no se puede deshacer aquí. Cámbielo a mano.",
+  "suggestions.answer.changed": "It has changed since. Change it by hand.",
+  "suggestions.answer.changed.es": "Cambió desde entonces. Cámbielo a mano.",
+  "suggestions.answer.undoStranded": "The change was undone, but this suggestion didn't update. Refresh before doing anything else.",
+  "suggestions.answer.undoStranded.es": "El cambio se deshizo, pero esta sugerencia no se actualizó. Actualice la página antes de hacer otra cosa.",
+  "suggestions.out.field_filled": "Out of date: the {field} was filled in since.",
+  "suggestions.out.field_filled.es": "Ya no aplica: el {field} se llenó después.",
+  "suggestions.out.name_mismatch": "Out of date: the name on file doesn't match this caller.",
+  "suggestions.out.name_mismatch.es": "Ya no aplica: el nombre registrado no coincide con quien llamó.",
+  "suggestions.out.deal_moved": "Out of date: this deal has moved since.",
+  "suggestions.out.deal_moved.es": "Ya no aplica: esta oportunidad cambió de etapa.",
+  "suggestions.out.deal_closed": "Out of date: this deal has been closed.",
+  "suggestions.out.deal_closed.es": "Ya no aplica: esta oportunidad se cerró.",
+  "suggestions.out.deal_gone": "Out of date: this deal was deleted.",
+  "suggestions.out.deal_gone.es": "Ya no aplica: esta oportunidad se eliminó.",
+  "suggestions.out.aged": "Out of date: this suggestion is more than 30 days old.",
+  "suggestions.out.aged.es": "Ya no aplica: esta sugerencia tiene más de 30 días.",
+  "suggestions.out.superseded": "Out of date: another suggestion covered this.",
+  "suggestions.out.superseded.es": "Ya no aplica: otra sugerencia ya lo cubrió.",
+  "suggestions.reason.field_filled": "The {field} was filled in since.",
+  "suggestions.reason.field_filled.es": "El {field} se llenó después.",
+  "suggestions.reason.name_mismatch": "The name on file doesn't match this caller.",
+  "suggestions.reason.name_mismatch.es": "El nombre registrado no coincide con quien llamó.",
+  "suggestions.reason.deal_moved": "This deal has moved since.",
+  "suggestions.reason.deal_moved.es": "Esta oportunidad cambió de etapa.",
+  "suggestions.reason.deal_closed": "This deal has been closed.",
+  "suggestions.reason.deal_closed.es": "Esta oportunidad se cerró.",
+  "suggestions.reason.deal_gone": "This deal was deleted.",
+  "suggestions.reason.deal_gone.es": "Esta oportunidad se eliminó.",
+  "suggestions.reason.aged": "More than 30 days old.",
+  "suggestions.reason.aged.es": "Tiene más de 30 días.",
+  "suggestions.reason.superseded": "Another suggestion covered this.",
+  "suggestions.reason.superseded.es": "Otra sugerencia ya lo cubrió.",
+  "suggestions.edit.title": "Title",
+  "suggestions.edit.title.es": "Título",
+  "suggestions.edit.due": "Due date",
+  "suggestions.edit.due.es": "Fecha",
+  "suggestions.edit.stage": "Stage",
+  "suggestions.edit.stage.es": "Etapa",
+  "suggestions.edit.titleRequired": "Write a title.",
+  "suggestions.edit.titleRequired.es": "Escriba un título.",
+  "suggestions.edit.titleTooLong": "Keep the title under 200 characters.",
+  "suggestions.edit.titleTooLong.es": "Use menos de 200 caracteres en el título.",
+  "suggestions.edit.dueInvalid": "Pick a date from today to a year from now.",
+  "suggestions.edit.dueInvalid.es": "Elija una fecha entre hoy y dentro de un año.",
+  "suggestions.edit.valueRequired": "Write a value.",
+  "suggestions.edit.valueRequired.es": "Escriba un valor.",
+  "suggestions.edit.phoneInvalid": "That doesn't look like a phone number.",
+  "suggestions.edit.phoneInvalid.es": "Eso no parece un número de teléfono.",
+  "suggestions.edit.emailInvalid": "That doesn't look like an email address.",
+  "suggestions.edit.emailInvalid.es": "Eso no parece un correo electrónico.",
+  "suggestions.edit.stageInvalid": "Pick a later stage that isn't the last one.",
+  "suggestions.edit.stageInvalid.es": "Elija una etapa posterior que no sea la última.",
 } as const;
 
 export type MessageKey = keyof typeof m;

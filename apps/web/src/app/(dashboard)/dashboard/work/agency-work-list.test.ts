@@ -1,10 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AgencyWorkRow, CallProposal } from "@bis/db";
+import type { AgencyWorkRow, Proposal } from "@bis/db";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
-import type { ResolvedStage } from "../accounts/[accountId]/calls/[callId]/proposals";
 import { m } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
+import { renderedText } from "@/lib/rendered-text";
+
+/** The registry's words, as the agency page draws them (English: an operator reads this page). */
+const T = makeTr("en");
 import { visibleAgencyBuckets, AgencyWorkList, type AgencyProposal } from "./agency-work-list";
 
 /** Flips `formatDateInZone` (and ONLY that export) into throwing a
@@ -41,6 +45,7 @@ function proposal(overrides: Partial<AgencyProposal> = {}): AgencyProposal {
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
     brandName: "Rio Roofing", timezone: "America/Chicago",
     ...overrides,
   } as AgencyProposal;
@@ -50,7 +55,7 @@ function renderList(
   b: AgencyBucketedWork,
   contactNames: Record<string, string> = {},
   proposals: AgencyProposal[] = [],
-  stageNames: Record<string, ResolvedStage> = {},
+  stageNames: Record<string, { name: string; position: number }> = {},
 ) {
   return renderToStaticMarkup(
     createElement(AgencyWorkList, { buckets: b, contactNames, proposals, stageNames }),
@@ -273,7 +278,7 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
   //
   // Fix-wave (task-10-brief.md, Important 2): the prior version of this
   // test only grepped the waiting section for the proposal's OWN
-  // `payload.title`/`evidence` strings. A bare `CallProposal` folded
+  // `payload.title`/`evidence` strings. A bare `Proposal` folded
   // directly into `buckets.waiting` carries neither into `primaryLabel`
   // (`row.source` is `undefined` there, so it falls through to the generic
   // `m["work.booking"]` label) — so that exact mutation left every
@@ -321,11 +326,11 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
     expect(html).toContain("Maria Garcia");
   });
 
-  it("shows a task proposal's own plain-language label", () => {
+  it("shows a task proposal in the registry's words, the model's title in its own lang=\"en\" span (item 8b-1)", () => {
     const html = renderList(buckets(), {}, [proposal({
       kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
     })]);
-    expect(html).toContain(m["proposals.task.label"].replace("{title}", () => "Call back Tuesday"));
+    expect(html).toContain('Add a to-do: <span lang="en">Call back Tuesday</span>');
   });
 
   // Fix-wave Important 1 (task-11-brief): the agency work queue is the
@@ -334,27 +339,37 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
   // account zone since this screen pools rows across every account.
   it("shows a task proposal's due date, formatted in ITS OWN account's zone (mutation: drop the due-date line -> FAILS)", () => {
     const html = renderList(buckets(), {}, [proposal({
-      kind: "task", payload: { title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" },
+      kind: "task", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" },
       timezone: "America/Chicago",
     })]);
-    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 22, 2026"));
+    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
   });
 
   it("uses a DIFFERENT proposal's OWN account zone, never one zone shared by the whole list (mutation: read a single shared timezone instead of proposal.timezone -> FAILS)", () => {
     const html = renderList(buckets(), {}, [
       proposal({
         id: "prop-chi", kind: "task",
-        payload: { title: "Call back Tuesday", dueAt: "2026-09-23T01:00:00.000Z" },
+        payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" },
         timezone: "America/Chicago",
       }),
       proposal({
         id: "prop-utc", kind: "task",
-        payload: { title: "Call back Wednesday", dueAt: "2026-09-23T01:00:00.000Z" },
+        payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" },
         timezone: "UTC",
       }),
     ]);
-    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 22, 2026"));
-    expect(html).toContain(m["proposals.task.due"].replace("{date}", () => "Sep 23, 2026"));
+    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
+    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 23, 2099" }));
+  });
+
+  it("a proposal whose account zone the formatter refuses keeps its row and loses only its due-date line, never a guessed zone (mutation: drop agencyDescription's RangeError branch -> the list throws, FAILS)", () => {
+    const html = renderList(buckets(), {}, [
+      proposal({ id: "prop-bad", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "Not/AZone" }),
+      proposal({ id: "prop-ok", payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "America/Chicago" }),
+    ]);
+    expect(html).toContain('Add a to-do: <span lang="en">Call back Tuesday</span>');
+    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
+    expect(renderedText(html)).not.toContain("Sep 23, 2099");
   });
 
   it("shows no due date for a task proposal whose dueAt is null (mutation: render a due-date line unconditionally -> FAILS)", () => {
@@ -364,12 +379,19 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
     expect(html).not.toContain("Due");
   });
 
-  it("shows a contact_field proposal's own plain-language label", () => {
+  it("shows a contact_field proposal in the registry's words, the arrow drawn and spoken as to (item 8b-1; design review minor 3)", () => {
     const html = renderList(buckets(), {}, [{
       ...proposal(), kind: "contact_field", payload: { field: "email", value: "sam@example.com" },
     } as AgencyProposal]);
-    expect(html).toContain("email");
-    expect(html).toContain("sam@example.com");
+    expect(html).toContain('Email: (empty) <span aria-hidden="true">→</span><span class="sr-only">to</span> sam@example.com');
+  });
+
+  // The type allows a suggestion with no call (a later source); today's CHECK makes every row a call's.
+  // Such a row must never link to /calls/null: it opens the account's To do tray, where its card is.
+  it("a suggestion with no call links to the account's To do tray, never /calls/null (final review, Task 8; mutation: always the call link -> FAILS)", () => {
+    const html = renderList(buckets(), {}, [proposal({ accountId: "acct-n", callId: null })]);
+    expect(html).not.toContain("/calls/null");
+    expect(html).toContain('href="/dashboard/accounts/acct-n/tasks"');
   });
 
   // Fix-wave (task-10-brief.md, Important 1): an opportunity_stage proposal
@@ -388,9 +410,7 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
       stage_2: { name: "Booked", position: 3 },
     });
     expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(
-      m["proposals.stage.label"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
-    );
+    expect(renderedText(html)).toContain(T.text("suggestions.stage", { from: "New", to: "Booked" }));
     expect(html).not.toContain("opp_1");
     expect(html).not.toContain("stage_1");
     expect(html).not.toContain("stage_2");
@@ -406,7 +426,7 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
       payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
     } as AgencyProposal], {});
     expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(m["proposals.stage.unresolved"]);
+    expect(renderedText(html)).toContain(T.text("suggestions.stage.unresolved"));
     expect(html).not.toContain("opp_1");
     expect(html).not.toContain("stage_1");
     expect(html).not.toContain("stage_2");
@@ -430,10 +450,11 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
 });
 
 // Real mitigation, kept rather than relied on alone (fix-wave report,
-// Important 2): a BARE `CallProposal` cannot enter `AgencyBucketedWork`'s
-// arrays without an explicit cast — `AgencyWorkRow` requires `source`,
-// `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` and `suppressed`,
-// none of which a `CallProposal` carries. Same precedent as
+// Important 2): a BARE `Proposal` cannot enter `AgencyBucketedWork`'s
+// arrays without an explicit cast — `AgencyWorkRow` requires `title`,
+// `dueAt`, `occurredAt`, `brandName`, `timezone` and `suppressed`, none of
+// which a `Proposal` carries (since 0088 a `Proposal` has a `source`, but
+// "call", which is no `WorkSource`). Same precedent as
 // `lib/work/buckets.test.ts`'s own
 // `_typeOnly_bucketedWorkCannotHoldAProposal`, restated here for
 // `AgencyBucketedWork` specifically — a DIFFERENT type (`AgencyWorkRow[]`,
@@ -443,10 +464,9 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
 // for `BucketedWork` would turn the `@ts-expect-error` below unused, which
 // `tsc --noEmit` reports as TS2578 on this exact line, red BY NAME.
 export function _typeOnly_agencyBucketedWorkCannotHoldAProposal(
-  b: AgencyBucketedWork, p: CallProposal,
+  b: AgencyBucketedWork, p: Proposal,
 ): void {
-  // @ts-expect-error a CallProposal is not an AgencyWorkRow (no `source`,
-  // `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` or
+  // @ts-expect-error a Proposal is not an AgencyWorkRow (no `title`, `dueAt`, `occurredAt`, `brandName`, `timezone` or
   // `suppressed`) — pushing one into `buckets.waiting` cannot typecheck,
   // which is what keeps a proposal out of Overdue/Today/Waiting
   // structurally, not just by convention.

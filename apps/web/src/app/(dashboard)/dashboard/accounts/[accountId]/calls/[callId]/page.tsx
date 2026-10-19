@@ -10,9 +10,19 @@ import {
   UserRound,
 } from "lucide-react";
 import {
-  getCall, listFailedOutboundSms, listProposalsForCall, getContact, getCallCard, getVoiceProfile,
-  type FailedOutboundSms, type CallProposal, type CallCard,
+  getCall, listFailedOutboundSms, listProposalsForCall, listPeopleNames, getContact, getCallCard, getVoiceProfile,
+  type FailedOutboundSms, type CallCard,
 } from "@bis/db";
+import { SuggestionSection, type SuggestionSectionData } from "@/components/proposals/suggestion-section";
+import {
+  acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
+} from "@/lib/proposals/actions";
+import { buildSuggestionView } from "@/lib/proposals/view";
+import { readSuggestionStages } from "@/lib/proposals/view-reads";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import type { Locale } from "@/lib/i18n/locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { makeTr } from "@/lib/record/copy";
 import { smsRecipientState } from "@/lib/consent/recipient-state";
 import { ledgerDb } from "@/lib/consent/ledger-db";
 import { composerStateLine } from "@/lib/consent/composer-state";
@@ -23,6 +33,7 @@ import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
@@ -32,39 +43,43 @@ import { sendSmsAction } from "../../conversations/actions";
 import { splitSummaryBlocks, type SummaryBlock } from "@/lib/voice/summary-blocks";
 import { TranscriptView } from "./transcript-view";
 import { TextbackResend } from "./textback-resend";
-import { CallProposals, type ResolvedStage } from "./proposals";
 import { CallCardPanel, hasCard } from "./call-card-panel";
 // The detail page is six of these stacked and not one of them was glass, so
 // the whole route read as flat rectangles on a lit ground. `bg-card` BEFORE
 // `glass`, the order `ui/card.tsx` uses: a tenant's `--card` still wins the
 // fill and the utility adds only the sheen, the highlight and `--shadow-card`.
-// Shared with proposals.tsx via `./card` rather than duplicated — see that
-// module's own doc comment for why a third module, not a mirrored constant,
-// is the right shape here.
+// Shared via `./card` rather than duplicated — see that module's own doc
+// comment for why a third module, not a mirrored constant, is the right
+// shape here.
 import { CARD, CARD_HEAD } from "./card";
 
 export const dynamic = "force-dynamic";
 
 export default async function CallDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ accountId: string; callId: string }>;
+  searchParams?: Promise<{ locale?: string }>;
 }) {
   const { accountId, callId } = await params;
+  const { locale: localeParam } = (await searchParams) ?? {};
   // BOTH audiences, exactly as the list is: this is the client's own business
   // data — what their receptionist said to their caller — not agency work
   // about the client.
-  const { isAgency } = await requireAccountAccess(accountId);
+  const { isAgency, userId } = await requireAccountAccess(accountId);
   const db = await dbForRequest();
 
-  const [call, account] = await Promise.all([
+  const [call, account, prefs] = await Promise.all([
     getCall(db, accountId, callId),
-    db.from("accounts").select("timezone").eq("id", accountId).maybeSingle()
+    db.from("accounts").select("timezone, language").eq("id", accountId).maybeSingle()
       .then(({ data, error }) => {
         if (error) throw new Error(`call detail: account lookup failed: ${error.message}`);
         if (!data) throw new Error("call detail: account not found");
-        return data as { timezone: string };
+        return data as { timezone: string; language?: Locale | null };
       }),
+    // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
+    getPersonPrefs(),
   ]);
 
   // `getCall` filters on account_id as well as id, so a call belonging to
@@ -127,48 +142,6 @@ export default async function CallDetailPage({
     }
   }
 
-  // The call's machine-suggested next steps (Task 2's read), plus — for any
-  // opportunity_stage proposal — the pipeline_stages names/positions its
-  // payload only carries as uuids. Best-effort, exactly like the text-back
-  // read above: this is one advisory block on a page whose job is the
-  // transcript, and a failure in EITHER read must degrade the WHOLE block to
-  // absent rather than take the call record down or hand `CallProposals` a
-  // stage id it cannot resolve to a name (which it has no way to render
-  // honestly — DESIGN.md rules out both the raw uuid and the destination
-  // alone).
-  let proposals: CallProposal[] = [];
-  let stageNames: Record<string, ResolvedStage> = {};
-  try {
-    proposals = await listProposalsForCall(db, accountId, callId);
-    const stageIds = new Set<string>();
-    for (const p of proposals) {
-      if (p.kind === "opportunity_stage") {
-        stageIds.add(p.payload.fromStageId);
-        stageIds.add(p.payload.toStageId);
-      }
-    }
-    if (stageIds.size > 0) {
-      // `stageIds` is bounded only TRANSITIVELY, through
-      // `listProposalsForCall`'s own `.limit(500)` (at most two ids per
-      // opportunity_stage proposal, so at most 1000 here) — there is no
-      // bound of this read's own.
-      const { data, error } = await db.from("pipeline_stages")
-        .select("id, name, position")
-        .eq("account_id", accountId)
-        .in("id", Array.from(stageIds));
-      if (error) throw new Error(`pipeline stage lookup failed: ${error.message}`);
-      for (const row of (data ?? []) as { id: string; name: string; position: number }[]) {
-        stageNames[row.id] = { name: row.name, position: row.position };
-      }
-    }
-  } catch (e) {
-    console.error(
-      `call detail ${callId}: proposals read failed, rendering no suggestions: ${String(e)}`,
-    );
-    proposals = [];
-    stageNames = {};
-  }
-
   // The call card: who called, why, the number to call back and their own
   // words (lib/voice/call-card.ts writes it after the call). Its own read,
   // swallowed like the two above and for their reason: one panel on a page
@@ -195,6 +168,41 @@ export default async function CallDetailPage({
   } catch (e) {
     console.error(`call detail ${callId}: call card read failed, rendering no card: ${String(e)}`);
     card = null;
+  }
+
+  // The Suggestions section (item 8b-1, spec 4.5): this call's suggestions as cards with their actions.
+  // It is the ONE part of this page in the reader's language (requestLocale: the person, then the
+  // account, then the operator default); the rest stays English until its own bilingual pass. Every
+  // read it needs runs on the request client: the rows, the deals and stage lists behind a stage
+  // suggestion (account-scoped, bounded: readSuggestionStages) and the deciders' names. A failure in
+  // any of them is the section's error state with Retry (rule 5), never a silently absent section and
+  // never the call record. The persona name above is the one read whose failure costs nothing but the
+  // name ("Sofía"), so it never puts the section into its error state.
+  // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
+  const accountLanguage = { language: account.language ?? null };
+  const locale = requestLocale({ account: accountLanguage, isOperator: isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  let suggestions: SuggestionSectionData;
+  try {
+    const rows = await listProposalsForCall(db, accountId, callId);
+    const deciders = [...new Set(rows.flatMap((r) => (r.decidedBy ? [r.decidedBy] : [])))];
+    const [stageCtx, names] = await Promise.all([
+      readSuggestionStages(db, accountId, rows),
+      listPeopleNames(db, deciders),
+    ]);
+    const callerName = [call.contact?.first_name, call.contact?.last_name]
+      .map((part) => part?.trim() ?? "").filter(Boolean).join(" ") || null;
+    const now = new Date();
+    const views = rows.map((row) => buildSuggestionView(row, {
+      tr, zone: timezone, now, ...stageCtx, callerName, callStartedAt: call.started_at, personaName, names, viewerId: userId,
+    }));
+    // Pending first: the section exists to obtain a decision, and `listProposalsForCall` orders by
+    // created_at DESC. `sort` is stable, so the order is otherwise kept.
+    views.sort((a, b) => Number(!a.canAct) - Number(!b.canAct));
+    suggestions = { ok: true, views, capped: false };
+  } catch (e) {
+    console.error(`call detail ${callId}: suggestions read failed, rendering the section's error state: ${loggableError(e)}`);
+    suggestions = { ok: false };
   }
 
   // Every link is conditional on its own id. A call that matched no contact,
@@ -379,12 +387,18 @@ export default async function CallDetailPage({
             </section>
           ) : null}
 
-          <CallProposals
-            proposals={proposals}
-            stageNames={stageNames}
-            accountId={accountId}
-            callId={callId}
-            timezone={timezone}
+          {/* The heading keeps the #call-proposals id the agency Work page's links land on. Each action
+              is bound to this account here (plan fix I-3): a server component cannot hand a client
+              component an inline closure. */}
+          <SuggestionSection
+            tr={tr}
+            personaName={personaName}
+            data={suggestions}
+            headingId="call-proposals"
+            accept={acceptSuggestionAction.bind(null, accountId)}
+            editAccept={editAcceptSuggestionAction.bind(null, accountId)}
+            discard={discardSuggestionAction.bind(null, accountId)}
+            undo={undoSuggestionAction.bind(null, accountId)}
           />
 
           <section aria-labelledby="call-transcript" className={CARD}>

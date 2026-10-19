@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { makeTr } from "@/lib/record/copy";
 import { renderedText } from "@/lib/rendered-text";
 
 vi.mock("./actions", () => ({
@@ -16,6 +17,7 @@ const { WorkList } = await import("./work-list");
 // the empty state rather than being swallowed by it.
 const EMPTY_PROPS = {
   buckets: { overdue: [], today: [], waiting: [] }, accountId: "a1", contactNames: {}, timezone: "America/Chicago",
+  tr: makeTr("en"),
 };
 
 describe("the To do row (spec 'Needs a look')", () => {
