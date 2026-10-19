@@ -26,10 +26,15 @@
 -- expected (production holds two from the 8b-1 smoke) and is never a difference.
 --
 -- ONE TRANSACTION (0088's pattern, plan assumption A3): the settings and the access-exclusive lock are
--- taken inside the first do block; the second raises 0090_not_one_transaction unless it runs in the
--- same transaction, still holding that lock. A path that commits between statements fails there,
--- before anything is dropped. No dependent object may be dropped silently: every drop below names its
--- object and none reaches past it, so a hidden dependency fails the drop loudly.
+-- taken inside the first do block, which also runs the self-check. The second do block raises
+-- 0090_not_one_transaction unless it runs in that same transaction, still holding that lock, and only
+-- then drops; the drops are statements INSIDE that block, never after it. That is what makes a raise
+-- final on every client. Under psql -1, supabase db push or MCP apply_migration, a raise aborts the one
+-- transaction. Under a bare psql -f (autocommit, no ON_ERROR_STOP) each statement commits on its own and
+-- psql carries on past an error: a raise in the first block is then followed by the second block in a
+-- NEW transaction, which raises before its drops, and no drop statement is left outside a block to run.
+-- Either way a failed check drops nothing. No dependent object may be dropped silently: every drop
+-- below names its object and none reaches past it, so a hidden dependency fails loudly.
 --
 -- ASCII only, no backslash anywhere.
 
@@ -50,7 +55,7 @@ begin
   end if;
 end $$;
 
--- 1. Still the one transaction that took the lock, or nothing is dropped.
+-- 1. Still the one transaction that took the lock, or nothing is dropped; then the drops, in this block.
 do $$
 begin
   if pg_catalog.current_setting('bis.m0090_xid', true) is distinct from pg_catalog.txid_current()::text
@@ -60,12 +65,12 @@ begin
                        and l.pid = pg_catalog.pg_backend_pid() and l.mode = 'AccessExclusiveLock' and l.granted) then
     raise exception '0090_not_one_transaction' using errcode = 'P0001';
   end if;
+
+  -- 2. The table, and with it its triggers, policies, indexes and constraints.
+  drop table public.call_proposals;
+
+  -- 3. The bridge functions. The two trigger functions lost their triggers with the table above.
+  drop function app.mirror_call_proposal();
+  drop function app.guard_call_proposal();
+  drop function app.copy_call_proposals();
 end $$;
-
--- 2. The table, and with it its triggers, policies, indexes and constraints.
-drop table public.call_proposals;
-
--- 3. The bridge functions. The two trigger functions lost their triggers with the table above.
-drop function app.mirror_call_proposal();
-drop function app.guard_call_proposal();
-drop function app.copy_call_proposals();
