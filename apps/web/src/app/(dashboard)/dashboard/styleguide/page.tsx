@@ -29,6 +29,7 @@ import { CALL_AT, EDITS, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows a
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { makeTr } from "@/lib/record/copy";
 import { SuggestionDemo } from "./suggestion-demo";
+import { buildWorkTrayColumns, WorkTrayDemo } from "./work-tray-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
@@ -625,6 +626,15 @@ export default async function StyleguidePage({
               ))}
             </div>
           </div>
+        </Section>
+
+        {/* Item 8b-2: the To do tray's cards grouped by customer then by call, "Waiting for you" on the
+            record in its five states, and the agency Work page's per-account cards with their own cap
+            line — English, Spanish and the pseudo-locale, built from the real `groupSuggestions` and
+            `buildSuggestionView` over the same typed-out rows. */}
+        <Section title="Work tray: grouped, Waiting for you, the agency section"
+          file="components/proposals/{suggestion-row,suggestion-group,suggestion-section}.tsx · lib/proposals/group.ts">
+          <WorkTrayDemo columns={buildWorkTrayColumns()} />
         </Section>
 
         <Section title="Loading skeletons" file="components/ui/skeleton.tsx">
