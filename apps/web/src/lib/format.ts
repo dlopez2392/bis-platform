@@ -4,7 +4,7 @@ import type { Locale } from "./i18n/locale";
 /** `es` renders as `es-US` (not bare `es`) so currency/date conventions stay
  *  US-local (e.g. `$`/`,`/`.` grouping) for an audience reading Spanish in
  *  the same market as the `en-US` callers above, not Spain's or Mexico's. */
-function tag(locale: Locale): string {
+export function tag(locale: Locale): string {
   return locale === "es" ? "es-US" : "en-US";
 }
 

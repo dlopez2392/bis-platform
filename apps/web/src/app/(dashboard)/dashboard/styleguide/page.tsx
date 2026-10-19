@@ -22,9 +22,13 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { SCREENED_REASONS, screenedClass, type ProposalStatus } from "@bis/db";
+import { SCREENED_REASONS, screenedClass } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
-import { STATUS_TREATMENT } from "../accounts/[accountId]/calls/[callId]/proposals";
+import { SuggestionSection, SuggestionSectionSkeleton } from "@/components/proposals/suggestion-section";
+import { CALL_AT, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows as SUGGESTION_ROWS } from "@/components/proposals/suggestion-specimens";
+import { buildSuggestionView } from "@/lib/proposals/view";
+import { makeTr } from "@/lib/record/copy";
+import { SuggestionDemo } from "./suggestion-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
@@ -72,9 +76,23 @@ import { SpanishBodyFieldDemo } from "./spanish-body-field-demo";
 
 export const dynamic = "force-dynamic";
 
-/** All three of `STATUS_TREATMENT`'s own keys, in the order a reader meets
- *  them: still open, then the two decided outcomes. */
-const PROPOSAL_STATUSES: ProposalStatus[] = ["pending", "accepted", "dismissed"];
+/** The suggestion card's five states (item 8b-1), built by the real view builder from typed-out rows,
+ *  in English, Spanish and the pseudo-locale (+35%), plus a pending row past its 30 days. */
+const SUGGESTION_TRS = [
+  { key: "en", tr: makeTr("en") }, { key: "es", tr: makeTr("es") }, { key: "pseudo", tr: makeTr("en", true) },
+] as const;
+const suggestionColumns = () => SUGGESTION_TRS.map(({ key, tr }) => ({
+  key, caption: key,
+  views: [...FIVE, "aged" as const].map((s) => buildSuggestionView(SUGGESTION_ROWS[s], {
+    tr, zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES, callerName: "Ana López",
+    callStartedAt: CALL_AT, personaName: "Sofía", names: NAMES, viewerId: null,
+  })),
+}));
+/** The section's error state renders no card, so these are never called or sent to the browser. */
+const NO_SUGGESTION_ACTIONS = {
+  accept: async () => ({ ok: false as const, error: "" }), editAccept: async () => ({ ok: false as const, error: "" }),
+  discard: async () => ({ ok: false as const, error: "" }), undo: async () => ({ ok: false as const, error: "" }),
+};
 
 /** The same `nav.*` keys the Locale section's en/es columns demonstrate
  *  (Task 6) — one shared array so Task 11's pseudo-locale column below
@@ -589,28 +607,21 @@ export default async function StyleguidePage({
           </div>
         </Section>
 
-        {/* DESIGN.md rule 3 again, for the call-detail proposals block's own
-            vocabulary (Suggested / Accepted / Dismissed) — Call Proposals
-            Task 7. Read straight off `proposals.tsx`'s own `STATUS_TREATMENT`
-            map, same precedent as "Screened reasons" above, so this page
-            cannot drift from the real block. */}
-        <Section title="Proposal status" file="…/calls/[callId]/proposals.tsx">
-          <div className="flex w-full flex-wrap gap-2">
-            {PROPOSAL_STATUSES.map((status) => {
-              const treatment = STATUS_TREATMENT[status];
-              return (
-                <span
-                  key={status}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs"
-                >
-                  <span
-                    className={cn("size-[7px] shrink-0 rounded-full", treatment.dot)}
-                    aria-hidden
-                  />
-                  {m[treatment.labelKey]}
-                </span>
-              );
-            })}
+        {/* Item 8b-1: the one suggestion card the call page and the To do tray show, in its five states
+            (dot and word, rule 3) in English, Spanish and the pseudo-locale, with Edit and accept's form,
+            and the section's error and loading states. Views come from the real builder, so this page
+            cannot drift from the card. */}
+        <Section title="Suggestion card" file="components/proposals/suggestion-{card,actions,section}.tsx">
+          <div className="flex w-full flex-col gap-6">
+            <SuggestionDemo columns={suggestionColumns()} />
+            <div className="grid w-full gap-6 md:grid-cols-2">
+              {(["en", "es"] as const).map((locale) => (
+                <div key={locale} data-sg-suggestions-states={locale} className="flex max-w-[360px] flex-col gap-6">
+                  <SuggestionSection tr={makeTr(locale)} personaName="Sofía" data={{ ok: false }} {...NO_SUGGESTION_ACTIONS} />
+                  <SuggestionSectionSkeleton tr={makeTr(locale)} />
+                </div>
+              ))}
+            </div>
           </div>
         </Section>
 
