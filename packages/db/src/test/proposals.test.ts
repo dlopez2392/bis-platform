@@ -505,6 +505,70 @@ describe("proposals accessors", () => {
       expect(await setAppliedRef(db, accountId, "00000000-0000-0000-0000-000000000002", { taskId: "t9" })).toBe(false);
     });
   });
+
+  it("setAppliedRef writes only on an accepted or edited row: pending and dismissed answer false and keep applied_ref null (mutation: drop .in(\"status\", [\"accepted\",\"edited\"]) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const pending = await taskOn(db, accountId, await seedCall(db, accountId));
+      const dismissed = await taskOn(db, accountId, await seedCall(db, accountId));
+      expect(await decideProposal(db, accountId, dismissed, { to: "dismissed", decidedBy: "user_a", now: NOW })).toBe(true);
+      expect(await setAppliedRef(db, accountId, pending, { taskId: "t1" })).toBe(false);
+      expect(await setAppliedRef(db, accountId, dismissed, { taskId: "t1" })).toBe(false);
+      expect((await raw(db, pending))!.applied_ref).toBeNull();
+      expect((await raw(db, dismissed))!.applied_ref).toBeNull();
+    });
+  });
+
+  it("listPendingSiblings reads against the injected now (mutation: ignore it and read the clock -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const contactId = await seedContact(db, accountId);
+      const self = await taskOn(db, accountId, await seedCall(db, accountId), { contactId });
+      const sib = await taskOn(db, accountId, await seedCall(db, accountId), { contactId, expiresAt: "2030-01-01T00:00:00.000Z" });
+      const q = { kind: "task" as const, contactId, exceptId: self };
+      expect((await listPendingSiblings(db, accountId, q, new Date("2029-12-31T23:59:59.000Z"))).map((r) => r.id)).toEqual([sib]);
+      expect(await listPendingSiblings(db, accountId, q, new Date("2030-06-01T00:00:00.000Z"))).toEqual([]);
+    });
+  });
+});
+
+/**
+ * Task 4 fix round (I2): the status half of each Undo-side compare-and-swap. The row is THIS same
+ * decider's, but dismissed: only the status condition stands between it and the write.
+ */
+describe("the status condition of the Undo-side writes (a row this decider dismissed)", () => {
+  async function dismissedBy(db: SupabaseClient, accountId: string, by: string) {
+    const id = await taskOn(db, accountId, await seedCall(db, accountId));
+    expect(await decideProposal(db, accountId, id, { to: "dismissed", decidedBy: by, now: NOW })).toBe(true);
+    return id;
+  }
+
+  it("revertProposalDecision answers missed and the row stays dismissed (mutation: drop .in(\"status\", [\"accepted\",\"edited\"]) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const id = await dismissedBy(db, accountId, "user_a");
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        expect(await revertProposalDecision(db, accountId, id, "user_a")).toBe("missed");
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await raw(db, id)).toMatchObject({ status: "dismissed", decided_by: "user_a" });
+    });
+  });
+
+  it("undoProposalDecision with from [accepted, edited] answers missed and the row stays dismissed (mutation: drop .in(\"status\", u.from) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const id = await dismissedBy(db, accountId, "user_a");
+      expect(await undoProposalDecision(db, accountId, id, { decidedBy: "user_a", from: ["accepted", "edited"], now: NOW })).toBe("missed");
+      expect(await raw(db, id)).toMatchObject({ status: "dismissed", decided_by: "user_a", undone_at: null });
+    });
+  });
+
+  it("expireAfterUndoCollision answers false and the row stays dismissed (mutation: drop .in(\"status\", [\"accepted\",\"edited\"]) -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const id = await dismissedBy(db, accountId, "user_a");
+      expect(await expireAfterUndoCollision(db, accountId, id, "user_a", NOW)).toBe(false);
+      expect(await raw(db, id)).toMatchObject({ status: "dismissed", decided_by: "user_a", expired_reason: null });
+    });
+  });
 });
 
 /**
@@ -615,6 +679,23 @@ describe("the writes throw on a database error (contract: setAppliedRef and expi
   it("expireProposals throws when the database refuses", async () => {
     await withTestAccount(async (db, accountId) => {
       await expect(expireProposals(db, accountId, ["not-a-uuid"], "superseded", T)).rejects.toThrow(/expireProposals failed/);
+    });
+  });
+  // Task 4 fix round (Minor 5): only 23505 is an answer ("collision"); any other database error throws.
+  it("revertProposalDecision throws on an error other than 23505", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await expect(revertProposalDecision(db, accountId, "not-a-uuid", "user_a")).rejects.toThrow(/revertProposalDecision failed/);
+    });
+  });
+  it("undoProposalDecision throws on an error other than 23505", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await expect(undoProposalDecision(db, accountId, "not-a-uuid", { decidedBy: "user_a", from: ["accepted"], now: NOW }))
+        .rejects.toThrow(/undoProposalDecision failed/);
+    });
+  });
+  it("restoreSiblings throws on an error other than 23505", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await expect(restoreSiblings(db, accountId, ["not-a-uuid"], T)).rejects.toThrow(/restoreSiblings failed/);
     });
   });
 });

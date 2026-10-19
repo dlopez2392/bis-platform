@@ -22,7 +22,8 @@ const RUN = Math.random().toString(36).slice(2, 10);
 const DIGITS = () => Math.floor(Math.random() * 1e7).toString().padStart(7, "0");
 const offSql = "alter table public.call_proposals disable trigger call_proposals_mirror, disable trigger call_proposals_guard";
 const onSql = "alter table public.call_proposals enable trigger call_proposals_mirror, enable trigger call_proposals_guard";
-/** The old code's Accept, exactly as call-proposals.ts:241-244 builds it (plan deviation 12). */
+/** The old code's Accept, exactly as markProposalDecided built it (call-proposals.ts:241-244 at 61772cac, deleted by
+ *  Task 4; plan deviation 12). The pre-deploy build still sends this statement until 0089. */
 const OLD_ACCEPT = "update call_proposals set status = 'accepted', decided_at = now(), decided_by = 'user_old' where account_id = $1 and id = $2 and status = 'pending'";
 /** The old code's revert of its own Accept. */
 const OLD_REVERT = "update call_proposals set status = 'pending', decided_at = null, decided_by = null where id = $1 and status = 'accepted' and decided_by = 'user_old'";

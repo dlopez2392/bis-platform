@@ -298,6 +298,33 @@ describe("generateProposals", () => {
     expect(db.rows[0].evidence).toBe("Necesito una cotización para una mesa de comedor.");
   });
 
+  // Task 4 fix round (Minor 2): the same for the other two kinds, each its own branch in generate.ts.
+  it("a Spanish call's contact-field and stage-move rows carry evidence_lang 'es' and their own turn (mutation: evidenceLang \"en\" in either branch -> FAILS)", async () => {
+    const db = fakeDb();
+    const spanish: TranscriptEvent[] = [
+      { role: "assistant", text: "Gracias por llamar. ¿En qué le ayudo?", at: "2026-09-18T12:00:00.000Z" },
+      { role: "caller", text: "Mi correo es sam arroba example punto com.", at: "2026-09-18T12:00:04.000Z" },
+      { role: "assistant", text: "Perfecto, ¿algo más?", at: "2026-09-18T12:00:08.000Z" },
+      { role: "caller", text: "Sí, ya hablamos con su equipo la semana pasada.", at: "2026-09-18T12:00:12.000Z" },
+    ];
+    const n = await generateProposals({
+      ...base, db, language: "es", transcript: spanish, contactId: "c1",
+      blankFields: ["email"], openOpportunity: pipeline,
+      fetchImpl: modelReturning({
+        proposals: [
+          { kind: "contact_field", field: "email", value: "sam@example.com", evidence: "mi correo es sam arroba example" },
+          { kind: "opportunity_stage", toStage: "Contacted", evidence: "ya hablamos con su equipo" },
+        ],
+      }),
+    });
+    expect(n).toBe(2);
+    const byKind = Object.fromEntries(db.rows.map((r: any) => [r.kind, r]));
+    expect(byKind.contact_field.evidence_lang).toBe("es");
+    expect(byKind.contact_field.evidence_ref).toEqual({ turn: 1, at: "2026-09-18T12:00:04.000Z" });
+    expect(byKind.opportunity_stage.evidence_lang).toBe("es");
+    expect(byKind.opportunity_stage.evidence_ref).toEqual({ turn: 3, at: "2026-09-18T12:00:12.000Z" });
+  });
+
   // THE CENTRAL SAFETY PROPERTY. A model that invents a quote must produce
   // NOTHING, not a proposal a human might believe.
   it("DROPS a proposal whose evidence is not in the transcript (mutation: skip the groundedEvidence check -> FAILS)", async () => {

@@ -200,14 +200,16 @@ export async function getProposal(
   return data ? toProposal(data as unknown as Row, "getProposal") : null;
 }
 
-/** The customer's OTHER pending, not-aged suggestions of one kind (what an Accept supersedes), ≤ 50. */
+/** The customer's OTHER pending, not-aged suggestions of one kind (what an Accept supersedes), ≤ 50.
+ *  `now` is injected like the other pending reads' (the decision's own instant). */
 export async function listPendingSiblings(
   db: SupabaseClient, accountId: string, q: { kind: ProposalKind; contactId: string; exceptId: string },
+  now: Date = new Date(),
 ): Promise<Proposal[]> {
   const { data, error } = await db.from("proposals").select(COLS)
     .eq("account_id", accountId).eq("status", "pending").eq("kind", q.kind)
     .eq("contact_id", q.contactId).neq("id", q.exceptId)
-    .gt("expires_at", new Date().toISOString())
+    .gt("expires_at", now.toISOString())
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw new Error(`listPendingSiblings failed: ${error.message}`);
@@ -272,12 +274,13 @@ export async function revertProposalDecision(
   return "reverted";
 }
 
-/** What Undo needs to reverse the applied write (the task id, the field's prior value, the stage). */
+/** What Undo needs to reverse the applied write (the task id, the field's prior value, the stage).
+ *  Only on an accepted or edited row: a ref on a pending, dismissed or out-of-date row means nothing. */
 export async function setAppliedRef(
   writer: SupabaseClient, accountId: string, id: string, ref: unknown,
 ): Promise<boolean> {
   const { data, error } = await writer.from("proposals").update({ applied_ref: ref })
-    .eq("account_id", accountId).eq("id", id)
+    .eq("account_id", accountId).eq("id", id).in("status", ["accepted", "edited"])
     .select("id");
   if (error) throw new Error(`setAppliedRef failed: ${error.message}`);
   return (data ?? []).length > 0;

@@ -25,6 +25,20 @@ function isBlank(v: unknown): boolean {
 }
 
 /**
+ * Gives an Accept back after its CRM write did not land. Best-effort, as the old local revert was:
+ * `revertProposalDecision` throws on a database error, and a throw here must not turn the action's
+ * honest "proposals.failed" answer into a rejected promise (item 8b-1, Task 4 fix round; this file
+ * runs on Preview until Task 8 replaces it). It logs "missed" and "collision" itself.
+ */
+async function revertQuietly(writer: SupabaseClient, accountId: string, proposalId: string, decidedBy: string): Promise<void> {
+  try {
+    await revertProposalDecision(writer, accountId, proposalId, decidedBy);
+  } catch (e) {
+    console.error(`acceptProposal: failed to revert proposal ${proposalId} (account ${accountId}) back to pending: ${String(e)}`);
+  }
+}
+
+/**
  * The write helper's own call threw AFTER the compare-and-swap already
  * stamped the proposal `accepted` — this can only mean the write is
  * AMBIGUOUS. `addTask`, `fillContactBlanks` and `moveOpportunityToStage`
@@ -190,7 +204,7 @@ export async function acceptProposal(
     } else if (proposal.kind === "contact_field") {
       const p = proposal.payload;
       if (!proposal.contactId) {
-        await revertProposalDecision(writer, accountId, proposalId, userId);
+        await revertQuietly(writer, accountId, proposalId, userId);
         return { ok: false, error: m["proposals.failed"] };
       }
       // Read the field's CURRENT value before the re-check below so an
@@ -218,7 +232,7 @@ export async function acceptProposal(
         return stranded(proposalId, callId, accountId, e);
       }
       if (filled.length === 0) {
-        await revertProposalDecision(writer, accountId, proposalId, userId);
+        await revertQuietly(writer, accountId, proposalId, userId);
         return {
           ok: false,
           error: alreadyFilled ? m["proposals.contactFilled"] : m["proposals.contactMismatch"],
@@ -248,7 +262,7 @@ export async function acceptProposal(
     revalidatePath(`/dashboard/accounts/${accountId}/tasks`);
   } catch (e) {
     if (decided && !written && writer) {
-      await revertProposalDecision(writer, accountId, proposalId, userId);
+      await revertQuietly(writer, accountId, proposalId, userId);
     }
     // Whether the compare-and-swap already ran, and whether the write
     // landed, are the two facts an operator needs before touching this row

@@ -204,21 +204,24 @@ function dbWithFailingEventsInsert(real: Db): Db {
  * client: since 0053 the revert runs on the service client, so a race
  * injected into the request client would never fire.
  */
+// Item 8b-1 (Task 4 fix round): the decision and its revert now write `proposals`
+// (revertProposalDecision, which filters with `.in("status", …)` as well as `.eq`).
 function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
   return {
     from: (table: string) => {
-      if (table !== "call_proposals") return real.from(table as never);
+      if (table !== "proposals") return real.from(table as never);
       return {
-        select: (cols: string) => real.from("call_proposals").select(cols),
+        select: (cols: string) => real.from("proposals").select(cols),
         update: (values: Record<string, unknown>) => {
-          if (values.status !== "pending") return real.from("call_proposals").update(values);
-          const eqs: [string, unknown][] = [];
+          if (values.status !== "pending") return real.from("proposals").update(values);
+          const filters: ["eq" | "in", string, unknown][] = [];
           const chain = {
-            eq: (col: string, val: unknown) => { eqs.push([col, val]); return chain; },
+            eq: (col: string, val: unknown) => { filters.push(["eq", col, val]); return chain; },
+            in: (col: string, vals: unknown[]) => { filters.push(["in", col, vals]); return chain; },
             select: async (cols: string) => {
               await race();
-              let q = real.from("call_proposals").update(values);
-              for (const [col, val] of eqs) q = q.eq(col, val);
+              let q = real.from("proposals").update(values);
+              for (const [op, col, val] of filters) q = op === "eq" ? q.eq(col, val) : q.in(col, val as unknown[]);
               return q.select(cols);
             },
           };
@@ -227,6 +230,12 @@ function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
       };
     },
   } as unknown as Db;
+}
+
+/** The writer whose revert (the `status: "pending"` UPDATE) fails with a database error; every
+ *  other call passes through. Item 8b-1, Task 4 fix round: revertProposalDecision throws on it. */
+function dbWithFailingRevert(real: Db): Db {
+  return dbWithRaceBeforeRevert(real, async () => { throw new Error("injected: revert failed"); });
 }
 
 /**
@@ -239,16 +248,17 @@ function dbWithRaceBeforeRevert(real: Db, race: () => Promise<void>): Db {
 function dbWithServerWrittenProposals(real: Db): Db {
   const refusal = {
     data: null,
-    error: { code: "42501", message: "permission denied for table call_proposals" },
+    error: { code: "42501", message: "permission denied for table proposals" },
   };
   return {
     from: (table: string) => {
-      if (table !== "call_proposals") return real.from(table as never);
+      if (table !== "proposals") return real.from(table as never);
       return {
-        select: (cols: string) => real.from("call_proposals").select(cols),
+        select: (cols: string) => real.from("proposals").select(cols),
         update: () => {
           const chain = {
             eq: () => { return chain; },
+            in: () => { return chain; },
             select: async () => refusal,
           };
           return chain;
@@ -828,7 +838,7 @@ describe("acceptProposal", () => {
         serviceDbImpl.mockImplementationOnce(() => dbWithRaceBeforeRevert(realServiceDb(), async () => {
           // Simulates a legitimate second decision landing in the gap
           // between this accept's own CAS and its compensating revert.
-          const { error } = await realServiceDb().from("call_proposals")
+          const { error } = await realServiceDb().from("proposals")
             .update({ decided_by: "user_other" }).eq("id", proposal!.id);
           if (error) throw new Error(error.message);
         }));
@@ -841,6 +851,33 @@ describe("acceptProposal", () => {
         // decider and stays accepted, never clawed back to pending.
         expect(after!.status).toBe("accepted");
         expect(after!.decidedBy).toBe("user_other");
+      });
+    },
+  );
+
+  it(
+    "a revert that throws still answers proposals.failed, never a rejected action " +
+    "(mutation: call revertProposalDecision unwrapped -> the action rejects, FAILS)",
+    async () => {
+      await withTestAccount(async (db, accountId) => {
+        // The outer catch's revert: the contact read throws AFTER the compare-and-swap (decided=true,
+        // written=false), and then the revert itself throws.
+        const callId = await seedCall(db, accountId);
+        const { id: contactId } = await createContact(db, accountId, { firstName: "Lead" }, "user_test");
+        const proposal = await insertProposal(db, accountId, {
+          callId, contactId, kind: "contact_field", evidence: "the caller spelled her email out loud",
+          payload: { field: "email", value: "lead@example.com" },
+        });
+        expect(proposal).not.toBeNull();
+        dbForRequestMock.mockImplementationOnce(async () => dbWithFailingContactRead(realServiceDb()));
+        serviceDbImpl.mockImplementationOnce(() => dbWithFailingRevert(realServiceDb()));
+        const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const r = await acceptProposal(accountId, callId, proposal!.id);
+          expect(r).toEqual({ ok: false, error: m["proposals.failed"] });
+        } finally {
+          errSpy.mockRestore();
+        }
       });
     },
   );
@@ -861,8 +898,8 @@ describe("acceptProposal", () => {
           // Simulates the SAME decider's stamp having already moved on
           // (dismissed through some other path) by the time the revert
           // would run.
-          const { error } = await realServiceDb().from("call_proposals")
-            .update({ status: "dismissed" }).eq("id", proposal!.id);
+          const { error } = await realServiceDb().from("proposals")
+            .update({ status: "dismissed", applied_payload: null }).eq("id", proposal!.id);
           if (error) throw new Error(error.message);
         }));
 
