@@ -40,4 +40,13 @@ describe("contact record page loading.tsx", () => {
     expect(timeline).toContain("data-timeline-skeleton");
     expect(timeline.match(/data-timeline-skeleton-row/g)).toHaveLength(5);
   });
+
+  it("What's next loads with two flat Waiting rows above its own lines (item 8b-2, spec 5.3; mutation: drop the Waiting skeleton -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(Loading));
+    const nextUp = html.slice(html.indexOf('data-record-card="next-up"'), html.indexOf('data-record-card="timeline"'));
+    expect(nextUp.match(/data-waiting-skeleton-row/g)).toHaveLength(2);
+    expect(nextUp.indexOf("data-waiting-skeleton")).toBeLessThan(nextUp.indexOf("data-record-skeleton"));
+    // Only What's next carries it.
+    expect(html.match(/data-waiting-skeleton-row/g)).toHaveLength(2);
+  });
 });

@@ -18,7 +18,13 @@ import { nextUpView } from "@/lib/record/next-up";
 import { headerActions, headerActionLabels, canTextFrom, firstMapUrl } from "@/lib/record/header-actions";
 import {
   loadSummary, loadNextUp, loadTimeline, loadDeals, loadTags, loadFieldDefs, loadHeaderPlaces, softSmsGate,
+  loadWaitingSuggestions,
 } from "@/lib/record/loaders";
+import { buildSuggestionView } from "@/lib/proposals/view";
+import { WaitingSuggestions, type WaitingData } from "@/components/proposals/suggestion-row";
+import {
+  acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
+} from "@/lib/proposals/actions";
 import { timelineRows, timelineFailedText } from "@/lib/record/timeline-rows";
 import { timelinePagerHrefs } from "@/lib/record/timeline-pager";
 import { parseTimelineCursor } from "@/lib/cursor";
@@ -93,7 +99,7 @@ export default async function ContactDetailPage({
   // client proved the contact is the caller's to see: that read is the authorisation.
   const ledger = ledgerDb();
   const now = new Date();
-  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places, forwarding] = await Promise.all([
+  const [prefs, tags, fieldDefs, smsGate, account, smsRecipient, assign, summary, nextUp, timeline, deals, places, forwarding, waiting] = await Promise.all([
     getPersonPrefs(),
     loadTags(db, accountId, contactId),
     loadFieldDefs(db, accountId),
@@ -121,6 +127,9 @@ export default async function ContactDetailPage({
       token: () => readReplyToken(serviceDb(), accountId, contactId),
       log: (line) => console.error(`contact page: account ${accountId} ${line}`),
     }, { isAgency: access.isAgency }),
+    // Item 8b-2 (spec 5.3): What's next's "Waiting for you", this customer's pending suggestions on the
+    // request client (RLS decides). Never throws: a failure is the section's own error line.
+    loadWaitingSuggestions(db, accountId, contactId, now),
   ]);
   // The email composer's read (consent spec §6, choice 22). Never throws.
   const emailRecipient = await emailRecipientState(ledger, accountId, contact);
@@ -200,6 +209,19 @@ export default async function ContactDetailPage({
     ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
+  // "Waiting for you" (item 8b-2, spec 5.3): built in its own guard, so a row that cannot be shown is the
+  // section's error line, never What's next's card. The persona is the timeline's one read (spec 5.3);
+  // the rows are this customer's own, so their source label names no caller.
+  const waitingData: WaitingData = (waiting.status === "ready"
+    ? viewOf("waiting suggestions", () => ({
+      ok: true as const,
+      views: waiting.rows.map((row) => buildSuggestionView(row, {
+        tr, zone: zone.zone, now, ...waiting.stages, callerName: null, callStartedAt: null,
+        personaName: (timeline.status === "ready" ? timeline.personaName : null) ?? "Sofía",
+        names: {}, viewerId: access.userId,
+      })),
+    }))
+    : null) ?? { ok: false };
   // review M1/M-2: a bad stored date (etc.) costs this one line, never the whole page, and the line
   // is LEFT OUT (no prop, no row) rather than a "Not set." that would be false for a set contact.
   const language = viewOf("language", () => languageView(contact as unknown as ContactLanguageFacts, {
@@ -227,7 +249,20 @@ export default async function ContactDetailPage({
       : failed(tr.text("record.summary.failed")),
     "next-up": upNext
       // Add a To-do focuses the timeline's To-do field: with no timeline there is nothing behind it (D3).
-      ? { node: <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={composerShown ? tr.text("record.nextUp.addTodo") : null} /> }
+      ? {
+        node: (
+          <NextUpBody view={upNext} emptyText={tr.text("record.nextUp.empty")} addTodoLabel={composerShown ? tr.text("record.nextUp.addTodo") : null}
+            // Shown only beside What's next's own rows: when that read fails, the card's error stands alone
+            // (plan ambiguity 7). Each action is bound to this account (plan fix I-3).
+            waiting={
+              <WaitingSuggestions tr={tr} data={waitingData} seeAllHref={`/dashboard/accounts/${accountId}/tasks`}
+                accept={acceptSuggestionAction.bind(null, accountId)}
+                editAccept={editAcceptSuggestionAction.bind(null, accountId)}
+                discard={discardSuggestionAction.bind(null, accountId)}
+                undo={undoSuggestionAction.bind(null, accountId)} />
+            } />
+        ),
+      }
       : failed(tr.text("record.nextUp.failed")),
     // 1b: bilingual (no lang="en" wrapper), one server page, every row marked.
     timeline: timeline.status === "ready" && timelineView

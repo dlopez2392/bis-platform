@@ -3189,13 +3189,6 @@ export const m = {
   "work.usageStale.many": "Usage for {n} clients hasn't reached Stripe in over a day, so it isn't on their bills yet. We retry every 15 minutes.",
   "work.usageStale.action": "Check the Stripe connection",
 
-  // The agency Work page's read-only Suggestions section (item 8b-1): the one reader left in this
-  // namespace. Every other proposals.* key went with the old call-page block (final review: zero
-  // readers); the card's words are suggestions.*. The section has no decision of its own, so acting
-  // means opening the account, where each suggestion is a card.
-  "proposals.work.heading": "Suggestions",
-  "proposals.work.body": "Open the account to accept or discard. Nothing changes from this screen.",
-
   // Agency Plans page (/dashboard/plans), client billing rollout step 1.
   // Agency-only screen (requireAgency); the env-var names in the
   // plans.stripe.* lines are for the operator who has to set them, the same

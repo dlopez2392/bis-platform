@@ -19,15 +19,18 @@
 //     rendered date reads those straight off the row, so an agency user
 //     never sees another account's zone-computed date leak onto this one's
 //     row, and never lands on another account's contact.
-//   - No action buttons. The per-account "To do" screen's Not now / Done /
-//     booking buttons are bound to ONE accountId (tasks/actions.ts); wiring
-//     the same actions per-row across many accounts is a bigger surface than
-//     this task's own brief asks for ("render grouped with the brand name on
-//     every row" — nothing about acting from here). A row here is read-only;
-//     acting on it means following its own link into that account.
+//   - No action buttons on the WORK rows. The per-account "To do" screen's
+//     Not now / Done / booking buttons are bound to ONE accountId
+//     (tasks/actions.ts); wiring the same actions per-row across many accounts
+//     is a bigger surface than this task's own brief asks for ("render grouped
+//     with the brand name on every row" — nothing about acting from here). A
+//     work row here is read-only; acting on it means following its own link
+//     into that account. The SUGGESTIONS below are the exception (item 8b-2,
+//     spec 5.2): the tray's own cards with their actions, grouped under each
+//     account, each account's four actions bound to that account here.
 import Link from "next/link";
 import { ListTodo } from "lucide-react";
-import type { AgencyWorkRow, Proposal } from "@bis/db";
+import type { AgencyWorkRow } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { Badge } from "@/components/ui/badge";
@@ -38,22 +41,13 @@ import { formatDateInZone } from "@/lib/format";
 import { m, type MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { workRowHref } from "@/lib/documents/card-focus";
-import { makeTr } from "@/lib/record/copy";
-import { describeRow } from "@/lib/proposals/view";
-import type { DescribeCtx, Part } from "@/lib/proposals/kinds/types";
-// Task 7's own extracted, reusable pieces (its header comment says so) —
-// reused here rather than copied: the SAME card shell the call-detail page's own
-// Suggested-next-steps block uses, so this screen's suggestions read as
-// visually distinct from a plain bucket's `ListPanel` — the binding
-// constraint's own "visually separated" requirement — without inventing a
-// second card language. No per-row status treatment is imported any more
-// (fix-wave minor, task-10-brief.md): every row this screen ever shows is
-// `pending` by construction and the section is already titled
-// "Suggestions", so a per-row chip repeating that fact distinguished
-// nothing.
-import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
+import type { Tr } from "@/lib/record/copy";
+import type { SuggestionGroup } from "@/lib/proposals/group";
+import {
+  acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
+} from "@/lib/proposals/actions";
+import { AgencySuggestionSection, type AgencySuggestionData } from "@/components/proposals/suggestion-section";
 import { AiAuthorMark } from "../accounts/[accountId]/calls/ai-author-mark";
-import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -205,99 +199,48 @@ function AgencyWorkRowItem({
   );
 }
 
-// ── Work Queue Task 10 — pending suggestions ────────────────────────────
+// ── Pending suggestions (Work Queue Task 10; cards since item 8b-2) ──────
 //
-// A proposal is a QUESTION about work, not work — it is rendered as its own
+// A suggestion is a QUESTION about work, not work: it is rendered as its own
 // sibling `<section>`, never folded into `buckets` (task-10-brief.md's own
 // binding constraint on `Bucket`/`BucketedWork`, `lib/work/buckets.ts`).
-// `listPendingProposalsForAgency` (packages/db/src/proposals.ts) is
-// this screen's cross-tenant twin of `listPendingProposals`, carrying the
-// same `brandName` field every other row on this page already does.
-export type AgencyProposal = Proposal & { brandName: string; timezone: string };
+// page.tsx reads every account's pending rows (`listPendingProposalsForAgency`,
+// at most 50 per account, item 8b-2), builds each card in THAT account's zone
+// and groups them by account, then as the tray (customer, then call).
 
-/** The registry's own words for the row (item 8b-1, plan deviation 14): `describeRow` with English (an
- *  operator reads this page) and the row's OWN account zone, never one shared by the whole list. This
- *  replaced the page's third copy of the sentence builder. A zone the formatter refuses (a RangeError)
- *  costs that row its due-date line, never the row and never a guessed zone; any other error is a
- *  programming error and is rethrown. A stage pair the page's batch read could not name reads the
- *  registry's honest "review the stage change" sentence, never a raw uuid. */
-const EN = makeTr("en");
-function agencyDescription(p: AgencyProposal, stages: DescribeCtx["stages"]): { parts: Part[]; detail: string | null } {
-  const now = new Date();
-  try {
-    return describeRow(p, { tr: EN, zone: p.timezone, stages, now });
-  } catch (err) {
-    if (!(err instanceof RangeError) || p.kind !== "task") throw err;
-    return { ...describeRow({ ...p, payload: { ...p.payload, dueAt: null } }, { tr: EN, zone: "UTC", stages, now }), detail: null };
-  }
-}
+const NO_SUGGESTIONS: AgencySuggestionsLoad = { ok: true, accounts: [] };
 
-function AgencyProposalRow({
-  proposal,
-  contactName,
-  stageNames,
-}: {
-  proposal: AgencyProposal;
-  /** `null` when the proposal carries no contact — never rendered, unlike
-   *  a bucket row's own always-present fallback, because a suggestion about
-   *  a contact detail or a task is still legible without one. */
-  contactName: string | null;
-  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
-   *  `agencyDescription`'s doc comment. Only ever consulted for an
-   *  `opportunity_stage` proposal. */
-  stageNames: DescribeCtx["stages"];
-}) {
-  const { parts, detail } = agencyDescription(proposal, stageNames);
+/** One account's suggestions as page.tsx built them; this file binds that account's actions. */
+export type AgencySuggestionAccountView = {
+  accountId: string; brandName: string; personaName: string; capped: boolean; groups: SuggestionGroup[];
+};
+/** The section's state: the accounts with something pending (none: no section), or the read failed. */
+export type AgencySuggestionsLoad = { ok: true; accounts: AgencySuggestionAccountView[] } | { ok: false };
 
-  return (
-    <li>
-      <Link
-        // A suggestion with no call (none today: 0088's CHECK ties source "call" to a call) opens the
-        // account's To do tray, where its card is, never /calls/null.
-        href={proposal.callId
-          ? `/dashboard/accounts/${proposal.accountId}/calls/${proposal.callId}#call-proposals`
-          : `/dashboard/accounts/${proposal.accountId}/tasks`}
-        className="flex flex-col gap-2 px-5 py-4 transition-colors hover:bg-[var(--surface-3)]"
-      >
-        <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
-          {proposal.brandName || m["work.agency.unbranded"]}
-        </span>
-        {/* No per-row status chip here (fix-wave minor, task-10-brief.md):
-            every row this screen ever shows is `pending` by construction
-            (`listPendingProposalsForAgency` only ever returns pending rows)
-            and the section heading above already says "Suggestions" — an
-            identical chip on every row would distinguish nothing.
-            DESIGN.md rule 3 exists to tell statuses APART; there is only
-            ever one here. */}
-        <span className="text-sm font-medium text-card-foreground">
-          <SuggestionParts parts={parts} />
-        </span>
-        {/* Fix-wave Important 1 (task-11-brief): a machine-chosen due date
-            must be visible before a human accepts it, in ITS OWN account's
-            zone — this screen pools rows across every account, so the zone
-            is read off the proposal's own `timezone`, never a single one
-            shared by the page. */}
-        {detail ? <span className="text-xs text-muted-foreground">{detail}</span> : null}
-        {contactName ? <span className="text-xs text-muted-foreground">{contactName}</span> : null}
-        {/* Evidence has no transcript beside it here, unlike the call-detail
-            page's own Suggested-next-steps block — the row's OWN link above
-            is how a reader checks the quote against the whole call it came
-            from, deep-linked to that page's own `#call-proposals` section
-            rather than its top. */}
-        <p className="text-sm leading-6 text-muted-foreground">
-          {m["suggestions.evidence"]}{" "}
-          <q className="text-foreground">{proposal.evidence}</q>
-        </p>
-      </Link>
-    </li>
-  );
+/** Each account's four actions bound to THAT account (plan fix I-3: `.bind`, never a closure, which a
+ *  server component cannot hand a client one), and a blank brand name read as the neutral caption. */
+function withActions(load: AgencySuggestionsLoad): AgencySuggestionData {
+  if (!load.ok) return { ok: false };
+  return {
+    ok: true,
+    accounts: load.accounts.map((a) => ({
+      ...a,
+      brandName: a.brandName || m["work.agency.unbranded"],
+      actions: {
+        accept: acceptSuggestionAction.bind(null, a.accountId),
+        editAccept: editAcceptSuggestionAction.bind(null, a.accountId),
+        discard: discardSuggestionAction.bind(null, a.accountId),
+        undo: undoSuggestionAction.bind(null, a.accountId),
+      },
+    })),
+  };
 }
 
 export function AgencyWorkList({
   buckets,
   contactNames,
-  proposals = [],
-  stageNames = {},
+  suggestions = NO_SUGGESTIONS,
+  tr,
 }: {
   buckets: AgencyBucketedWork;
   /** contactId → display name, for every non-null contactId across every
@@ -307,24 +250,17 @@ export function AgencyWorkList({
    *  "undefined". Also resolves a proposal row's own contact, from the
    *  SAME batch read (page.tsx extends the same id collection). */
   contactNames: Record<string, string>;
-  /** Every account's pending proposals, pooled the same way `buckets` is.
-   *  Optional (defaults to none) so every existing call site — and every
-   *  existing test — is unaffected by this prop's addition. */
-  proposals?: AgencyProposal[];
-  /** page.tsx's own batched `pipeline_stages` read, keyed by stage id — see
-   *  `agencyDescription`'s doc comment. Optional (defaults to none) for the
-   *  same reason `proposals` is. */
-  stageNames?: DescribeCtx["stages"];
+  /** Every account's pending suggestions as cards, grouped by account (item 8b-2). Optional (defaults
+   *  to none) so the bucket-only call sites and tests are unaffected. */
+  suggestions?: AgencySuggestionsLoad;
+  /** The suggestions' words in the operator's language (requestLocale). REQUIRED, never defaulted, as
+   *  the tray's WorkList's is: a silent English default would show a Spanish reader English. */
+  tr: Tr;
 }) {
   const shown = visibleAgencyBuckets(buckets);
-  // Fix-wave Important 1's "also" (task-10-brief.md): every proposal this
-  // screen is handed now describes itself with SOMETHING honest (see
-  // `agencyDescription`, which never returns nothing for any kind) — so
-  // there is no longer a kind-based filter here that could quietly consume
-  // `listPendingProposalsForAgency`'s `.limit(500)` cap on rows this screen
-  // then never shows. Every fetched proposal is a shown proposal.
-
-  if (shown.length === 0 && proposals.length === 0) {
+  // The real queue can be empty while a suggestion is pending, or while the
+  // suggestions could not be read: never "Nothing needs you right now" over either.
+  if (shown.length === 0 && suggestions.ok && suggestions.accounts.length === 0) {
     return (
       <EmptyState
         icon={ListTodo}
@@ -367,29 +303,8 @@ export function AgencyWorkList({
           </ListPanel>
         </section>
       ))}
-      {proposals.length > 0 ? (
-        // A sibling `<section>`, never a fourth bucket — visually separated
-        // by Task 7's own CARD shell (a bordered, glass panel; a bucket's
-        // own ListPanel below shares that exact styling by coincidence of
-        // BOTH constants being `overflow-hidden rounded-xl border
-        // border-border bg-card glass`, but this one ALSO carries a labelled
-        // heading + subhead, which no bucket section has, so "Suggestions"
-        // never reads as a fourth Overdue/Today/Waiting).
-        <section data-proposals aria-labelledby="agency-proposals" className={CARD}>
-          <h2 id="agency-proposals" className={CARD_HEAD}>{m["proposals.work.heading"]}</h2>
-          <p className="px-5 pt-3 text-sm text-muted-foreground">{m["proposals.work.body"]}</p>
-          <ul className="divide-y divide-[var(--row-line)]">
-            {proposals.map((p) => (
-              <AgencyProposalRow
-                key={p.id}
-                proposal={p}
-                contactName={p.contactId ? (contactNames[p.contactId] ?? m["contact.noName"]) : null}
-                stageNames={stageNames}
-              />
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      {/* A sibling section, never a fourth bucket: the tray's cards under each account's name. */}
+      <AgencySuggestionSection tr={tr} data={withActions(suggestions)} />
     </div>
   );
 }

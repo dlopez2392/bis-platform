@@ -195,6 +195,8 @@ export default async function CallDetailPage({
     const now = new Date();
     const views = rows.map((row) => buildSuggestionView(row, {
       tr, zone: timezone, now, ...stageCtx, callerName, callStartedAt: call.started_at, personaName, names, viewerId: userId,
+      // "See it in the transcript" points at the turn below on this very page (item 8b-2, spec 5.5).
+      onCallPage: true,
     }));
     // Pending first: the section exists to obtain a decision, and `listProposalsForCall` orders by
     // created_at DESC. `sort` is stable, so the order is otherwise kept.

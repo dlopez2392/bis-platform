@@ -1064,9 +1064,4 @@ describe("the tray everywhere, item 8b-2's new keys (plan Task 3)", () => {
       .filter((s) => /proposal|payload|model|registry|token|call_proposals/i.test(s ?? ""));
     expect(bad).toEqual([]);
   });
-
-  it("does not delete proposals.work.heading/.body: Task 6 still reads them (agency-work-list.tsx)", () => {
-    expect(m["proposals.work.heading"]).toBeTruthy();
-    expect(m["proposals.work.body"]).toBeTruthy();
-  });
 });

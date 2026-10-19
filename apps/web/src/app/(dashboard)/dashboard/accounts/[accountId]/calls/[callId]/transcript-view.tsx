@@ -34,11 +34,15 @@ function turnClock(at: string, timeZone: string): { label: string; ms: number } 
  *  actually guarantees an array of well-formed turns reached this page. A turn
  *  with no text is dropped rather than rendered as an empty bubble, which
  *  would look like the receptionist said nothing and be indistinguishable
- *  from a real silent turn. */
-function usableTurns(transcript: TranscriptEvent[]): TranscriptEvent[] {
+ *  from a real silent turn.
+ *
+ *  Each kept turn keeps its RAW index into the stored array (item 8b-2, plan
+ *  A1): a suggestion's `evidence_ref.turn` counts the stored turns, empty ones
+ *  included, so the anchor a card links to must count them too. */
+function usableTurns(transcript: TranscriptEvent[]): { turn: TranscriptEvent; raw: number }[] {
   if (!Array.isArray(transcript)) return [];
-  return transcript.filter(
-    (t) => t && typeof t.text === "string" && t.text.trim().length > 0,
+  return transcript.flatMap((t, raw) =>
+    t && typeof t.text === "string" && t.text.trim().length > 0 ? [{ turn: t, raw }] : [],
   );
 }
 
@@ -81,7 +85,7 @@ export function TranscriptView({
       />
 
       <ol className="relative grid gap-3 sm:grid-cols-2 sm:gap-x-10">
-        {turns.map((turn, i) => {
+        {turns.map(({ turn, raw }, i) => {
           const isCaller = turn.role === "caller";
           // The role is SHOWN once per run, not once per turn: a back-and-forth
           // of thirty turns would otherwise be half labels, and the side and the
@@ -91,14 +95,16 @@ export function TranscriptView({
           // side and tint are exactly the two cues a screen reader does not
           // have, and without the label a listener hears a bare timestamp and
           // a sentence with nobody attached to it.
-          const startsRun = i === 0 || turns[i - 1]?.role !== turn.role;
+          const startsRun = i === 0 || turns[i - 1]?.turn.role !== turn.role;
           const clock = turnClock(turn.at, timezone);
 
           return (
             <li
-              key={`${i}-${turn.at}`}
+              key={`${raw}-${turn.at}`}
+              // "See it in the transcript" lands here (item 8b-2, spec 5.5); scroll-mt clears the topbar.
+              id={`turn-${raw}`}
               className={cn(
-                "flex flex-col items-start gap-1",
+                "flex scroll-mt-20 flex-col items-start gap-1",
                 isCaller ? "sm:col-start-1" : "sm:col-start-2 sm:items-end",
               )}
             >

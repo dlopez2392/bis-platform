@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { SuggestionActions, decisionFocusTarget, escCancelsEdit } from "./suggestion-actions";
+import { SuggestionActions, decisionFocusTarget, escCancelsEdit, nextSuggestionAfter } from "./suggestion-actions";
 import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
 
 /** No DOM here (no jsdom): the markup a reader and a keyboard get, per mode. What the buttons DO is
@@ -197,5 +197,51 @@ describe("the suggestion card's client files stay off the registry and the datab
       `import type { SuggestionView } from "@/lib/proposals/view";`,
       `import type { Proposal } from "@bis/db/proposal-rules";`,
     ].map((s) => SERVER_VALUE_IMPORT.test(s))).toEqual([true, true, true, true, false, false]);
+  });
+});
+
+/**
+ * The flat row's actions (item 8b-2, spec 5.3; DESIGN.md rule 8 as amended 2026-10-19: "A flat suggestion
+ * row inside a record card has no primary at all"): ghost Accept and ghost Discard, and no Edit, which
+ * happens in the tray.
+ */
+describe("SuggestionActions variant=\"row\" (the record's flat row)", () => {
+  function rowHtml(edit: SuggestionEdit) {
+    return renderToStaticMarkup(createElement(SuggestionActions, {
+      id: "sg_1", edit, labels, accept: ok, editAccept: ok, discard: ok, undo, variant: "row",
+    }));
+  }
+  it("exactly two buttons, Accept and Discard, both ghost: zero primary (mutation: keep Accept's default variant -> FAILS)", () => {
+    for (const edit of [TASK, STAGE]) {
+      const b = buttons(rowHtml(edit));
+      expect(b.map((x) => [text(x), variant(x), typeOf(x)])).toEqual([
+        ["Accept", "ghost", "button"],
+        ["Discard", "ghost", "button"],
+      ]);
+      expect(b.filter((x) => variant(x) === "default")).toEqual([]);
+    }
+  });
+  it("Accept still carries data-suggestion-accept, so focus can land on the next row's Accept", () => {
+    expect(rowHtml(TASK)).toMatch(/<button[^>]*data-suggestion-accept[^>]*>Accept<\/button>/);
+  });
+  it("the card's variant is unchanged by default: one primary Accept", () => {
+    expect(buttons(html(TASK)).filter((x) => variant(x) === "default").map(text)).toEqual(["Accept"]);
+  });
+});
+
+/**
+ * Which card's Accept takes focus once a decided card leaves (spec 4.5, plan Task 6: "must still hold across
+ * a group boundary"). The ids are every card in the list in document order, read with querySelectorAll over
+ * the list, never the card's next DOM sibling, which is a group heading at a group's last card.
+ */
+describe("nextSuggestionAfter", () => {
+  it("the card after this one in document order, across a group boundary (mutation: return the id before -> FAILS)", () => {
+    // Group A holds sg_1 and sg_2; group B holds sg_3. sg_2 is its group's last card.
+    expect(nextSuggestionAfter(["sg_1", "sg_2", "sg_3"], "sg_2")).toBe("sg_3");
+    expect(nextSuggestionAfter(["sg_1", "sg_2", "sg_3"], "sg_1")).toBe("sg_2");
+  });
+  it("the last card has none, and an id not in the list has none", () => {
+    expect(nextSuggestionAfter(["sg_1", "sg_2"], "sg_2")).toBeNull();
+    expect(nextSuggestionAfter(["sg_1"], "sg_9")).toBeNull();
   });
 });

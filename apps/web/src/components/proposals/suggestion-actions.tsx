@@ -6,7 +6,9 @@
 // `runDecision`'s, a pure handler with a unit test, because there is no DOM to test this file in.
 //
 // Rule 8 (P12): each card is its own view with ONE primary, Accept, or Save and accept while editing;
-// everything else is ghost. `useTransition` disables every button while any one runs.
+// everything else is ghost. `useTransition` disables every button while any one runs. The record's flat
+// row (variant "row", item 8b-2) has NO primary: ghost Accept and ghost Discard, and no Edit, which
+// happens in the tray (DESIGN.md rule 8 as amended 2026-10-19).
 import { useEffect, useId, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -56,6 +58,16 @@ export function decisionFocusTarget(doc: CardLookup, ownId: string, nextId: stri
   return { wait: false, el: doc.querySelector(`[data-suggestion="${nextId}"] [data-suggestion-accept]`) };
 }
 
+/**
+ * The card after `ownId` in the list, in document order (item 8b-2): the ids come from the whole list
+ * (the tray's section, an agency account's section, the record's Waiting rows), never the card's next
+ * DOM sibling, which at a group's last card is the next group's heading. Pure.
+ */
+export function nextSuggestionAfter(ids: readonly string[], ownId: string): string | null {
+  const i = ids.indexOf(ownId);
+  return i >= 0 && i + 1 < ids.length ? ids[i + 1]! : null;
+}
+
 /** Polls decisionFocusTarget until the re-render lands (bounded: 60 tries, 50 ms apart). It runs from a
  *  timer, not an effect, because in the tray this component has unmounted by then. */
 function focusAfterDecision(ownId: string, nextId: string | null, tries = 60) {
@@ -68,11 +80,13 @@ function focusAfterDecision(ownId: string, nextId: string | null, tries = 60) {
 }
 
 export function SuggestionActions({
-  id, edit, labels, accept, editAccept, discard, undo, initialMode = "view",
+  id, edit, labels, accept, editAccept, discard, undo, initialMode = "view", variant = "card",
 }: SuggestionActionProps & {
   id: string; edit: SuggestionEdit; labels: SuggestionLabels;
   /** For the markup test and the styleguide; the card always starts in view. */
   initialMode?: "view" | "edit";
+  /** "row": the record's flat row, ghost Accept and Discard only. */
+  variant?: "card" | "row";
 }) {
   const [mode, setMode] = useState<"view" | "edit">(initialMode);
   const [fieldError, setFieldError] = useState<{ field: string; text: string } | null>(null);
@@ -101,11 +115,15 @@ export function SuggestionActions({
     startTransition(async () => {
       const r = await runDecision({
         act, undo: () => undo(id), toast, schedule: (fn, ms) => { setTimeout(fn, ms); },
-        labels: { undo: labels.undo, crashed: labels.crashed, lang: labels.lang },
+        // A full reload, never router.refresh(): a tab pinned to an older deployment refreshes from it (A4).
+        reload: () => { window.location.reload(); },
+        labels: { undo: labels.undo, crashed: labels.crashed, reload: labels.reload, lang: labels.lang },
       });
       if (r.ok) {
-        const card = (rootRef.current ?? formRef.current)?.closest("[data-suggestion]");
-        const next = card?.nextElementSibling?.closest("[data-suggestion]")?.getAttribute("data-suggestion") ?? null;
+        const own = rootRef.current ?? formRef.current;
+        const list = own?.closest("[data-suggestion-list]");
+        const ids = [...(list?.querySelectorAll("[data-suggestion]") ?? [])].map((el) => el.getAttribute("data-suggestion") ?? "");
+        const next = nextSuggestionAfter(ids, id);
         setFieldError(null);
         setMode("view");
         focusAfterDecision(id, next);
@@ -119,6 +137,20 @@ export function SuggestionActions({
     returnFocus.current = true;
     setFieldError(null);
     setMode("view");
+  }
+
+  if (variant === "row") {
+    return (
+      <div ref={rootRef} className="flex flex-wrap gap-2">
+        <Button data-suggestion-accept type="button" size="sm" variant="ghost" className={CTL} disabled={pending}
+          onClick={() => run(() => accept(id))}>
+          {labels.accept}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" className={CTL} disabled={pending} onClick={() => run(() => discard(id))}>
+          {labels.discard}
+        </Button>
+      </div>
+    );
   }
 
   if (mode === "view") {

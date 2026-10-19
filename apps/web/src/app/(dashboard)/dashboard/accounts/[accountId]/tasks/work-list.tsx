@@ -30,7 +30,7 @@ import { ConsentHoldActions } from "./consent-hold-actions";
 import type { TextsActionResult } from "@/lib/consent/staff-actions";
 import { AiAuthorMark } from "../calls/ai-author-mark";
 import { SuggestionSection } from "@/components/proposals/suggestion-section";
-import type { SuggestionView } from "@/lib/proposals/view";
+import type { SuggestionGroup } from "@/lib/proposals/group";
 import {
   acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
 } from "@/lib/proposals/actions";
@@ -313,7 +313,7 @@ function WorkRowItem({
   );
 }
 
-const NO_SUGGESTIONS = { views: [], capped: false, error: false };
+const NO_SUGGESTIONS = { groups: [], capped: false, error: false };
 
 export function WorkList({
   buckets,
@@ -342,12 +342,13 @@ export function WorkList({
    *  because the guess is no longer silent. One rule, five screens. */
   timezone: string;
   /** The tray (item 8b-1): this account's pending suggestions as cards
-   *  (`buildSuggestionView`, page.tsx), whether more than 200 came back, and
+   *  (`buildSuggestionView`, page.tsx), grouped by customer, then by call
+   *  (`groupSuggestions`, item 8b-2), whether more than 200 came back, and
    *  whether a read behind them failed. A QUESTION about work, never work
    *  itself, so it is NEVER folded into `buckets`/`Bucket` (spec 8.1).
    *  Optional (defaults to none) so every other call site and test is
    *  unaffected. */
-  suggestions?: { views: SuggestionView[]; capped: boolean; error: boolean };
+  suggestions?: { groups: SuggestionGroup[]; capped: boolean; error: boolean };
   /** The section's words in the reader's language (requestLocale). REQUIRED, never defaulted (final
    *  review, Task 8): a silent English default let a caller that forgot it show a Spanish reader English
    *  cards, and no test could tell. */
@@ -388,7 +389,7 @@ export function WorkList({
   // the suggestions could not be read: this screen never claims "Nothing
   // needs you right now" over a pending suggestion or over a read it could
   // not make.
-  if (shown.length === 0 && suggestions.views.length === 0 && !suggestions.error) {
+  if (shown.length === 0 && suggestions.groups.length === 0 && !suggestions.error) {
     // F-085 part 1: an empty filter is not an empty queue, so it says which.
     if (who === "mine") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.mine"]} /></>;
     if (who === "unassigned") return <>{heldRow}<EmptyState icon={ListTodo} title={m["assign.empty.unassignedWork"]} /></>;
@@ -444,7 +445,7 @@ export function WorkList({
       <SuggestionSection
         tr={tr}
         personaName={personaName}
-        data={suggestions.error ? { ok: false } : { ok: true, views: suggestions.views, capped: suggestions.capped }}
+        data={suggestions.error ? { ok: false } : { ok: true, groups: suggestions.groups, capped: suggestions.capped }}
         accept={acceptSuggestionAction.bind(null, accountId)}
         editAccept={editAcceptSuggestionAction.bind(null, accountId)}
         discard={discardSuggestionAction.bind(null, accountId)}

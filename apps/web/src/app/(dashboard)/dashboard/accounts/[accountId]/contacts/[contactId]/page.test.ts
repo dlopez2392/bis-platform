@@ -77,6 +77,8 @@ const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
 const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
+// Item 8b-2 (spec 5.3): What's next's "Waiting for you" read; none pending unless a case says so.
+const listPendingProposalsForContactMock = vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []);
 // S-06 part 2 (spec §1): the Forwarding address row's two reads. Replies off by default, the state
 // a new account starts in; a test that wants an address turns them on.
 const SERVICE = vi.hoisted(() => ({ tag: "service-db" }));
@@ -96,6 +98,7 @@ vi.mock("@bis/db", () => ({
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
   getVoiceProfile: (...a: unknown[]) => getVoiceProfileMock(...a),
+  listPendingProposalsForContact: (...a: unknown[]) => listPendingProposalsForContactMock(...a),
   TIMELINE_SOURCES: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"],
   getContact: (...args: unknown[]) => getContactMock(...args),
   listContactTags: (...args: unknown[]) => listContactTagsMock(...args),
@@ -279,6 +282,7 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
       listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
       getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
       getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock, readReplyToken: readReplyTokenMock,
+      listPendingProposalsForContact: listPendingProposalsForContactMock,
     };
     for (const r of Object.values(reads)) r.mockClear();
     await expect(render()).rejects.toThrow("NEXT_NOT_FOUND");
@@ -1228,5 +1232,83 @@ describe("item 8a-2: the AI part sits under the facts line (spec 4.1; plan devia
       errors.mockRestore();
       contactFactsMock.mockResolvedValue(READY_FACTS);
     }
+  });
+});
+
+/**
+ * What's next's "Waiting for you" (item 8b-2, spec 5.3): this customer's pending suggestions as flat rows
+ * above the card's own rows, with its own boundary inside the card, the persona read once (the timeline's).
+ */
+describe("the record page's Waiting for you (item 8b-2)", () => {
+  const PENDING = {
+    id: "sg1", accountId: "acct1", source: "call", callId: "call1", contactId: "ct1", kind: "task",
+    payload: { title: "Call back about the quote", dueAt: null }, status: "pending",
+    evidence: "Can someone call me back about the quote?", evidenceRef: {}, evidenceLang: "en",
+    expiredReason: null, appliedPayload: null, appliedRef: null, decidedAt: null, decidedBy: null,
+    undoneAt: null, undoneBy: null, createdAt: "2026-10-14T15:00:00Z", expiresAt: "2099-01-01T00:00:00Z",
+  };
+  /** The What's next card's markup: everything from its own marker to the next card's (the timeline). */
+  const nextUp = (html: string) => html.slice(html.indexOf('data-record-card="next-up"'), html.indexOf('data-record-card="timeline"'));
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    contactFactsMock.mockReset().mockResolvedValue(READY_FACTS);
+    contactNextUpMock.mockReset().mockResolvedValue({ bookings: [], datedTasks: [{ id: "t1", title: "Order shingles", due_at: "2099-10-20T15:00:00Z" }], undatedCount: 0 });
+    listContactTimelinePageMock.mockReset().mockResolvedValue(EMPTY_PAGE);
+    getVoiceProfileMock.mockReset().mockResolvedValue({ persona_name: "Lupe" });
+    listPendingProposalsForContactMock.mockReset().mockResolvedValue([PENDING]);
+  });
+
+  it("reads this customer's pending suggestions on the request client, once, and draws them above What's next's rows (mutation: drop the read from the Promise.all -> FAILS)", async () => {
+    const html = await render();
+    expect(listPendingProposalsForContactMock).toHaveBeenCalledTimes(1);
+    const [db, accountId, contactId, now] = listPendingProposalsForContactMock.mock.calls[0]!;
+    expect([accountId, contactId]).toEqual(["acct1", "ct1"]);
+    expect(db).not.toBe(LEDGER);
+    expect(now).toBeInstanceOf(Date);
+    const card = nextUp(html);
+    expect(card).toContain("data-waiting-suggestions");
+    expect(card.indexOf("data-waiting-suggestions")).toBeLessThan(card.indexOf('data-next-up-row="task"'));
+    expect(card).toMatch(/<li[^>]*data-suggestion="sg1"/);
+    expect(renderedText(card)).toContain(m["suggestions.waiting.heading"]);
+    expect(card).toContain('href="/dashboard/accounts/acct1/tasks"');
+  });
+
+  it("the row's mark names the account's persona from the timeline's one read, and the row has no primary (rule 8)", async () => {
+    const card = nextUp(await render());
+    expect(card).toMatch(/<span[^>]*data-ai-mark[^>]*>Lupe · AI<\/span>/);
+    expect(getVoiceProfileMock).toHaveBeenCalledTimes(1);
+    expect(card).not.toMatch(/data-variant="default"/);
+  });
+
+  it("the section's read failing is its own one line with Retry; What's next's rows still render (mutation: fail the whole card -> FAILS)", async () => {
+    listPendingProposalsForContactMock.mockRejectedValue(new Error("permission denied for table proposals"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const card = nextUp(await render());
+      expect(renderedText(card)).toContain("Couldn't load suggestions.");
+      expect(card).toContain('data-next-up-row="task"');
+      expect(card).not.toMatch(/data-suggestion=/);
+    } finally { errors.mockRestore(); }
+  });
+
+  it("What's next's own read failing is the card's error, and no Waiting section shows (plan ambiguity 7)", async () => {
+    contactNextUpMock.mockRejectedValue(new Error("next up down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const card = nextUp(await render());
+      expect(card).toContain(m["record.nextUp.failed"].replaceAll("'", "&#x27;"));
+      expect(card).not.toContain("data-waiting-suggestions");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("nothing pending: no section at all, the card's own rows as before", async () => {
+    listPendingProposalsForContactMock.mockResolvedValue([]);
+    const card = nextUp(await render());
+    expect(card).not.toContain("data-waiting-suggestions");
+    expect(card).toContain('data-next-up-row="task"');
   });
 });
