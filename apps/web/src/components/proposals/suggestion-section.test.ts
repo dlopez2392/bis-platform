@@ -139,6 +139,10 @@ describe("SuggestionSection: grouped", () => {
       expect((card.match(/data-variant="default"/g) ?? []).length).toBe(1);
     }
   });
+  it("the tray's last card falls back to the page heading (design review I3; mutation: no data-focus-fallback -> FAILS)", () => {
+    expect(renderToStaticMarkup(createElement(SuggestionSection, { tr: makeTr("en"), personaName: "Lupe", data: loaded("en"), ...actions })))
+      .toMatch(/^<section[^>]*data-focus-fallback="h1"/);
+  });
   it("the section is the list the focus rule reads (data-suggestion-list), lang on the section; the cap line stays", () => {
     const h = section(grouped("es", true), "es");
     expect(h).toMatch(/^<section[^>]*data-suggestion-list[^>]*>|^<section(?=[^>]*data-suggestion-list)/);
@@ -173,17 +177,47 @@ describe("AgencySuggestionSection", () => {
     ] };
   }
   const accountSections = (h: string) => [...h.matchAll(/<section[^>]*data-suggestion-account="([^"]+)"[\s\S]*?<\/section>/g)];
-  it("one section per account, headed by its brand name in a mono label, each with its own persona's subhead", () => {
+  it("one section per account, headed by its brand name, each with its own persona's subhead", () => {
     const h = agency(two());
     const s = accountSections(h);
     expect(s.map((x) => x[1])).toEqual(["acc_a", "acc_b"]);
-    expect(s[0]![0]).toMatch(/<h3[^>]*class="[^"]*font-mono[^"]*"[^>]*>Acme HVAC<\/h3>/);
+    expect(s[0]![0]).toMatch(/<h3[^>]*>Acme HVAC<\/h3>/);
     expect(s[1]![0]).toMatch(/<h3[^>]*>Rio Roofing<\/h3>/);
     expect(plain(s[0]![0])).toContain("From Lupe. Nothing changes until you accept.");
     expect(plain(s[1]![0])).toContain("From Sofía. Nothing changes until you accept.");
     // A group heading under an account heading is one level down.
     expect(s[0]![0]).toMatch(/<h4[^>]*>Ana López · from the call on Wed, Oct 14<\/h4>/);
   });
+  // Design review I4: the account boundary reads as one. The account <h3> is in the UI role (600, 13.5px,
+  // the card's own text), never the same mono label as the <h2> above and the <h4> below it.
+  it("the account <h3> is in the UI role and the group <h4> stays the mono label (mutation: MONO_LABEL on the h3 -> FAILS)", () => {
+    const h = agency(two());
+    const h3 = (/<h3[^>]*class="([^"]*)"[^>]*>Acme HVAC</.exec(h)?.[1] ?? "").split(" ");
+    expect(h3).toEqual(expect.arrayContaining(["font-semibold", "text-[13.5px]", "text-card-foreground"]));
+    expect(h3).not.toContain("font-mono");
+    expect(h3).not.toContain("uppercase");
+    const h4 = (/<h4[^>]*class="([^"]*)"[^>]*>Ana López/.exec(h)?.[1] ?? "").split(" ");
+    expect(h4).toEqual(expect.arrayContaining(["font-mono", "uppercase", "text-[10px]"]));
+  });
+
+  // Design review I3: an account's last card hands focus on (focusPlan): the outer section is the scope
+  // whose later cards come next, then the section's own heading, then the page's.
+  it("the outer section is the focus scope and each account list names its fallbacks, the section heading first (mutation: drop data-suggestion-scope -> FAILS)", () => {
+    const h = agency(two());
+    expect(h).toMatch(/^<section(?=[^>]*data-suggestion-scope)(?=[^>]*data-proposals)/);
+    for (const s of accountSections(h)) expect(s[0]).toMatch(/^<section[^>]*data-focus-fallback="#agency-suggestions\|h1"/);
+  });
+
+  // Design review minor 4: two sections on one page (the styleguide's locale columns) need their own ids.
+  it("headingId names the heading and every account heading under it (mutation: a fixed id -> FAILS)", () => {
+    const h = renderToStaticMarkup(createElement(AgencySuggestionSection, { tr: makeTr("es"), data: two("es"), headingId: "agency-suggestions-es" }));
+    expect(h).toMatch(/<section[^>]*aria-labelledby="agency-suggestions-es"/);
+    expect(h).toContain('<h2 id="agency-suggestions-es"');
+    expect(h).toContain('id="agency-suggestions-es-acc_a"');
+    expect(h).toContain('aria-labelledby="agency-suggestions-es-acc_a"');
+    expect(h).toContain('data-focus-fallback="#agency-suggestions-es|h1"');
+  });
+
   it("the capped account says so; the other does not (mutation: drop the cap line -> FAILS)", () => {
     const [a, b] = accountSections(agency(two()));
     expect(plain(a![0])).toContain("Showing the newest 50 for this account.");

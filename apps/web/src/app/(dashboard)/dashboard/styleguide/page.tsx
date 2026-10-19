@@ -29,7 +29,7 @@ import { CALL_AT, EDITS, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows a
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { makeTr } from "@/lib/record/copy";
 import { SuggestionDemo } from "./suggestion-demo";
-import { buildWorkTrayColumns, WorkTrayDemo } from "./work-tray-demo";
+import { WorkTrayDemo } from "./work-tray-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
@@ -634,7 +634,8 @@ export default async function StyleguidePage({
             `buildSuggestionView` over the same typed-out rows. */}
         <Section title="Work tray: grouped, Waiting for you, the agency section"
           file="components/proposals/{suggestion-row,suggestion-group,suggestion-section}.tsx · lib/proposals/group.ts">
-          <WorkTrayDemo columns={buildWorkTrayColumns()} />
+          {/* No props: the demo builds its own columns in the client (final review I-1). */}
+          <WorkTrayDemo />
         </Section>
 
         <Section title="Loading skeletons" file="components/ui/skeleton.tsx">

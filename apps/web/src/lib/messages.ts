@@ -3051,6 +3051,8 @@ export const m = {
   // blank, the row's caption reads this instead of going empty or falling
   // back to the internal label.
   "work.agency.unbranded": "Unnamed account",
+  // Item 8b-2 (design review minor 6): the agency section's account heading, inside its lang="es".
+  "work.agency.unbranded.es": "Cuenta sin nombre",
 
   // ── The zone note (2026-09-18) ─────────────────────────────────────────
   // Five screens print dates in the account's zone. Every one of them now

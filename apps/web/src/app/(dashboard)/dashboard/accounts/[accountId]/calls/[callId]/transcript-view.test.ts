@@ -35,4 +35,12 @@ describe("TranscriptView: turn anchors", () => {
     const html = render(transcript);
     expect(html).toMatch(/<li[^>]*id="turn-2"[^>]*class="[^"]*\bscroll-mt-20\b|<li[^>]*class="[^"]*\bscroll-mt-20\b[^"]*"[^>]*id="turn-2"/);
   });
+
+  // Design review minor 3: the turn a "See it in the transcript" link lands on is marked, so the eye finds it
+  // among thirty: a :target ring in the focus glow token, on the control radius.
+  it("the landed-on turn is marked by a :target ring on --ring-glow (mutation: drop the target: classes -> FAILS)", () => {
+    const html = render(transcript);
+    const cls = (/<li[^>]*id="turn-2"[^>]*class="([^"]*)"|<li[^>]*class="([^"]*)"[^>]*id="turn-2"/.exec(html) ?? []).slice(1).join(" ").split(" ");
+    expect(cls).toEqual(expect.arrayContaining(["target:ring-[3px]", "target:ring-[var(--ring-glow)]", "rounded-[var(--radius-ctl)]"]));
+  });
 });

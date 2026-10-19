@@ -101,10 +101,11 @@ export function TranscriptView({
           return (
             <li
               key={`${raw}-${turn.at}`}
-              // "See it in the transcript" lands here (item 8b-2, spec 5.5); scroll-mt clears the topbar.
+              // "See it in the transcript" lands here (item 8b-2, spec 5.5); scroll-mt clears the topbar, and
+              // the :target ring (design review minor 3) marks the landed-on turn among the others.
               id={`turn-${raw}`}
               className={cn(
-                "flex scroll-mt-20 flex-col items-start gap-1",
+                "flex scroll-mt-20 flex-col items-start gap-1 rounded-[var(--radius-ctl)] target:ring-[3px] target:ring-[var(--ring-glow)]",
                 isCaller ? "sm:col-start-1" : "sm:col-start-2 sm:items-end",
               )}
             >

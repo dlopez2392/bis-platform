@@ -7,6 +7,7 @@ import { MONO_LABEL, STATUS_DOT } from "./suggestion-card";
 import { SuggestionActions, type SuggestionActionProps } from "./suggestion-actions";
 import { SuggestionParts } from "./suggestion-parts";
 import { SuggestionRetry } from "./suggestion-retry";
+import { focusFallback } from "./focus-fallback";
 
 /**
  * The flat presentation of a suggestion (item 8b-2, spec 4.5 and 5.3): the same `SuggestionView` the card
@@ -50,13 +51,18 @@ export type WaitingData = { ok: true; views: SuggestionView[] } | { ok: false };
  * an error is one line with Retry, and What's next's rows render whatever this section does. It is the
  * list the focus rule reads, so a decided row's leaving hands focus to the next row's Accept.
  */
-export function WaitingSuggestions({ tr, data, seeAllHref, ...actions }: {
+export function WaitingSuggestions({ tr, data, seeAllHref, headingId = "waiting-suggestions", ...actions }: {
   tr: Tr; data: WaitingData; seeAllHref: string;
+  /** Two copies on one page (the styleguide's locale columns) each need their own id (design review minor 4). */
+  headingId?: string;
 } & SuggestionActionProps) {
   if (data.ok && data.views.length === 0) return null;
-  const id = "waiting-suggestions";
+  const id = headingId;
   return (
+    // The last row leaves with the section: focus falls back to What's next's own heading, then the
+    // page's, never <body> (design review I3).
     <section lang={tr.locale} aria-labelledby={id} data-waiting-suggestions data-suggestion-list
+      data-focus-fallback={focusFallback('[data-record-card="next-up"] h2', "h1")}
       className="flex min-w-0 flex-col gap-1 border-b border-[var(--row-line)] pb-2">
       <h3 id={id} className={MONO_LABEL}>{tr.text("suggestions.waiting.heading")}</h3>
       {data.ok ? (
@@ -71,7 +77,7 @@ export function WaitingSuggestions({ tr, data, seeAllHref, ...actions }: {
         </>
       ) : (
         <div role="alert" className="flex flex-wrap items-center gap-3">
-          <p className="min-w-0 text-sm text-muted-foreground">{tr.text("suggestions.loadFailed")}</p>
+          <p className="min-w-0 text-sm text-foreground">{tr.text("suggestions.loadFailed")}</p>
           <SuggestionRetry label={tr.text("common.retry")} />
         </div>
       )}

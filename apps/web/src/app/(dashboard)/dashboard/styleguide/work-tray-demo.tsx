@@ -15,13 +15,19 @@ import {
 } from "@/components/proposals/suggestion-specimens";
 
 /**
- * The To do tray grouped, "Waiting for you" in its five states, and the agency Work page's per-account
- * cards (item 8b-2, Task 7), in English, Spanish and the pseudo-locale. The views come from the real
- * `buildSuggestionView`, the groups from the real `groupSuggestions`: this page cannot drift from the tray.
- * A server component cannot hand this client one a function (suggestion-demo.tsx's own note), so the stand-in
- * actions below answer with the card's own words and write nothing.
+ * The To do tray grouped, "Waiting for you" in its five states and its error, and the agency Work page's
+ * per-account cards and its error (item 8b-2, Task 7), in English, Spanish and the pseudo-locale. The views
+ * come from the real `buildSuggestionView`, the groups from the real `groupSuggestions`: this page cannot
+ * drift from the tray.
+ *
+ * It takes NO props and builds its columns here, in the client (final review I-1): the styleguide page is a
+ * server component, and a server component can neither call a function this file exports (it is a client
+ * reference there, and calling it threw "Attempted to call ... from the server") nor hand this component
+ * the columns, which hold functions (`tr`, the stand-in actions). The stand-in actions answer with the
+ * card's own words and write nothing. Every heading id carries the locale (design review minor 4), so the
+ * three columns never share one.
  */
-export type WorkTrayColumn = {
+type WorkTrayColumn = {
   key: string; tr: Tr; personaName: string;
   waiting: WaitingData; grouped: SuggestionSectionData; agency: AgencySuggestionData;
 };
@@ -30,7 +36,7 @@ const LOCALES = [
   { key: "en", tr: makeTr("en") }, { key: "es", tr: makeTr("es") }, { key: "pseudo", tr: makeTr("en", true) },
 ] as const;
 
-export function buildWorkTrayColumns(): WorkTrayColumn[] {
+function buildWorkTrayColumns(): WorkTrayColumn[] {
   return LOCALES.map(({ key, tr }) => {
     const build = (s: keyof typeof rows) => buildSuggestionView(rows[s], {
       tr, zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES, callerName: "Ana Lopez",
@@ -57,7 +63,8 @@ function standIn() {
   return { accept: answered, editAccept: answered, discard: answered, undo: async () => ({ ok: true as const, message: "Undone." }) };
 }
 
-export function WorkTrayDemo({ columns }: { columns: WorkTrayColumn[] }) {
+export function WorkTrayDemo() {
+  const columns = buildWorkTrayColumns();
   return (
     <div className="flex w-full flex-col gap-8">
       {columns.map(({ key, tr, personaName, waiting, grouped, agency }) => (
@@ -65,15 +72,25 @@ export function WorkTrayDemo({ columns }: { columns: WorkTrayColumn[] }) {
           <p className={MONO_LABEL}>{key}</p>
           <div className="grid w-full gap-6 md:grid-cols-3">
             <div data-sg-waiting={key} className="flex min-w-0 max-w-[360px] flex-col gap-3">
-              <WaitingSuggestions tr={tr} data={waiting} seeAllHref="/dashboard/accounts/acc_1/tasks" {...standIn()} />
+              <WaitingSuggestions tr={tr} data={waiting} seeAllHref="/dashboard/accounts/acc_1/tasks"
+                headingId={`waiting-suggestions-${key}`} {...standIn()} />
               <WaitingSuggestionsSkeleton />
+              {/* The section's own error: one line with Retry, the card's rows unaffected (rule 5). */}
+              <div data-sg-waiting-error={key}>
+                <WaitingSuggestions tr={tr} data={{ ok: false }} seeAllHref="/dashboard/accounts/acc_1/tasks"
+                  headingId={`waiting-suggestions-error-${key}`} {...standIn()} />
+              </div>
             </div>
             <div data-sg-tray-grouped={key} className="flex min-w-0 max-w-[360px] flex-col gap-3">
               <SuggestionSection tr={tr} personaName={personaName} data={grouped} headingId={`tray-${key}`} {...standIn()} />
-              <SuggestionSectionSkeleton tr={tr} grouped />
+              <SuggestionSectionSkeleton tr={tr} grouped headingId={`tray-loading-${key}`} />
             </div>
-            <div data-sg-agency={key} className="flex min-w-0 max-w-[420px] flex-col gap-3">
-              <AgencySuggestionSection tr={tr} data={agency} />
+            <div data-sg-agency={key} className="flex min-w-0 max-w-[420px] flex-col gap-6">
+              <AgencySuggestionSection tr={tr} data={agency} headingId={`agency-suggestions-${key}`} />
+              {/* The agency section's own error: its heading, one line and Retry; the buckets unaffected. */}
+              <div data-sg-agency-error={key}>
+                <AgencySuggestionSection tr={tr} data={{ ok: false }} headingId={`agency-suggestions-error-${key}`} />
+              </div>
             </div>
           </div>
         </div>

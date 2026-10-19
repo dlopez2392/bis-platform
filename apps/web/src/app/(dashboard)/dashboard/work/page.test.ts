@@ -26,7 +26,7 @@ const countLinesTurningCallersAwayMock = vi.fn<
 // so every pre-existing case below is unaffected by its addition. Real
 // signature read from packages/db/src/proposals.ts.
 type AgencyRow = Proposal & { brandName: string; timezone: string; accountCapped: boolean };
-const listPendingProposalsForAgencyMock = vi.fn(async (): Promise<AgencyRow[]> => []);
+const listPendingProposalsForAgencyMock = vi.fn(async (..._a: unknown[]): Promise<AgencyRow[]> => []);
 // The stale-usage banner's read (client billing) — defaults to [] (no
 // banner) so every case above is unaffected. Real signature:
 // packages/db/src/usage.ts, `(db, now) => Promise<string[]>`.
@@ -79,7 +79,7 @@ vi.mock("@bis/db", async () => ({
   listAgencyWork: () => listAgencyWorkMock(),
   countLinesTurningCallersAway: (db: unknown, sinceIso: string) =>
     countLinesTurningCallersAwayMock(db, sinceIso),
-  listPendingProposalsForAgency: () => listPendingProposalsForAgencyMock(),
+  listPendingProposalsForAgency: (...a: unknown[]) => listPendingProposalsForAgencyMock(...a),
   listAccountsWithStaleUsage: (db: unknown, now: Date) => listAccountsWithStaleUsageMock(db, now),
 }));
 
@@ -391,6 +391,26 @@ describe("AgencyWorkPage", () => {
       expect(html).toMatch(/<h4[^>]*>Rosa Díaz · from the call on Tue, Sep 1<\/h4>/);
       expect(renderedText(html)).toContain("From the call on Tue, Sep 1 · Ana López");
       expect(readsOf("contacts")).toHaveLength(1);
+    });
+
+    // Final review M-4: the group heading's day is the ACCOUNT's, as the card's is. 03:00Z on Sep 2 is
+    // still Tue, Sep 1 in Chicago; in UTC it would read Wed, Sep 2.
+    it("the group heading's day is the account's own zone (mutation: group in UTC -> 'Wed, Sep 2', FAILS)", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({ contactId: "ct-rosa", callId: "call-1", timezone: "America/Chicago" })]);
+      fake.tables.calls = [{ id: "call-1", account_id: "acct-a", started_at: "2026-09-02T03:00:00Z", contact_id: "ct-rosa" }];
+      fake.tables.contacts = [{ id: "ct-rosa", first_name: "Rosa", last_name: "Díaz" }];
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(html).toMatch(/<h4[^>]*>Rosa Díaz · from the call on Tue, Sep 1<\/h4>/);
+      expect(html).not.toContain("Wed, Sep 2");
+    });
+
+    // Final review M-6: the suggestions read takes the page's one clock, as every other clock-bound read does.
+    it("the suggestions read is handed the page's one clock (mutation: call it without now -> FAILS)", async () => {
+      await AgencyWorkPage();
+      const [db, now] = listPendingProposalsForAgencyMock.mock.calls[0]!;
+      expect(db).toBe(FAKE_DB);
+      expect(now).toBeInstanceOf(Date);
+      expect(now).toBe(listAccountsWithStaleUsageMock.mock.calls[0]![1]);
     });
 
     it("the operator's own language sets the cards' words (requestLocale for an operator; mutation: hard-code English -> FAILS)", async () => {

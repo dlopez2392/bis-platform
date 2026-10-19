@@ -326,6 +326,15 @@ describe("AgencyWorkList — pending suggestions as cards (item 8b-2)", () => {
     expect(html).toMatch(new RegExp(`<h3[^>]*>${m["work.agency.unbranded"]}</h3>`));
   });
 
+  // Design review minor 6: inside the section's lang="es" the caption is Spanish too, through the section's tr.
+  it("the neutral caption is in the section's language (mutation: read it from m[...] -> English inside lang=\"es\", FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(AgencyWorkList, {
+      buckets: buckets(), contactNames: {}, suggestions: loaded(account("acct-a", "", [proposal()])), tr: makeTr("es"),
+    }));
+    expect(html).toMatch(/<h3[^>]*>Cuenta sin nombre<\/h3>/);
+    expect(html).not.toContain(m["work.agency.unbranded"]);
+  });
+
   it("a capped account says so under its own cards", () => {
     const html = renderList(buckets(), {}, loaded(account("acct-a", "Rio Roofing", [proposal()], true)));
     expect(renderedText(html)).toContain("Showing the newest 50 for this account.");

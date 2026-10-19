@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { buildWorkTrayColumns, WorkTrayDemo } from "./work-tray-demo";
+
+// The error specimens render Retry, which refreshes through the app router a static render has not mounted.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
+const { WorkTrayDemo } = await import("./work-tray-demo");
 
 /**
  * The To do tray's grouped cards, "Waiting for you" in all five states, and the agency Work page's
@@ -11,7 +14,9 @@ import { buildWorkTrayColumns, WorkTrayDemo } from "./work-tray-demo";
  * transcript link renders here too.
  */
 describe("styleguide: the work tray (grouped cards, Waiting for you, the agency section)", () => {
-  const html = () => renderToStaticMarkup(createElement(WorkTrayDemo, { columns: buildWorkTrayColumns() }));
+  // No props (final review I-1): the server page cannot hand a client component the columns, which hold
+  // functions; the demo builds them itself.
+  const html = () => renderToStaticMarkup(createElement(WorkTrayDemo));
 
   it("one column per locale", () => {
     const h = html();
@@ -67,5 +72,31 @@ describe("styleguide: the work tray (grouped cards, Waiting for you, the agency 
     expect(h).toContain("Esperan su respuesta");
     expect(h).toContain("Se muestran las 50 más recientes de esta cuenta");
     expect(h).toMatch(/\[Sú/);
+  });
+});
+
+// Design review minor 4: the error states of Waiting for you and of the agency section are specimens too,
+// and three locale columns on one page never share an id (aria-labelledby would point at the first copy).
+describe("styleguide: the work tray's error states and ids (design review minor 4)", () => {
+  const html = () => renderToStaticMarkup(createElement(WorkTrayDemo));
+
+  it("Waiting for you and the agency section each show their error line with Retry, per locale (mutation: drop the {ok:false} specimens -> FAILS)", () => {
+    const h = html();
+    for (const key of ["en", "es", "pseudo"]) {
+      expect(h).toContain(`data-sg-waiting-error="${key}"`);
+      expect(h).toContain(`data-sg-agency-error="${key}"`);
+    }
+    const en = h.slice(h.indexOf('data-sg-waiting-error="en"'));
+    expect(en).toMatch(/^[^]*?<div role="alert"[^>]*>[^]*?Couldn&#x27;t load suggestions\.[^]*?<button[^>]*>Retry<\/button>/);
+    const es = h.slice(h.indexOf('data-sg-agency-error="es"'));
+    expect(es).toMatch(/^[^]*?<h2[^>]*>Sugerencias<\/h2>[^]*?No se pudieron cargar las sugerencias\./);
+  });
+
+  it("no id appears twice on the page, and every aria-labelledby names one that exists (mutation: a fixed headingId -> FAILS)", () => {
+    const h = html();
+    const ids = [...h.matchAll(/\sid="([^"]+)"/g)].map((x) => x[1]!);
+    const dupes = ids.filter((id, i) => ids.indexOf(id) !== i);
+    expect(dupes).toEqual([]);
+    for (const x of h.matchAll(/aria-labelledby="([^"]+)"/g)) expect(ids).toContain(x[1]);
   });
 });

@@ -79,7 +79,8 @@ export default async function AgencyWorkPage() {
       console.error(`work queue: lines-down read failed, rendering no banner: ${String(e)}`);
       return 0;
     }),
-    listPendingProposalsForAgency(db).then(
+    // The page's one clock (final review M-6): "pending and not yet expired" is judged at the same instant.
+    listPendingProposalsForAgency(db, now).then(
       (got) => ({ ok: true as const, rows: got }),
       (e: unknown) => {
         console.error(`work queue: suggestions read failed, rendering the section's error state: ${loggableError(e)}`);

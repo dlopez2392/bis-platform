@@ -7,6 +7,7 @@ import { SuggestionCard, SUGGESTION_CARD, MONO_LABEL } from "./suggestion-card";
 import type { SuggestionActionProps } from "./suggestion-actions";
 import { SuggestionRetry } from "./suggestion-retry";
 import { SuggestionGroupBlock } from "./suggestion-group";
+import { focusFallback } from "./focus-fallback";
 
 /**
  * The Suggestions section (item 8b-1, spec 4.5): a mono-label heading over separate cards. No card
@@ -30,6 +31,8 @@ function cardCount(data: Extract<SuggestionSectionData, { ok: true }>): number {
 
 const SECTION = "flex flex-col gap-3";
 const SUBHEAD = "text-sm text-muted-foreground";
+/** The agency account's name in the UI role (600, 13.5px, the card's text), as a record card's title. */
+const ACCOUNT_HEADING = "min-w-0 break-words text-[13.5px] font-semibold text-card-foreground";
 
 /** "Showing the newest 200." under a capped stack (plan deviation 19). Exported for the styleguide. */
 export function SuggestionCapLine({ tr }: { tr: Tr }) {
@@ -60,7 +63,8 @@ export function SuggestionSection({
 } & SuggestionActionProps) {
   if (data.ok && cardCount(data) === 0) return null;
   return (
-    <section lang={tr.locale} aria-labelledby={headingId} data-suggestion-list className={SECTION}>
+    // The tray's last card leaves with the section: focus falls back to the page's heading (I3).
+    <section lang={tr.locale} aria-labelledby={headingId} data-suggestion-list data-focus-fallback={focusFallback("h1")} className={SECTION}>
       <Heading id={headingId} tr={tr} />
       {data.ok ? (
         <>
@@ -86,23 +90,27 @@ export type AgencySuggestionData = { ok: true; accounts: AgencySuggestionAccount
 
 /**
  * The agency Work page's suggestions (item 8b-2, spec 5.2): the tray's cards, with their actions, under each
- * account's brand name (a mono-label <h3>), then that account's groups as in the tray (<h4>), then
- * "Showing the newest 50 for this account." when the read held more. Each account section is its own focus
- * list, and each carries the actions the page bound to THAT account. No card wraps an account (P12).
- * Absent when nothing is pending anywhere; the heading, one line and Retry when the read failed (rule 5).
+ * account's brand name (an <h3> in the UI role, design review I4: the account boundary must read as one,
+ * not as a third mono label), then that account's groups as in the tray (mono <h4>), then "Showing the
+ * newest 50 for this account." when the read held more. Each account section is its own focus list, and
+ * each carries the actions the page bound to THAT account; the outer section is their focus scope, so an
+ * account's last card hands focus to the next account's first Accept, then to this heading (I3). No card
+ * wraps an account (P12). Absent when nothing is pending anywhere; the heading, one line and Retry when the
+ * read failed (rule 5). `headingId`: two copies on one page (the styleguide) each need their own ids.
  */
-export function AgencySuggestionSection({ tr, data }: { tr: Tr; data: AgencySuggestionData }) {
+export function AgencySuggestionSection({ tr, data, headingId = "agency-suggestions" }: {
+  tr: Tr; data: AgencySuggestionData; headingId?: string;
+}) {
   if (data.ok && data.accounts.length === 0) return null;
-  const headingId = "agency-suggestions";
   return (
-    <section lang={tr.locale} aria-labelledby={headingId} data-proposals className="flex flex-col gap-6">
+    <section lang={tr.locale} aria-labelledby={headingId} data-proposals data-suggestion-scope className="flex flex-col gap-6">
       <Heading id={headingId} tr={tr} />
       {data.ok ? data.accounts.map((a) => {
-        const id = `agency-suggestions-${a.accountId}`;
+        const id = `${headingId}-${a.accountId}`;
         return (
           <section key={a.accountId} data-suggestion-account={a.accountId} data-suggestion-list aria-labelledby={id}
-            className={SECTION}>
-            <h3 id={id} className={`${MONO_LABEL} break-words`}>{a.brandName}</h3>
+            data-focus-fallback={focusFallback(`#${headingId}`, "h1")} className={SECTION}>
+            <h3 id={id} className={ACCOUNT_HEADING}>{a.brandName}</h3>
             <p className={SUBHEAD}>{subhead(tr, a.personaName)}</p>
             {a.groups.map((g) => <SuggestionGroupBlock key={g.key} group={g} level={4} {...a.actions} />)}
             {/* The per-account cap (spec 5.2; plan deviation 4): the read asks for 51 to state 50. */}
@@ -116,11 +124,15 @@ export function AgencySuggestionSection({ tr, data }: { tr: Tr; data: AgencySugg
 
 /** Two cards shaped like the card while the section loads: a label line, the change, the evidence, the buttons.
  *  `grouped` (the To do tray, item 8b-2): a group heading's label bar above them, as the loaded tray has. */
-export function SuggestionSectionSkeleton({ tr, grouped = false }: { tr: Tr; grouped?: boolean }) {
+export function SuggestionSectionSkeleton({ tr, grouped = false, headingId = "suggestions-loading" }: {
+  tr: Tr; grouped?: boolean;
+  /** Two skeletons on one page (the styleguide's locale columns) each need their own id. */
+  headingId?: string;
+}) {
   const line = "rounded-[var(--radius-ctl)]";
   return (
     <section lang={tr.locale} className={SECTION}>
-      <Heading id="suggestions-loading" tr={tr} />
+      <Heading id={headingId} tr={tr} />
       <p role="status" className={SUBHEAD}>{tr.text("suggestions.loading")}</p>
       {grouped ? <Skeleton data-tray-group-bar aria-hidden className={`h-3 w-56 max-w-full ${line}`} /> : null}
       {[0, 1].map((i) => (

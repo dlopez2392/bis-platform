@@ -218,14 +218,15 @@ export type AgencySuggestionAccountView = {
 export type AgencySuggestionsLoad = { ok: true; accounts: AgencySuggestionAccountView[] } | { ok: false };
 
 /** Each account's four actions bound to THAT account (plan fix I-3: `.bind`, never a closure, which a
- *  server component cannot hand a client one), and a blank brand name read as the neutral caption. */
-function withActions(load: AgencySuggestionsLoad): AgencySuggestionData {
+ *  server component cannot hand a client one), and a blank brand name read as the neutral caption, in the
+ *  section's own language (design review minor 6: m[...] was English inside lang="es"). */
+function withActions(load: AgencySuggestionsLoad, tr: Tr): AgencySuggestionData {
   if (!load.ok) return { ok: false };
   return {
     ok: true,
     accounts: load.accounts.map((a) => ({
       ...a,
-      brandName: a.brandName || m["work.agency.unbranded"],
+      brandName: a.brandName || tr.text("work.agency.unbranded"),
       actions: {
         accept: acceptSuggestionAction.bind(null, a.accountId),
         editAccept: editAcceptSuggestionAction.bind(null, a.accountId),
@@ -304,7 +305,7 @@ export function AgencyWorkList({
         </section>
       ))}
       {/* A sibling section, never a fourth bucket: the tray's cards under each account's name. */}
-      <AgencySuggestionSection tr={tr} data={withActions(suggestions)} />
+      <AgencySuggestionSection tr={tr} data={withActions(suggestions, tr)} />
     </div>
   );
 }

@@ -98,6 +98,25 @@ describe("WaitingSuggestions: the section inside What's next", () => {
   it("the section is the list the focus rule reads (data-suggestion-list)", () => {
     expect(waiting(two())).toMatch(/^<section(?=[^>]*data-suggestion-list)(?=[^>]*data-waiting-suggestions)/);
   });
+  // Design review I3: the record's last (or only) Waiting row leaves, and the section with it: focus goes to
+  // What's next's own heading, then the page's, never <body>.
+  it("its last row falls back to What's next's heading, then the page's (mutation: no data-focus-fallback -> FAILS)", () => {
+    expect(waiting(two())).toMatch(/^<section[^>]*data-focus-fallback="\[data-record-card=&quot;next-up&quot;\] h2\|h1"/);
+  });
+  // Design review minor 4: its heading id is a prop, so two copies on one page (the styleguide) differ.
+  it("headingId names the heading the section is labelled by (mutation: a fixed id -> FAILS)", () => {
+    const h = renderToStaticMarkup(createElement(WaitingSuggestions, {
+      tr: makeTr("es"), data: two("es"), seeAllHref: "/dashboard/accounts/acc_1/tasks", headingId: "waiting-suggestions-es", ...actions,
+    }));
+    expect(h).toMatch(/^<section[^>]*aria-labelledby="waiting-suggestions-es"/);
+    expect(h).toContain('<h3 id="waiting-suggestions-es"');
+  });
+  // Design review minor 2: the error line reads as the tray's does (text-foreground), not muted.
+  it("the error sentence is text-foreground, as the tray's (mutation: text-muted-foreground -> FAILS)", () => {
+    const cls = (/<div role="alert"[^>]*><p class="([^"]*)"/.exec(waiting({ ok: false })))?.[1] ?? "";
+    expect(cls.split(" ")).toContain("text-foreground");
+    expect(cls.split(" ")).not.toContain("text-muted-foreground");
+  });
   it("empty: nothing at all (the card's own empty state stands)", () => {
     expect(waiting({ ok: true, views: [] })).toBe("");
   });
