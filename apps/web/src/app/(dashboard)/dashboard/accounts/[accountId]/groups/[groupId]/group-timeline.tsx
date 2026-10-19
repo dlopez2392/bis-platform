@@ -4,6 +4,7 @@ import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
+import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { formatDateInZone } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -209,5 +210,21 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
           {row.note ? <p lang={row.note.lang} data-webchat-unconfirmed="" className="text-xs text-muted-foreground">{row.note.text}</p> : null}
         </TimelineItem>
       );
+    // item 8b-2 (design review C1): the group page reads no suggestions today (group-loaders.ts), but a
+    // row of this kind still renders, drawn from its parts, rather than as an empty <li>.
+    case "suggestion":
+      return (
+        <TimelineItem {...head} icon={CheckSquare}
+          verb={row.verbParts ? <SuggestionParts parts={row.verbParts} /> : row.verb}
+          detail={row.detailParts ? <SuggestionParts parts={row.detailParts} /> : row.detail} />
+      );
+    default:
+      return unknownKind(e);
   }
+}
+
+/** The switch is exhaustive: a new TimelineEntry kind is a type error here, never an empty row. */
+function unknownKind(e: never): null {
+  void e;
+  return null;
 }

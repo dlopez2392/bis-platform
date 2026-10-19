@@ -256,4 +256,17 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     await loadGroupTimeline(db, "acct1", IDS, undefined, G);
     expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, undefined, expect.objectContaining({ groupId: G }));
   });
+
+  // Item 8b-2 (final review M-3): accepted suggestions are the contact page's source only. The group page
+  // reads no stage names and its rows would read "Review the stage change", so it never asks for them.
+  it("the group timeline never asks listTimelinePage for suggestions (mutation: pass suggestions: true -> FAILS)", async () => {
+    for (const before of [undefined, { at: "2026-10-01T00:00:00Z", id: "x" }]) {
+      listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: SOURCES });
+      listPeopleNamesMock.mockResolvedValueOnce({});
+      getVoiceProfileMock.mockResolvedValueOnce(null);
+      await loadGroupTimeline(db, "acct1", IDS, before as never, G);
+      const opts = listTimelinePageMock.mock.lastCall![4] as { suggestions?: boolean };
+      expect(opts.suggestions).not.toBe(true);
+    }
+  });
 });

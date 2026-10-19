@@ -250,14 +250,14 @@ describe("record loaders: suggestions (item 8b-2)", () => {
 
 describe("loadWaitingSuggestions: the record's Waiting for you (item 8b-2, spec 5.3)", () => {
   const NOW_ = new Date("2026-10-15T15:00:00.000Z");
-  beforeEach(() => { listPendingProposalsForContactMock.mockReset(); });
+  beforeEach(() => { listPendingProposalsForContactMock.mockReset(); getVoiceProfileMock.mockReset().mockResolvedValue({ persona_name: "Lupe" }); });
 
   it("reads this customer's pending suggestions on the page's client, with the clock, and their stage names (mutation: drop the stage read -> FAILS)", async () => {
     const s = stageDb(DEAL);
     listPendingProposalsForContactMock.mockResolvedValue([SG.pending, SG.stage]);
     const load = await loadWaitingSuggestions(s.db, "acct1", "ct1", NOW_);
     expect(listPendingProposalsForContactMock).toHaveBeenCalledWith(s.db, "acct1", "ct1", NOW_);
-    expect(load).toEqual({ status: "ready", rows: [SG.pending, SG.stage], stages: {
+    expect(load).toEqual({ status: "ready", rows: [SG.pending, SG.stage], personaName: "Lupe", stages: {
       stages: { st_new: { name: "New lead", position: 0 }, st_quote: { name: "Quote sent", position: 1 } },
       pipelineStages: [{ id: "st_new", name: "New lead", position: 0, pipelineId: "pl_1" }, { id: "st_quote", name: "Quote sent", position: 1, pipelineId: "pl_1" }],
     } });
@@ -266,8 +266,25 @@ describe("loadWaitingSuggestions: the record's Waiting for you (item 8b-2, spec 
   it("reads no stages when no row is a stage suggestion", async () => {
     const s = stageDb(DEAL);
     listPendingProposalsForContactMock.mockResolvedValue([SG.pending]);
-    expect(await loadWaitingSuggestions(s.db, "acct1", "ct1", NOW_)).toEqual({ status: "ready", rows: [SG.pending], stages: { stages: {}, pipelineStages: [] } });
+    expect(await loadWaitingSuggestions(s.db, "acct1", "ct1", NOW_)).toEqual({ status: "ready", rows: [SG.pending], personaName: "Lupe", stages: { stages: {}, pipelineStages: [] } });
     expect(s.asked).toEqual([]);
+  });
+
+  // Design review minor 1: the persona is this section's own read, so a failed timeline (whose read the
+  // page reused before) never turns Lupe's rows into "Sofía · AI". With no row there is nothing to mark.
+  it("reads the persona on its own when it has rows, and a failed persona read is null, never the section's error (mutation: personaName: null -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listPendingProposalsForContactMock.mockResolvedValue([SG.pending]);
+      expect(await loadWaitingSuggestions(stageDb().db, "acct1", "ct1", NOW_)).toMatchObject({ status: "ready", personaName: "Lupe" });
+      expect(getVoiceProfileMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+      getVoiceProfileMock.mockRejectedValueOnce(new Error("voice down"));
+      expect(await loadWaitingSuggestions(stageDb().db, "acct1", "ct1", NOW_)).toMatchObject({ status: "ready", rows: [SG.pending], personaName: null });
+      getVoiceProfileMock.mockClear();
+      listPendingProposalsForContactMock.mockResolvedValue([]);
+      expect(await loadWaitingSuggestions(stageDb().db, "acct1", "ct1", NOW_)).toEqual({ status: "ready", rows: [], personaName: null, stages: { stages: {}, pipelineStages: [] } });
+      expect(getVoiceProfileMock).not.toHaveBeenCalled();
+    } finally { errors.mockRestore(); }
   });
 
   it("a failed read, or a failed stage read, is the section's error and never a throw, logged by card and account only (mutation: rethrow -> FAILS)", async () => {

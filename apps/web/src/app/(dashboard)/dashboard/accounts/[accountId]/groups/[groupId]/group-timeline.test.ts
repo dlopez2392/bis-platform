@@ -262,3 +262,24 @@ describe("a website chat row on the group page (S-06 part 3, spec §7; G18, G20,
     }
   });
 });
+
+// Design review C1: the row switch is exhaustive. The group page reads no suggestions today
+// (group-loaders.ts), but a suggestion row that reached it would render, never as an empty <li>.
+describe("GroupTimeline: an accepted suggestion row (item 8b-2, design review C1)", () => {
+  it("renders through TimelineItem with its parts, not as an empty row (mutation: drop the suggestion case -> FAILS)", () => {
+    const tr = makeTr("en");
+    const entry = { kind: "suggestion", id: "p1", at: AT, contactId: "c-ana", suggestion: {
+      proposal: { id: "p1", accountId: "a1", source: "call", callId: "k1", contactId: "c-ana", kind: "task",
+        payload: { title: "Send the quote", dueAt: null }, evidence: "x", evidenceRef: {}, evidenceLang: "en", status: "accepted",
+        expiredReason: null, appliedPayload: null, appliedRef: null, decidedAt: AT, decidedBy: "user_me", undoneAt: null, undoneBy: null,
+        expiresAt: AT, createdAt: EARLIER },
+      applied: { title: "Send the quote", dueAt: null } } } as unknown as TimelineEntry;
+    const rows = timelineRows([entry], { zone: "America/Chicago", tr, subjects: SUBJECTS, author: { viewerId: "user_me", names: {}, personaName: "Sofía", tr } });
+    const html = renderToStaticMarkup(createElement(GroupTimeline, {
+      accountId: "a1", timezone: "America/Chicago", rows, failedText: null, emptyText: null,
+      pager: { olderHref: null, newerHref: null }, tr, customerLangs: {},
+    } as never));
+    expect(html).toContain('data-timeline-item="suggestion"');
+    expect(html).toContain('<span lang="en">Send the quote</span>');
+  });
+});

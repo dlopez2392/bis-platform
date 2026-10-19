@@ -2,7 +2,7 @@ import type { TimelineEntry, TimelineSource, TimelineSuggestion } from "@bis/db"
 import { removedReason } from "@bis/db/document-rules";
 import type { Proposal } from "@bis/db/proposal-rules";
 import { describeRow } from "@/lib/proposals/view";
-import type { DescribeCtx, Description } from "@/lib/proposals/kinds/types";
+import type { DescribeCtx, Description, Part } from "@/lib/proposals/kinds/types";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
@@ -20,6 +20,11 @@ export type TimelineRow = {
   subject: { label: string; href: string } | null;
   /** S-06 part 3 (§5a, G18): a staff-language line under the row, on a chat matched to an existing customer only. */
   note?: { text: string; lang: Locale };
+  /** item 8b-2 (final review M-5): an accepted suggestion row's verb, and an edited one's original, as the
+   *  card draws them (SuggestionParts): the model's own words keep lang="en" (P18), the arrow is drawn
+   *  aria-hidden beside its spoken word. `verb` and `detail` stay the drawn sentence, as text. */
+  verbParts?: Part[];
+  detailParts?: Part[];
 };
 export type TimelineSubjects = Readonly<Record<string, { label: string; href: string }>>;
 
@@ -46,9 +51,18 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   documents: "timeline.what.documents", chats: "timeline.what.chats", suggestions: "timeline.what.suggestions",
 };
 
-/** The suggestion's sentence as one string: the card draws the arrow run aria-hidden beside its spoken
- *  words; a timeline row is plain text, so it keeps the drawn run, as the card shows it. */
-const sentence = (d: Description) => d.parts.map((p) => p.text).join("");
+/** Stands in for the change inside the translated template, so the template can be split around it. No
+ *  vowels: the pseudo-locale rewrites vowels (kinds/task.ts's own SLOT). */
+const SLOT = "␟";
+
+/** The template's words around the change's own parts, so the row keeps each part's lang and spoken form. */
+function around(template: string, d: Description): Part[] {
+  const at = template.lastIndexOf(SLOT);
+  const before = at < 0 ? template : template.slice(0, at);
+  const after = at < 0 ? "" : template.slice(at + SLOT.length);
+  return [...(before ? [{ text: before }] : []), ...d.parts, ...(after ? [{ text: after }] : [])];
+}
+const drawn = (parts: Part[]) => parts.map((p) => p.text).join("");
 
 /**
  * item 8b-2 (spec 5.4, 7): "accepted Rosa's suggestion: <what was written>" through the registry's own
@@ -58,16 +72,18 @@ const sentence = (d: Description) => d.parts.map((p) => p.text).join("");
  */
 function suggestionPhrase(
   s: TimelineSuggestion, at: string, zone: string, tr: Tr, persona: string, stages: DescribeCtx["stages"],
-): Pick<TimelineRow, "verb" | "status" | "detail"> {
+): Pick<TimelineRow, "verb" | "status" | "detail" | "verbParts" | "detailParts"> {
   const ctx = { tr, zone, stages, now: new Date(at) };
   // `applied` is the proposal's own kind's payload (TimelineSuggestion pairs them arm by arm); the spread
   // loses that pairing in the type only.
   const written = describeRow({ ...s.proposal, payload: s.applied ?? s.proposal.payload } as Proposal, ctx);
   const edited = s.proposal.status === "edited";
+  const verbParts = around(tr.text(edited ? "timeline.suggestionEdited" : "timeline.suggestion", { persona, change: SLOT }), written);
+  const detailParts = edited ? around(tr.text("timeline.suggestion.original", { change: SLOT }), describeRow(s.proposal, ctx)) : undefined;
   return {
-    verb: tr.text(edited ? "timeline.suggestionEdited" : "timeline.suggestion", { persona, change: sentence(written) }),
-    status: null,
-    detail: edited ? tr.text("timeline.suggestion.original", { change: sentence(describeRow(s.proposal, ctx)) }) : written.detail,
+    verb: drawn(verbParts), verbParts, status: null,
+    detail: detailParts ? drawn(detailParts) : written.detail,
+    ...(detailParts ? { detailParts } : {}),
   };
 }
 
@@ -93,7 +109,7 @@ function whenText(iso: string, zone: string, tr: Tr): string {
 
 function phrase(
   entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr, persona: string, stages: DescribeCtx["stages"],
-): Pick<TimelineRow, "verb" | "status" | "detail"> {
+): Pick<TimelineRow, "verb" | "status" | "detail" | "verbParts" | "detailParts"> {
   switch (entry.kind) {
     case "suggestion": return suggestionPhrase(entry.suggestion, entry.at, zone, tr, persona, stages);
     case "note": return { verb: tr.text("timeline.note"), status: null, detail: null };

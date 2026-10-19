@@ -100,24 +100,31 @@ export async function loadTimeline(
   return { status: "ready", page, holdOpen, names, personaName, suggestionStages };
 }
 
-export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext } | { status: "error" };
+export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext; personaName: string | null } | { status: "error" };
 
 /**
  * What's next's "Waiting for you" (item 8b-2, spec 5.3): this customer's pending suggestions, at most
  * five, newest first, on the page's REQUEST client (RLS decides, P14), then the stage names and choices a
  * stage suggestion needs, read only when one is present. Either read failing is the section's own error
- * state, never the card's and never a throw. The persona is not read here: the page reuses the timeline's
- * (one read for the page, spec 5.3).
+ * state, never the card's and never a throw. The persona is this section's OWN soft read, made only when
+ * there is a row to mark (design review minor 1): reusing the timeline's turned Lupe's rows into
+ * "Sofía · AI" whenever the timeline failed. A failed persona read is null, the AI mark's own fallback.
  */
 export async function loadWaitingSuggestions(
   db: SupabaseClient, accountId: string, contactId: string, now: Date,
 ): Promise<WaitingLoad> {
   try {
     const rows = await listPendingProposalsForContact(db, accountId, contactId, now);
-    const stages: StageContext = rows.some((r) => r.kind === "opportunity_stage")
-      ? await readSuggestionStages(db, accountId, rows)
-      : { stages: {}, pipelineStages: [] };
-    return { status: "ready", rows, stages };
+    const [stages, personaName] = await Promise.all([
+      rows.some((r) => r.kind === "opportunity_stage")
+        ? readSuggestionStages(db, accountId, rows)
+        : Promise.resolve<StageContext>({ stages: {}, pipelineStages: [] }),
+      rows.length === 0 ? Promise.resolve(null) : getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+        log("waiting persona", accountId, e);
+        return null;
+      }),
+    ]);
+    return { status: "ready", rows, stages, personaName };
   } catch (e) {
     log("waiting suggestions", accountId, e);
     return { status: "error" };

@@ -360,6 +360,35 @@ describe("an accepted suggestion row (item 8b-2)", () => {
       .toBe("accepted Rosa's suggestion: Move from Quoted to Won over");
   });
 
+  // Final review M-5 / design review I2b: the row is drawn from its parts, as the card is, so the model's
+  // English title keeps lang="en" (P18) and the arrow is drawn aria-hidden beside its spoken word.
+  it("the verb and an edited row's original carry their parts: the model's title keeps lang en, the arrow is drawn but spoken (mutation: one joined text part -> FAILS)", () => {
+    const t = one(suggestion("accepted", task(null), { title: "Send the quote", dueAt: null }));
+    expect(t.verbParts).toEqual([
+      { text: "accepted Rosa's suggestion: " }, { text: "Add a to-do: " }, { text: "Send the quote", lang: "en" },
+    ]);
+    expect(t.detailParts).toBeUndefined();
+    const entry = suggestion("edited", { kind: "contact_field", payload: { field: "email", value: "ana@exmaple.com" } }, { field: "email", value: "ana@example.com" });
+    const en = one(entry);
+    expect(en.verbParts).toEqual([
+      { text: "accepted Rosa's suggestion with changes: " }, { text: "Email: (empty) " }, { text: "→", spoken: "to" }, { text: " ana@example.com" },
+    ]);
+    expect(en.detailParts).toEqual([{ text: "Suggested: " }, { text: "Email: (empty) " }, { text: "→", spoken: "to" }, { text: " ana@exmaple.com" }]);
+    const es = one(entry, "es");
+    expect(es.verbParts?.find((p) => p.spoken)).toEqual({ text: "→", spoken: "a" });
+    // The strings stay the drawn sentence, for anything that reads the row as text.
+    expect(en.verb).toBe((en.verbParts ?? []).map((p) => p.text).join(""));
+  });
+
+  it("the pseudo-locale's verb parts still split around the change (mutation: interpolate the joined change text instead of splitting -> no English title part, FAILS)", () => {
+    const p = timelineRows([suggestion("accepted", task(null), { title: "Send the quote", dueAt: null })], {
+      zone: "America/Chicago", tr: makeTr("en", true), author: { viewerId: null, names: {}, personaName: "Rosa", tr: makeTr("en", true) },
+    })[0]!;
+    expect(p.verbParts?.some((x) => x.text === "Send the quote" && x.lang === "en")).toBe(true);
+    expect(p.verbParts?.[0]?.text.startsWith("[")).toBe(true);
+    expect(p.verbParts?.at(-1)?.text.endsWith("]")).toBe(true);
+  });
+
   it("a failed suggestions source is named in both languages", () => {
     expect(timelineFailedText(["suggestions"], makeTr("en"))).toBe("Couldn't load accepted suggestions.");
     expect(timelineFailedText(["suggestions"], makeTr("es"))).toBe("No se pudo cargar: sugerencias aceptadas.");

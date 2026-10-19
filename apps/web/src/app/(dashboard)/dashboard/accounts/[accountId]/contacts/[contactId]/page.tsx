@@ -193,6 +193,8 @@ export default async function ContactDetailPage({
     ? viewOf("timeline", () => timelineRows(timeline.page.items, {
       zone: zone.zone, tr,
       author: { viewerId: access.userId, names: timeline.names, personaName: timeline.personaName, tr },
+      // item 8b-2 (final review I-2): an accepted stage move names both stages, read by loadTimeline.
+      suggestionStages: timeline.suggestionStages,
     }))
     : null;
   // Text and Email link to the composer inside the timeline card; when that card failed there is no
@@ -210,14 +212,15 @@ export default async function ContactDetailPage({
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
   // "Waiting for you" (item 8b-2, spec 5.3): built in its own guard, so a row that cannot be shown is the
-  // section's error line, never What's next's card. The persona is the timeline's one read (spec 5.3);
-  // the rows are this customer's own, so their source label names no caller.
+  // section's error line, never What's next's card. The persona is the section's own read (design review
+  // minor 1: the timeline's failing made Lupe's rows "Sofía · AI"); the rows are this customer's own, so
+  // their source label names no caller.
   const waitingData: WaitingData = (waiting.status === "ready"
     ? viewOf("waiting suggestions", () => ({
       ok: true as const,
       views: waiting.rows.map((row) => buildSuggestionView(row, {
         tr, zone: zone.zone, now, ...waiting.stages, callerName: null, callStartedAt: null,
-        personaName: (timeline.status === "ready" ? timeline.personaName : null) ?? "Sofía",
+        personaName: waiting.personaName ?? "Sofía",
         names: {}, viewerId: access.userId,
       })),
     }))

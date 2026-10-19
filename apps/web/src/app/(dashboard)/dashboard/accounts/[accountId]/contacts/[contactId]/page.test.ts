@@ -21,9 +21,16 @@ import path from "node:path";
 const accountRead = vi.fn(async (): Promise<{ data: unknown; error: unknown }> =>
   ({ data: { timezone: "America/Chicago" }, error: null }));
 const accountsEq = vi.fn();
+/** item 8b-2 (final review I-2): the deal and stage reads readSuggestionStages makes; null = none expected. */
+const stageReads = vi.hoisted(() => ({ tables: null as null | Record<string, unknown[]> }));
 vi.mock("@/lib/db", () => ({
   dbForRequest: async () => ({
     from: (table: string) => {
+      if (stageReads.tables && Object.hasOwn(stageReads.tables, table)) {
+        const data = stageReads.tables[table];
+        const chain = { select: () => chain, eq: () => chain, in: () => chain, limit: async () => ({ data, error: null }) };
+        return chain;
+      }
       if (table !== "accounts") throw new Error(`unexpected read of ${table}`);
       let cols: string[] = [];
       const chain = {
@@ -1277,11 +1284,22 @@ describe("the record page's Waiting for you (item 8b-2)", () => {
     expect(card).toContain('href="/dashboard/accounts/acct1/tasks"');
   });
 
-  it("the row's mark names the account's persona from the timeline's one read, and the row has no primary (rule 8)", async () => {
+  it("the row's mark names the account's persona, and the row has no primary (rule 8)", async () => {
     const card = nextUp(await render());
     expect(card).toMatch(/<span[^>]*data-ai-mark[^>]*>Lupe · AI<\/span>/);
-    expect(getVoiceProfileMock).toHaveBeenCalledTimes(1);
     expect(card).not.toMatch(/data-variant="default"/);
+  });
+
+  // Design review minor 1: the persona was the timeline's read, so a failed timeline turned Lupe's rows
+  // into "Sofía · AI". The section reads it on its own now.
+  it("a failed timeline still marks the rows with the account's persona (mutation: take the persona from the timeline -> 'Sofía · AI', FAILS)", async () => {
+    listContactTimelinePageMock.mockRejectedValue(new Error("timeline down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const card = nextUp(await render());
+      expect(card).toMatch(/<span[^>]*data-ai-mark[^>]*>Lupe · AI<\/span>/);
+      expect(card).not.toContain("Sofía · AI");
+    } finally { errors.mockRestore(); }
   });
 
   it("the section's read failing is its own one line with Retry; What's next's rows still render (mutation: fail the whole card -> FAILS)", async () => {
@@ -1310,5 +1328,54 @@ describe("the record page's Waiting for you (item 8b-2)", () => {
     const card = nextUp(await render());
     expect(card).not.toContain("data-waiting-suggestions");
     expect(card).toContain('data-next-up-row="task"');
+  });
+});
+
+/**
+ * Final review I-2 / design review I2a: the timeline's accepted stage move names both stages. loadTimeline
+ * reads their names (loaders.ts), and the page must hand them to timelineRows, or the row reads the
+ * registry's honest "Review the stage change on this deal." for every stage move.
+ */
+describe("the record page's timeline: an accepted stage move (item 8b-2)", () => {
+  const AT = "2026-10-14T15:00:00Z";
+  const MOVE = { opportunityId: "opp1", fromStageId: "st_quote", toStageId: "st_won" };
+  const ACCEPTED_MOVE = {
+    kind: "suggestion", id: "sg9", at: AT, contactId: "ct1",
+    suggestion: {
+      proposal: {
+        id: "sg9", accountId: "acct1", source: "call", callId: "call1", contactId: "ct1", kind: "opportunity_stage", payload: MOVE,
+        status: "accepted", evidence: "We'll go ahead with it.", evidenceRef: {}, evidenceLang: "en", expiredReason: null,
+        appliedPayload: MOVE, appliedRef: null, decidedAt: AT, decidedBy: "user_dan", undoneAt: null, undoneBy: null,
+        createdAt: AT, expiresAt: "2099-01-01T00:00:00Z",
+      },
+      applied: MOVE,
+    },
+  };
+  beforeEach(() => {
+    getContactMock.mockReset().mockResolvedValue(CONTACT);
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    contactFactsMock.mockReset().mockResolvedValue(READY_FACTS);
+    getVoiceProfileMock.mockReset().mockResolvedValue({ persona_name: "Lupe" });
+    listPendingProposalsForContactMock.mockReset().mockResolvedValue([]);
+    listContactTimelinePageMock.mockReset().mockResolvedValue({ ...EMPTY_PAGE, items: [ACCEPTED_MOVE], sources: [...SOURCES, "suggestions"] });
+    stageReads.tables = {
+      opportunities: [{ id: "opp1", pipeline_id: "pl1" }],
+      pipeline_stages: [
+        { id: "st_quote", name: "Quote sent", position: 1, pipeline_id: "pl1" },
+        { id: "st_won", name: "Won over", position: 2, pipeline_id: "pl1" },
+      ],
+    };
+  });
+
+  it("names both stages (mutation: drop suggestionStages from the page's timelineRows call -> 'Review the stage change', FAILS)", async () => {
+    try {
+      timelineProps.mockClear();
+      await render();
+      const rows = (timelineProps.mock.calls[0]![0] as { rows: { verb: string; entry: { kind: string } }[] }).rows;
+      expect(rows.map((r) => [r.entry.kind, r.verb])).toEqual([["suggestion", "accepted Lupe's suggestion: Move from Quote sent to Won over"]]);
+    } finally { stageReads.tables = null; }
   });
 });
