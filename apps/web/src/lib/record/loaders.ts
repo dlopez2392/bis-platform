@@ -1,6 +1,6 @@
 import {
   contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
-  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, TIMELINE_SOURCES,
+  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
   type TimelinePage, type TimelineCursor,
 } from "@bis/db";
@@ -60,7 +60,9 @@ export async function loadTimeline(
     log("activity", accountId, e);
     return { status: "error" };
   }
-  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
+  // which reads nothing, an empty timeline rather than the error state.
+  if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const tasks = page.items.flatMap((i) => (i.kind === "task" ? [i.task] : []));
   const [holdOpen, names, personaName] = await Promise.all([
     // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
@@ -105,7 +107,9 @@ export async function loadRecent(db: SupabaseClient, accountId: string, contactI
     log("recent", accountId, e);
     return { status: "error" };
   }
-  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
+  // which reads nothing, an empty timeline rather than the error state.
+  if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const [names, personaName] = await Promise.all([
     listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
       log("recent names", accountId, e);

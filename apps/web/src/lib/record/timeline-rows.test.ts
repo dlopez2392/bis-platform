@@ -291,3 +291,77 @@ describe("a website chat row (S-06 part 3, spec §7, G18, G23, G24)", () => {
     expect(r.note!.text).not.toBe("Matched by the phone or email they typed; not confirmed.");
   });
 });
+
+// item 8b-2 (spec 5.4, 7): "{person} accepted Rosa's suggestion: <what was written>", the accepter's person
+// mark, the original as the detail when it was changed first.
+describe("an accepted suggestion row (item 8b-2)", () => {
+  const AT = "2026-10-09T16:12:00+00:00";
+  type Kinded = { kind: "task"; payload: { title: string; dueAt: string | null } }
+    | { kind: "contact_field"; payload: { field: "email"; value: string } }
+    | { kind: "opportunity_stage"; payload: { opportunityId: string; fromStageId: string; toStageId: string } };
+  const suggestion = (status: "accepted" | "edited", proposed: Kinded, applied: Kinded["payload"] | null): TimelineEntry => ({
+    kind: "suggestion", id: "p1", at: AT, contactId: "c1",
+    suggestion: {
+      proposal: {
+        id: "p1", accountId: "a1", source: "call", callId: "k1", contactId: "c1", ...proposed, evidence: "x", evidenceRef: {},
+        evidenceLang: "en", status, expiredReason: null, appliedPayload: applied, appliedRef: null, decidedAt: AT,
+        decidedBy: "user_dan", undoneAt: null, undoneBy: null, expiresAt: "2026-11-08T16:12:00+00:00", createdAt: "2026-10-08T16:12:00+00:00",
+      },
+      applied,
+    },
+  }) as TimelineEntry;
+  const one = (entry: TimelineEntry, locale: "en" | "es" = "en", stages: Record<string, { name: string; position: number }> | undefined = undefined, personaName: string | null = "Rosa") =>
+    timelineRows([entry], {
+      zone: "America/Chicago", tr: makeTr(locale), author: { viewerId: null, names: { user_dan: "Dan López" }, personaName, tr: makeTr(locale) },
+      ...(stages ? { suggestionStages: stages } : {}),
+    })[0]!;
+  const task = (dueAt: string | null): Kinded => ({ kind: "task", payload: { title: "Send the quote", dueAt } });
+
+  it("an accepted to-do names the persona, says what was written, and its due date as it read when accepted, never 'Was due' later (mutation: describe at today's clock -> 'Was due', FAILS)", () => {
+    const r = one(suggestion("accepted", task("2026-10-12T15:00:00Z"), { title: "Send the quote", dueAt: "2026-10-12T15:00:00Z" }));
+    expect([r.verb, r.detail, r.status, r.mark]).toEqual([
+      "accepted Rosa's suggestion: Add a to-do: Send the quote", "Due Oct 12, 2026", null, { kind: "person", label: "Dan López" },
+    ]);
+    expect(r.key).toBe("suggestion-p1");
+  });
+
+  it("with no persona on the account it is Sofía's suggestion (the AI mark's own rule)", () => {
+    expect(one(suggestion("accepted", task(null), { title: "Send the quote", dueAt: null }), "en", undefined, null).verb)
+      .toBe("accepted Sofía's suggestion: Add a to-do: Send the quote");
+  });
+
+  it("edited reads 'with changes', describes what was WRITTEN, and the original is the detail, in English and Spanish (mutations: describe the proposal, not the applied form -> FAILS; drop the original -> FAILS)", () => {
+    const entry = suggestion("edited", { kind: "contact_field", payload: { field: "email", value: "ana@exmaple.com" } }, { field: "email", value: "ana@example.com" });
+    const en = one(entry);
+    expect([en.verb, en.detail]).toEqual([
+      "accepted Rosa's suggestion with changes: Email: (empty) → ana@example.com", "Suggested: Email: (empty) → ana@exmaple.com",
+    ]);
+    const es = one(entry, "es");
+    expect([es.verb, es.detail, es.mark.label]).toEqual([
+      "aceptó la sugerencia de Rosa con cambios: Correo: (vacío) → ana@example.com", "Se sugirió: Correo: (vacío) → ana@exmaple.com", "Dan López",
+    ]);
+  });
+
+  it("an accepted one in Spanish (mutation: read the words from m[...] -> English, FAILS)", () => {
+    const r = one(suggestion("accepted", { kind: "contact_field", payload: { field: "email", value: "ana@example.com" } }, { field: "email", value: "ana@example.com" }), "es");
+    expect([r.verb, r.detail]).toEqual(["aceptó la sugerencia de Rosa: Correo: (vacío) → ana@example.com", null]);
+  });
+
+  it("an applied form the read could not parse describes what was proposed (mutation: describe nothing -> FAILS)", () => {
+    expect(one(suggestion("accepted", task(null), null)).verb).toBe("accepted Rosa's suggestion: Add a to-do: Send the quote");
+  });
+
+  it("a stage move with no stage names reads the registry's honest sentence; with them, the move (mutation: default suggestionStages to a stage name -> FAILS)", () => {
+    const move = { opportunityId: "o1", fromStageId: "s1", toStageId: "s2" };
+    const entry = suggestion("accepted", { kind: "opportunity_stage", payload: move }, move);
+    expect(one(entry).verb).toBe("accepted Rosa's suggestion: Review the stage change on this deal.");
+    expect(one(entry, "es").verb).toBe("aceptó la sugerencia de Rosa: Revise el cambio de etapa de esta oportunidad.");
+    expect(one(entry, "en", { s1: { name: "Quoted", position: 1 }, s2: { name: "Won over", position: 2 } }).verb)
+      .toBe("accepted Rosa's suggestion: Move from Quoted to Won over");
+  });
+
+  it("a failed suggestions source is named in both languages", () => {
+    expect(timelineFailedText(["suggestions"], makeTr("en"))).toBe("Couldn't load accepted suggestions.");
+    expect(timelineFailedText(["suggestions"], makeTr("es"))).toBe("No se pudo cargar: sugerencias aceptadas.");
+  });
+});

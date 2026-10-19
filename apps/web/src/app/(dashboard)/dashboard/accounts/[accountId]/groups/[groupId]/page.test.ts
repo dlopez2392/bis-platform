@@ -54,6 +54,8 @@ const person = (p: { contactId: string; firstName: string | null; lastName: stri
   ({ contactId: p.contactId, firstName: p.firstName, lastName: p.lastName });
 const ANA_P = person(ANA as never);
 const LUIS_P = person(LUIS as never);
+/** The sources a mocked page read (item 8b-2: every page names them). */
+const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
 const NO_PLACES = { groups: [], places: [], placeCount: 0, equipment: [], equipmentCount: 0 };
 const place = (over: Record<string, unknown>) => ({
   id: "p1", account_id: "acct1", contact_id: null, client_group_id: G, label: null, address: null, landmark: null, directions: null,
@@ -165,7 +167,7 @@ beforeEach(() => {
   groupActivityMembersMock.mockReset().mockResolvedValue({ people: [ANA_P, LUIS_P], total: { ok: true, value: 2 }, more: false });
   groupFactsMock.mockReset().mockResolvedValue({ bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null } });
   groupNextUpMock.mockReset().mockResolvedValue({ bookings: [], datedTasks: [], undatedCount: 0 });
-  listTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [] });
+  listTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [], sources: SOURCES });
   listPeopleNamesMock.mockReset().mockResolvedValue({});
   getVoiceProfileMock.mockReset().mockResolvedValue(null);
   placesCardProps.length = 0; peopleCardProps.length = 0; detailsCardProps.length = 0;
@@ -628,7 +630,7 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
   });
 
   it("timeline rows name their member with a link to the member's page, and keep the mark (C8; mutation: no subjects -> FAILS)", async () => {
-    listTimelinePageMock.mockResolvedValue({ items: [callOf(ANA.contactId), noteOf(LUIS.contactId)], older: null, failed: [] });
+    listTimelinePageMock.mockResolvedValue({ items: [callOf(ANA.contactId), noteOf(LUIS.contactId)], older: null, failed: [], sources: SOURCES });
     const html = cardHtml(await render(), "timeline");
     expect(html).toMatch(new RegExp(`<a (?=[^>]*href="/dashboard/accounts/acct1/contacts/${ANA.contactId}")(?=[^>]*data-timeline-subject)[^>]*>Ana García</a>`));
     expect(html).toMatch(new RegExp(`<a (?=[^>]*href="/dashboard/accounts/acct1/contacts/${LUIS.contactId}")(?=[^>]*data-timeline-subject)[^>]*>Luis García</a>`));
@@ -641,7 +643,7 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
   });
 
   it("a source failed: the failure is said, with no empty sentence and no Older (spec §8.8; mutation: show the empty text whenever rows are empty -> FAILS)", async () => {
-    listTimelinePageMock.mockResolvedValue({ items: [], older: { v: AT, id: "n1" }, failed: ["calls"] });
+    listTimelinePageMock.mockResolvedValue({ items: [], older: { v: AT, id: "n1" }, failed: ["calls"], sources: SOURCES });
     const html = cardHtml(await render(), "timeline");
     expect(html).toContain("data-timeline-failed");
     expect(html).not.toContain("data-timeline-empty");
@@ -651,7 +653,7 @@ describe("the group record page: the middle column (S-03 part 2b, spec §8.6-8.8
   it("?before= reaches the timeline read and gives Newer; Older carries the page's cursor (DESIGN.md, Paged lists; mutation: ignore ?before= -> FAILS)", async () => {
     const { encodeCursor } = await import("@/lib/cursor");
     const cursor = { v: AT, id: "55555555-5555-4555-8555-555555555555" };
-    listTimelinePageMock.mockResolvedValue({ items: [noteOf(LUIS.contactId)], older: { v: AT, id: "n1" }, failed: [] });
+    listTimelinePageMock.mockResolvedValue({ items: [noteOf(LUIS.contactId)], older: { v: AT, id: "n1" }, failed: [], sources: SOURCES });
     const html = cardHtml(await render({ before: encodeCursor(cursor), locale: "es" }), "timeline");
     expect(listTimelinePageMock).toHaveBeenLastCalledWith(REQUEST_DB, "acct1", [ANA.contactId, LUIS.contactId], cursor, expect.anything());
     expect(html).toContain(`href="/dashboard/accounts/acct1/groups/${G}?locale=es#record-timeline"`);

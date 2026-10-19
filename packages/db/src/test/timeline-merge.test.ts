@@ -145,7 +145,9 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     // document_requests and 0081's two document_requirement_skips reads (a skip at created_at, an un-skip at
     // unskipped_at), and 0085's two document_share_timeline reads (a share at created_at, an open at
     // first_opened_at), so there are seven reads more than there are sources, each at limit + 1.
-    expect(paged.map((r) => r.limit)).toEqual(Array(TIMELINE_SOURCES.length + 7).fill(TIMELINE_PAGE_SIZE + 1));
+    // 8b-2: `sources`, not TIMELINE_SOURCES, is what this page read (the suggestions source is read only when asked).
+    expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions"));
+    expect(paged.map((r) => r.limit)).toEqual(Array(p.sources.length + 7).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_requirement_skips").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_version_timeline").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
@@ -194,7 +196,30 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
   it("every source failing is still a page, not a throw (mutation: Promise.all without the per-source catch -> rejects, FAILS)", async () => {
     const all = ["notes", "tasks", "opportunities", "form_submissions", "conversations", "bookings", "calls", "documents"];
     const page = await listContactTimelinePage(fakeDb({}, { throwOn: all }).db, u(100), u(99));
-    expect(page).toEqual({ items: [], older: null, failed: [...TIMELINE_SOURCES] });
+    const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+    expect(page).toEqual({ items: [], older: null, failed: NINE, sources: NINE });
+    // 8b-2: asked for, the suggestions source is read too, and fails with the rest.
+    const asked = await listContactTimelinePage(fakeDb({}, { throwOn: [...all, "proposals"] }).db, u(100), u(99), undefined, { suggestions: true });
+    expect(asked).toEqual({ items: [], older: null, failed: [...NINE, "suggestions"], sources: [...NINE, "suggestions"] });
+  });
+
+  it("the suggestions source reads accepted and edited rows on decided_at, at limit + 1, only when asked (8b-2; mutation: the entry's at from created_at -> the rows swap and carry the wrong instants, FAILS)", async () => {
+    const prop = (id: string, status: string, created: string, decided: string | null): Row => ({
+      id, account_id: u(100), source: "call", call_id: u(800), contact_id: u(99), kind: "task",
+      payload: { title: `t${id.slice(-1)}`, dueAt: null }, applied_payload: status === "pending" ? null : { title: "done", dueAt: null },
+      applied_ref: null, evidence: "x", evidence_ref: {}, evidence_lang: "en", status, expired_reason: null,
+      decided_at: decided, decided_by: decided ? "user_a" : null, undone_at: null, undone_by: null,
+      expires_at: "2031-03-04T05:06:07+00:00", created_at: created,
+    });
+    // Made in one order, decided in the other: the row sits at its DECISION.
+    const proposals = [prop(u(21), "accepted", day(1), day(6)), prop(u(22), "edited", day(2), day(5)), prop(u(23), "pending", day(3), null)];
+    const { db, reads } = fakeDb({ conversations: [{ id: CONV }], proposals });
+    const page = await listContactTimelinePage(db, u(100), u(99), undefined, { suggestions: true });
+    expect(page.items.map((i) => [i.kind, i.id, i.at])).toEqual([["suggestion", u(21), day(6)], ["suggestion", u(22), day(5)]]);
+    expect(reads.filter((r) => r.table === "proposals").map((r) => [r.limit, r.in])).toEqual([[TIMELINE_PAGE_SIZE + 1, ["status", ["accepted", "edited"]]]]);
+    const plain = fakeDb({ conversations: [{ id: CONV }], proposals });
+    await listContactTimelinePage(plain.db, u(100), u(99));
+    expect(plain.reads.filter((r) => r.table === "proposals")).toEqual([]);
   });
 
   it("a refused read of the removed-file relation fails the documents source, not a swallowed empty (spec 3.5; mutation: .catch(() => []) on listDocumentScanTimeline -> FAILS)", async () => {

@@ -16,6 +16,8 @@ import { listDocumentTimeline, listDocumentVersionTimeline, listDocumentScanTime
 import { listDocumentRequestTimeline, type TimelineDocumentRequest } from "./document-requests";
 import { listDocumentSkipTimeline, type TimelineDocumentSkip } from "./document-requirements";
 import { listDocumentShareTimeline, type TimelineDocumentShare } from "./document-shares";
+import { listContactAcceptedSuggestions } from "./proposals";
+import { parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayload, type Proposal } from "./proposal-rules";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -269,8 +271,25 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats";
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "suggestions";
+/** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`), so
+ *  what a page read is its own `sources`, never this list. */
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions"];
+
+/** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
+ *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
+ *  describes what was proposed. One arm per kind, so `applied` is always the proposal's own shape. */
+export type TimelineSuggestion = {
+  [K in Proposal["kind"]]: { proposal: Extract<Proposal, { kind: K }>; applied: Extract<Proposal, { kind: K }>["payload"] | null };
+}[Proposal["kind"]];
+
+function timelineSuggestion(p: Proposal): TimelineSuggestion {
+  switch (p.kind) {
+    case "task": return { proposal: p, applied: parseTaskPayload(p.appliedPayload) };
+    case "contact_field": return { proposal: p, applied: parseContactFieldPayload(p.appliedPayload) };
+    case "opportunity_stage": return { proposal: p, applied: parseOpportunityStagePayload(p.appliedPayload) };
+  }
+}
 
 export type TimelineNote = { id: string; body: string; author_id: string | null; created_at: string };
 export type TimelineTask = {
@@ -324,8 +343,13 @@ export type TimelineEntry =
   /** S-07 3b (plan deviation 4): one row per share link, at its created_at, from 0085's document_share_timeline so RLS decides. `id` is the share's. */
   | { kind: "documentShared"; id: string; at: string; contactId: string; share: TimelineDocumentShare }
   /** S-07 3b: the link's first download, at its first_opened_at, from the same row. The kind keeps its key apart from the share's. */
-  | { kind: "documentShareOpened"; id: string; at: string; contactId: string; share: TimelineDocumentShare };
-export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[] };
+  | { kind: "documentShareOpened"; id: string; at: string; contactId: string; share: TimelineDocumentShare }
+  /** item 8b-2 (spec 5.4): one row per accepted or edited suggestion, at its decided_at, from `proposals` so RLS decides. `id` is the suggestion's. */
+  | { kind: "suggestion"; id: string; at: string; contactId: string; suggestion: TimelineSuggestion };
+/** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
+ *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
+ *  reads nothing, so both are empty and that is an empty timeline, not an error. */
+export type TimelinePage = { items: TimelineEntry[]; older: TimelineCursor | null; failed: TimelineSource[]; sources: TimelineSource[] };
 
 /** (at desc, id desc). `at` to the microsecond (instantKey); ids as Postgres orders uuids (bytewise,
  *  which is the lowercase hex string's order). */
@@ -387,7 +411,7 @@ async function listContactChats(
 
 /**
  * The record page's timeline (S-03 part 1, 1b; spec §6, §7, C3), for one person or (2b, C6) a
- * household's set, each entry naming its member. Nine sources (S-07 added documents, S-06 part 3 added chats; a group page
+ * household's set, each entry naming its member. Nine sources, ten with `opts.suggestions` (item 8b-2) (S-07 added documents, S-06 part 3 added chats; a group page
  * passes `opts.groupId` so the group's OWN files are read too), each read on the
  * caller's client (RLS, 0068's Technician fences included, decides what is visible), merged into ONE
  * page ordered (at desc, id desc) with the contact list's cursor. Each source reads `limit + 1` rows
@@ -399,11 +423,11 @@ async function listContactChats(
  */
 export async function listTimelinePage(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean } = {},
 ): Promise<TimelinePage> {
   // A set with no one in it (a group none of whose members this reader can see) has nothing to
   // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
-  if (contactIds.length === 0) return { items: [], older: null, failed: [] };
+  if (contactIds.length === 0) return { items: [], older: null, failed: [], sources: [] };
   const limit = opts.limit ?? TIMELINE_PAGE_SIZE;
   const page = { before, limit: limit + 1 };
   // One person keeps the `.eq` path the contact page has always read; a set is `.in`.
@@ -471,18 +495,25 @@ export async function listTimelinePage(
     }),
     // S-06 part 3 (spec §7): one row per website chat.
     settle("chats", () => listContactChats(db, accountId, who, page)),
+    // item 8b-2 (spec 5.4): one row per accepted suggestion, only when asked (owner decision 1, 2026-10-19:
+    // the record page's timeline, not the drawer's Recent and not the household page).
+    ...(opts.suggestions === true
+      ? [settle("suggestions", async () => (await listContactAcceptedSuggestions(db, accountId, who, page))
+        .map((p): TimelineEntry => ({ kind: "suggestion", id: p.id, at: p.decidedAt, contactId: p.contactId, suggestion: timelineSuggestion(p) })))]
+      : []),
   ]);
+  const sources = results.map((r) => r.source);
   const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
   const merged = results.flatMap((r) => r.entries ?? []).sort(compareTimelineEntries);
   const items = merged.slice(0, limit);
   const last = items.at(-1);
-  return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed };
+  return { items, older: merged.length > limit && last ? { v: last.at, id: last.id } : null, failed, sources };
 }
 
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */
 export async function listContactTimelinePage(
   db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; suggestions?: boolean } = {},
 ): Promise<TimelinePage> {
   return listTimelinePage(db, accountId, [contactId], before, opts);
 }

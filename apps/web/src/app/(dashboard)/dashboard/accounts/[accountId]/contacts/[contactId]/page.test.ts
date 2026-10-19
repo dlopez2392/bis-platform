@@ -71,7 +71,9 @@ const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, the
 const timelineThrows = vi.hoisted(() => ({ on: false }));
 const listContactTagsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
 const listCustomFieldsMock = vi.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
-const EMPTY_PAGE = { items: [], older: null, failed: [] };
+/** The sources a mocked page read (item 8b-2: every page names them). */
+const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
+const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
 const listContactTimelinePageMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => EMPTY_PAGE);
 const listPeopleNamesMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => ({}));
 const getVoiceProfileMock = vi.fn(async (..._a: unknown[]): Promise<unknown> => null);
@@ -385,7 +387,7 @@ describe("ContactDetailPage: the recipient's texts state", () => {
   it("the timeline is told exactly what holdOpenTaskIds answered for the page's own tasks, and an unreadable ledger hints every open linked one — never a Done that would be refused (review R3-N1, I4; mutation: pass [] on failure → FAILS; mutation: pass the fallback always → the first case FAILS)", async () => {
     const taskEntry = (id: string, consent_event_id: string | null) => ({ kind: "task", id, at: "2026-10-01T00:00:00Z", task: {
       id, title: "x", due_at: null, completed_at: null, created_at: "2026-10-01T00:00:00Z", consent_event_id, call_id: null, assigned_to: null, created_by: null } });
-    listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", "h1"), taskEntry("t_plain", null)], older: null, failed: [] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", "h1"), taskEntry("t_plain", null)], older: null, failed: [], sources: SOURCES });
     // The hold was decided since: the read answers none, and the page passes none (not its own fallback).
     holdOpenTaskIdsMock.mockResolvedValue([]);
     await render();
@@ -988,7 +990,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
 
   it("names: the request client reads the page's person ids; the viewer reads You and an unreadable id Someone on the team (D10, D11; mutation: You for every person -> FAILS)", async () => {
     requireAccountAccessMock.mockResolvedValueOnce({ userId: "user_me", isAgency: false, role: "staff", canManage: false });
-    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy("user_me", "n1"), noteBy("user_dan", "n2"), noteBy("user_gone", "n3")], older: null, failed: [] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy("user_me", "n1"), noteBy("user_dan", "n2"), noteBy("user_gone", "n3")], older: null, failed: [], sources: SOURCES });
     listPeopleNamesMock.mockResolvedValue({ user_dan: "Dan López" });
     await render();
     expect(listPeopleNamesMock.mock.calls.at(-1)![1]).toEqual(["user_me", "user_dan", "user_gone"]);
@@ -996,7 +998,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
   });
 
   it("some sources failed: the timeline gets its rows and says what could not load (mutation: drop failedText -> FAILS)", async () => {
-    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: ["calls", "bookings"] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: ["calls", "bookings"], sources: SOURCES });
     await render();
     expect(props().failedText).toBe("Couldn't load calls and bookings.");
     expect(props().rows).toHaveLength(1);
@@ -1005,7 +1007,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
 
   it("a page where a source failed offers no Older (its cursor would skip that source's rows), keeps Newer, and never claims empty (Task 9's rule; mutation: hand timelinePagerHrefs failed: [] -> FAILS)", async () => {
     const cursor = Buffer.from(JSON.stringify(["2026-10-09T16:12:00Z", ID]), "utf8").toString("base64url");
-    listContactTimelinePageMock.mockResolvedValue({ items: [], older: { v: "2026-10-08T16:12:00Z", id: ID }, failed: ["calls"] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: { v: "2026-10-08T16:12:00Z", id: ID }, failed: ["calls"], sources: SOURCES });
     await render({ before: cursor });
     expect(listContactTimelinePageMock.mock.calls.at(-1)![3]).toEqual({ v: "2026-10-09T16:12:00Z", id: ID });
     expect(props().pager).toEqual({ olderHref: null, newerHref: "/dashboard/accounts/acct1/contacts/ct1#record-timeline" });
@@ -1015,7 +1017,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
   });
 
   it("all eight sources failed: the card's error, and Text and Email hide with the composer (D3)", async () => {
-    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: SOURCES, sources: SOURCES });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();
@@ -1026,7 +1028,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
   });
 
   it("the pager: Older from the head carries the merge's cursor; a paged view offers Newer; the first empty page sells the timeline (mutation: offer Newer on the head -> FAILS)", async () => {
-    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: { v: "2026-10-09T16:12:00Z", id: ID }, failed: [] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: { v: "2026-10-09T16:12:00Z", id: ID }, failed: [], sources: SOURCES });
     await render();
     expect(props().pager.olderHref).toMatch(/^\/dashboard\/accounts\/acct1\/contacts\/ct1\?before=[\w-]+#record-timeline$/);
     expect(props().pager.newerHref).toBeNull();
@@ -1041,7 +1043,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
 
   it("a Spanish page's rows read Spanish (§9.6; mutation: build the rows with an English Tr -> FAILS)", async () => {
     prefsMock.mockResolvedValue({ language: "es", theme: null });
-    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: [] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [noteBy(null)], older: null, failed: [], sources: SOURCES });
     await render();
     expect(props().rows[0]!.verb).toBe("agregó una nota");
     expect(props().rows[0]!.mark.label).toBe("Alguien del equipo");
@@ -1052,7 +1054,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
     const AT = "2026-10-12T03:30:00Z"; // Oct 12 in UTC; Oct 11, 10:30 PM in America/Chicago (CDT, UTC-5).
     listContactTimelinePageMock.mockResolvedValue({
       items: [{ kind: "note", id: "n1", at: AT, note: { id: "n1", body: "x", author_id: null, created_at: AT } }],
-      older: null, failed: [],
+      older: null, failed: [], sources: SOURCES,
     });
     await render();
     expect(props().rows[0]!.day).toBe("Oct 11, 2026");
@@ -1061,7 +1063,7 @@ describe("the record page's timeline (S-03 1b, spec §7, §9.4, §11)", () => {
 
   it("a row that cannot be drawn costs the timeline card, never the page, and its composer actions hide (C5, D3; mutation: build the rows outside viewOf -> the render rejects, FAILS)", async () => {
     getContactMock.mockResolvedValue({ ...CONTACT, phone: "+19565550100" });
-    listContactTimelinePageMock.mockResolvedValue({ items: [{ ...noteBy(null), at: "not-a-date" }], older: null, failed: [] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [{ ...noteBy(null), at: "not-a-date" }], older: null, failed: [], sources: SOURCES });
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const html = await render();

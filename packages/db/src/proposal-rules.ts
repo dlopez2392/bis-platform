@@ -25,6 +25,11 @@ export const PROPOSAL_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 export const UNDO_WINDOW_MS = 2 * 60 * 1000;
 /** decided_by when the app, not a person, decided (out of date). Not a Clerk user id. */
 export const SYSTEM_DECIDER = "system";
+/** The agency Work page shows at most this many pending suggestions per account, newest first (item 8b-2,
+ *  spec 5.2). The read asks 0089 for one more, so the page can say there are more. */
+export const AGENCY_PER_ACCOUNT = 50;
+/** The customer record's "Waiting for you" section shows at most this many (item 8b-2, spec 5.3). */
+export const WAITING_LIMIT = 5;
 
 export type ContactFieldName = "firstName" | "lastName" | "email" | "phone";
 export type TaskPayload = { title: string; dueAt: string | null };

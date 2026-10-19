@@ -54,6 +54,8 @@ function excerptOf(e: TimelineEntry, customerLang: "" | "en" | "es"): RecentRowV
     case "documentShared": case "documentShareOpened": return null;
     // S-06 part 3: the head already says who chatted and how much; the unconfirmed line comes from the row.
     case "chat": return null;
+    // item 8b-2: the head already says what was accepted. The drawer never reads this source (owner decision 1).
+    case "suggestion": return null;
   }
 }
 

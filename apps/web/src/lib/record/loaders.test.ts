@@ -34,6 +34,8 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: async () => { throw new E
 
 const { loadSummary, loadTimeline, loadRecent, DRAWER_RECENT, loadHeaderPlaces, softSmsGate } = await import("./loaders");
 const db = {} as SupabaseClient;
+/** The sources a mocked page read (item 8b-2: every page names them). */
+const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
 const ledger = { tag: "ledger" } as unknown as SupabaseClient;
 
 describe("record loaders", () => {
@@ -41,7 +43,7 @@ describe("record loaders", () => {
     contactFactsMock.mockReset();
     listContactTasksMock.mockReset().mockResolvedValue([]);
     holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
-    listContactTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [] });
+    listContactTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [], sources: SOURCES });
     listPeopleNamesMock.mockReset().mockResolvedValue({});
     getVoiceProfileMock.mockReset().mockResolvedValue(null);
   });
@@ -81,7 +83,7 @@ describe("record loaders", () => {
   it("a failed hold read fails CLOSED onto every open linked To-do on the page, on the ledger client (mutation: pass [] on failure -> FAILS)", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", null, "h1"), taskEntry("t_done", "2026-10-01T00:00:00Z", "h2"), taskEntry("t_plain", null, null)], older: null, failed: [] });
+      listContactTimelinePageMock.mockResolvedValue({ items: [taskEntry("t_hold", null, "h1"), taskEntry("t_done", "2026-10-01T00:00:00Z", "h2"), taskEntry("t_plain", null, null)], older: null, failed: [], sources: SOURCES });
       holdOpenTaskIdsMock.mockRejectedValue(new Error("ledger down"));
       const load = await loadTimeline(db, ledger, "acct1", "ct1");
       expect(load).toMatchObject({ status: "ready", holdOpen: ["t_hold"] });
@@ -90,17 +92,26 @@ describe("record loaders", () => {
   });
 
   it("some sources failing is still ready; all seven failing is the card's error (spec §9.4; mutation: error on any failure -> FAILS)", async () => {
-    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["calls"] });
+    const seven = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["calls"], sources: seven });
     expect(await loadTimeline(db, ledger, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: ["calls"] } });
-    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"] });
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: seven, sources: seven });
     expect(await loadTimeline(db, ledger, "acct1", "ct1")).toEqual({ status: "error" });
+  });
+
+  it("'every source failed' is counted against the sources the page READ, not every source there is (item 8b-2; mutation: compare to TIMELINE_SOURCES.length -> the seven-of-eight page is an error, FAILS)", async () => {
+    const seven = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+    listContactTimelinePageMock.mockResolvedValue({ items: [], older: null, failed: seven, sources: [...seven, "suggestions"] });
+    expect(await loadTimeline(db, ledger, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: seven } });
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: seven, sources: [...seven, "suggestions"] });
+    expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: seven } });
   });
 
   it("the cursor reaches the page read, and the names read asks for exactly the page's person ids (mutation: drop `before` -> FAILS)", async () => {
     const before = { v: "2026-10-09T16:12:00Z", id: "0f8a7b2c-1d2e-4f3a-8b4c-5d6e7f8a9b0c" };
     listContactTimelinePageMock.mockResolvedValue({ items: [
       { kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-01T00:00:00Z" } },
-    ], older: null, failed: [] });
+    ], older: null, failed: [], sources: SOURCES });
     await loadTimeline(db, ledger, "acct1", "ct1", before);
     expect(listContactTimelinePageMock.mock.calls[0]!.slice(0, 4)).toEqual([db, "acct1", "ct1", before]);
     expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
@@ -137,16 +148,16 @@ describe("record loaders", () => {
 
   it("Recent reads no hold and no ledger: the drawer has no Done (mutation: build it on loadTimeline -> FAILS)", async () => {
     listContactTimelinePageMock.mockResolvedValueOnce({ items: [{ kind: "task", id: "t1", at: "2026-10-01T00:00:00Z", contactId: "ct1",
-      task: { id: "t1", completed_at: null, consent_event_id: "ev1", call_id: null, created_by: null } }], older: null, failed: [] });
+      task: { id: "t1", completed_at: null, consent_event_id: "ev1", call_id: null, created_by: null } }], older: null, failed: [], sources: SOURCES });
     expect((await loadRecent(db, "acct1", "ct1")).status).toBe("ready");
     expect(holdOpenTaskIdsMock).not.toHaveBeenCalled();
   });
 
   it("Recent is an error only when all seven sources failed; six failed is ready, naming them (mutation: error on any failure -> FAILS)", async () => {
     const all = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all });
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all, sources: all });
     expect(await loadRecent(db, "acct1", "ct1")).toEqual({ status: "error" });
-    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all.slice(1) });
+    listContactTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: all.slice(1), sources: all });
     expect(await loadRecent(db, "acct1", "ct1")).toMatchObject({ status: "ready", page: { failed: all.slice(1) } });
   });
 

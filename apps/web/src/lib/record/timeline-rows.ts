@@ -1,5 +1,8 @@
-import type { TimelineEntry, TimelineSource } from "@bis/db";
+import type { TimelineEntry, TimelineSource, TimelineSuggestion } from "@bis/db";
 import { removedReason } from "@bis/db/document-rules";
+import type { Proposal } from "@bis/db/proposal-rules";
+import { describeRow } from "@/lib/proposals/view";
+import type { DescribeCtx, Description } from "@/lib/proposals/kinds/types";
 import type { TimelineTone } from "@/components/record/timeline-item";
 import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
@@ -40,8 +43,33 @@ const DEAL_STATUS: StatusMap = {
 const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
-  documents: "timeline.what.documents", chats: "timeline.what.chats",
+  documents: "timeline.what.documents", chats: "timeline.what.chats", suggestions: "timeline.what.suggestions",
 };
+
+/** The suggestion's sentence as one string: the card draws the arrow run aria-hidden beside its spoken
+ *  words; a timeline row is plain text, so it keeps the drawn run, as the card shows it. */
+const sentence = (d: Description) => d.parts.map((p) => p.text).join("");
+
+/**
+ * item 8b-2 (spec 5.4, 7): "accepted Rosa's suggestion: <what was written>" through the registry's own
+ * sentence (`describeRow`), described at the DECISION's instant, so a to-do due that week never reads
+ * "Was due" later. What was written is the applied form; when the read could not parse it, what was
+ * proposed. An edited one says so and carries the original as its detail.
+ */
+function suggestionPhrase(
+  s: TimelineSuggestion, at: string, zone: string, tr: Tr, persona: string, stages: DescribeCtx["stages"],
+): Pick<TimelineRow, "verb" | "status" | "detail"> {
+  const ctx = { tr, zone, stages, now: new Date(at) };
+  // `applied` is the proposal's own kind's payload (TimelineSuggestion pairs them arm by arm); the spread
+  // loses that pairing in the type only.
+  const written = describeRow({ ...s.proposal, payload: s.applied ?? s.proposal.payload } as Proposal, ctx);
+  const edited = s.proposal.status === "edited";
+  return {
+    verb: tr.text(edited ? "timeline.suggestionEdited" : "timeline.suggestion", { persona, change: sentence(written) }),
+    status: null,
+    detail: edited ? tr.text("timeline.suggestion.original", { change: sentence(describeRow(s.proposal, ctx)) }) : written.detail,
+  };
+}
 
 /** A deal's amount, or null when it has none: 0 and null are not an amount anyone entered
  *  (DESIGN.md: omitted, never zeroed), and "$0" would read as a free job. */
@@ -63,8 +91,11 @@ function whenText(iso: string, zone: string, tr: Tr): string {
   }).format(new Date(iso));
 }
 
-function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr, persona: string): Pick<TimelineRow, "verb" | "status" | "detail"> {
+function phrase(
+  entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr, persona: string, stages: DescribeCtx["stages"],
+): Pick<TimelineRow, "verb" | "status" | "detail"> {
   switch (entry.kind) {
+    case "suggestion": return suggestionPhrase(entry.suggestion, entry.at, zone, tr, persona, stages);
     case "note": return { verb: tr.text("timeline.note"), status: null, detail: null };
     case "task": return { verb: tr.text(entry.task.call_id ? "timeline.callbackTodo" : "timeline.todo"), status: null, detail: null };
     case "deal": return {
@@ -151,17 +182,23 @@ function phrase(entry: TimelineEntry, mark: AuthorMarkView, zone: string, tr: Tr
  * its view guard (C5): a bad row costs the timeline card, never the page.
  */
 export function timelineRows(
-  entries: readonly TimelineEntry[], ctx: { zone: string; tr: Tr; author: AuthorCtx; subjects?: TimelineSubjects },
+  entries: readonly TimelineEntry[],
+  ctx: {
+    zone: string; tr: Tr; author: AuthorCtx; subjects?: TimelineSubjects;
+    /** item 8b-2: stage names for a stage-move suggestion's row; an unresolved one reads the registry's honest sentence. */
+    suggestionStages?: DescribeCtx["stages"];
+  },
 ): TimelineRow[] {
   let previousDay: string | null = null;
   // The AI mark's own rule (author-mark.ts's authorLabel): the account's persona, else Sofía.
   const persona = ctx.author.personaName?.trim() || "Sofía";
+  const stages = ctx.suggestionStages ?? {};
   return entries.map((entry) => {
     const day = formatDateInZone(entry.at, ctx.zone, ctx.tr.locale);
     const mark = authorMark(entry, ctx.author);
     const row: TimelineRow = {
       key: `${entry.kind}-${entry.id}`, entry, day, showDay: day !== previousDay,
-      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr, persona),
+      time: formatDateTimeInZone(entry.at, ctx.zone, ctx.tr.locale), mark, ...phrase(entry, mark, ctx.zone, ctx.tr, persona, stages),
       subject: ctx.subjects && Object.hasOwn(ctx.subjects, entry.contactId) ? ctx.subjects[entry.contactId]! : null,
       ...(entry.kind === "chat" && entry.chat.matchedExisting
         ? { note: { text: ctx.tr.text("conversations.webchat.unconfirmed"), lang: ctx.tr.locale } } : {}),
