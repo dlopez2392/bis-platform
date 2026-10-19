@@ -885,18 +885,20 @@ describe("production secrets are reachable only from jobs that declare the produ
 });
 
 /**
- * The production demo rebuilds itself every Monday (owner's decision,
- * 2026-10-13): left alone, every date in it is frozen at its seed and the
- * Website chart and "this week" tiles go stale. A schedule has no inputs, so
- * the "type seed" check must skip it, and only it; a dispatch still needs the
- * word. And still no push trigger, ever.
+ * The production demo rebuilds itself every morning, with a backup run an
+ * hour later (owner's decisions, 2026-10-13 and 2026-10-19): left alone,
+ * every date in it is frozen at its seed. The first scheduled Monday run was
+ * dropped by GitHub without a trace, hence the backup, which must skip when
+ * the demo is already fresh and must rebuild otherwise. A schedule has no
+ * inputs, so the "type seed" check skips it, and only it; a dispatch still
+ * needs the word. And still no push trigger, ever.
  */
-describe("seed-demo.yml rebuilds the production demo on Mondays, and only by schedule or a typed dispatch", () => {
+describe("seed-demo.yml rebuilds the production demo every morning, with a backup, and only by schedule or a typed dispatch", () => {
   const seedLines = codeLines(read("../../../.github/workflows/seed-demo.yml"));
   const text = seedLines.join("\n");
 
-  it("runs every Monday morning (mutation: drop the schedule -> FAILS)", () => {
-    expect(text).toMatch(/schedule:\s*\n\s*- cron: '17 10 \* \* 1'/);
+  it("runs every morning, and again an hour later (mutation: drop either cron -> FAILS)", () => {
+    expect(text).toMatch(/schedule:\s*\n\s*- cron: '17 10 \* \* \*'\s*\n\s*- cron: '17 11 \* \* \*'/);
   });
 
   it("never runs on a push or pull request (mutation: add `push:` -> FAILS)", () => {
@@ -907,5 +909,15 @@ describe("seed-demo.yml rebuilds the production demo on Mondays, and only by sch
   it("skips the typed confirmation for the schedule only (mutation: drop the `if:` -> FAILS)", () => {
     expect(text).toMatch(/- name: Check the confirmation\s*\n\s*if: github\.event_name == 'workflow_dispatch'/);
     expect(text).toMatch(/inputs\.confirm \}\}" != "seed"/);
+  });
+
+  it("lets only the backup run skip, and only on a demo under six hours old (mutation: skip on the 10:17 run -> FAILS)", () => {
+    expect(text).toMatch(/id: fresh\s*\n\s*if: github\.event_name == 'schedule' && github\.event\.schedule == '17 11 \* \* \*'/);
+    expect(text).toMatch(/-lt 21600/);
+  });
+
+  it("gates the seed itself on that check (mutation: drop the Seed step's `if:` -> FAILS)", () => {
+    expect(text).toMatch(/- name: Seed\s*\n\s*if: steps\.fresh\.outputs\.skip != 'true'/);
+    expect(text).toMatch(/- run: pnpm install --frozen-lockfile\s*\n\s*if: steps\.fresh\.outputs\.skip != 'true'/);
   });
 });

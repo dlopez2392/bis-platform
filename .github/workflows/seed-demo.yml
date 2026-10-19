@@ -12,19 +12,27 @@ name: Seed demo tenant
 # effect of a merge is exactly the kind of surprise the outbound_suppressed
 # guard exists to make survivable rather than routine.
 #
-# A SCHEDULE is the one exception (owner's decision, 2026-10-13): every
-# Monday at 10:17 UTC, 5:17 AM CDT / 4:17 AM CST, before anyone opens the
-# demo. Every timestamp in the demo is anchored to the moment it was seeded,
-# so a demo left alone goes stale: its Website chart stops at the seed day
-# and its "this week" tiles empty out a week later. On 2026-10-13 the
-# production demo was days old and still had the pre-#243 site, which showed
-# "Link a site". A schedule is not a side effect of a merge; it is the same
+# A SCHEDULE is the one exception (owner's decision, 2026-10-13; daily, with
+# a backup run, 2026-10-19): every day at 10:17 UTC, 5:17 AM CDT / 4:17 AM
+# CST, before anyone opens the demo, and again at 11:17 UTC as a backup.
+# Every timestamp in the demo is anchored to the moment it was seeded, so a
+# demo left alone goes stale: its "today" and "this week" panels empty out
+# and its Website chart stops at the seed day. On 2026-10-13 the production
+# demo was days old and still had the pre-#243 site, which showed "Link a
+# site". A schedule is not a side effect of a merge; it is the same
 # deliberate rebuild, on a clock. GitHub cron is UTC only and does not follow
 # DST; minute 17 rather than 0 because :00 is when GitHub's scheduler is most
 # delayed.
+#
+# Why the backup: GitHub can drop a scheduled run without a trace, and the
+# first Monday run (2026-10-19) never started while this repo's other
+# schedule ran normally. The 11:17 run reads the demo account's own
+# created_at and does nothing if the account is under six hours old, so on a
+# normal day it costs one query and a dropped 10:17 costs an hour, not a day.
 on:
   schedule:
-    - cron: '17 10 * * 1'
+    - cron: '17 10 * * *'
+    - cron: '17 11 * * *'
   workflow_dispatch:
     inputs:
       confirm:
@@ -77,24 +85,51 @@ jobs:
             exit 1
           fi
 
+      # The backup schedule only (see the header): skip when the demo was
+      # rebuilt in the last six hours, by the 10:17 run or by hand. Reads the
+      # account's created_at through PostgREST with the job's own key; the key
+      # is never echoed. A failed read is not a reason to skip: it rebuilds.
+      - name: Skip the backup run if the demo is already fresh
+        id: fresh
+        if: github.event_name == 'schedule' && github.event.schedule == '17 11 * * *'
+        run: |
+          created=$(curl -fsS \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/accounts?clerk_org_id=eq.org_demo_resaca_air&select=created_at" \
+            | jq -r '.[0].created_at // empty') || created=""
+          if [ -n "$created" ]; then
+            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+            if [ "$age" -lt 21600 ]; then
+              echo "The demo was rebuilt $((age / 60)) minutes ago; nothing to do."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "The demo is stale or unreadable (created_at: ${created:-unknown}); rebuilding."
+
       - uses: actions/checkout@v5
+        if: steps.fresh.outputs.skip != 'true'
       - uses: pnpm/action-setup@v6
+        if: steps.fresh.outputs.skip != 'true'
       - uses: actions/setup-node@v5
+        if: steps.fresh.outputs.skip != 'true'
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        if: steps.fresh.outputs.skip != 'true'
 
       # The script prints which database it is writing to before it touches it,
       # then a count per table. It drops its own half-built account on any
       # failure, so a red run here leaves nothing behind to clean up by hand.
       - name: Seed
+        if: steps.fresh.outputs.skip != 'true'
         run: pnpm --filter @bis/db db:seed-demo | tee "$RUNNER_TEMP/seed.log"
 
       # Repeated into the run summary so the counts are readable without
       # opening the log — this is the output somebody actually wants to see.
       - name: Report
-        if: always()
+        if: always() && steps.fresh.outputs.skip != 'true'
         run: |
           {
             echo '## Demo tenant'
