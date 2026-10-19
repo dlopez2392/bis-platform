@@ -371,7 +371,10 @@ test("at 360 px in the pseudo-locale, no element inside a suggestion card overfl
   const noOverflow = async (id: string) => {
     const el = card(page, id);
     await expect(el).toBeVisible();
+    // A screen-reader-only run (the arrow spoken as "to" / "a", design review minor 3) is clipped to 1px by
+    // design, so its scrollWidth always exceeds its clientWidth; it is not visible overflow.
     const over = await el.evaluate((root) => [root, ...root.querySelectorAll("*")]
+      .filter((n) => !n.closest(".sr-only"))
       .filter((n) => (n as HTMLElement).scrollWidth > (n as HTMLElement).clientWidth + 1).length);
     expect(over, `suggestion card ${id} overflows at 360px in the pseudo-locale`).toBe(0);
   };
