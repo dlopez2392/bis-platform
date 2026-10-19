@@ -7,7 +7,7 @@ import type { Locale } from "@/lib/i18n/locale";
 import { renderedText } from "@/lib/rendered-text";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { SuggestionCard } from "./suggestion-card";
-import { AI_MARK_CLASS } from "@/app/(dashboard)/dashboard/accounts/[accountId]/calls/ai-author-mark";
+import { AI_MARK_CLASS } from "@/components/ai-mark";
 import { CALL_AT, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, TITLE, ZONE, rows } from "./suggestion-specimens";
 
 /** Views built by the real builder from typed-out rows; markup by renderToStaticMarkup (no DOM). */
@@ -56,7 +56,7 @@ describe("SuggestionCard: the five states in English (rule 3: dot and word)", ()
 
 describe("SuggestionCard: the same five in Spanish", () => {
   it("each status word is the Spanish one, and the decided line is Spanish", () => {
-    expect(FIVE.map((s) => statusOf(card(rows[s], "es")))).toEqual(["Pendiente", "Aceptada", "Editada", "Descartada", "Vencida"]);
+    expect(FIVE.map((s) => statusOf(card(rows[s], "es")))).toEqual(["Sugerida", "Aceptada", "Editada", "Descartada", "Ya no aplica"]);
     expect(plain(card(rows.accepted, "es"))).toContain("Aceptada por Ana Lopez · 9:42 a.m.");
     expect(plain(card(rows.pending, "es"))).toContain("Porque quien llamó dijo");
   });
@@ -91,7 +91,10 @@ describe("SuggestionCard: the pseudo-locale", () => {
   it("every visible string but the model's title and the caller's words is pseudo-localised", () => {
     for (const s of [...FIVE, "aged"] as const) {
       const h = card(rows[s], "en", { pseudo: true });
-      const nodes = h.split(/<[^>]*>/).map((x) => x.trim()).filter(Boolean);
+      // A drawn, aria-hidden glyph (the field change's arrow) is a symbol, not a word; its spoken words
+      // (the sr-only run beside it) are checked like every other word.
+      const nodes = h.replace(/<span aria-hidden="true">[^<]*<\/span>/g, "")
+        .split(/<[^>]*>/).map((x) => x.trim()).filter(Boolean);
       const own = nodes.filter((x) => x !== TITLE && x !== rows[s].evidence);
       expect(own.length).toBeGreaterThan(3);
       // The module's own marker (its [ ] wrapper or a pad word), never a bare accent: an accented specimen
@@ -109,6 +112,24 @@ describe("SuggestionCard: tokens only", () => {
       const radii = new Set(h.match(/rounded-[^\s"]+/g) ?? []);
       expect([...radii].filter((r) => !["rounded-[var(--radius-card)]", "rounded-[var(--radius-ctl)]", "rounded-full"].includes(r))).toEqual([]);
     }
+  });
+});
+
+// Design review I1: the card is the house card's recipe (ui/card.tsx), so on a themed tenant it takes the
+// tenant's opaque --card like its bg-card glass neighbours, and on BIS it carries the sheen. A chrome
+// neutral (--surface-1, --line) here was the mode-keyed side of the seam, by accident.
+describe("SuggestionCard: the house card's recipe", () => {
+  it("bg-card glass border-border at the card radius, never a chrome neutral (mutation: bg-[var(--surface-1)] -> FAILS)", () => {
+    const cls = (/^<article[^>]*class="([^"]*)"/.exec(card(rows.pending))?.[1] ?? "").split(" ");
+    expect(cls).toEqual(expect.arrayContaining(["bg-card", "glass", "border", "border-border", "rounded-[var(--radius-card)]", "min-w-0"]));
+    expect(cls.filter((c) => /surface-|--line|shadow-/.test(c))).toEqual([]);
+  });
+});
+
+describe("SuggestionCard: the field change's arrow (design review minor 3)", () => {
+  it("is aria-hidden, with an sr-only to / a in its place (mutation: render part.text alone -> FAILS)", () => {
+    expect(card(rows.field)).toContain('<span aria-hidden="true">→</span><span class="sr-only">to</span>');
+    expect(card(rows.field, "es")).toContain('<span aria-hidden="true">→</span><span class="sr-only">a</span>');
   });
 });
 

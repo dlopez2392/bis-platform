@@ -379,11 +379,19 @@ describe("AgencyWorkList — pending suggestions (Task 10)", () => {
     expect(html).not.toContain("Due");
   });
 
-  it("shows a contact_field proposal in the registry's words (item 8b-1)", () => {
+  it("shows a contact_field proposal in the registry's words, the arrow drawn and spoken as to (item 8b-1; design review minor 3)", () => {
     const html = renderList(buckets(), {}, [{
       ...proposal(), kind: "contact_field", payload: { field: "email", value: "sam@example.com" },
     } as AgencyProposal]);
-    expect(renderedText(html)).toContain(T.text("suggestions.field", { field: "Email", value: "sam@example.com" }));
+    expect(html).toContain('Email: (empty) <span aria-hidden="true">→</span><span class="sr-only">to</span> sam@example.com');
+  });
+
+  // The type allows a suggestion with no call (a later source); today's CHECK makes every row a call's.
+  // Such a row must never link to /calls/null: it opens the account's To do tray, where its card is.
+  it("a suggestion with no call links to the account's To do tray, never /calls/null (final review, Task 8; mutation: always the call link -> FAILS)", () => {
+    const html = renderList(buckets(), {}, [proposal({ accountId: "acct-n", callId: null })]);
+    expect(html).not.toContain("/calls/null");
+    expect(html).toContain('href="/dashboard/accounts/acct-n/tasks"');
   });
 
   // Fix-wave (task-10-brief.md, Important 1): an opportunity_stage proposal

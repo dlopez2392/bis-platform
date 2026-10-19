@@ -24,7 +24,6 @@ export const opportunityStageKind: KindDef<"opportunity_stage", OpportunityStage
   sources: ["call"],
   needsContact: true,
   dataClass: "facts",
-  parse: parseOpportunityStagePayload,
 
   describe(p, { tr, stages }) {
     const from = stageOf(stages, p.fromStageId);

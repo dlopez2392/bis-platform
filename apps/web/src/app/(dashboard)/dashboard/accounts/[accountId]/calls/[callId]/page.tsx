@@ -33,6 +33,7 @@ import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
+import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
@@ -200,7 +201,7 @@ export default async function CallDetailPage({
     views.sort((a, b) => Number(!a.canAct) - Number(!b.canAct));
     suggestions = { ok: true, views, capped: false };
   } catch (e) {
-    console.error(`call detail ${callId}: suggestions read failed, rendering the section's error state: ${String(e)}`);
+    console.error(`call detail ${callId}: suggestions read failed, rendering the section's error state: ${loggableError(e)}`);
     suggestions = { ok: false };
   }
 

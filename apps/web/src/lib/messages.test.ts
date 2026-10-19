@@ -931,7 +931,7 @@ describe("item 8a-2: the record summary's copy (spec 4.6, 4.8, 3.6)", () => {
 
 describe("suggestions.* keys (item 8b-1)", () => {
   const KEYS = [
-    "suggestions.heading", "suggestions.subhead", "suggestions.empty", "suggestions.cap", "suggestions.loadFailed",
+    "suggestions.heading", "suggestions.subhead", "suggestions.cap", "suggestions.loadFailed",
     "suggestions.loading", "suggestions.source.call", "suggestions.source.callNoName", "suggestions.evidence",
     "suggestions.status.pending", "suggestions.status.accepted", "suggestions.status.edited",
     "suggestions.status.dismissed", "suggestions.status.expired",

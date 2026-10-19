@@ -1,11 +1,11 @@
 import { fillContactBlanksReport, getContact, updateContact } from "@bis/db";
 import { normalisePhone } from "@bis/db/phone";
-import { parseContactFieldPayload, type ContactFieldName, type ContactFieldPayload } from "@bis/db/proposal-rules";
+import type { ContactFieldName, ContactFieldPayload } from "@bis/db/proposal-rules";
 import type { MessageKey } from "@/lib/messages";
 import type { Tr } from "@/lib/record/copy";
 import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
-import type { Db, KindDef } from "./types";
+import type { Db, KindDef, Part } from "./types";
 
 /** generate.ts's limit on a contact-field value (MAX_TITLE_LEN). The generator clamps; an edit is told. */
 const MAX_VALUE_LEN = 200;
@@ -60,16 +60,33 @@ async function contactOrThrow(db: Db, accountId: string, contactId: string | nul
 
 const label = (field: ContactFieldName, tr: Tr) => tr.text(LABEL[field]);
 
+/** Stands in for the value while the sentence is split around its arrow, so an arrow the caller's own
+ *  value carries is never taken for the sentence's. No vowels: the pseudo-locale rewrites vowels. */
+const SLOT = "␟";
+const ARROW = "→";
+
+/** "Phone: (empty) → +52 ..." as parts, the arrow drawn but spoken as "to" / "a" (design review minor 3). */
+function fieldSentence(field: string, value: string, tr: Tr): Part[] {
+  const sentence = tr.text("suggestions.field", { field, value: SLOT });
+  const at = sentence.indexOf(ARROW);
+  const fill = (s: string) => s.split(SLOT).join(value);
+  if (at < 0 || at > sentence.indexOf(SLOT)) return [{ text: fill(sentence) }];
+  return [
+    { text: fill(sentence.slice(0, at)) },
+    { text: ARROW, spoken: tr.text("suggestions.field.arrow") },
+    { text: fill(sentence.slice(at + ARROW.length)) },
+  ].filter((p) => p.text !== "");
+}
+
 export const contactFieldKind: KindDef<"contact_field", ContactFieldPayload> = {
   kind: "contact_field",
   sources: ["call"],
   needsContact: true,
   dataClass: "facts",
-  parse: parseContactFieldPayload,
 
   describe(p, { tr }) {
     return {
-      parts: [{ text: tr.text("suggestions.field", { field: label(p.field, tr), value: p.value }) }],
+      parts: fieldSentence(label(p.field, tr), p.value, tr),
       detail: null, pastDue: false,
     };
   },

@@ -22,6 +22,8 @@ export type SuggestionLabels = {
   undo: string; title: string; due: string; stage: string; crashed: string;
   /** "Because the caller said", the words before the caller's quote. */
   because: string;
+  /** The words' language, which every toast carries (design review I3). */
+  lang: "en" | "es";
 };
 
 export type SuggestionView = {
@@ -71,17 +73,14 @@ const DECIDED_BY_YOU: Record<"accepted" | "edited" | "dismissed", MessageKey> = 
   dismissed: "suggestions.decided.dismissedByYou",
 };
 
-/** The account's own calendar day ("2026-10-14"), never UTC's. */
-const dayIn = (d: Date, zone: string) =>
-  new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-
 /**
  * "9:42 AM" for a decision made today in the account's zone; "Oct 14, 9:42 AM" before today; with the year
  * when it is not this year (the orchestrator's ruling on spec 4.5; the 8a label's rule, aiSummaryStamp).
  */
 function decidedStamp(at: Date, zone: string, now: Date, locale: "en" | "es"): string {
-  const day = dayIn(at, zone);
-  const today = dayIn(now, zone);
+  // The account's own calendar day ("2026-10-14"), never UTC's: local-day.ts's one formatter.
+  const day = localDateKey(at, zone);
+  const today = localDateKey(now, zone);
   const opts: Intl.DateTimeFormatOptions = day === today
     ? { timeZone: zone, hour: "numeric", minute: "2-digit" }
     : { timeZone: zone, ...(day.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" as const }),
@@ -147,7 +146,8 @@ export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): Sugg
     } else if (ctx.viewerId && by === ctx.viewerId) {
       decidedLine = tr.text(DECIDED_BY_YOU[status], { time });
     } else {
-      const name = (Object.hasOwn(ctx.names, by) ? ctx.names[by] : undefined) || tr.text("assign.someone");
+      // Mid-sentence, so lowercase ("Discarded by someone on the team"), never assign.someone's capital.
+      const name = (Object.hasOwn(ctx.names, by) ? ctx.names[by] : undefined) || tr.text("suggestions.decided.someone");
       decidedLine = tr.text(DECIDED[status], { name, time });
     }
   }
@@ -179,6 +179,7 @@ export function buildSuggestionView(row: Proposal, ctx: SuggestionViewCtx): Sugg
       stage: tr.text("suggestions.edit.stage"),
       crashed: tr.text("suggestions.answer.maybeFailed"),
       because: tr.text("suggestions.evidence"),
+      lang: locale,
     },
   };
 }

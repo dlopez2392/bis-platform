@@ -33,9 +33,10 @@ const MAX_PER_CALL = 3;
  * proposal here would be a silent drop of the caller's actual request.
  *
  * Shared with `contact_field`'s `value` for the identical reason (fix-wave
- * Minor): that value lands on the same review card `proposals.tsx`
- * interpolates straight into its sentence, so an unclamped 5,000-character
- * value is the same defect as an unclamped title, not a new one.
+ * Minor): that value lands on the same suggestion card
+ * (`components/proposals/suggestion-card.tsx`), straight inside its
+ * sentence, so an unclamped 5,000-character value is the same defect as an
+ * unclamped title, not a new one.
  */
 const MAX_TITLE_LEN = 200;
 
@@ -544,10 +545,11 @@ export async function generateProposals(input: {
       // isCallbackTitle). Before `attempts++`: a dropped duplicate must not
       // spend a slot a real proposal could use.
       if (input.callbackTodo && isCallbackTitle(title)) {
-        // One info line per drop, the title only: a dropped suggestion is
-        // otherwise invisible, and a matcher that drops a real task has to
-        // be findable from the logs.
-        console.log(`generateProposals: dropped "${title}" for call ${input.callId}: the callback To do already exists`);
+        // One info line per drop, by the call id only: a dropped suggestion
+        // is otherwise invisible, and a matcher that drops a real task has to
+        // be findable from the logs. Never the title: it is the caller's own
+        // words read back by the model (final review M-4).
+        console.log(`generateProposals: dropped a callback suggestion for call ${input.callId}: the callback To do already exists`);
         continue;
       }
       // THE BOUNDARY, and note WHAT IS STORED. `groundedTurn` returns the

@@ -15,6 +15,11 @@ export type SuggestionSectionData = { ok: true; views: SuggestionView[]; capped:
 const SECTION = "flex flex-col gap-3";
 const SUBHEAD = "text-sm text-muted-foreground";
 
+/** "Showing the newest 200." under a capped stack (plan deviation 19). Exported for the styleguide. */
+export function SuggestionCapLine({ tr }: { tr: Tr }) {
+  return <p className={SUBHEAD}>{tr.text("suggestions.cap", { n: 200 })}</p>;
+}
+
 function Heading({ id, tr }: { id: string; tr: Tr }) {
   return <h2 id={id} className={MONO_LABEL}>{tr.text("suggestions.heading")}</h2>;
 }
@@ -34,11 +39,11 @@ export function SuggestionSection({
         <>
           <p className={SUBHEAD}>{tr.text("suggestions.subhead", { persona: personaName.trim() || "Sofía" })}</p>
           {data.views.map((view) => <SuggestionCard key={view.id} view={view} {...actions} />)}
-          {data.capped ? <p className={SUBHEAD}>{tr.text("suggestions.cap", { n: 200 })}</p> : null}
+          {data.capped ? <SuggestionCapLine tr={tr} /> : null}
         </>
       ) : (
         <div role="alert" className="flex flex-wrap items-center gap-3">
-          <p className="text-sm text-foreground">{tr.text("suggestions.loadFailed")}</p>
+          <p className="min-w-0 text-sm text-foreground">{tr.text("suggestions.loadFailed")}</p>
           <SuggestionRetry label={tr.text("common.retry")} />
         </div>
       )}
@@ -58,7 +63,8 @@ export function SuggestionSectionSkeleton({ tr }: { tr: Tr }) {
           <Skeleton className={`h-3 w-2/5 ${line}`} />
           <Skeleton className={`h-4 w-4/5 ${line}`} />
           <Skeleton className={`h-4 w-3/5 ${line}`} />
-          <div className="flex gap-2">
+          {/* Wraps: three fixed widths in one row were the card's min-content (330px) at phone width. */}
+          <div className="flex flex-wrap gap-2">
             <Skeleton className={`h-8 w-20 ${line}`} />
             <Skeleton className={`h-8 w-28 ${line}`} />
             <Skeleton className={`h-8 w-20 ${line}`} />

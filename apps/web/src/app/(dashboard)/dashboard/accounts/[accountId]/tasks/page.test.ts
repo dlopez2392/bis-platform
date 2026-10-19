@@ -249,7 +249,7 @@ function renderList(
   timezone: string = ZONE,
 ) {
   return renderToStaticMarkup(
-    createElement(WorkList, { buckets, accountId: ACCOUNT_ID, contactNames, timezone }),
+    createElement(WorkList, { buckets, accountId: ACCOUNT_ID, contactNames, timezone, tr: makeTr("en") }),
   );
 }
 
@@ -597,6 +597,21 @@ describe("TasksPage — the Suggestions section (item 8b-1)", () => {
     spy.mockRestore();
   });
 
+  // The read boundary refuses such a row (parseTaskPayload), but a card the page cannot build is still the
+  // section's own failure, never the whole To do page's (final review M-1; the call page already builds
+  // its views inside its try). The mock hands the row straight through, as a boundary that missed one would.
+  it("a card that cannot be built is the section's error state, and the buckets still render (mutation: build the views after the try -> the page throws a RangeError -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    workRows = [taskRow({ id: "task:1", contactId: null, dueAt: "2099-01-01T12:00:00Z" })];
+    pendingProposals = [proposal({ payload: { title: "Call back", dueAt: "next week" } } as Partial<Proposal>)];
+    const html = await render();
+    expect(renderedText(html)).toContain("Couldn't load suggestions.");
+    expect(html).not.toContain("data-suggestion=");
+    expect(html).toContain("Call about the estimate");
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("suggestions could not be shown"));
+    spy.mockRestore();
+  });
+
   it("never claims the queue is clear when a suggestion is pending", async () => {
     pendingProposals = [proposal()];
     const html = await render();
@@ -784,7 +799,7 @@ describe("WorkList — Assigned to on task rows (F-085)", () => {
   const list = (rows: WorkRow[], canAssign: boolean) => {
     taskFieldProps.length = 0;
     return renderToStaticMarkup(createElement(WorkList, {
-      buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE,
+      buckets: bucketWork(rows, NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE, tr: makeTr("en"),
       canAssign, members: [ANA],
     }));
   };
@@ -819,9 +834,15 @@ describe("WorkList — Assigned to on task rows (F-085)", () => {
   });
 });
 
+// Final review, Task 8: WorkList's `tr` has no silent English default. The guard is the type checker's:
+// were `tr` optional again, this directive would be unused and `pnpm --filter web typecheck` FAILS.
+void (() =>
+  // @ts-expect-error tr is required: the Suggestions section's words are the reader's, never a default
+  createElement(WorkList, { buckets: bucketWork([], new Date(0), "UTC"), accountId: "a1", contactNames: {}, timezone: "UTC" }));
+
 describe("WorkList — filtered empty states (F-085)", () => {
   const empty = (who: "all" | "mine" | "unassigned") => renderToStaticMarkup(createElement(WorkList, {
-    buckets: bucketWork([], NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE, who,
+    buckets: bucketWork([], NOW, ZONE), accountId: ACCOUNT_ID, contactNames: {}, timezone: ZONE, tr: makeTr("en"), who,
   }));
 
   it("an empty Mine says nothing is assigned to you yet (mutation: always 'Nothing needs you' -> FAILS)", () => {
@@ -942,5 +963,26 @@ describe("the To do route's loading skeleton (rule 7, plan fix M5)", () => {
     expect(html.indexOf('aria-busy="true"')).toBeGreaterThanOrEqual(0);
     expect((busy.match(/data-skeleton/g) ?? []).length).toBe(2);
     expect(renderedText(busy)).toContain(makeTr("en").text("suggestions.loading"));
+  });
+
+  // Final review, Task 8: the slice above runs to the END of the markup, so a Suggestions skeleton moved
+  // outside the busy region, or above the bucket's, still passed it. This cuts the busy <div> out by its
+  // own nesting and reads the order inside it.
+  it("the Suggestions skeleton is INSIDE the aria-busy <div>, after the bucket skeleton (mutations: render it after the busy div -> FAILS; above the bucket -> FAILS)", async () => {
+    const { default: Loading } = await import("./loading");
+    const html = renderToStaticMarkup(createElement(Loading));
+    const start = html.lastIndexOf("<div", html.indexOf('aria-busy="true"'));
+    let depth = 0;
+    let end = start;
+    for (const m of html.slice(start).matchAll(/<div\b|<\/div>/g)) {
+      depth += m[0] === "</div>" ? -1 : 1;
+      if (depth === 0) { end = start + m.index! + m[0].length; break; }
+    }
+    const region = html.slice(start, end);
+    const bucket = region.indexOf("rounded-xl border border-border");
+    const suggestions = region.indexOf("data-skeleton");
+    expect([bucket >= 0, suggestions >= 0]).toEqual([true, true]);
+    expect(suggestions).toBeGreaterThan(bucket);
+    expect((region.match(/data-skeleton/g) ?? []).length).toBe(2);
   });
 });

@@ -41,13 +41,7 @@ const ctxWith = (d: Db): ApplyCtx => ({ db: d, accountId: "a1", userId: "user_1"
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("opportunity_stage: parse and describe", () => {
-  it("parses its own payload and refuses the other kinds'", () => {
-    expect(opportunityStageKind.parse(stored)).toEqual(stored);
-    expect(opportunityStageKind.parse({ title: "Call", dueAt: null })).toBeNull();
-    expect(opportunityStageKind.parse({ field: "phone", value: "+15551234567" })).toBeNull();
-  });
-
+describe("opportunity_stage: describe", () => {
   it("names the move by the account's stage names and says when one stage is skipped", () => {
     const p = { ...stored, toStageId: "s2" };
     expect(opportunityStageKind.describe(p, dctx()))

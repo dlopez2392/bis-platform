@@ -88,14 +88,25 @@ describe("buildSuggestionView: status, canAct and who decided", () => {
     const lastYear = { ...rows.accepted, decidedAt: "2025-10-14T14:42:00.000Z" };
     expect(plain(view(lastYear).decidedLine)).toBe("Accepted by Ana Lopez · Oct 14, 2025, 9:42 AM");
   });
-  it("a decision by a named person reads their name; by nobody we can name, Someone on the team", () => {
+  // Mid-sentence, the unnamed person is lowercase (final review M-2): "Discarded by someone on the team",
+  // never the standalone mark's capital ("Someone on the team", assign.someone).
+  it("a decision by a named person reads their name; by nobody we can name, someone on the team, lowercase mid-sentence", () => {
     expect(plain(view(rows.edited).decidedLine)).toBe("Edited by Ana Lopez · 9:42 AM");
-    expect(plain(view(rows.dismissed, "en", { names: {} }).decidedLine)).toBe("Discarded by Someone on the team · 9:42 AM");
+    expect(plain(view(rows.dismissed, "en", { names: {} }).decidedLine)).toBe("Discarded by someone on the team · 9:42 AM");
+    expect(plain(view(rows.dismissed, "es", { names: {} }).decidedLine)).toBe("Descartada por alguien del equipo · 9:42 a.m.");
     expect(plain(view(rows.expired).decidedLine)).toBe("Marked out of date · 9:42 AM");
     expect(view(rows.pending).decidedLine).toBeNull();
   });
   it("an out-of-date row states its stored reason in the reader's language", () => {
-    expect([view(rows.expired).reasonLine, view(rows.expired, "es").statusWord]).toEqual(["This deal has moved since.", "Vencida"]);
+    expect([view(rows.expired).reasonLine, view(rows.expired, "es").statusWord]).toEqual(["This deal has moved since.", "Ya no aplica"]);
+  });
+  // Design review I2 and minor 2: "Pendiente" read as already on the to-do list (the To do page is
+  // "Pendientes", a suggested to-do "Agregar un pendiente"), and "Vencida" read as overdue next to
+  // "Vencía el {date}". The Spanish states are Sugerida and Ya no aplica, the refusals' own words.
+  it("Spanish: a pending card reads Sugerida, an out-of-date one Ya no aplica, in its status and its decided line", () => {
+    expect(view(rows.pending, "es").statusWord).toBe("Sugerida");
+    expect(plain(view(rows.expired, "es").decidedLine)).toBe("Se marcó que ya no aplica · 9:42 a.m.");
+    expect(view(rows.aged, "es").statusWord).toBe("Ya no aplica");
   });
   it("the persona mark carries the account's persona, never a hard-coded name", () => {
     expect(view(rows.pending, "en", { personaName: "Ana" }).personaMark).toBe("Ana · AI");

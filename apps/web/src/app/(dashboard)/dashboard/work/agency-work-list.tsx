@@ -27,7 +27,6 @@
 //     acting on it means following its own link into that account.
 import Link from "next/link";
 import { ListTodo } from "lucide-react";
-import { Fragment } from "react";
 import type { AgencyWorkRow, Proposal } from "@bis/db";
 import type { Bucket } from "@/lib/work/buckets";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
@@ -54,6 +53,7 @@ import type { DescribeCtx, Part } from "@/lib/proposals/kinds/types";
 // nothing.
 import { CARD, CARD_HEAD } from "../accounts/[accountId]/calls/[callId]/card";
 import { AiAuthorMark } from "../accounts/[accountId]/calls/ai-author-mark";
+import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 
 const BUCKET_ORDER: Bucket[] = ["overdue", "today", "waiting"];
 
@@ -252,7 +252,11 @@ function AgencyProposalRow({
   return (
     <li>
       <Link
-        href={`/dashboard/accounts/${proposal.accountId}/calls/${proposal.callId}#call-proposals`}
+        // A suggestion with no call (none today: 0088's CHECK ties source "call" to a call) opens the
+        // account's To do tray, where its card is, never /calls/null.
+        href={proposal.callId
+          ? `/dashboard/accounts/${proposal.accountId}/calls/${proposal.callId}#call-proposals`
+          : `/dashboard/accounts/${proposal.accountId}/tasks`}
         className="flex flex-col gap-2 px-5 py-4 transition-colors hover:bg-[var(--surface-3)]"
       >
         <span className="truncate font-mono text-[10px] font-medium tracking-[0.14em] text-muted-foreground uppercase">
@@ -266,9 +270,7 @@ function AgencyProposalRow({
             DESIGN.md rule 3 exists to tell statuses APART; there is only
             ever one here. */}
         <span className="text-sm font-medium text-card-foreground">
-          {parts.map((part, i) => (part.lang
-            ? <span key={i} lang={part.lang}>{part.text}</span>
-            : <Fragment key={i}>{part.text}</Fragment>))}
+          <SuggestionParts parts={parts} />
         </span>
         {/* Fix-wave Important 1 (task-11-brief): a machine-chosen due date
             must be visible before a human accepts it, in ITS OWN account's
@@ -283,7 +285,7 @@ function AgencyProposalRow({
             from, deep-linked to that page's own `#call-proposals` section
             rather than its top. */}
         <p className="text-sm leading-6 text-muted-foreground">
-          {m["proposals.evidence"]}{" "}
+          {m["suggestions.evidence"]}{" "}
           <q className="text-foreground">{proposal.evidence}</q>
         </p>
       </Link>

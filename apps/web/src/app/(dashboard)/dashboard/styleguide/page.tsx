@@ -24,7 +24,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SCREENED_REASONS, screenedClass } from "@bis/db";
 import { CLASS_DOT } from "../screened/screened-table";
-import { SuggestionSection, SuggestionSectionSkeleton } from "@/components/proposals/suggestion-section";
+import { SuggestionCapLine, SuggestionSection, SuggestionSectionSkeleton } from "@/components/proposals/suggestion-section";
 import { CALL_AT, EDITS, FIVE, NAMES, NOW, PIPELINE_STAGES, STAGES, ZONE, rows as SUGGESTION_ROWS } from "@/components/proposals/suggestion-specimens";
 import { buildSuggestionView } from "@/lib/proposals/view";
 import { makeTr } from "@/lib/record/copy";
@@ -84,7 +84,7 @@ const SUGGESTION_TRS = [
 const suggestionColumns = () => SUGGESTION_TRS.map(({ key, tr }) => {
   const build = (s: keyof typeof SUGGESTION_ROWS) => buildSuggestionView(SUGGESTION_ROWS[s], {
     tr, zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES, callerName: "Ana Lopez",
-    callStartedAt: CALL_AT, personaName: "Sofia", names: NAMES, viewerId: null,
+    callStartedAt: CALL_AT, personaName: "Sofía", names: NAMES, viewerId: null,
   });
   return { key, caption: key, views: [...FIVE, "aged" as const].map(build), edits: EDITS.map(build) };
 });
@@ -616,9 +616,11 @@ export default async function StyleguidePage({
             <SuggestionDemo columns={suggestionColumns()} />
             <div className="grid w-full gap-6 md:grid-cols-2">
               {(["en", "es"] as const).map((locale) => (
-                <div key={locale} data-sg-suggestions-states={locale} className="flex max-w-[360px] flex-col gap-6">
-                  <SuggestionSection tr={makeTr(locale)} personaName="Sofia" data={{ ok: false }} {...NO_SUGGESTION_ACTIONS} />
+                <div key={locale} data-sg-suggestions-states={locale} className="flex min-w-0 max-w-[360px] flex-col gap-6">
+                  <SuggestionSection tr={makeTr(locale)} personaName="Sofía" data={{ ok: false }} {...NO_SUGGESTION_ACTIONS} />
                   <SuggestionSectionSkeleton tr={makeTr(locale)} />
+                  {/* The line under a capped stack, as the To do tray shows it past 200 (plan deviation 19). */}
+                  <div data-sg-suggestions-cap={locale}><SuggestionCapLine tr={makeTr(locale)} /></div>
                 </div>
               ))}
             </div>

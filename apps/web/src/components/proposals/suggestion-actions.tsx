@@ -10,8 +10,9 @@
 import { useEffect, useId, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Input, nativeFieldClass } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
 import { runDecision, type SuggestionActionResult, type UndoResult } from "./suggestion-handlers";
 
@@ -25,12 +26,45 @@ export type SuggestionActionProps = {
 const CTL = "min-h-11 md:min-h-8";
 const FIELD = "flex flex-col gap-1";
 const ERROR = "text-xs text-destructive";
-const SELECT = "min-h-11 md:min-h-8 w-full rounded-[var(--radius-ctl)] border border-input bg-[var(--surface-2)] px-3 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
+/** Painted as every native field is (input.tsx's nativeFieldClass; design review minor 1), with Input's
+ *  invalid style for a refused stage. */
+const SELECT = cn(nativeFieldClass, CTL,
+  "text-foreground aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40");
 
 /** Esc cancels the edit from any field but the stage <select>, whose own Esc closes its open list
  *  (review minor 8). Pure, so it is unit-tested without a DOM. */
 export function escCancelsEdit(key: string, targetTag: string): boolean {
   return key === "Escape" && targetTag !== "SELECT";
+}
+
+type Focusable = { focus: () => void };
+type CardLookup = { querySelector(selector: string): (Focusable & { getAttribute?: (name: string) => string | null }) | null };
+
+/**
+ * Where focus goes once a decision has landed (design review minor 5), so it never falls to <body>.
+ * The card still reads pending: the page's re-render has not landed, wait. The card stayed, decided (the
+ * call page lists every status): its status line. The card left (the To do tray lists pending only): the
+ * next card's Accept, or nothing when it was the last. Pure over a document-shaped lookup.
+ */
+export function decisionFocusTarget(doc: CardLookup, ownId: string, nextId: string | null): { wait: boolean; el: Focusable | null } {
+  const own = doc.querySelector(`[data-suggestion="${ownId}"]`);
+  if (own) {
+    if (own.getAttribute?.("data-status") === "pending") return { wait: true, el: null };
+    return { wait: false, el: doc.querySelector(`[data-suggestion="${ownId}"] [data-status-line]`) };
+  }
+  if (nextId === null) return { wait: false, el: null };
+  return { wait: false, el: doc.querySelector(`[data-suggestion="${nextId}"] [data-suggestion-accept]`) };
+}
+
+/** Polls decisionFocusTarget until the re-render lands (bounded: 60 tries, 50 ms apart). It runs from a
+ *  timer, not an effect, because in the tray this component has unmounted by then. */
+function focusAfterDecision(ownId: string, nextId: string | null, tries = 60) {
+  const step = (left: number) => {
+    const { wait, el } = decisionFocusTarget(document, ownId, nextId);
+    if (wait && left > 0) { window.setTimeout(() => step(left - 1), 50); return; }
+    el?.focus();
+  };
+  window.setTimeout(() => step(tries), 0);
 }
 
 export function SuggestionActions({
@@ -45,6 +79,8 @@ export function SuggestionActions({
   const [pending, startTransition] = useTransition();
   const uid = useId();
   const formRef = useRef<HTMLFormElement>(null);
+  /** The view's root (the form has formRef), to find this card and the one after it once a decision lands. */
+  const rootRef = useRef<HTMLDivElement>(null);
   const editButtonRef = useRef<HTMLButtonElement>(null);
   /** Set by Cancel / Esc only, so focus returns to Edit and accept then, and never on the first render. */
   const returnFocus = useRef(false);
@@ -65,9 +101,16 @@ export function SuggestionActions({
     startTransition(async () => {
       const r = await runDecision({
         act, undo: () => undo(id), toast, schedule: (fn, ms) => { setTimeout(fn, ms); },
-        labels: { undo: labels.undo, crashed: labels.crashed },
+        labels: { undo: labels.undo, crashed: labels.crashed, lang: labels.lang },
       });
-      if (r.ok) { setFieldError(null); setMode("view"); return; }
+      if (r.ok) {
+        const card = (rootRef.current ?? formRef.current)?.closest("[data-suggestion]");
+        const next = card?.nextElementSibling?.closest("[data-suggestion]")?.getAttribute("data-suggestion") ?? null;
+        setFieldError(null);
+        setMode("view");
+        focusAfterDecision(id, next);
+        return;
+      }
       setFieldError(r.field ? { field: r.field, text: r.error } : null);
     });
   }
@@ -80,8 +123,8 @@ export function SuggestionActions({
 
   if (mode === "view") {
     return (
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" className={CTL} disabled={pending} onClick={() => run(() => accept(id))}>
+      <div ref={rootRef} className="flex flex-wrap gap-2">
+        <Button data-suggestion-accept type="button" size="sm" className={CTL} disabled={pending} onClick={() => run(() => accept(id))}>
           {labels.accept}
         </Button>
         {editable ? (
@@ -127,7 +170,8 @@ export function SuggestionActions({
         <>
           <div className={FIELD}>
             <Label htmlFor={`${uid}-title`}>{labels.title}</Label>
-            <Input {...fieldProps("title")} type="text" defaultValue={edit.title} className={CTL} />
+            {/* The model's English title (P18), so lang="en" under a Spanish card (design review minor 7). */}
+            <Input {...fieldProps("title")} lang="en" type="text" defaultValue={edit.title} className={CTL} />
             {errorUnder("title")}
           </div>
           <div className={FIELD}>

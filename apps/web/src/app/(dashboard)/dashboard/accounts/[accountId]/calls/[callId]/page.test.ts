@@ -593,6 +593,18 @@ describe("CallDetailPage — the Suggestions section (item 8b-1)", () => {
     spy.mockRestore();
   });
 
+  it("the failed read's log line goes through loggableError: an address in the error never reaches the log (mutation: String(e) -> FAILS)", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    getCallMock.mockResolvedValue(CALL);
+    listFailedOutboundSmsMock.mockResolvedValue([]);
+    listProposalsForCallMock.mockRejectedValue(new Error("row for ana.caller@example.com refused"));
+    await CallDetailPage({ params: Promise.resolve({ accountId: "acct1", callId: "call1" }) }).then(renderToStaticMarkup);
+    const line = spy.mock.calls.map((a) => String(a[0])).find((l) => l.includes("suggestions read failed")) ?? "";
+    expect(line).toContain("Error: row for [email] refused");
+    expect(line).not.toContain("ana.caller@example.com");
+    spy.mockRestore();
+  });
+
   it("a failed stage read is the section's error state too, never a card it cannot name", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     fake.tables = { ...fake.tables, ...stageTables() };

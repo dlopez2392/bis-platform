@@ -1,5 +1,5 @@
 import { addTask, deleteTaskForUndo, readPersonId, taskAssigneeFor } from "@bis/db";
-import { parseTaskPayload, type TaskPayload } from "@bis/db/proposal-rules";
+import type { TaskPayload } from "@bis/db/proposal-rules";
 import { formatDateInZone } from "@/lib/format";
 import { addLocalDays, firstInstantOfLocalDay, localDateKey } from "../local-day";
 import type { KindDef, Part } from "./types";
@@ -27,14 +27,6 @@ function isPastDue(dueAt: string | null, zone: string, now: Date): boolean {
   return dueAt !== null && localDateKey(new Date(dueAt), zone) < localDateKey(now, zone);
 }
 
-/** parseTaskPayload, plus: a due date must be a real instant. A stored "next week" is refused here, so
- *  describe and normalise never meet an Invalid Date (formatDateInZone throws a RangeError on one). */
-function parseTask(v: unknown): TaskPayload | null {
-  const p = parseTaskPayload(v);
-  if (p && p.dueAt !== null && Number.isNaN(Date.parse(p.dueAt))) return null;
-  return p;
-}
-
 type RefT = { taskId: string; title: string; dueAt: string | null };
 function readRef(ref: unknown): RefT | null {
   if (ref === null || typeof ref !== "object") return null;
@@ -49,7 +41,6 @@ export const taskKind: KindDef<"task", TaskPayload> = {
   sources: ["call"],
   needsContact: false,
   dataClass: "facts",
-  parse: parseTask,
 
   describe(p, { tr, zone, now }) {
     const pastDue = isPastDue(p.dueAt, zone, now);

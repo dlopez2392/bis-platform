@@ -34,7 +34,7 @@ import type { SuggestionView } from "@/lib/proposals/view";
 import {
   acceptSuggestionAction, editAcceptSuggestionAction, discardSuggestionAction, undoSuggestionAction,
 } from "@/lib/proposals/actions";
-import { makeTr, type Tr } from "@/lib/record/copy";
+import type { Tr } from "@/lib/record/copy";
 import type { AssignMember } from "@/lib/assign/view";
 import type { Who } from "@/lib/assign/who";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
@@ -314,7 +314,6 @@ function WorkRowItem({
 }
 
 const NO_SUGGESTIONS = { views: [], capped: false, error: false };
-const EN = makeTr("en");
 
 export function WorkList({
   buckets,
@@ -322,7 +321,7 @@ export function WorkList({
   contactNames,
   timezone,
   suggestions = NO_SUGGESTIONS,
-  tr = EN,
+  tr,
   personaName = "Sofía",
   canAssign = false,
   members = [],
@@ -349,8 +348,10 @@ export function WorkList({
    *  Optional (defaults to none) so every other call site and test is
    *  unaffected. */
   suggestions?: { views: SuggestionView[]; capped: boolean; error: boolean };
-  /** The section's words in the reader's language (requestLocale). */
-  tr?: Tr;
+  /** The section's words in the reader's language (requestLocale). REQUIRED, never defaulted (final
+   *  review, Task 8): a silent English default let a caller that forgot it show a Spanish reader English
+   *  cards, and no test could tell. */
+  tr: Tr;
   /** The account's persona, for the section's subhead. */
   personaName?: string;
   /** F-085 part 1: may this caller hand tasks to someone (Owner, Staff, the

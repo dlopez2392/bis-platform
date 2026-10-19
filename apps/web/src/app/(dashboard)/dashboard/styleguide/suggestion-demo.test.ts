@@ -26,7 +26,7 @@ describe("styleguide: the suggestion card", () => {
         .toEqual(["task", "contact_field", "opportunity_stage"]);
       expect(col).toMatch(/<select[^>]*name="toStageId"/);
     }
-    expect(h).toContain("Pendiente");
+    expect(h).toContain("Sugerida");
     expect(h).toMatch(/\[Sú/);
   });
 });

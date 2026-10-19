@@ -28,18 +28,18 @@ const undo = (ref: unknown, ctx = actx) => {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("contact_field: parse and describe", () => {
-  it("parses its own payload and refuses the other kinds'", () => {
-    expect(contactFieldKind.parse(phone)).toEqual(phone);
-    expect(contactFieldKind.parse({ title: "Call", dueAt: null })).toBeNull();
-    expect(contactFieldKind.parse({ opportunityId: "o1", fromStageId: "s1", toStageId: "s2" })).toBeNull();
-  });
-
-  it("reads the field and the value in the reader's language, with no English-only part", () => {
+describe("contact_field: describe", () => {
+  // Design review minor 3: the arrow is drawn, never read ("Phone empty right arrow ..."): its part says
+  // what a screen reader hears instead, "to" / "a", in the reader's language.
+  it("reads the field and the value in the reader's language, the arrow spoken as to / a (mutation: one plain part -> FAILS)", () => {
     expect(contactFieldKind.describe(phone, dctx()))
-      .toEqual({ parts: [{ text: "Phone: (empty) → +528990000000" }], detail: null, pastDue: false });
+      .toEqual({ parts: [{ text: "Phone: (empty) " }, { text: "→", spoken: "to" }, { text: " +528990000000" }], detail: null, pastDue: false });
     expect(contactFieldKind.describe(phone, dctx(es)))
-      .toEqual({ parts: [{ text: "Teléfono: (vacío) → +528990000000" }], detail: null, pastDue: false });
+      .toEqual({ parts: [{ text: "Teléfono: (vacío) " }, { text: "→", spoken: "a" }, { text: " +528990000000" }], detail: null, pastDue: false });
+  });
+  it("an arrow inside the caller's value is the value's, never split off as the sentence's", () => {
+    expect(contactFieldKind.describe({ field: "email", value: "a→b@example.com" }, dctx()).parts)
+      .toEqual([{ text: "Email: (empty) " }, { text: "→", spoken: "to" }, { text: " a→b@example.com" }]);
   });
 });
 

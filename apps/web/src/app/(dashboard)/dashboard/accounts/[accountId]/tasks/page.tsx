@@ -170,17 +170,28 @@ export default async function TasksPage({
     }
   }
 
+  // Built inside its own try, as the call page builds its views inside its read's: a card that cannot be
+  // built (a payload the read boundary should have refused) is the section's error state, never the
+  // whole To do page (final review M-1). It runs after the contacts batch above, which the buckets share.
   const now = new Date();
-  const views: SuggestionView[] = suggestionRows.map((p) => {
-    const callerId = callerIdOf(p);
-    return buildSuggestionView(p, {
-      tr, zone: timezone, now, ...stageCtx,
-      callerName: callerId ? (contactNames[callerId] ?? null) : null,
-      callStartedAt: p.callId ? (callsById.get(p.callId)?.startedAt ?? null) : null,
-      // The tray shows pending rows only, so it names no decider.
-      personaName, names: {}, viewerId: access.userId,
+  let views: SuggestionView[] = [];
+  try {
+    views = suggestionRows.map((p) => {
+      const callerId = callerIdOf(p);
+      return buildSuggestionView(p, {
+        tr, zone: timezone, now, ...stageCtx,
+        callerName: callerId ? (contactNames[callerId] ?? null) : null,
+        callStartedAt: p.callId ? (callsById.get(p.callId)?.startedAt ?? null) : null,
+        // The tray shows pending rows only, so it names no decider.
+        personaName, names: {}, viewerId: access.userId,
+      });
     });
-  });
+  } catch (e) {
+    console.error(`tasks ${accountId}: suggestions could not be shown, rendering the section's error state: ${loggableError(e)}`);
+    views = [];
+    capped = false;
+    suggestionsError = true;
+  }
 
   return (
     <>

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { makeTr } from "@/lib/record/copy";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
 
@@ -19,6 +20,7 @@ const task = (consent: WorkRow["consent"]): WorkRow => ({
 });
 const render = (row: WorkRow) => renderToStaticMarkup(createElement(WorkList, {
   buckets: { overdue: [], today: [row], waiting: [] }, accountId: "a1", contactNames: { c1: "Ana" }, timezone: "America/Chicago",
+  tr: makeTr("en"),
 }));
 
 describe("the consent To-do row (spec §6)", () => {

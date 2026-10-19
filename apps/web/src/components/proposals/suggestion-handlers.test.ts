@@ -25,15 +25,18 @@ function fakeSchedule() {
   return { schedule: (fn: () => void, ms: number) => { jobs.push({ fn, ms }); }, jobs };
 }
 const flush = () => new Promise((r) => setTimeout(r, 0));
-const labels = { undo: "Undo", crashed: "Something went wrong. Try again." };
+const labels = { undo: "Undo", crashed: "Something went wrong. Try again.", lang: "en" as const };
+/** A toast's words as the handler hands them to sonner: an element carrying the reader's lang (design
+ *  review I3), so a Spanish toast under <html lang="en"> is announced in a Spanish voice. */
+const said = (text: string, lang: "en" | "es" = "en") => expect.objectContaining({ type: "span", props: { lang, children: text } });
 const accepted: SuggestionActionResult = { ok: true, status: "accepted", toast: "Added to your to-do list" };
 
-function deps(over: { act?: () => Promise<SuggestionActionResult>; undo?: () => Promise<UndoResult> } = {}) {
+function deps(over: { act?: () => Promise<SuggestionActionResult>; undo?: () => Promise<UndoResult>; lang?: "en" | "es" } = {}) {
   const t = fakeToast();
   const s = fakeSchedule();
   const act = vi.fn(over.act ?? (async () => accepted));
   const undo = vi.fn(over.undo ?? (async (): Promise<UndoResult> => ({ ok: true, message: "Undone." })));
-  return { t, s, act, undo, d: { act, undo, toast: t.toast as never, schedule: s.schedule, labels } };
+  return { t, s, act, undo, d: { act, undo, toast: t.toast as never, schedule: s.schedule, labels: { ...labels, lang: over.lang ?? "en" } } };
 }
 
 describe("runDecision", () => {
@@ -42,8 +45,8 @@ describe("runDecision", () => {
     expect(await runDecision(d)).toEqual({ ok: true });
     expect(SUGGESTION_TOAST_MS).toBe(10_000);
     expect(t.toast.success).toHaveBeenCalledTimes(1);
-    expect(t.toast.success).toHaveBeenCalledWith("Added to your to-do list", {
-      action: { label: "Undo", onClick: expect.any(Function) },
+    expect(t.toast.success).toHaveBeenCalledWith(said("Added to your to-do list"), {
+      action: { label: said("Undo"), onClick: expect.any(Function) },
       duration: 10_000,
     });
     expect(s.jobs.map((j) => j.ms)).toEqual([10_000]);
@@ -58,7 +61,7 @@ describe("runDecision", () => {
     await flush();
     expect(undo).toHaveBeenCalledTimes(1);
     expect(act).toHaveBeenCalledTimes(1);
-    expect(t.toast.success).toHaveBeenLastCalledWith("Undone.");
+    expect(t.toast.success).toHaveBeenLastCalledWith(said("Undone."));
     expect(t.toast.error).not.toHaveBeenCalled();
   });
 
@@ -77,7 +80,7 @@ describe("runDecision", () => {
     await runDecision(d);
     t.clickUndo();
     await flush();
-    expect(t.toast.error).toHaveBeenCalledWith("Too late to undo here. Change it by hand.");
+    expect(t.toast.error).toHaveBeenCalledWith(said("Too late to undo here. Change it by hand."));
     expect(t.toast.success).toHaveBeenCalledTimes(1);
   });
 
@@ -86,21 +89,35 @@ describe("runDecision", () => {
     await runDecision(d);
     t.clickUndo();
     await flush();
-    expect(t.toast.error).toHaveBeenCalledWith(labels.crashed);
+    expect(t.toast.error).toHaveBeenCalledWith(said(labels.crashed));
   });
 
   it("a refused decision toasts its error, offers no Undo and hands the field back for the form", async () => {
     const { t, s, d } = deps({ act: async () => ({ ok: false, error: "Enter a phone number.", field: "value" }) });
     expect(await runDecision(d)).toEqual({ ok: false, error: "Enter a phone number.", field: "value" });
-    expect(t.toast.error).toHaveBeenCalledWith("Enter a phone number.");
+    expect(t.toast.error).toHaveBeenCalledWith(said("Enter a phone number."));
     expect(t.toast.success).not.toHaveBeenCalled();
     expect(s.jobs).toEqual([]);
+  });
+
+  it("a Spanish reader's toasts, its Undo and Undo's answer all carry lang=\"es\" (design review I3; mutation: hand sonner the bare string -> FAILS)", async () => {
+    const { t, d } = deps({
+      lang: "es",
+      act: async () => ({ ok: true, status: "accepted", toast: "Agregado a sus pendientes" }),
+      undo: async () => ({ ok: true, message: "Se deshizo." }),
+    });
+    await runDecision({ ...d, labels: { ...d.labels, undo: "Deshacer" } });
+    expect(t.toast.success).toHaveBeenCalledWith(said("Agregado a sus pendientes", "es"),
+      expect.objectContaining({ action: expect.objectContaining({ label: said("Deshacer", "es") }) }));
+    t.clickUndo();
+    await flush();
+    expect(t.toast.success).toHaveBeenLastCalledWith(said("Se deshizo.", "es"));
   });
 
   it("a decision that throws toasts the crash words and offers no Undo", async () => {
     const { t, s, d } = deps({ act: async () => { throw new Error("boom"); } });
     expect(await runDecision(d)).toEqual({ ok: false, error: labels.crashed });
-    expect(t.toast.error).toHaveBeenCalledWith(labels.crashed);
+    expect(t.toast.error).toHaveBeenCalledWith(said(labels.crashed));
     expect(t.toast.success).not.toHaveBeenCalled();
     expect(s.jobs).toEqual([]);
   });

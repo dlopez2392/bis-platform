@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Proposal } from "@bis/db/proposal-rules";
+import { parseTaskPayload, type Proposal } from "@bis/db/proposal-rules";
 import { makeTr } from "@/lib/record/copy";
 import type { ApplyCtx, Db, DescribeCtx, EditCtx } from "./types";
 
@@ -22,13 +22,15 @@ const stored = { title: "Send the quote", dueAt: "2026-10-21T05:00:00.000Z" };
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("task: parse", () => {
+// The read boundary is @bis/db's (toProposal parses every row by kind before a kind sees it; final review
+// M-1), so the to-do's parse cases read parseTaskPayload itself.
+describe("task: the read boundary (parseTaskPayload)", () => {
   it("accepts a to-do payload and refuses the other kinds' payloads and a wrong title type", () => {
     // Mutation: accept any object -> FAILS on the three refusals.
-    expect(taskKind.parse({ title: "Call back", dueAt: null })).toEqual({ title: "Call back", dueAt: null });
-    expect(taskKind.parse({ field: "phone", value: "+15551234567" })).toBeNull();
-    expect(taskKind.parse({ opportunityId: "o1", fromStageId: "s1", toStageId: "s2" })).toBeNull();
-    expect(taskKind.parse({ title: 5 })).toBeNull();
+    expect(parseTaskPayload({ title: "Call back", dueAt: null })).toEqual({ title: "Call back", dueAt: null });
+    expect(parseTaskPayload({ field: "phone", value: "+15551234567" })).toBeNull();
+    expect(parseTaskPayload({ opportunityId: "o1", fromStageId: "s1", toStageId: "s2" })).toBeNull();
+    expect(parseTaskPayload({ title: 5 })).toBeNull();
   });
 });
 
@@ -132,6 +134,21 @@ describe("task: normalise", () => {
     same("2026-10-10T10:14:41.761Z", "2026-10-10T05:00:00.000Z");
   });
 
+  // The chain decide runs (spec 4.4 step 5), end to end on a stored row of production's shape: the model's
+  // due instant is 10:14Z, not a midnight. The form posts that date untouched; validateEdit stores the
+  // day's first instant; normalise must call the two equal, and a different date not.
+  // Mutations: normalise compares instants -> the first FAILS; validateEdit stores UTC midnight
+  // (`${key}T00:00:00.000Z`, Oct 20 in Chicago) -> the first FAILS.
+  it("the chain on production's shape: an untouched 10:14Z date through validateEdit then normalise is the same due date; a new date is not", () => {
+    const prod = { title: "Send the quote", dueAt: "2026-10-21T10:14:41.761Z" };
+    const untouched = taskKind.validateEdit(prod, { title: "Send the quote", dueAt: "2026-10-21" }, ectx);
+    const moved = taskKind.validateEdit(prod, { title: "Send the quote", dueAt: "2026-10-22" }, ectx);
+    if (!untouched.ok || !moved.ok) throw new Error("edit refused");
+    expect(untouched.payload.dueAt).not.toBe(prod.dueAt);
+    expect(taskKind.normalise(untouched.payload, { zone: ZONE })).toEqual(taskKind.normalise(prod, { zone: ZONE }));
+    expect(taskKind.normalise(moved.payload, { zone: ZONE })).not.toEqual(taskKind.normalise(prod, { zone: ZONE }));
+  });
+
   it("late evening: 23:30 on Oct 20 in Chicago is Oct 20, not the UTC day's Oct 21", () => {
     same("2026-10-21T04:30:00Z", "2026-10-20T05:00:00.000Z");
     expect(taskKind.normalise({ title: "Call", dueAt: "2026-10-21T05:00:00.000Z" }, { zone: ZONE }))
@@ -150,11 +167,11 @@ describe("task: normalise", () => {
 });
 
 describe("task: a due date that is not a date", () => {
-  it("parse refuses it, so describe and normalise never meet an Invalid Date", () => {
-    // Mutation: parse = parseTaskPayload -> this payload parses, FAILS.
-    expect(taskKind.parse({ title: "Call", dueAt: "next week" })).toBeNull();
-    expect(taskKind.parse({ title: "Call", dueAt: "" })).toBeNull();
-    expect(taskKind.parse({ title: "Call", dueAt: "2026-10-10T10:14:41.761Z" }))
+  it("the read boundary refuses it, so describe and normalise never meet an Invalid Date", () => {
+    // Mutation: drop parseTaskPayload's Date.parse check -> "next week" parses, FAILS.
+    expect(parseTaskPayload({ title: "Call", dueAt: "next week" })).toBeNull();
+    expect(parseTaskPayload({ title: "Call", dueAt: "" })).toBeNull();
+    expect(parseTaskPayload({ title: "Call", dueAt: "2026-10-10T10:14:41.761Z" }))
       .toEqual({ title: "Call", dueAt: "2026-10-10T10:14:41.761Z" });
   });
 });

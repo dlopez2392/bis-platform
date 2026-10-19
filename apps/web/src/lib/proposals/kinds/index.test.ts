@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { PROPOSAL_KINDS } from "@bis/db/proposal-rules";
+import {
+  PROPOSAL_KINDS, parseContactFieldPayload, parseOpportunityStagePayload, parseTaskPayload,
+} from "@bis/db/proposal-rules";
 
 // A bare, empty factory: any kind module that reads a @bis/db value at import time (`apply: addTask`)
 // throws `[vitest] No "addTask" export is defined on the "@bis/db" mock` while ./index loads.
@@ -39,15 +41,19 @@ describe("the kind registry", () => {
       .toEqual([false, true, true]);
   });
 
-  it("each kind parses its own sample and refuses the other two kinds' (spec 8.1)", async () => {
+  // The read boundary is @bis/db's toProposal, parsing by kind with these three (final review M-1: a kind's
+  // own parse was never called on the read path, so it is gone from KindDef).
+  it("each kind's read-boundary parser takes its own sample and refuses the other two kinds' (spec 8.1)", async () => {
     const { KINDS, kindOf } = await import("./index");
+    const PARSE = { task: parseTaskPayload, contact_field: parseContactFieldPayload, opportunity_stage: parseOpportunityStagePayload };
     for (const k of PROPOSAL_KINDS) {
       for (const other of PROPOSAL_KINDS) {
-        const parsed = KINDS[k].parse(SAMPLES[other]);
+        const parsed = PARSE[k](SAMPLES[other]);
         if (other === k) expect(parsed).toEqual(SAMPLES[k]);
         else expect(parsed, `${k} parsed a ${other} payload`).toBeNull();
       }
       expect(kindOf(k)).toBe(KINDS[k]);
+      expect("parse" in KINDS[k], `${k} carries a parse no reader calls`).toBe(false);
     }
   });
 });

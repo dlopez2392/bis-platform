@@ -11,8 +11,10 @@ export type DescribeCtx = {
   stages: Readonly<Record<string, { name: string; position: number }>>;
   now: Date;
 };
-/** One run of the suggestion's sentence. `lang` only on the model's own words (P18): "en". */
-export type Part = { text: string; lang?: "en" };
+/** One run of the suggestion's sentence. `lang` only on the model's own words (P18): "en". `spoken` on a
+ *  run that is drawn but not read (the field change's arrow, design review minor 3): the screen reader
+ *  hears `spoken` instead ("to" / "a"). */
+export type Part = { text: string; lang?: "en"; spoken?: string };
 export type Description = { parts: Part[]; detail: string | null; pastDue: boolean };
 /** What the edit form posted; each kind reads only its own `editable` fields from it. */
 export type EditInput = Record<string, unknown>;
@@ -33,12 +35,16 @@ export type Inverse =
   | { undo: (ctx: ApplyCtx, ref: unknown) => Promise<"undone" | "changed"> }
   | { irreversible: MessageKey };
 
+/**
+ * One kind of suggestion. It has no `parse` of its own (final review M-1): the read boundary is
+ * `@bis/db`'s `toProposal`, which parses every row by kind (`parseTaskPayload` and its twins in
+ * `@bis/db/proposal-rules`) before any screen or decision sees it, so a payload reaching a kind is typed.
+ */
 export type KindDef<K extends ProposalKind, P> = {
   kind: K;
   sources: readonly ["call"];
   needsContact: boolean;
   dataClass: "facts";
-  parse(v: unknown): P | null;
   describe(p: P, ctx: DescribeCtx): Description;
   /** task: title, dueAt; contact_field: value; opportunity_stage: toStageId. */
   editable: readonly string[];

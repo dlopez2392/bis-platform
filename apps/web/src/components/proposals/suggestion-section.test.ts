@@ -77,6 +77,23 @@ describe("SuggestionSectionSkeleton: loading (rule 7)", () => {
     });
 });
 
+// CI run 39267488188 (phone-width.spec, /dashboard/styleguide at 375px): the page was 443px wide. 330px is
+// the skeleton card's min-content exactly: three fixed-width button bars (80 + 112 + 80px, two 8px gaps)
+// in a row that could not wrap, plus the card's 20px padding and border. A row of fixed widths must wrap,
+// and the error row's words must be free to wrap beside Retry.
+describe("SuggestionSection at phone width (no fixed row it cannot shrink below)", () => {
+  it("the skeleton's button row wraps (mutation: drop flex-wrap -> FAILS)", () => {
+    const h = renderToStaticMarkup(createElement(SuggestionSectionSkeleton, { tr: makeTr("en") }));
+    const rows = [...h.matchAll(/<div class="([^"]*)"><div data-slot="skeleton"/g)].map((x) => x[1]!);
+    expect(rows.length).toBe(2);
+    for (const cls of rows) expect(cls.split(" ")).toEqual(expect.arrayContaining(["flex", "flex-wrap"]));
+  });
+  it("the error row wraps, and its sentence may shrink beside Retry (mutation: drop min-w-0 -> FAILS)", () => {
+    const h = section({ ok: false });
+    expect(h).toMatch(/<div role="alert" class="[^"]*\bflex-wrap\b[^"]*"><p class="[^"]*\bmin-w-0\b/);
+  });
+});
+
 describe("SuggestionRetry (plan fix M6)", () => {
   it("re-reads the page with useRouter().refresh() from next/navigation, and nothing else", () => {
     const src = readFileSync(join(__dirname, "suggestion-retry.tsx"), "utf8");

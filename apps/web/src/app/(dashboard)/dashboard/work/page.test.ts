@@ -317,7 +317,7 @@ describe("AgencyWorkPage", () => {
     expect(html).not.toContain(m["work.empty"]);
     expect(html).toContain(m["proposals.work.heading"]);
     expect(html).toContain(
-      m["proposals.stage.label"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
+      m["suggestions.stage"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
     );
     expect(html).toContain("move this to booked now");
     // ONE batched read — not one per proposal, not one per account.
