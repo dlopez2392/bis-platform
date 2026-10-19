@@ -988,3 +988,85 @@ describe("suggestions.* keys (item 8b-1)", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("the tray everywhere, item 8b-2's new keys (plan Task 3)", () => {
+  const KEYS = [
+    "suggestions.group.call",
+    "suggestions.group.noCustomer",
+    "suggestions.capAccount",
+    "suggestions.waiting.heading",
+    "suggestions.waiting.seeAll",
+    "suggestions.transcript",
+    "suggestions.transcript.noTime",
+    "suggestions.answer.unreachable",
+    "suggestions.reload",
+    "timeline.suggestion",
+    "timeline.suggestionEdited",
+    "timeline.suggestion.original",
+    "timeline.what.suggestions",
+  ] as const;
+
+  it("every key has an English string and a Spanish twin that differs from it (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const missing = KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`]);
+    expect(missing).toEqual([]);
+  });
+
+  it("pins the plan's own sentences, both languages (mutation: change one word -> FAILS)", () => {
+    expect([m["suggestions.group.call"], m["suggestions.group.call.es"]]).toEqual([
+      "{name} · from the call on {date}", "{name} · de la llamada del {date}"]);
+    expect([m["suggestions.group.noCustomer"], m["suggestions.group.noCustomer.es"]]).toEqual([
+      "No customer yet", "Sin cliente todavía"]);
+    expect([m["suggestions.capAccount"], m["suggestions.capAccount.es"]]).toEqual([
+      "Showing the newest {n} for this account.", "Se muestran las {n} más recientes de esta cuenta."]);
+    expect([m["suggestions.waiting.heading"], m["suggestions.waiting.heading.es"]]).toEqual([
+      "Waiting for you", "Esperan su respuesta"]);
+    expect([m["suggestions.waiting.seeAll"], m["suggestions.waiting.seeAll.es"]]).toEqual([
+      "Edit or see all in To do", "Editar o ver todas en Pendientes"]);
+    expect([m["suggestions.transcript"], m["suggestions.transcript.es"]]).toEqual([
+      "See it in the transcript · {time}", "Ver en la transcripción · {time}"]);
+    expect([m["suggestions.transcript.noTime"], m["suggestions.transcript.noTime.es"]]).toEqual([
+      "See it in the transcript", "Ver en la transcripción"]);
+    expect([m["suggestions.answer.unreachable"], m["suggestions.answer.unreachable.es"]]).toEqual([
+      "That didn't reach us. Reload the page, then check before trying again.",
+      "No nos llegó. Recargue la página y revise antes de intentarlo otra vez."]);
+    expect([m["suggestions.reload"], m["suggestions.reload.es"]]).toEqual(["Reload", "Recargar"]);
+    expect([m["timeline.suggestion"], m["timeline.suggestion.es"]]).toEqual([
+      "accepted {persona}'s suggestion: {change}", "aceptó la sugerencia de {persona}: {change}"]);
+    expect([m["timeline.suggestionEdited"], m["timeline.suggestionEdited.es"]]).toEqual([
+      "accepted {persona}'s suggestion with changes: {change}",
+      "aceptó la sugerencia de {persona} con cambios: {change}"]);
+    expect([m["timeline.suggestion.original"], m["timeline.suggestion.original.es"]]).toEqual([
+      "Suggested: {change}", "Se sugirió: {change}"]);
+    expect([m["timeline.what.suggestions"], m["timeline.what.suggestions.es"]]).toEqual([
+      "accepted suggestions", "sugerencias aceptadas"]);
+  });
+
+  it("the named params interpolate through t() for both languages", () => {
+    expect(t(m, "suggestions.group.call", "en", { name: "Maria Garcia", date: "Oct 12" }))
+      .toBe("Maria Garcia · from the call on Oct 12");
+    expect(t(m, "suggestions.group.call", "es", { name: "Maria Garcia", date: "12 oct" }))
+      .toBe("Maria Garcia · de la llamada del 12 oct");
+    expect(t(m, "suggestions.capAccount", "en", { n: 50 })).toBe("Showing the newest 50 for this account.");
+    expect(t(m, "suggestions.capAccount", "es", { n: 50 })).toBe("Se muestran las 50 más recientes de esta cuenta.");
+    expect(t(m, "suggestions.transcript", "en", { time: "2:14" })).toBe("See it in the transcript · 2:14");
+    expect(t(m, "suggestions.transcript", "es", { time: "2:14" })).toBe("Ver en la transcripción · 2:14");
+    expect(t(m, "timeline.suggestion", "en", { persona: "Sofía", change: "Stage: Lead → Deal build" }))
+      .toBe("accepted Sofía's suggestion: Stage: Lead → Deal build");
+    expect(t(m, "timeline.suggestionEdited", "es", { persona: "Sofía", change: "Etapa: Prospecto → Construcción" }))
+      .toBe("aceptó la sugerencia de Sofía con cambios: Etapa: Prospecto → Construcción");
+    expect(t(m, "timeline.suggestion.original", "en", { change: "Due Oct 20" })).toBe("Suggested: Due Oct 20");
+  });
+
+  it("no plumbing words reach the reader, and no internal milestone code (mutation: write 'proposal' into one key -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const bad = KEYS.flatMap((k) => [cat[k], cat[`${k}.es`]])
+      .filter((s) => /proposal|payload|model|registry|token|call_proposals/i.test(s ?? ""));
+    expect(bad).toEqual([]);
+  });
+
+  it("does not delete proposals.work.heading/.body: Task 6 still reads them (agency-work-list.tsx)", () => {
+    expect(m["proposals.work.heading"]).toBeTruthy();
+    expect(m["proposals.work.body"]).toBeTruthy();
+  });
+});

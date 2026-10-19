@@ -4541,6 +4541,16 @@ export const m = {
   "timeline.what.deals.es": "oportunidades",
   "timeline.what.forms": "forms",
   "timeline.what.forms.es": "formularios",
+  // Item 8b-2: an accepted or edited suggestion as a timeline row, with the
+  // decision-maker's person mark (author-mark.ts) carrying the verb.
+  "timeline.suggestion": "accepted {persona}'s suggestion: {change}",
+  "timeline.suggestion.es": "aceptó la sugerencia de {persona}: {change}",
+  "timeline.suggestionEdited": "accepted {persona}'s suggestion with changes: {change}",
+  "timeline.suggestionEdited.es": "aceptó la sugerencia de {persona} con cambios: {change}",
+  "timeline.suggestion.original": "Suggested: {change}",
+  "timeline.suggestion.original.es": "Se sugirió: {change}",
+  "timeline.what.suggestions": "accepted suggestions",
+  "timeline.what.suggestions.es": "sugerencias aceptadas",
   "timeline.older": "Older",
   "timeline.older.es": "Anteriores",
   "timeline.newer": "Newer",
@@ -5118,6 +5128,27 @@ export const m = {
   "suggestions.edit.emailInvalid.es": "Eso no parece un correo electrónico.",
   "suggestions.edit.stageInvalid": "Pick a later stage that isn't the last one.",
   "suggestions.edit.stageInvalid.es": "Elija una etapa posterior que no sea la última.",
+  // Item 8b-2, the tray everywhere: groups in the To do tray and on the
+  // agency Work page, the record's flat "Waiting for you" section, the
+  // transcript deep link and the client-side unreachable/reload answer.
+  "suggestions.group.call": "{name} · from the call on {date}",
+  "suggestions.group.call.es": "{name} · de la llamada del {date}",
+  "suggestions.group.noCustomer": "No customer yet",
+  "suggestions.group.noCustomer.es": "Sin cliente todavía",
+  "suggestions.capAccount": "Showing the newest {n} for this account.",
+  "suggestions.capAccount.es": "Se muestran las {n} más recientes de esta cuenta.",
+  "suggestions.waiting.heading": "Waiting for you",
+  "suggestions.waiting.heading.es": "Esperan su respuesta",
+  "suggestions.waiting.seeAll": "Edit or see all in To do",
+  "suggestions.waiting.seeAll.es": "Editar o ver todas en Pendientes",
+  "suggestions.transcript": "See it in the transcript · {time}",
+  "suggestions.transcript.es": "Ver en la transcripción · {time}",
+  "suggestions.transcript.noTime": "See it in the transcript",
+  "suggestions.transcript.noTime.es": "Ver en la transcripción",
+  "suggestions.answer.unreachable": "That didn't reach us. Reload the page, then check before trying again.",
+  "suggestions.answer.unreachable.es": "No nos llegó. Recargue la página y revise antes de intentarlo otra vez.",
+  "suggestions.reload": "Reload",
+  "suggestions.reload.es": "Recargar",
 } as const;
 
 export type MessageKey = keyof typeof m;
