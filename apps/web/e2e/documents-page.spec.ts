@@ -161,7 +161,9 @@ test("1. Filters: Expiring soon by default, Expired, and the category Select by 
     expect(await pageTotal(page)).toBe(await main(page).locator("[data-documents-page-row]").count());
   }
 
-  await page.getByRole("link", { name: m["documents.page.show.expired"], exact: true }).click();
+  // Through <main> as well: a row visible in <main> does not mean the parked copy outside it is gone
+  // (39129894931 showed both at once), and a click is a strict-mode read.
+  await main(page).getByRole("link", { name: m["documents.page.show.expired"], exact: true }).click();
   await expect(page).toHaveURL(/show=expired/);
   await expect(main(page).locator(`[data-documents-page-row="${docB}"]`)).toBeVisible();
   await expect(page.locator(`[data-documents-page-row="${docA}"]`)).toHaveCount(0);
@@ -181,7 +183,7 @@ test("1. Filters: Expiring soon by default, Expired, and the category Select by 
   // with Enter, arrow down to Photo, and only Enter commits — arrowing through the list must never
   // navigate (spec review addition).
   await page.goto(`${base()}?show=all`);
-  const trigger = page.getByRole("combobox", { name: m["documents.page.category.label"] });
+  const trigger = main(page).getByRole("combobox", { name: m["documents.page.category.label"] });
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("option", { name: m["documents.category.photo"], exact: true })).toBeVisible();
@@ -264,7 +266,9 @@ test("4. An expiry To-do and its link: dedupe end to end, the work queue's title
 
   await page.goto(`/dashboard/accounts/${accountId}/tasks`);
   const title = expiryTaskTitle({ category: "insurance", title: `${STAMP} Póliza`, name: contactName, expiresOn: expiresOnA }, accountLang);
-  const row = page.getByRole("link", { name: title, exact: false });
+  // /tasks has a loading.tsx too (the same streamed copy suggestions.spec.ts met there in CI run
+  // 39283437434), so the To-do's link is read through <main>.
+  const row = main(page).getByRole("link", { name: title, exact: false });
   await expect(row).toBeVisible();
   await row.click();
 
