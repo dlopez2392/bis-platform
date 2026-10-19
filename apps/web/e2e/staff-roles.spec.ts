@@ -217,13 +217,21 @@ test.describe("a direct delete through Staff's own token", () => {
 test.describe("the Owner runs the team", () => {
   test.use({ storageState: "e2e/.auth/client-state.json" });
 
+  // The Team page's own content. /team has a loading.tsx, and React 19.2's streamed reveal can leave a
+  // hidden copy of the page outside <main> (support.ts's RECORD_PAGE CONVENTION). CI runs 39068046006
+  // and 39155331085 (main) met it here: `[data-team-row]` for "E2E Staff" resolved to 2 identical <li>s,
+  // one in <main>, one outside it. Every PRESENCE check and every action goes through <main>; absence
+  // checks (toHaveCount(0)) and the retrying counts stay page-wide, the stricter reading, and portals
+  // (the invite dialog, the role options, toasts) stay page-wide by design.
+  const team = (page: Page) => page.getByRole("main");
+
   // Independent of the test below it (the client is the sole Owner from the
   // moment the Staff login exists, never only after it invites or promotes
   // anyone) — ordered second only to match the brief's own numbering.
   test("demoting the only Owner is refused, and the role stays Owner", async ({ page }) => {
     const { accountId, clerkUserId } = fixture();
     await page.goto(`/dashboard/accounts/${accountId}/team`);
-    const ownerRow = page.locator("[data-team-row]").filter({ hasText: "E2E Client" });
+    const ownerRow = team(page).locator("[data-team-row]").filter({ hasText: "E2E Client" });
     await expect(ownerRow).toBeVisible();
     const combobox = ownerRow.getByRole("combobox", { name: "Role for E2E Client" });
     await combobox.click();
@@ -252,12 +260,12 @@ test.describe("the Owner runs the team", () => {
     try {
       await page.goto(`/dashboard/accounts/${accountId}/team`);
 
-      const staffRow = page.locator("[data-team-row]").filter({ hasText: "E2E Staff" });
+      const staffRow = team(page).locator("[data-team-row]").filter({ hasText: "E2E Staff" });
       await expect(staffRow).toBeVisible();
       const staffRoleBox = staffRow.getByRole("combobox", { name: "Role for E2E Staff" });
 
       // --- invite, as Staff (the dialog's own default role) --------------
-      await page.getByRole("button", { name: m["team.invite"] }).click();
+      await team(page).getByRole("button", { name: m["team.invite"] }).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel(m["team.invite.email"]).fill(inviteEmail);
       await dialog.getByRole("button", { name: m["team.invite.send"] }).click();
@@ -266,7 +274,7 @@ test.describe("the Owner runs the team", () => {
       // would still be present here instead of closed.
       await expect(dialog).toHaveCount(0);
 
-      const inviteRow = page.locator("[data-team-invite]").filter({ hasText: inviteEmail });
+      const inviteRow = team(page).locator("[data-team-invite]").filter({ hasText: inviteEmail });
       await expect(inviteRow).toBeVisible();
       await expect(inviteRow.getByText(m["team.status.invited"])).toBeVisible();
       await expect(inviteRow.getByText(m["team.role.staff"])).toBeVisible();
@@ -306,7 +314,7 @@ test.describe("the Owner runs the team", () => {
       )).toBeVisible();
       // Mutation: an undo that re-invites with the wrong role/language (or
       // fails silently) leaves the row absent here.
-      await expect(page.locator("[data-team-invite]").filter({ hasText: inviteEmail })).toBeVisible();
+      await expect(team(page).locator("[data-team-invite]").filter({ hasText: inviteEmail })).toBeVisible();
 
       // --- remove the Staff person, then Undo ------------------------------
       await staffRow.getByRole("button", { name: m["team.remove"] }).click();
@@ -323,7 +331,7 @@ test.describe("the Owner runs the team", () => {
       // Mutation: an undo that restores the WRONG role (removal-log.ts's
       // `recordRemoval` writing the post-promotion role instead of the one at
       // removal time) answers "owner" here instead of "staff".
-      await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toBeVisible();
+      await expect(team(page).locator("[data-team-row]").filter({ hasText: "E2E Staff" })).toBeVisible();
       expect(await readAccountRole(db, accountId, staffClerkUserId)).toBe("staff");
 
       // --- the 5-seat cap: Owner + Staff + Technician + one invitation is 4 -
@@ -334,12 +342,12 @@ test.describe("the Owner runs the team", () => {
       // team row — this is the only place that would be visible if it ever
       // did.
       await expect(page.locator("[data-team-row]")).toHaveCount(3);
-      await expect(page.locator("[data-team-row]").filter({ hasText: "E2E Technician" })).toBeVisible();
+      await expect(team(page).locator("[data-team-row]").filter({ hasText: "E2E Technician" })).toBeVisible();
       await expect(page.locator("[data-team-invite]")).toHaveCount(1);
       // Mutation: roomLeft() counting members OR pending but not both reads
       // "Room for 2 more people" (members only) or a cap-sized number
       // (pending only) instead of exactly 1 (5 - 3 - 1).
-      await expect(page.getByText(m["team.room.one"], { exact: true })).toBeVisible();
+      await expect(team(page).getByText(m["team.room.one"], { exact: true })).toBeVisible();
     } finally {
       // A failure at ANY step above must never leave this run's fixture with
       // a dangling invitation or a Staff login stuck at Owner (or removed
