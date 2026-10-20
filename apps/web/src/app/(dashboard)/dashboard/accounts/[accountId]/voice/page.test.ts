@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { VoiceProfileRow } from "@bis/db";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
@@ -54,6 +55,20 @@ vi.mock("@bis/db", () => ({
   getBranding: (...a: unknown[]) => serviceDbMock.getBranding(...a),
   getTransferPhone: (...a: unknown[]) => serviceDbMock.getTransferPhone(...a),
   listForms: (...a: unknown[]) => serviceDbMock.listForms(...a),
+  // S-47a: never invoked in this test — `VoiceSettings` is stubbed below and
+  // never renders the `disclosureResults` prop it is handed — but the Global
+  // Constraints bare-`@bis/db`-factory grep requires every factory this file
+  // list names to carry the symbol `disclosure-results-card.tsx` imports.
+  getDisclosureResults: async () => ({
+    said: { counted: 0, booked: 0, abandoned: 0, askedPerson: 0 },
+    didnt: { counted: 0, booked: 0, abandoned: 0, askedPerson: 0 },
+    notCounted: 0,
+  }),
+}));
+
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language }),
 }));
 
 // "use server" modules cannot be imported into a vitest render.
@@ -71,6 +86,8 @@ const captured = vi.hoisted(() => ({
   props: null as {
     accountId?: string; brandName?: string; transferPhone?: string | null;
     publishedForms?: { id: string; name: string }[]; origin?: string;
+    disclosureCopy?: { locale: string; options: { value: string }[] };
+    disclosureResults?: unknown;
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -110,6 +127,7 @@ beforeEach(() => {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
   serviceDbMock.listForms.mockReset().mockResolvedValue([]);
+  prefsFixture.language = null;
 });
 
 /**
@@ -197,5 +215,14 @@ describe("voice settings page — the transfer number", () => {
     // transfer off without anyone deciding to.
     serviceDbMock.getTransferPhone.mockRejectedValue(new Error("db down"));
     await expect(render()).rejects.toThrow();
+  });
+});
+
+describe("voice settings page — the AI disclosure setting and results card (S-47a)", () => {
+  it("builds the three-way copy from DISCLOSURE_VALUES and hands the card a React node (mutation: build the options from a two-value list → FAILS)", async () => {
+    const props = await render();
+    expect(props.disclosureCopy?.locale).toBe("en");
+    expect(props.disclosureCopy?.options.map((o) => o.value)).toEqual(["off", "trial", "on"]);
+    expect(isValidElement(props.disclosureResults)).toBe(true);
   });
 });

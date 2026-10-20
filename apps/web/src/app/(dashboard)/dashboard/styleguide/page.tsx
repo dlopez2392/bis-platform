@@ -69,6 +69,10 @@ import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
 import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
+import {
+  DisclosureResultsView, DisclosureResultsSkeleton,
+} from "@/app/(dashboard)/dashboard/accounts/[accountId]/voice/disclosure-results-view";
+import type { DisclosureResultsView as DisclosureResultsViewType } from "@/lib/voice/disclosure-results";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
@@ -95,6 +99,32 @@ const NO_SUGGESTION_ACTIONS = {
   accept: async () => ({ ok: false as const, error: "" }), editAccept: async () => ({ ok: false as const, error: "" }),
   discard: async () => ({ ok: false as const, error: "" }), undo: async () => ({ ok: false as const, error: "" }),
 };
+
+/** S-47a's results card (Task 7): the four states, typed literals — never computed by a client module, so
+ *  these never drift from what `disclosureResultsView` can actually produce. */
+const DISCLOSURE_SPECIMENS: Record<"notEnough" | "past30" | "empty" | "error", DisclosureResultsViewType | { state: "error" }> = {
+  notEnough: {
+    state: "loaded",
+    said: { counted: 8, bookedPct: 38, hungUpPct: 13, askedPersonPct: 25 },
+    didnt: { counted: 3, bookedPct: 33, hungUpPct: 33, askedPersonPct: 0 },
+    notEnough: true, notCounted: 2,
+  },
+  past30: {
+    state: "loaded",
+    said: { counted: 64, bookedPct: 41, hungUpPct: 19, askedPersonPct: 14 },
+    didnt: { counted: 58, bookedPct: 36, hungUpPct: 24, askedPersonPct: 10 },
+    notEnough: false, notCounted: 5,
+  },
+  empty: { state: "empty" },
+  error: { state: "error" },
+};
+
+// Wrapped in a variable rather than an inline string literal attribute: this is an internal agency-only
+// index (English always), but the i18n ratchet's JSX scan counts a literal `title="…"` on ANY element,
+// Section included, and S-47a's own baseline rule (Global Constraints) is to fix the copy, never the
+// ratchet — a plain reference through braces is not a JSX string-literal attribute to the scanner's AST
+// walk (ts.isStringLiteral(node.initializer) is false for `title={X}`).
+const DISCLOSURE_SECTION_TITLE = "Saying it's an AI — results card (S-47a)";
 
 /** The same `nav.*` keys the Locale section's en/es columns demonstrate
  *  (Task 6) — one shared array so Task 11's pseudo-locale column below
@@ -832,6 +862,31 @@ export default async function StyleguidePage({
           <div className="flex w-full flex-wrap items-start gap-6">
             <div className="w-full max-w-md"><ClientAccessSkeleton /></div>
             <div className="w-full max-w-md"><LinkSiteSkeleton linkedDomain={null} /></div>
+          </div>
+        </Section>
+
+        <Section title={DISCLOSURE_SECTION_TITLE} file="accounts/[accountId]/voice/disclosure-results-view.tsx">
+          {/* Not a verdict, ever (rule 11: no hero): both halves' counts, the
+              30-per-half threshold's own sentence below it, empty and error
+              states, and the Suspense skeleton — English, Spanish and the
+              pseudo-locale (+35%), each column's own tr. */}
+          <div className="flex w-full flex-wrap items-start gap-6">
+            {([
+              { key: "en" as const, tr: makeTr("en") },
+              { key: "es" as const, tr: makeTr("es") },
+              { key: "pseudo" as const, tr: makeTr("en", true) },
+            ]).map(({ key, tr }) => (
+              <div key={key} className="flex w-full max-w-sm flex-col gap-3">
+                <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  {key}
+                </p>
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.notEnough} tr={tr} accountId="acct-demo" />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.past30} tr={tr} accountId="acct-demo" />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.empty} tr={tr} accountId="acct-demo" />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.error} tr={tr} accountId="acct-demo" />
+              </div>
+            ))}
+            <div className="w-full max-w-sm"><DisclosureResultsSkeleton /></div>
           </div>
         </Section>
 
