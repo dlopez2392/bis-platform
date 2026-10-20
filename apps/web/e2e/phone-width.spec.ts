@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "./fixtures/test";
 import { buildNavGroups } from "../src/lib/nav-groups";
 import { readClientFixture } from "./support";
-import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile, getVoiceProfile } from "@bis/db";
+import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile, getVoiceProfile, addTask } from "@bis/db";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -430,6 +430,75 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
     // file) already proved visible above, not against either phrase's
     // own text.
     await expect(page.getByTestId("topbar-presence")).toBeVisible();
+  });
+
+  // The owner's phone screenshot (2026-10-20): every To do row at ~390px drew
+  // no title at all and stacked the status chip, the assignee and the date on
+  // top of each other. No page scroll resulted, so the sweep above passed. This
+  // measures the row itself: the title has a real box, and the chip, date,
+  // assignee and Done boxes do not intersect each other or the title. Agency
+  // session (it may assign, so the picker renders), the per-run fixture
+  // account, one seeded task, deleted in `finally`.
+  test("a To do row stacks at 375px: the title is visible and nothing overlaps", async ({ page }) => {
+    const fixture = readClientFixture();
+    const fx = clientFixture();
+    if (!fixture || !fx) {
+      test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite.");
+      return;
+    }
+    const db = serviceDb();
+    const contacts = await listContacts(db, fixture.accountId, { limit: 1 });
+    expect(contacts.length, "the fixture always seeds one contact (auth.setup.ts)").toBeGreaterThan(0);
+    const title = `Phone row check ${Date.now()}: call back about the roof leak over the garage`;
+    // Due yesterday: an Overdue row, the screenshot's own first bucket.
+    const dueAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { id: taskId } = await addTask(db, fixture.accountId, { contactId: contacts[0]!.id, title, dueAt }, fx.clerkUserId);
+    try {
+      await page.setViewportSize({ width: WIDTH, height: HEIGHT });
+      await page.goto(`/dashboard/accounts/${fixture.accountId}/tasks`);
+      // The route streams (loading.tsx): scoped to <main>, never `page` alone.
+      const row = page.getByRole("main").locator("[data-work-row]").filter({ hasText: title }).first();
+      await expect(row).toBeVisible({ timeout: 15_000 });
+      await expect(row.locator("[data-work-row-done]")).toBeVisible();
+      const boxes = await row.evaluate((li) => {
+        const box = (sel: string) => {
+          const el = li.querySelector(sel);
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+        };
+        return {
+          title: box("[data-work-row-title]"),
+          chip: box("[data-work-row-chip]"),
+          date: box("[data-work-row-date]"),
+          assignee: box('[data-work-row-actions] [data-slot="select-trigger"]'),
+          done: box("[data-work-row-done]"),
+        };
+      });
+      expect(boxes.title, "the row has no title element").not.toBeNull();
+      expect(boxes.title!.width, "the title shrank to nothing").toBeGreaterThan(40);
+      expect(boxes.title!.height, "the title has no height").toBeGreaterThan(0);
+      const named = Object.entries(boxes) as [string, NonNullable<(typeof boxes)["title"]>][];
+      for (const [name, b] of named) expect(b, `the row has no ${name} element`).not.toBeNull();
+      const overlap = (a: (typeof named)[number][1], b: (typeof named)[number][1]) =>
+        a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      for (let i = 0; i < named.length; i++) {
+        for (let j = i + 1; j < named.length; j++) {
+          const [an, a] = named[i]!;
+          const [bn, b] = named[j]!;
+          expect(overlap(a, b), `${an} ${JSON.stringify(a)} overlaps ${bn} ${JSON.stringify(b)} at ${WIDTH}px`).toBe(false);
+        }
+      }
+      // Every box stays inside the viewport too: a box pushed off-screen does
+      // not overlap anything, and is no more readable for it.
+      for (const [name, b] of named) {
+        expect(b.left, `${name} starts left of the screen`).toBeGreaterThanOrEqual(0);
+        expect(b.right, `${name} ends past the ${WIDTH}px screen`).toBeLessThanOrEqual(WIDTH);
+      }
+    } finally {
+      const { error } = await db.from("tasks").delete().eq("id", taskId);
+      if (error) throw new Error(`phone-width spec: seeded task cleanup failed: ${error.message}`);
+    }
   });
 
   // The Goal's stricter, parenthetical width — checked on a representative
