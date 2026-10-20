@@ -59,7 +59,7 @@ export function isSmsKind(kind: string): kind is SmsKind {
 
 /**
  * THE EMAIL KINDS (consent chain spec §4.3, corrected by the PR-3 plan's E1:
- * twenty-two send sites then; twenty-eight kinds now, with the operational
+ * twenty-two send sites then; twenty-nine kinds now, with the operational
  * floor's ops alert, F-048's cancel notice, the two emails of F-048's
  * customer move (the customer's and the business's), and S-06's reply
  * forward, each named at exactly one send site, which scans.test.ts pins).
@@ -77,8 +77,18 @@ export function isSmsKind(kind: string): kind is SmsKind {
  * carries the unsubscribe link and the RFC 8058 headers, except staff-typed
  * email, a person's own reply (danlo's decision Q4, 2026-09-30; spec §4.3,
  * choice 22). Operator mail carries neither.
+ *
+ * `transactional` (item 8c, owner Q2, 2026-10-19) holds exactly one kind: the
+ * customer's notice when staff undo one of Sofía's booking changes. It is a
+ * correction about their own appointment, so an unsubscribe does not stop it
+ * (decision 7 is unchanged: the gate still reads the ledger for the two
+ * automated classes alone) and it may go at any hour; its words are ours, not
+ * a person's, so it carries the unsubscribe footer. A hard bounce or a
+ * complaint (D-016's suppression) blocks it as it blocks every customer class, and
+ * a suppressed account sends nothing. It is not
+ * `customer_initiated`: scan 4 keeps that class to where the customer acted.
  */
-export type EmailClass = "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator";
+export type EmailClass = "customer_initiated" | "informational" | "marketing" | "staff_typed" | "operator" | "transactional";
 
 export type EmailKindSpec = { readonly class: EmailClass; readonly hours: HoursRule; readonly footer: "unsubscribe" | "none" };
 
@@ -119,6 +129,8 @@ export const EMAIL_KINDS = {
   "operator.ops_alert": { class: "operator", hours: "any", footer: "none" },
   // S-06 part 1: the owner's copy of a customer's reply; operator mail, as the lead alert is.
   "operator.reply_forward": { class: "operator", hours: "any", footer: "none" },
+  // item 8c (owner Q2): staff undid one of Sofía's booking changes and chose to tell the customer.
+  "booking.undo_notice": { class: "transactional", hours: "any", footer: "unsubscribe" },
 } as const satisfies Record<string, EmailKindSpec>;
 
 export type EmailKind = keyof typeof EMAIL_KINDS;

@@ -395,21 +395,43 @@ describe("an accepted suggestion row (item 8b-2)", () => {
   });
 });
 
-// item 8c: the type-only case only (plan Task 3) — an empty verb/status/detail, pinned so Task 5's
-// real description replaces it on purpose rather than by accident.
-describe("an ai_acts row, type-only (item 8c)", () => {
-  it("renders an empty verb/status/detail, pending Task 5's own description (mutation: a non-empty verb -> FAILS)", () => {
-    const entry: TimelineEntry = {
-      kind: "aiAct", id: "a1", at: "2026-10-09T16:12:00+00:00", contactId: "c1",
-      act: {
-        id: "a1", accountId: "acct1", actor: "voice", callId: "k1", chatId: null, contactId: "c1",
-        kind: "contact_field_filled", target: { field: "firstName" }, before: { value: null }, after: { value: "Ana" },
-        createdAt: "2026-10-09T16:12:00+00:00", undoneAt: null, undoneBy: null, undoNotified: false,
-      },
-    } as unknown as TimelineEntry;
-    const r = timelineRows([entry], {
-      zone: "America/Chicago", tr: makeTr("en"), author: { viewerId: null, names: {}, personaName: null, tr: makeTr("en") },
-    })[0]!;
-    expect([r.verb, r.status, r.detail]).toEqual(["", null, null]);
+// item 8c (plan Task 5 item 7): an act's row reads the act-kind registry's sentence, marked as Sofía's, and
+// carries its built view (the Undo state the row draws). Task 3's empty placeholder is gone on purpose.
+describe("an ai_acts row (item 8c)", () => {
+  const actEntry = (over: Record<string, unknown> = {}): TimelineEntry => ({
+    kind: "aiAct", id: "a1", at: "2026-10-09T16:12:00+00:00", contactId: "c1",
+    act: {
+      id: "a1", accountId: "acct1", actor: "voice", callId: "k1", chatId: null, contactId: "c1",
+      kind: "contact_field_filled", target: { field: "firstName" }, before: { value: null }, after: { value: "Ana" },
+      createdAt: "2026-10-09T16:12:00+00:00", undoneAt: null, undoneBy: null, undoNotified: false, ...over,
+    },
+  } as unknown as TimelineEntry);
+  const facts = { now: new Date("2026-10-10T00:00:00Z"), bookings: {}, contact: { first_name: "Ana", email: null }, heldBy: {}, editors: {}, canDelete: true, futureBooked: [] };
+  const ctx = (locale: "en" | "es" = "en", actFacts: typeof facts | null | undefined = facts) => ({
+    zone: "America/Chicago", tr: makeTr(locale), actFacts,
+    author: { viewerId: "user_me", names: { user_ana: "Ana López" }, personaName: "Lupe", tr: makeTr(locale) },
+  });
+
+  it("reads the registry's sentence under the AI mark, with no status, and carries the row's view (mutation: keep the empty verb -> FAILS)", () => {
+    const r = timelineRows([actEntry()], ctx())[0]!;
+    expect([r.verb, r.status, r.detail, r.mark]).toEqual(["filled in the first name: Ana", null, null, { kind: "ai", label: "Lupe · AI" }]);
+    expect(r.act).toMatchObject({ id: "a1", verb: "filled in the first name: Ana", source: { href: "/dashboard/accounts/acct1/calls/k1" },
+      undo: { state: "available", control: "field", fieldLabel: "first name" } });
+    expect(timelineRows([actEntry()], ctx("es"))[0]!.verb).toBe("completó el nombre: Ana");
+  });
+
+  it("a failed facts read leaves the row, without an Undo (mutation: treat null facts as safe -> FAILS)", () => {
+    expect(timelineRows([actEntry()], ctx("en", null))[0]!.act!.undo).toEqual({ state: "unknown" });
+    const noFacts = { zone: "America/Chicago", tr: makeTr("en"), author: ctx("en").author };
+    expect(timelineRows([actEntry()], noFacts)[0]!.act!.undo).toEqual({ state: "unknown" });
+  });
+
+  it("an undone act names who undid it from the page's one names read", () => {
+    const r = timelineRows([actEntry({ undoneAt: "2026-10-09T18:00:00+00:00", undoneBy: "user_ana" })], ctx())[0]!;
+    expect(r.act!.undo).toEqual({ state: "undone", line: "Undone by Ana López · Oct 9, 2026" });
+  });
+
+  it("no other kind of row carries an act view", () => {
+    expect(rows([call(60)])[0]!.act).toBeUndefined();
   });
 });
