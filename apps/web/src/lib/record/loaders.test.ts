@@ -333,9 +333,11 @@ describe("record loaders: Sofía's acts (item 8c)", () => {
   it("the page's acts go to ONE facts read on the page's client, with the Owner's right to remove a customer; its answer is the load's", async () => {
     const items = [aiAct("x1"), aiAct("x2")];
     listContactTimelinePageMock.mockResolvedValue({ items, older: null, failed: [], sources: [...SOURCES, "ai_acts"] });
-    const load = await loadTimeline(db, ledger, "acct1", "ct1", undefined, { canDelete: true });
+    const now = new Date("2026-10-16T12:00:00.000Z");
+    const load = await loadTimeline(db, ledger, "acct1", "ct1", undefined, { canDelete: true, now });
     expect(readActFactsMock).toHaveBeenCalledTimes(1);
-    expect(readActFactsMock).toHaveBeenCalledWith(db, "acct1", "ct1", [items[0]!.act, items[1]!.act], { canDelete: true });
+    // Review M-e: the page's ONE clock reaches the facts read, so "has it happened yet" and the page agree.
+    expect(readActFactsMock).toHaveBeenCalledWith(db, "acct1", "ct1", [items[0]!.act, items[1]!.act], { canDelete: true }, now);
     expect(load).toMatchObject({ status: "ready", actFacts: FACTS });
     await loadTimeline(db, ledger, "acct1", "ct1");
     expect(readActFactsMock.mock.calls[1]![4]).toEqual({ canDelete: false });
@@ -374,5 +376,14 @@ describe("record loaders: Sofía's acts (item 8c)", () => {
     await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio", "user_dan"] });
     expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
     expect([...listPeopleNamesMock.mock.calls[0]![1]].sort()).toEqual(["user_dan", "user_rio"]);
+  });
+
+  it("Task 9 (design I-4): the load says whether the names read answered, so a failed read leaves a person's \"Added by\" out rather than guessing (mutation: namesOk always true -> FAILS)", async () => {
+    expect(await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio"] })).toMatchObject({ status: "ready", namesOk: true });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listPeopleNamesMock.mockRejectedValue(new Error("users down"));
+      expect(await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio"] })).toMatchObject({ status: "ready", names: {}, namesOk: false });
+    } finally { errors.mockRestore(); }
   });
 });

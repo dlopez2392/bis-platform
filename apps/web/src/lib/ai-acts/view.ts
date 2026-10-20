@@ -21,6 +21,9 @@ export type AiActUndoView =
     contactName: string;
     /** The field control's words for the field ("email", "el correo"), for its toast; null otherwise. */
     fieldLabel: string | null;
+    /** The field control only: the field was blank before she filled it, so the Undo removes her value
+     *  rather than putting an earlier one back (design I-5). False for every other control. */
+    fieldWasEmpty: boolean;
   }
   | { state: "blocked"; line: string }
   | { state: "undone"; line: string }
@@ -28,6 +31,8 @@ export type AiActUndoView =
 
 export type AiActView = {
   id: string; kind: AiActKind; verb: string; detail: string | null;
+  /** Who acted: the contact dialog and its toast speak of the call or of the website chat (review M-a). */
+  actor: AiAct["actor"];
   source: { label: string; href: string | null };
   /** The receptionist's name as the account sets it, else Sofía: the field redo toast's {persona}. */
   persona: string;
@@ -74,7 +79,7 @@ export function buildActView(act: AiAct, facts: ActFacts | null, ctx: ActViewCtx
     : { label: tr.text("aiActs.source.webchat"), href: null };
   const author = { tr, viewerId: ctx.viewerId, names: ctx.names, personaName: ctx.personaName };
   const persona = ctx.personaName?.trim() || "Sofía";
-  const view = { id: act.id, kind: act.kind, verb, detail, source, persona };
+  const view = { id: act.id, kind: act.kind, actor: act.actor, verb, detail, source, persona };
 
   // The stamp is on the act itself, so "Undone by" stands even when the facts read failed.
   if (act.undoneAt) {
@@ -94,5 +99,6 @@ export function buildActView(act: AiAct, facts: ActFacts | null, ctx: ActViewCtx
   const notify = control !== "booking" ? null
     : str(facts.contact?.email) ? { name: contactName } : { none: tr.text("aiActs.notify.noEmail", { name: contactName }) };
   const fieldLabel = act.kind === "contact_field_filled" ? tr.text(FIELD_LABEL[act.target.field]) : null;
-  return { ...view, undo: { state: "available", control, notify, contactName, fieldLabel } };
+  const fieldWasEmpty = act.kind === "contact_field_filled" && str(act.before.value) === null;
+  return { ...view, undo: { state: "available", control, notify, contactName, fieldLabel, fieldWasEmpty } };
 }

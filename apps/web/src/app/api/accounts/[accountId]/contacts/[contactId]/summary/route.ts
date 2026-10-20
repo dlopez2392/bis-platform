@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getContact } from "@bis/db";
+import { getContact, type AuthorKind } from "@bis/db";
 import { apiAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { renderZone } from "@/lib/zone";
@@ -11,7 +11,7 @@ import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import type { Locale } from "@/lib/i18n/locale";
 import { makeTr } from "@/lib/record/copy";
-import { factsView } from "@/lib/record/record-facts";
+import { addedByLine, factsView } from "@/lib/record/record-facts";
 import { nextUpView } from "@/lib/record/next-up";
 import { timelineRows, timelineFailedText } from "@/lib/record/timeline-rows";
 import { TIMELINE_ANCHOR } from "@/lib/record/timeline-pager";
@@ -107,8 +107,17 @@ export async function GET(
     }), tr, name),
   };
 
+  // item 8c (final review): "Added by", as the record page says it, with NO read of its own (route.reads.test.ts's
+  // fence): a person's name only when Recent's own names read already holds it, else left out (`unnamed: "omit"`),
+  // since that read never asked for this id. The persona is Recent's own soft read too.
+  const addedBy = addedByLine(contact.author_kind ? { kind: contact.author_kind as AuthorKind, personId: contact.author_id ?? null } : null, {
+    tr, viewerId: access.userId,
+    names: recent.status === "ready" ? recent.names : null,
+    personaName: recent.status === "ready" ? recent.personaName : null,
+    unnamed: "omit",
+  });
   const facts = summary.status === "ready"
-    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
+    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts, addedBy }, { zone: zone.zone, now, tr }))
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
   const rows = recent.status === "ready"

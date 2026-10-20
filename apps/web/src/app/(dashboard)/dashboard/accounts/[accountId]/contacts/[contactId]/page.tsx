@@ -13,8 +13,7 @@ import { RecordHeader, type RecordHeaderAction } from "@/components/record/recor
 import { RecordCard, type RecordCardState } from "@/components/record/record-card";
 import { RECORD_CARDS, columnRuns, type RecordCardId } from "@/lib/record/record-cards";
 import { makeTr } from "@/lib/record/copy";
-import { factsView } from "@/lib/record/record-facts";
-import { authorLabel } from "@/lib/record/author-mark";
+import { addedByLine, factsView } from "@/lib/record/record-facts";
 import { nextUpView } from "@/lib/record/next-up";
 import { headerActions, headerActionLabels, canTextFrom, firstMapUrl } from "@/lib/record/header-actions";
 import {
@@ -123,6 +122,8 @@ export default async function ContactDetailPage({
     loadTimeline(db, ledger, accountId, contactId, before, {
       canDelete: access.canManage,
       extraNames: contact.author_kind === "person" && contact.author_id ? [contact.author_id] : [],
+      // Review M-e: the page's one clock, so the acts' "has it happened" agrees with What's next.
+      now,
     }),
     loadDeals(db, accountId, contactId),
     loadHeaderPlaces(db, accountId, contactId),
@@ -216,22 +217,18 @@ export default async function ContactDetailPage({
     directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
   }), tr, name);
 
-  // item 8c (plan Task 6): "Added by", built from the record's own author columns (null on a row written
-  // before the deploy, which omits the fact rather than guessing). The name, when the author is a person,
-  // reaches the page's ONE names read via `extraNames` above, so it is never "Someone on the team" for a
-  // viewer who could otherwise see it.
-  const author = contact.author_kind
-    ? {
-      kind: contact.author_kind as AuthorKind,
-      label: authorLabel(contact.author_kind as AuthorKind, contact.author_id ?? null, {
-        tr, viewerId: access.userId,
-        names: timeline.status === "ready" ? timeline.names : {},
-        personaName: timeline.status === "ready" ? timeline.personaName : null,
-      }),
-    }
-    : null;
+  // item 8c: "Added by", one sentence per author kind (design I-4), from the record's own author columns
+  // (null on a row written before the deploy, which omits the fact). The name, when the author is a person,
+  // reaches the page's ONE names read via `extraNames` above, so a missing name there is a person the reader
+  // cannot name ("someone on the team"); a FAILED names read, or a failed timeline, leaves it out.
+  const addedBy = addedByLine(contact.author_kind ? { kind: contact.author_kind as AuthorKind, personId: contact.author_id ?? null } : null, {
+    tr, viewerId: access.userId,
+    names: timeline.status === "ready" && timeline.namesOk ? timeline.names : null,
+    personaName: timeline.status === "ready" ? timeline.personaName : null,
+    unnamed: "someone",
+  });
   const facts = summary.status === "ready"
-    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts, author }, { zone: zone.zone, now, tr }))
+    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts, addedBy }, { zone: zone.zone, now, tr }))
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
   // "Waiting for you" (item 8b-2, spec 5.3): built in its own guard, so a row that cannot be shown is the

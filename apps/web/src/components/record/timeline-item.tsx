@@ -26,6 +26,8 @@ export type TimelineItemProps = {
   dateTime: string;
   action?: ReactNode;
   children?: ReactNode;
+  /** item 8c: an id on the row's sentence, so a control in `action` can name it with `aria-describedby`. */
+  textId?: string;
 };
 
 const Sep = () => <span aria-hidden="true" className="text-muted-foreground">·</span>;
@@ -34,12 +36,12 @@ const Sep = () => <span aria-hidden="true" className="text-muted-foreground">·<
  * One timeline row (spec §8, §9.4): who · did what · status · detail · when, then the body. Rows sit
  * on `--row-line` rules inside the card (never a box in a glass card); the caller draws the rule.
  */
-export function TimelineItem({ kind, icon: Icon, mark, subject, verb, status, detail, time, dateTime, action, children }: TimelineItemProps) {
+export function TimelineItem({ kind, icon: Icon, mark, subject, verb, status, detail, time, dateTime, action, children, textId }: TimelineItemProps) {
   return (
     <div data-timeline-item={kind} className="flex items-start gap-3 py-[7px]">
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
+        <p id={textId} className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
           {subject ? (
             <>
               <Link href={subject.href} data-timeline-subject title={subject.label}

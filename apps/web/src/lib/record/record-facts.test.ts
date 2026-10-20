@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ContactFacts } from "@bis/db";
-import { factsView, talkedWhen, calendarDaysAgo } from "./record-facts";
+import { addedByLine, factsView, talkedWhen, calendarDaysAgo } from "./record-facts";
 import { makeTr } from "./copy";
 
 const ZONE = "America/Chicago";
@@ -68,21 +68,49 @@ describe("the summary's fact line (spec §9.2)", () => {
   });
 });
 
-describe("item 8c: the 'Added by' fact", () => {
-  it("follows 'since', built from the author's own label (mutation: drop the push -> FAILS)", () => {
-    const v = factsView(
-      { createdAt: "2026-01-01T05:30:00Z", facts: facts(), author: { kind: "ai", label: "Sofía · AI" } },
-      { zone: ZONE, now: NOW, tr: makeTr("en") },
-    );
-    expect(v.line).toEqual(["On your list since Dec 2025", "Added by Sofía · AI"]);
-    const vEs = factsView(
-      { createdAt: "2026-01-01T05:30:00Z", facts: facts(), author: { kind: "ai", label: "Sofía · IA" } },
-      { zone: ZONE, now: NOW, tr: makeTr("es") },
-    );
-    expect(vEs.line).toEqual(["En su lista desde dic 2025", "Agregado por Sofía · IA"]);
+describe("item 8c: the 'Added by' fact (design review I-4: one sentence per author kind)", () => {
+  const ctx = (over: Partial<Parameters<typeof addedByLine>[1]> = {}, locale: "en" | "es" = "en") => ({
+    tr: makeTr(locale), viewerId: "user_me", personaName: "Lupe", names: { user_dan: "Dan López" } as Record<string, string> | null,
+    unnamed: "someone" as const, ...over,
   });
 
-  it("a null author (a row written before the deploy) adds no fact (mutation: push it anyway -> FAILS)", () => {
+  it("reads a sentence per kind, never a mark label inside it (mutation: build it from the mark's 'Lupe · AI' -> FAILS)", () => {
+    expect(addedByLine({ kind: "ai", personId: null }, ctx())).toBe("Added by Lupe (AI)");
+    expect(addedByLine({ kind: "person", personId: "user_dan" }, ctx())).toBe("Added by Dan López");
+    expect(addedByLine({ kind: "person", personId: "user_me" }, ctx())).toBe("Added by you");
+    expect(addedByLine({ kind: "customer", personId: null }, ctx())).toBe("Added by the customer");
+    expect(addedByLine({ kind: "import", personId: null }, ctx())).toBe("Added by an import");
+    expect(addedByLine({ kind: "automation", personId: null }, ctx())).toBe("Added by an automation");
+  });
+
+  it("reads in Spanish, usted (mutation: hard-code English -> FAILS)", () => {
+    expect(addedByLine({ kind: "ai", personId: null }, ctx({}, "es"))).toBe("Agregado por Lupe (IA)");
+    expect(addedByLine({ kind: "person", personId: "user_me" }, ctx({}, "es"))).toBe("Agregado por usted");
+    expect(addedByLine({ kind: "customer", personId: null }, ctx({}, "es"))).toBe("Agregado por el cliente");
+  });
+
+  it("no persona read falls back to Sofía, as the AI mark does", () => {
+    expect(addedByLine({ kind: "ai", personId: null }, ctx({ personaName: null }))).toBe("Added by Sofía (AI)");
+  });
+
+  it("a person when the names read FAILED is left out, never guessed (mutation: fall back to 'someone on the team' -> FAILS)", () => {
+    expect(addedByLine({ kind: "person", personId: "user_dan" }, ctx({ names: null }))).toBeNull();
+    // The reader's own id needs no read.
+    expect(addedByLine({ kind: "person", personId: "user_me" }, ctx({ names: null }))).toBe("Added by you");
+  });
+
+  it("a person the read did not name: 'someone on the team' where the id was asked (the page), left out where it was not (the drawer)", () => {
+    expect(addedByLine({ kind: "person", personId: "user_gone" }, ctx())).toBe("Added by someone on the team");
+    expect(addedByLine({ kind: "person", personId: "user_gone" }, ctx({ unnamed: "omit" }))).toBeNull();
+  });
+
+  it("no author (a row written before the deploy) is no fact", () => {
+    expect(addedByLine(null, ctx())).toBeNull();
+  });
+
+  it("factsView puts it after 'since' (mutation: drop the push -> FAILS)", () => {
+    const v = factsView({ createdAt: "2026-01-01T05:30:00Z", facts: facts(), addedBy: "Added by Lupe (AI)" }, { zone: ZONE, now: NOW, tr: makeTr("en") });
+    expect(v.line).toEqual(["On your list since Dec 2025", "Added by Lupe (AI)"]);
     expect(view().line).toEqual(["On your list since Dec 2025"]);
   });
 });

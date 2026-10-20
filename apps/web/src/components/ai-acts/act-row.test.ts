@@ -76,8 +76,8 @@ describe("ActRow: no primary on the row itself (DESIGN.md rule 8, 2026-10-19 ame
   });
 
   it("carries the reader's lang (mutation: drop it -> FAILS)", () => {
-    expect(html(filled(), facts())).toMatch(/<div lang="en" data-ai-act-row="">/);
-    expect(html(filled(), facts(), "es")).toMatch(/<div lang="es" data-ai-act-row="">/);
+    expect(html(filled(), facts())).toMatch(/<div lang="en" data-ai-act-row=""/);
+    expect(html(filled(), facts(), "es")).toMatch(/<div lang="es" data-ai-act-row=""/);
   });
 
   it("the source line links to the call; a web-chat act has no link (mutation: link the chat source -> FAILS)", () => {
@@ -98,5 +98,38 @@ describe("ActRow: no primary on the row itself (DESIGN.md rule 8, 2026-10-19 ame
     const b = buttons(html(booked(), facts()));
     expect(b).toHaveLength(1);
     expect(variant(b[0]!)).toBe("ghost");
+  });
+});
+
+describe("ActRow: Task 9 fix round (design I-3, M-1, M-4, M-5; CI's pseudo-locale e2e)", () => {
+  const cancelled = facts({ bookings: { b1: { status: "cancelled", startsAt: "2026-10-21T20:00:00.000Z", endsAt: "2026-10-21T21:00:00.000Z", updatedAt: "2026-10-19T16:00:00.000Z", replacedBy: null, slotTaken: false } } });
+
+  it("a blocked or undone line sits UNDER the source line, never in the row's action slot (I-3, the 375 px styleguide overflow; mutation: render it as the action -> FAILS)", () => {
+    for (const h of [html(booked(), cancelled), html(filled({ undoneAt: "2026-10-20T13:00:00.000Z", undoneBy: "user_me" }), facts())]) {
+      expect(h).not.toContain('<div class="shrink-0">');
+      expect(h).toMatch(/data-ai-act-source=""[^>]*>From the call on [^<]+<\/a><span aria-hidden="true">·<\/span><span data-ai-act-line=""/);
+    }
+  });
+
+  it("the line takes focus after an Undo (M-1: tabIndex -1, with a visible focus ring)", () => {
+    expect(html(booked(), cancelled)).toMatch(/<span data-ai-act-line="" tabindex="-1" class="[^"]*focus-visible:ring-\[3px\]/);
+  });
+
+  it("the row carries its act's id and state, so a test (and the focus move) finds it in any language (mutation: drop either -> FAILS)", () => {
+    expect(html(booked(), cancelled)).toMatch(/<div lang="en" data-ai-act-row="" data-ai-act-id="act1" data-ai-act-state="blocked">/);
+    expect(html(filled(), facts())).toMatch(/data-ai-act-id="act1" data-ai-act-state="available"/);
+  });
+
+  it("each Undo is described by its own row's sentence (M-5; mutation: drop aria-describedby -> FAILS)", () => {
+    for (const [act, f] of [[filled(), facts()], [booked(), facts()], [made(), facts({ heldBy: { act1: [] } })]] as const) {
+      const h = html(act, f);
+      const describedBy = /<button[^>]*data-ai-act-undo="[a-z]+"[^>]*>/.exec(h)![0].match(/aria-describedby="([^"]+)"/)?.[1];
+      expect(describedBy).toBeTruthy();
+      expect(h).toContain(`<p id="${describedBy}"`);
+    }
+  });
+
+  it("the source link is a full-size target on a phone (M-4)", () => {
+    expect(html(filled(), facts())).toMatch(/<a[^>]*data-ai-act-source=""[^>]*class="[^"]*min-h-11[^"]*md:min-h-8/);
   });
 });

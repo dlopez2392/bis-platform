@@ -47,6 +47,9 @@ export async function loadNextUp(db: SupabaseClient, accountId: string, contactI
 export type TimelineLoad =
   | {
     status: "ready"; page: TimelinePage; holdOpen: string[]; names: Record<string, string>; personaName: string | null;
+    /** Whether the one names read answered (item 8c, design I-4): false when it failed, so `names` is `{}`
+     *  for a reason other than "nobody to name", and a person's "Added by" is left out rather than guessed. */
+    namesOk: boolean;
     /** The stage names the page's accepted stage suggestions need (item 8b-2); `{}` when none, or unreadable. */
     suggestionStages: DescribeCtx["stages"];
     /** What the page's acts' Undo depends on (item 8c, `readActFacts`); null when that read failed, and then
@@ -79,6 +82,8 @@ export async function loadTimeline(
      *  "Added by" fact, when its author is a named person. Merged into the SAME one names read, never a
      *  second read. */
     extraNames?: readonly string[];
+    /** The page's ONE clock (review M-e), so "has this booking happened yet" agrees with the rest of the page. */
+    now?: Date;
   } = {},
 ): Promise<TimelineLoad> {
   let page: TimelinePage;
@@ -98,7 +103,7 @@ export async function loadTimeline(
   const tasks = page.items.flatMap((i) => (i.kind === "task" ? [i.task] : []));
   const accepted: Proposal[] = page.items.flatMap((i) => (i.kind === "suggestion" ? [i.suggestion.proposal] : []));
   const acts: AiAct[] = page.items.flatMap((i) => (i.kind === "aiAct" ? [i.act] : []));
-  const factsAndNames = readActFacts(db, accountId, contactId, acts, { canDelete: opts.canDelete === true })
+  const factsAndNames = readActFacts(db, accountId, contactId, acts, { canDelete: opts.canDelete === true }, opts.now ?? new Date())
     .catch((e: unknown) => {
       log("activity actions", accountId, e);
       return null;
@@ -108,13 +113,15 @@ export async function loadTimeline(
       for (const a of acts) if (a.undoneBy) ids.add(a.undoneBy);
       for (const editor of Object.values(actFacts?.editors ?? {})) if (editor) ids.add(editor);
       for (const id of opts.extraNames ?? []) ids.add(id);
+      let namesOk = true;
       const names = await listPeopleNames(db, [...ids]).catch((e: unknown) => {
         log("activity names", accountId, e);
+        namesOk = false;
         return {} as Record<string, string>;
       });
-      return { actFacts, names };
+      return { actFacts, names, namesOk };
     });
-  const [holdOpen, { actFacts, names }, personaName, suggestionStages] = await Promise.all([
+  const [holdOpen, { actFacts, names, namesOk }, personaName, suggestionStages] = await Promise.all([
     // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
     // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
     holdOpenTaskIds(db, accountId, tasks, ledger).catch((e: unknown) => {
@@ -132,7 +139,7 @@ export async function loadTimeline(
       return {} as DescribeCtx["stages"];
     }),
   ]);
-  return { status: "ready", page, holdOpen, names, personaName, suggestionStages, actFacts };
+  return { status: "ready", page, holdOpen, names, namesOk, personaName, suggestionStages, actFacts };
 }
 
 export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext; personaName: string | null } | { status: "error" };

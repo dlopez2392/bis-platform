@@ -64,22 +64,22 @@ describe("typedNameMatches: the contact Undo's typed confirmation", () => {
 describe("buildActView: the Undo state", () => {
   it("available: a booking's control offers the notice by the customer's name when they have an email", () => {
     expect(buildActView(booked(), facts(), ctx()).undo)
-      .toEqual({ state: "available", control: "booking", notify: { name: "Ana Ruiz" }, contactName: "Ana Ruiz", fieldLabel: null });
+      .toEqual({ state: "available", control: "booking", notify: { name: "Ana Ruiz" }, contactName: "Ana Ruiz", fieldLabel: null, fieldWasEmpty: false });
   });
   it("available: with no email, the notice says to call them instead, in the reader's language", () => {
     const f = facts({ contact: { first_name: "Ana", last_name: null, email: null } });
     expect(buildActView(booked(), f, ctx()).undo).toEqual({
-      state: "available", control: "booking", contactName: "Ana", fieldLabel: null,
+      state: "available", control: "booking", contactName: "Ana", fieldLabel: null, fieldWasEmpty: false,
       notify: { none: "Ana has no email on file, so they won't be told. Call them if they need to know." },
     });
     expect(buildActView(booked(), f, ctx({ tr: makeTr("es") })).undo).toMatchObject({
-      notify: { none: "Ana no tiene correo registrado, así que no se le avisará. Llámele si necesita saberlo." },
+      notify: { none: "Este cliente no tiene correo registrado, así que no se le avisará. Llámele si Ana necesita saberlo." },
     });
   });
   it("available: a field or a contact carries no notice", () => {
-    expect(buildActView(filled(), facts(), ctx()).undo).toEqual({ state: "available", control: "field", notify: null, contactName: "Ana Ruiz", fieldLabel: "email" });
+    expect(buildActView(filled(), facts(), ctx()).undo).toEqual({ state: "available", control: "field", notify: null, contactName: "Ana Ruiz", fieldLabel: "email", fieldWasEmpty: true });
     expect(buildActView(filled(), facts(), ctx({ tr: makeTr("es") })).undo).toMatchObject({ fieldLabel: "el correo" });
-    expect(buildActView(made(), facts({ heldBy: { act1: [] } }), ctx()).undo).toEqual({ state: "available", control: "contact", notify: null, contactName: "Ana Ruiz", fieldLabel: null });
+    expect(buildActView(made(), facts({ heldBy: { act1: [] } }), ctx()).undo).toEqual({ state: "available", control: "contact", notify: null, contactName: "Ana Ruiz", fieldLabel: null, fieldWasEmpty: false });
   });
   it("blocked: the reason in words, in the reader's language", () => {
     const f = facts({ bookings: { b1: { ...facts().bookings.b1!, status: "cancelled" } } });
@@ -89,9 +89,9 @@ describe("buildActView: the Undo state", () => {
   });
   it("blocked: a field changed since by a person reads their name, or Someone on the team when the page cannot name them", () => {
     const f = facts({ contact: { first_name: "Ana", email: "other@example.com" }, editors: { act1: "user_ana" } });
-    expect(buildActView(filled(), f, ctx()).undo).toEqual({ state: "blocked", line: "Changed since by Ana López" });
-    expect(buildActView(filled(), { ...f, editors: { act1: "user_gone" } }, ctx()).undo).toEqual({ state: "blocked", line: "Changed since by Someone on the team" });
-    expect(buildActView(filled(), { ...f, editors: { act1: "user_me" } }, ctx()).undo).toEqual({ state: "blocked", line: "Changed since by You" });
+    expect(buildActView(filled(), f, ctx()).undo).toEqual({ state: "blocked", line: "Changed by Ana López since" });
+    expect(buildActView(filled(), { ...f, editors: { act1: "user_gone" } }, ctx()).undo).toEqual({ state: "blocked", line: "Changed by Someone on the team since" });
+    expect(buildActView(filled(), { ...f, editors: { act1: "user_me" } }, ctx()).undo).toEqual({ state: "blocked", line: "Changed by You since" });
   });
   it("undone: names You for the viewer, the person by name, and Someone on the team when unnamed, with the day", () => {
     const at = "2026-10-20T01:00:00.000Z";
@@ -106,5 +106,22 @@ describe("buildActView: the Undo state", () => {
   });
   it("unknown: the facts read failed, so the row shows without an Undo", () => {
     expect(buildActView(booked(), null, ctx()).undo).toEqual({ state: "unknown" });
+  });
+});
+
+describe("Task 9 fix round: what the controls need to word their toasts and dialog", () => {
+  it("the view carries who acted, so the contact dialog and its toast can speak of the chat (review M-a; mutation: drop actor -> FAILS)", () => {
+    expect(buildActView(made(), facts({ heldBy: { act1: [] } }), ctx()).actor).toBe("voice");
+    expect(buildActView(made({ actor: "webchat", callId: null, chatId: "chat1" }), facts({ heldBy: { act1: [] } }), ctx()).actor).toBe("webchat");
+  });
+  it("a field's control knows whether the field was blank before her (design I-5; mutation: always true -> FAILS)", () => {
+    const blank = buildActView(filled(), facts(), ctx()).undo;
+    expect(blank).toMatchObject({ state: "available", control: "field", fieldWasEmpty: true });
+    const held = buildActView(filled({ before: { value: "old@example.com" } } as Partial<AiAct>), facts(), ctx()).undo;
+    expect(held).toMatchObject({ state: "available", control: "field", fieldWasEmpty: false });
+    // A "Caller" placeholder first name is a value the Undo puts back, not a blank.
+    const placeholder = buildActView(filled({ target: { field: "firstName" }, before: { value: "Caller" }, after: { value: "Ana" } } as Partial<AiAct>),
+      facts({ contact: { first_name: "Ana", last_name: "Ruiz", email: "ana@example.com" } }), ctx()).undo;
+    expect(placeholder).toMatchObject({ fieldWasEmpty: false });
   });
 });

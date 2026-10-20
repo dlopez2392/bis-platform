@@ -1255,7 +1255,8 @@ describe("item 8c: the record's 'Added by' fact (plan Task 6)", () => {
   it("follows 'since' (mutation: drop the fact -> FAILS)", async () => {
     getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "ai", author_id: null });
     const html = cardHtml(await render(), "summary");
-    expect(html).toContain(renderedText("Added by Sofía · AI"));
+    // Design I-4: a sentence, not the mark's own label inside one.
+    expect(html).toContain(renderedText("Added by Sofía (AI)"));
   });
 
   it("in Spanish (mutation: hard-code English -> FAILS)", async () => {
@@ -1264,7 +1265,7 @@ describe("item 8c: the record's 'Added by' fact (plan Task 6)", () => {
     vi.stubEnv("VERCEL", "");
     try {
       const html = cardHtml(await render({ locale: "es" }), "summary");
-      expect(html).toContain(renderedText("Agregado por Sofía · IA"));
+      expect(html).toContain(renderedText("Agregado por Sofía (IA)"));
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1282,6 +1283,22 @@ describe("item 8c: the record's 'Added by' fact (plan Task 6)", () => {
     const html = cardHtml(await render(), "summary");
     expect([...(listPeopleNamesMock.mock.calls[0]![1] as string[])]).toContain("user_dan");
     expect(html).toContain(renderedText("Added by Dan López"));
+  });
+
+  it("a person author when the names read FAILED is left out, never guessed as someone on the team (design I-4; mutation: names {} on failure -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_dan" });
+    listPeopleNamesMock.mockRejectedValue(new Error("users down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = cardHtml(await render(), "summary");
+      expect(html).not.toContain("Added by");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("a person the read could not name (a departed member) reads someone on the team", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_gone" });
+    const html = cardHtml(await render(), "summary");
+    expect(html).toContain(renderedText("Added by someone on the team"));
   });
 });
 

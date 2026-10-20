@@ -4,14 +4,17 @@ import { REASON_KEY, type ActReason } from "./kinds/types";
 
 /**
  * The sequencing behind an act row's three Undo controls (item 8c, plan Task 5 item 8; spec 5.2), with no
- * "use client" and no DOM: the toast, the refresh, the navigation, the timer and the reload are injected
+ * "use client" and no DOM: the toast, the navigation, the timer and the reload are injected
  * (the `cancel-booking.ts` and `suggestion-handlers.ts` shape), so it is unit-tested without jsdom. The
  * server actions' result types live here, because the client controls and `actions.ts` share them.
  *
  *   - a field runs at once (DESIGN.md rule 6) and its toast carries a 10-second Undo that puts Sofía's value
  *     back (`redoAiFieldFillAction`; plan ambiguity F);
  *   - a booking runs from its popover and says whether the customer was told; no redo (spec §3);
- *   - a customer, after the typed name, says the call stays in Calls and goes to the contacts list.
+ *   - a customer, after the typed name, says where the call (or the chat's form entry) stays and goes to the
+ *     contacts list.
+ * No router refresh after a success (final review): each server action already calls `revalidatePath` for
+ * the record, which hands the page's fresh render back with the action's own answer.
  * A refusal says why in words. A throw (the action never answered: a network failure, or a tab older than
  * the deployment) says reload, and offers it (8b-2's follow-up 1: a full reload, never a router refresh).
  * Every word handed to the toast is an element carrying the reader's `lang` (8b-1 design review I3).
@@ -37,8 +40,6 @@ export type ActToast = {
 };
 type Common = {
   toast: ActToast; tr: Pick<Tr, "text" | "locale">;
-  /** Re-reads the page so the row shows its new state. */
-  refresh: () => void;
   /** `window.location.reload`, offered when the action never answered. */
   reload: () => void;
 };
@@ -83,10 +84,12 @@ export async function runFieldUndo(deps: Common & {
   schedule: (fn: () => void, ms: number) => void;
   /** The field's words ("email", "el correo"), as the row's sentence names it. */
   field: string;
+  /** The field was blank before she filled it: the Undo removes her value rather than putting one back. */
+  wasEmpty: boolean;
   /** The receptionist's name as the account sets it. */
   persona: string;
 }): Promise<boolean> {
-  const { toast, tr, refresh, schedule } = deps;
+  const { toast, tr, schedule } = deps;
   const say = sayer(tr);
   const r = await attempt(deps, deps.undo);
   if (!r) return false;
@@ -94,10 +97,13 @@ export async function runFieldUndo(deps: Common & {
     refuse(deps, r.reason);
     return false;
   }
-  refresh();
+  // Design I-5: say what happened to THIS field: her value removed (it was blank), or the earlier one back.
+  const done = deps.wasEmpty
+    ? tr.text("aiActs.toast.fieldRemoved", { field: deps.field, persona: deps.persona })
+    : tr.text("aiActs.toast.fieldUndone", { field: deps.field });
   // Once per toast: a double click must not send a second redo.
   let fired = false;
-  const id = toast.success(say(tr.text("aiActs.toast.fieldUndone", { field: deps.field })), {
+  const id = toast.success(say(done), {
     action: {
       label: say(tr.text("common.undo")),
       onClick: () => {
@@ -110,8 +116,7 @@ export async function runFieldUndo(deps: Common & {
             refuse(deps, u.reason);
             return;
           }
-          refresh();
-          toast.success(say(tr.text("aiActs.toast.fieldRedone", { persona: deps.persona })));
+          toast.success(say(tr.text("aiActs.toast.fieldRedone", { persona: deps.persona, field: deps.field })));
         })();
       },
     },
@@ -129,7 +134,7 @@ export async function runBookingUndo(deps: Common & {
   /** The customer's name, for the told / not-told sentence. */
   name: string;
 }): Promise<boolean> {
-  const { toast, tr, refresh } = deps;
+  const { toast, tr } = deps;
   const say = sayer(tr);
   const r = await attempt(deps, () => deps.undo(deps.notify));
   if (!r) return false;
@@ -138,7 +143,6 @@ export async function runBookingUndo(deps: Common & {
     return false;
   }
   const told = r.control === "booking" ? r.told : "notAsked";
-  refresh();
   toast.success(say(told === "yes" ? tr.text("aiActs.toast.bookingUndoneTold", { name: deps.name })
     : told === "no" ? tr.text("aiActs.toast.bookingUndoneNotTold", { name: deps.name })
     : tr.text("aiActs.toast.bookingUndone")));
@@ -148,6 +152,8 @@ export async function runBookingUndo(deps: Common & {
 export async function runContactUndo(deps: Common & {
   undo: (typedName: string) => Promise<UndoResult>;
   typedName: string;
+  /** The web chat added them (review M-a): its form entry stays in Forms, and there is no call. */
+  fromChat: boolean;
   navigate: (href: string) => void;
   /** The contacts list: the record page is gone once the customer is removed. */
   listHref: string;
@@ -160,7 +166,7 @@ export async function runContactUndo(deps: Common & {
     refuse(deps, r.reason);
     return false;
   }
-  toast.success(say(tr.text("aiActs.toast.contactRemoved")));
+  toast.success(say(tr.text(deps.fromChat ? "aiActs.toast.contactRemovedChat" : "aiActs.toast.contactRemoved")));
   deps.navigate(deps.listHref);
   return true;
 }

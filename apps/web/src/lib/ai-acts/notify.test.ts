@@ -120,7 +120,8 @@ describe("sendBookingUndoNotice", () => {
 
   it("review I-1: a move undone asks them to change their calendar back, in their language, in both parts; the other two notices do not (mutation: drop the sentence -> FAILS)", async () => {
     const EN = "If you added the new time to your calendar, please change it back to this one.";
-    const ES = "Si agregó la nueva hora a su calendario, por favor cámbiela de nuevo a esta.";
+    // Design I-6: tú, as the booking templates the sentence sits in.
+    const ES = "Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.";
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: moved, contact: { email: "ana@example.com", language: "en" }, origin: "https://app.example" });
     expect(sent().body).toContain(EN);

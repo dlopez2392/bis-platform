@@ -326,10 +326,11 @@ export default async function StyleguidePage({
           <RecordDemo />
         </Section>
 
-        {/* item 8c (plan Task 6): the timeline's aiAct row and its three Undo controls — a field
-            available, a booking with an email on file and one with none, a contact, a blocked one,
-            an undone one and one whose facts read failed — English, Spanish and the pseudo-locale. */}
-        <Section title={t(m, "timeline.what.aiActs", "en")} file="components/ai-acts/{act-row,act-undo}.tsx">
+        {/* item 8c (plan Task 6; Task 9 design I-8): the timeline's aiAct row and its three Undo controls — a
+            field available, a booking with an email on file and one with none, a contact, a blocked one,
+            an undone one and one whose facts read failed — then the popover's body ticked and with no
+            email, and the dialog's body empty and matched; English, Spanish and the pseudo-locale, inert. */}
+        <Section title={t(m, "styleguide.aiActs", "en")} file="components/ai-acts/{act-row,act-undo}.tsx">
           <AiActsDemo />
         </Section>
 
