@@ -1065,3 +1065,118 @@ describe("the tray everywhere, item 8b-2's new keys (plan Task 3)", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("Sofía's acts on the timeline, their Undo, reasons, notice and created-by (item 8c, plan Task 2)", () => {
+  // The expected `{param}` set per key — the mutation this guards against is
+  // a key whose English and Spanish strings name different params (a
+  // translator drops or renames one), which `t()` would silently leave
+  // un-interpolated in only one language.
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "timeline.what.aiActs": [],
+    "aiActs.verb.booked": ["when"],
+    "aiActs.verb.rescheduled": ["when"],
+    "aiActs.detail.movedFrom": ["when"],
+    "aiActs.verb.cancelled": ["when"],
+    "aiActs.verb.contactCreated": [],
+    "aiActs.verb.fieldFilled": ["field", "value"],
+    "aiActs.field.firstName": [],
+    "aiActs.field.lastName": [],
+    "aiActs.field.email": [],
+    "aiActs.field.phone": [],
+    "aiActs.source.call": ["date"],
+    "aiActs.source.webchat": [],
+    "aiActs.reason.alreadyCancelled": [],
+    "aiActs.reason.alreadyHappened": [],
+    "aiActs.reason.rebooked": [],
+    "aiActs.reason.timePassed": [],
+    "aiActs.reason.timeTaken": [],
+    "aiActs.reason.oldTimeTaken": [],
+    "aiActs.reason.changed": [],
+    "aiActs.reason.changedBy": ["name"],
+    "aiActs.reason.hasActivity": [],
+    "aiActs.reason.hasBooking": [],
+    "aiActs.reason.otherBooking": [],
+    "aiActs.reason.ownerOnly": [],
+    "aiActs.undoneBy": ["name", "date"],
+    "aiActs.notify.label": ["name"],
+    "aiActs.notify.noEmail": ["name"],
+    "aiActs.toast.fieldUndone": ["field"],
+    "aiActs.toast.fieldRedone": ["persona"],
+    "aiActs.toast.bookingUndone": [],
+    "aiActs.toast.bookingUndoneTold": ["name"],
+    "aiActs.toast.bookingUndoneNotTold": ["name"],
+    "aiActs.toast.contactRemoved": [],
+    "aiActs.toast.notAvailable": ["reason"],
+    "aiActs.toast.failed": [],
+    "aiActs.contactDialog.title": ["name"],
+    "aiActs.contactDialog.body": ["persona", "name"],
+    "aiActs.contactDialog.confirm": [],
+    "record.facts.addedBy": ["who"],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+
+  function paramsOf(s: string): string[] {
+    return [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+  }
+
+  it("every key exists with its Spanish twin, differing from the English (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const missing = KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`]);
+    expect(missing).toEqual([]);
+  });
+
+  it("names exactly its params, and the same set in both languages (mutation: rename {name} to {who} in one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      const expected = [...EXPECTED_PARAMS[k]!].sort();
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual(expected);
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual(expected);
+    }
+  });
+
+  it("pins the plan's own sentences, both languages (mutation: change one word -> FAILS)", () => {
+    expect([m["timeline.what.aiActs"], m["timeline.what.aiActs.es"]]).toEqual([
+      "the assistant's actions", "las acciones de la asistente"]);
+    expect([m["aiActs.verb.fieldFilled"], m["aiActs.verb.fieldFilled.es"]]).toEqual([
+      "filled in the {field}: {value}", "completó {field}: {value}"]);
+    expect([m["aiActs.undoneBy"], m["aiActs.undoneBy.es"]]).toEqual([
+      "Undone by {name} · {date}", "Deshecho por {name} · {date}"]);
+    expect([m["aiActs.notify.noEmail"], m["aiActs.notify.noEmail.es"]]).toEqual([
+      "{name} has no email on file, so they won't be told. Call them if they need to know.",
+      "{name} no tiene correo registrado, así que no se le avisará. Llámele si necesita saberlo."]);
+    expect([m["aiActs.contactDialog.body"], m["aiActs.contactDialog.body.es"]]).toEqual([
+      "{persona} added this customer, and nothing else has happened since. Removing them can't be undone; the call stays in Calls. Type {name} to confirm.",
+      "{persona} agregó a este cliente y no ha pasado nada más desde entonces. Quitarlo no se puede deshacer; la llamada sigue en Llamadas. Escriba {name} para confirmar."]);
+    expect([m["record.facts.addedBy"], m["record.facts.addedBy.es"]]).toEqual([
+      "Added by {who}", "Agregado por {who}"]);
+  });
+
+  it("the named params interpolate through t() for both languages", () => {
+    expect(t(m, "aiActs.verb.booked", "en", { when: "2:00 PM" })).toBe("booked 2:00 PM");
+    expect(t(m, "aiActs.verb.booked", "es", { when: "2:00 PM" })).toBe("reservó 2:00 PM");
+    expect(t(m, "aiActs.verb.fieldFilled", "en", { field: "phone number", value: "(956) 555-0101" }))
+      .toBe("filled in the phone number: (956) 555-0101");
+    expect(t(m, "aiActs.undoneBy", "es", { name: "Ana", date: "Oct 20" })).toBe("Deshecho por Ana · Oct 20");
+    expect(t(m, "aiActs.contactDialog.title", "en", { name: "Maria Garcia" })).toBe("Remove Maria Garcia?");
+    expect(t(m, "record.facts.addedBy", "en", { who: "Sofía · AI" })).toBe("Added by Sofía · AI");
+  });
+
+  it("reuses common.undo, common.cancel and provenance.ai rather than duplicating them", () => {
+    expect(m["common.undo"]).toBe("Undo");
+    expect(m["common.cancel"]).toBe("Cancel");
+    expect(m["provenance.ai"]).toBe("{name} · AI");
+  });
+
+  it("no plumbing words reach the reader, and no internal milestone code (mutation: write 'rpc' into one key -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const bad = KEYS.flatMap((k) => [cat[k], cat[`${k}.es`]])
+      .filter((s) => /\b(act|ai act|registry|rpc|payload|server)\b/i.test(s ?? ""));
+    expect(bad).toEqual([]);
+  });
+
+  it("Spanish is usted, never tú (mutation: 'tu' or 'Intenta' in any .es -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const es = KEYS.map((k) => cat[`${k}.es`]!);
+    for (const s of es) expect(s).not.toMatch(/\b(escribe|intenta|recarga|tu|tus|contigo)\b/i);
+  });
+});
