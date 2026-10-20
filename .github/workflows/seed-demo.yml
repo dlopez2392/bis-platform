@@ -12,27 +12,27 @@ name: Seed demo tenant
 # effect of a merge is exactly the kind of surprise the outbound_suppressed
 # guard exists to make survivable rather than routine.
 #
-# A SCHEDULE is the one exception (owner's decision, 2026-10-13; daily, with
-# a backup run, 2026-10-19): every day at 10:17 UTC, 5:17 AM CDT / 4:17 AM
-# CST, before anyone opens the demo, and again at 11:17 UTC as a backup.
-# Every timestamp in the demo is anchored to the moment it was seeded, so a
-# demo left alone goes stale: its "today" and "this week" panels empty out
-# and its Website chart stops at the seed day. On 2026-10-13 the production
-# demo was days old and still had the pre-#243 site, which showed "Link a
-# site". A schedule is not a side effect of a merge; it is the same
-# deliberate rebuild, on a clock. GitHub cron is UTC only and does not follow
-# DST; minute 17 rather than 0 because :00 is when GitHub's scheduler is most
-# delayed.
+# A SCHEDULE is the one exception (owner's decisions: weekly 2026-10-13,
+# daily with a backup 2026-10-19, started by Vercel 2026-10-20). Every
+# timestamp in the demo is anchored to the moment it was seeded, so a demo
+# left alone goes stale: its "today" and "this week" panels empty out and its
+# Website chart stops at the seed day. A schedule is not a side effect of a
+# merge; it is the same deliberate rebuild, on a clock.
 #
-# Why the backup: GitHub can drop a scheduled run without a trace, and the
-# first Monday run (2026-10-19) never started while this repo's other
-# schedule ran normally. The 11:17 run reads the demo account's own
-# created_at and does nothing if the account is under six hours old, so on a
-# normal day it costs one query and a dropped 10:17 costs an hour, not a day.
+# The morning rebuild is STARTED BY VERCEL, not by the schedule below:
+# apps/web's /api/cron/demo-refresh dispatches this workflow at 10:17 UTC
+# (5:17 AM CDT / 4:17 AM CST) every day. GitHub's scheduler drops most of
+# this repo's runs: on 2026-10-19/20 the hourly ops-health workflow ran 5
+# times in 24 hours, and both of this workflow's scheduled runs never
+# started. The two crons here are BACKUPS only: each reads the demo
+# account's created_at and does nothing if it is under six hours old, so on
+# a normal day they cost one query each and never rebuild twice. GitHub cron
+# is UTC only; minute 17 rather than 0 because :00 is when GitHub's
+# scheduler is busiest.
 on:
   schedule:
-    - cron: '17 10 * * *'
     - cron: '17 11 * * *'
+    - cron: '17 13 * * *'
   workflow_dispatch:
     inputs:
       confirm:
@@ -85,13 +85,13 @@ jobs:
             exit 1
           fi
 
-      # The backup schedule only (see the header): skip when the demo was
-      # rebuilt in the last six hours, by the 10:17 run or by hand. Reads the
+      # The backup schedules only (see the header): skip when the demo was
+      # rebuilt in the last six hours, by Vercel's morning dispatch or by hand. Reads the
       # account's created_at through PostgREST with the job's own key; the key
       # is never echoed. A failed read is not a reason to skip: it rebuilds.
       - name: Skip the backup run if the demo is already fresh
         id: fresh
-        if: github.event_name == 'schedule' && github.event.schedule == '17 11 * * *'
+        if: github.event_name == 'schedule'
         run: |
           created=$(curl -fsS \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \

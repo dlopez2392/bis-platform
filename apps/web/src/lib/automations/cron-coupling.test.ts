@@ -41,9 +41,12 @@ function tickIntervalMs(schedule: string): number {
 describe("the cron schedule and the query windows are coupled — enforced, not described", () => {
   const entry = vercel.crons.find((c) => c.path === "/api/cron/reminders");
 
-  it("vercel.json has exactly one cron entry, and it is the reminders route", () => {
-    expect(vercel.crons).toHaveLength(1);
+  it("vercel.json has the reminders tick and the morning demo rebuild, and nothing else", () => {
+    // The second entry (2026-10-20) only dispatches the demo's rebuild
+    // workflow (app/api/cron/demo-refresh); it runs no automation pass.
+    expect(vercel.crons.map((c) => c.path).sort()).toEqual(["/api/cron/demo-refresh", "/api/cron/reminders"]);
     expect(entry).toBeDefined();
+    expect(vercel.crons.find((c) => c.path === "/api/cron/demo-refresh")!.schedule).toBe("17 10 * * *");
   });
 
   it("the reminder window is wider than one tick, so no booking can fall between two ticks", () => {
