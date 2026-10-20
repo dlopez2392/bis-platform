@@ -11,7 +11,7 @@ import { testPhoneNumber } from "./fixtures";
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 
-async function seed(c: Client, label: string): Promise<{ accountId: string; orgId: string; callId: string }> {
+async function seed(c: Client, label: string): Promise<{ accountId: string; orgId: string; callId: string; phoneId: string }> {
   await actAsOwner(c);
   const orgId = `org_disc_${label}_${RUN}`;
   const { rows: [agency] } = await c.query<{ id: string }>("insert into public.agencies (name) values ('Disc') returning id");
@@ -23,7 +23,7 @@ async function seed(c: Client, label: string): Promise<{ accountId: string; orgI
     "insert into public.phone_numbers (account_id, e164) values ($1, $2) returning id", [account!.id, testPhoneNumber()]);
   const { rows: [call] } = await c.query<{ id: string }>(
     "insert into public.calls (account_id, phone_number_id) values ($1, $2) returning id", [account!.id, phone!.id]);
-  return { accountId: account!.id, orgId, callId: call!.id };
+  return { accountId: account!.id, orgId, callId: call!.id, phoneId: phone!.id };
 }
 
 describe("0093 voice_profiles.disclosure", () => {
@@ -76,14 +76,15 @@ describe("0093 calls.disclosed", () => {
       expect(rows).toEqual([{ data_type: "boolean", is_nullable: "YES", column_default: null }]);
     }));
 
-  it("a call inserted without it reads null, and true and false both store", () =>
+  // The pair CHECK means disclosed is only ever written WITH disclosure_setting, so each write sets both.
+  it("a call inserted without it reads null, and true and false both store (with a setting)", () =>
     withRollback(async (c) => {
       const { callId } = await seed(c, "stamp");
       const read = async () => (await c.query("select disclosed from public.calls where id = $1", [callId])).rows;
       expect(await read()).toEqual([{ disclosed: null }]);
-      await c.query("update public.calls set disclosed = true where id = $1", [callId]);
+      await c.query("update public.calls set disclosed = true, disclosure_setting = 'trial' where id = $1", [callId]);
       expect(await read()).toEqual([{ disclosed: true }]);
-      await c.query("update public.calls set disclosed = false where id = $1", [callId]);
+      await c.query("update public.calls set disclosed = false, disclosure_setting = 'trial' where id = $1", [callId]);
       expect(await read()).toEqual([{ disclosed: false }]);
     }));
 });
@@ -97,22 +98,68 @@ describe("0093 calls.disclosure_setting (D5)", () => {
       expect(rows).toEqual([{ data_type: "text", is_nullable: "YES", column_default: null }]);
     }));
 
-  it("reads null when not sent, and takes trial, on and null again", () =>
+  it("reads null when not sent, and takes trial, on and null again (each with its disclosed)", () =>
     withRollback(async (c) => {
       const { callId } = await seed(c, "setting");
       const read = async () => (await c.query("select disclosure_setting from public.calls where id = $1", [callId])).rows;
       expect(await read()).toEqual([{ disclosure_setting: null }]);
-      for (const v of ["trial", "on", null]) {
-        await c.query("update public.calls set disclosure_setting = $2 where id = $1", [callId, v]);
+      for (const [v, d] of [["trial", false], ["on", true], [null, null]] as const) {
+        await c.query("update public.calls set disclosure_setting = $2, disclosed = $3 where id = $1", [callId, v, d]);
         expect(await read()).toEqual([{ disclosure_setting: v }]);
       }
     }));
 
+  // disclosed is set too, so neither pairing CHECK can be the one that refuses: only the setting CHECK can.
   it("refuses 'off' and any other word by calls_disclosure_setting_check: an Off call is never stamped (mutation: drop the CHECK → FAILS)", () =>
     withRollback(async (c) => {
       const { callId } = await seed(c, "setting_check");
-      await expect(c.query("update public.calls set disclosure_setting = 'off' where id = $1", [callId]))
+      await expect(c.query("update public.calls set disclosed = true, disclosure_setting = 'off' where id = $1", [callId]))
         .rejects.toMatchObject({ code: "23514", constraint: "calls_disclosure_setting_check" });
+    }));
+});
+
+describe("0093 the pairing: disclosed and disclosure_setting are written together, and on always discloses", () => {
+  const insertAsServer = async (c: Client, label: string, disclosed: boolean | null, setting: string | null) => {
+    const { accountId, phoneId } = await seed(c, label);
+    await c.query("set local role service_role");
+    return c.query<{ disclosed: boolean | null; disclosure_setting: string | null }>(
+      `insert into public.calls (account_id, phone_number_id, disclosed, disclosure_setting)
+       values ($1, $2, $3, $4) returning disclosed, disclosure_setting`, [accountId, phoneId, disclosed, setting]);
+  };
+
+  // ONE refused statement per withRollback: the transaction is aborted after it.
+  it.each([
+    ["no stamp but a setting (null, 'trial')", "calls_disclosure_pair_check", null, "trial"],
+    ["a stamp but no setting (true, null)", "calls_disclosure_pair_check", true, null],
+    ["a stamp but no setting (false, null)", "calls_disclosure_pair_check", false, null],
+    ["an On call that did not disclose (false, 'on')", "calls_disclosure_on_check", false, "on"],
+  ] as const)("the server is refused %s by %s (mutation: drop that CHECK → FAILS)", (_name, constraint, disclosed, setting) =>
+    withRollback(async (c) => {
+      await expect(insertAsServer(c, `pair_${constraint}_${String(disclosed)}`, disclosed, setting))
+        .rejects.toMatchObject({ code: "23514", constraint });
+    }));
+
+  it.each([
+    [true, "trial"],
+    [false, "trial"],
+    [true, "on"],
+    [null, null],
+  ] as const)("the server may write (disclosed %s, setting %s)", (disclosed, setting) =>
+    withRollback(async (c) => {
+      const { rows } = await insertAsServer(c, `ok_${String(disclosed)}_${String(setting)}`, disclosed, setting);
+      expect(rows).toEqual([{ disclosed, disclosure_setting: setting }]);
+    }));
+
+  it("both pairing CHECKs exist with these exact definitions", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query(
+        `select conname, pg_get_constraintdef(oid) as def from pg_constraint
+          where conrelid = 'public.calls'::regclass and conname in ('calls_disclosure_pair_check', 'calls_disclosure_on_check')
+          order by conname`);
+      expect(rows).toEqual([
+        { conname: "calls_disclosure_on_check", def: "CHECK (((disclosure_setting IS DISTINCT FROM 'on'::text) OR disclosed))" },
+        { conname: "calls_disclosure_pair_check", def: "CHECK (((disclosed IS NULL) = (disclosure_setting IS NULL)))" },
+      ]);
     }));
 });
 

@@ -5,7 +5,7 @@
 **Goal:** an agency-only, per-account setting (Off / Trial / On) decides whether Sofía says, right after the operator's greeting and in that greeting's language, that she is an AI assistant and that the call is transcribed. On Trial a fair coin decides per call. Every Trial or On call is stamped `calls.disclosed` and `calls.disclosure_setting` (which setting decided it, D5). The website chat is labelled AI (header and first message) on Trial or On. An agency-only card on the Voice page compares the two halves of the TRIAL calls (booked, hung up early, asked for a person, D6) without declaring a winner.
 
 **Architecture:**
-- Migration 0093 adds `voice_profiles.disclosure` (text, NOT NULL, default `'off'`, CHECK), `calls.disclosed` (boolean, nullable) and `calls.disclosure_setting` (text, nullable, CHECK `trial`/`on`). No grant, no policy: both tables are already server-written only (0019/0020/0053).
+- Migration 0093 adds `voice_profiles.disclosure` (text, NOT NULL, default `'off'`, CHECK), `calls.disclosed` (boolean, nullable) and `calls.disclosure_setting` (text, nullable, CHECK `trial`/`on`), plus two table CHECKs on `calls`: the pair is null together or set together, and an On call is always disclosed. No grant, no policy: both tables are already server-written only (0019/0020/0053).
 - `@bis/db`: the row type and `PROFILE_COLS` gain `disclosure`; `startCallRow` writes `disclosed` and `disclosure_setting` together when given; `getDisclosureResults` reads the card's counts with head counts, Trial-stamped calls only.
 - Web: `lib/voice/disclosure.ts` decides per call (`crypto.randomInt`); `openingGreeting` appends the spoken sentence; `buildSystemPrompt` swaps the IDENTITY line; the incoming route wires both and stamps on the row it already writes; the chat page and turn route read the same setting; the Voice page gets the three-way choice inside the profile form (its own Save) and the results card under it.
 
@@ -101,6 +101,7 @@ Path abbreviations:
 | `voice_profiles.disclosure` | `text not null default 'off' constraint voice_profiles_disclosure_check check (disclosure in ('off', 'trial', 'on'))` |
 | `calls.disclosed` | `boolean`, nullable, no default. Set once at call start for Trial/On; null for Off and every call before 0093 |
 | `calls.disclosure_setting` (D5) | `text`, nullable, no default, `constraint calls_disclosure_setting_check check (disclosure_setting in ('trial', 'on'))`. The setting that decided this call, written on the same insert as `disclosed`, only for Trial/On; Off sends neither |
+| `calls` table CHECKs (Task 1 review fix) | `constraint calls_disclosure_pair_check check ((disclosed is null) = (disclosure_setting is null))`: the two are written together or not at all. `constraint calls_disclosure_on_check check (disclosure_setting is distinct from 'on' or disclosed)`: an On call is always disclosed. Every row before 0093 is null/null and passes both. Task 4's `startCallRow` already sends both or neither; the database now refuses anything else |
 
 Grants: **none added.** `authenticated` has table SELECT on both tables (`0019_voice_core.sql:42`, `:69`) and no write verb (`0020_voice_grants_revoke.sql:8-14`); `anon` has nothing; `service_role` writes through default privileges. A new column inherits exactly that, so an Owner (any client member) can read `disclosure` and can never write it (decision 28), and nobody but the server writes `calls.disclosed` or `calls.disclosure_setting`. Row visibility on `calls` is `calls_tenant` (0019) AND the restrictive `calls_technician_scope` (0068, `:112-118`, made in its loop), both unchanged; client test cases therefore act as a real member (`actAsMember`, `packages/db/src/test/db.ts:33-42`). This is `0058_voice_forward_calls.sql`'s "the absence is the control" reasoning, cited in the header. The client-write digest is UNCHANGED.
 
@@ -206,7 +207,7 @@ IDENTITY — You have already told the ${audienceWord} that you are ${persona}, 
   | Task 4 implementer, then Task 6 implementer (Task 4 stops its kit first) | 55702 | 55703 | 55704 |
   | Task 4 reviewer | 55705 | 55706 | 55707 |
   | Task 9 reviewer (after Task 1's reviewer has stopped) | 55701 | 55708 | 55709 |
-- **Faithfulness:** the client-write digest (the query at `…-pr8b1.md:301-311`) on `pre` must equal bis-ci's value that Task 0 reads after 0092. 0093 must leave it UNCHANGED on `post`.
+- **Faithfulness:** the client-write digest (the query at `…-pr8b1.md:301-311`) on `pre` must equal bis-ci's value that Task 0 reads after 0092. 0093 must leave it UNCHANGED on `post`. The digest reads TABLE-level privileges only (`has_table_privilege`); a column-level grant would not move it. Column grants are guarded separately, by the 0093 test's `information_schema.column_privileges` case and `has_column_privilege` case, and by `server-only-writes-grants.test.ts`.
 - **SQL byte rules for 0093:**
   - ASCII only and no backslash: `LC_ALL=C tr -d '\000-\177' < f | wc -c` prints `0`, and `grep -nF '\' f` prints nothing. "Sofia", never "Sofía", in this file.
   - `$` only in `$$` pairs: exactly 4 `$` characters (one `do` block).
@@ -264,7 +265,7 @@ IDENTITY — You have already told the ${audienceWord} that you are ${persona}, 
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `public.voice_profiles.disclosure` (`text`, `'off'|'trial'|'on'`, default `'off'`), `public.calls.disclosed` (`boolean`, nullable), `public.calls.disclosure_setting` (`text`, nullable, `'trial'|'on'`), constraints `voice_profiles_disclosure_check` and `calls_disclosure_setting_check`.
+- Produces: `public.voice_profiles.disclosure` (`text`, `'off'|'trial'|'on'`, default `'off'`), `public.calls.disclosed` (`boolean`, nullable), `public.calls.disclosure_setting` (`text`, nullable, `'trial'|'on'`), constraints `voice_profiles_disclosure_check`, `calls_disclosure_setting_check`, `calls_disclosure_pair_check` and `calls_disclosure_on_check` (the last two from the Task 1 review fix).
 
 - [ ] **Step 1: Build the kit** (Global constraints) on 55700 and show the `diff` against `<KIT8C>`. Confirm `pre`'s digest equals Task 0's bis-ci value.
 
@@ -572,6 +573,8 @@ comment on column public.calls.disclosure_setting is
   'The setting that decided calls.disclosed, written with it at call start by the incoming call route (startCallRow): trial or on. NULL for an off account and for every call before 0093. The results card counts only trial calls. Server-written only.';
 ```
 
+**Task 1 review fix (2026-10-20, before any apply):** the committed file supersedes the block above in four places. (1) A section 4 adds `alter table public.calls add constraint calls_disclosure_pair_check check ((disclosed is null) = (disclosure_setting is null));` and `alter table public.calls add constraint calls_disclosure_on_check check (disclosure_setting is distinct from 'on' or disclosed);`. (2) The header says the pairing is enforced, and its ROLLBACK note says both CHECKs go with the first `drop column` (checked on the replica). (3) The two `calls` column comments name the CHECKs. (4) The GRANTS line reads "(the same reasoning as 0058's DO NOT FIX)". The test's two existing `calls` write cases now set both columns together (the pair CHECK refuses a one-sided write), and the "refuses 'off'" case sets `disclosed = true` too, so only the setting CHECK can be the one that refuses. A new describe pins three pair refusals, one On refusal, four accepted pairs, and both definitions.
+
 - [ ] **Step 5: Re-build the kit** (it applies 0093 to `post` with `psql -1`) and run on `post`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55700/post; node node_modules/vitest/vitest.mjs run src/test/ai-disclosure-schema.test.ts src/test/voice-forward-grants.test.ts src/test/schema-grants-guard.test.ts src/test/server-only-writes-grants.test.ts` → all green (the `withTestAccount` cases in `voice-forward-grants` need PostgREST; if this kit has none, run only its `withRollback` describes with `-t "0058"` and read the run count).
 
 - [ ] **Step 6: Run each mutation** on `post` (edit the migration, rebuild the kit, run, paste the failing line, edit back, `cmp`):
@@ -583,6 +586,8 @@ comment on column public.calls.disclosure_setting is
   6. append `grant update (disclosure_setting) on public.calls to authenticated;` → "column privileges" and "a client Owner cannot stamp a call's disclosure_setting" FAIL.
   7. drop `calls_disclosure_setting_check` → "refuses 'off' and any other word" FAILS.
   8. `add column disclosure_setting text default 'trial'` → "is text, nullable, with no default" FAILS.
+  9. (review fix) drop the `calls_disclosure_pair_check` statement → the three "the server is refused … by calls_disclosure_pair_check" cases and "both pairing CHECKs exist" FAIL.
+  10. (review fix) drop the `calls_disclosure_on_check` statement → "the server is refused an On call that did not disclose" and "both pairing CHECKs exist" FAIL.
 
 - [ ] **Step 7: Digest and bytes.** The digest on `post` equals `pre`'s. `LC_ALL=C tr -d '\000-\177' < packages/db/supabase/migrations/0093_ai_disclosure.sql | wc -c` → `0`; `grep -nF '\' …` → nothing; `grep -o '\$' … | wc -l` → `4`; `grep -niw cascade …` → nothing. Record `md5sum`.
 

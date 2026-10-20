@@ -55,6 +55,10 @@ and the trial client On before counsel reads the wording (an ops step, not code)
 - `calls.disclosure_setting text` (nullable) with `calls_disclosure_setting_check (disclosure_setting in
   ('trial', 'on'))` (D5): the setting that decided this call, stamped on the same insert as `disclosed`,
   only for Trial/On; Off sends neither. Server-written only.
+- The pairing is enforced by the database (Task 1 review fix, 2026-10-20):
+  `calls_disclosure_pair_check ((disclosed is null) = (disclosure_setting is null))`, so the two are null
+  together or set together, and `calls_disclosure_on_check (disclosure_setting is distinct from 'on' or
+  disclosed)`, so an On call is always disclosed. Every row before 0093 is null and null and passes both.
 - Additive and safe under the running build (defaults and nullable). Apply order: bis-ci, production,
   parity, merge. The client-write digest must stay unchanged.
 

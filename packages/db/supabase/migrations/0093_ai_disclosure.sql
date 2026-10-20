@@ -19,12 +19,15 @@
 --     setting that decided the call, written on the same insert as disclosed and only with it. The results
 --     card counts only trial rows, so moving an account from trial to on never pours every-call-discloses
 --     calls into the half that heard it. No 'off': an off call is never stamped.
+--   The pairing is enforced, not only promised: calls_disclosure_pair_check makes disclosed and
+--   disclosure_setting null together or set together, and calls_disclosure_on_check makes an on call
+--   always disclosed (on means every call, so on with disclosed false would be a false record).
 --
 -- WHO WRITES THEM. disclosure: the agency only, through serviceDb(), behind the app's agency check, in
 -- saveVoiceProfileAction (the Voice page's own Save). calls.disclosed and calls.disclosure_setting: the
 -- server only, in startCallRow.
 --
--- GRANTS: NONE, and the absence is the control (0058's DO NOT FIX, word for word in spirit).
+-- GRANTS: NONE, and the absence is the control (the same reasoning as 0058's DO NOT FIX).
 --   authenticated has table SELECT on voice_profiles and calls (0019) and no write verb on either (0020
 --   revoked insert, update, delete, truncate, references and trigger; 0053 revoked maintain), so a column
 --   added today inherits exactly that: a client Owner reads the setting and never writes it (decision 28:
@@ -44,7 +47,8 @@
 --
 -- ROLLBACK (roll the app back first), in this order; the two calls columns only on an owner decision,
 -- because they drop the trial's per-call record:
---   alter table public.calls drop column disclosure_setting;   (its CHECK goes with it)
+--   alter table public.calls drop column disclosure_setting;   (its CHECK, the pair CHECK and the on
+--                                                               CHECK go with it)
 --   alter table public.calls drop column disclosed;
 --   alter table public.voice_profiles drop column disclosure;  (its CHECK goes with it)
 --
@@ -70,7 +74,7 @@ alter table public.calls
   add column disclosed boolean;
 
 comment on column public.calls.disclosed is
-  'Set once at call start by the incoming call route (startCallRow) when the profile was trial or on: true if the receptionist said she is an AI, false if not. NULL for an off account and for every call before 0093. Server-written only.';
+  'Set once at call start by the incoming call route (startCallRow) when the profile was trial or on: true if the receptionist said she is an AI, false if not. NULL for an off account and for every call before 0093. NULL exactly when disclosure_setting is NULL (calls_disclosure_pair_check). Server-written only.';
 
 -- 3. Which setting decided it (D5).
 alter table public.calls
@@ -78,4 +82,12 @@ alter table public.calls
     constraint calls_disclosure_setting_check check (disclosure_setting in ('trial', 'on'));
 
 comment on column public.calls.disclosure_setting is
-  'The setting that decided calls.disclosed, written with it at call start by the incoming call route (startCallRow): trial or on. NULL for an off account and for every call before 0093. The results card counts only trial calls. Server-written only.';
+  'The setting that decided calls.disclosed, written with it at call start by the incoming call route (startCallRow): trial or on. NULL for an off account and for every call before 0093. The results card counts only trial calls. NULL exactly when disclosed is NULL (calls_disclosure_pair_check); on always has disclosed true (calls_disclosure_on_check). Server-written only.';
+
+-- 4. The pairing, enforced. Every existing row is null and null, so both CHECKs hold on every row this file
+--    finds.
+alter table public.calls
+  add constraint calls_disclosure_pair_check check ((disclosed is null) = (disclosure_setting is null));
+
+alter table public.calls
+  add constraint calls_disclosure_on_check check (disclosure_setting is distinct from 'on' or disclosed);
