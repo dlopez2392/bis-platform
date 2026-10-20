@@ -8,7 +8,7 @@ import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { makeTr } from "@/lib/record/copy";
 import { m, type MessageKey } from "@/lib/messages";
@@ -133,7 +133,7 @@ export default async function VoicePage({
   // disclosure setting and its results card below read this; the rest of
   // the page stays English (decision 2).
   const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale);
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
   const persona = profile?.persona_name?.trim() || "Sofía";
   const disclosureCopy: DisclosureCopy = {
     locale,
@@ -145,9 +145,18 @@ export default async function VoicePage({
       hint: tr.text(DISCLOSURE_HINT_KEY[value], { persona }),
     })),
   };
+  // The results card reads through THIS page's client (behind requireAgencyOnlyAccountAccess above),
+  // never one of its own; its empty state reads the STORED setting (no profile yet = the column's
+  // default, "off"); and its Retry keeps this page's own query (?from=, ?locale=).
+  const retryQuery = new URLSearchParams();
+  if (from) retryQuery.set("from", from);
+  if (localeParam) retryQuery.set("locale", localeParam);
+  const retryHref = `/dashboard/accounts/${accountId}/voice${retryQuery.size > 0 ? `?${retryQuery}` : ""}`;
   const disclosureResults = (
     <Suspense fallback={<DisclosureResultsSkeleton />}>
-      <DisclosureResultsCard accountId={accountId} tr={tr} />
+      <DisclosureResultsCard
+        db={db} accountId={accountId} setting={profile?.disclosure ?? "off"} retryHref={retryHref} tr={tr}
+      />
     </Suspense>
   );
 

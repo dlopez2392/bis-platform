@@ -35,8 +35,10 @@ const serviceDbMock = vi.hoisted(() => ({
   getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(), listForms: vi.fn(),
 }));
 
+// One stable client, so the results card can be shown to receive THIS client rather than one of its own.
+const serviceClient = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({
+  serviceDb: () => (serviceClient.client ??= {
     from: (table: string) => {
       if (table === "phone_numbers") {
         return {
@@ -86,7 +88,7 @@ const captured = vi.hoisted(() => ({
   props: null as {
     accountId?: string; brandName?: string; transferPhone?: string | null;
     publishedForms?: { id: string; name: string }[]; origin?: string;
-    disclosureCopy?: { locale: string; options: { value: string }[] };
+    disclosureCopy?: { locale: string; legend: string; options: { value: string }[] };
     disclosureResults?: unknown;
   } | null,
 }));
@@ -108,11 +110,11 @@ const PROFILE: VoiceProfileRow = {
   public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
 };
 
-async function render() {
+async function render(searchParams: { from?: string; locale?: string } = {}) {
   captured.props = null;
   const el = await VoicePage({
     params: Promise.resolve({ accountId: "a1" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(searchParams),
   });
   renderToStaticMarkup(el);
   return captured.props!;
@@ -224,5 +226,46 @@ describe("voice settings page — the AI disclosure setting and results card (S-
     expect(props.disclosureCopy?.locale).toBe("en");
     expect(props.disclosureCopy?.options.map((o) => o.value)).toEqual(["off", "trial", "on"]);
     expect(isValidElement(props.disclosureResults)).toBe(true);
+  });
+});
+
+/** The results card element inside the Suspense node the page hands VoiceSettings. */
+function cardProps(node: unknown): { db: unknown; accountId: string; setting: string; retryHref: string } {
+  if (!isValidElement(node)) throw new Error("disclosureResults is not an element");
+  const child = (node.props as { children: unknown }).children;
+  if (!isValidElement(child)) throw new Error("no card inside the Suspense boundary");
+  return child.props as { db: unknown; accountId: string; setting: string; retryHref: string };
+}
+
+describe("voice settings page — the results card's inputs (S-47a fix round)", () => {
+  it("hands the card the page's OWN client, never a second one (mutation: card calls serviceDb() itself -> in-account-service-reads FAILS; drop the prop -> this FAILS)", async () => {
+    const props = await render();
+    expect(serviceClient.client).not.toBeNull();
+    expect(cardProps(props.disclosureResults).db).toBe(serviceClient.client);
+    expect(cardProps(props.disclosureResults).accountId).toBe("a1");
+  });
+
+  it("hands the card the STORED setting, and off when there is no profile yet (the column default) (mutation: hard-code trial -> FAILS)", async () => {
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, disclosure: "on" });
+    expect(cardProps((await render()).disclosureResults).setting).toBe("on");
+    serviceDbMock.getVoiceProfile.mockResolvedValue(null);
+    expect(cardProps((await render()).disclosureResults).setting).toBe("off");
+  });
+
+  it("Retry keeps the page's own query (mutation: drop the query -> FAILS)", async () => {
+    expect(cardProps((await render()).disclosureResults).retryHref).toBe("/dashboard/accounts/a1/voice");
+    expect(cardProps((await render({ from: "setup", locale: "es" })).disclosureResults).retryHref)
+      .toBe("/dashboard/accounts/a1/voice?from=setup&locale=es");
+  });
+
+  it("?locale=pseudo reaches the disclosure copy under the QA flag (mutation: makeTr(locale) without requestPseudoMode -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const props = await render({ locale: "pseudo" });
+      expect(props.disclosureCopy?.legend.startsWith("[Téll cállérs Sófíá ís án ÁÍ")).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

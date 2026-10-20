@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DisclosureColumnView, DisclosureResultsView as DisclosureResultsViewType } from "@/lib/voice/disclosure-results";
+import type { DisclosureSetting } from "@bis/db";
 import type { Tr } from "@/lib/record/copy";
 
 type HalfKey = "said" | "didnt";
@@ -44,10 +45,20 @@ function ResultColumn({
  * The card itself. `view` is either the pure results view (loaded/empty) or `{ state: "error" }`, which
  * `disclosure-results-view.ts` never produces on its own — only `disclosure-results-card.tsx`'s catch does,
  * on a failed read. Never a verdict (rule 11: no hero, no comparative sentence) — numbers only, text-coloured.
+ *
+ * `setting` is the line's STORED Off / Trial / On (never the form's unsaved choice): the empty state can
+ * only say the right thing when it knows it. On Trial the calls are simply still to come; on Off or On no
+ * trial is running, so it says what appears here and the one action that causes it (rule 5). `retryHref`
+ * is the page's own URL with its query (?from=, ?locale=), so Retry never drops the reader's context.
  */
 export function DisclosureResultsView({
-  view, tr, accountId,
-}: { view: DisclosureResultsViewType | { state: "error" }; tr: Tr; accountId: string }) {
+  view, tr, setting, retryHref,
+}: { view: DisclosureResultsViewType | { state: "error" }; tr: Tr; setting: DisclosureSetting; retryHref: string }) {
+  const footnote = view.state !== "error" && view.notCounted > 0 ? (
+    <p className="text-xs text-muted-foreground">
+      {tr.count("voice.disclosure.results.notCounted", view.notCounted)}
+    </p>
+  ) : null;
   return (
     <Card data-disclosure-results lang={tr.locale}>
       <CardHeader>
@@ -61,28 +72,35 @@ export function DisclosureResultsView({
             {/* Ghost only — this card carries no primary (rule 8: the profile
                 card's Save is this page's one primary). */}
             <Button asChild variant="ghost" size="sm">
-              <Link href={`/dashboard/accounts/${accountId}/voice`}>{tr.text("common.retry")}</Link>
+              <Link href={retryHref}>{tr.text("common.retry")}</Link>
             </Button>
           </>
         ) : view.state === "empty" ? (
           <>
-            <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.empty")}</p>
-            <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.emptyAction")}</p>
+            {setting === "trial" ? (
+              <>
+                <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.empty")}</p>
+                <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.emptyAction")}</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.emptyIdle")}</p>
+                <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.emptyIdleAction")}</p>
+              </>
+            )}
+            {footnote}
           </>
         ) : (
           <>
-            <div className="grid grid-cols-2 gap-4">
+            {/* One column below sm: two side by side ran the styleguide 19px past a 375px viewport. */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <ResultColumn half="said" heading={tr.text("voice.disclosure.results.said")} view={view.said} tr={tr} />
               <ResultColumn half="didnt" heading={tr.text("voice.disclosure.results.didnt")} view={view.didnt} tr={tr} />
             </div>
             {view.notEnough ? (
               <p className="text-sm text-muted-foreground">{tr.text("voice.disclosure.results.notEnough")}</p>
             ) : null}
-            {view.notCounted > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {tr.count("voice.disclosure.results.notCounted", view.notCounted)}
-              </p>
-            ) : null}
+            {footnote}
           </>
         )}
       </CardContent>
@@ -97,7 +115,7 @@ export function DisclosureResultsSkeleton() {
         <Skeleton className="h-5 w-48" />
         <Skeleton className="h-4 w-64 max-w-full" />
       </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-4">
+      <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {[0, 1].map((col) => (
           <div key={col} className="space-y-2">
             <Skeleton className="h-4 w-20" />

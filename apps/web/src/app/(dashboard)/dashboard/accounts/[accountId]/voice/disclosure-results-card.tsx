@@ -1,7 +1,7 @@
 // S-47a §5.3: the async server component that reads the results and hands the pure view to
 // disclosure-results-view.tsx. Re-exports its skeleton so page.tsx needs only this one import for the
 // Suspense boundary (ai-section.tsx's own `export { AiCardSkeleton } from "./ai-card"` precedent).
-import { serviceDb, getDisclosureResults } from "@bis/db";
+import { getDisclosureResults, type DisclosureSetting, type SupabaseClient } from "@bis/db";
 import { loggableError } from "@/lib/loggable-error";
 import { disclosureResultsView, type DisclosureResultsView as ResultsView } from "@/lib/voice/disclosure-results";
 import type { Tr } from "@/lib/record/copy";
@@ -16,14 +16,20 @@ export { DisclosureResultsSkeleton } from "./disclosure-results-view";
  *
  * The JSX is built OUTSIDE the try/catch (react-hooks/error-boundaries: constructing an element inside a
  * try tells nothing about whether its OWN render throws) — the data read above is what can actually fail.
+ *
+ * `db` is the client page.tsx already holds behind requireAgencyOnlyAccountAccess: this card never gets
+ * a service client of its own (in-account-service-reads.test.ts lists every file that does, with its
+ * reason). `setting` is the STORED Off / Trial / On, for the empty state's copy.
  */
-export async function DisclosureResultsCard({ accountId, tr }: { accountId: string; tr: Tr }) {
+export async function DisclosureResultsCard({
+  db, accountId, setting, retryHref, tr,
+}: { db: SupabaseClient; accountId: string; setting: DisclosureSetting; retryHref: string; tr: Tr }) {
   let view: ResultsView | { state: "error" };
   try {
-    view = disclosureResultsView(await getDisclosureResults(serviceDb(), accountId));
+    view = disclosureResultsView(await getDisclosureResults(db, accountId));
   } catch (e) {
     console.error(`voice: disclosure results read failed for account ${accountId}: ${loggableError(e)}`);
     view = { state: "error" };
   }
-  return <DisclosureResultsView view={view} tr={tr} accountId={accountId} />;
+  return <DisclosureResultsView view={view} tr={tr} setting={setting} retryHref={retryHref} />;
 }

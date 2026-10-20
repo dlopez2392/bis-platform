@@ -51,7 +51,7 @@ const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "r
  * this component only through `options`, never recomputed here.
  */
 export type DisclosureCopy = {
-  locale: string;
+  locale: "en" | "es";
   legend: string;
   nextCall: string;
   options: Array<{ value: "off" | "trial" | "on"; label: string; hint: string }>;
@@ -313,8 +313,8 @@ export function VoiceProfileForm({
               the bare word — the hint is its own sibling `<p>`, tied by `aria-describedby`, so a screen
               reader hears "Off"/"Trial"/"On" as the radio's accessible name and the hint as its
               description (e2e's exact role names, `{ name: "On", exact: true }`, depend on this). */}
-          <div className="space-y-2 border-t border-border pt-4">
-            <fieldset role="radiogroup" className="space-y-3" lang={disclosureCopy.locale}>
+          <div className="space-y-2 border-t border-border pt-4" lang={disclosureCopy.locale}>
+            <fieldset role="radiogroup" className="space-y-3">
               <legend className="text-sm font-medium">{disclosureCopy.legend}</legend>
               {disclosureCopy.options.map((o) => {
                 const hintId = `disclosure-hint-${o.value}`;
@@ -327,6 +327,7 @@ export function VoiceProfileForm({
                         value={o.value}
                         defaultChecked={p.disclosure === o.value}
                         aria-describedby={hintId}
+                        className="size-4 shrink-0 accent-[var(--accent)]"
                       />
                       {o.label}
                     </label>

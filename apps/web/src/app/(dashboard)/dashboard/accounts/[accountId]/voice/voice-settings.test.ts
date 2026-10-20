@@ -747,6 +747,23 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
     const labelMatch = /<label[^>]*>\s*<input[^>]*name="disclosure"[^>]*value="off"[^>]*\/?>\s*([^<]*)<\/label>/.exec(html);
     expect(labelMatch?.[1]?.trim()).toBe(m["voice.disclosure.off"]);
   });
+
+  it("each radio paints in the accent, as choice-tiles.tsx does (fix round; mutation: drop the class -> FAILS)", () => {
+    const radios = [...render().matchAll(/<input[^>]*name="disclosure"[^>]*>/g)].map((mm) => mm[0]);
+    expect(radios.length).toBe(3);
+    for (const r of radios) expect(r).toContain('class="size-4 shrink-0 accent-[var(--accent)]"');
+  });
+
+  it("lang covers the next-call line too, not only the fieldset (fix round; mutation: lang back on the fieldset -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+      disclosureCopy: { ...EN_DISCLOSURE_COPY, locale: "es", nextCall: m["voice.disclosure.nextCall.es"] },
+    }));
+    // The element carrying lang="es" must CONTAIN the next-call line: the wrapper div, opened before
+    // the fieldset and closed after the line.
+    expect(html).toMatch(new RegExp(`<div[^>]*lang="es"[^>]*>\\s*<fieldset[\\s\\S]*${m["voice.disclosure.nextCall.es"]}</p></div>`));
+    expect(html).not.toMatch(/<fieldset[^>]*lang=/);
+  });
 });
 
 

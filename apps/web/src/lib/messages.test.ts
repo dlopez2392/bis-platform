@@ -1255,6 +1255,8 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
     "voice.disclosure.results.notCountedOne": [],
     "voice.disclosure.results.empty": [],
     "voice.disclosure.results.emptyAction": [],
+    "voice.disclosure.results.emptyIdle": [],
+    "voice.disclosure.results.emptyIdleAction": [],
     "voice.disclosure.results.error": [],
     "concierge.aiLabel": ["persona"],
     "concierge.aiIntro": ["persona"],
@@ -1297,6 +1299,21 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
       "{count} calls not counted (spam, or outside the trial)", "{count} llamadas no contadas (spam, o fuera de la prueba)"]);
     expect([m["voice.disclosure.results.notCountedOne"], m["voice.disclosure.results.notCountedOne.es"]]).toEqual([
       "1 call not counted (spam, or outside the trial)", "1 llamada no contada (spam, o fuera de la prueba)"]);
+    // Fix round: the off hint never genders the persona (a persona may be male).
+    expect([m["voice.disclosure.offHint"], m["voice.disclosure.offHint.es"]]).toEqual([
+      "{persona} says it's an AI only when someone asks.",
+      "{persona} dice que es una IA solo cuando se lo preguntan."]);
+    // Fix round: the empty card says what fits the STORED setting — on Trial, that calls are counted as
+    // they end; on Off or On, what appears here and the one action that causes it. Usted.
+    expect([m["voice.disclosure.results.empty"], m["voice.disclosure.results.empty.es"]]).toEqual([
+      "No calls since the trial started.", "No hay llamadas desde que empezó la prueba."]);
+    expect([m["voice.disclosure.results.emptyAction"], m["voice.disclosure.results.emptyAction.es"]]).toEqual([
+      "Each Trial call is counted here once it ends.", "Cada llamada de Prueba se cuenta aquí cuando termina."]);
+    expect([m["voice.disclosure.results.emptyIdle"], m["voice.disclosure.results.emptyIdle.es"]]).toEqual([
+      "Once a trial runs, how calls went with and without saying it's an AI shows here.",
+      "Cuando haga una prueba, aquí verá cómo fueron las llamadas al decir que es una IA y al no decirlo."]);
+    expect([m["voice.disclosure.results.emptyIdleAction"], m["voice.disclosure.results.emptyIdleAction.es"]]).toEqual([
+      "Choose Trial above and save.", "Elija Prueba arriba y guarde."]);
     expect([m["concierge.aiLabel"], m["concierge.aiLabel.es"]]).toEqual([
       "{persona} · AI assistant", "{persona} · asistente de IA"]);
     expect([m["concierge.aiIntro"], m["concierge.aiIntro.es"]]).toEqual([

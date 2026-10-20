@@ -9,7 +9,7 @@ export type DisclosureColumnView = {
   counted: number; bookedPct: number | null; hungUpPct: number | null; askedPersonPct: number | null;
 };
 export type DisclosureResultsView =
-  | { state: "empty" }
+  | { state: "empty"; notCounted: number }
   | { state: "loaded"; said: DisclosureColumnView; didnt: DisclosureColumnView; notEnough: boolean; notCounted: number };
 
 const pct = (part: number, of: number): number | null => (of === 0 ? null : Math.round((100 * part) / of));
@@ -24,7 +24,7 @@ function column(h: DisclosureHalf): DisclosureColumnView {
 }
 
 export function disclosureResultsView(r: DisclosureResults): DisclosureResultsView {
-  if (r.said.counted === 0 && r.didnt.counted === 0) return { state: "empty" };
+  if (r.said.counted === 0 && r.didnt.counted === 0) return { state: "empty", notCounted: r.notCounted };
   return {
     state: "loaded",
     said: column(r.said), didnt: column(r.didnt),
