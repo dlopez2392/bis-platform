@@ -8,6 +8,8 @@ export type PhoneNumberRow = {
   id: string; account_id: string; e164: string;
   telnyx_id: string | null; status: PhoneNumberStatus;
 };
+/** 0093. Off / Trial / On (spec S-47a §4): the TypeScript twin of voice_profiles_disclosure_check. */
+export type DisclosureSetting = "off" | "trial" | "on";
 export type VoiceProfileRow = {
   id: string; account_id: string; persona_name: string;
   greeting_en: string; greeting_es: string; facts: string; services: string;
@@ -23,6 +25,9 @@ export type VoiceProfileRow = {
   /** 0058. Send this account's callers straight to `accounts.transfer_phone`
    *  instead of to the receptionist. Written ONLY by `setForwardCalls`. */
   forward_calls: boolean;
+  /** 0093. Whether Sofía says she is an AI right after the greeting. Agency-written through serviceDb()
+   *  by saveVoiceProfileAction; authenticated has SELECT only (0020). */
+  disclosure: DisclosureSetting;
 };
 /**
  * `forward_calls` is omitted on purpose (0058): `setForwardCalls` is its only
@@ -67,7 +72,7 @@ export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
   "textback_body_es, textback_body_es_basis, " +
-  "public_id, concierge_enabled, concierge_form_id, forward_calls";
+  "public_id, concierge_enabled, concierge_form_id, forward_calls, disclosure";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,
@@ -291,15 +296,28 @@ export async function setForwardCalls(
  *
  * This comment is the only guard on that decision — no test can express
  * "before the migration" — so it has to be accurate.
+ *
+ * `disclosure` (0093, S-47a, D5) writes `disclosed` and `disclosure_setting`
+ * together, and only when the profile was Trial or On: one object, so the two
+ * can never be written apart (0093's `calls_disclosure_pair_check` refuses a
+ * row that tries). Named only when given, the same deployment-ordering reason
+ * as the token: an Off account's insert is byte-identical to before, and 0093
+ * goes to both projects before the build that sends it.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
-  input: { phoneNumberId: string; callerE164: string | null; handoffToken?: string },
+  input: {
+    phoneNumberId: string; callerE164: string | null; handoffToken?: string;
+    disclosure?: { disclosed: boolean; setting: "trial" | "on" };
+  },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
     .insert({
       account_id: accountId, phone_number_id: input.phoneNumberId, caller_e164: input.callerE164,
       ...(input.handoffToken === undefined ? {} : { handoff_token: input.handoffToken }),
+      ...(input.disclosure === undefined
+        ? {}
+        : { disclosed: input.disclosure.disclosed, disclosure_setting: input.disclosure.setting }),
     })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);

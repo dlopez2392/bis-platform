@@ -88,7 +88,7 @@ const PROFILE: VoiceProfileRow = {
   languages: "both", booking_enabled: true, after_hours: "hours_then_message",
   enabled: true, textback_enabled: true, textback_body: "",
   textback_body_es: null, textback_body_es_basis: null,
-  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
 };
 
 async function render() {

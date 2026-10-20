@@ -35,6 +35,14 @@ vi.mock("next/server", async (importOriginal) => {
   return { ...actual, after: (cb: () => unknown) => afterMock(cb) };
 });
 
+// --- node:crypto: partial (A4). Only `randomInt`, S-47a's Trial coin, is
+// replaced; the rest of the module (the webhook path's own crypto) is real.
+const randomIntMock = vi.hoisted(() => vi.fn<(...a: unknown[]) => number>(() => 1));
+vi.mock("node:crypto", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:crypto")>()),
+  randomInt: (...a: unknown[]) => randomIntMock(...a),
+}));
+
 // --- @bis/db ----------------------------------------------------------------
 const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
@@ -166,6 +174,7 @@ beforeEach(() => {
   delete process.env.VOICE_HANDOFF_SECRET;
   delete process.env.VOICE_HANDOFF_ENFORCE;
   serviceDbSpy.mockReset();
+  randomIntMock.mockReset().mockReturnValue(1);
 
   unwrapMock.mockReset();
   afterMock.mockReset();
@@ -855,6 +864,82 @@ describe("POST /api/voice/incoming — the TeXML-route signature", () => {
       expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
         expect.objectContaining({ callerE164: "+19565550777" }));
     });
+  });
+});
+
+describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
+  const acceptedInstructions = () => {
+    const [, init] = fetchMock.mock.calls[0]!;
+    return (JSON.parse(String((init as { body: string }).body)) as { instructions: string }).instructions;
+  };
+  const DISCLOSED = "IDENTITY — You have already told the caller that you are Sofía, an AI assistant.";
+  const OLD = "IDENTITY — Do not volunteer that you are automated";
+
+  it("off (no setting on the row): no stamp named and the old identity line — the existing shape assertion still holds", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(acceptedInstructions()).toContain(OLD);
+    expect(randomIntMock).not.toHaveBeenCalled();
+  });
+
+  it("on: stamped true as On and the disclosed identity line (mutation: pass disclosed: false into the prompt → FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "on" });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" } });
+    expect(acceptedInstructions()).toContain(DISCLOSED);
+  });
+
+  it("trial: the coin's answer is both what is stamped and what the prompt says (mutation: stamp disclosed true regardless → the 0 case FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "trial" });
+    randomIntMock.mockReturnValue(0);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(randomIntMock).toHaveBeenCalledWith(2);
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" } });
+    expect(acceptedInstructions()).toContain(OLD);
+  });
+
+  // The coin is drawn AFTER every gate (step 9c), so a call the gates decline never draws it and never gets
+  // a row. Both cases use a Trial profile, the one setting that draws. Named mutation for both: move
+  // Step 9c above Step 8 → both FAIL (randomIntMock is then called once).
+  it("a Trial call declined by the per-account cap draws no coin and writes no row", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "trial" });
+    countCallsSinceMock.mockResolvedValue(999);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "per-account" });
+    expect(randomIntMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
+  });
+
+  it("a Trial call from a repeat silent caller is declined repeat-spam, draws no coin and writes no row", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "trial" });
+    countCallerHistorySinceMock.mockResolvedValue({ spamCalls: 3, otherCalls: 0 });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "repeat-spam" });
+    expect(randomIntMock).not.toHaveBeenCalled();
+    expect(startCallRowMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed stamp: the call is still answered as decided, and the log carries ids and the error class only (mutation: add callerNumber to the log → FAILS)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "on" });
+    startCallRowMock.mockRejectedValue(new Error("startCallRow failed: boom"));
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(afterMock).toHaveBeenCalledOnce();
+    expect(acceptedInstructions()).toContain(DISCLOSED);
+    const line = logSpy.mock.calls.find((c) => String(c[1]).startsWith("startCallRow failed"));
+    expect(line, "the failure is logged").toBeDefined();
+    expect(Object.keys(line![2] as object).sort()).toEqual(["accountId", "callId", "error"]);
+    expect(JSON.stringify(line)).not.toContain("+19562921696");
+    logSpy.mockRestore();
   });
 });
 

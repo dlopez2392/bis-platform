@@ -499,6 +499,19 @@ describe("runCallLifecycle — Important #4 ①: greeting payload", () => {
     expect(String(greetingCall![0])).toContain("Hi, thanks for calling Rio Roofing.");
   });
 
+  it("disclosure on: the greeting timer sends the greeting and then the AI sentence (S-47a; mutation: pass disclose: false to openingGreeting → FAILS)", async () => {
+    vi.useFakeTimers();
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, disclosure: "on" });
+    const { ws } = await startLifecycle();
+    ws.send = vi.fn();
+    ws.emit("open");
+    await vi.advanceTimersByTimeAsync(900);
+    const calls = (ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    const greetingCall = calls.find((c) => String(c[0]).includes("Greet the caller with exactly:"));
+    expect(String(greetingCall![0])).toContain(
+      "Hi, thanks for calling Rio Roofing. I'm Sofía, an AI assistant. This call is transcribed so the team can follow up.");
+  });
+
   it("languages: es → the greeting timer sends greeting_es", async () => {
     vi.useFakeTimers();
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, languages: "es" });
