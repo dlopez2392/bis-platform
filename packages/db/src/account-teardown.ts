@@ -23,6 +23,8 @@ export const ACCOUNT_OWNED_TABLES = [
   "site_traffic_breakdown", "site_traffic_daily", "sites",
   // Item 8b-1 (0088): AI suggestions, before calls (call_id and contact_id cascade too; spec 4.1 lists it).
   "proposals",
+  // Item 8c (0091): Sofia's live acts, before calls, concierge_conversations and contacts (all three cascade too).
+  "ai_acts",
   "calls", "bookings", "calendars", "events",
   "concierge_conversations", "form_submissions", "forms",
   "messages", "conversations",
