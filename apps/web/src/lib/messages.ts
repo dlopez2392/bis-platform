@@ -2044,6 +2044,10 @@ export const m = {
   // constraints name, alongside the spoken phone sentence (D3, usted).
   "concierge.aiLabel": "{persona} · AI assistant",
   "concierge.aiLabel.es": "{persona} · asistente de IA",
+  // concierge.aiIntro: the chat's first message on Trial or On, spoken in the
+  // chat's own tú register like aiLabel above.
+  "concierge.aiIntro": "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
+  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
 
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this

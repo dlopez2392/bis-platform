@@ -1257,6 +1257,7 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
     "voice.disclosure.results.emptyAction": [],
     "voice.disclosure.results.error": [],
     "concierge.aiLabel": ["persona"],
+    "concierge.aiIntro": ["persona"],
   };
   const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
 
@@ -1298,6 +1299,9 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
       "1 call not counted (spam, or outside the trial)", "1 llamada no contada (spam, o fuera de la prueba)"]);
     expect([m["concierge.aiLabel"], m["concierge.aiLabel.es"]]).toEqual([
       "{persona} · AI assistant", "{persona} · asistente de IA"]);
+    expect([m["concierge.aiIntro"], m["concierge.aiIntro.es"]]).toEqual([
+      "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
+      "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento."]);
   });
 
   it("the plural pair differs only by number, the contacts.count/contacts.countOne shape (mutation: template the singular with {count} -> FAILS)", () => {
@@ -1319,7 +1323,7 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
   // Every key here except concierge.aiLabel is operator copy (the Voice page's own settings card and its
   // results card), so Spanish is usted. concierge.aiLabel is the website chat's own register (tú), the one
   // named exception alongside the spoken phone sentence (D3, usted) — global constraints, Copy rules.
-  const TU_KEYS = new Set<string>(["concierge.aiLabel"]);
+  const TU_KEYS = new Set<string>(["concierge.aiLabel", "concierge.aiIntro"]);
 
   it("Spanish operator copy is usted, never tú (mutation: 'tu' into one operator .es line -> FAILS)", () => {
     const cat = m as Record<string, string>;
