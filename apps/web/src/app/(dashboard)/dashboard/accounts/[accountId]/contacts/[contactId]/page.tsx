@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { notFound } from "next/navigation";
-import { getContact, getInboundSettings, readReplyToken, serviceDb } from "@bis/db";
+import { getContact, getInboundSettings, readReplyToken, serviceDb, type AuthorKind } from "@bis/db";
 import { contactDisplayName } from "@/lib/format";
 import { dbForRequest } from "@/lib/db";
 import { requireAccountAccess } from "@/lib/auth";
@@ -14,6 +14,7 @@ import { RecordCard, type RecordCardState } from "@/components/record/record-car
 import { RECORD_CARDS, columnRuns, type RecordCardId } from "@/lib/record/record-cards";
 import { makeTr } from "@/lib/record/copy";
 import { factsView } from "@/lib/record/record-facts";
+import { authorLabel } from "@/lib/record/author-mark";
 import { nextUpView } from "@/lib/record/next-up";
 import { headerActions, headerActionLabels, canTextFrom, firstMapUrl } from "@/lib/record/header-actions";
 import {
@@ -116,7 +117,13 @@ export default async function ContactDetailPage({
     }),
     loadSummary(db, accountId, contactId),
     loadNextUp(db, accountId, contactId, now),
-    loadTimeline(db, ledger, accountId, contactId, before),
+    // item 8c: `canDelete` is the Owner's right to remove a customer Sofía added (0066); `extraNames`
+    // carries the record's own author id (when a person made it) into the SAME one names read, for the
+    // "Added by" fact below — never a second read.
+    loadTimeline(db, ledger, accountId, contactId, before, {
+      canDelete: access.canManage,
+      extraNames: contact.author_kind === "person" && contact.author_id ? [contact.author_id] : [],
+    }),
     loadDeals(db, accountId, contactId),
     loadHeaderPlaces(db, accountId, contactId),
     // S-06 part 2 (spec §1, plan G15 as amended 2026-10-17): the Forwarding address. getContact above, on
@@ -195,6 +202,8 @@ export default async function ContactDetailPage({
       author: { viewerId: access.userId, names: timeline.names, personaName: timeline.personaName, tr },
       // item 8b-2 (final review I-2): an accepted stage move names both stages, read by loadTimeline.
       suggestionStages: timeline.suggestionStages,
+      // item 8c (plan Task 6): the page's acts' facts, so each act's row knows whether its Undo is still safe.
+      actFacts: timeline.actFacts,
     }))
     : null;
   // Text and Email link to the composer inside the timeline card; when that card failed there is no
@@ -207,8 +216,22 @@ export default async function ContactDetailPage({
     directionsUrl: places ? firstMapUrl(places.places, contactId, places.groups) : null,
   }), tr, name);
 
+  // item 8c (plan Task 6): "Added by", built from the record's own author columns (null on a row written
+  // before the deploy, which omits the fact rather than guessing). The name, when the author is a person,
+  // reaches the page's ONE names read via `extraNames` above, so it is never "Someone on the team" for a
+  // viewer who could otherwise see it.
+  const author = contact.author_kind
+    ? {
+      kind: contact.author_kind as AuthorKind,
+      label: authorLabel(contact.author_kind as AuthorKind, contact.author_id ?? null, {
+        tr, viewerId: access.userId,
+        names: timeline.status === "ready" ? timeline.names : {},
+        personaName: timeline.status === "ready" ? timeline.personaName : null,
+      }),
+    }
+    : null;
   const facts = summary.status === "ready"
-    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts }, { zone: zone.zone, now, tr }))
+    ? viewOf("summary", () => factsView({ createdAt: contact.created_at, facts: summary.facts, author }, { zone: zone.zone, now, tr }))
     : null;
   const upNext = nextUp.status === "ready" ? viewOf("next up", () => nextUpView(nextUp.data, { zone: zone.zone, now, tr })) : null;
   // "Waiting for you" (item 8b-2, spec 5.3): built in its own guard, so a row that cannot be shown is the

@@ -1,4 +1,4 @@
-import type { ContactFacts } from "@bis/db";
+import type { AuthorKind, ContactFacts } from "@bis/db";
 import { partsInZone } from "@/lib/booking/slots";
 import { formatCurrency, formatDateInZone } from "@/lib/format";
 import type { Locale } from "@/lib/i18n/locale";
@@ -46,12 +46,22 @@ export type FactsView = { line: string[]; missing: string | null; allFailed: boo
  * named under the line ("Couldn't count …"), so a missing fact never reads as a zero (DESIGN.md,
  * the weekly report: omitted, never zeroed).
  */
-export function factsView(input: { createdAt: string; facts: ContactFacts }, ctx: { zone: string; now: Date; tr: Tr }): FactsView {
+export function factsView(
+  input: {
+    createdAt: string; facts: ContactFacts;
+    /** item 8c: who created the record, already resolved to the mark's own words (`authorLabel`); null
+     *  for a row written before the deploy (the column itself is null), so the fact is simply absent
+     *  rather than wrong (DESIGN.md: omitted, never guessed). */
+    author?: { kind: AuthorKind; label: string } | null;
+  },
+  ctx: { zone: string; now: Date; tr: Tr },
+): FactsView {
   const { tr, zone, now } = ctx;
   const line: string[] = [];
   const missing: string[] = [];
   const month = sinceMonth(input.createdAt, zone, tr.locale);
   if (month) line.push(tr.text("record.facts.since", { month }));
+  if (input.author) line.push(tr.text("record.facts.addedBy", { who: input.author.label }));
 
   const booked = input.facts.bookingsMade;
   if (!booked.ok) missing.push(tr.text("record.facts.what.bookings"));

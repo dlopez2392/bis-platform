@@ -73,7 +73,13 @@ export type TimelineLoad =
  */
 export async function loadTimeline(
   db: SupabaseClient, ledger: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
-  opts: { canDelete?: boolean } = {},
+  opts: {
+    canDelete?: boolean;
+    /** item 8c, Task 6: an id outside the page's own rows that still needs a name — the record's own
+     *  "Added by" fact, when its author is a named person. Merged into the SAME one names read, never a
+     *  second read. */
+    extraNames?: readonly string[];
+  } = {},
 ): Promise<TimelineLoad> {
   let page: TimelinePage;
   try {
@@ -101,6 +107,7 @@ export async function loadTimeline(
       const ids = new Set(personIdsOf(page.items));
       for (const a of acts) if (a.undoneBy) ids.add(a.undoneBy);
       for (const editor of Object.values(actFacts?.editors ?? {})) if (editor) ids.add(editor);
+      for (const id of opts.extraNames ?? []) ids.add(id);
       const names = await listPeopleNames(db, [...ids]).catch((e: unknown) => {
         log("activity names", accountId, e);
         return {} as Record<string, string>;

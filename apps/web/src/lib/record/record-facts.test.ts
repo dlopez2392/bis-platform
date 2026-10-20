@@ -68,6 +68,25 @@ describe("the summary's fact line (spec §9.2)", () => {
   });
 });
 
+describe("item 8c: the 'Added by' fact", () => {
+  it("follows 'since', built from the author's own label (mutation: drop the push -> FAILS)", () => {
+    const v = factsView(
+      { createdAt: "2026-01-01T05:30:00Z", facts: facts(), author: { kind: "ai", label: "Sofía · AI" } },
+      { zone: ZONE, now: NOW, tr: makeTr("en") },
+    );
+    expect(v.line).toEqual(["On your list since Dec 2025", "Added by Sofía · AI"]);
+    const vEs = factsView(
+      { createdAt: "2026-01-01T05:30:00Z", facts: facts(), author: { kind: "ai", label: "Sofía · IA" } },
+      { zone: ZONE, now: NOW, tr: makeTr("es") },
+    );
+    expect(vEs.line).toEqual(["En su lista desde dic 2025", "Agregado por Sofía · IA"]);
+  });
+
+  it("a null author (a row written before the deploy) adds no fact (mutation: push it anyway -> FAILS)", () => {
+    expect(view().line).toEqual(["On your list since Dec 2025"]);
+  });
+});
+
 describe("Last talked on a website chat (S-06 part 3, spec §7)", () => {
   it("says 'website chat' / 'chat del sitio web' (mutation: word a chat as a text -> FAILS)", () => {
     expect(view({ lastTalked: ok({ at: "2026-10-12T13:00:00Z", channel: "chat" }) }).line[1]).toBe("Last talked today (website chat)");

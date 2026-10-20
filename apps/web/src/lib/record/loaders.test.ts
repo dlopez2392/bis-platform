@@ -365,4 +365,14 @@ describe("record loaders: Sofía's acts (item 8c)", () => {
     expect(listPeopleNamesMock.mock.calls[0]![0]).toBe(db);
     expect([...listPeopleNamesMock.mock.calls[0]![1]].sort()).toEqual(["user_ana", "user_dan", "user_eli"]);
   });
+
+  it("Task 6: an extra id (the record's own author) reaches the SAME ONE names read, deduped against the page's own ids (mutation: drop extraNames -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({
+      items: [{ kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-01T00:00:00Z" } }],
+      older: null, failed: [], sources: SOURCES,
+    });
+    await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio", "user_dan"] });
+    expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
+    expect([...listPeopleNamesMock.mock.calls[0]![1]].sort()).toEqual(["user_dan", "user_rio"]);
+  });
 });
