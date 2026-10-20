@@ -71,3 +71,32 @@ describe("NextUpBody across a household (S-03 part 2b, C9)", () => {
     expect(html).not.toContain('lang=""');
   });
 });
+
+/**
+ * "Waiting for you" (item 8b-2, spec 5.3) sits ABOVE What's next's own rows. NextUpBody takes it as a
+ * ready-made node so the drawer and the group page, which pass none, render exactly as before (P20, owner
+ * decision 2026-10-19: the drawer gains no read and no rendering change).
+ */
+describe("NextUpBody: the Waiting slot (item 8b-2)", () => {
+  const WAITING = createElement("section", { "data-waiting-suggestions": "" }, "W");
+  const rows = { undated: null, rows: [{ kind: "booking" as const, id: "b", label: "Appointment · Fri, Oct 16 · 10:00 AM", who: null }] };
+  it("renders the section above the rows, and above the empty sentence when there are none (mutation: render it after the rows -> FAILS)", () => {
+    const h = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: rows, waiting: WAITING }));
+    expect(h.indexOf("data-waiting-suggestions")).toBeGreaterThanOrEqual(0);
+    expect(h.indexOf("data-waiting-suggestions")).toBeLessThan(h.indexOf('data-next-up-row="booking"'));
+    const empty = renderToStaticMarkup(createElement(NextUpBody, { ...props, view: { rows: [], undated: null }, waiting: WAITING }));
+    expect(empty.indexOf("data-waiting-suggestions")).toBeLessThan(empty.indexOf("Nothing coming up."));
+  });
+  it("no waiting prop renders exactly what it did before", () => {
+    expect(renderToStaticMarkup(createElement(NextUpBody, { ...props, view: rows }))).not.toContain("data-waiting");
+  });
+  it("the drawer's and the group page's NextUpBody calls pass no waiting (P20; mutation: pass it in the drawer -> FAILS)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    for (const file of [join(__dirname, "../contact-drawer.tsx"), join(__dirname, "../../groups/[groupId]/page.tsx")]) {
+      const calls = readFileSync(file, "utf8").match(/<NextUpBody\b[^>]*\/>/g) ?? [];
+      expect(calls.length).toBeGreaterThan(0);
+      for (const c of calls) expect(c).not.toMatch(/\bwaiting=/);
+    }
+  });
+});

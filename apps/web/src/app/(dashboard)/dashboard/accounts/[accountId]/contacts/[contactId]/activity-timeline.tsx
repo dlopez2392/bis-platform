@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
+import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
 import { formatDateInZone } from "@/lib/format";
@@ -278,5 +279,24 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
           {row.note ? <p lang={row.note.lang} data-webchat-unconfirmed="" className="text-xs text-muted-foreground">{row.note.text}</p> : null}
         </TimelineItem>
       );
+    // item 8b-2 (spec 5.4; design review C1): an accepted suggestion, its words drawn from their parts.
+    case "suggestion":
+      return <TimelineItem {...head} {...suggestionWords(row)} icon={CheckSquare} />;
+    default:
+      return unknownKind(e);
   }
+}
+
+/** An accepted suggestion's verb and original as the card draws them (final review M-5). */
+function suggestionWords(row: TimelineRow) {
+  return {
+    verb: row.verbParts ? <SuggestionParts parts={row.verbParts} /> : row.verb,
+    detail: row.detailParts ? <SuggestionParts parts={row.detailParts} /> : row.detail,
+  };
+}
+
+/** The switch is exhaustive: a new TimelineEntry kind is a type error here, never an empty row. */
+function unknownKind(e: never): null {
+  void e;
+  return null;
 }

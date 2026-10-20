@@ -167,6 +167,8 @@ export {
   insertProposal, listProposalsForCall, listPendingProposals, listPendingProposalsForAgency, getProposal,
   listPendingSiblings, decideProposal, revertProposalDecision, setAppliedRef, expireProposals,
   undoProposalDecision, expireAfterUndoCollision, restoreSiblings,
+  // Item 8b-2: the record's "Waiting for you" and the timeline's accepted suggestions.
+  listPendingProposalsForContact, listContactAcceptedSuggestions,
 } from "./proposals";
 export * from "./voice-web-sessions";
 export * from "./concierge";
@@ -367,6 +369,7 @@ export {
   type ContactNextUp, type NextUpTask,
   type TimelineSource, type TimelineNote, type TimelineTask, type TimelineDeal, type TimelineSubmission,
   type TimelineMessage, type TimelineChat, type TimelineEntry, type TimelinePage, type TimelineCursor, type ContactBookingRow,
+  type TimelineSuggestion,
   type ContactMessageRow,
   // S-03 part 2b: the household and business page reads its members as one set.
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, GROUP_ACTIVITY_SCAN,

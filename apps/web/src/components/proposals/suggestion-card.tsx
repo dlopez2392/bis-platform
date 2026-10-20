@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 // AiAuthorMark's chip, worded by the view so it reads in either language.
 import { AI_MARK_CLASS } from "@/components/ai-mark";
@@ -20,8 +21,9 @@ export const SUGGESTION_CARD =
   "flex min-w-0 flex-col gap-2.5 rounded-[var(--radius-card)] border border-border bg-card p-5 text-card-foreground glass";
 /** DESIGN.md's Label role. */
 export const MONO_LABEL = "font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground";
-/** The status dot per state: the old proposals block's own treatments (rule 3: always beside its word). */
-const DOT: Record<SuggestionView["status"], string> = {
+/** The status dot per state: the old proposals block's own treatments (rule 3: always beside its word).
+ *  Exported for the record's flat row (suggestion-row.tsx), which shows the same status. */
+export const STATUS_DOT: Record<SuggestionView["status"], string> = {
   pending: "bg-primary",
   accepted: "bg-success",
   edited: "bg-success",
@@ -41,12 +43,20 @@ export function SuggestionCard({ view, ...actions }: { view: SuggestionView } & 
         {view.labels.because}{" "}
         <q lang={view.evidenceLang} className="text-foreground">{view.evidence}</q>
       </p>
+      {/* "See it in the transcript · 2:14" (item 8b-2, spec 5.5): a ghost text link under the evidence, so
+          the quote can be read in its place before anyone accepts. Tap-sized on a phone. */}
+      {view.transcript ? (
+        <Link data-transcript-link href={view.transcript.href}
+          className="inline-flex min-h-11 items-center self-start rounded-[var(--radius-ctl)] text-xs text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)] md:min-h-8">
+          {view.transcript.label}
+        </Link>
+      ) : null}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span data-ai-mark className={AI_MARK_CLASS}>{view.personaMark}</span>
         {/* Focus lands here once this card's decision is shown (design review minor 5), never on <body>. */}
         <p data-status-line tabIndex={-1}
           className="inline-flex items-center gap-1.5 rounded-[var(--radius-ctl)] text-xs text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-[var(--ring-glow)]">
-          <span data-status-dot className={cn("size-[7px] shrink-0 rounded-full", DOT[view.status])} aria-hidden />
+          <span data-status-dot className={cn("size-[7px] shrink-0 rounded-full", STATUS_DOT[view.status])} aria-hidden />
           <span data-status-word>{view.statusWord}</span>
         </p>
       </div>

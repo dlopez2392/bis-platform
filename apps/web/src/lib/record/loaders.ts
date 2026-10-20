@@ -1,11 +1,14 @@
 import {
   contactFacts, contactNextUp, holdOpenTaskIds, listContactOpportunities, listContactPlaces, listContactTags,
-  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, TIMELINE_SOURCES,
+  listCustomFields, listContactTimelinePage, listPeopleNames, getVoiceProfile, listPendingProposalsForContact,
   type ContactFacts, type ContactNextUp, type ContactPlaces, type CustomFieldDef, type SupabaseClient,
   type TimelinePage, type TimelineCursor,
 } from "@bis/db";
+import type { Proposal } from "@bis/db/proposal-rules";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { loggableError } from "@/lib/loggable-error";
+import type { DescribeCtx } from "@/lib/proposals/kinds/types";
+import { readSuggestionStages, type StageContext } from "@/lib/proposals/view-reads";
 import { personIdsOf } from "./author-mark";
 
 /**
@@ -39,14 +42,21 @@ export async function loadNextUp(db: SupabaseClient, accountId: string, contactI
 }
 
 export type TimelineLoad =
-  | { status: "ready"; page: TimelinePage; holdOpen: string[]; names: Record<string, string>; personaName: string | null }
+  | {
+    status: "ready"; page: TimelinePage; holdOpen: string[]; names: Record<string, string>; personaName: string | null;
+    /** The stage names the page's accepted stage suggestions need (item 8b-2); `{}` when none, or unreadable. */
+    suggestionStages: DescribeCtx["stages"];
+  }
   | { status: "error" };
 
 /**
  * The timeline card's load (S-03 1b, spec §7, C3, C5): one merged server page; a source that failed
- * is named in `page.failed` and the rest still render; only when EVERY source failed is it the card's
- * error. Then three soft reads, none of which can cost the card: the hold check (fails CLOSED), the
- * names on person marks (fails to "Someone on the team"), the receptionist's persona (fails to "Sofía").
+ * is named in `page.failed` and the rest still render; only when EVERY source READ failed is it the
+ * card's error. Then four soft reads, none of which can cost the card: the hold check (fails CLOSED), the
+ * names on person marks (fails to "Someone on the team"), the receptionist's persona (fails to "Sofía"),
+ * and the stage names of the accepted stage suggestions (item 8b-2; fails to the registry's honest
+ * sentence, which names no stage). The record page is the ONE timeline that reads the suggestions source
+ * (owner decision 1, 2026-10-19): `loadRecent` below and the group loader never pass it.
  */
 export async function loadTimeline(
   db: SupabaseClient, ledger: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
@@ -54,15 +64,19 @@ export async function loadTimeline(
   let page: TimelinePage;
   try {
     page = await listContactTimelinePage(db, accountId, contactId, before, {
+      suggestions: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
     });
   } catch (e) {
     log("activity", accountId, e);
     return { status: "error" };
   }
-  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
+  // which reads nothing, an empty timeline rather than the error state.
+  if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const tasks = page.items.flatMap((i) => (i.kind === "task" ? [i.task] : []));
-  const [holdOpen, names, personaName] = await Promise.all([
+  const accepted: Proposal[] = page.items.flatMap((i) => (i.kind === "suggestion" ? [i.suggestion.proposal] : []));
+  const [holdOpen, names, personaName, suggestionStages] = await Promise.all([
     // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
     // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
     holdOpenTaskIds(db, accountId, tasks, ledger).catch((e: unknown) => {
@@ -77,8 +91,44 @@ export async function loadTimeline(
       log("activity persona", accountId, e);
       return null;
     }),
+    // Account-scoped and bounded (readSuggestionStages); with no stage suggestion on the page it reads nothing.
+    readSuggestionStages(db, accountId, accepted).then((c) => c.stages).catch((e: unknown) => {
+      log("activity stage names", accountId, e);
+      return {} as DescribeCtx["stages"];
+    }),
   ]);
-  return { status: "ready", page, holdOpen, names, personaName };
+  return { status: "ready", page, holdOpen, names, personaName, suggestionStages };
+}
+
+export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext; personaName: string | null } | { status: "error" };
+
+/**
+ * What's next's "Waiting for you" (item 8b-2, spec 5.3): this customer's pending suggestions, at most
+ * five, newest first, on the page's REQUEST client (RLS decides, P14), then the stage names and choices a
+ * stage suggestion needs, read only when one is present. Either read failing is the section's own error
+ * state, never the card's and never a throw. The persona is this section's OWN soft read, made only when
+ * there is a row to mark (design review minor 1): reusing the timeline's turned Lupe's rows into
+ * "Sofía · AI" whenever the timeline failed. A failed persona read is null, the AI mark's own fallback.
+ */
+export async function loadWaitingSuggestions(
+  db: SupabaseClient, accountId: string, contactId: string, now: Date,
+): Promise<WaitingLoad> {
+  try {
+    const rows = await listPendingProposalsForContact(db, accountId, contactId, now);
+    const [stages, personaName] = await Promise.all([
+      rows.some((r) => r.kind === "opportunity_stage")
+        ? readSuggestionStages(db, accountId, rows)
+        : Promise.resolve<StageContext>({ stages: {}, pipelineStages: [] }),
+      rows.length === 0 ? Promise.resolve(null) : getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
+        log("waiting persona", accountId, e);
+        return null;
+      }),
+    ]);
+    return { status: "ready", rows, stages, personaName };
+  } catch (e) {
+    log("waiting suggestions", accountId, e);
+    return { status: "error" };
+  }
 }
 
 /** The list drawer's Recent: the newest five rows (S-03 part 3 D5). */
@@ -105,7 +155,9 @@ export async function loadRecent(db: SupabaseClient, accountId: string, contactI
     log("recent", accountId, e);
     return { status: "error" };
   }
-  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
+  // which reads nothing, an empty timeline rather than the error state.
+  if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const [names, personaName] = await Promise.all([
     listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
       log("recent names", accountId, e);

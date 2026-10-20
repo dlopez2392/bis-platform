@@ -26,7 +26,9 @@ vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => { or
 
 const READY_FACTS = { bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null }, openDeals: { ok: true, value: { count: 0, amount: null } } };
 const NO_PLACES = { groups: [], places: [], placeCount: 0, equipment: [], equipmentCount: 0 };
-const EMPTY_PAGE = { items: [], older: null, failed: [] };
+/** The sources a mocked page read (item 8b-2: every page names them). */
+const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls"];
+const EMPTY_PAGE = { items: [], older: null, failed: [], sources: SOURCES };
 const dbMocks = {
   getContact: vi.fn(), contactFacts: vi.fn(), contactNextUp: vi.fn(), listContactTimelinePage: vi.fn(), listPeopleNames: vi.fn(),
   getVoiceProfile: vi.fn(), listContactTags: vi.fn(), listContactPlaces: vi.fn(), listContactMessages: vi.fn(), holdOpenTaskIds: vi.fn(),
@@ -183,14 +185,14 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
 
   it("the submission once, never the inbox's form copy beside it: no direct message read (mutation: re-add today's listContactMessages read -> FAILS)", async () => {
     dbMocks.listContactMessages.mockResolvedValue([{ id: "x1", channel: "form", direction: "inbound", body: "Leak", created_at: AT }]);
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING, SUBMISSION], older: null, failed: [] });
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING, SUBMISSION], older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows.map((r: { kind: string }) => r.kind)).toEqual(["booking", "submission"]);
     expect(dbMocks.listContactMessages).not.toHaveBeenCalled();
   });
 
   it("every row is marked, the booking page's booking the customer's; See all opens the record's timeline", async () => {
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: [] });
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows[0].mark).toEqual({ kind: "customer", label: m["provenance.customer"] });
     expect(b.recent.seeAllHref).toBe("/dashboard/accounts/a1/contacts/c1#record-timeline");
@@ -199,7 +201,7 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
 
   it("empty only when nothing failed; a failed source says so and keeps the rows that loaded (rule 5: a failure is not 'nothing')", async () => {
     expect((await body()).recent.emptyText).toBe(m["timeline.empty"]);
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: ["calls"] });
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [BOOKING], older: null, failed: ["calls"], sources: SOURCES });
     const b = await body();
     expect(b.recent.emptyText).toBeNull();
     expect(b.recent.failedText).toBe(m["timeline.someFailed"].replace("{what}", m["timeline.what.calls"]));
@@ -207,7 +209,7 @@ describe("the drawer's summary route: Recent (D5, C6)", () => {
   });
 
   it("zero rows AND a failed source is still not empty: a failure is not 'nothing' even with nothing to show (mutation: emptyText on rows.length === 0 alone -> FAILS)", async () => {
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [], older: null, failed: ["calls"] });
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items: [], older: null, failed: ["calls"], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows).toHaveLength(0);
     expect(b.recent.emptyText).toBeNull();
@@ -336,7 +338,7 @@ describe("what the route sends, the drawer's parser accepts whole", () => {
       { kind: "call", id: "k1", at: AT, contactId: "c1", call: { id: "k1", contact_id: "c1", started_at: AT, outcome: "booked", duration_secs: 180,
         reason: null, summary: "Roof leak, booked.", language: "en" } },
     ];
-    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items, older: null, failed: [] });
+    dbMocks.listContactTimelinePage.mockResolvedValueOnce({ items, older: null, failed: [], sources: SOURCES });
     const b = await body();
     expect(b.recent.rows.map((r: { kind: string }) => r.kind).sort()).toEqual(["booking", "call", "deal", "message", "note", "submission", "task"]);
     const parsed = parseDrawerSummary(b)!;

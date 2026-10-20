@@ -20,7 +20,8 @@ export default function Loading() {
             {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[52px] rounded-none" />)}
           </div>
         </div>
-        <SuggestionSectionSkeleton tr={makeTr("en")} />
+        {/* Grouped, as the loaded tray is (item 8b-2): a group heading's bar over the cards. */}
+        <SuggestionSectionSkeleton tr={makeTr("en")} grouped />
       </div>
     </div>
   );

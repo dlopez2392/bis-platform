@@ -65,6 +65,8 @@ const ROW_ICON: Record<RecentRowView["kind"], typeof StickyNote> = {
   note: StickyNote, task: Square, deal: DollarSign, submission: FileText, message: MessageSquare, booking: CalendarCheck, call: Phone,
   document: Paperclip, documentVersion: Paperclip, documentRemoved: ShieldAlert, documentRequest: Send,
   documentSkip: ListChecks, documentUnskip: ListChecks, documentShared: Link2, documentShareOpened: Download, chat: MessagesSquare,
+  // item 8b-2: the type's exhaustive case only. The drawer's Recent never reads suggestions (owner decision 1, 2026-10-19).
+  suggestion: CheckSquare,
 };
 const GHOST_LINK = cn(buttonVariants({ variant: "ghost", size: "sm" }), "min-h-11 md:min-h-8");
 const LABEL_ROW = "grid grid-cols-[92px_minmax(0,1fr)] items-center gap-2";

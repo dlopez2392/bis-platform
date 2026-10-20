@@ -39,6 +39,11 @@ import { Button } from "@/components/ui/button";
 import { m } from "@/lib/messages";
 import type { ActionResult, DismissResult } from "./actions";
 
+/** A 44px touch target below md, the compact 32px row button from md up —
+ *  the same breakpoint and heights as the assignee picker beside it
+ *  (`INLINE_TRIGGER`, components/assign/assignee-field.tsx). */
+const TOUCH = "min-h-11 md:min-h-8";
+
 export function WorkRowActions({
   source,
   rawId,
@@ -121,7 +126,7 @@ export function WorkRowActions({
 
   if (source === "task") {
     return (
-      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={runComplete}>
+      <Button data-work-row-done type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runComplete}>
         {m["work.done"]}
       </Button>
     );
@@ -129,7 +134,7 @@ export function WorkRowActions({
 
   if (source === "conversation") {
     return (
-      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={runDismiss}>
+      <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={runDismiss}>
         {m["work.notNow"]}
       </Button>
     );
@@ -141,10 +146,10 @@ export function WorkRowActions({
   // distinguishable, not an accident of copy-paste.
   return (
     <div className="flex shrink-0 gap-2">
-      <Button type="button" variant="ghost" size="sm" disabled={pending} onClick={() => runBooking("completed")}>
+      <Button type="button" variant="ghost" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("completed")}>
         {m["work.booking.completed"]}
       </Button>
-      <Button type="button" variant="destructive" size="sm" disabled={pending} onClick={() => runBooking("no_show")}>
+      <Button type="button" variant="destructive" size="sm" className={TOUCH} disabled={pending} onClick={() => runBooking("no_show")}>
         {m["work.booking.noShow"]}
       </Button>
     </div>

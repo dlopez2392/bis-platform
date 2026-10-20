@@ -534,7 +534,11 @@ describe("TasksPage — the Suggestions section (item 8b-1)", () => {
     const cards = cardsIn(html);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toContain(">Accept<");
-    expect(cards[0]).not.toContain('href="/dashboard/accounts/acct1/calls/');
+    // The card decides here; its one link to the call is "See it in the transcript" (item 8b-2, spec 5.5),
+    // never a link standing in for the buttons.
+    const callLinks = cards[0]!.match(/<a[^>]*href="\/dashboard\/accounts\/acct1\/calls\/[^"]*"[^>]*>/g) ?? [];
+    expect(callLinks).toHaveLength(1);
+    expect(callLinks[0]).toContain("data-transcript-link");
     expect(renderedText(html)).toContain(T.text("suggestions.heading"));
     expect(renderedText(html)).toContain("the caller asked for a callback");
   });
@@ -984,5 +988,91 @@ describe("the To do route's loading skeleton (rule 7, plan fix M5)", () => {
     expect([bucket >= 0, suggestions >= 0]).toEqual([true, true]);
     expect(suggestions).toBeGreaterThan(bucket);
     expect((region.match(/data-skeleton/g) ?? []).length).toBe(2);
+  });
+});
+
+/**
+ * The tray grouped (item 8b-2, spec 5.1): by customer (the ROW's contact_id, P14's customer), then by call,
+ * groups ordered by their newest card, "No customer yet" for a row with no customer. The customer's name
+ * comes from the page's one contacts batch, which must hold every row's OWN contactId, not only the call's.
+ */
+describe("TasksPage — the tray grouped by customer, then call (item 8b-2)", () => {
+  const render = async () => renderToStaticMarkup(await TasksPage({ params: Promise.resolve({ accountId: "acct1" }) }));
+  let TasksPage: (typeof import("./page"))["default"];
+  const headings = (html: string) => [...html.matchAll(/<h3[^>]*>([^<]*)<\/h3>/g)].map((x) => renderedText(x[1]!));
+
+  beforeEach(async () => {
+    ({ default: TasksPage } = await import("./page"));
+    accountTimezone = "America/Chicago";
+    agencyTimezone = "America/Chicago";
+    isAgency = true;
+    workRows = [];
+    listPendingProposalsMock.mockReset().mockImplementation(async () => pendingProposals);
+    resetFake();
+    fake.tables = {
+      calls: [
+        { id: "call-ana", account_id: "acct1", started_at: "2026-10-14T15:00:00Z", contact_id: "ct-ana" },
+        { id: "call-luis", account_id: "acct1", started_at: "2026-10-13T15:00:00Z", contact_id: "ct-luis" },
+        { id: "call-anon", account_id: "acct1", started_at: "2026-10-12T15:00:00Z", contact_id: null },
+      ],
+      contacts: [
+        { id: "ct-ana", account_id: "acct1", first_name: "Ana", last_name: "López" },
+        { id: "ct-luis", account_id: "acct1", first_name: "Luis", last_name: "Peña" },
+        { id: "ct-rosa", account_id: "acct1", first_name: "Rosa", last_name: "Díaz" },
+      ],
+    };
+  });
+
+  it("two customers and a no-customer row: three headings, newest group first, each over its own cards (mutation: order groups by oldest -> FAILS)", async () => {
+    // The read's order is newest first; the no-customer row is the newest of all.
+    pendingProposals = [
+      proposal({ id: "p-anon", callId: "call-anon", contactId: null, createdAt: "2026-10-15T10:00:00Z" }),
+      proposal({ id: "p-ana-2", callId: "call-ana", contactId: "ct-ana", createdAt: "2026-10-14T16:00:00Z" }),
+      proposal({ id: "p-luis", callId: "call-luis", contactId: "ct-luis", createdAt: "2026-10-13T16:00:00Z" }),
+      proposal({ id: "p-ana-1", callId: "call-ana", contactId: "ct-ana", createdAt: "2026-10-14T15:30:00Z" }),
+    ];
+    const html = await render();
+    expect(headings(html)).toEqual([
+      "No customer yet · from the call on Mon, Oct 12",
+      "Ana López · from the call on Wed, Oct 14",
+      "Luis Peña · from the call on Tue, Oct 13",
+    ]);
+    // Ana's two cards sit under Ana's heading, in the read's order.
+    expect(html).toMatch(/Ana López · from the call on Wed, Oct 14<\/h3><article[^>]*data-suggestion="p-ana-2"[\s\S]*?<\/article><article[^>]*data-suggestion="p-ana-1"/);
+  });
+
+  it("the group names the row's own customer even when the call's caller is someone else (mutation: drop the rows' contactId from the contacts batch -> \"(no name)\", FAILS)", async () => {
+    // The call was Ana's line; the suggestion is about Rosa (contact_id), whom nothing else on the page names.
+    pendingProposals = [proposal({ id: "p-rosa", callId: "call-ana", contactId: "ct-rosa", createdAt: "2026-10-14T16:00:00Z" })];
+    const html = await render();
+    expect(headings(html)).toEqual(["Rosa Díaz · from the call on Wed, Oct 14"]);
+    expect(readsOf("contacts")).toHaveLength(1);
+    expect(readsOf("contacts")[0]!.in[0]![1]).toEqual(expect.arrayContaining(["ct-ana", "ct-rosa"]));
+  });
+
+  it("Spanish (the QA override): the heading in the reader's words, the day as the card formats it", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      pendingProposals = [proposal({ id: "p-anon", callId: "call-anon", contactId: null })];
+      const html = renderToStaticMarkup(await TasksPage({
+        params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ locale: "es" }),
+      }));
+      const { callDay } = await import("@/lib/proposals/view");
+      expect(headings(html)).toEqual([`Sin cliente todavía · de la llamada del ${callDay("es", "America/Chicago", "2026-10-12T15:00:00Z")}`]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe("the To do route's loading skeleton: the tray is grouped (item 8b-2)", () => {
+  it("a group heading's label bar sits above the skeleton cards, never a card around them (mutation: drop grouped -> FAILS)", async () => {
+    const { default: Loading } = await import("./loading");
+    const html = renderToStaticMarkup(createElement(Loading));
+    const bar = html.indexOf("data-tray-group-bar");
+    expect(bar).toBeGreaterThanOrEqual(0);
+    expect(bar).toBeLessThan(html.indexOf("data-skeleton"));
+    expect((html.match(/data-skeleton=/g) ?? []).length).toBe(2);
   });
 });

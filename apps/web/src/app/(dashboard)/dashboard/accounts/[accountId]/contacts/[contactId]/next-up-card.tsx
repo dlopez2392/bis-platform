@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { NextUpRow, NextUpView } from "@/lib/record/next-up";
 import { ADD_TODO_FIELD_ID } from "./constants";
 import { FocusFieldButton } from "./focus-field-button";
@@ -12,11 +13,19 @@ function Who({ row }: { row: NextUpRow }) {
   return row.who ? <span data-next-up-who="" className="text-muted-foreground"> · {row.who.typed ? <span lang="">{row.who.name}</span> : <span>{row.who.name}</span>}</span> : null;
 }
 
-export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView; emptyText: string; addTodoLabel: string | null }) {
+/**
+ * `waiting`: the record page's "Waiting for you" section (item 8b-2, spec 5.3), drawn above the rows. A
+ * ready-made node, so this body imports nothing of the suggestions: the drawer and the group page pass none
+ * and render exactly as before (P20).
+ */
+export function NextUpBody({ view, emptyText, addTodoLabel, waiting }: {
+  view: NextUpView; emptyText: string; addTodoLabel: string | null; waiting?: ReactNode;
+}) {
   const undated = view.undated ? <p className="text-xs text-muted-foreground">{view.undated}</p> : null;
   if (view.rows.length === 0) {
     return (
       <div className="space-y-2">
+        {waiting}
         <p className="text-sm text-muted-foreground">{emptyText}</p>
         {undated}
         {addTodoLabel ? <FocusFieldButton targetId={ADD_TODO_FIELD_ID} label={addTodoLabel} /> : null}
@@ -25,6 +34,7 @@ export function NextUpBody({ view, emptyText, addTodoLabel }: { view: NextUpView
   }
   return (
     <div className="space-y-2">
+      {waiting}
       <ul className="flex flex-col text-sm">
         {view.rows.map((r) => (
           <li key={`${r.kind}-${r.id}`} data-next-up-row={r.kind} className="border-t border-[var(--row-line)] py-[7px] first:border-t-0">

@@ -138,3 +138,40 @@ describe("SuggestionCard: the e2e's scope", () => {
     expect(card(rows.accepted)).toMatch(/^<article[^>]*data-suggestion="sg_accepted"[^>]*data-status="accepted"/);
   });
 });
+
+/** "See it in the transcript · 2:14" (item 8b-2, spec 5.5): the view's link, under the evidence. */
+describe("SuggestionCard: the transcript link", () => {
+  const cited = { ...rows.pending, evidenceRef: { turn: 4, at: "2026-10-14T14:44:14.000Z" } } as Proposal;
+  function cardOn(row: Proposal, locale: Locale, onCallPage: boolean) {
+    const view = buildSuggestionView(row, {
+      tr: makeTr(locale), zone: ZONE, now: NOW, stages: STAGES, pipelineStages: PIPELINE_STAGES,
+      callerName: "Ana Lopez", callStartedAt: CALL_AT, personaName: "Sofia", names: NAMES, viewerId: null, onCallPage,
+    });
+    return renderToStaticMarkup(createElement(SuggestionCard, { view, ...actions }));
+  }
+  const link = (h: string) => /<a[^>]*data-transcript-link[^>]*>[\s\S]*?<\/a>/.exec(h)?.[0] ?? null;
+  it.each([["en", "See it in the transcript · 2:14"], ["es", "Ver en la transcripción · 2:14"]] as const)(
+    "%s: a link to the cited turn, after the evidence (mutation: drop the link -> FAILS)", (locale, words) => {
+      const h = cardOn(cited, locale, false);
+      const a = link(h);
+      expect(a).not.toBeNull();
+      expect(a).toContain('href="/dashboard/accounts/acc_1/calls/call_1#turn-4"');
+      expect(plain(a!)).toBe(words);
+      expect(h.indexOf("data-transcript-link")).toBeGreaterThan(h.indexOf("<q "));
+    });
+  it("a tap-sized ghost text link, tokens only (min-h-11 md:min-h-8)", () => {
+    const cls = (/<a[^>]*data-transcript-link[^>]*class="([^"]*)"/.exec(cardOn(cited, "en", false))?.[1]
+      ?? /<a[^>]*class="([^"]*)"[^>]*data-transcript-link/.exec(cardOn(cited, "en", false))?.[1] ?? "").split(" ");
+    expect(cls).toEqual(expect.arrayContaining(["min-h-11", "md:min-h-8"]));
+    expect(cls.join(" ")).not.toMatch(/#[0-9a-f]{3,8}\b|bg-primary/);
+  });
+  it("on the call page the link is the turn's own anchor; a copied row there has no link at all", () => {
+    expect(link(cardOn(cited, "en", true))).toContain('href="#turn-4"');
+    expect(link(cardOn(rows.pending, "en", true))).toBeNull();
+  });
+  it("a copied row elsewhere links to the call with no time", () => {
+    const a = link(cardOn(rows.pending, "en", false));
+    expect(a).toContain('href="/dashboard/accounts/acc_1/calls/call_1"');
+    expect(plain(a!)).toBe("See it in the transcript");
+  });
+});

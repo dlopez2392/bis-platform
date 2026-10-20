@@ -41,6 +41,8 @@ const {
 } = await import("./group-loaders");
 
 const db = { tag: "request-db" } as unknown as SupabaseClient;
+/** The sources a mocked page read (item 8b-2: every page names them). */
+const SOURCES = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
 const G = "11111111-1111-4111-8111-111111111111";
 const ANA: GroupMember = {
   memberId: "m-ana", contactId: "c-ana", firstName: "Ana", lastName: "García", phone: "+19565550100",
@@ -220,7 +222,7 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
 
   it("the timeline: one merged page across the set with names and the persona, no hold read; every source failed or a throw is the card's error (mutation: rethrow -> FAILS; mutation: treat one failed source as the card's error -> FAILS)", async () => {
     const before = { v: "2026-10-01T00:00:00.000Z", id: "22222222-2222-4222-8222-222222222222" };
-    const page = { items: [{ kind: "note", id: "n1", at: "2026-10-09T16:12:00Z", contactId: "c-ana", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-09T16:12:00Z" } }], older: null, failed: ["calls"] };
+    const page = { items: [{ kind: "note", id: "n1", at: "2026-10-09T16:12:00Z", contactId: "c-ana", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-09T16:12:00Z" } }], older: null, failed: ["calls"], sources: SOURCES };
     listTimelinePageMock.mockResolvedValueOnce(page);
     listPeopleNamesMock.mockResolvedValueOnce({ user_dan: "Dan López" });
     getVoiceProfileMock.mockResolvedValueOnce({ persona_name: "Sofía" });
@@ -228,18 +230,43 @@ describe("group record loaders, the middle column (S-03 part 2b)", () => {
     expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, before, expect.objectContaining({ onError: expect.any(Function) }));
     expect(listPeopleNamesMock).toHaveBeenCalledWith(db, ["user_dan"]);
 
-    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"] });
+    const eight = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents"];
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: eight, sources: eight });
     expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
     listTimelinePageMock.mockRejectedValueOnce(new Error("boom"));
     expect(await loadGroupTimeline(db, "acct1", IDS)).toEqual({ status: "error" });
     expect(logged()).toEqual([expect.stringMatching(/^record page: activity read failed for account acct1: /)]);
   });
 
+  // item 8b-2: a household none of whose members this reader can see reads nothing (record.ts's early
+  // return), so `failed` and `sources` are both empty; 0 >= 0 must not turn that into the error state.
+  it("an empty set's page (nothing read, nothing failed) is an empty timeline, never the card's error (mutation: drop the `> 0` -> FAILS)", async () => {
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: [] });
+    listPeopleNamesMock.mockResolvedValueOnce({});
+    getVoiceProfileMock.mockResolvedValueOnce(null);
+    expect(await loadGroupTimeline(db, "acct1", [])).toEqual({
+      status: "ready", page: { items: [], older: null, failed: [], sources: [] }, names: {}, personaName: null,
+    });
+  });
+
   it("the timeline reads the group's own documents too: the group id reaches listTimelinePage (S-07, plan deviation 3; mutation: drop the groupId pass-through -> FAILS)", async () => {
-    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [] });
+    listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: SOURCES });
     listPeopleNamesMock.mockResolvedValueOnce({});
     getVoiceProfileMock.mockResolvedValueOnce(null);
     await loadGroupTimeline(db, "acct1", IDS, undefined, G);
     expect(listTimelinePageMock).toHaveBeenCalledWith(db, "acct1", IDS, undefined, expect.objectContaining({ groupId: G }));
+  });
+
+  // Item 8b-2 (final review M-3): accepted suggestions are the contact page's source only. The group page
+  // reads no stage names and its rows would read "Review the stage change", so it never asks for them.
+  it("the group timeline never asks listTimelinePage for suggestions (mutation: pass suggestions: true -> FAILS)", async () => {
+    for (const before of [undefined, { at: "2026-10-01T00:00:00Z", id: "x" }]) {
+      listTimelinePageMock.mockResolvedValueOnce({ items: [], older: null, failed: [], sources: SOURCES });
+      listPeopleNamesMock.mockResolvedValueOnce({});
+      getVoiceProfileMock.mockResolvedValueOnce(null);
+      await loadGroupTimeline(db, "acct1", IDS, before as never, G);
+      const opts = listTimelinePageMock.mock.lastCall![4] as { suggestions?: boolean };
+      expect(opts.suggestions).not.toBe(true);
+    }
   });
 });

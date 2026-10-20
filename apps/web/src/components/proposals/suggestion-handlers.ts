@@ -31,15 +31,23 @@ export async function runDecision(deps: {
   undo: () => Promise<UndoResult>;
   toast: DecisionToast;
   schedule: (fn: () => void, ms: number) => void;
-  labels: { undo: string; crashed: string; lang: "en" | "es" };
+  /** A full document reload (8b-1 follow-up 1, plan A4): the caller passes `window.location.reload`,
+   *  never `router.refresh()`, which a tab pinned to an older deployment would fetch from that deployment. */
+  reload: () => void;
+  labels: { undo: string; crashed: string; reload: string; lang: "en" | "es" };
 }): Promise<{ ok: true } | { ok: false; field?: string; error: string }> {
-  const { act, undo, toast, schedule, labels } = deps;
+  const { act, undo, toast, schedule, reload, labels } = deps;
   const say = (text: string): ReactElement => createElement("span", { lang: labels.lang }, text);
+  // The request never reached a server action that answered (a network failure, or a tab older than the
+  // deployment): the words say reload, and the toast offers it. The server's own refusals are not this.
+  const unreachable = () => {
+    toast.error(say(labels.crashed), { action: { label: say(labels.reload), onClick: () => reload() } });
+  };
   let r: SuggestionActionResult;
   try {
     r = await act();
   } catch {
-    toast.error(say(labels.crashed));
+    unreachable();
     return { ok: false, error: labels.crashed };
   }
   if (!r.ok) {
@@ -59,7 +67,7 @@ export async function runDecision(deps: {
           try {
             u = await undo();
           } catch {
-            toast.error(say(labels.crashed));
+            unreachable();
             return;
           }
           if (u.ok) toast.success(say(u.message));

@@ -5,10 +5,13 @@
 // compare-and-swaps, the read boundary and the never-throws insert (item 8b-1, plan Task 4; carried
 // over from the deleted call-proposals.test.ts, every case kept and retargeted).
 import { describe, it, expect, vi } from "vitest";
+import type { Client } from "pg";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
+import { withRollback, actAsMember } from "./db";
 import {
   insertProposal, listProposalsForCall, listPendingProposals, getProposal, listPendingProposalsForAgency,
+  listPendingProposalsForContact,
   listPendingSiblings, decideProposal, revertProposalDecision, setAppliedRef, expireProposals,
   undoProposalDecision, expireAfterUndoCollision, restoreSiblings,
 } from "../proposals";
@@ -808,15 +811,259 @@ describe("listPendingProposalsForAgency", () => {
     });
   });
 
-  it("leaves out a row past expires_at (mutation: drop .gt(\"expires_at\", now) -> FAILS)", async () => {
+  it("leaves out a row past expires_at, through the 0089 read on the replica's PostgREST (A2: rpc + select)", async () => {
     await withTestAccount(async (db, accountId) => {
       const live = await taskOn(db, accountId, await seedCall(db, accountId));
       const aged = await taskOn(db, accountId, await seedCall(db, accountId), { expiresAt: "2026-10-02T00:00:00.000Z" });
-      const ids = (await listPendingProposalsForAgency(db, NOW)).map((r) => r.id);
-      expect(ids).toContain(live);
-      expect(ids).not.toContain(aged);
+      const mine = (await listPendingProposalsForAgency(db, NOW)).filter((r) => r.accountId === accountId);
+      expect(mine.map((r) => r.id)).toEqual([live]);
+      expect(mine[0]!.accountCapped).toBe(false);
+      expect(mine.map((r) => r.id)).not.toContain(aged);
     });
   });
+});
+
+/**
+ * item 8b-2 (plan Task 4, 1): the agency read pages the 0089 RPC under PostgREST's max_rows (1000), in an
+ * order the request itself names, dedupes by id across pages and caps per account. The stub below does what
+ * the SQL does for `p_per_account` (the newest N per account, ordered account_id, created_at desc, id desc)
+ * and what PostgREST does for `.range()`, so the cap and the paging are the code's own, not the stub's.
+ */
+describe("listPendingProposalsForAgency: paging, order, dedupe and the per-account cap (stubbed client)", () => {
+  type StubRow = Record<string, unknown> & { id: string; account_id: string; created_at: string };
+  const acct = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`;
+  const rid = (a: number, i: number) => `${a.toString(16).padStart(8, "0")}-0000-4000-8000-${i.toString(16).padStart(12, "0")}`;
+  /** Row `i` of account `a`; a higher `i` is newer (created_at counts up in seconds). */
+  const stubRow = (a: number, i: number, over: Record<string, unknown> = {}): StubRow => ({
+    id: rid(a, i), account_id: acct(a), source: "call", call_id: rid(9999, i), contact_id: null, kind: "task",
+    payload: { title: `t${i}`, dueAt: null }, applied_payload: null, applied_ref: null, evidence: "x", evidence_ref: {},
+    evidence_lang: "en", status: "pending", expired_reason: null, decided_at: null, decided_by: null, undone_at: null,
+    undone_by: null, expires_at: FUTURE, created_at: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString(), ...over,
+  });
+  const many = (a: number, n: number) => Array.from({ length: n }, (_, i) => stubRow(a, i + 1));
+
+  /** 0089's own semantics over `rows`: the newest `cap` per account, ordered account, newest first. */
+  const sqlOrder = (rows: StubRow[], cap: number) => {
+    const sorted = [...rows].sort((x, y) => (x.account_id !== y.account_id ? (x.account_id < y.account_id ? -1 : 1)
+      : x.created_at !== y.created_at ? (x.created_at < y.created_at ? 1 : -1) : x.id < y.id ? 1 : -1));
+    const seen = new Map<string, number>();
+    return sorted.filter((r) => { const n = (seen.get(r.account_id) ?? 0) + 1; seen.set(r.account_id, n); return n <= cap; });
+  };
+
+  type Calls = unknown[][][];
+  function stub(page: (args: { p_per_account: number }, from: number, to: number, call: number) => { data: unknown; error: unknown }) {
+    const calls: Calls = [];
+    const accountReads: string[][] = [];
+    const db = {
+      rpc: (fn: string, args: { p_per_account: number }) => {
+        const rec: unknown[][] = [["rpc", fn, args]];
+        calls.push(rec);
+        const n = calls.length;
+        let range: [number, number] = [0, Number.MAX_SAFE_INTEGER];
+        const b = {
+          select: (c: string) => { rec.push(["select", c]); return b; },
+          order: (...a: unknown[]) => { rec.push(["order", ...a]); return b; },
+          range: (f: number, t: number) => { rec.push(["range", f, t]); range = [f, t]; return b; },
+          then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) =>
+            Promise.resolve(page(args, range[0], range[1], n)).then(ok, ko),
+        };
+        return b;
+      },
+      from: (table: string) => {
+        if (table !== "accounts") throw new Error(`stub: unexpected table ${table}`);
+        let ids: string[] = [];
+        const b = {
+          select: () => b,
+          in: (_c: string, v: string[]) => { ids = v; accountReads.push(v); return b; },
+          then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve({
+            data: ids.map((id) => ({ id, brand_name: `Brand ${id.slice(-2)}`, timezone: "America/Chicago" })), error: null,
+          }).then(ok, ko),
+        };
+        return b;
+      },
+    };
+    return { db: db as unknown as SupabaseClient, calls, accountReads };
+  }
+  /** A table the stub serves as 0089 + PostgREST would. */
+  const table = (rows: StubRow[]) => stub((args, from, to) => ({ data: sqlOrder(rows, args.p_per_account).slice(from, to + 1), error: null }));
+
+  it("names its own order on the request (account_id, created_at desc, id desc) and pages 1000 at a time (mutation: drop .order(\"account_id\") -> FAILS)", async () => {
+    const { db, calls } = table(many(1, 3));
+    await listPendingProposalsForAgency(db, NOW);
+    expect(calls[0]!.filter((c) => c[0] !== "select")).toEqual([
+      ["rpc", "list_pending_proposals_for_agency", { p_per_account: 51 }],
+      ["order", "account_id"],
+      ["order", "created_at", { ascending: false }],
+      ["order", "id", { ascending: false }],
+      ["range", 0, 999],
+    ]);
+    expect(String(calls[0]!.find((c) => c[0] === "select")![1])).toContain("evidence_ref");
+  });
+
+  it("reads every page until an EMPTY one: 1000, then 3, then none; all 1003 come back and the second page's account is there (mutation: read one page only -> FAILS)", async () => {
+    // Twenty accounts of 50 fill page one exactly; the twenty-first account's three rows are page two.
+    const rows = [...Array.from({ length: 20 }, (_, a) => many(a + 1, 50)).flat(), ...many(21, 3)];
+    const { db, calls } = table(rows);
+    const out = await listPendingProposalsForAgency(db, NOW);
+    expect(out).toHaveLength(1003);
+    expect(out.filter((r) => r.accountId === acct(21)).map((r) => r.id)).toEqual([rid(21, 3), rid(21, 2), rid(21, 1)]);
+    expect(calls.map((c) => c.find((x) => x[0] === "range"))).toEqual([["range", 0, 999], ["range", 1000, 1999], ["range", 1003, 2002]]);
+  });
+
+  it("throws after 20 pages that never end, rather than show a partial screen as whole (mutation: return what was read -> FAILS)", async () => {
+    const { db, calls } = stub((_a, from) => ({ data: Array.from({ length: 1000 }, (_, i) => stubRow(1 + Math.floor((from + i) / 50), from + i + 1)), error: null }));
+    await expect(listPendingProposalsForAgency(db, NOW)).rejects.toThrow(/listPendingProposalsForAgency: no end after 20 pages/);
+    expect(calls).toHaveLength(20);
+  });
+
+  it("throws when a page is refused (mutation: treat an error as an empty page -> FAILS)", async () => {
+    const { db } = stub((_a, _f, _t, n) => (n === 1 ? { data: many(1, 2), error: null } : { data: null, error: { message: "boom" } }));
+    await expect(listPendingProposalsForAgency(db, NOW)).rejects.toThrow(/listPendingProposalsForAgency failed: boom/);
+  });
+
+  // The repeat is in an account well under the cap: in a full account the 51st copy is cut by the cap and
+  // the duplicate would hide (the first draft of this case did exactly that and could not fail).
+  it("a row that repeats across two pages (offset pages are not one snapshot) is listed once (mutation: drop the dedupe -> the row twice, FAILS)", async () => {
+    const first = [stubRow(1, 3), stubRow(1, 2), stubRow(1, 1)];
+    const { db } = stub((_a, from) => ({
+      data: from === 0 ? first : from === 3 ? [stubRow(1, 1), stubRow(2, 1)] : [], error: null,
+    }));
+    expect((await listPendingProposalsForAgency(db, NOW)).map((r) => r.id)).toEqual([rid(1, 3), rid(1, 2), rid(1, 1), rid(2, 1)]);
+  });
+
+  it("keeps the newest 50 per account, and says so: capped for the account that had 51, not for one with 50 (mutation: ask for AGENCY_PER_ACCOUNT, not + 1 -> FAILS)", async () => {
+    const { db } = table([...many(10, 60), ...many(11, 50)]);
+    const out = await listPendingProposalsForAgency(db, NOW);
+    const a = out.filter((r) => r.accountId === acct(10));
+    const b = out.filter((r) => r.accountId === acct(11));
+    expect(a.map((r) => r.id)).toEqual(Array.from({ length: 50 }, (_, i) => rid(10, 60 - i)));
+    expect(a.every((r) => r.accountCapped)).toBe(true);
+    expect(b).toHaveLength(50);
+    expect(b.some((r) => r.accountCapped)).toBe(false);
+  });
+
+  it("a quiet account is still listed beside a busy one (mutation: one global cap of 50 instead of per account -> FAILS)", async () => {
+    const { db } = table([...many(10, 60), ...many(12, 1)]);
+    const out = await listPendingProposalsForAgency(db, NOW);
+    expect(out.filter((r) => r.accountId === acct(12)).map((r) => [r.id, r.accountCapped, r.brandName, r.timezone]))
+      .toEqual([[rid(12, 1), false, "Brand 0c", "America/Chicago"]]);
+  });
+
+  it("leaves out a row the caller's clock already sees as aged (mutation: drop the expires_at > now check -> FAILS)", async () => {
+    const { db } = table([stubRow(1, 2), stubRow(1, 1, { expires_at: "2026-10-19T09:59:59.999Z" })]);
+    expect((await listPendingProposalsForAgency(db, NOW)).map((r) => r.id)).toEqual([rid(1, 2)]);
+  });
+
+  it("reads the brands of only the accounts it lists, once, with no read at all for an empty answer", async () => {
+    const two = table([...many(3, 1), ...many(4, 1)]);
+    await listPendingProposalsForAgency(two.db, NOW);
+    expect(two.accountReads).toEqual([[acct(3), acct(4)]]);
+    const none = table([]);
+    expect(await listPendingProposalsForAgency(none.db, NOW)).toEqual([]);
+    expect(none.accountReads).toEqual([]);
+  });
+});
+
+/**
+ * A read-only PostgREST stand-in over one `pg` connection, for the chain `listPendingProposalsForContact`
+ * builds (select, eq, gt, order, limit). It runs on the connection's CURRENT role and claims, so a case that
+ * `actAsMember`s first reads through that person's RLS exactly as their request client would (P14). It
+ * understands nothing else: an unknown builder call throws.
+ */
+function pgReader(c: Client): SupabaseClient {
+  const from = (tbl: string) => {
+    let cols = "*";
+    const where: string[] = [];
+    const args: unknown[] = [];
+    const order: string[] = [];
+    let limit: number | null = null;
+    const ident = (s: string) => { if (!/^[a-z_]+$/.test(s)) throw new Error(`pgReader: bad identifier ${s}`); return s; };
+    const b = {
+      select: (s: string) => { cols = s.split(",").map((x) => ident(x.trim())).join(", "); return b; },
+      eq: (k: string, v: unknown) => { args.push(v); where.push(`${ident(k)} = $${args.length}`); return b; },
+      gt: (k: string, v: unknown) => { args.push(v); where.push(`${ident(k)} > $${args.length}`); return b; },
+      order: (k: string, o?: { ascending?: boolean }) => { order.push(`${ident(k)} ${o?.ascending === false ? "desc" : "asc"}`); return b; },
+      limit: (n: number) => { limit = n; return b; },
+      then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => c.query<{ rows: unknown[] }>(
+        `select coalesce(json_agg(row_to_json(t)), '[]'::json) as rows from (select ${cols} from public.${ident(tbl)}` +
+        (where.length ? ` where ${where.join(" and ")}` : "") + (order.length ? ` order by ${order.join(", ")}` : "") +
+        (limit !== null ? ` limit ${limit}` : "") + ") t", args,
+      ).then((r) => ({ data: r.rows[0]!.rows, error: null }), (e: Error) => ({ data: null, error: { message: e.message } })).then(ok, ko),
+    };
+    return b;
+  };
+  return { from } as unknown as SupabaseClient;
+}
+
+/** item 8b-2 (plan Task 4, 2): the record's "Waiting for you" read, on the caller's own client. */
+describe("listPendingProposalsForContact", () => {
+  it("account B's id with A's customer answers nothing while B has a pending row of its own (mutation: drop .eq(\"account_id\") -> FAILS)", async () => {
+    await withTestAccount(async (dbA, a) => {
+      await withTestAccount(async (dbB, b) => {
+        const contactA = await seedContact(dbA, a);
+        await taskOn(dbA, a, await seedCall(dbA, a), { contactId: contactA });
+        const contactB = await seedContact(dbB, b);
+        const pendingB = await taskOn(dbB, b, await seedCall(dbB, b), { contactId: contactB });
+        expect(await listPendingProposalsForContact(dbB, b, contactA, NOW)).toEqual([]);
+        expect((await listPendingProposalsForContact(dbB, b, contactB, NOW)).map((r) => r.id)).toEqual([pendingB]);
+      });
+    });
+  });
+
+  it("leaves out an aged row, a decided one and another customer's (mutation: drop .gt(\"expires_at\", now) -> the aged row enters, FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const ana = await seedContact(db, accountId);
+      const ben = await seedContact(db, accountId, { first_name: "Ben" });
+      const live = await taskOn(db, accountId, await seedCall(db, accountId), { contactId: ana });
+      await taskOn(db, accountId, await seedCall(db, accountId), { contactId: ana, expiresAt: "2026-10-02T00:00:00.000Z" });
+      const decided = await taskOn(db, accountId, await seedCall(db, accountId), { contactId: ana });
+      await acceptAs(db, accountId, decided, "user_x");
+      await taskOn(db, accountId, await seedCall(db, accountId), { contactId: ben });
+      expect((await listPendingProposalsForContact(db, accountId, ana, NOW)).map((r) => r.id)).toEqual([live]);
+    });
+  });
+
+  it("at most 5, newest first (mutation: drop .limit(WAITING_LIMIT) -> six, FAILS; created_at ascending -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const ana = await seedContact(db, accountId);
+      // created_at is fixed once written (0088's proposals_proposed_is_fixed), so the order is the insert
+      // order: one request each, so each its own now().
+      const ids: string[] = [];
+      for (let i = 1; i <= 6; i++) ids.push(await taskOn(db, accountId, await seedCall(db, accountId), { contactId: ana, title: `t${i}` }));
+      expect((await listPendingProposalsForContact(db, accountId, ana, NOW)).map((r) => r.id))
+        .toEqual([ids[5], ids[4], ids[3], ids[2], ids[1]]);
+    });
+  });
+
+  it("throws on a refused read, never an empty section (mutation: return [] on error -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await expect(listPendingProposalsForContact(db, accountId, "not-a-uuid", NOW)).rejects.toThrow(/listPendingProposalsForContact failed/);
+    });
+  });
+
+  it("on a Technician's own client it reads nothing for a customer they are not assigned, while the Owner reads the row (P14 through RLS; the Owner is the control)", () =>
+    withRollback(async (c) => {
+      const run = Math.random().toString(36).slice(2, 10);
+      const org = `org_wait_${run}`;
+      const one = async (sql: string, args: unknown[]) => (await c.query<{ id: string }>(sql, args)).rows[0]!.id;
+      const agency = await one("select id from agencies limit 1", []);
+      const account = await one(
+        "insert into accounts (agency_id, clerk_org_id, name, client_access_enabled) values ($1,$2,'Wait Co',true) returning id", [agency, org]);
+      const contact = await one("insert into contacts (account_id, first_name) values ($1,'Unassigned') returning id", [account]);
+      const phone = await one("insert into phone_numbers (account_id, e164) values ($1,$2) returning id", [account, testPhoneNumber()]);
+      const call = await one(
+        "insert into calls (account_id, phone_number_id, contact_id) values ($1,$2,$3) returning id", [account, phone, contact]);
+      const pending = await one(
+        `insert into proposals (account_id, source, call_id, contact_id, kind, payload, evidence, expires_at)
+           values ($1,'call',$2,$3,'task','{"title":"Send the quote","dueAt":null}','I need a quote',$4) returning id`,
+        [account, call, contact, FUTURE]);
+      await c.query("savepoint before_roles");
+      await actAsMember(c, account, org, "technician");
+      expect(await listPendingProposalsForContact(pgReader(c), account, contact, NOW)).toEqual([]);
+      await c.query("rollback to savepoint before_roles");
+      await actAsMember(c, account, org, "owner");
+      expect((await listPendingProposalsForContact(pgReader(c), account, contact, NOW)).map((r) => r.id)).toEqual([pending]);
+    }));
 });
 
 /**

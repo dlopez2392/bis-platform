@@ -1,6 +1,6 @@
 import {
   listGroupMembers, listOpenDealsFor, listGroupPlaces, getContact,
-  groupActivityMembers, groupFacts, groupNextUp, listTimelinePage, listPeopleNames, getVoiceProfile, TIMELINE_SOURCES,
+  groupActivityMembers, groupFacts, groupNextUp, listTimelinePage, listPeopleNames, getVoiceProfile,
   type GroupMembersPage, type GroupMember, type GroupPerson, type OpenDealRow, type ContactPlaces,
   type GroupActivity, type GroupFacts, type GroupNextUp, type TimelinePage,
   type SupabaseClient, type TimelineCursor,
@@ -146,7 +146,9 @@ export async function loadGroupTimeline(
     log("activity", accountId, e);
     return { status: "error" };
   }
-  if (page.failed.length >= TIMELINE_SOURCES.length) return { status: "error" };
+  // Every source READ failed (item 8b-2: `sources`, not every source there is). The `> 0` keeps an empty set,
+  // which reads nothing, an empty timeline rather than the error state.
+  if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const [names, personaName] = await Promise.all([
     listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
       log("activity names", accountId, e);

@@ -10,6 +10,10 @@ export const CALL_AT = "2026-10-14T14:42:00.000Z";
 export const NOW = new Date("2026-10-15T15:00:00.000Z");
 export const ANA = "user_ana";
 export const NAMES: Readonly<Record<string, string>> = { [ANA]: "Ana Lopez" };
+/** `contactId` → display name, for the tray's group headings (item 8b-2 Task 7; `group.ts`'s `contactNames`). */
+export const CONTACT_NAMES: Readonly<Record<string, string>> = { con_1: "Ana López" };
+/** The one call every specimen row cites, keyed as `group.ts`'s `callsById` wants it. */
+export const CALLS_BY_ID: ReadonlyMap<string, { startedAt: string | null }> = new Map([["call_1", { startedAt: CALL_AT }]]);
 export const STAGES = {
   st_new: { name: "New lead", position: 0 },
   st_quote: { name: "Quote sent", position: 1 },
@@ -57,6 +61,11 @@ export const rows = {
     payload: { field: "email", value: "rio@example.com" } },
   spanishEvidence: { ...base, id: "sg_es", status: "pending", evidenceLang: "es",
     evidence: "¿Me puede llamar el jueves?", kind: "task", payload: { title: TITLE, dueAt: null } },
+  /** No contact ("No customer yet" in a tray group), with `evidenceRef` so its card's transcript link
+   *  shows (item 8b-2 Task 7): 2:14 into the call `CALL_AT` began. */
+  cited: { ...base, id: "sg_cited", status: "pending", contactId: null, kind: "task",
+    payload: { title: TITLE, dueAt: "2026-10-21T15:00:00.000Z" },
+    evidenceRef: { turn: 4, at: "2026-10-14T14:44:14.000Z" } },
 } satisfies Record<string, Proposal>;
 
 /** Every state the card shows, in the order a reader meets them. */

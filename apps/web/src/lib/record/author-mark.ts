@@ -71,6 +71,9 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // customer; the customer mark, worded as the link's recipient (authorMark).
     case "documentShared": return { kind: "person", personId: entry.share.created_by };
     case "documentShareOpened": return { kind: "customer", personId: null };
+    // item 8b-2 (spec 5.4, 8.3): the person who ACCEPTED it, never Sofía, who only suggested it. One the
+    // reader cannot name reads "Someone on the team", still the person mark.
+    case "suggestion": return { kind: "person", personId: entry.suggestion.proposal.decidedBy };
   }
 }
 
