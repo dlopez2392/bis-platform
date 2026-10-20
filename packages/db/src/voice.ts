@@ -324,6 +324,46 @@ export async function startCallRow(
   return { id: (data as { id: string }).id };
 }
 
+/** S-47a's results card: one half of the TRIAL calls (D5). `counted` = finished, stamped 'trial', not spam.
+ *  `abandoned` ("Hung up early") excludes calls that asked for a person; `askedPerson` counts them (D6). */
+export type DisclosureHalf = { counted: number; booked: number; abandoned: number; askedPerson: number };
+export type DisclosureResults = { said: DisclosureHalf; didnt: DisclosureHalf; notCounted: number };
+
+/**
+ * The agency's results card on the Voice page (spec §5.3). Head counts, never a row fetch: PostgREST caps
+ * a select at its max-rows, which would silently cut a long trial short. A finished call is one with
+ * `ended_at` set (finishCallRow): `outcome` defaults to 'abandoned' at insert (0019), so an unfinished
+ * call would otherwise read as hung up. Only `disclosure_setting = 'trial'` calls are compared (D5); an
+ * On call is outside the trial and goes to `notCounted`. A handed-off call classifies 'abandoned' at
+ * socket close, so "hung up early" requires `handoff_requested_at is null` (D6). A null count is a
+ * failure, never zero (memory "Head-count null").
+ */
+export async function getDisclosureResults(db: SupabaseClient, accountId: string): Promise<DisclosureResults> {
+  const finished = () => db.from("calls").select("id", { count: "exact", head: true })
+    .eq("account_id", accountId).not("ended_at", "is", null);
+  async function n(label: string, q: PromiseLike<{ count: number | null; error: { message: string } | null }>): Promise<number> {
+    const { count, error } = await q;
+    if (error) throw new Error(`getDisclosureResults ${label} failed: ${error.message}`);
+    if (count === null) throw new Error(`getDisclosureResults ${label}: no count returned`);
+    return count;
+  }
+  async function half(disclosed: boolean, label: string): Promise<DisclosureHalf> {
+    const trialHalf = () => finished().eq("disclosure_setting", "trial").eq("disclosed", disclosed).neq("outcome", "spam");
+    const [counted, booked, abandoned, askedPerson] = await Promise.all([
+      n(`${label}.counted`, trialHalf()),
+      n(`${label}.booked`, trialHalf().eq("outcome", "booked")),
+      n(`${label}.abandoned`, trialHalf().eq("outcome", "abandoned").is("handoff_requested_at", null)),
+      n(`${label}.askedPerson`, trialHalf().not("handoff_requested_at", "is", null)),
+    ]);
+    return { counted, booked, abandoned, askedPerson };
+  }
+  const [said, didnt, notCounted] = await Promise.all([
+    half(true, "said"), half(false, "didnt"),
+    n("notCounted", finished().or("disclosure_setting.is.null,disclosure_setting.eq.on,outcome.eq.spam")),
+  ]);
+  return { said, didnt, notCounted };
+}
+
 /**
  * Stamps the moment a caller asked to speak to a person (0037's
  * `calls.handoff_requested_at`).
