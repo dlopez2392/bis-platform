@@ -15,6 +15,10 @@ const listContactTimelinePageMock = vi.fn();
 const listPeopleNamesMock = vi.fn();
 const getVoiceProfileMock = vi.fn();
 const listPendingProposalsForContactMock = vi.fn();
+const FACTS = { now: new Date("2026-10-16T00:00:00Z"), bookings: {}, contact: null, heldBy: {}, editors: {}, canDelete: false, futureBooked: [] };
+// The acts' facts (item 8c): mocked at their own module, answering an empty page's facts unless a case says otherwise.
+const readActFactsMock = vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => FACTS);
+vi.mock("@/lib/ai-acts/facts", () => ({ readActFacts: (...a: unknown[]) => readActFactsMock(...a) }));
 vi.mock("@bis/db", () => ({
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
@@ -299,6 +303,87 @@ describe("loadWaitingSuggestions: the record's Waiting for you (item 8b-2, spec 
       expect(logged).toContain("stages down");
       expect(logged).not.toContain("cust-42");
       expect(logged).not.toContain(SG.stage.evidence);
+    } finally { errors.mockRestore(); }
+  });
+});
+
+const aiAct = (id: string, over: Record<string, unknown> = {}) => ({
+  kind: "aiAct", id, at: "2026-10-15T14:42:00.000Z", contactId: "ct1",
+  act: { id, accountId: "acct1", contactId: "ct1", actor: "voice", callId: "call1", chatId: null, kind: "booking_created",
+    target: { bookingId: "b1" }, before: null, after: { startsAt: "2026-10-22T15:00:00.000Z", endsAt: "2026-10-22T16:00:00.000Z" },
+    createdAt: "2026-10-15T14:42:00.000Z", undoneAt: null, undoneBy: null, undoNotified: false, ...over },
+});
+
+describe("record loaders: Sofía's acts (item 8c)", () => {
+  beforeEach(() => {
+    listContactTimelinePageMock.mockReset().mockResolvedValue({ items: [], older: null, failed: [], sources: SOURCES });
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
+    holdOpenTaskIdsMock.mockReset().mockResolvedValue([]);
+    readActFactsMock.mockReset().mockResolvedValue(FACTS);
+  });
+
+  it("the record page's timeline reads the acts source; the drawer's Recent does not (spec §3 Out; mutation: pass it in loadRecent -> FAILS)", async () => {
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(listContactTimelinePageMock.mock.calls[0]![4]).toMatchObject({ aiActs: true, suggestions: true });
+    await loadRecent(db, "acct1", "ct1");
+    expect(listContactTimelinePageMock.mock.calls[1]![4]).not.toHaveProperty("aiActs");
+  });
+
+  it("the page's acts go to ONE facts read on the page's client, with the Owner's right to remove a customer; its answer is the load's", async () => {
+    const items = [aiAct("x1"), aiAct("x2")];
+    listContactTimelinePageMock.mockResolvedValue({ items, older: null, failed: [], sources: [...SOURCES, "ai_acts"] });
+    const now = new Date("2026-10-16T12:00:00.000Z");
+    const load = await loadTimeline(db, ledger, "acct1", "ct1", undefined, { canDelete: true, now });
+    expect(readActFactsMock).toHaveBeenCalledTimes(1);
+    // Review M-e: the page's ONE clock reaches the facts read, so "has it happened yet" and the page agree.
+    expect(readActFactsMock).toHaveBeenCalledWith(db, "acct1", "ct1", [items[0]!.act, items[1]!.act], { canDelete: true }, now);
+    expect(load).toMatchObject({ status: "ready", actFacts: FACTS });
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(readActFactsMock.mock.calls[1]![4]).toEqual({ canDelete: false });
+  });
+
+  it("a failed facts read is soft: the load is ready with no facts (every act then reads without an Undo), logged by account only (mutation: rethrow -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listContactTimelinePageMock.mockResolvedValue({ items: [aiAct("x1")], older: null, failed: [], sources: [...SOURCES, "ai_acts"] });
+      readActFactsMock.mockRejectedValue(new Error("bookings down"));
+      expect(await loadTimeline(db, ledger, "acct1", "cust-42")).toMatchObject({ status: "ready", actFacts: null });
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("record page: activity actions read failed for account acct1");
+      expect(logged).not.toContain("cust-42");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("who undid an act and who changed a field reach the ONE names read beside the page's person marks (mutation: drop the undoers -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({ items: [
+      { kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-01T00:00:00Z" } },
+      aiAct("x1", { undoneAt: "2026-10-16T00:00:00.000Z", undoneBy: "user_ana" }),
+      aiAct("x2", { undoneAt: "2026-10-16T00:00:00.000Z", undoneBy: "user_dan" }),
+    ], older: null, failed: [], sources: [...SOURCES, "ai_acts"] });
+    readActFactsMock.mockResolvedValue({ ...FACTS, editors: { x3: "user_eli", x4: null } });
+    await loadTimeline(db, ledger, "acct1", "ct1");
+    expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
+    expect(listPeopleNamesMock.mock.calls[0]![0]).toBe(db);
+    expect([...listPeopleNamesMock.mock.calls[0]![1]].sort()).toEqual(["user_ana", "user_dan", "user_eli"]);
+  });
+
+  it("Task 6: an extra id (the record's own author) reaches the SAME ONE names read, deduped against the page's own ids (mutation: drop extraNames -> FAILS)", async () => {
+    listContactTimelinePageMock.mockResolvedValue({
+      items: [{ kind: "note", id: "n1", at: "2026-10-01T00:00:00Z", note: { id: "n1", body: "x", author_id: "user_dan", created_at: "2026-10-01T00:00:00Z" } }],
+      older: null, failed: [], sources: SOURCES,
+    });
+    await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio", "user_dan"] });
+    expect(listPeopleNamesMock).toHaveBeenCalledTimes(1);
+    expect([...listPeopleNamesMock.mock.calls[0]![1]].sort()).toEqual(["user_dan", "user_rio"]);
+  });
+
+  it("Task 9 (design I-4): the load says whether the names read answered, so a failed read leaves a person's \"Added by\" out rather than guessing (mutation: namesOk always true -> FAILS)", async () => {
+    expect(await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio"] })).toMatchObject({ status: "ready", namesOk: true });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      listPeopleNamesMock.mockRejectedValue(new Error("users down"));
+      expect(await loadTimeline(db, ledger, "acct1", "ct1", undefined, { extraNames: ["user_rio"] })).toMatchObject({ status: "ready", names: {}, namesOk: false });
     } finally { errors.mockRestore(); }
   });
 });

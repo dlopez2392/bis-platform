@@ -1,4 +1,4 @@
-import type { ContactFacts } from "@bis/db";
+import type { AuthorKind, ContactFacts } from "@bis/db";
 import { partsInZone } from "@/lib/booking/slots";
 import { formatCurrency, formatDateInZone } from "@/lib/format";
 import type { Locale } from "@/lib/i18n/locale";
@@ -42,16 +42,60 @@ export function talkedWhen(at: string, now: Date, zone: string, locale: Locale):
 export type FactsView = { line: string[]; missing: string | null; allFailed: boolean };
 
 /**
+ * The "Added by" fact (item 8c; design review I-4): one sentence per author kind, never the timeline mark's
+ * own label ("Added by Sofía · AI" read as a mark inside a sentence). Null means the fact is left out:
+ *   - no author (a row written before the deploy: the column itself is null);
+ *   - a person, when `names` is null (the names read failed, or the caller made none): never guessed;
+ *   - a person the read did not name, when `unnamed` is "omit" (the drawer, whose read never asked for
+ *     this id). The record page asks for it (`extraNames`), so there a missing name is a person the reader
+ *     cannot name: "someone on the team", the DESIGN.md provenance rule.
+ * The reader's own id needs no read: "Added by you".
+ */
+export function addedByLine(
+  author: { kind: AuthorKind; personId: string | null } | null,
+  ctx: {
+    tr: Tr; viewerId: string | null; personaName: string | null;
+    names: Readonly<Record<string, string>> | null; unnamed: "someone" | "omit";
+  },
+): string | null {
+  if (!author) return null;
+  const { tr } = ctx;
+  switch (author.kind) {
+    case "person": {
+      const id = author.personId;
+      if (id && ctx.viewerId && id === ctx.viewerId) return tr.text("record.facts.addedBy.you");
+      if (!ctx.names) return null;
+      const named = id && Object.hasOwn(ctx.names, id) ? ctx.names[id] : undefined;
+      if (named) return tr.text("record.facts.addedBy.person", { name: named });
+      return ctx.unnamed === "someone" ? tr.text("record.facts.addedBy.someone") : null;
+    }
+    case "ai": return tr.text("record.facts.addedBy.ai", { name: ctx.personaName?.trim() || "Sofía" });
+    case "customer": return tr.text("record.facts.addedBy.customer");
+    case "import": return tr.text("record.facts.addedBy.import");
+    case "automation": return tr.text("record.facts.addedBy.automation");
+  }
+}
+
+/**
  * The summary's one line of facts (spec §9.2). A zero is left out; a failed read is left out AND
  * named under the line ("Couldn't count …"), so a missing fact never reads as a zero (DESIGN.md,
  * the weekly report: omitted, never zeroed).
  */
-export function factsView(input: { createdAt: string; facts: ContactFacts }, ctx: { zone: string; now: Date; tr: Tr }): FactsView {
+export function factsView(
+  input: {
+    createdAt: string; facts: ContactFacts;
+    /** item 8c: who created the record, as `addedByLine` words it; null or absent leaves the fact out
+     *  (DESIGN.md: omitted, never guessed). */
+    addedBy?: string | null;
+  },
+  ctx: { zone: string; now: Date; tr: Tr },
+): FactsView {
   const { tr, zone, now } = ctx;
   const line: string[] = [];
   const missing: string[] = [];
   const month = sinceMonth(input.createdAt, zone, tr.locale);
   if (month) line.push(tr.text("record.facts.since", { month }));
+  if (input.addedBy) line.push(input.addedBy);
 
   const booked = input.facts.bookingsMade;
   if (!booked.ok) missing.push(tr.text("record.facts.what.bookings"));

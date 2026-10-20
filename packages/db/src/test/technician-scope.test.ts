@@ -25,7 +25,7 @@ const claimsFor = (a: Actor) =>
 /** Tables whose rows reach exactly one contact: the key column to select by. */
 const PER_CONTACT = {
   contact_tags: "contact_id", notes: "id", tasks: "id", opportunities: "id", conversations: "id",
-  messages: "id", calls: "id", proposals: "id", bookings: "id", form_submissions: "id",
+  messages: "id", calls: "id", proposals: "id", ai_acts: "id", bookings: "id", form_submissions: "id",
   automation_log: "id", consent_events: "id",
 } as const;
 type Table = keyof typeof PER_CONTACT;
@@ -77,6 +77,10 @@ async function seed(c: Client) {
       messages: cid ? await one("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1,$2,'sms','inbound','hola','customer') returning id", [acct, conv]) : "",
       calls: call,
       proposals: proposal,
+      // 0091: an act always has its customer (contact_id not null), so the no-customer row has none.
+      ai_acts: cid ? await one(
+        "insert into ai_acts (account_id, actor, call_id, contact_id, kind, target) values ($1,'voice',$2,$3,'contact_created','{}') returning id",
+        [acct, call, cid]) : "",
       bookings: cid ? await one(
         "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind) values ($1,$2,$3,$4,$5,$6,'person') returning id",
         [acct, calendar, cid, starts.toISOString(), new Date(starts.getTime() + 1_800_000).toISOString(), `tok_${RUN}_${hour}`]) : "",

@@ -19,6 +19,7 @@ import { createDocumentShare, claimDocumentShareDownload } from "../document-sha
 import { createConciergeConversation, appendConciergeTurns, setConciergeSubmission, type ConciergeTurn } from "../concierge";
 import { syncWebchatTurns } from "../webchat";
 import { insertProposal, decideProposal, undoProposalDecision } from "../proposals";
+import { insertAiActs } from "../ai-acts";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, type TimelineEntry,
@@ -300,8 +301,8 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(errors).toEqual(["calls"]);
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
       // The pinned list, in source order (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS); 8b-2's
-      // suggestions last, read only when asked (owner decision 1, 2026-10-19).
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions"]);
+      // suggestions, then item 8c's ai_acts, both read only when asked.
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions", "ai_acts"]);
     }));
 });
 
@@ -471,6 +472,7 @@ describe("listTimelinePage across a set (S-03 part 2b, C6)", () => {
     const db = { from } as unknown as SupabaseClient;
     expect(await listTimelinePage(db, "acct", [])).toEqual({ items: [], older: null, failed: [], sources: [] });
     expect(await listTimelinePage(db, "acct", [], undefined, { suggestions: true })).toEqual({ items: [], older: null, failed: [], sources: [] });
+    expect(await listTimelinePage(db, "acct", [], undefined, { aiActs: true })).toEqual({ items: [], older: null, failed: [], sources: [] });
     expect(await groupFacts(db, "acct", [])).toEqual({ bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null } });
     expect(await groupNextUp(db, "acct", [], "2026-10-12T15:00:00Z")).toEqual({ bookings: [], datedTasks: [], undatedCount: 0 });
     expect(from).not.toHaveBeenCalled();
@@ -881,5 +883,80 @@ describe("the suggestions source (item 8b-2)", () => {
       const page = await listContactTimelinePage(failing, accountId, ana, undefined, { suggestions: true, onError: (s) => errors.push(s) });
       expect([page.failed, errors, page.sources]).toEqual([["suggestions"], ["suggestions"], TEN]);
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
+    }));
+});
+
+/**
+ * item 8c (plan Task 3): one row per Sofia-or-webchat act, at its `created_at`, from `ai_acts`, only
+ * when the caller asks (`opts.aiActs`) — the suggestions source's own shape, one source later.
+ */
+describe("the ai_acts source (item 8c)", () => {
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+  const TEN = [...NINE, "ai_acts"];
+
+  async function actOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, value: string) {
+    const { data, error } = await db.from("calls").insert({ account_id: accountId, phone_number_id: phoneId }).select("id").single();
+    if (error) throw new Error(`seed call failed: ${error.message}`);
+    await insertAiActs(db, accountId, [{
+      kind: "contact_field_filled", actor: "voice", callId: data!.id as string, chatId: null, contactId,
+      target: { field: "firstName" }, before: { value: null }, after: { value },
+    }]);
+  }
+
+  async function setUp(db: SupabaseClient, accountId: string) {
+    const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+    const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+    return { ana, phone: num.id };
+  }
+
+  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and an eleventh source appear without the option, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      await actOn(db, accountId, ana, phone, "Ana");
+      const plain = await listContactTimelinePage(db, accountId, ana);
+      expect(plain.items.filter((i) => i.kind === "aiAct")).toEqual([]);
+      expect(plain.sources).toEqual(NINE);
+      const set = await listTimelinePage(db, accountId, [ana]);
+      expect(set.sources).toEqual(NINE);
+      const asked = await listTimelinePage(db, accountId, [ana], undefined, { aiActs: true });
+      expect(asked.items.filter((i) => i.kind === "aiAct")).toHaveLength(1);
+      expect(asked.sources).toEqual(TEN);
+    }));
+
+  it("a failed ai_acts read is named in `failed` and the other sources still render (mutation: let it reject the page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana } = await setUp(db, accountId);
+      await addNote(db, accountId, ana, "still here", ACTOR);
+      const failing = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === "from") {
+            return (table: string) => {
+              if (table === "ai_acts") throw new Error("ai_acts down");
+              return target.from(table);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const errors: string[] = [];
+      const page = await listContactTimelinePage(failing, accountId, ana, undefined, { aiActs: true, onError: (s) => errors.push(s) });
+      expect([page.failed, errors, page.sources]).toEqual([["ai_acts"], ["ai_acts"], TEN]);
+      expect(page.items.map((i) => i.kind)).toEqual(["note"]);
+    }));
+
+  it("pages across a cursor boundary, newest first (mutation: drop withTimelinePage's cursor from the read -> page two repeats, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      await actOn(db, accountId, ana, phone, "one");
+      await new Promise((r) => setTimeout(r, 10));
+      await actOn(db, accountId, ana, phone, "two");
+      const p1 = await listContactTimelinePage(db, accountId, ana, undefined, { limit: 1, aiActs: true });
+      expect(p1.older).not.toBeNull();
+      const row1 = p1.items.find((i) => i.kind === "aiAct");
+      expect(row1?.kind === "aiAct" ? row1.act.after : null).toEqual({ value: "two" });
+      const p2 = await listContactTimelinePage(db, accountId, ana, p1.older!, { limit: 1, aiActs: true });
+      expect(p2.older).toBeNull();
+      const row2 = p2.items.find((i) => i.kind === "aiAct");
+      expect(row2?.kind === "aiAct" ? row2.act.after : null).toEqual({ value: "one" });
     }));
 });

@@ -94,12 +94,20 @@ const EMAIL_TABLE: Record<string, [string, string, string]> = {
   "operator.ops_alert": ["operator", "any", "none"],
   // S-06 part 1: the owner's copy of a customer's reply; operator mail, as the lead alert is.
   "operator.reply_forward": ["operator", "any", "none"],
+  // item 8c (owner Q2): the customer's notice when staff undo one of Sofía's booking changes. A correction
+  // about their own appointment: an unsubscribe does not stop it, any hour, the unsubscribe footer.
+  "booking.undo_notice": ["transactional", "any", "unsubscribe"],
 };
 
 describe("EMAIL_KINDS — spec §4.3's table, row for row", () => {
-  it("has exactly the twenty-eight send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, and S-06's reply forward) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
+  it("has exactly the twenty-nine send sites (E1, plus the operational floor's ops alert, F-048's cancel notice, its customer move's two emails, S-07 2b's document request, S-06's reply forward, and item 8c's undo notice) — no more and no fewer (mutation: add or drop a kind → FAILS)", () => {
     expect(Object.keys(EMAIL_KINDS).sort()).toEqual(Object.keys(EMAIL_TABLE).sort());
-    expect(Object.keys(EMAIL_KINDS)).toHaveLength(28);
+    expect(Object.keys(EMAIL_KINDS)).toHaveLength(29);
+  });
+
+  it("the transactional class (item 8c, owner Q2) holds exactly the one kind, the booking undo notice (mutation: classify automation.reminder as transactional → FAILS)", () => {
+    const transactional = Object.entries(EMAIL_KINDS).filter(([, s]) => s.class === "transactional").map(([k]) => k);
+    expect(transactional).toEqual(["booking.undo_notice"]);
   });
 
   it.each(Object.entries(EMAIL_TABLE))("%s is %j (mutation: change any one of this row's three fields → FAILS)", (kind, [cls, hours, footer]) => {

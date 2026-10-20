@@ -158,6 +158,11 @@ const ALLOWED: Record<string, Reason> = {
   // the consent state after that proof.
   "app/api/accounts/[accountId]/contacts/[contactId]/document-requests/route.ts": "proven-target",
   "app/api/accounts/[accountId]/groups/[groupId]/document-requests/route.ts": "proven-target",
+  // item 8c: the Undo of one of Sofía's acts. The act is read on the request client first (getAiAct: RLS and
+  // 0091's Technician fence), then each booking it names (callerCanSee), the field's own compare-and-swap or
+  // the contact row, all on the request client; only then 0091's two functions, the act's stamp and the
+  // customer notice on the service client, scoped to that same account and act.
+  "lib/ai-acts/actions.ts": "proven-target",
   "lib/auth.ts": "before-trust",
   "lib/booking/availability.ts": "public-or-cron",
   "lib/branding/tenant-theme-reader.ts": "configuration",

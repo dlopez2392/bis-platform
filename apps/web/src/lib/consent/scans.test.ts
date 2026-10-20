@@ -263,10 +263,10 @@ describe("scan 2: every SMS kind handed to the gate is in the registry", () => {
     expect(kindLiterals().filter(({ kind }) => !(kind in SMS_KINDS) && !(kind in EMAIL_KINDS))).toEqual([]);
   });
 
-  it("the scan reaches every send path's kind — all fifteen SMS kinds and all twenty-eight email kinds, 39 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
+  it("the scan reaches every send path's kind — all fifteen SMS kinds and all twenty-nine email kinds, 40 distinct (four keys are in both registries) (the positive control; mutation: a site stops naming its kind → FAILS; mutation: drop lib/automations/context from GATE_MODULES → automation.reminder, automation.followup, automation.reactivation and the two report kinds are never seen, FAILS)", () => {
     const seen = new Set(kindLiterals().map(({ kind }) => kind));
     const all = [...new Set([...Object.keys(SMS_KINDS), ...Object.keys(EMAIL_KINDS)])].sort();
-    expect(all).toHaveLength(39);
+    expect(all).toHaveLength(40);
     expect([...seen].sort()).toEqual(all);
   });
 });
@@ -788,6 +788,8 @@ describe("the email kinds' own send sites (spec §4.3's table, E1)", () => {
     "operator.sender_check": [`${DASH}/settings/actions.ts`],
     "operator.ops_alert": [`${PASSES}/ops-watch.ts`],
     "operator.reply_forward": ["apps/web/src/lib/email/inbound/forward.ts"],
+    // item 8c: staff undid one of Sofía's booking changes and chose to tell the customer.
+    "booking.undo_notice": ["apps/web/src/lib/ai-acts/notify.ts"],
   };
   const REGISTRY = "apps/web/src/lib/consent/classes.ts";
 

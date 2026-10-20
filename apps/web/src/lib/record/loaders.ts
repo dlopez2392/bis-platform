@@ -5,6 +5,9 @@ import {
   type TimelinePage, type TimelineCursor,
 } from "@bis/db";
 import type { Proposal } from "@bis/db/proposal-rules";
+import type { AiAct } from "@bis/db/ai-act-rules";
+import { readActFacts } from "@/lib/ai-acts/facts";
+import type { ActFacts } from "@/lib/ai-acts/kinds/types";
 import { resolveSmsSender, type SmsGate } from "@/lib/sms/sender";
 import { loggableError } from "@/lib/loggable-error";
 import type { DescribeCtx } from "@/lib/proposals/kinds/types";
@@ -44,8 +47,14 @@ export async function loadNextUp(db: SupabaseClient, accountId: string, contactI
 export type TimelineLoad =
   | {
     status: "ready"; page: TimelinePage; holdOpen: string[]; names: Record<string, string>; personaName: string | null;
+    /** Whether the one names read answered (item 8c, design I-4): false when it failed, so `names` is `{}`
+     *  for a reason other than "nobody to name", and a person's "Added by" is left out rather than guessed. */
+    namesOk: boolean;
     /** The stage names the page's accepted stage suggestions need (item 8b-2); `{}` when none, or unreadable. */
     suggestionStages: DescribeCtx["stages"];
+    /** What the page's acts' Undo depends on (item 8c, `readActFacts`); null when that read failed, and then
+     *  every act on the page reads without an Undo. */
+    actFacts: ActFacts | null;
   }
   | { status: "error" };
 
@@ -57,14 +66,31 @@ export type TimelineLoad =
  * and the stage names of the accepted stage suggestions (item 8b-2; fails to the registry's honest
  * sentence, which names no stage). The record page is the ONE timeline that reads the suggestions source
  * (owner decision 1, 2026-10-19): `loadRecent` below and the group loader never pass it.
+ *
+ * item 8c: the record page is also the ONE timeline that reads Sofía's acts (`aiActs`, spec §3: not the
+ * drawer, not the group page). Its fifth soft read is the acts' facts (`readActFacts`, on this same request
+ * client), which a failure turns into `actFacts: null` (every act then shows without an Undo), never the
+ * card's error. Who undid an act and who changed a field since are named by the SAME one names read as the
+ * page's person marks, so that read waits for the facts. `opts.canDelete` is the reader's right to remove a
+ * customer (`requireAccountAccess().canManage`); absent, no contact Undo is offered.
  */
 export async function loadTimeline(
   db: SupabaseClient, ledger: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
+  opts: {
+    canDelete?: boolean;
+    /** item 8c, Task 6: an id outside the page's own rows that still needs a name — the record's own
+     *  "Added by" fact, when its author is a named person. Merged into the SAME one names read, never a
+     *  second read. */
+    extraNames?: readonly string[];
+    /** The page's ONE clock (review M-e), so "has this booking happened yet" agrees with the rest of the page. */
+    now?: Date;
+  } = {},
 ): Promise<TimelineLoad> {
   let page: TimelinePage;
   try {
     page = await listContactTimelinePage(db, accountId, contactId, before, {
       suggestions: true,
+      aiActs: true,
       onError: (source, e) => log(`activity (${source})`, accountId, e),
     });
   } catch (e) {
@@ -76,17 +102,33 @@ export async function loadTimeline(
   if (page.failed.length > 0 && page.failed.length >= page.sources.length) return { status: "error" };
   const tasks = page.items.flatMap((i) => (i.kind === "task" ? [i.task] : []));
   const accepted: Proposal[] = page.items.flatMap((i) => (i.kind === "suggestion" ? [i.suggestion.proposal] : []));
-  const [holdOpen, names, personaName, suggestionStages] = await Promise.all([
+  const acts: AiAct[] = page.items.flatMap((i) => (i.kind === "aiAct" ? [i.act] : []));
+  const factsAndNames = readActFacts(db, accountId, contactId, acts, { canDelete: opts.canDelete === true }, opts.now ?? new Date())
+    .catch((e: unknown) => {
+      log("activity actions", accountId, e);
+      return null;
+    })
+    .then(async (actFacts) => {
+      const ids = new Set(personIdsOf(page.items));
+      for (const a of acts) if (a.undoneBy) ids.add(a.undoneBy);
+      for (const editor of Object.values(actFacts?.editors ?? {})) if (editor) ids.add(editor);
+      for (const id of opts.extraNames ?? []) ids.add(id);
+      let namesOk = true;
+      const names = await listPeopleNames(db, [...ids]).catch((e: unknown) => {
+        log("activity names", accountId, e);
+        namesOk = false;
+        return {} as Record<string, string>;
+      });
+      return { actFacts, names, namesOk };
+    });
+  const [holdOpen, { actFacts, names, namesOk }, personaName, suggestionStages] = await Promise.all([
     // Review R3-N1 (G21): a failed hold read fails CLOSED onto every open linked To-do on the page.
     // The tasks are the request client's; only the hold's ledger read moves (F-085, spec §7.3).
     holdOpenTaskIds(db, accountId, tasks, ledger).catch((e: unknown) => {
       console.error(`contact page: hold To-dos unreadable for contact ${contactId}: ${loggableError(e)}`);
       return tasks.filter((t) => !t.completed_at && t.consent_event_id).map((t) => t.id);
     }),
-    listPeopleNames(db, personIdsOf(page.items)).catch((e: unknown) => {
-      log("activity names", accountId, e);
-      return {} as Record<string, string>;
-    }),
+    factsAndNames,
     getVoiceProfile(db, accountId).then((p) => p?.persona_name ?? null).catch((e: unknown) => {
       log("activity persona", accountId, e);
       return null;
@@ -97,7 +139,7 @@ export async function loadTimeline(
       return {} as DescribeCtx["stages"];
     }),
   ]);
-  return { status: "ready", page, holdOpen, names, personaName, suggestionStages };
+  return { status: "ready", page, holdOpen, names, namesOk, personaName, suggestionStages, actFacts };
 }
 
 export type WaitingLoad = { status: "ready"; rows: Proposal[]; stages: StageContext; personaName: string | null } | { status: "error" };

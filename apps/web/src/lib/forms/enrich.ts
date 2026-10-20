@@ -2,8 +2,11 @@ import type { serviceDb, FormRow } from "@bis/db";
 import {
   createContact, updateContact, getContact, linkSubmissionContact,
   ensureConversation, createMessage, incrementUnreadCount, emitFormSubmitted,
-  setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal,
+  setSubmissionProcessingError, setContactsBusiness, recordLanguageSignal, phoneFields,
 } from "@bis/db";
+import type { NewAiAct } from "@bis/db/ai-act-rules";
+import type { ContactFieldName } from "@bis/db/proposal-rules";
+import { recordActs } from "@/lib/ai-acts/record";
 import { sendEmailOrThrow, EmailNotSent } from "@/lib/consent/email-gate";
 import { normalizeReplyTo } from "@/lib/email/reply-to";
 import { emailBrand } from "@/lib/email/templates/shell";
@@ -45,8 +48,16 @@ export async function enrich(
   /** True when any consent checkbox was left unticked — the instant reply's
    *  "no" (Milestone C, spec §1). */
   consentWithheld: boolean,
+  /**
+   * Item 8c: set ONLY by the web chat (`lib/concierge/lead.ts`), with its `concierge_conversations`
+   * id. With it, the contact is Sofía's (`author: ai`) and what she made or filled is recorded as her
+   * act on that chat. The public form passes nothing: its contacts stay the customer's and nothing it
+   * files is an act. Nothing else in this pipeline reads it.
+   */
+  webchat?: { chatId: string },
 ): Promise<void> {
   const accountId = form.account_id;
+  const chatSource = webchat ? { actor: "webchat" as const, callId: null, chatId: webchat.chatId } : null;
   const byKind = new Map(form.fields.map((f) => [f.kind, answers.find((a) => a.key === f.key)?.value ?? ""]));
   const custom: Record<string, string> = {};
   for (const field of form.fields) {
@@ -104,6 +115,7 @@ export async function enrich(
       phone: rawPhone || undefined,
       source: `form: ${form.name}`,
       custom,
+      ...(chatSource ? { author: { authorKind: "ai" as const, authorId: null } } : {}),
     }, "form", "system");
     contactId = created.id;
 
@@ -147,8 +159,17 @@ export async function enrich(
     }
 
     if (created.existing) {
-      const businessError = await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
+      const { businessError, filled } = await fillBlanks(db, accountId, contactId, byKind, custom, attribution);
       if (businessError) errors.push(businessError);
+      // The four columns only (ambiguity D): custom fields, the business and the attribution are
+      // the form's data, not Sofía's judgement. Never at the lead's cost (recordActs never throws).
+      if (chatSource && filled.length > 0) {
+        const filledBy = contactId;
+        await recordActs(db, accountId, filled.map((f): NewAiAct => ({
+          ...chatSource, kind: "contact_field_filled", contactId: filledBy,
+          target: { field: f.field }, before: { value: f.before }, after: { value: f.after },
+        })));
+      }
     } else {
       await setAttribution(db, accountId, contactId, attribution, true);
     }
@@ -176,10 +197,18 @@ export async function enrich(
 
     const convo = await ensureConversation(db, accountId, contactId, "form", "system");
     conversationId = convo.id;
-    await createMessage(db, accountId, {
+    const message = await createMessage(db, accountId, {
       conversationId: convo.id, channel: "form", direction: "inbound",
       subject: form.name, body: threadBody,
     }, "form", "system");
+    // Item 8c: a contact the chat made is Sofía's, recorded once its thread message exists. The act
+    // names that message and this submission: the two non-AI rows its Undo may treat as hers.
+    if (chatSource && !created.existing) {
+      await recordActs(db, accountId, [{
+        ...chatSource, kind: "contact_created", contactId,
+        target: { messageId: message.id, submissionId }, before: null, after: null,
+      }]);
+    }
     await incrementUnreadCount(db, accountId, convo.id);
 
     await emitFormSubmitted(db, accountId, { formId: form.id, submissionId, contactId });
@@ -267,9 +296,9 @@ async function fillBlanks(
   db: ReturnType<typeof serviceDb>, accountId: string, contactId: string,
   byKind: Map<string, string>, custom: Record<string, string>,
   attribution: Record<string, string>,
-): Promise<string | null> {
+): Promise<{ businessError: string | null; filled: FilledField[] }> {
   const current = await getContact(db, accountId, contactId);
-  if (!current) return null;
+  if (!current) return { businessError: null, filled: [] };
 
   // Same AS-TYPED rule the create path applies (see its comment in `enrich`)
   // — a blank existing phone getting filled from a later submission passes
@@ -299,6 +328,20 @@ async function fillBlanks(
     await updateContact(db, accountId, contactId,
       { ...patch, ...(customChanged ? { custom: mergedCustom } : {}) }, "form", "system");
   }
+  // What the write above put in each of the four columns, as `updateContact` STORES it (an email
+  // trimmed, a phone through `phoneFields`), beside what the column held before: only after the
+  // write succeeded, so a failed fill reports nothing (item 8c).
+  const filled: FilledField[] = [];
+  for (const [input, column] of pairs) {
+    const typed = patch[input];
+    if (typed === undefined) continue;
+    const stored = input === "email" ? (typed.trim() || null)
+      : input === "phone" ? phoneFields(typed).phone
+      : typed;
+    if (!stored) continue;
+    const held = (current as Record<string, unknown>)[column];
+    filled.push({ field: input as ContactFieldName, before: typeof held === "string" ? held : null, after: stored });
+  }
 
   // The "held" check still reads company_name: the database keeps it equal
   // to the contact's business group (0069), so blank means "no business yet".
@@ -323,8 +366,11 @@ async function fillBlanks(
   }
 
   await setAttribution(db, accountId, contactId, attribution, false);
-  return businessError;
+  return { businessError, filled };
 }
+
+/** One of the four contact columns a returning lead's fill wrote (item 8c). */
+type FilledField = { field: ContactFieldName; before: string | null; after: string };
 
 /**
  * First touch is written once and never overwritten; every later submission

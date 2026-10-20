@@ -59,6 +59,7 @@ import { NeverLogDemo } from "./never-log-demo";
 import { ForwardingDemo } from "./forwarding-demo";
 import { WebchatDemo } from "./webchat-demo";
 import { RecordDemo } from "./record-demo";
+import { AiActsDemo } from "./ai-acts-demo";
 import { WhoFilter } from "@/components/assign/who-filter";
 import { LocaleNavDemo, NavRowGeometry, NAV_LABEL_SPAN_CLASS } from "./locale-nav-demo";
 import { requestPseudoMode } from "@/lib/i18n/request-locale";
@@ -323,6 +324,14 @@ export default async function StyleguidePage({
             actions, a card loading, ready, empty, in error and closed on a phone. */}
         <Section title={t(m, "styleguide.recordKit", "en")} file="components/record/*">
           <RecordDemo />
+        </Section>
+
+        {/* item 8c (plan Task 6; Task 9 design I-8): the timeline's aiAct row and its three Undo controls — a
+            field available, a booking with an email on file and one with none, a contact, a blocked one,
+            an undone one and one whose facts read failed — then the popover's body ticked and with no
+            email, and the dialog's body empty and matched; English, Spanish and the pseudo-locale, inert. */}
+        <Section title={t(m, "styleguide.aiActs", "en")} file="components/ai-acts/{act-row,act-undo}.tsx">
+          <AiActsDemo />
         </Section>
 
         <Section title={m["assign.filter.label"]} file="components/assign/who-filter.tsx">

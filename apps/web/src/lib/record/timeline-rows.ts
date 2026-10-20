@@ -7,6 +7,9 @@ import type { TimelineTone } from "@/components/record/timeline-item";
 import { formatCurrency, formatDateInZone, formatDateTimeInZone } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import type { Locale } from "@/lib/i18n/locale";
+import { describeAct } from "@/lib/ai-acts/kinds";
+import type { ActFacts } from "@/lib/ai-acts/kinds/types";
+import { buildActView, type AiActView } from "@/lib/ai-acts/view";
 import { authorMark, type AuthorCtx, type AuthorMarkView } from "./author-mark";
 import type { Tr } from "./copy";
 
@@ -25,6 +28,9 @@ export type TimelineRow = {
    *  aria-hidden beside its spoken word. `verb` and `detail` stay the drawn sentence, as text. */
   verbParts?: Part[];
   detailParts?: Part[];
+  /** item 8c: an act's row only, its built view (the source line and the Undo state), from the act-kind
+   *  registry and the page's one facts read (`view.ts`, pure, server-built). */
+  act?: AiActView;
 };
 export type TimelineSubjects = Readonly<Record<string, { label: string; href: string }>>;
 
@@ -49,6 +55,7 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
   documents: "timeline.what.documents", chats: "timeline.what.chats", suggestions: "timeline.what.suggestions",
+  ai_acts: "timeline.what.aiActs",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -189,6 +196,9 @@ function phrase(
       status: entry.share.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.share.category}`),
     };
+    // item 8c: the act-kind registry's own sentence ("booked Thu, Oct 22, 10:00 AM CDT"), under the AI mark
+    // (authorOf). No status word: whether it can still be undone is the row's view (`timelineRows`, `act`).
+    case "aiAct": return { ...describeAct(entry.act, { tr, zone }), status: null };
   }
 }
 
@@ -203,6 +213,8 @@ export function timelineRows(
     zone: string; tr: Tr; author: AuthorCtx; subjects?: TimelineSubjects;
     /** item 8b-2: stage names for a stage-move suggestion's row; an unresolved one reads the registry's honest sentence. */
     suggestionStages?: DescribeCtx["stages"];
+    /** item 8c: the page's acts' facts (`loadTimeline`); null or absent, every act reads without an Undo. */
+    actFacts?: ActFacts | null;
   },
 ): TimelineRow[] {
   let previousDay: string | null = null;
@@ -218,6 +230,11 @@ export function timelineRows(
       subject: ctx.subjects && Object.hasOwn(ctx.subjects, entry.contactId) ? ctx.subjects[entry.contactId]! : null,
       ...(entry.kind === "chat" && entry.chat.matchedExisting
         ? { note: { text: ctx.tr.text("conversations.webchat.unconfirmed"), lang: ctx.tr.locale } } : {}),
+      ...(entry.kind === "aiAct"
+        ? { act: buildActView(entry.act, ctx.actFacts ?? null, {
+          tr: ctx.tr, zone: ctx.zone, personaName: ctx.author.personaName, names: ctx.author.names,
+          viewerId: ctx.author.viewerId, accountId: entry.act.accountId,
+        }) } : {}),
     };
     previousDay = day;
     return row;

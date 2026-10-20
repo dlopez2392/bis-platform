@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { TimelineItem } from "@/components/record/timeline-item";
+import { ActRow } from "@/components/ai-acts/act-row";
 import { SuggestionParts } from "@/components/proposals/suggestion-parts";
 import { RecordCardRetry } from "@/components/record/record-card";
 import { TaskAssigneeField } from "@/components/assign/assignee-field";
@@ -282,6 +283,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // item 8b-2 (spec 5.4; design review C1): an accepted suggestion, its words drawn from their parts.
     case "suggestion":
       return <TimelineItem {...head} {...suggestionWords(row)} icon={CheckSquare} />;
+    // item 8c (plan Task 6): the view the page built (`buildActView`), its source line and its Undo.
+    case "aiAct":
+      return row.act ? <ActRow head={head} act={row.act} accountId={accountId} locale={tr.locale} /> : <TimelineItem {...head} icon={Bot} />;
     default:
       return unknownKind(e);
   }

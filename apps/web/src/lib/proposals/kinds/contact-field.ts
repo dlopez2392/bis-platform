@@ -23,13 +23,13 @@ const blank = (v: unknown) => v == null || String(v).trim() === "";
 
 /** fillContactBlanksReport's own blank rule (contacts.ts): null or empty after trim, and for a first
  *  name also our finish-call placeholder, "Caller" with no last name. */
-function isBlankOn(row: ContactRow, field: ContactFieldName): boolean {
+export function isBlankOn(row: ContactRow, field: ContactFieldName): boolean {
   if (field === "firstName" && row.first_name === "Caller" && blank(row.last_name)) return true;
   return blank(row[COLUMN[field]]);
 }
 
 /** The value as the fill stores it: a phone's E.164 (phoneFields), an email lowercased, a name trimmed. */
-function storedForm(field: ContactFieldName, value: string): string {
+export function storedForm(field: ContactFieldName, value: string): string {
   const v = value.trim();
   if (field === "phone") return normalisePhone(v)?.e164 ?? v;
   if (field === "email") return v.toLowerCase();
@@ -37,7 +37,7 @@ function storedForm(field: ContactFieldName, value: string): string {
 }
 
 /** Whether the column still holds what the Accept wrote, read the way the fill stored it. */
-function stillAsWritten(field: ContactFieldName, current: unknown, value: string): boolean {
+export function stillAsWritten(field: ContactFieldName, current: unknown, value: string): boolean {
   if (typeof current !== "string") return false;
   return storedForm(field, current) === value;
 }

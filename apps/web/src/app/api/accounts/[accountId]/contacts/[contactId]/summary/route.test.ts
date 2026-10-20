@@ -345,3 +345,36 @@ describe("what the route sends, the drawer's parser accepts whole", () => {
     expect(parsed).toEqual({ ...b, who: { status: "ready", ...b.who } });
   });
 });
+
+describe("the drawer's summary route: who added the customer (item 8c final review, design I-4)", () => {
+  const NOTE = (author: string) => ({ kind: "note", id: "n1", at: AT, contactId: "c1", note: { id: "n1", body: "x", author_id: author, created_at: AT } });
+
+  it("the facts line says who added them, as the record page does (mutation: build factsView without the author -> FAILS)", async () => {
+    dbMocks.getContact.mockResolvedValue({ ...CONTACT, author_kind: "ai", author_id: null });
+    dbMocks.getVoiceProfile.mockResolvedValue({ persona_name: "Lupe" });
+    const b = await body();
+    expect(b.facts.view.line).toContain("Added by Lupe (AI)");
+  });
+
+  it("a person's name comes from Recent's own names read, never a read of its own; a person it did not name is left out (no extra read, the reads fence's measure)", async () => {
+    dbMocks.getContact.mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_dan" });
+    dbMocks.listContactTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_dan")] });
+    dbMocks.listPeopleNames.mockResolvedValue({ user_dan: "Dan López" });
+    expect((await body()).facts.view.line).toContain("Added by Dan López");
+    expect(dbMocks.listPeopleNames).toHaveBeenCalledTimes(1);
+    expect([...dbMocks.listPeopleNames.mock.calls[0]![1]]).toEqual(["user_dan"]);
+
+    dbMocks.listPeopleNames.mockClear();
+    dbMocks.listContactTimelinePage.mockResolvedValue({ ...EMPTY_PAGE, items: [NOTE("user_ana")] });
+    dbMocks.listPeopleNames.mockResolvedValue({ user_ana: "Ana" });
+    const line: string[] = (await body()).facts.view.line;
+    expect(line.some((l) => l.startsWith("Added by"))).toBe(false);
+    expect([...dbMocks.listPeopleNames.mock.calls[0]![1]]).toEqual(["user_ana"]);
+  });
+
+  it("the reader's own record reads 'Added by you' with no name needed", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.getContact.mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "u1" });
+    expect((await body()).facts.view.line).toContain("Added by you");
+  });
+});

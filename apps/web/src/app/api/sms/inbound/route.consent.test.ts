@@ -248,9 +248,34 @@ describe("the alert phone (review R2-I5, plan G10)", () => {
 });
 
 describe("what answers 503 (plan G2)", () => {
-  it("a STOP whose contact cannot be made answers 503; the same failure on a plain text answers 200, as before (mutation: 503 for every failure → the plain case FAILS)", async () => {
+  it("a STOP whose contact cannot be made answers 503; a plain text whose failure comes AFTER it is filed answers 200, as before (mutation: 503 for every failure → the plain case FAILS)", async () => {
     db.createContact.mockRejectedValue(new Error("createContact failed"));
     expect((await POST(text("STOP"))).status).toBe(503);
+    db.createContact.mockResolvedValue({ id: "ct_1", existing: true, flagged: false });
+    db.incrementUnreadCount.mockRejectedValue(new Error("unread bump failed"));
+    expect((await POST(text("see you Tuesday"))).status).toBe(200);
+    expect(db.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  // Item 8c final review A7: a plain text whose FIRST filing fails before its message row exists (here, the
+  // contact it matched was removed a moment before, so its thread cannot be made) was lost behind a 200.
+  // It answers 503 now, and Telnyx's retry files it: the retry finds no row under the message id, so it
+  // files from the start (idempotent on that id, findMessageByProviderId).
+  it("a plain text whose first filing fails before the message is written answers 503, and the retry files it (mutation: 200 for it as before → FAILS)", async () => {
+    db.ensureConversation.mockRejectedValueOnce(new Error("ensureConversation failed: insert violates foreign key"));
+    const payload = { id: "msg_race", to: [{ phone_number: OUR_NUMBER }], from: { phone_number: CUSTOMER }, text: "see you Tuesday" };
+    const first = await POST(signed(payload));
+    expect(first.status).toBe(503);
+    expect(db.createMessage).not.toHaveBeenCalled();
+    const second = await POST(signed(payload));
+    expect(second.status).toBe(200);
+    expect(db.createMessage).toHaveBeenCalledTimes(1);
+    expect(db.createMessage.mock.calls[0]![2]).toMatchObject({ providerMessageId: "msg_race", body: "see you Tuesday" });
+  });
+
+  it("a retry of a text already filed whose contact step fails still answers 200: nothing a retry could file is lost (mutation: 503 for any failure on a plain text → FAILS)", async () => {
+    db.findMessageByProviderId.mockResolvedValue({ id: "in_1" });
+    db.ensureConversation.mockRejectedValue(new Error("ensureConversation failed"));
     expect((await POST(text("see you Tuesday"))).status).toBe(200);
   });
 

@@ -1242,6 +1242,66 @@ describe("item 8a-2: the AI part sits under the facts line (spec 4.1; plan devia
   });
 });
 
+describe("item 8c: the record's 'Added by' fact (plan Task 6)", () => {
+  beforeEach(() => {
+    recipientState.mockReset().mockResolvedValue({ kind: "ok" });
+    emailRecipientStateMock.mockReset().mockResolvedValue({ kind: "ok" });
+    readTextsView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    readEmailView.mockReset().mockResolvedValue({ kind: "allowed", newestId: null });
+    listContactTimelinePageMock.mockReset().mockResolvedValue(EMPTY_PAGE);
+    listPeopleNamesMock.mockReset().mockResolvedValue({});
+  });
+
+  it("follows 'since' (mutation: drop the fact -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "ai", author_id: null });
+    const html = cardHtml(await render(), "summary");
+    // Design I-4: a sentence, not the mark's own label inside one.
+    expect(html).toContain(renderedText("Added by Sofía (AI)"));
+  });
+
+  it("in Spanish (mutation: hard-code English -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "ai", author_id: null });
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const html = cardHtml(await render({ locale: "es" }), "summary");
+      expect(html).toContain(renderedText("Agregado por Sofía (IA)"));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("a null author_kind (a row written before the deploy) adds no fact (mutation: push it anyway -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: null, author_id: null });
+    const html = cardHtml(await render(), "summary");
+    expect(html).not.toContain("Added by");
+  });
+
+  it("a person author's name reaches the SAME one names read, so a viewer never sees 'Someone on the team' for a name they could read (mutation: drop extraNames -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_dan" });
+    listPeopleNamesMock.mockResolvedValue({ user_dan: "Dan López" });
+    const html = cardHtml(await render(), "summary");
+    expect([...(listPeopleNamesMock.mock.calls[0]![1] as string[])]).toContain("user_dan");
+    expect(html).toContain(renderedText("Added by Dan López"));
+  });
+
+  it("a person author when the names read FAILED is left out, never guessed as someone on the team (design I-4; mutation: names {} on failure -> FAILS)", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_dan" });
+    listPeopleNamesMock.mockRejectedValue(new Error("users down"));
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const html = cardHtml(await render(), "summary");
+      expect(html).not.toContain("Added by");
+    } finally { errors.mockRestore(); }
+  });
+
+  it("a person the read could not name (a departed member) reads someone on the team", async () => {
+    getContactMock.mockReset().mockResolvedValue({ ...CONTACT, author_kind: "person", author_id: "user_gone" });
+    const html = cardHtml(await render(), "summary");
+    expect(html).toContain(renderedText("Added by someone on the team"));
+  });
+});
+
 /**
  * What's next's "Waiting for you" (item 8b-2, spec 5.3): this customer's pending suggestions as flat rows
  * above the card's own rows, with its own boundary inside the card, the persona read once (the timeline's).

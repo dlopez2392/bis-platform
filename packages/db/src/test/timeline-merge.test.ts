@@ -145,8 +145,8 @@ describe("listContactTimelinePage over a fake client (spec §7, C3, C4)", () => 
     // document_requests and 0081's two document_requirement_skips reads (a skip at created_at, an un-skip at
     // unskipped_at), and 0085's two document_share_timeline reads (a share at created_at, an open at
     // first_opened_at), so there are seven reads more than there are sources, each at limit + 1.
-    // 8b-2: `sources`, not TIMELINE_SOURCES, is what this page read (the suggestions source is read only when asked).
-    expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions"));
+    // 8b-2 / 8c: `sources`, not TIMELINE_SOURCES, is what this page read (the suggestions and ai_acts sources are read only when asked).
+    expect(p.sources).toEqual(TIMELINE_SOURCES.filter((s) => s !== "suggestions" && s !== "ai_acts"));
     expect(paged.map((r) => r.limit)).toEqual(Array(p.sources.length + 7).fill(TIMELINE_PAGE_SIZE + 1));
     expect(paged.filter((r) => r.table === "document_requests").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1]);
     expect(paged.filter((r) => r.table === "document_requirement_skips").map((r) => r.limit)).toEqual([TIMELINE_PAGE_SIZE + 1, TIMELINE_PAGE_SIZE + 1]);

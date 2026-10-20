@@ -33,3 +33,20 @@ export function bookingAuthor(actorType: ActorType, actorId: string): RowAuthor 
   if (actorType === "system") return { authorKind: "customer", authorId: null };
   return { authorKind: "person", authorId: btrim(actorId) || null };
 }
+
+/** The demo tenant's daily seed and the CI seed write contacts under these actor ids; their contacts are
+ *  imports, whatever the actor type (owner decision Q1, item 8c). */
+export const SEED_ACTORS = ["system_demo_seed", "system_ci_seed"] as const;
+
+/**
+ * Who created a contact (item 8c, spec §5.3), from the actor its writer passes to createContact. SQL twin:
+ * app.contact_author (0091), pinned by provenance-parity.test.ts. `ai` is the receptionist or the web chat;
+ * a seed actor id is an import; `user` is a person (with their id); any other `system` actor (the public
+ * form, the booking page, an inbound text) is the customer.
+ */
+export function contactAuthor(actorType: ActorType, actorId: string): RowAuthor {
+  if (actorType === "ai") return { authorKind: "ai", authorId: null };
+  if ((SEED_ACTORS as readonly string[]).includes(btrim(actorId))) return { authorKind: "import", authorId: null };
+  if (actorType === "user") return { authorKind: "person", authorId: btrim(actorId) || null };
+  return { authorKind: "customer", authorId: null };
+}

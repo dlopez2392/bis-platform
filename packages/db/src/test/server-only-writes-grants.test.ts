@@ -23,7 +23,7 @@ const byPrivilege = (table: string) =>
 type Seed = {
   accountId: string; contactId: string; conversationId: string; messageId: string; formId: string;
   submissionId: string; calendarId: string; bookingId: string; proposalId: string; eventId: string;
-  opportunityId: string;
+  opportunityId: string; aiActId: string;
 };
 
 /** One real account (client access ON, so RLS would pass) holding one row in every table this file tests. Owner connection. */
@@ -62,7 +62,11 @@ async function seed(c: Client, label: string): Promise<Seed> {
   const opportunityId = await one(
     "insert into opportunities (account_id, contact_id, pipeline_id, stage_id, name) values ($1,$2,$3,$4,'Roof') returning id",
     [accountId, contactId, pipelineId, stageId]);
-  return { accountId, contactId, conversationId, messageId, formId, submissionId, calendarId, bookingId, proposalId, eventId, opportunityId };
+  // 0091: one of Sofia's acts, on the contact, from the call.
+  const aiActId = await one(
+    "insert into ai_acts (account_id, actor, call_id, contact_id, kind, target) values ($1,'voice',$2,$3,'contact_created','{}'::jsonb) returning id",
+    [accountId, callId, contactId]);
+  return { accountId, contactId, conversationId, messageId, formId, submissionId, calendarId, bookingId, proposalId, eventId, opportunityId, aiActId };
 }
 
 let seated = 0;
@@ -85,6 +89,8 @@ const SERVER_ONLY = [
   { table: "bookings", policy: "bookings_tenant_read", fence: { name: "bookings_technician_scope", cmd: "ALL" } },
   // 0088: the one table for every AI suggestion. Its fence is FOR SELECT (there is no client write to fence).
   { table: "proposals", policy: "proposals_member_read", fence: { name: "proposals_technician_scope", cmd: "SELECT" } },
+  // 0091: Sofia's live acts, read like proposals (FOR SELECT fence; no client write to fence).
+  { table: "ai_acts", policy: "ai_acts_member_read", fence: { name: "ai_acts_technician_scope", cmd: "SELECT" } },
 ] as const;
 
 describe("0053: server-only tables, at the catalogue", () => {
@@ -156,6 +162,7 @@ const READ_CASES = [
   ["messages", "messageId"], ["bookings", "bookingId"],
   // The seed inserts the proposals row directly (the 0040 table and its mirror went with 0090).
   ["proposals", "proposalId"],
+  ["ai_acts", "aiActId"],
 ] as const;
 
 describe("0053: a member reads its own account's rows and never another account's (green before AND after)", () => {
@@ -219,6 +226,7 @@ describe("0053: a member of a real account is refused every write by privilege",
         ["conversations", "update conversations set unread_count = 0 where id = $1", [s.conversationId]],
         ["messages", "update messages set body = 'edited' where id = $1", [s.messageId]],
         ["proposals", "update proposals set status = 'accepted', decided_at = now(), decided_by = 'user_x', applied_payload = payload where id = $1", [s.proposalId]],
+        ["ai_acts", "update ai_acts set undone_at = now(), undone_by = 'user_x' where id = $1", [s.aiActId]],
         ["contacts", "update contacts set reactivation_sent_at = null where id = $1", [s.contactId]],
         ["opportunities", "update opportunities set quote_followup_sent_at = null where id = $1", [s.opportunityId]],
         ["opportunities", "update opportunities set quote_followup_sms_failed_at = null where id = $1", [s.opportunityId]],
@@ -247,6 +255,8 @@ describe("0053: a member of a real account is refused every write by privilege",
         .toMatchObject(byPrivilege("events"));
       expect(await refused(c, "update proposals set status = 'dismissed', decided_at = now(), decided_by = 'u' where id = $1", [s.proposalId]))
         .toMatchObject(byPrivilege("proposals"));
+      expect(await refused(c, "update ai_acts set undone_at = now(), undone_by = 'u' where id = $1", [s.aiActId]))
+        .toMatchObject(byPrivilege("ai_acts"));
     }));
 });
 

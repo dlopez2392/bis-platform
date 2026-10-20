@@ -95,6 +95,21 @@ type TelnyxWebhookBody = {
 /** Work to run once the response is sent (`after`); injected so tests can run it. */
 type Defer = (work: () => Promise<void>) => void;
 
+/**
+ * A text's FIRST filing failed before its message row was written (item 8c final review A7): the
+ * customer's words are nowhere yet, so the route answers 503 and Telnyx retries. The retry is safe:
+ * filing is keyed on the message id (`findMessageByProviderId`), so it files once. The case it exists
+ * for is a text racing the removal of the contact it matched (an Undo of a customer Sofía added):
+ * `@bis/db`'s helpers rethrow plain Errors without the database code, so the route never matches on a
+ * foreign-key text; any failure before the row exists is retryable by definition.
+ */
+class FilingFailed extends Error {
+  override name = "FilingFailed";
+  constructor(cause: unknown) {
+    super("the inbound text's first filing failed before its message was written", { cause });
+  }
+}
+
 async function handleInbound(
   db: SupabaseClient, payload: TelnyxPayload | undefined, consent: InboundClass, defer: Defer,
 ): Promise<void> {
@@ -166,26 +181,44 @@ async function handleInbound(
   // most recent unanswered ask" and must not run twice), but the consent step
   // is not: it is idempotent on the same id, and it is what a retry is for
   // (plan G1, spec S1).
-  const existing = providerMessageId ? await findMessageByProviderId(db, accountId, providerMessageId) : null;
+  let existing: Awaited<ReturnType<typeof findMessageByProviderId>> = null;
+  try {
+    existing = providerMessageId ? await findMessageByProviderId(db, accountId, providerMessageId) : null;
+  } catch (e) {
+    // Not knowing whether it was filed is not having filed it: a retry asks again.
+    throw new FilingFailed(e);
+  }
   const firstFiling = existing === null;
 
   // Match an existing contact on this account by phone, or create one —
   // createContact already dedupes on phone (contacts.ts's findDuplicate),
-  // so a known customer's text joins their existing thread.
-  const contact = await createContact(
-    db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
-  );
-  const conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
+  // so a known customer's text joins their existing thread. Up to and
+  // including the message row, a failure on the FIRST filing is
+  // `FilingFailed` (503, Telnyx retries); on a retry the text is already
+  // filed, so a failure here keeps the old rule below.
+  let contact: Awaited<ReturnType<typeof createContact>>;
+  let conversation: Awaited<ReturnType<typeof ensureConversation>>;
+  try {
+    contact = await createContact(
+      db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
+    );
+    conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
+    if (firstFiling) {
+      await createMessage(db, accountId, {
+        conversationId: conversation.id, channel: "sms", direction: "inbound",
+        body: text, providerMessageId: providerMessageId ?? undefined,
+        // Received in full, not queued to send anywhere — see NewMessage.status
+        // (packages/db/src/messaging.ts). The column default is 'queued', which
+        // is right for an outbound send and wrong for an inbound text.
+        status: "delivered",
+      }, ACTOR_ID, ACTOR_TYPE);
+    }
+  } catch (e) {
+    if (firstFiling) throw new FilingFailed(e);
+    throw e;
+  }
 
   if (firstFiling) {
-    await createMessage(db, accountId, {
-      conversationId: conversation.id, channel: "sms", direction: "inbound",
-      body: text, providerMessageId: providerMessageId ?? undefined,
-      // Received in full, not queued to send anywhere — see NewMessage.status
-      // (packages/db/src/messaging.ts). The column default is 'queued', which
-      // is right for an outbound send and wrong for an inbound text.
-      status: "delivered",
-    }, ACTOR_ID, ACTOR_TYPE);
     // Same invariant every other inbound writer keeps: a new inbound message
     // always bumps the conversation's unread count, right after the row that
     // made it unread exists.
@@ -278,7 +311,9 @@ export async function POST(req: Request): Promise<NextResponse> {
   // EXCEPT a text that changes consent (a stop, a start, a stop sentence):
   // losing one of those is a legal failure, so it answers 503 and Telnyx
   // retries (plan G2; every write it retries is idempotent). A plain text
-  // keeps the old rule: nothing a retry can fix, so 200 and a log line.
+  // keeps the old rule (nothing a retry can fix, so 200 and a log line)
+  // once it is filed; before its message row exists, a failure is
+  // `FilingFailed` and answers 503 too, so the words are never lost.
   // serviceDb() MUST stay inside this try for either guarantee to hold.
   try {
     const db = serviceDb();
@@ -293,8 +328,15 @@ export async function POST(req: Request): Promise<NextResponse> {
     // The event type is Telnyx's own name and the error is named by its type,
     // never its message, which can quote a phone number or the text itself.
     stampHeartbeat("sms.inbound", { ok: false, error: `${String(eventType ?? "unknown").slice(0, 40)} handling failed (${e instanceof Error ? e.name : typeof e})` });
+    // A FilingFailed wraps the real cause; every branch logs the cause.
+    const cause = e instanceof FilingFailed ? e.cause : e;
     if (CHANGES_CONSENT.has(consent.kind)) {
-      log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(e));
+      log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(cause));
+      return NextResponse.json({ error: "retry" }, { status: 503 });
+    }
+    // Item 8c final review A7: a plain text not yet filed is retried too.
+    if (e instanceof FilingFailed) {
+      log("could not file an inbound text; answering 503 so Telnyx retries", eventType, loggableError(cause));
       return NextResponse.json({ error: "retry" }, { status: 503 });
     }
     log("unexpected failure handling webhook", eventType, loggableError(e));

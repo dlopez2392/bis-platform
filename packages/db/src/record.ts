@@ -18,6 +18,8 @@ import { listDocumentSkipTimeline, type TimelineDocumentSkip } from "./document-
 import { listDocumentShareTimeline, type TimelineDocumentShare } from "./document-shares";
 import { listContactAcceptedSuggestions } from "./proposals";
 import { parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayload, type Proposal } from "./proposal-rules";
+import { listContactAiActs } from "./ai-acts";
+import type { AiAct } from "./ai-act-rules";
 
 export type { TimelineCursor } from "./timeline-cursor";
 export type { ContactBookingRow } from "./booking";
@@ -271,10 +273,11 @@ export async function groupActivityMembers(
   };
 }
 
-export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "suggestions";
-/** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`), so
- *  what a page read is its own `sources`, never this list. */
-export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions"];
+export type TimelineSource = "notes" | "todos" | "deals" | "forms" | "messages" | "bookings" | "calls" | "documents" | "chats" | "suggestions" | "ai_acts";
+/** Every source there is, in source order. A page reads `suggestions` only when asked (`opts.suggestions`)
+ *  and `ai_acts` only when asked (`opts.aiActs`, item 8c), so what a page read is its own `sources`,
+ *  never this list. */
+export const TIMELINE_SOURCES: readonly TimelineSource[] = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions", "ai_acts"];
 
 /** item 8b-2 (spec 5.4): an accepted suggestion as the timeline draws it. `applied` is what was written
  *  (`applied_payload`), parsed by the row's own kind; null when it does not parse, and then the row
@@ -345,7 +348,10 @@ export type TimelineEntry =
   /** S-07 3b: the link's first download, at its first_opened_at, from the same row. The kind keeps its key apart from the share's. */
   | { kind: "documentShareOpened"; id: string; at: string; contactId: string; share: TimelineDocumentShare }
   /** item 8b-2 (spec 5.4): one row per accepted or edited suggestion, at its decided_at, from `proposals` so RLS decides. `id` is the suggestion's. */
-  | { kind: "suggestion"; id: string; at: string; contactId: string; suggestion: TimelineSuggestion };
+  | { kind: "suggestion"; id: string; at: string; contactId: string; suggestion: TimelineSuggestion }
+  /** item 8c: one row per act Sofia or the web chat took live, at its created_at, from `ai_acts` so RLS
+   *  decides; read only when `opts.aiActs` asks. `id` is the act's. */
+  | { kind: "aiAct"; id: string; at: string; contactId: string; act: AiAct };
 /** `sources` (item 8b-2) is every source this page READ, in source order; `failed` is the ones of them that
  *  failed. "Every source failed" is `failed.length > 0 && failed.length >= sources.length`: an empty set
  *  reads nothing, so both are empty and that is an empty timeline, not an error. */
@@ -423,7 +429,7 @@ async function listContactChats(
  */
 export async function listTimelinePage(
   db: SupabaseClient, accountId: string, contactIds: readonly string[], before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; groupId?: string; suggestions?: boolean; aiActs?: boolean } = {},
 ): Promise<TimelinePage> {
   // A set with no one in it (a group none of whose members this reader can see) has nothing to
   // read: PostgREST's `in.()` is not a query anyone means, and forContacts refuses it.
@@ -501,6 +507,12 @@ export async function listTimelinePage(
       ? [settle("suggestions", async () => (await listContactAcceptedSuggestions(db, accountId, who, page))
         .map((p): TimelineEntry => ({ kind: "suggestion", id: p.id, at: p.decidedAt, contactId: p.contactId, suggestion: timelineSuggestion(p) })))]
       : []),
+    // item 8c: one row per act Sofia or the web chat took live, only when the caller asks (`opts.aiActs`,
+    // the `suggestions` source's own shape, one source later).
+    ...(opts.aiActs === true
+      ? [settle("ai_acts", async () => (await listContactAiActs(db, accountId, who, page))
+        .map((a): TimelineEntry => ({ kind: "aiAct", id: a.id, at: a.createdAt, contactId: a.contactId, act: a })))]
+      : []),
   ]);
   const sources = results.map((r) => r.source);
   const failed = results.flatMap((r) => (r.entries === null ? [r.source] : []));
@@ -513,7 +525,7 @@ export async function listTimelinePage(
 /** The contact page's timeline (S-03 1b): `listTimelinePage` for one person, on the `.eq` path. */
 export async function listContactTimelinePage(
   db: SupabaseClient, accountId: string, contactId: string, before?: TimelineCursor,
-  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; suggestions?: boolean } = {},
+  opts: { limit?: number; onError?: (source: TimelineSource, e: unknown) => void; suggestions?: boolean; aiActs?: boolean } = {},
 ): Promise<TimelinePage> {
   return listTimelinePage(db, accountId, [contactId], before, opts);
 }

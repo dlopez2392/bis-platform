@@ -1065,3 +1065,167 @@ describe("the tray everywhere, item 8b-2's new keys (plan Task 3)", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("Sofía's acts on the timeline, their Undo, reasons, notice and created-by (item 8c, plan Task 2)", () => {
+  // The expected `{param}` set per key — the mutation this guards against is
+  // a key whose English and Spanish strings name different params (a
+  // translator drops or renames one), which `t()` would silently leave
+  // un-interpolated in only one language.
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "timeline.what.aiActs": [],
+    "aiActs.verb.booked": ["when"],
+    "aiActs.verb.rescheduled": ["when"],
+    "aiActs.detail.movedFrom": ["when"],
+    "aiActs.verb.cancelled": ["when"],
+    "aiActs.verb.contactCreated": [],
+    "aiActs.verb.fieldFilled": ["field", "value"],
+    "aiActs.field.firstName": [],
+    "aiActs.field.lastName": [],
+    "aiActs.field.email": [],
+    "aiActs.field.phone": [],
+    "aiActs.source.call": ["date"],
+    "aiActs.source.webchat": [],
+    "aiActs.reason.alreadyCancelled": [],
+    "aiActs.reason.alreadyHappened": [],
+    "aiActs.reason.rebooked": [],
+    "aiActs.reason.timePassed": [],
+    "aiActs.reason.timeTaken": [],
+    "aiActs.reason.oldTimeTaken": [],
+    "aiActs.reason.changed": [],
+    "aiActs.reason.changedBy": ["name"],
+    "aiActs.reason.hasActivity": [],
+    "aiActs.reason.hasBooking": [],
+    "aiActs.reason.otherBooking": [],
+    "aiActs.reason.ownerOnly": [],
+    "aiActs.reason.gone": [],
+    "aiActs.undoneBy": ["name", "date"],
+    "aiActs.notify.label": ["name"],
+    "aiActs.notify.noEmail": ["name"],
+    "aiActs.toast.fieldUndone": ["field"],
+    "aiActs.toast.fieldRedone": ["persona", "field"],
+    "aiActs.toast.fieldRemoved": ["field", "persona"],
+    "aiActs.toast.bookingUndone": [],
+    "aiActs.toast.bookingUndoneTold": ["name"],
+    "aiActs.toast.bookingUndoneNotTold": ["name"],
+    "aiActs.toast.contactRemoved": [],
+    "aiActs.toast.contactRemovedChat": [],
+    "aiActs.toast.notAvailable": ["reason"],
+    "aiActs.toast.failed": [],
+    "aiActs.toast.typedNameMismatch": [],
+    "aiActs.notice.calendarFix": [],
+    "aiActs.contactDialog.title": ["name"],
+    "aiActs.contactDialog.body": ["persona"],
+    "aiActs.contactDialog.bodyChat": ["persona"],
+    "aiActs.contactDialog.label": ["name"],
+    "aiActs.contactDialog.mismatch": [],
+    "aiActs.contactDialog.confirm": [],
+    "record.facts.addedBy.person": ["name"],
+    "record.facts.addedBy.you": [],
+    "record.facts.addedBy.someone": [],
+    "record.facts.addedBy.ai": ["name"],
+    "record.facts.addedBy.customer": [],
+    "record.facts.addedBy.import": [],
+    "record.facts.addedBy.automation": [],
+    "styleguide.aiActs": [],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+
+  function paramsOf(s: string): string[] {
+    return [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+  }
+
+  it("every key exists with its Spanish twin, differing from the English (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const missing = KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`]);
+    expect(missing).toEqual([]);
+  });
+
+  it("names exactly its params, and the same set in both languages (mutation: rename {name} to {who} in one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      const expected = [...EXPECTED_PARAMS[k]!].sort();
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual(expected);
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual(expected);
+    }
+  });
+
+  it("pins the plan's own sentences, both languages (mutation: change one word -> FAILS)", () => {
+    expect([m["timeline.what.aiActs"], m["timeline.what.aiActs.es"]]).toEqual([
+      "the assistant's actions", "las acciones de la asistente"]);
+    expect([m["aiActs.verb.fieldFilled"], m["aiActs.verb.fieldFilled.es"]]).toEqual([
+      "filled in the {field}: {value}", "completó {field}: {value}"]);
+    expect([m["aiActs.undoneBy"], m["aiActs.undoneBy.es"]]).toEqual([
+      "Undone by {name} · {date}", "Deshecho por {name} · {date}"]);
+    // Design M-8: the Spanish names who would need to know, so "Llámele" is never read as the reader's own call.
+    expect([m["aiActs.notify.noEmail"], m["aiActs.notify.noEmail.es"]]).toEqual([
+      "{name} has no email on file, so they won't be told. Call them if they need to know.",
+      "Este cliente no tiene correo registrado, así que no se le avisará. Llámele si {name} necesita saberlo."]);
+    // Design M-2: the typed name moved out of the body into its own visible label.
+    expect([m["aiActs.contactDialog.body"], m["aiActs.contactDialog.body.es"]]).toEqual([
+      "{persona} added this customer, and nothing else has happened since. Removing them can't be undone; the call stays in Calls.",
+      "{persona} agregó a este cliente y no ha pasado nada más desde entonces. Quitarlo no se puede deshacer; la llamada sigue en Llamadas."]);
+    expect([m["aiActs.contactDialog.label"], m["aiActs.contactDialog.label.es"]]).toEqual([
+      "Type {name} to confirm", "Escriba {name} para confirmar"]);
+    // Review M-a: the web chat's own words.
+    expect([m["aiActs.contactDialog.bodyChat"], m["aiActs.toast.contactRemovedChat"]]).toEqual([
+      "{persona} added this customer from the website chat, and nothing else has happened since. Removing them can't be undone; the chat's form entry stays in Forms.",
+      "Customer removed. The chat's form entry stays in Forms."]);
+    // Design I-5: what the field toasts say.
+    expect([m["aiActs.toast.fieldRemoved"], m["aiActs.toast.fieldUndone"], m["aiActs.toast.fieldRedone"]]).toEqual([
+      "Removed the {field} {persona} filled in.", "Put back the earlier {field}.", "{persona}'s {field} is back."]);
+    // Design M-7.
+    expect([m["aiActs.reason.changedBy"], m["aiActs.reason.changed"], m["aiActs.reason.hasActivity"]]).toEqual([
+      "Changed by {name} since", "Changed since then", "They've had other activity since"]);
+    // Design I-4: one sentence per author kind.
+    expect([m["record.facts.addedBy.ai"], m["record.facts.addedBy.ai.es"], m["record.facts.addedBy.you.es"]]).toEqual([
+      "Added by {name} (AI)", "Agregado por {name} (IA)", "Agregado por usted"]);
+  });
+
+  it("every reason is a fragment with no closing period; the refusal toast closes the sentence (design M-7; mutation: a period back on one reason -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const reasons = KEYS.filter((k) => k.startsWith("aiActs.reason."));
+    expect(reasons.length).toBeGreaterThanOrEqual(13);
+    const closed = reasons.flatMap((k) => [cat[k]!, cat[`${k}.es`]!]).filter((x) => /[.!?]$/.test(x));
+    expect(closed).toEqual([]);
+    expect(m["aiActs.toast.notAvailable"]).toBe("This can't be undone any more: {reason}.");
+    expect(m["aiActs.toast.notAvailable.es"]).toBe("Ya no se puede deshacer: {reason}.");
+  });
+
+  it("the named params interpolate through t() for both languages", () => {
+    expect(t(m, "aiActs.verb.booked", "en", { when: "2:00 PM" })).toBe("booked 2:00 PM");
+    expect(t(m, "aiActs.verb.booked", "es", { when: "2:00 PM" })).toBe("reservó 2:00 PM");
+    expect(t(m, "aiActs.verb.fieldFilled", "en", { field: "phone number", value: "(956) 555-0101" }))
+      .toBe("filled in the phone number: (956) 555-0101");
+    expect(t(m, "aiActs.undoneBy", "es", { name: "Ana", date: "Oct 20" })).toBe("Deshecho por Ana · Oct 20");
+    expect(t(m, "aiActs.contactDialog.title", "en", { name: "Maria Garcia" })).toBe("Remove Maria Garcia?");
+    expect(t(m, "record.facts.addedBy.ai", "en", { name: "Sofía" })).toBe("Added by Sofía (AI)");
+    expect(t(m, "aiActs.toast.fieldRemoved", "es", { field: "el correo", persona: "Sofía" })).toBe("Se quitó el correo que completó Sofía.");
+  });
+
+  it("reuses common.undo, common.cancel and provenance.ai rather than duplicating them", () => {
+    expect(m["common.undo"]).toBe("Undo");
+    expect(m["common.cancel"]).toBe("Cancel");
+    expect(m["provenance.ai"]).toBe("{name} · AI");
+  });
+
+  it("no plumbing words reach the reader, and no internal milestone code (mutation: write 'rpc' into one key -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const bad = KEYS.flatMap((k) => [cat[k], cat[`${k}.es`]])
+      .filter((s) => /\b(act|ai act|registry|rpc|payload|server)\b/i.test(s ?? ""));
+    expect(bad).toEqual([]);
+  });
+
+  // The undo notice is a CUSTOMER email: it follows the booking templates' own register, which is tú (design
+  // I-6). Every other key here is app copy, read by staff: usted.
+  const CUSTOMER_EMAIL = new Set<string>(["aiActs.notice.calendarFix"]);
+
+  it("Spanish app copy is usted, never tú (mutation: 'tu' or 'Intenta' in any app .es -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const es = KEYS.filter((k) => !CUSTOMER_EMAIL.has(k)).map((k) => cat[`${k}.es`]!);
+    for (const s of es) expect(s).not.toMatch(/\b(escribe|intenta|recarga|tu|tus|contigo)\b/i);
+  });
+
+  it("the undo notice's Spanish sentence is tú, matching the email it sits in (design I-6; mutation: back to usted -> FAILS)", () => {
+    expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.");
+  });
+});

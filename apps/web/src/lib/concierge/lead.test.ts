@@ -151,6 +151,14 @@ describe("fileLead", () => {
     expect(call[7]).toBe(true);
   });
 
+  it("tells enrich it is the chat, with this conversation's own id, as the ninth argument (item 8c; mutation: drop it -> FAILS)", async () => {
+    const { db } = fakeDb();
+    await fileLead({ db, ...CTX });
+    const call = enrichMock.mock.calls[0]!;
+    expect(call).toHaveLength(9);
+    expect(call[8]).toEqual({ chatId: CTX.conversationId });
+  });
+
   it("returns false and deletes the orphan when the slot was already claimed", async () => {
     dbFns.setConciergeSubmission.mockResolvedValue(false);
     const { db, deletes } = fakeDb();

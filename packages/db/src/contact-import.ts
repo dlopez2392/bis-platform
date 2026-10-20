@@ -173,7 +173,9 @@ export async function applyImportBatch(
       contactId = hitId;
       updated++;
     } else {
-      const result = await createContact(db, accountId, row.input, actorId);
+      // item 8c: every row an import creates is an import, whatever actor the caller signs the write
+      // as — a CSV re-import of an export must never read as a PERSON's own hand-entry.
+      const result = await createContact(db, accountId, { ...row.input, author: { authorKind: "import", authorId: null } }, actorId);
       contactId = result.id;
       if (result.flagged) flagged++;
       if (result.existing) {
