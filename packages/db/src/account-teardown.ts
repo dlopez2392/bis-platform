@@ -61,16 +61,14 @@ export const ACCOUNT_OWNED_TABLES = [
  * `account_billing.plan_id` and `billing_links.plan_id` are both `restrict`
  * toward it, not toward the account.)
  *
- * `call_proposals` (0040) stays OFF that list until 0089 drops the table,
- * and it needs no `account_id`-cascade proof of its own: `call_id` is
- * `not null … on delete cascade`, and `calls` IS on `ACCOUNT_OWNED_TABLES`
- * above, so its rows ride `calls`' cascade long before `accounts` itself is
- * reached (`account_id`'s own cascade is a backstop for a direct `accounts`
- * delete). `call-proposals-grants.test.ts` proves the row is gone after
- * teardown without assuming which FK did it. Its successor `proposals`
- * (0088) is ON the list, directly before `calls`: it cascades with its call
- * and its contact too, but listed, every caller of this list deletes it
- * explicitly and reports its error by name (spec 4.1 names it).
+ * `call_proposals` (0040) was never on that list, and was dropped by 0090
+ * (item 8b-2) with its mirror, its guard and the copy function. While it
+ * existed its rows rode `calls`' cascade (`call_id` was `not null … on
+ * delete cascade`, and `calls` is on the list above), so no caller deleted
+ * it by name. Its successor `proposals` (0088) is ON the list, directly
+ * before `calls`: it cascades with its call and its contact too, but
+ * listed, every caller of this list deletes it explicitly and reports its
+ * error by name (spec 4.1 names it).
  *
  * `consent_events` (0054) is off this list for a DIFFERENT, load-bearing
  * reason: it is NOT derived or scratch state — it is the append-only

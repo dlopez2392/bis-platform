@@ -3,14 +3,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { SuggestionActions, decisionFocusTarget, escCancelsEdit } from "./suggestion-actions";
+import { SuggestionActions, decisionFocusTarget, escCancelsEdit, focusPlan } from "./suggestion-actions";
 import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
 
 /** No DOM here (no jsdom): the markup a reader and a keyboard get, per mode. What the buttons DO is
  *  suggestion-handlers.test.ts's, and in the browser the e2e's (Task 10). */
 const labels: SuggestionLabels = {
   accept: "Accept", editAccept: "Edit and accept", discard: "Discard", saveAccept: "Save and accept", cancel: "Cancel",
-  undo: "Undo", title: "Title", due: "Due date", stage: "Stage", crashed: "That may not have gone through.",
+  undo: "Undo", title: "Title", due: "Due date", stage: "Stage", crashed: "That may not have gone through.", reload: "Reload",
   because: "Because the caller said", lang: "es",
 };
 const ok = async () => ({ ok: true as const, status: "accepted" as const, toast: "Done" });
@@ -93,18 +93,21 @@ describe("SuggestionActions: the edit forms", () => {
 });
 
 /**
- * Design review minor 5: after a decision, focus must not fall to <body>. On the call page the card stays
- * and its status line takes focus; in the To do tray it leaves, and the next card's Accept takes it. Until
- * the page's re-render lands the card still reads pending, so the caller waits. A fake document stands in
- * for the DOM (there is no jsdom here); the e2e proves it in the browser.
+ * Design review minor 5, and 8b-2's I3: after a decision, focus must not fall to <body>. On the call page
+ * the card stays and its status line takes focus; in a list it leaves, and the first of the plan's cards
+ * still there takes it (the next card, else the previous one, else a card in a later list of the same
+ * scope), else the first fallback heading present (spec 4.5). Until the page's re-render lands the card
+ * still reads pending, so the caller waits. A fake document stands in for the DOM (there is no jsdom
+ * here); the e2e proves it in the browser.
  */
-function fakeDoc(cards: Record<string, string>) {
+function fakeDoc(cards: Record<string, string>, present: string[] = []) {
   const el = (name: string) => ({ name, focus: vi.fn() });
   const made = new Map<string, ReturnType<typeof el>>();
   const get = (name: string) => { if (!made.has(name)) made.set(name, el(name)); return made.get(name)!; };
   return {
     made,
     querySelector(sel: string) {
+      if (present.includes(sel)) return get(sel);
       const m = /^\[data-suggestion="([^"]+)"\](?: (.+))?$/.exec(sel);
       if (!m || !(m[1]! in cards)) return null;
       const card = { getAttribute: (a: string) => (a === "data-status" ? cards[m[1]!]! : null) };
@@ -113,19 +116,25 @@ function fakeDoc(cards: Record<string, string>) {
     },
   };
 }
-describe("decisionFocusTarget (design review minor 5)", () => {
+const plan = (candidates: string[], fallbacks: string[] = []) => ({ candidates, fallbacks });
+describe("decisionFocusTarget (design review minor 5; 8b-2 design review I3)", () => {
   it("the card still reads pending: wait for the re-render", () => {
     const doc = fakeDoc({ sg_1: "pending", sg_2: "pending" });
-    expect(decisionFocusTarget(doc as never, "sg_1", "sg_2")).toEqual({ wait: true, el: null });
+    expect(decisionFocusTarget(doc as never, "sg_1", plan(["sg_2"]))).toEqual({ wait: true, el: null, heading: false });
   });
   it("the card stayed, decided (the call page): its status line (mutation: always the next Accept -> FAILS)", () => {
     const doc = fakeDoc({ sg_1: "accepted", sg_2: "pending" });
-    expect(decisionFocusTarget(doc as never, "sg_1", "sg_2")).toEqual({ wait: false, el: doc.made.get("sg_1 [data-status-line]") });
+    expect(decisionFocusTarget(doc as never, "sg_1", plan(["sg_2"]))).toEqual({ wait: false, el: doc.made.get("sg_1 [data-status-line]"), heading: false });
   });
-  it("the card left (the tray): the next card's Accept; none left, nothing", () => {
-    const doc = fakeDoc({ sg_2: "pending" });
-    expect(decisionFocusTarget(doc as never, "sg_1", "sg_2")).toEqual({ wait: false, el: doc.made.get("sg_2 [data-suggestion-accept]") });
-    expect(decisionFocusTarget(fakeDoc({}) as never, "sg_1", null)).toEqual({ wait: false, el: null });
+  it("the card left (the tray): the first planned card still there takes focus on its Accept", () => {
+    const doc = fakeDoc({ sg_3: "pending" });
+    expect(decisionFocusTarget(doc as never, "sg_1", plan(["sg_2", "sg_3"]))).toEqual({ wait: false, el: doc.made.get("sg_3 [data-suggestion-accept]"), heading: false });
+  });
+  it("no planned card is left: the first fallback heading present, never <body> (mutation: stop at the cards -> FAILS)", () => {
+    const doc = fakeDoc({}, ["h1", '[data-record-card="next-up"] h2']);
+    expect(decisionFocusTarget(doc as never, "sg_1", plan(["sg_2"], ["#gone", '[data-record-card="next-up"] h2', "h1"])))
+      .toEqual({ wait: false, el: doc.made.get('[data-record-card="next-up"] h2'), heading: true });
+    expect(decisionFocusTarget(fakeDoc({}) as never, "sg_1", plan([], ["h1"]))).toEqual({ wait: false, el: null, heading: false });
   });
 });
 
@@ -197,5 +206,57 @@ describe("the suggestion card's client files stay off the registry and the datab
       `import type { SuggestionView } from "@/lib/proposals/view";`,
       `import type { Proposal } from "@bis/db/proposal-rules";`,
     ].map((s) => SERVER_VALUE_IMPORT.test(s))).toEqual([true, true, true, true, false, false]);
+  });
+});
+
+/**
+ * The flat row's actions (item 8b-2, spec 5.3; DESIGN.md rule 8 as amended 2026-10-19: "A flat suggestion
+ * row inside a record card has no primary at all"): ghost Accept and ghost Discard, and no Edit, which
+ * happens in the tray.
+ */
+describe("SuggestionActions variant=\"row\" (the record's flat row)", () => {
+  function rowHtml(edit: SuggestionEdit) {
+    return renderToStaticMarkup(createElement(SuggestionActions, {
+      id: "sg_1", edit, labels, accept: ok, editAccept: ok, discard: ok, undo, variant: "row",
+    }));
+  }
+  it("exactly two buttons, Accept and Discard, both ghost: zero primary (mutation: keep Accept's default variant -> FAILS)", () => {
+    for (const edit of [TASK, STAGE]) {
+      const b = buttons(rowHtml(edit));
+      expect(b.map((x) => [text(x), variant(x), typeOf(x)])).toEqual([
+        ["Accept", "ghost", "button"],
+        ["Discard", "ghost", "button"],
+      ]);
+      expect(b.filter((x) => variant(x) === "default")).toEqual([]);
+    }
+  });
+  it("Accept still carries data-suggestion-accept, so focus can land on the next row's Accept", () => {
+    expect(rowHtml(TASK)).toMatch(/<button[^>]*data-suggestion-accept[^>]*>Accept<\/button>/);
+  });
+  it("the card's variant is unchanged by default: one primary Accept", () => {
+    expect(buttons(html(TASK)).filter((x) => variant(x) === "default").map(text)).toEqual(["Accept"]);
+  });
+});
+
+/**
+ * Where focus may go once a decided card leaves (item 8b-2; design review I3, spec 4.5), in order: the cards
+ * after it in its own list (document order, across group boundaries: never the card's next DOM sibling,
+ * which is a group heading at a group's last card), then the cards before it, nearest first (the record's
+ * last Waiting row, an agency account's last card), then the cards of the later lists in the same scope
+ * (the next account's first Accept), then the list's fallback headings. Pure.
+ */
+describe("focusPlan", () => {
+  it("next in the list first, across a group boundary, then the previous card, nearest first (mutation: drop the previous cards -> FAILS)", () => {
+    // Group A holds sg_1 and sg_2; group B holds sg_3. sg_2 is its group's last card.
+    expect(focusPlan(["sg_1", "sg_2", "sg_3"], "sg_2", [], []).candidates).toEqual(["sg_3", "sg_1"]);
+    expect(focusPlan(["sg_1", "sg_2", "sg_3"], "sg_3", [], []).candidates).toEqual(["sg_2", "sg_1"]);
+  });
+  it("an agency account's last card: then the next account's cards, then the fallbacks (mutation: later lists before the previous card -> FAILS)", () => {
+    const p = focusPlan(["a_1", "a_2"], "a_2", ["a_1", "a_2", "b_1", "b_2"], ["#agency-suggestions", "h1"]);
+    expect(p).toEqual({ candidates: ["a_1", "b_1", "b_2"], fallbacks: ["#agency-suggestions", "h1"] });
+  });
+  it("the only card: no candidate, only the fallbacks; an id not in the list has no neighbours", () => {
+    expect(focusPlan(["sg_1"], "sg_1", [], ["h1"])).toEqual({ candidates: [], fallbacks: ["h1"] });
+    expect(focusPlan(["sg_1"], "sg_9", [], []).candidates).toEqual([]);
   });
 });

@@ -1,10 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { brandDisplayName } from "./branding";
 import {
-  SYSTEM_DECIDER, parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayload,
+  SYSTEM_DECIDER, AGENCY_PER_ACCOUNT, WAITING_LIMIT, parseTaskPayload, parseContactFieldPayload, parseOpportunityStagePayload,
   type Proposal, type ProposalInput, type ProposalKind, type ProposalSource, type ProposalStatus,
   type ExpiredReason, type EvidenceRef,
 } from "./proposal-rules";
+import { forContacts, withTimelinePage, type TimelinePageOpts } from "./timeline-cursor";
 
 /**
  * One table for every AI suggestion (0088, item 8b-1; replaces call-proposals.ts). Every read and write
@@ -143,25 +144,64 @@ export async function listPendingProposals(
   return toProposals((data ?? []) as unknown as Row[], "listPendingProposals");
 }
 
+/** PostgREST's max_rows (packages/db/supabase/config.toml), the RPC's responses included. */
+const AGENCY_PAGE = 1000;
+/** 20 x 1000 rows is about 390 busy accounts at 51 each; past that the read fails closed rather than
+ *  show a partial screen as whole. */
+const AGENCY_MAX_PAGES = 20;
+
 /**
  * `listPendingProposals`'s cross-tenant twin, for `/dashboard/work`, agency-wide by construction the
- * way `listAgencyWork` is (work-queue.ts). Copies its accounts-join shape: read the rows, collect the
- * distinct account ids they carry, read only THOSE accounts' `brand_name` and zone, and resolve each
- * name through `brandDisplayName`, which takes no fallback, so a blank `brand_name` comes through as
- * `""`, never `accounts.name` (the agency's internal label).
+ * way `listAgencyWork` is (work-queue.ts), on the SERVICE client (0089 is service_role only). Copies its
+ * accounts-join shape: read the rows, collect the distinct account ids they carry, read only THOSE
+ * accounts' `brand_name` and zone, and resolve each name through `brandDisplayName`, which takes no
+ * fallback, so a blank `brand_name` comes through as `""`, never `accounts.name` (the agency's internal
+ * label).
  *
- * The 500 cap is GLOBAL, ordered newest first, not per account: one account's burst can crowd every
- * quiet account's suggestions off this screen with no trace.
+ * The cap is PER ACCOUNT (item 8b-2, spec 5.2): 0089 answers each account's newest
+ * `AGENCY_PER_ACCOUNT + 1` pending rows, so one account's burst never crowds a quiet account off the
+ * screen, and `accountCapped` says when an account had more than are shown (the tray's 201/200 shape).
+ * PostgREST caps every response at max_rows, the RPC's too, so the read PAGES over an order the request
+ * itself names (the same order 0089 sorts by) until an EMPTY page: a page shorter than asked is not proof
+ * of the end under a lower max_rows (`countBilledAccountsByPlan`'s precedent, billing.ts). Offset pages
+ * are not one snapshot, so a row can repeat between pages: rows are kept once, by id. A row the caller's
+ * own `now` already sees as aged is left out too (the card would show it out of date). THROWS on any
+ * failed read and after `AGENCY_MAX_PAGES` pages with no end; the Work page's catch makes that no
+ * suggestions section, logged.
  */
 export async function listPendingProposalsForAgency(
   db: SupabaseClient, now: Date = new Date(),
-): Promise<(Proposal & { brandName: string; timezone: string })[]> {
-  const { data, error } = await db.from("proposals").select(COLS)
-    .eq("status", "pending").gt("expires_at", now.toISOString())
-    .order("created_at", { ascending: false })
-    .limit(500);
-  if (error) throw new Error(`listPendingProposalsForAgency failed: ${error.message}`);
-  const rows = toProposals((data ?? []) as unknown as Row[], "listPendingProposalsForAgency");
+): Promise<(Proposal & { brandName: string; timezone: string; accountCapped: boolean })[]> {
+  const seen = new Set<string>();
+  const read: Row[] = [];
+  for (let page = 0, from = 0; ; page++) {
+    if (page >= AGENCY_MAX_PAGES) {
+      throw new Error(`listPendingProposalsForAgency: no end after ${AGENCY_MAX_PAGES} pages of ${AGENCY_PAGE}`);
+    }
+    const { data, error } = await db.rpc("list_pending_proposals_for_agency", { p_per_account: AGENCY_PER_ACCOUNT + 1 })
+      .select(COLS)
+      .order("account_id").order("created_at", { ascending: false }).order("id", { ascending: false })
+      .range(from, from + AGENCY_PAGE - 1);
+    if (error) throw new Error(`listPendingProposalsForAgency failed: ${error.message}`);
+    const got = (data ?? []) as unknown as Row[];
+    if (got.length === 0) break;
+    for (const r of got) {
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      read.push(r);
+    }
+    from += got.length;
+  }
+  const fresh = read.filter((r) => Date.parse(r.expires_at) > now.getTime());
+  const perAccount = new Map<string, number>();
+  for (const r of fresh) perAccount.set(r.account_id, (perAccount.get(r.account_id) ?? 0) + 1);
+  const kept = new Map<string, number>();
+  const capped = fresh.filter((r) => {
+    const n = (kept.get(r.account_id) ?? 0) + 1;
+    kept.set(r.account_id, n);
+    return n <= AGENCY_PER_ACCOUNT;
+  });
+  const rows = toProposals(capped, "listPendingProposalsForAgency");
   if (rows.length === 0) return [];
 
   const accountIds = [...new Set(rows.map((r) => r.accountId))];
@@ -186,7 +226,46 @@ export async function listPendingProposalsForAgency(
     // UTC only when the account row itself could not be read (not reachable: the id came off a row
     // read a moment ago), rather than throwing this best-effort screen away over one zone.
     timezone: timezoneByAccount.get(r.accountId) ?? "UTC",
+    accountCapped: (perAccount.get(r.accountId) ?? 0) > AGENCY_PER_ACCOUNT,
   }));
+}
+
+/**
+ * The customer record's "Waiting for you" (item 8b-2, spec 5.3): this customer's pending, not-aged
+ * suggestions, newest first, at most `WAITING_LIMIT`. On the REQUEST client the caller passes, so RLS
+ * decides (P14): a Technician reads none for a customer they cannot read. Served by
+ * `proposals_account_contact_idx`. THROWS on a database error: the section's own error state, never
+ * an empty section.
+ */
+export async function listPendingProposalsForContact(
+  db: SupabaseClient, accountId: string, contactId: string, now: Date = new Date(),
+): Promise<Proposal[]> {
+  const { data, error } = await db.from("proposals").select(COLS)
+    .eq("account_id", accountId).eq("contact_id", contactId).eq("status", "pending")
+    .gt("expires_at", now.toISOString())
+    .order("created_at", { ascending: false })
+    .limit(WAITING_LIMIT);
+  if (error) throw new Error(`listPendingProposalsForContact failed: ${error.message}`);
+  return toProposals((data ?? []) as unknown as Row[], "listPendingProposalsForContact");
+}
+
+/**
+ * The timeline's `suggestions` source (item 8b-2, spec 5.4): the accepted and edited suggestions about
+ * one customer or a set, paged on `decided_at` like every source (`withTimelinePage`), on the caller's
+ * client (RLS decides), served by `proposals_contact_decided_idx`. An Undo puts a row back to pending,
+ * which takes it off. THROWS on a read error (`listTimelinePage`'s settle names it).
+ */
+export async function listContactAcceptedSuggestions(
+  db: SupabaseClient, accountId: string, who: string | readonly string[], page: TimelinePageOpts,
+): Promise<(Proposal & { contactId: string; decidedAt: string })[]> {
+  const { data, error } = await withTimelinePage(
+    forContacts(db.from("proposals").select(COLS).eq("account_id", accountId).in("status", ["accepted", "edited"]), "contact_id", who),
+    "decided_at", page);
+  if (error) throw new Error(`listContactAcceptedSuggestions failed: ${error.message}`);
+  // Both columns are set on an accepted or edited row (0088's proposals_decision_complete); a row that
+  // somehow lacks either is not a timeline row.
+  return toProposals((data ?? []) as unknown as Row[], "listContactAcceptedSuggestions")
+    .flatMap((p) => (p.contactId !== null && p.decidedAt !== null ? [{ ...p, contactId: p.contactId, decidedAt: p.decidedAt }] : []));
 }
 
 /** One suggestion, or null. On the REQUEST client this is what authorises a decision (RLS). */

@@ -21,7 +21,8 @@ import type { Locale } from "@/lib/i18n/locale";
 import { loggableError } from "@/lib/loggable-error";
 import { m } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
-import { buildSuggestionView, type SuggestionView } from "@/lib/proposals/view";
+import { buildSuggestionView } from "@/lib/proposals/view";
+import { groupSuggestions, type SuggestionGroup } from "@/lib/proposals/group";
 import { readSuggestionStages, type StageContext } from "@/lib/proposals/view-reads";
 import { WorkList } from "./work-list";
 
@@ -149,12 +150,14 @@ export default async function TasksPage({
   // The caller behind a row is the call's own contact, else the row's.
   const callerIdOf = (p: Proposal) => (p.callId ? callsById.get(p.callId)?.contactId : null) ?? p.contactId;
 
-  // ONE batch read for every contact these rows (AND every suggestion's caller) reference — never one
-  // read per row. Scoped by account_id so a contactId can never resolve a different account's person.
+  // ONE batch read for every contact these rows (AND every suggestion's caller, AND every suggestion's own
+  // customer, whom its tray group is named after: item 8b-2) reference — never one read per row. Scoped
+  // by account_id so a contactId can never resolve a different account's person.
   const contactIds = [...new Set(
     [...buckets.overdue, ...buckets.today, ...buckets.waiting]
       .map((r) => r.contactId)
       .concat(suggestionRows.map(callerIdOf))
+      .concat(suggestionRows.map((p) => p.contactId))
       .filter((id): id is string => id !== null),
   )];
   const contactNames: Record<string, string> = {};
@@ -174,9 +177,9 @@ export default async function TasksPage({
   // built (a payload the read boundary should have refused) is the section's error state, never the
   // whole To do page (final review M-1). It runs after the contacts batch above, which the buckets share.
   const now = new Date();
-  let views: SuggestionView[] = [];
+  let groups: SuggestionGroup[] = [];
   try {
-    views = suggestionRows.map((p) => {
+    const views = suggestionRows.map((p) => {
       const callerId = callerIdOf(p);
       return buildSuggestionView(p, {
         tr, zone: timezone, now, ...stageCtx,
@@ -186,9 +189,13 @@ export default async function TasksPage({
         personaName, names: {}, viewerId: access.userId,
       });
     });
+    // Grouped by customer, then by call (item 8b-2, spec 5.1), in the same guard as the cards.
+    groups = groupSuggestions(suggestionRows, new Map(views.map((v) => [v.id, v])), {
+      tr, zone: timezone, contactNames, callsById,
+    });
   } catch (e) {
     console.error(`tasks ${accountId}: suggestions could not be shown, rendering the section's error state: ${loggableError(e)}`);
-    views = [];
+    groups = [];
     capped = false;
     suggestionsError = true;
   }
@@ -220,7 +227,7 @@ export default async function TasksPage({
           accountId={accountId}
           contactNames={contactNames}
           timezone={timezone}
-          suggestions={{ views, capped, error: suggestionsError }}
+          suggestions={{ groups, capped, error: suggestionsError }}
           tr={tr}
           personaName={personaName}
           canAssign={assign.canAssign}

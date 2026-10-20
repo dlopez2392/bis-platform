@@ -25,7 +25,7 @@ const claimsFor = (a: Actor) =>
 /** Tables whose rows reach exactly one contact: the key column to select by. */
 const PER_CONTACT = {
   contact_tags: "contact_id", notes: "id", tasks: "id", opportunities: "id", conversations: "id",
-  messages: "id", calls: "id", call_proposals: "id", proposals: "id", bookings: "id", form_submissions: "id",
+  messages: "id", calls: "id", proposals: "id", bookings: "id", form_submissions: "id",
   automation_log: "id", consent_events: "id",
 } as const;
 type Table = keyof typeof PER_CONTACT;
@@ -64,7 +64,10 @@ async function seed(c: Client) {
     const conv = cid ? await one("insert into conversations (account_id, contact_id) values ($1,$2) returning id", [acct, cid]) : "";
     const call = await one("insert into calls (account_id, phone_number_id, contact_id, caller_e164) values ($1,$2,$3,'+19565550142') returning id", [acct, phone, cid]);
     if (cid) await c.query("insert into contact_tags (contact_id, tag_id, account_id) values ($1,$2,$3)", [cid, tag, acct]);
-    const callProposal = await one("insert into call_proposals (account_id, call_id, contact_id, kind, payload, evidence) values ($1,$2,$3,'task','{}','they asked') returning id", [acct, call, cid]);
+    // The row's own customer is what proposals_technician_scope reads, so contact_id is the case's customer.
+    const proposal = await one(
+      "insert into proposals (account_id, source, call_id, contact_id, kind, payload, evidence, expires_at) values ($1,'call',$2,$3,'task','{}','they asked', now() + interval '30 days') returning id",
+      [acct, call, cid]);
     return {
       contact_tags: cid ?? "",
       notes: cid ? await one("insert into notes (account_id, contact_id, body) values ($1,$2,'n') returning id", [acct, cid]) : "",
@@ -73,9 +76,7 @@ async function seed(c: Client) {
       conversations: conv,
       messages: cid ? await one("insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1,$2,'sms','inbound','hola','customer') returning id", [acct, conv]) : "",
       calls: call,
-      call_proposals: callProposal,
-      // 0088's mirror makes the twin with the same id and the same contact (plan fix M2).
-      proposals: callProposal,
+      proposals: proposal,
       bookings: cid ? await one(
         "insert into bookings (account_id, calendar_id, contact_id, starts_at, ends_at, cancel_token, author_kind) values ($1,$2,$3,$4,$5,$6,'person') returning id",
         [acct, calendar, cid, starts.toISOString(), new Date(starts.getTime() + 1_800_000).toISOString(), `tok_${RUN}_${hour}`]) : "",

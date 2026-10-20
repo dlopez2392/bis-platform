@@ -113,3 +113,51 @@ describe("buildSuggestionView: status, canAct and who decided", () => {
     expect(view(rows.pending, "es", { personaName: "Ana" }).personaMark).toBe("Ana · IA");
   });
 });
+
+// item 8b-2 (spec 5.5): a card links to the exact transcript turn. The call started at CALL_AT (9:42:00 AM);
+// the cited turn was spoken 2 min 14 s in. The row itself was written later, when the call ended, so a
+// time computed from `createdAt` instead of the call's start would read a different (negative) answer.
+const cited = { ...rows.pending, createdAt: "2026-10-14T14:50:00.000Z", evidenceRef: { turn: 4, at: "2026-10-14T14:44:14.000Z" } } satisfies Proposal;
+
+describe("buildSuggestionView: the transcript link", () => {
+  it("links to the cited turn on the call page with the time since the call began, in English and Spanish (mutation: time from createdAt -> FAILS)", () => {
+    expect(view(cited).transcript).toEqual({
+      href: "/dashboard/accounts/acc_1/calls/call_1#turn-4", label: "See it in the transcript · 2:14",
+    });
+    expect(view(cited, "es").transcript).toEqual({
+      href: "/dashboard/accounts/acc_1/calls/call_1#turn-4", label: "Ver en la transcripción · 2:14",
+    });
+  });
+  it("pads the seconds and counts turn 0 as a turn", () => {
+    const first = { ...cited, evidenceRef: { turn: 0, at: "2026-10-14T14:43:05.900Z" } } satisfies Proposal;
+    expect(view(first).transcript).toEqual({
+      href: "/dashboard/accounts/acc_1/calls/call_1#turn-0", label: "See it in the transcript · 1:05",
+    });
+  });
+  it("with no call start, or a turn before it, the link has no time", () => {
+    expect(view(cited, "en", { callStartedAt: null }).transcript)
+      .toEqual({ href: "/dashboard/accounts/acc_1/calls/call_1#turn-4", label: "See it in the transcript" });
+    expect(view(cited, "es", { callStartedAt: "2026-10-14T14:45:00.000Z" }).transcript)
+      .toEqual({ href: "/dashboard/accounts/acc_1/calls/call_1#turn-4", label: "Ver en la transcripción" });
+    const noAt = { ...cited, evidenceRef: { turn: 4, at: "" } } satisfies Proposal;
+    expect(view(noAt).transcript).toEqual({ href: "/dashboard/accounts/acc_1/calls/call_1#turn-4", label: "See it in the transcript" });
+  });
+  it("a copied row (no turn) links to the call page itself, with no time", () => {
+    expect(view(rows.pending).transcript).toEqual({ href: "/dashboard/accounts/acc_1/calls/call_1", label: "See it in the transcript" });
+  });
+  it("on the call page, the cited turn is an anchor on the same page and a copied row has no link", () => {
+    expect(view(cited, "en", { onCallPage: true }).transcript).toEqual({ href: "#turn-4", label: "See it in the transcript · 2:14" });
+    expect(view(rows.pending, "en", { onCallPage: true }).transcript).toBeNull();
+  });
+  it("a row with no call has no link", () => {
+    expect(view({ ...cited, callId: null }).transcript).toBeNull();
+  });
+});
+
+describe("buildSuggestionView: the reload answer (8b-1 follow-up 1)", () => {
+  it("a client-side rejection tells the person to reload, in English and Spanish (mutation: back to maybeFailed -> FAILS)", () => {
+    expect(view(rows.pending).labels.crashed).toBe("That didn't reach us. Reload the page, then check before trying again.");
+    expect(view(rows.pending, "es").labels.crashed).toBe("No nos llegó. Recargue la página y revise antes de intentarlo otra vez.");
+    expect([view(rows.pending).labels.reload, view(rows.pending, "es").labels.reload]).toEqual(["Reload", "Recargar"]);
+  });
+});

@@ -106,7 +106,7 @@ describe("0051 tables exist (guards every assertion below from vacuity)", () => 
 describe("0051 grants", () => {
   for (const table of CLIENT_SELECTABLE) {
     // EXACT set, not containment: the default ACL hands TRUNCATE to
-    // authenticated on every new table (call-proposals-grants.test.ts).
+    // authenticated on every new table (proposals-schema.test.ts, the full grant set case).
     it(`${table}: authenticated holds EXACTLY select (mutation: grant insert on ${table} to authenticated → FAILS)`, () =>
       withRollback(async (c) => {
         const { rows } = await c.query(
@@ -245,7 +245,7 @@ describe("0051 RLS reads: a foreign row is PRESENT in every case", () => {
 // INSERT policy ALSO raises 42501 ("new row violates row-level security
 // policy"), so with the insert grant mutated in, a code-only assertion stays
 // green. "permission denied for table <t>" is the GRANT refusing, which is the
-// barrier under test. (Precedent: call-proposals-grants.test.ts.)
+// barrier under test. (Precedent: proposals-schema.test.ts, the client INSERT case.)
 const denied = (table: string) => ({
   code: "42501",
   message: expect.stringMatching(new RegExp(`permission denied for table ${table}`, "i")),

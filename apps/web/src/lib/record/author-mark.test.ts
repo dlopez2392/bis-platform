@@ -189,3 +189,29 @@ describe("a share link's marks (S-07 3b, O1)", () => {
     expect(authorMark({ kind: "chat", id: "x", at: AT, contactId: "c1", chat: { conversationId: "v", count: 1, matchedExisting: true } } as TimelineEntry, ctx()).label).toBe("Customer");
   });
 });
+
+// item 8b-2 (spec 5.4, 8.3): an accepted suggestion is the ACCEPTER's row, a person mark from the closed set,
+// never Sofía's: she suggested it, a person decided it.
+describe("an accepted suggestion's mark (item 8b-2)", () => {
+  const suggestion = (decidedBy: string | null): TimelineEntry => ({
+    kind: "suggestion", id: "p1", at: AT, contactId: "c1",
+    suggestion: {
+      proposal: {
+        id: "p1", accountId: "a1", source: "call", callId: "k1", contactId: "c1", kind: "task",
+        payload: { title: "Send the quote", dueAt: null }, evidence: "x", evidenceRef: {}, evidenceLang: "en",
+        status: "accepted", expiredReason: null, appliedPayload: { title: "Send the quote", dueAt: null }, appliedRef: null,
+        decidedAt: AT, decidedBy, undoneAt: null, undoneBy: null, expiresAt: "2026-11-08T16:12:00+00:00", createdAt: AT,
+      },
+      applied: { title: "Send the quote", dueAt: null },
+    },
+  }) as TimelineEntry;
+  it("is the person who accepted it: named, You for the viewer, Someone on the team unnamed, in both languages; the names read asks for them (mutation: kind 'ai' -> FAILS)", () => {
+    expect(authorOf(suggestion("user_dan"))).toEqual({ kind: "person", personId: "user_dan" });
+    expect(authorMark(suggestion("user_dan"), ctx())).toEqual({ kind: "person", label: "Dan López" });
+    expect(authorMark(suggestion("user_me"), ctx())).toEqual({ kind: "person", label: "You" });
+    expect(authorMark(suggestion("user_me"), ctx({ tr: makeTr("es") }))).toEqual({ kind: "person", label: "Usted" });
+    expect(authorMark(suggestion("user_gone"), ctx())).toEqual({ kind: "person", label: "Someone on the team" });
+    expect(authorMark(suggestion("user_gone"), ctx({ tr: makeTr("es") }))).toEqual({ kind: "person", label: "Alguien del equipo" });
+    expect(personIdsOf([suggestion("user_dan"), suggestion("user_gone")])).toEqual(["user_dan", "user_gone"]);
+  });
+});

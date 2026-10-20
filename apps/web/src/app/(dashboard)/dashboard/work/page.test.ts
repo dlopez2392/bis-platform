@@ -25,43 +25,61 @@ const countLinesTurningCallersAwayMock = vi.fn<
 // Work Queue Task 10's own read — defaults to [] (no suggestions section)
 // so every pre-existing case below is unaffected by its addition. Real
 // signature read from packages/db/src/proposals.ts.
-const listPendingProposalsForAgencyMock = vi.fn(
-  async (): Promise<(Proposal & { brandName: string })[]> => [],
-);
+type AgencyRow = Proposal & { brandName: string; timezone: string; accountCapped: boolean };
+const listPendingProposalsForAgencyMock = vi.fn(async (..._a: unknown[]): Promise<AgencyRow[]> => []);
 // The stale-usage banner's read (client billing) — defaults to [] (no
 // banner) so every case above is unaffected. Real signature:
 // packages/db/src/usage.ts, `(db, now) => Promise<string[]>`.
 const listAccountsWithStaleUsageMock = vi.fn<(db: unknown, now: Date) => Promise<string[]>>(async () => []);
-// Two distinct batch reads share this fake db: the contacts lookup
-// (page.tsx's pre-existing second query) and, since this task's fix-wave
-// (Important 1), the `pipeline_stages` lookup that resolves an
-// opportunity_stage proposal's fromStageId/toStageId to real names — same
-// minimal `.select().in()` chain shape tasks/page.test.ts's own
-// dbForRequest mock uses, with no `.eq()` at all: this read is deliberately
-// cross-tenant (pipeline_stages.id is a globally unique uuid PK, and the ids
-// came from an already-cross-tenant service-role read the same way the
-// contacts ids did). Routed by table name so a test can set each one's own
-// resolved value independently.
-const contactsInMock = vi.fn<
-  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
->(async () => ({ data: [], error: null }));
-const pipelineStagesInMock = vi.fn<
-  (...args: unknown[]) => Promise<{ data: unknown[] | null; error: unknown }>
->(async () => ({ data: [], error: null }));
+/**
+ * The service client, as a recording fake (item 8b-2): every `from(table)` logs its `.eq`/`.in`/`.limit`
+ * filters and answers the table's rows FILTERED by them, so a read that drops a filter really draws another
+ * account's row. The page's own reads (the contacts batch) and the cards' context read
+ * (readAgencySuggestionContext: voice_profiles, calls, and per stage-account opportunities and
+ * pipeline_stages) all go through it. A table in `fake.fail` answers an error.
+ */
+type FakeRow = Record<string, unknown>;
+type FakeQuery = { table: string; eq: [string, unknown][]; in: [string, unknown[]][]; limit: number | null };
+const fake = { tables: {} as Record<string, FakeRow[]>, fail: new Set<string>(), log: [] as FakeQuery[] };
+const readsOf = (table: string) => fake.log.filter((q) => q.table === table);
 const FAKE_DB = {
-  from: (table: string) => {
-    if (table === "pipeline_stages") {
-      return { select: () => ({ in: (...args: unknown[]) => pipelineStagesInMock(...args) }) };
-    }
-    return { select: () => ({ in: (...args: unknown[]) => contactsInMock(...args) }) };
+  from(table: string) {
+    const entry: FakeQuery = { table, eq: [], in: [], limit: null };
+    fake.log.push(entry);
+    const run = () => {
+      if (fake.fail.has(table)) return { data: null, error: { message: `permission denied for table ${table}` } };
+      const rows = (fake.tables[table] ?? [])
+        .filter((r) => entry.eq.every(([c, v]) => r[c] === v) && entry.in.every(([c, vs]) => vs.includes(r[c])));
+      return { data: entry.limit === null ? rows : rows.slice(0, entry.limit), error: null };
+    };
+    const q = {
+      select: () => q,
+      eq: (c: string, v: unknown) => { entry.eq.push([c, v]); return q; },
+      in: (c: string, vs: unknown[]) => { entry.in.push([c, vs]); return q; },
+      limit: (n: number) => { entry.limit = n; return q; },
+      maybeSingle: async () => { const r = run(); return { data: r.data?.[0] ?? null, error: r.error }; },
+      then: (ok: (v: unknown) => unknown, ko?: (e: unknown) => unknown) => Promise.resolve(run()).then(ok, ko),
+    };
+    return q;
   },
 };
-vi.mock("@bis/db", () => ({
+const prefsMock = vi.fn(async () => ({ language: null as "en" | "es" | null, theme: null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: () => prefsMock() }));
+// The section's Retry refreshes through the app router, which a static render has not mounted.
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {}, push: () => {} }),
+}));
+vi.mock("@bis/db", async () => ({
+  // Item 8b-2: each card is built in its account's zone through the REAL renderZone (lib/zone.ts), whose two
+  // pure helpers come from the real package; every read below stays mocked.
+  isUsableZone: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).isUsableZone,
+  resolveZone: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).resolveZone,
   serviceDb: () => FAKE_DB,
   listAgencyWork: () => listAgencyWorkMock(),
   countLinesTurningCallersAway: (db: unknown, sinceIso: string) =>
     countLinesTurningCallersAwayMock(db, sinceIso),
-  listPendingProposalsForAgency: () => listPendingProposalsForAgencyMock(),
+  listPendingProposalsForAgency: (...a: unknown[]) => listPendingProposalsForAgencyMock(...a),
   listAccountsWithStaleUsage: (db: unknown, now: Date) => listAccountsWithStaleUsageMock(db, now),
 }));
 
@@ -74,17 +92,19 @@ function row(overrides: Partial<AgencyWorkRow> = {}): AgencyWorkRow {
   };
 }
 
-function proposal(overrides: Partial<Proposal & { brandName: string }> = {}): Proposal & { brandName: string } {
+function proposal(overrides: Partial<AgencyRow> = {}): AgencyRow {
   return {
     id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
-    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
-    brandName: "Rio Roofing",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2099-10-01T00:00:00Z",
+    brandName: "Rio Roofing", timezone: "America/Chicago", accountCapped: false,
     ...overrides,
-  } as Proposal & { brandName: string };
+  } as AgencyRow;
 }
+const T = makeTr("en");
+const cardsIn = (html: string) => [...html.matchAll(/<article[^>]*data-suggestion="([^"]+)"/g)].map((x) => x[1]);
 
 describe("AgencyWorkPage", () => {
   // Hoisted out of every test: `import("./page")` cold-loads the whole
@@ -107,8 +127,10 @@ describe("AgencyWorkPage", () => {
     countLinesTurningCallersAwayMock.mockReset().mockResolvedValue(0);
     listPendingProposalsForAgencyMock.mockReset().mockResolvedValue([]);
     listAccountsWithStaleUsageMock.mockReset().mockResolvedValue([]);
-    contactsInMock.mockReset().mockResolvedValue({ data: [], error: null });
-    pipelineStagesInMock.mockReset().mockResolvedValue({ data: [], error: null });
+    fake.tables = {};
+    fake.fail.clear();
+    fake.log.length = 0;
+    prefsMock.mockReset().mockResolvedValue({ language: null, theme: null });
   });
 
   // Fix-wave Important 2 (task-11-brief): this page issues THREE serviceDb
@@ -119,12 +141,12 @@ describe("AgencyWorkPage", () => {
   // the proposals read above `await requireAgency()` (preserving its own
   // `.catch` and concurrency) left this test, and all 45 of its neighbours,
   // green — PROVED live, see this task's own report.
-  it("guards before any read — a rejected agency check never reaches listAgencyWork, listPendingProposalsForAgency or the pipeline_stages read", async () => {
+  it("guards before any read — a rejected agency check never reaches listAgencyWork, listPendingProposalsForAgency or any table read", async () => {
     requireAgencyMock.mockRejectedValueOnce(new Error("NEXT_REDIRECT"));
     await expect(AgencyWorkPage()).rejects.toThrow("NEXT_REDIRECT");
     expect(listAgencyWorkMock).not.toHaveBeenCalled();
     expect(listPendingProposalsForAgencyMock).not.toHaveBeenCalled();
-    expect(pipelineStagesInMock).not.toHaveBeenCalled();
+    expect(fake.log).toEqual([]);
     expect(listAccountsWithStaleUsageMock).not.toHaveBeenCalled();
   });
 
@@ -216,33 +238,25 @@ describe("AgencyWorkPage", () => {
   });
 
   // Work Queue Task 10 — pending suggestions, rendered beside the real
-  // queue, never inside it.
-  it("renders pending proposals in their own suggestions section", async () => {
+  // queue, never inside it. Since item 8b-2 (spec 5.2) they are the tray's
+  // own cards, with their actions, grouped by account.
+  it("renders pending suggestions as cards in their own section", async () => {
     listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal()]);
     const html = renderToStaticMarkup(await AgencyWorkPage());
-    expect(html).toContain(m["proposals.work.heading"]);
+    expect(html).toMatch(/<section[^>]*data-proposals/);
+    expect(cardsIn(html)).toEqual(["prop-1"]);
+    expect(renderedText(html)).toContain(T.text("suggestions.heading"));
   });
 
-  it("renders no suggestions section when there are no pending proposals", async () => {
+  it("renders no suggestions section when there are no pending suggestions", async () => {
     const html = renderToStaticMarkup(await AgencyWorkPage());
-    expect(html).not.toContain(m["proposals.work.heading"]);
+    expect(html).not.toMatch(/data-proposals/);
   });
 
   // THE PROOF THE WIRING ITSELF NEVER CONTAMINATES bucketAgencyWork's INPUT
-  // — the exact integration point named in the task-10 brief. Real work
-  // ("Call back") is bucketed alongside a genuinely distinct proposal; the
-  // proposal's own content must render, but never inside the bucket section
-  // it sits beside.
-  //
-  // Fix-wave (task-10-brief.md, Important 2): the prior version only
-  // grepped the waiting section for the proposal's own
-  // `payload.title`/`evidence` strings, which a bare `Proposal` folded
-  // into `buckets.waiting` never carries into `primaryLabel` (`row.source`
-  // is `undefined` there, so it falls through to the generic
-  // `m["work.booking"]` label) — a real phantom row could ship with every
-  // assertion below still green. Asserting the section's own `<li>` COUNT
-  // instead is invariant to how a fold is shaped.
-  it("keeps the waiting section's own <li> count exactly at the real bucketed rows, even with a distinct proposal rendered alongside it (mutation: concat proposal-derived rows into `rows` before bucketing -> FAILS)", async () => {
+  // — the exact integration point named in the task-10 brief. Asserting the
+  // waiting section's own `<li>` COUNT is invariant to how a fold is shaped.
+  it("keeps the waiting section's own <li> count exactly at the real bucketed rows, even with a distinct suggestion rendered alongside it (mutation: concat suggestion-derived rows into `rows` before bucketing -> FAILS)", async () => {
     listAgencyWorkMock.mockResolvedValueOnce([row({ id: "task:1", title: "Call back" })]);
     listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({
       id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
@@ -252,30 +266,28 @@ describe("AgencyWorkPage", () => {
 
     const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
     expect((waitingSection.match(/<li[ >]/g) ?? []).length).toBe(1);
-    // Proves the count assertion above tests separation, not that nothing
-    // rendered at all — the proposal's own content IS on the page, in its
-    // own section.
     expect(html).toContain("UNIQUE_TASK_TITLE_5678");
     expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
   });
 
-  it("degrades to no suggestions section, not a broken page, when the proposals read fails", async () => {
+  it("a failed suggestions read is the section's error state with Retry, and the queue still renders (rule 5; mutation: swallow it to no section -> FAILS)", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     listAgencyWorkMock.mockResolvedValueOnce([row()]);
     listPendingProposalsForAgencyMock.mockRejectedValueOnce(new Error("permission denied for table proposals"));
 
     const html = renderToStaticMarkup(await AgencyWorkPage());
 
-    // The queue itself is still there…
     expect(html).toContain("Call back");
-    // …only the suggestions section is missing…
-    expect(html).not.toContain(m["proposals.work.heading"]);
-    // …and the swallow left a trace.
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("proposals read failed"));
+    expect(renderedText(html)).toContain(T.text("suggestions.loadFailed"));
+    expect(html).toMatch(new RegExp(`<button[^>]*>${T.text("common.retry")}</button>`));
+    expect(cardsIn(html)).toEqual([]);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("suggestions read failed"));
+    // The log carries the error, never a caller's words.
+    expect(spy.mock.calls.flat().join(" ")).not.toContain("the caller asked");
     spy.mockRestore();
   });
 
-  it("runs the proposals read CONCURRENTLY with listAgencyWork, not chained after it (mutation: await listAgencyWork before starting the proposals read -> FAILS)", async () => {
+  it("runs the suggestions read CONCURRENTLY with listAgencyWork, not chained after it (mutation: await listAgencyWork before starting the suggestions read -> FAILS)", async () => {
     let listCalled = false;
     let proposalsCalled = false;
     listAgencyWorkMock.mockReset().mockImplementation(async () => {
@@ -292,57 +304,123 @@ describe("AgencyWorkPage", () => {
     await expect(AgencyWorkPage()).resolves.toBeTruthy();
   }, 2000);
 
-  // Fix-wave (task-10-brief.md, Important 1) — proved against the REAL
-  // page, not just the list component: page.tsx's own batched
-  // `pipeline_stages` read is what resolves an opportunity_stage proposal's
-  // fromStageId/toStageId to real names. Before this fix, this exact
-  // scenario (empty buckets, one pending opportunity_stage proposal with
-  // real evidence) rendered `m["work.empty"]` — "Nothing needs you right
-  // now." — with the proposal nowhere on the page.
-  it("never claims the queue is clear when a pending opportunity_stage proposal exists, and resolves its stage names via ONE batched pipeline_stages read", async () => {
-    listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({
-      kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
+  describe("each account's cards (item 8b-2, spec 5.2)", () => {
+    const STAGE = () => proposal({
+      kind: "opportunity_stage", payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
       evidence: "move this to booked now",
-    })]);
-    pipelineStagesInMock.mockResolvedValueOnce({
-      data: [
-        { id: "stage_1", name: "New", position: 0 },
-        { id: "stage_2", name: "Booked", position: 3 },
-      ],
-      error: null,
+    } as Partial<AgencyRow>);
+
+    it("groups by account under each brand name, newest account first, and names each account's own persona with ONE profiles read", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([
+        proposal({ id: "p-old", accountId: "acct-a", brandName: "Rio Roofing", createdAt: "2026-09-01T00:00:00Z" }),
+        proposal({ id: "p-new", accountId: "acct-b", brandName: "Acme HVAC", callId: "call-2", createdAt: "2026-09-03T00:00:00Z" }),
+      ]);
+      fake.tables.voice_profiles = [
+        { account_id: "acct-a", persona_name: "Lupe" }, { account_id: "acct-b", persona_name: "Marta" },
+      ];
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      const sections = [...html.matchAll(/<section[^>]*data-suggestion-account="([^"]+)"[\s\S]*?<h3[^>]*>([^<]*)<\/h3>/g)].map((x) => [x[1], x[2]]);
+      expect(sections).toEqual([["acct-b", "Acme HVAC"], ["acct-a", "Rio Roofing"]]);
+      expect(renderedText(html)).toContain("Marta · AI");
+      expect(renderedText(html)).toContain("Lupe · AI");
+      expect(readsOf("voice_profiles")).toHaveLength(1);
     });
-    const html = renderToStaticMarkup(await AgencyWorkPage());
 
-    expect(html).not.toContain(m["work.empty"]);
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(
-      m["suggestions.stage"].replace("{from}", () => "New").replace("{to}", () => "Booked"),
-    );
-    expect(html).toContain("move this to booked now");
-    // ONE batched read — not one per proposal, not one per account.
-    expect(pipelineStagesInMock).toHaveBeenCalledTimes(1);
-    expect(pipelineStagesInMock).toHaveBeenCalledWith("id", ["stage_1", "stage_2"]);
-  });
-
-  it("renders an honest summary that names no stage, but still shows the row, when the pipeline_stages read fails", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({
-      kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
-      evidence: "move this to booked now",
-    })]);
-    pipelineStagesInMock.mockResolvedValueOnce({
-      data: null, error: { message: "permission denied for table pipeline_stages" },
+    it("a capped account states its cap (the read's accountCapped)", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({ accountCapped: true })]);
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(renderedText(html)).toContain("Showing the newest 50 for this account.");
     });
-    const html = renderToStaticMarkup(await AgencyWorkPage());
 
-    expect(html).not.toContain(m["work.empty"]);
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(renderedText(html)).toContain(makeTr("en").text("suggestions.stage.unresolved"));
-    expect(html).not.toContain("stage_1");
-    expect(html).not.toContain("stage_2");
-    spy.mockRestore();
+    it("a stage suggestion names its stages from ITS account's own pipeline (readSuggestionStages, account-scoped)", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([STAGE()]);
+      fake.tables.opportunities = [{ id: "opp_1", account_id: "acct-a", pipeline_id: "pipe-1" }];
+      fake.tables.pipeline_stages = [
+        { id: "stage_1", account_id: "acct-a", pipeline_id: "pipe-1", name: "New", position: 0 },
+        { id: "stage_2", account_id: "acct-a", pipeline_id: "pipe-1", name: "Booked", position: 1 },
+        { id: "stage_3", account_id: "acct-a", pipeline_id: "pipe-1", name: "Won", position: 2 },
+      ];
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(html).not.toContain(m["work.empty"]);
+      expect(renderedText(html)).toContain(T.text("suggestions.stage", { from: "New", to: "Booked" }));
+      expect(renderedText(html)).toContain("move this to booked now");
+      expect(readsOf("pipeline_stages")[0]?.eq).toContainEqual(["account_id", "acct-a"]);
+    });
+
+    it("a failed stage read is the section's error, never a card it cannot name, and the queue stands (mutation: render the cards anyway -> FAILS)", async () => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      listAgencyWorkMock.mockResolvedValueOnce([row()]);
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([STAGE()]);
+      fake.tables.opportunities = [{ id: "opp_1", account_id: "acct-a", pipeline_id: "pipe-1" }];
+      fake.fail.add("pipeline_stages");
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(cardsIn(html)).toEqual([]);
+      expect(renderedText(html)).toContain(T.text("suggestions.loadFailed"));
+      expect(html).toContain("Call back");
+      expect(html).not.toContain("stage_1");
+      spy.mockRestore();
+    });
+
+    it("a task's due date is drawn in ITS OWN account's zone, never one zone for the page (mutation: one shared zone -> FAILS)", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([
+        proposal({ id: "p-chi", accountId: "acct-chi", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "America/Chicago" }),
+        proposal({ id: "p-utc", accountId: "acct-utc", callId: "call-2", payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "UTC" }),
+      ]);
+      const text = renderedText(renderToStaticMarkup(await AgencyWorkPage()));
+      expect(text).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
+      expect(text).toContain(T.text("suggestions.due", { date: "Sep 23, 2099" }));
+    });
+
+    it("an account whose stored zone is unusable keeps its card (a stated fallback zone), and its neighbour keeps its own zone", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([
+        proposal({ id: "p-bad", accountId: "acct-bad", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "Not/AZone" }),
+        proposal({ id: "p-ok", accountId: "acct-ok", callId: "call-2", payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "America/Chicago" }),
+      ]);
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(cardsIn(html).sort()).toEqual(["p-bad", "p-ok"]);
+      expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
+    });
+
+    it("the group names the row's own customer from the page's one contacts batch, and the card names the call's caller", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({ contactId: "ct-rosa", callId: "call-1" })]);
+      fake.tables.calls = [{ id: "call-1", account_id: "acct-a", started_at: "2026-09-01T15:00:00Z", contact_id: "ct-ana" }];
+      fake.tables.contacts = [
+        { id: "ct-rosa", first_name: "Rosa", last_name: "Díaz" }, { id: "ct-ana", first_name: "Ana", last_name: "López" },
+      ];
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(html).toMatch(/<h4[^>]*>Rosa Díaz · from the call on Tue, Sep 1<\/h4>/);
+      expect(renderedText(html)).toContain("From the call on Tue, Sep 1 · Ana López");
+      expect(readsOf("contacts")).toHaveLength(1);
+    });
+
+    // Final review M-4: the group heading's day is the ACCOUNT's, as the card's is. 03:00Z on Sep 2 is
+    // still Tue, Sep 1 in Chicago; in UTC it would read Wed, Sep 2.
+    it("the group heading's day is the account's own zone (mutation: group in UTC -> 'Wed, Sep 2', FAILS)", async () => {
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal({ contactId: "ct-rosa", callId: "call-1", timezone: "America/Chicago" })]);
+      fake.tables.calls = [{ id: "call-1", account_id: "acct-a", started_at: "2026-09-02T03:00:00Z", contact_id: "ct-rosa" }];
+      fake.tables.contacts = [{ id: "ct-rosa", first_name: "Rosa", last_name: "Díaz" }];
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(html).toMatch(/<h4[^>]*>Rosa Díaz · from the call on Tue, Sep 1<\/h4>/);
+      expect(html).not.toContain("Wed, Sep 2");
+    });
+
+    // Final review M-6: the suggestions read takes the page's one clock, as every other clock-bound read does.
+    it("the suggestions read is handed the page's one clock (mutation: call it without now -> FAILS)", async () => {
+      await AgencyWorkPage();
+      const [db, now] = listPendingProposalsForAgencyMock.mock.calls[0]!;
+      expect(db).toBe(FAKE_DB);
+      expect(now).toBeInstanceOf(Date);
+      expect(now).toBe(listAccountsWithStaleUsageMock.mock.calls[0]![1]);
+    });
+
+    it("the operator's own language sets the cards' words (requestLocale for an operator; mutation: hard-code English -> FAILS)", async () => {
+      prefsMock.mockResolvedValue({ language: "es", theme: null });
+      listPendingProposalsForAgencyMock.mockResolvedValueOnce([proposal()]);
+      const html = renderToStaticMarkup(await AgencyWorkPage());
+      expect(html).toMatch(/<section[^>]*lang="es"[^>]*data-proposals|<section[^>]*data-proposals[^>]*lang="es"|<section lang="es"[^>]*data-proposals/);
+      expect(html).toMatch(/<h2[^>]*>Sugerencias<\/h2>/);
+      expect(html).toMatch(/>Aceptar</);
+    });
   });
 
   // Client billing: usage that has not reached Stripe in over a day.

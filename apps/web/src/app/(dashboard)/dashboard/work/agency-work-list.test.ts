@@ -2,14 +2,22 @@ import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AgencyWorkRow, Proposal } from "@bis/db";
+import type { Proposal as Row } from "@bis/db/proposal-rules";
 import type { AgencyBucketedWork } from "@/lib/work/agency-buckets";
 import { m } from "@/lib/messages";
 import { makeTr } from "@/lib/record/copy";
 import { renderedText } from "@/lib/rendered-text";
 
-/** The registry's words, as the agency page draws them (English: an operator reads this page). */
+import { buildSuggestionView } from "@/lib/proposals/view";
+import { visibleAgencyBuckets, AgencyWorkList, type AgencySuggestionsLoad } from "./agency-work-list";
+
+/** The cards' words, as the agency page draws them (English: an operator reads this page). */
 const T = makeTr("en");
-import { visibleAgencyBuckets, AgencyWorkList, type AgencyProposal } from "./agency-work-list";
+
+vi.mock("next/navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/navigation")>()),
+  useRouter: () => ({ refresh: () => {}, push: () => {} }),
+}));
 
 /** Flips `formatDateInZone` (and ONLY that export) into throwing a
  *  non-`RangeError` for exactly one test, matching tasks/work-list's own
@@ -39,26 +47,34 @@ function buckets(overrides: Partial<AgencyBucketedWork> = {}): AgencyBucketedWor
   return { overdue: [], today: [], waiting: [], ...overrides };
 }
 
-function proposal(overrides: Partial<AgencyProposal> = {}): AgencyProposal {
+function proposal(overrides: Partial<Row> = {}): Row {
   return {
     id: "prop-1", accountId: "acct-a", callId: "call-1", contactId: null,
     kind: "task", payload: { title: "Call back", dueAt: null },
     evidence: "the caller asked for a callback", status: "pending",
     decidedAt: null, decidedBy: null, createdAt: "2026-09-01T00:00:00Z",
-    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2026-10-01T00:00:00Z",
-    brandName: "Rio Roofing", timezone: "America/Chicago",
+    source: "call", evidenceRef: {}, evidenceLang: "en", expiredReason: null, appliedPayload: null, appliedRef: null, undoneAt: null, undoneBy: null, expiresAt: "2099-10-01T00:00:00Z",
     ...overrides,
-  } as AgencyProposal;
+  } as Row;
 }
+const NOW = new Date("2026-09-02T15:00:00Z");
+/** One account's section as page.tsx hands it: real cards from the real builder, one group. */
+function account(accountId: string, brandName: string, rowsIn: Row[], capped = false) {
+  const views = rowsIn.map((r) => buildSuggestionView(r, {
+    tr: T, zone: "America/Chicago", now: NOW, stages: {}, pipelineStages: [],
+    callerName: null, callStartedAt: null, personaName: "Sofía", names: {}, viewerId: null,
+  }));
+  return { accountId, brandName, personaName: "Sofía", capped, groups: [{ key: `${accountId}:g`, heading: "No customer yet · from the call on Tue, Sep 1", views }] };
+}
+const loaded = (...accounts: ReturnType<typeof account>[]): AgencySuggestionsLoad => ({ ok: true, accounts });
 
 function renderList(
   b: AgencyBucketedWork,
   contactNames: Record<string, string> = {},
-  proposals: AgencyProposal[] = [],
-  stageNames: Record<string, { name: string; position: number }> = {},
+  suggestions?: AgencySuggestionsLoad,
 ) {
   return renderToStaticMarkup(
-    createElement(AgencyWorkList, { buckets: b, contactNames, proposals, stageNames }),
+    createElement(AgencyWorkList, { buckets: b, contactNames, suggestions, tr: T }),
   );
 }
 
@@ -245,207 +261,91 @@ describe("AgencyWorkList", () => {
   });
 });
 
-// Work Queue Task 10 — a proposal is a QUESTION about work, not work, and
+// Work Queue Task 10 — a suggestion is a QUESTION about work, not work, and
 // must render beside the real queue, never inside it (task-10-brief.md's own
-// binding constraint on Bucket/BucketedWork). Rendered as a separate `<section
-// data-proposals>`, distinguishable from a bucket's own `<section
-// data-bucket="…">` by that marker alone, so a test can isolate one section's
-// own HTML from the other's.
-describe("AgencyWorkList — pending suggestions (Task 10)", () => {
-  it("renders a pending proposal in its own section, labelled as suggestions", () => {
-    const html = renderList(buckets(), {}, [proposal()]);
-    expect(html).toMatch(/<section data-proposals[^>]*>[\s\S]*?<\/section>/);
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain(m["proposals.work.body"]);
+// binding constraint on Bucket/BucketedWork). Since item 8b-2 (spec 5.2) the
+// section holds the tray's own cards with their actions, grouped by account
+// (`<section data-suggestion-account>`), inside one `<section data-proposals>`
+// distinguishable from a bucket's own `<section data-bucket="…">`.
+describe("AgencyWorkList — pending suggestions as cards (item 8b-2)", () => {
+  const sectionOf = (h: string) => /<section[^>]*data-proposals[\s\S]*$/.exec(h)?.[0] ?? "";
+
+  it("renders the suggestions in their own section, headed Suggestions, as cards with an Accept each", () => {
+    const html = renderList(buckets(), {}, loaded(account("acct-a", "Rio Roofing", [proposal()])));
+    expect(html).toMatch(/<section[^>]*data-proposals/);
+    expect(html).toMatch(new RegExp(`<h2[^>]*>${T.text("suggestions.heading")}</h2>`));
+    expect((sectionOf(html).match(/<article[^>]*data-suggestion="prop-1"/g) ?? []).length).toBe(1);
+    expect(sectionOf(html)).toMatch(/<button[^>]*data-variant="default"[^>]*>Accept<\/button>|<button[^>]*>Accept<\/button>/);
   });
 
-  it("renders no suggestions section at all when there are none", () => {
-    const html = renderList(buckets({ waiting: [row()] }), {}, []);
-    expect(html).not.toContain(m["proposals.work.heading"]);
+  it("renders no suggestions section at all when nothing is pending", () => {
+    const html = renderList(buckets({ waiting: [row()] }), {}, loaded());
     expect(html).not.toMatch(/data-proposals/);
   });
 
-  it("shows the suggestions section even when the real queue is otherwise empty, instead of the 'nothing needs you' empty state", () => {
-    const html = renderList(buckets(), {}, [proposal()]);
+  it("shows the suggestions even when the real queue is otherwise empty, instead of the 'nothing needs you' empty state", () => {
+    const html = renderList(buckets(), {}, loaded(account("acct-a", "Rio Roofing", [proposal()])));
     expect(html).not.toContain(m["work.empty"]);
-    expect(html).toContain(m["proposals.work.heading"]);
+    expect(html).toMatch(/data-proposals/);
   });
 
-  // THE PROOF THE WHOLE FEATURE'S SEPARATION EXISTS FOR. Real work ("Call
-  // back") sits in Waiting alongside a genuinely distinct proposal — the
-  // proposal's own content must render, but ONLY inside its own section,
-  // never inside the bucket section it sits beside.
-  //
-  // Fix-wave (task-10-brief.md, Important 2): the prior version of this
-  // test only grepped the waiting section for the proposal's OWN
-  // `payload.title`/`evidence` strings. A bare `Proposal` folded
-  // directly into `buckets.waiting` carries neither into `primaryLabel`
-  // (`row.source` is `undefined` there, so it falls through to the generic
-  // `m["work.booking"]` label) — so that exact mutation left every
-  // assertion below green while a second, wrong `<li>` was really rendered
-  // inside `data-bucket="waiting"`. Asserting the section's own `<li>`
-  // COUNT instead is invariant to how a fold is shaped — a bare push and a
-  // properly WorkRow-shaped map both add one element to the array, so both
-  // move this count away from `waiting.length` regardless of what content
-  // ends up in the extra row.
-  it("keeps the waiting section's own <li> count exactly at buckets.waiting.length, even with a distinct proposal rendered alongside it (mutation: concat `proposals` into `buckets.waiting` before rendering -> FAILS)", () => {
+  it("a failed suggestions read is the section's error with Retry, never 'nothing needs you' (rule 5; mutation: treat a failed read as none -> FAILS)", () => {
+    const html = renderList(buckets(), {}, { ok: false });
+    expect(html).not.toContain(m["work.empty"]);
+    expect(renderedText(html)).toContain(T.text("suggestions.loadFailed"));
+    expect(html).toMatch(new RegExp(`<button[^>]*>${T.text("common.retry")}</button>`));
+    // …and the buckets still render beside it.
+    expect(renderList(buckets({ waiting: [row()] }), {}, { ok: false })).toContain('data-bucket="waiting"');
+  });
+
+  // THE PROOF THE WHOLE FEATURE'S SEPARATION EXISTS FOR (task-10-brief.md, Important 2): the waiting
+  // section's own <li> count stays at buckets.waiting.length, and no card lands inside it.
+  it("keeps the waiting section's own <li> count exactly at buckets.waiting.length, with no card inside it (mutation: render the section inside a bucket's <section> -> FAILS)", () => {
     const waitingRows = [row({ id: "task:1", title: "Call back" })];
-    const html = renderList(
-      buckets({ waiting: waitingRows }),
-      {},
-      [proposal({
-        id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null },
-        evidence: "UNIQUE_CALLER_QUOTE_1234",
-      })],
-    );
+    const html = renderList(buckets({ waiting: waitingRows }), {}, loaded(account("acct-a", "Rio Roofing", [proposal({
+      id: "prop-unique", payload: { title: "UNIQUE_TASK_TITLE_5678", dueAt: null }, evidence: "UNIQUE_CALLER_QUOTE_1234",
+    })])));
     const waitingSection = html.match(/<section data-bucket="waiting"[\s\S]*?<\/section>/)?.[0] ?? "";
     expect((waitingSection.match(/<li[ >]/g) ?? []).length).toBe(waitingRows.length);
-    // Proves the count assertion above is testing separation, not merely
-    // that nothing rendered at all — the proposal's own content IS on the
-    // page, in its own section.
+    expect(waitingSection).not.toContain("data-suggestion");
     expect(html).toContain("UNIQUE_TASK_TITLE_5678");
     expect(html).toContain("UNIQUE_CALLER_QUOTE_1234");
   });
 
-  it("shows the account's own brand name on a proposal row, the caller's own words as evidence, and links to the call it came from", () => {
-    const html = renderList(buckets(), {}, [proposal({
-      accountId: "acct-z", callId: "call-z", brandName: "Acme HVAC",
-      evidence: "call me back Tuesday morning",
-    })]);
-    expect(html).toContain("Acme HVAC");
-    expect(html).toContain("call me back Tuesday morning");
-    // Evidence has no transcript beside it here (unlike the call-detail
-    // page) — the row's own link is how a reader checks it against the
-    // whole call, deep-linked to the call-detail page's own proposals
-    // section rather than the page's top.
-    expect(html).toContain('href="/dashboard/accounts/acct-z/calls/call-z#call-proposals"');
+  it("each account is its own section under its brand name, in the order page.tsx gives (spec 5.2)", () => {
+    const html = renderList(buckets(), {}, loaded(
+      account("acct-z", "Acme HVAC", [proposal({ id: "p-z", accountId: "acct-z" })]),
+      account("acct-a", "Rio Roofing", [proposal({ id: "p-a" })]),
+    ));
+    const sections = [...html.matchAll(/<section[^>]*data-suggestion-account="([^"]+)"[\s\S]*?<h3[^>]*>([^<]*)<\/h3>/g)].map((x) => [x[1], x[2]]);
+    expect(sections).toEqual([["acct-z", "Acme HVAC"], ["acct-a", "Rio Roofing"]]);
   });
 
-  it("names the contact on a proposal row when one is on file", () => {
-    const html = renderList(buckets(), { c1: "Maria Garcia" }, [proposal({ contactId: "c1" })]);
-    expect(html).toContain("Maria Garcia");
+  it("an account whose brand name is blank reads the neutral caption, never a blank heading (mutation: drop the fallback -> FAILS)", () => {
+    const html = renderList(buckets(), {}, loaded(account("acct-a", "", [proposal()])));
+    expect(html).toMatch(new RegExp(`<h3[^>]*>${m["work.agency.unbranded"]}</h3>`));
   });
 
-  it("shows a task proposal in the registry's words, the model's title in its own lang=\"en\" span (item 8b-1)", () => {
-    const html = renderList(buckets(), {}, [proposal({
-      kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
-    })]);
-    expect(html).toContain('Add a to-do: <span lang="en">Call back Tuesday</span>');
+  // Design review minor 6: inside the section's lang="es" the caption is Spanish too, through the section's tr.
+  it("the neutral caption is in the section's language (mutation: read it from m[...] -> English inside lang=\"es\", FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(AgencyWorkList, {
+      buckets: buckets(), contactNames: {}, suggestions: loaded(account("acct-a", "", [proposal()])), tr: makeTr("es"),
+    }));
+    expect(html).toMatch(/<h3[^>]*>Cuenta sin nombre<\/h3>/);
+    expect(html).not.toContain(m["work.agency.unbranded"]);
   });
 
-  // Fix-wave Important 1 (task-11-brief): the agency work queue is the
-  // SECOND place a task proposal's own dueAt must be visible before a human
-  // accepts it — same rule as the call-detail card, in THIS proposal's own
-  // account zone since this screen pools rows across every account.
-  it("shows a task proposal's due date, formatted in ITS OWN account's zone (mutation: drop the due-date line -> FAILS)", () => {
-    const html = renderList(buckets(), {}, [proposal({
-      kind: "task", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" },
-      timezone: "America/Chicago",
-    })]);
-    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
+  it("a capped account says so under its own cards", () => {
+    const html = renderList(buckets(), {}, loaded(account("acct-a", "Rio Roofing", [proposal()], true)));
+    expect(renderedText(html)).toContain("Showing the newest 50 for this account.");
   });
 
-  it("uses a DIFFERENT proposal's OWN account zone, never one zone shared by the whole list (mutation: read a single shared timezone instead of proposal.timezone -> FAILS)", () => {
-    const html = renderList(buckets(), {}, [
-      proposal({
-        id: "prop-chi", kind: "task",
-        payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" },
-        timezone: "America/Chicago",
-      }),
-      proposal({
-        id: "prop-utc", kind: "task",
-        payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" },
-        timezone: "UTC",
-      }),
-    ]);
-    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
-    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 23, 2099" }));
-  });
-
-  it("a proposal whose account zone the formatter refuses keeps its row and loses only its due-date line, never a guessed zone (mutation: drop agencyDescription's RangeError branch -> the list throws, FAILS)", () => {
-    const html = renderList(buckets(), {}, [
-      proposal({ id: "prop-bad", payload: { title: "Call back Tuesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "Not/AZone" }),
-      proposal({ id: "prop-ok", payload: { title: "Call back Wednesday", dueAt: "2099-09-23T01:00:00.000Z" }, timezone: "America/Chicago" }),
-    ]);
-    expect(html).toContain('Add a to-do: <span lang="en">Call back Tuesday</span>');
-    expect(renderedText(html)).toContain(T.text("suggestions.due", { date: "Sep 22, 2099" }));
-    expect(renderedText(html)).not.toContain("Sep 23, 2099");
-  });
-
-  it("shows no due date for a task proposal whose dueAt is null (mutation: render a due-date line unconditionally -> FAILS)", () => {
-    const html = renderList(buckets(), {}, [proposal({
-      kind: "task", payload: { title: "Call back Tuesday", dueAt: null },
-    })]);
-    expect(html).not.toContain("Due");
-  });
-
-  it("shows a contact_field proposal in the registry's words, the arrow drawn and spoken as to (item 8b-1; design review minor 3)", () => {
-    const html = renderList(buckets(), {}, [{
-      ...proposal(), kind: "contact_field", payload: { field: "email", value: "sam@example.com" },
-    } as AgencyProposal]);
-    expect(html).toContain('Email: (empty) <span aria-hidden="true">→</span><span class="sr-only">to</span> sam@example.com');
-  });
-
-  // The type allows a suggestion with no call (a later source); today's CHECK makes every row a call's.
-  // Such a row must never link to /calls/null: it opens the account's To do tray, where its card is.
-  it("a suggestion with no call links to the account's To do tray, never /calls/null (final review, Task 8; mutation: always the call link -> FAILS)", () => {
-    const html = renderList(buckets(), {}, [proposal({ accountId: "acct-n", callId: null })]);
-    expect(html).not.toContain("/calls/null");
-    expect(html).toContain('href="/dashboard/accounts/acct-n/tasks"');
-  });
-
-  // Fix-wave (task-10-brief.md, Important 1): an opportunity_stage proposal
-  // used to return `null` from `proposalSummary` 100% of the time, by
-  // construction — dropping the row silently, and (proved by the next test)
-  // leaving the empty state claiming the queue was clear when it was not.
-  // `stageNames` is page.tsx's own batched `pipeline_stages` read, threaded
-  // down as a prop — when it resolves both ids, the row shows the real
-  // from -> to names, never the raw uuid.
-  it("shows an opportunity_stage proposal's real from -> to stage names when page.tsx's batch read resolves them, never dropping the row", () => {
-    const html = renderList(buckets(), {}, [{
-      ...proposal(), kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
-    } as AgencyProposal], {
-      stage_1: { name: "New", position: 0 },
-      stage_2: { name: "Booked", position: 3 },
-    });
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(renderedText(html)).toContain(T.text("suggestions.stage", { from: "New", to: "Booked" }));
-    expect(html).not.toContain("opp_1");
-    expect(html).not.toContain("stage_1");
-    expect(html).not.toContain("stage_2");
-  });
-
-  // The honest-fallback half of the same fix: a specific pair that did NOT
-  // resolve (the batch read errored, or came back short for just this pair)
-  // still shows the row — never the raw uuid, never the destination alone,
-  // and never a dropped row either.
-  it("names no stage, but still shows the row, when an opportunity_stage proposal's stage ids do not resolve", () => {
-    const html = renderList(buckets(), {}, [{
-      ...proposal(), kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
-    } as AgencyProposal], {});
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(renderedText(html)).toContain(T.text("suggestions.stage.unresolved"));
-    expect(html).not.toContain("opp_1");
-    expect(html).not.toContain("stage_1");
-    expect(html).not.toContain("stage_2");
-  });
-
-  // THE EXACT PROBE THE FIX-WAVE REPORT DESCRIBES: empty buckets, ONE
-  // pending opportunity_stage proposal with real evidence. Before this fix,
-  // `proposalSummary` returned `null` for it, `visibleProposals` filtered it
-  // out, and the empty-state gate rendered "Nothing needs you right now."
-  // with the proposal's own evidence nowhere on the page.
-  it("never claims the queue is clear when a pending opportunity_stage proposal exists (Important 1 regression)", () => {
-    const html = renderList(buckets(), {}, [{
-      ...proposal(), kind: "opportunity_stage",
-      payload: { opportunityId: "opp_1", fromStageId: "stage_1", toStageId: "stage_2" },
-      evidence: "move this to booked now",
-    } as AgencyProposal]);
-    expect(html).not.toContain(m["work.empty"]);
-    expect(html).toContain(m["proposals.work.heading"]);
-    expect(html).toContain("move this to booked now");
+  it("the old read-only rows are gone: no #call-proposals link, no row link standing in for the buttons", () => {
+    const html = renderList(buckets(), {}, loaded(account("acct-a", "Rio Roofing", [proposal({ accountId: "acct-a", callId: "call-z" })])));
+    expect(html).not.toContain("#call-proposals");
+    // The card's one link to the call is its transcript link.
+    const links = sectionOf(html).match(/<a[^>]*href="[^"]*"/g) ?? [];
+    expect(links.every((a) => a.includes("data-transcript-link"))).toBe(true);
   });
 });
 

@@ -53,6 +53,8 @@ const ROW_KINDS: Readonly<Record<RecentRowView["kind"], true>> = {
   note: true, task: true, deal: true, submission: true, message: true, booking: true, call: true, document: true,
   documentVersion: true, documentRemoved: true, documentRequest: true, documentSkip: true, documentUnskip: true,
   documentShared: true, documentShareOpened: true, chat: true,
+  // item 8b-2: the type's exhaustive case; the drawer's Recent never reads suggestions (owner decision 1).
+  suggestion: true,
 };
 /** Where a header action may point: a phone, this app, an anchor, or an https map. Never `javascript:`,
  *  and never a protocol-relative URL (`//evil.example`, which the browser reads as `https://evil.example`,

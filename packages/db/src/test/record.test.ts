@@ -18,6 +18,7 @@ import { skipDocumentRequirement, unskipDocumentRequirement } from "../document-
 import { createDocumentShare, claimDocumentShareDownload } from "../document-shares";
 import { createConciergeConversation, appendConciergeTurns, setConciergeSubmission, type ConciergeTurn } from "../concierge";
 import { syncWebchatTurns } from "../webchat";
+import { insertProposal, decideProposal, undoProposalDecision } from "../proposals";
 import {
   contactFacts, contactNextUp, listContactTimelinePage, listPeopleNames, TIMELINE_SOURCES,
   listTimelinePage, groupActivityMembers, groupFacts, groupNextUp, type TimelineEntry,
@@ -298,8 +299,9 @@ describe("listContactTimelinePage (S-03 1b, spec §7, C3, C4)", () => {
       expect(page.failed).toEqual(["calls"]);
       expect(errors).toEqual(["calls"]);
       expect(page.items.map((i) => i.kind)).toEqual(["note"]);
-      // The pinned list, in source order, documents last (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS).
-      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"]);
+      // The pinned list, in source order (S-07; mutation: drop "documents" from TIMELINE_SOURCES -> FAILS); 8b-2's
+      // suggestions last, read only when asked (owner decision 1, 2026-10-19).
+      expect(TIMELINE_SOURCES).toEqual(["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats", "suggestions"]);
     }));
 });
 
@@ -467,7 +469,8 @@ describe("listTimelinePage across a set (S-03 part 2b, C6)", () => {
   it("an empty set is an empty page, empty facts and an empty Next up, with no read at all (mutation: drop the timeline's short-circuit -> forContacts refuses and all seven sources fail, FAILS)", async () => {
     const from = vi.fn(() => { throw new Error("no read expected"); });
     const db = { from } as unknown as SupabaseClient;
-    expect(await listTimelinePage(db, "acct", [])).toEqual({ items: [], older: null, failed: [] });
+    expect(await listTimelinePage(db, "acct", [])).toEqual({ items: [], older: null, failed: [], sources: [] });
+    expect(await listTimelinePage(db, "acct", [], undefined, { suggestions: true })).toEqual({ items: [], older: null, failed: [], sources: [] });
     expect(await groupFacts(db, "acct", [])).toEqual({ bookingsMade: { ok: true, value: 0 }, lastTalked: { ok: true, value: null } });
     expect(await groupNextUp(db, "acct", [], "2026-10-12T15:00:00Z")).toEqual({ bookings: [], datedTasks: [], undatedCount: 0 });
     expect(from).not.toHaveBeenCalled();
@@ -735,5 +738,148 @@ describe("the documents source's share rows (S-07 3b)", () => {
       const rows = page.items.filter((i) => i.kind === "documentShared" || i.kind === "documentShareOpened");
       expect(rows.map((i) => i.kind)).toEqual(["documentShareOpened", "documentShared"]);
       expect(rows.map((i) => i.id)).toEqual([created.share.id, created.share.id]);
+    }));
+});
+
+/**
+ * item 8b-2 (plan Task 4, 3; spec 5.4): every accepted suggestion is a row on the customer's timeline, at
+ * its decided_at, read from `proposals` on the caller's client, and only when the caller asks
+ * (`opts.suggestions`; owner decision 1, 2026-10-19: not the drawer, not the household page).
+ */
+describe("the suggestions source (item 8b-2)", () => {
+  const FAR = "2031-03-04T05:06:07.000Z";
+  const at = (d: number) => `2026-10-0${d}T15:00:00+00:00`;
+  const NINE = ["notes", "todos", "deals", "forms", "messages", "bookings", "calls", "documents", "chats"];
+  const TEN = [...NINE, "suggestions"];
+
+  async function suggestionOn(db: SupabaseClient, accountId: string, contactId: string, phoneId: string, title: string): Promise<string> {
+    // The call carries no customer, so it is not a timeline row of its own: only the suggestion is.
+    const { data, error } = await db.from("calls").insert({ account_id: accountId, phone_number_id: phoneId }).select("id").single();
+    if (error) throw new Error(`seed call failed: ${error.message}`);
+    const made = await insertProposal(db, accountId, {
+      callId: data!.id as string, contactId, kind: "task", evidence: "call me Tuesday", evidenceRef: {}, evidenceLang: "en",
+      expiresAt: FAR, payload: { title, dueAt: null },
+    });
+    if (!made) throw new Error("insertProposal returned null");
+    return made.id;
+  }
+  async function decide(
+    db: SupabaseClient, accountId: string, id: string, to: "accepted" | "edited" | "dismissed" | "expired", decidedAt: string, applied?: unknown,
+  ) {
+    const now = new Date("2026-10-09T15:00:00Z");
+    const ok = to === "expired" ? await decideProposal(db, accountId, id, { to, reason: "superseded", now })
+      : to === "dismissed" ? await decideProposal(db, accountId, id, { to, decidedBy: ACTOR, now })
+      : await decideProposal(db, accountId, id, { to, decidedBy: ACTOR, appliedPayload: applied, now });
+    if (!ok) throw new Error(`decide ${to} matched nothing`);
+    const { error } = await db.from("proposals").update({ decided_at: decidedAt }).eq("id", id);
+    if (error) throw new Error(`stamp decided_at failed: ${error.message}`);
+  }
+  async function setUp(db: SupabaseClient, accountId: string) {
+    const { id: ana } = await createContact(db, accountId, { firstName: "Ana" }, ACTOR);
+    const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, ACTOR);
+    return { ana, phone: num.id };
+  }
+
+  it("one row per accepted and per edited suggestion, at decided_at, carrying the applied form; none for dismissed, out of date or pending (mutation: read status = 'accepted' only -> the edited row is gone, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      const accepted = await suggestionOn(db, accountId, ana, phone, "Call back Tuesday");
+      await decide(db, accountId, accepted, "accepted", at(3), { title: "Call back Tuesday", dueAt: null });
+      const edited = await suggestionOn(db, accountId, ana, phone, "Send the quote");
+      await decide(db, accountId, edited, "edited", at(4), { title: "Send the quote today", dueAt: null });
+      await decide(db, accountId, await suggestionOn(db, accountId, ana, phone, "dismissed"), "dismissed", at(5));
+      await decide(db, accountId, await suggestionOn(db, accountId, ana, phone, "expired"), "expired", at(6));
+      await suggestionOn(db, accountId, ana, phone, "still pending");
+      const page = await listContactTimelinePage(db, accountId, ana, undefined, { suggestions: true });
+      const rows = page.items.flatMap((i) => (i.kind === "suggestion" ? [i] : []));
+      expect(rows.map((r) => [r.id, r.at, r.contactId, r.suggestion.proposal.status])).toEqual([
+        [edited, at(4), ana, "edited"], [accepted, at(3), ana, "accepted"],
+      ]);
+      expect(rows.map((r) => r.suggestion.applied)).toEqual([
+        { title: "Send the quote today", dueAt: null }, { title: "Call back Tuesday", dueAt: null },
+      ]);
+      expect(rows[0]!.suggestion.proposal.payload).toEqual({ title: "Send the quote", dueAt: null });
+      expect(rows[0]!.suggestion.proposal.decidedBy).toBe(ACTOR);
+      expect(page).toMatchObject({ failed: [], sources: TEN });
+    }));
+
+  // Undo clears decided_at, and a row with none is never a timeline row, so dropping the status filter
+  // ALONE cannot fail this case (run: it passed); placing an undone row at its undone_at with the filter
+  // dropped does.
+  it("an Undo (the row back to pending) takes the row off the timeline (mutation: drop the status filter and place a row at decided_at ?? undone_at -> the undone row stays, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      const id = await suggestionOn(db, accountId, ana, phone, "Call back Tuesday");
+      await decide(db, accountId, id, "accepted", at(3), { title: "Call back Tuesday", dueAt: null });
+      const before = await listContactTimelinePage(db, accountId, ana, undefined, { suggestions: true });
+      expect(before.items.filter((i) => i.kind === "suggestion").map((i) => i.id)).toEqual([id]);
+      expect(await undoProposalDecision(db, accountId, id, { decidedBy: ACTOR, from: ["accepted"], now: new Date() })).toBe("undone");
+      const after = await listContactTimelinePage(db, accountId, ana, undefined, { suggestions: true });
+      expect(after.items.filter((i) => i.kind === "suggestion")).toEqual([]);
+    }));
+
+  it("the source is read only when asked, and `sources` names exactly what was read (mutation: read it always -> the row and a tenth source appear without the option, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      const id = await suggestionOn(db, accountId, ana, phone, "Call back Tuesday");
+      await decide(db, accountId, id, "accepted", at(3), { title: "Call back Tuesday", dueAt: null });
+      const plain = await listContactTimelinePage(db, accountId, ana);
+      expect(plain.items.filter((i) => i.kind === "suggestion")).toEqual([]);
+      expect(plain.sources).toEqual(NINE);
+      const set = await listTimelinePage(db, accountId, [ana]);
+      expect(set.sources).toEqual(NINE);
+      const asked = await listTimelinePage(db, accountId, [ana], undefined, { suggestions: true });
+      expect(asked.items.map((i) => i.id)).toEqual([id]);
+      expect(asked.sources).toEqual(TEN);
+    }));
+
+  it("two rows at one decided_at across a page boundary are neither lost nor repeated (mutation: drop withTimelinePage's cursor from the read -> page two repeats, FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      const same = "2026-10-09T16:12:00.123456+00:00";
+      const a = await suggestionOn(db, accountId, ana, phone, "one");
+      await decide(db, accountId, a, "accepted", same, { title: "one", dueAt: null });
+      const b = await suggestionOn(db, accountId, ana, phone, "two");
+      await decide(db, accountId, b, "accepted", same, { title: "two", dueAt: null });
+      const p1 = await listContactTimelinePage(db, accountId, ana, undefined, { limit: 1, suggestions: true });
+      expect(p1.older).not.toBeNull();
+      const p2 = await listContactTimelinePage(db, accountId, ana, p1.older!, { limit: 1, suggestions: true });
+      expect(p2.older).toBeNull();
+      expect(p2.items[0]!.at).toBe(p1.items[0]!.at);
+      expect([...p1.items, ...p2.items].map((i) => i.id).sort()).toEqual([a, b].sort());
+    }));
+
+  it("an applied form that does not fit its kind is null, and the row still reads from what was proposed (mutation: cast applied_payload unparsed -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana, phone } = await setUp(db, accountId);
+      const id = await suggestionOn(db, accountId, ana, phone, "Call back Tuesday");
+      await decide(db, accountId, id, "accepted", at(3), { title: "Call back Tuesday", dueAt: null });
+      const { error } = await db.from("proposals").update({ applied_payload: { title: 5 } }).eq("id", id);
+      if (error) throw new Error(error.message);
+      const page = await listContactTimelinePage(db, accountId, ana, undefined, { suggestions: true });
+      const row = page.items.find((i) => i.kind === "suggestion");
+      expect(row?.kind === "suggestion" ? [row.suggestion.applied, row.suggestion.proposal.payload] : null)
+        .toEqual([null, { title: "Call back Tuesday", dueAt: null }]);
+    }));
+
+  it("a failed suggestions read is named in `failed` and the other nine still render (mutation: let it reject the page -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const { ana } = await setUp(db, accountId);
+      await addNote(db, accountId, ana, "still here", ACTOR);
+      const failing = new Proxy(db, {
+        get(target, prop, receiver) {
+          if (prop === "from") {
+            return (table: string) => {
+              if (table === "proposals") throw new Error("proposals down");
+              return target.from(table);
+            };
+          }
+          return Reflect.get(target, prop, receiver);
+        },
+      });
+      const errors: string[] = [];
+      const page = await listContactTimelinePage(failing, accountId, ana, undefined, { suggestions: true, onError: (s) => errors.push(s) });
+      expect([page.failed, errors, page.sources]).toEqual([["suggestions"], ["suggestions"], TEN]);
+      expect(page.items.map((i) => i.kind)).toEqual(["note"]);
     }));
 });

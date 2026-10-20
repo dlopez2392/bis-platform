@@ -6,7 +6,9 @@
 // `runDecision`'s, a pure handler with a unit test, because there is no DOM to test this file in.
 //
 // Rule 8 (P12): each card is its own view with ONE primary, Accept, or Save and accept while editing;
-// everything else is ghost. `useTransition` disables every button while any one runs.
+// everything else is ghost. `useTransition` disables every button while any one runs. The record's flat
+// row (variant "row", item 8b-2) has NO primary: ghost Accept and ghost Discard, and no Edit, which
+// happens in the tray (DESIGN.md rule 8 as amended 2026-10-19).
 import { useEffect, useId, useRef, useState, useTransition, type FormEvent, type KeyboardEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import type { SuggestionEdit, SuggestionLabels } from "@/lib/proposals/view";
 import { runDecision, type SuggestionActionResult, type UndoResult } from "./suggestion-handlers";
+import { FALLBACK_SEP } from "./focus-fallback";
 
 export type SuggestionActionProps = {
   accept: (id: string) => Promise<SuggestionActionResult>;
@@ -40,39 +43,82 @@ export function escCancelsEdit(key: string, targetTag: string): boolean {
 type Focusable = { focus: () => void };
 type CardLookup = { querySelector(selector: string): (Focusable & { getAttribute?: (name: string) => string | null }) | null };
 
+/** Where focus may go once a decided card leaves, in order: suggestion ids, then fallback selectors. */
+export type FocusPlan = { candidates: string[]; fallbacks: string[] };
+
+/**
+ * The plan, read off the list at decision time, before the card unmounts (item 8b-2; design review I3,
+ * spec 4.5): the cards after `ownId` in its own list (document order across group boundaries, never the
+ * card's next DOM sibling, which at a group's last card is a heading), then the cards before it, nearest
+ * first, then the cards of the LATER lists in the same scope (`scopeIds`: the agency section's every card,
+ * so an account's last card hands focus to the next account's first Accept), then the list's own
+ * fallback headings. Pure.
+ */
+export function focusPlan(ids: readonly string[], ownId: string, scopeIds: readonly string[], fallbacks: readonly string[]): FocusPlan {
+  const i = ids.indexOf(ownId);
+  const after = i >= 0 ? ids.slice(i + 1) : [];
+  const before = i > 0 ? ids.slice(0, i).reverse() : [];
+  const at = scopeIds.indexOf(ownId);
+  const later = at >= 0 ? scopeIds.slice(at + 1).filter((id) => !ids.includes(id)) : [];
+  return { candidates: [...after, ...before, ...later], fallbacks: [...fallbacks] };
+}
+
 /**
  * Where focus goes once a decision has landed (design review minor 5), so it never falls to <body>.
  * The card still reads pending: the page's re-render has not landed, wait. The card stayed, decided (the
- * call page lists every status): its status line. The card left (the To do tray lists pending only): the
- * next card's Accept, or nothing when it was the last. Pure over a document-shaped lookup.
+ * call page lists every status): its status line. The card left (the tray, the record's Waiting rows, the
+ * agency page list pending only): the first planned card still present, on its Accept; else the first
+ * fallback heading present (`heading`: the caller makes it focusable with tabIndex -1); else nothing.
+ * Pure over a document-shaped lookup.
  */
-export function decisionFocusTarget(doc: CardLookup, ownId: string, nextId: string | null): { wait: boolean; el: Focusable | null } {
+export function decisionFocusTarget(doc: CardLookup, ownId: string, plan: FocusPlan): { wait: boolean; el: Focusable | null; heading: boolean } {
   const own = doc.querySelector(`[data-suggestion="${ownId}"]`);
   if (own) {
-    if (own.getAttribute?.("data-status") === "pending") return { wait: true, el: null };
-    return { wait: false, el: doc.querySelector(`[data-suggestion="${ownId}"] [data-status-line]`) };
+    if (own.getAttribute?.("data-status") === "pending") return { wait: true, el: null, heading: false };
+    return { wait: false, el: doc.querySelector(`[data-suggestion="${ownId}"] [data-status-line]`), heading: false };
   }
-  if (nextId === null) return { wait: false, el: null };
-  return { wait: false, el: doc.querySelector(`[data-suggestion="${nextId}"] [data-suggestion-accept]`) };
+  for (const id of plan.candidates) {
+    const el = doc.querySelector(`[data-suggestion="${id}"] [data-suggestion-accept]`);
+    if (el) return { wait: false, el, heading: false };
+  }
+  for (const sel of plan.fallbacks) {
+    const el = doc.querySelector(sel);
+    if (el) return { wait: false, el, heading: true };
+  }
+  return { wait: false, el: null, heading: false };
+}
+
+/** Reads the plan off the DOM while the card is still mounted (the list may unmount with it). */
+function readFocusPlan(own: Element | null, ownId: string): FocusPlan {
+  const list = own?.closest("[data-suggestion-list]") ?? null;
+  const idsIn = (root: Element | null | undefined) =>
+    [...(root?.querySelectorAll("[data-suggestion]") ?? [])].map((el) => el.getAttribute("data-suggestion") ?? "");
+  const scope = list?.parentElement?.closest("[data-suggestion-scope]") ?? null;
+  const fallbacks = (list?.getAttribute("data-focus-fallback") ?? "").split(FALLBACK_SEP).filter(Boolean);
+  return focusPlan(idsIn(list), ownId, idsIn(scope), fallbacks);
 }
 
 /** Polls decisionFocusTarget until the re-render lands (bounded: 60 tries, 50 ms apart). It runs from a
- *  timer, not an effect, because in the tray this component has unmounted by then. */
-function focusAfterDecision(ownId: string, nextId: string | null, tries = 60) {
+ *  timer, not an effect, because in a list this component has unmounted by then. */
+function focusAfterDecision(ownId: string, plan: FocusPlan, tries = 60) {
   const step = (left: number) => {
-    const { wait, el } = decisionFocusTarget(document, ownId, nextId);
+    const { wait, el, heading } = decisionFocusTarget(document, ownId, plan);
     if (wait && left > 0) { window.setTimeout(() => step(left - 1), 50); return; }
+    // A heading takes focus only with a tabindex; -1 keeps it out of the Tab order.
+    if (heading && el instanceof HTMLElement && !el.hasAttribute("tabindex")) el.tabIndex = -1;
     el?.focus();
   };
   window.setTimeout(() => step(tries), 0);
 }
 
 export function SuggestionActions({
-  id, edit, labels, accept, editAccept, discard, undo, initialMode = "view",
+  id, edit, labels, accept, editAccept, discard, undo, initialMode = "view", variant = "card",
 }: SuggestionActionProps & {
   id: string; edit: SuggestionEdit; labels: SuggestionLabels;
   /** For the markup test and the styleguide; the card always starts in view. */
   initialMode?: "view" | "edit";
+  /** "row": the record's flat row, ghost Accept and Discard only. */
+  variant?: "card" | "row";
 }) {
   const [mode, setMode] = useState<"view" | "edit">(initialMode);
   const [fieldError, setFieldError] = useState<{ field: string; text: string } | null>(null);
@@ -101,14 +147,15 @@ export function SuggestionActions({
     startTransition(async () => {
       const r = await runDecision({
         act, undo: () => undo(id), toast, schedule: (fn, ms) => { setTimeout(fn, ms); },
-        labels: { undo: labels.undo, crashed: labels.crashed, lang: labels.lang },
+        // A full reload, never router.refresh(): a tab pinned to an older deployment refreshes from it (A4).
+        reload: () => { window.location.reload(); },
+        labels: { undo: labels.undo, crashed: labels.crashed, reload: labels.reload, lang: labels.lang },
       });
       if (r.ok) {
-        const card = (rootRef.current ?? formRef.current)?.closest("[data-suggestion]");
-        const next = card?.nextElementSibling?.closest("[data-suggestion]")?.getAttribute("data-suggestion") ?? null;
+        const plan = readFocusPlan(rootRef.current ?? formRef.current, id);
         setFieldError(null);
         setMode("view");
-        focusAfterDecision(id, next);
+        focusAfterDecision(id, plan);
         return;
       }
       setFieldError(r.field ? { field: r.field, text: r.error } : null);
@@ -119,6 +166,20 @@ export function SuggestionActions({
     returnFocus.current = true;
     setFieldError(null);
     setMode("view");
+  }
+
+  if (variant === "row") {
+    return (
+      <div ref={rootRef} className="flex flex-wrap gap-2">
+        <Button data-suggestion-accept type="button" size="sm" variant="ghost" className={CTL} disabled={pending}
+          onClick={() => run(() => accept(id))}>
+          {labels.accept}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" className={CTL} disabled={pending} onClick={() => run(() => discard(id))}>
+          {labels.discard}
+        </Button>
+      </div>
+    );
   }
 
   if (mode === "view") {

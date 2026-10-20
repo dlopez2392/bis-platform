@@ -20,7 +20,8 @@ export type TimelineItemProps = {
   subject?: { label: string; href: string };
   verb: ReactNode;
   status?: { tone: TimelineTone; word: string } | null;
-  detail?: string | null;
+  /** A string, or an accepted suggestion's original drawn from its parts (item 8b-2, SuggestionParts). */
+  detail?: ReactNode;
   time: string;
   dateTime: string;
   action?: ReactNode;

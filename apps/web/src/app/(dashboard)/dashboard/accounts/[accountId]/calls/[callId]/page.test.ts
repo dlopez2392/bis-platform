@@ -565,6 +565,17 @@ describe("CallDetailPage — the Suggestions section (item 8b-1)", () => {
     expect(html).toContain(">Accept<");
   });
 
+  // Item 8b-2 (spec 5.5): on the call page itself the link is the cited turn's own anchor, which the
+  // transcript below carries; a copied row (no turn) has no link here at all.
+  it("a cited card links to its turn on this page, and that anchor exists in the transcript; a copied row has no link (mutation: drop onCallPage -> FAILS)", async () => {
+    const cited: Proposal = { ...TASK, id: "prop-cited", evidenceRef: { turn: 1, at: "2026-08-25T19:15:11Z" } };
+    const html = await render(CALL, [], [cited, { ...DECIDED }]);
+    const links = [...html.matchAll(/<a[^>]*data-transcript-link[^>]*href="([^"]*)"|<a[^>]*href="([^"]*)"[^>]*data-transcript-link/g)]
+      .map((x) => x[1] ?? x[2]);
+    expect(links).toEqual(["#turn-1"]);
+    expect(html).toMatch(/<li[^>]*id="turn-1"/);
+  });
+
   it("sits between the summary and the transcript", async () => {
     const text = renderedText(await render(CALL, [], [TASK]));
     const summaryAt = text.indexOf(m["calls.detail.summary"]);

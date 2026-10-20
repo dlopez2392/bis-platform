@@ -3,7 +3,7 @@ import type { Client } from "pg";
 import { withRollback, actAs, actAsOwner } from "./db";
 
 // Per-process suffix: clerk_org_id is unique on the ONE project every CI run
-// shares (call-proposals-grants.test.ts:6-20).
+// shares (first explained in the deleted 0040-era grants test).
 const RUN = Math.random().toString(36).slice(2, 10);
 const org = (label: string) => `org_RE_${label}_${RUN}`;
 const sub = (label: string) => `user_RE_${label}_${RUN}`;
