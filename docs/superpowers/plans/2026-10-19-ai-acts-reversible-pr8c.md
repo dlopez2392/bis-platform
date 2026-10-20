@@ -300,7 +300,7 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
 - [ ] **Gate:** bis-ci is at **0089** today (2026-10-19); 0090 waits for 8b-2's own rollout. Task 0 does not start until `max(version)` reads 0090's apply on BOTH projects; read 1 below checks it.
 - [ ] **After 8b-2 merges** (≥ 2026-10-20T05:35:46Z, with 0089 and 0090 on both projects): `git -C <WT> fetch origin && git -C <WT> merge origin/main`. The merge conflicts in nothing; this branch holds only the spec and this plan. Run `pnpm install`. Check A4.
 - [ ] Re-read every file:line this plan cites, on the merged tree:
-  - the call sites (`registry.ts:434-436`, `:451-453`, `:481-486`, `:592-601`, `:683`; `finish-call.ts:296-357`; `textback.ts:157-174`, `:228`; `enrich.ts:97-106`, `:150`, `:179-182`, `:266-310`; `lead.ts:155-179`; `handoff-result/route.ts:352-365`);
+  - the call sites (`registry.ts:434-436`, `:451-453`, `:481-486`, `:592-601`, `:683`; `finish-call.ts:295-357`; `textback.ts:157-174`, `:228`; `enrich.ts:97-106`, `:150`, `:179-182`, `:266-310`; `lead.ts:155-179`; `handoff-result/route.ts:352-365`);
   - the 8b-2 record files.
 
   Correct this plan in place for any line that moved (a docs commit) before dispatching Wave A.
@@ -562,7 +562,7 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 | `booking_created` | `registry.ts:481-486` | `target { bookingId }`, `after { startsAt, endsAt }` from `slot` |
 | `booking_rescheduled` | `registry.ts:592-596` + `:601` | ONE act, recorded after `:601` succeeds (the new booking is not also a `booking_created`); capture `:601`'s `{ updatedAt }`; `target { bookingId: newId, fromBookingId: bookingId }`, `before { startsAt: old.starts_at, endsAt: old.ends_at, version: updatedAt }`, `after` from `slot` |
 | `booking_cancelled` | `registry.ts:683` | capture `{ updatedAt }`; `target { bookingId }`, `before { startsAt: row.starts_at, endsAt: row.ends_at }`, `after { version: updatedAt }` |
-| `contact_created` / `contact_field_filled` | `finish-call.ts:302-310`, `:322-327`, `:337-342`, `:344-348` | `resolveContactId(state, ctx)` (`:296`) gains a third parameter `callId: string \| null`. Both callers pass it: `finishCall` (`:420`, `meta.callRowId`) and the text-back resolver (`:604`). The fills switch to `fillContactBlanksReport`, one act per written field. `:344-348`'s phone fill is a no-op on a caller-ID match, so it records nothing unless `written` is non-empty |
+| `contact_created` / `contact_field_filled` | `finish-call.ts:302-310`, `:322-327`, `:337-342`, `:344-348` | `resolveContactId(state, ctx)` (`:295`) gains a third parameter `callId: string \| null`. Both callers pass it: `finishCall` (`:423`, `meta.callRowId`) and the text-back resolver (`:603`). The fills switch to `fillContactBlanksReport`, one act per written field. `:344-348`'s phone fill is a no-op on a caller-ID match, so it records nothing unless `written` is non-empty |
 | `contact_created` / `contact_field_filled` | `textback.ts:157-174` (`contactForCallerId`) | gains a `callId: string \| null` parameter, passed by `:228` as `r.callId`; `handoff-result/route.ts:352-365` already passes `callId` into `prepareTextback` |
 | web chat: `contact_created` / `contact_field_filled` | `enrich.ts:97-106`, `:150` (`fillBlanks`, `:266-310`), `:179-182` | see below |
 
