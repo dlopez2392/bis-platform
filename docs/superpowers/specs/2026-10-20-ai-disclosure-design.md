@@ -26,6 +26,14 @@ the two halves are compared as calls arrive.
   - ES: "Soy {persona}, una asistente de inteligencia artificial. Esta llamada se transcribe para que el
     equipo le dé seguimiento."
 - **D4 Web chat:** on Trial or On the chat is always labelled AI (header + first message); no split.
+- **D5 Why a call disclosed (2026-10-20):** each stamped call also records the setting that decided it,
+  `calls.disclosure_setting` ('trial' or 'on'). The results card counts ONLY Trial calls; an On call is
+  "outside the trial" and goes to the not-counted footnote, so moving an account from Trial to On never
+  pours every-call-discloses calls into the "Said it was AI" half.
+- **D6 Asked for a person (2026-10-20):** each half gets its own "Asked for a person" figure (counted calls
+  with `handoff_requested_at` set), and those calls are left OUT of "Hung up early" (hung up early =
+  `outcome = 'abandoned'` AND `handoff_requested_at is null`): a handed-off call classifies `abandoned` at
+  socket close, and asking for a person is not hanging up.
 
 ## 3. Scope
 
@@ -44,6 +52,9 @@ and the trial client On before counsel reads the wording (an ops step, not code)
   never owner-editable).
 - `calls.disclosed boolean` (nullable): set once at call start for every call whose profile is Trial or
   On; null for Off and for every call before 0093. Server-written only, like the rest of `calls`.
+- `calls.disclosure_setting text` (nullable) with `calls_disclosure_setting_check (disclosure_setting in
+  ('trial', 'on'))` (D5): the setting that decided this call, stamped on the same insert as `disclosed`,
+  only for Trial/On; Off sends neither. Server-written only.
 - Additive and safe under the running build (defaults and nullable). Apply order: bis-ci, production,
   parity, merge. The client-write digest must stay unchanged.
 
@@ -52,7 +63,8 @@ and the trial client On before counsel reads the wording (an ops step, not code)
 ### 5.1 The phone call
 - At call start (the incoming route, where the greeting and prompt are built) the server resolves
   `disclose`: Off → false; On → true; Trial → a fair coin (`crypto.randomInt(2) === 1`, never
-  `Math.random`). It stamps `calls.disclosed` with that value on the call row it already writes; a stamp
+  `Math.random`). It stamps `calls.disclosed` with that value, and `calls.disclosure_setting` with the
+  setting that decided it (D5), on the call row it already writes; a stamp
   failure is logged by id and the call goes on (it disclosed or not as decided; the call is then simply
   left out of the results).
 - `openingGreeting` (`lib/voice/greeting.ts`) gains `disclose: boolean` and `personaName`. When true it
@@ -75,8 +87,10 @@ and the trial client On before counsel reads the wording (an ops step, not code)
 ### 5.3 The results card (agency only)
 - On the account's Voice settings page, under the setting, visible to the agency only: two columns,
   "Said it was AI" and "Didn't", each with: calls counted, booked %, hung up early % (`outcome =
-  'abandoned'`). Counted = stamped calls, excluding `outcome = 'spam'`. A footnote: "{n} calls not counted
-  (spam, or before the trial)".
+  'abandoned'` AND `handoff_requested_at is null`, D6), and asked for a person % (`handoff_requested_at is
+  not null`, D6). Counted = finished calls stamped `disclosure_setting = 'trial'` (D5), excluding
+  `outcome = 'spam'`. A footnote: "{n} calls not counted (spam, or outside the trial)" — finished calls
+  that are spam, unstamped, or stamped by On.
 - No comparison sentence until each column has at least 30 counted calls; until then: "Not enough calls
   yet to tell." Past that, the card shows the numbers only. It never declares a winner; the owner decides.
 - Loaded, empty ("No calls since the trial started") and error states; English and Spanish; tokens only;
@@ -90,7 +104,10 @@ and the trial client On before counsel reads the wording (an ops step, not code)
 ## 6. Copy
 
 All strings in `messages.ts` with `.es` twins; the spoken D3 sentences live in the greeting builder as
-constants (they are speech, not UI), pinned by test in both languages. Spanish UI copy is usted.
+constants (they are speech, not UI), pinned by test in both languages. Spanish UI copy is usted, except
+the website chat's two strings (its label and first-message sentence), which follow the chat's own existing
+register, tú (`lib/concierge/strings.ts`): "…para que el equipo te dé seguimiento." The spoken phone
+sentence stays exactly D3 (usted, "le").
 
 ## 7. Testing
 
@@ -99,10 +116,11 @@ constants (they are speech, not UI), pinned by test in both languages. Spanish U
 - Prompt: disclosed vs not; "never claim to be human" in both.
 - Coin: `crypto.randomInt` is the source (mocked); Trial stamps what it decided; On always true; Off null.
 - Stamp failure: the call proceeds and logs ids only.
-- Results: spam and null excluded; second-account rows never counted; < 30 per half shows the
-  not-enough line; percentages exact on fixed fixtures.
-- Migration (0093): the CHECK; default; owners cannot write `disclosure`; authenticated cannot write
-  `calls.disclosed`; digest unchanged.
+- Results: spam, null and On-stamped calls excluded (D5); second-account rows never counted; < 30 per
+  half shows the not-enough line; percentages exact on fixed fixtures; a call that asked for a person is
+  counted under "Asked for a person" and never under "Hung up early" (D6).
+- Migration (0093): the two CHECKs; default; owners cannot write `disclosure`; authenticated cannot write
+  `calls.disclosed` or `calls.disclosure_setting`; digest unchanged.
 - e2e: with the setting On, the public chat header shows the AI label in English and Spanish; the agency
   sees the setting and the card; a client Owner sees neither control.
 
