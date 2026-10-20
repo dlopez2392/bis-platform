@@ -328,13 +328,15 @@ export async function POST(req: Request): Promise<NextResponse> {
     // The event type is Telnyx's own name and the error is named by its type,
     // never its message, which can quote a phone number or the text itself.
     stampHeartbeat("sms.inbound", { ok: false, error: `${String(eventType ?? "unknown").slice(0, 40)} handling failed (${e instanceof Error ? e.name : typeof e})` });
+    // A FilingFailed wraps the real cause; every branch logs the cause.
+    const cause = e instanceof FilingFailed ? e.cause : e;
     if (CHANGES_CONSENT.has(consent.kind)) {
-      log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(e));
+      log("could not handle a text that changes consent; answering 503 so Telnyx retries", eventType, consent.kind, loggableError(cause));
       return NextResponse.json({ error: "retry" }, { status: 503 });
     }
     // Item 8c final review A7: a plain text not yet filed is retried too.
     if (e instanceof FilingFailed) {
-      log("could not file an inbound text; answering 503 so Telnyx retries", eventType, loggableError(e.cause));
+      log("could not file an inbound text; answering 503 so Telnyx retries", eventType, loggableError(cause));
       return NextResponse.json({ error: "retry" }, { status: 503 });
     }
     log("unexpected failure handling webhook", eventType, loggableError(e));
