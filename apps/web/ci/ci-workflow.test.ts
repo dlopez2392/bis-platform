@@ -897,8 +897,8 @@ describe("seed-demo.yml rebuilds the production demo every morning, with a backu
   const seedLines = codeLines(read("../../../.github/workflows/seed-demo.yml"));
   const text = seedLines.join("\n");
 
-  it("runs every morning, and again an hour later (mutation: drop either cron -> FAILS)", () => {
-    expect(text).toMatch(/schedule:\s*\n\s*- cron: '17 10 \* \* \*'\s*\n\s*- cron: '17 11 \* \* \*'/);
+  it("keeps two backup schedules after Vercel's 10:17 dispatch (mutation: drop either cron -> FAILS)", () => {
+    expect(text).toMatch(/schedule:\s*\n\s*- cron: '17 11 \* \* \*'\s*\n\s*- cron: '17 13 \* \* \*'/);
   });
 
   it("never runs on a push or pull request (mutation: add `push:` -> FAILS)", () => {
@@ -911,8 +911,8 @@ describe("seed-demo.yml rebuilds the production demo every morning, with a backu
     expect(text).toMatch(/inputs\.confirm \}\}" != "seed"/);
   });
 
-  it("lets only the backup run skip, and only on a demo under six hours old (mutation: skip on the 10:17 run -> FAILS)", () => {
-    expect(text).toMatch(/id: fresh\s*\n\s*if: github\.event_name == 'schedule' && github\.event\.schedule == '17 11 \* \* \*'/);
+  it("lets only a scheduled run skip, and only on a demo under six hours old; a dispatch always rebuilds (mutation: guard dispatches too -> FAILS)", () => {
+    expect(text).toMatch(/id: fresh\s*\n\s*if: github\.event_name == 'schedule'\s*\n/);
     expect(text).toMatch(/-lt 21600/);
   });
 
