@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -450,5 +452,32 @@ describe("ConciergeChat AI label (S-47a)", () => {
   it("renders no label when aiLabel is absent", () => {
     const html = renderToStaticMarkup(createElement(ConciergeChat, { ...base, bare: true }));
     expect(html).not.toContain("data-ai-label");
+  });
+});
+
+/**
+ * S-47a fix round (design review): the AI label is the one line on this panel that tells a stranger they
+ * are talking to software, so it reads in the panel's primary text at weight 500, never the muted grey
+ * that measured 4.1:1. And no rule in this file falls back to a pure grey (DESIGN.md: violet-biased
+ * neutrals only) — each fallback is tokens.css's own light value: --text-1 #1D1930, --text-2 #5D5876.
+ */
+describe("concierge.css colours (S-47a fix round)", () => {
+  const css = readFileSync(join(__dirname, "concierge.css"), "utf8");
+  const rule = (selector: string) => {
+    const at = css.indexOf(`${selector} {`);
+    if (at < 0) throw new Error(`no rule for ${selector}`);
+    return css.slice(at, css.indexOf("}", at));
+  };
+
+  it("the AI label paints in --foreground (fallback tokens.css light --text-1) at 500 (mutation: back to --muted-foreground -> FAILS)", () => {
+    const r = rule(".bis-concierge-ai-label");
+    expect(r).toContain("color: var(--foreground, #1D1930);");
+    expect(r).toContain("font-weight: 500;");
+  });
+
+  it("no pure-grey fallback anywhere; the footer and close fall back to light --text-2 (mutation: restore #71717a -> FAILS)", () => {
+    expect(css).not.toMatch(/#71717a/i);
+    expect(rule(".bis-concierge-footer")).toContain("color: var(--muted-foreground, #5D5876);");
+    expect(rule(".bis-concierge-close")).toContain("color: var(--muted-foreground, #5D5876);");
   });
 });

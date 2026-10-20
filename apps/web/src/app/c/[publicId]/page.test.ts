@@ -220,12 +220,14 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     return { el, chat, html: renderToStaticMarkup(el) };
   }
 
-  it("On, English: the label and the greeting followed by the AI sentence", async () => {
+  // Fix round: the AI sentence comes FIRST, so a greeting that ends in a question still ends the message
+  // (mutation: back to greeting-then-intro -> FAILS).
+  it("On, English: the label, and the AI sentence BEFORE the greeting", async () => {
     const { chat, html } = await render({ ...PROFILE, disclosure: "on" });
     expect(html).toContain("Sofía · AI assistant");
     expect(html).toContain('data-ai-label=""');
     expect(chat.props.greeting).toBe(
-      "Hi! How can I help? I'm Sofía, an AI assistant. This chat is saved so the team can follow up.",
+      "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hi! How can I help?",
     );
   });
 
@@ -233,7 +235,7 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     const { chat, html } = await render({ ...PROFILE, disclosure: "trial" }, { locale: "es" });
     expect(html).toContain("Sofía · asistente de IA");
     expect(chat.props.greeting).toBe(
-      "¡Hola! Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
+      "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento. ¡Hola!",
     );
   });
 
@@ -245,7 +247,7 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     expect(chat.props.aiLabel ?? null).toBeNull();
   });
 
-  it("a blank greeting on On: the first message is the AI sentence alone, no leading space", async () => {
+  it("a blank greeting on On: the first message is the AI sentence alone, no trailing space", async () => {
     const { chat } = await render({ ...PROFILE, greeting_en: "   ", disclosure: "on" });
     expect(chat.props.greeting).toBe(
       "I'm Sofía, an AI assistant. This chat is saved so the team can follow up.",
@@ -256,7 +258,7 @@ describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
     const { chat, html } = await render({ ...PROFILE, persona_name: "  ", disclosure: "on" });
     expect(html).toContain("Sofía · AI assistant");
     expect(chat.props.greeting).toBe(
-      "Hi! How can I help? I'm Sofía, an AI assistant. This chat is saved so the team can follow up.",
+      "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hi! How can I help?",
     );
   });
 });

@@ -78,7 +78,7 @@
   padding: 0;
   text-align: center;
   font-size: 12px;
-  color: var(--muted-foreground, #71717a);
+  color: var(--muted-foreground, #5D5876);
 }
 
 .bis-concierge-panel {
@@ -111,13 +111,15 @@
   max-width: none;
   margin: 0;
 }
-/* S-47a: the AI label. Muted text on the panel's own surface, tokens only (the fallbacks are the
+/* S-47a: the AI label. The panel's primary text at 500, not muted: it is the line that tells a stranger
+   they are talking to software, and muted measured 4.1:1. Tokens only (the fallbacks are the
    tokens' own light values, as every rule in this file carries). */
 .bis-concierge-ai-label {
   margin: 0;
   font-size: 12px;
   line-height: 16px;
-  color: var(--muted-foreground, #71717a);
+  font-weight: 500;
+  color: var(--foreground, #1D1930);
 }
 /* Ghost, tokens only. 32px square: a comfortable target on a phone without
    growing the header row past the logo's own height. */
@@ -132,7 +134,7 @@
   border: 0;
   border-radius: var(--radius-ctl, 8px);
   background: transparent;
-  color: var(--muted-foreground, #71717a);
+  color: var(--muted-foreground, #5D5876);
   font: inherit;
   font-size: 20px;
   line-height: 1;
@@ -203,7 +205,7 @@
   width: 6px;
   height: 6px;
   border-radius: var(--radius-ctl, 8px);
-  background: var(--muted-foreground, #71717A);
+  background: var(--muted-foreground, #5D5876);
   opacity: .35;
   animation: bis-concierge-pulse 1s ease-in-out infinite;
 }

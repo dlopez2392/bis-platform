@@ -105,8 +105,10 @@ export default async function ConciergePage({
   const saysAi = profile.disclosure === "trial" || profile.disclosure === "on";
   const persona = profile.persona_name.trim() || "Sofía";
   const aiLabel = saysAi ? t(m, "concierge.aiLabel", locale, { persona }) : null;
+  // The AI sentence comes FIRST: a tenant greeting usually ends in a question ("How can I help?"), and
+  // that question has to stay the last thing the visitor reads before typing.
   const firstMessage = saysAi
-    ? [greeting.trim(), t(m, "concierge.aiIntro", locale, { persona })].filter(Boolean).join(" ")
+    ? [t(m, "concierge.aiIntro", locale, { persona }), greeting.trim()].filter(Boolean).join(" ")
     : greeting;
 
   // Real signatures, read from the source rather than assumed:
