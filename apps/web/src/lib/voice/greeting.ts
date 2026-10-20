@@ -14,6 +14,17 @@ function spanishGreeting(profile: GreetingProfile, businessName: string): string
   return profile.greeting_es?.trim() || `Gracias por llamar a ${businessName}. ¿En qué le puedo ayudar?`;
 }
 
+/** What a caller hears after the greeting when this call discloses (spec D3, owner 2026-10-20). Speech,
+ *  not UI: constants here, pinned word for word in both languages by greeting.test.ts. */
+function aiSentence(lang: "en" | "es", persona: string): string {
+  return lang === "es"
+    ? `Soy ${persona}, una asistente de inteligencia artificial. Esta llamada se transcribe para que el equipo le dé seguimiento.`
+    : `I'm ${persona}, an AI assistant. This call is transcribed so the team can follow up.`;
+}
+
+/** Whether THIS call says it, decided per call by the incoming route (`decideDisclosure`). */
+export type GreetingDisclosure = { disclose: boolean; personaName: string };
+
 /**
  * The opening line: the `response.create` instruction the call socket sends
  * after the greeting delay.
@@ -33,13 +44,25 @@ function spanishGreeting(profile: GreetingProfile, businessName: string): string
  *
  * A blank half falls back in its own language rather than being dropped: a
  * `both` profile saved before Setup required both greetings can still have one.
+ *
+ * S-47a (decision 20): when `disclosure.disclose` is true, the D3 sentence
+ * ("I'm {persona}, an AI assistant. …" / "Soy {persona}, …") follows EACH
+ * greeting in that greeting's language, inside the same word-for-word
+ * instruction: on a bilingual line, English greeting + English sentence, then
+ * Spanish greeting + Spanish sentence. A blank persona falls back to Sofía, as
+ * the prompt's IDENTITY line does. When false, the instruction is
+ * byte-identical to before S-47a.
  */
 export function openingGreeting(
-  profile: GreetingProfile, businessName: string,
+  profile: GreetingProfile, businessName: string, disclosure: GreetingDisclosure,
 ): { instruction: string } {
+  const persona = disclosure.personaName.trim() || "Sofía";
+  // Off: the greeting alone, so the instruction is byte-identical to before S-47a.
+  const said = (greeting: string, lang: "en" | "es") =>
+    disclosure.disclose ? `${greeting} ${aiSentence(lang, persona)}` : greeting;
   if (profile.languages === "both") {
-    const en = englishGreeting(profile, businessName);
-    const es = spanishGreeting(profile, businessName);
+    const en = said(englishGreeting(profile, businessName), "en");
+    const es = said(spanishGreeting(profile, businessName), "es");
     return {
       instruction:
         "Greet the caller with these two greetings, word for word, one right after the other: "
@@ -50,7 +73,7 @@ export function openingGreeting(
     };
   }
   const text = profile.languages === "es"
-    ? spanishGreeting(profile, businessName)
-    : englishGreeting(profile, businessName);
+    ? said(spanishGreeting(profile, businessName), "es")
+    : said(englishGreeting(profile, businessName), "en");
   return { instruction: `Greet the caller with exactly: ${text}` };
 }

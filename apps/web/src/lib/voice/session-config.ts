@@ -39,6 +39,12 @@ export type VoicePromptInput = {
    * always appended.
    */
   medium?: "phone" | "web" | "web_voice";
+  /**
+   * S-47a: this conversation has ALREADY been told it is talking to an AI (the phone's opening sentence,
+   * or the chat's label and first message). OPTIONAL and defaulting to false, so every caller that does not
+   * pass it (the browser voice demo) gets a byte-identical prompt.
+   */
+  disclosed?: boolean;
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

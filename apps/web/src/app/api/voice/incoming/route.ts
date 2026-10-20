@@ -1115,7 +1115,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // D-037: `openingGreeting` (lib/voice/greeting.ts) — a blank greeting
     // falls back in its own language, and a bilingual line opens with the
     // English greeting then the Spanish one.
-    const opening = openingGreeting(profile, businessName);
+    const opening = openingGreeting(profile, businessName, { disclose: false, personaName: profile.persona_name });
 
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName,
