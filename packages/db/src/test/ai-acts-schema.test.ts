@@ -18,6 +18,12 @@ import { serviceDb } from "../service";
  * RED BEFORE 0091, legitimately, every case except the teardown-order case (which reads account-teardown.ts,
  * edited in the same commit): the table, the functions and the unique key do not exist yet.
  *
+ * 0092 (final review I-1) widens what ai_contact_held_by counts as hers by finishCall's own `voice` log row for
+ * her call. RED BEFORE 0092, legitimately: the lead-call and skipped-voice cases (the row blocks). Green before
+ * 0092 too, and said so: the another-call and held-textback cases (the voice row already blocks them, so before
+ * 0092 they pass for the wrong reason; after it they are the mutation guards for the new clause), the grants pin
+ * (a non-regression pin: create or replace must keep it) and the FK-pair guard (no FK changes).
+ *
  * ONE REFUSED STATEMENT PER withRollback, or a savepoint around it (`attempt`): a refusal otherwise aborts the
  * transaction (25P02). Every function call runs as service_role (`svc`), as the app calls them, unless a case
  * says it runs as the client role.
@@ -835,21 +841,125 @@ describe("0091: ai_contact_held_by, table by table (plan Task 1 case 9)", () => 
     }
   });
 
-  it("the guard: the tables with a foreign key into contacts are exactly the typed list of 20 (mutation: a new FK into contacts -> FAILS naming it)", () =>
+  // Pairs, not distinct tables (0092 review): a second FK on a table already listed (a third contact column on
+  // contact_relationships, say) is a new way to hold a contact that the function's clause for that table may not
+  // read, and a distinct-table compare could never see it.
+  it("the guard: the foreign keys into contacts are exactly the typed list of 22 (table, constraint) pairs, two each on contact_duplicate_flags and contact_relationships (mutation: a second FK into contacts on notes -> FAILS naming it)", () =>
     withRollback(async (c) => {
-      const { rows } = await c.query<{ t: string }>(
-        "select distinct conrelid::regclass::text as t from pg_constraint where confrelid = 'public.contacts'::regclass and contype = 'f' order by 1");
-      expect(rows.map((r) => r.t.replace(/^public\./, "")).sort()).toEqual([...FK_TABLES].sort());
-      expect(FK_TABLES).toHaveLength(20);
+      const { rows } = await c.query<{ t: string; n: string }>(
+        "select conrelid::regclass::text as t, conname as n from pg_constraint where confrelid = 'public.contacts'::regclass and contype = 'f'");
+      expect(rows.map((r) => `${r.t.replace(/^public\./, "")} ${r.n}`).sort()).toEqual([...FK_PAIRS].sort());
+      expect(FK_PAIRS).toHaveLength(22);
+      expect([...new Set(FK_PAIRS.map((p) => p.split(" ")[0]))].sort()).toEqual([...FK_TABLES].sort());
     }));
 });
 
-/** Every table with a foreign key into public.contacts after 0091 (pg_constraint, re-read on the replica). */
+/** Every foreign key into public.contacts after 0091, as "table constraint" (pg_constraint, re-read on the replica). */
+const FK_PAIRS = [
+  "ai_acts ai_acts_contact_fkey", "automation_log automation_log_contact_id_fkey", "bookings bookings_contact_id_fkey",
+  "calls calls_contact_id_fkey", "client_group_members client_group_members_contact_fkey",
+  "consent_events consent_events_contact_fkey",
+  "contact_duplicate_flags contact_duplicate_flags_contact_a_fkey", "contact_duplicate_flags contact_duplicate_flags_contact_b_fkey",
+  "contact_relationships contact_relationships_contact_fkey", "contact_relationships contact_relationships_related_fkey",
+  "contact_tags contact_tags_contact_id_fkey", "conversations conversations_contact_id_fkey",
+  "document_requests document_requests_contact_fkey", "document_requirement_skips document_requirement_skips_contact_fkey",
+  "documents documents_contact_fkey", "form_submissions form_submissions_contact_id_fkey", "notes notes_contact_id_fkey",
+  "opportunities opportunities_contact_id_fkey", "places places_contact_fkey", "proposals proposals_contact_fkey",
+  "record_summaries record_summaries_contact_fkey", "tasks tasks_contact_id_fkey",
+] as const;
+/** The 20 distinct tables those keys sit on. */
 const FK_TABLES = [
   "ai_acts", "automation_log", "bookings", "calls", "client_group_members", "consent_events", "contact_duplicate_flags",
   "contact_relationships", "contact_tags", "conversations", "document_requests", "document_requirement_skips", "documents",
   "form_submissions", "notes", "opportunities", "places", "proposals", "record_summaries", "tasks",
 ] as const;
+
+/** Exactly what a lead call leaves on the contact Sofia made from it (finish-call.ts): the call, linked to her
+ *  thread; her AI call summary in that thread; her open, unassigned callback To-do; the missed-call text-back,
+ *  sent; finishCall's own `voice` log row for the call (source voice, channel ai, subject call:<id>, the contact,
+ *  :694-704); her pending suggestion; the ai contact.created and task.created events; and her contact_created act. */
+async function seedLeadCall(c: Client, s: Seeded) {
+  const z = await one(c, "insert into contacts (account_id, first_name, author_kind) values ($1,'Caller','ai') returning id", [s.acct]);
+  const k = await one(c, "insert into calls (account_id, phone_number_id, contact_id) values ($1,$2,$3) returning id", [s.acct, s.phone, z]);
+  const v = await one(c, "insert into conversations (account_id, contact_id) values ($1,$2) returning id", [s.acct, z]);
+  await c.query("update calls set conversation_id = $2 where id = $1", [k, v]);
+  const m = await one(c, "insert into messages (account_id, conversation_id, channel, direction, body, author_kind) values ($1,$2,'voice','inbound','Call summary','ai') returning id", [s.acct, v]);
+  const task = await one(c, "insert into tasks (account_id, contact_id, title, call_id) values ($1,$2,'Call back',$3) returning id", [s.acct, z, k]);
+  const textback = await one(c,
+    "insert into automation_log (account_id, source, channel, contact_id, subject_key, status) values ($1,'textback','sms',$2,$3,'sent') returning id",
+    [s.acct, z, `call:${k}`]);
+  const voiceLog = await one(c,
+    "insert into automation_log (account_id, source, channel, contact_id, subject_key, status) values ($1,'voice','ai',$2,$3,'sent') returning id",
+    [s.acct, z, `call:${k}`]);
+  const proposal = await one(c,
+    "insert into proposals (account_id, source, call_id, contact_id, kind, payload, evidence, expires_at) values ($1,'call',$2,$3,'task','{}','she asked', now() + interval '30 days') returning id",
+    [s.acct, k, z]);
+  const ev = (type: string, payload: Record<string, string>) =>
+    c.query("insert into events (account_id, type, actor_type, actor_id, payload) values ($1,$2,'ai','voice',$3)", [s.acct, type, JSON.stringify(payload)]);
+  await ev("contact.created", { contactId: z });
+  await ev("task.created", { taskId: task, contactId: z });
+  const act = await insAct(c, actRow(s, { call_id: k, contact_id: z }));
+  return { z, k, v, m, task, textback, voiceLog, proposal, act };
+}
+
+describe("0092: finishCall's own voice log row for her call is hers (final review I-1)", () => {
+  it("a real lead call answers {} and undo deletes the contact; the call and both log rows stay, unlinked (mutation: drop 0092's voice clause -> {automation_log} / has_activity -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const z = await seedLeadCall(c, s);
+      expect(await heldBy(c, s.acct, z.act), "held_by").toEqual([]);
+      expect(await undoContact(c, s.acct, z.act), "undo").toBe("deleted");
+      expect((await c.query("select 1 from contacts where id = $1", [z.z])).rowCount, "the contact").toBe(0);
+      const { rows: [k] } = await c.query("select contact_id, conversation_id from calls where id = $1", [z.k]);
+      expect(k, "the call stays, unlinked").toEqual({ contact_id: null, conversation_id: null });
+      const { rows: logs } = await c.query("select id, contact_id from automation_log where id = any($1::uuid[]) order by source",
+        [[z.textback, z.voiceLog]]);
+      expect(logs, "both log rows stay, unlinked").toEqual([{ id: z.textback, contact_id: null }, { id: z.voiceLog, contact_id: null }]);
+    }));
+
+  it("a hang-up's skipped voice row for her call is hers too (any status) (mutation: voice clause limited to status sent -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const z = await seedLeadCall(c, s);
+      await c.query("update automation_log set status = 'skipped', reason = 'The caller hung up' where id = $1", [z.voiceLog]);
+      expect(await heldBy(c, s.acct, z.act)).toEqual([]);
+    }));
+
+  it("a voice log row for ANOTHER call on the same contact answers {automation_log} (mutation: match source = 'voice' without the call's subject key -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const z = await seedLeadCall(c, s);
+      const k2 = await one(c, "insert into calls (account_id, phone_number_id) values ($1,$2) returning id", [s.acct, s.phone]);
+      await c.query("insert into automation_log (account_id, source, channel, contact_id, subject_key, status) values ($1,'voice','ai',$2,$3,'sent')",
+        [s.acct, z.z, `call:${k2}`]);
+      expect(await heldBy(c, s.acct, z.act), "held_by").toEqual(["automation_log"]);
+      expect(await undoContact(c, s.acct, z.act), "undo").toBe("has_activity");
+    }));
+
+  it("a textback-source row under her call's voice-shaped key is still judged by the textback rule: held answers {automation_log} (mutation: voice clause without source = 'voice' -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await seed(c);
+      const z = await seedLeadCall(c, s);
+      await c.query("update automation_log set status = 'held', held_until = now() + interval '8 hours' where id = $1", [z.textback]);
+      expect(await heldBy(c, s.acct, z.act)).toEqual(["automation_log"]);
+    }));
+
+  // A non-regression pin, green before 0092 too: create or replace keeps the oid, so the grants, the owner and the
+  // settings must come through unchanged. The owner's own entry is read by role, not by name (the CLI stack's
+  // migration role may differ from the replica's).
+  it("ai_contact_held_by keeps its grants, settings and invoker rights through 0092: execute for exactly the owner, authenticated and service_role, none grantable (mutation: 0092 as drop + create without the grants -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ who: string; priv: string; g: boolean }>(
+        `select case when a.grantee = p.proowner then 'owner' when a.grantee = 0 then 'PUBLIC' else a.grantee::regrole::text end as who,
+                a.privilege_type as priv, a.is_grantable as g
+           from pg_proc p cross join lateral aclexplode(p.proacl) a
+          where p.oid = 'public.ai_contact_held_by(uuid, uuid)'::regprocedure order by 1, 2`);
+      expect(rows.map((r) => `${r.who} ${r.priv} ${r.g}`)).toEqual(["authenticated EXECUTE false", "owner EXECUTE false", "service_role EXECUTE false"]);
+      const { rows: [f] } = await c.query(
+        "select prosecdef, proconfig, provolatile, prorettype::regtype::text as ret from pg_proc where oid = 'public.ai_contact_held_by(uuid, uuid)'::regprocedure");
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'], provolatile: "s", ret: "text[]" });
+    }));
+});
 
 describe("0091: undo_ai_contact_created (plan Task 1 case 10)", () => {
   it("the clean contact is deleted with her thread, her To-do, her suggestion and her acts; the call stays, unlinked; Omar stays (mutation: delete the contact before the messages -> 23503 -> FAILS)", () =>
