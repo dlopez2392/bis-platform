@@ -52,6 +52,8 @@ and the trial client On before counsel reads the wording (an ops step, not code)
   never owner-editable).
 - `calls.disclosed boolean` (nullable): set once at call start for every call whose profile is Trial or
   On; null for Off and for every call before 0093. Server-written only, like the rest of `calls`.
+  `true` means Sofía was INSTRUCTED to say the sentence (it is in the word-for-word greeting), not that
+  the caller heard it: a caller who talks over the greeting can cut it off (fix round, 2026-10-20).
 - `calls.disclosure_setting text` (nullable) with `calls_disclosure_setting_check (disclosure_setting in
   ('trial', 'on'))` (D5): the setting that decided this call, stamped on the same insert as `disclosed`,
   only for Trial/On; Off sends neither. Server-written only.
@@ -70,7 +72,8 @@ and the trial client On before counsel reads the wording (an ops step, not code)
   `Math.random`). It stamps `calls.disclosed` with that value, and `calls.disclosure_setting` with the
   setting that decided it (D5), on the call row it already writes; a stamp
   failure is logged by id and the call goes on (it disclosed or not as decided; the call is then simply
-  left out of the results).
+  left out of the results). The stamp records the INSTRUCTION, not what was heard: a caller who talks
+  over the greeting can cut the sentence off, and that call still reads `disclosed = true`.
 - `openingGreeting` (`lib/voice/greeting.ts`) gains `disclose: boolean` and `personaName`. When true it
   appends the D3 sentence after each greeting in that greeting's language (on a bilingual line: English
   greeting + English sentence, then Spanish greeting + Spanish sentence), inside the same word-for-word
@@ -85,7 +88,9 @@ and the trial client On before counsel reads the wording (an ops step, not code)
 ### 5.2 The website chat
 - When the account's setting is Trial or On: the chat header reads "{persona} · AI assistant" /
   "{persona} · asistente de IA", and the first assistant message carries one sentence saying she is an AI
-  assistant and the chat is saved so the team can follow up (EN/ES, in the page's language). The chat's
+  assistant and the chat is saved so the team can follow up (EN/ES, in the page's language). The
+  sentence comes BEFORE the tenant's greeting (fix round, 2026-10-20), so a greeting that ends in a
+  question still ends the message. The chat's
   prompt gets the same disclosed IDENTITY line. Off: unchanged.
 
 ### 5.3 The results card (agency only)
@@ -130,7 +135,10 @@ sentence stays exactly D3 (usted, "le").
 
 ## 8. Rollout
 
-1. 0093 to bis-ci, then production (MCP, once), then parity, then merge.
+1. 0093 to bis-ci, then production (MCP, once), then parity, then merge. The order is not optional:
+   the build selects `voice_profiles.disclosure` on every voice-profile read (`PROFILE_COLS`), so a
+   build that reaches a database without 0093 breaks the public website chat (`/c/<publicId>`) and the
+   agency's Voice page as well as incoming calls, not only calls.
 2. After deploy: set BIS's own line to On; one real call to the BIS line hears the sentence; read
    `calls.disclosed = true` on that call.
 3. When the first real client with call volume goes live: set it to Trial; read the card after ~4 weeks

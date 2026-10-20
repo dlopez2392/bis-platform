@@ -146,9 +146,13 @@ test.afterAll(async () => {
   if (!fixtureRef) return;
   const fixture = fixtureRef;
   const db = serviceDb();
+  // Every failure is logged AND collected; the hook throws at the end, after every step has had its try,
+  // so a leftover row or an unrestored profile fails the run by name instead of scrolling past in a log.
+  const problems: string[] = [];
+  const fail = (line: string) => { console.error(line); problems.push(line); };
   const step = async (what: string, run: () => PromiseLike<{ error: { message: string } | null }>) => {
     const { error } = await run();
-    if (error) console.error(`ai-disclosure e2e cleanup: ${what} failed: ${error.message}`);
+    if (error) fail(`ai-disclosure e2e cleanup: ${what} failed: ${error.message}`);
   };
 
   if (callIds.length > 0) await step("calls", () => db.from("calls").delete().eq("account_id", accountId).in("id", callIds));
@@ -185,15 +189,16 @@ test.afterAll(async () => {
   ];
   for (const [table, count] of checks) {
     const n = await count();
-    if (n !== 0) console.error(`ai-disclosure e2e cleanup: ${table} still holds ${n} row(s) for this spec's seed`);
+    if (n !== 0) fail(`ai-disclosure e2e cleanup: ${table} still holds ${n} row(s) for this spec's seed`);
   }
   if (priorProfileCaptured) {
     const after = await getVoiceProfile(db, accountId);
     const restored = priorProfile
       ? after?.disclosure === priorProfile.disclosure && after?.persona_name === priorProfile.persona_name
       : after === null;
-    if (!restored) console.error("ai-disclosure e2e cleanup: voice_profiles was not restored to its prior state");
+    if (!restored) fail("ai-disclosure e2e cleanup: voice_profiles was not restored to its prior state");
   }
+  if (problems.length > 0) throw new Error(`ai-disclosure e2e cleanup left the fixture dirty:\n${problems.join("\n")}`);
 });
 
 test("Chat, English: the AI label and the disclosed first message", async ({ page }) => {
@@ -201,7 +206,7 @@ test("Chat, English: the AI label and the disclosed first message", async ({ pag
   await page.goto(`/c/${publicId}`);
   await expect(page.locator("[data-ai-label]")).toHaveText("Sofía · AI assistant");
   await expect(page.locator(".bis-msg-assistant").first()).toHaveText(
-    "Hello from the workshop. I'm Sofía, an AI assistant. This chat is saved so the team can follow up.",
+    "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hello from the workshop.",
   );
 });
 
@@ -210,7 +215,7 @@ test("Chat, Spanish: the AI label and the disclosed first message", async ({ pag
   await page.goto(`/c/${publicId}?locale=es`);
   await expect(page.locator("[data-ai-label]")).toHaveText("Sofía · asistente de IA");
   await expect(page.locator(".bis-msg-assistant").first()).toHaveText(
-    "Hola desde el taller. Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
+    "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento. Hola desde el taller.",
   );
 });
 
@@ -267,19 +272,15 @@ test.describe("a client Owner never reaches the setting", () => {
     if (fixture) await setClientAccess(serviceDb(), fixture.accountId, true, fixture.clerkUserId);
   });
 
-  test("is sent to their own dashboard, and the setting is nowhere on it", async ({ page }) => {
+  // The redirect is the check that can fail: a guard that let a client through would leave the URL on
+  // /voice. (Fix round: two checks that could not fail were dropped — the dashboard never renders the
+  // setting's legend whatever the guard does, and a page view writes no profile either way.)
+  test("is sent to their own dashboard", async ({ page }) => {
     const fixture = readFixture();
     test.skip(!fixture, "No client fixture — the setup project creates it; run the full suite.");
     const { accountId: fixtureAccountId } = fixture!;
 
-    const db = serviceDb();
-    const before = await getVoiceProfile(db, fixtureAccountId);
-
     await page.goto(`/dashboard/accounts/${fixtureAccountId}/voice`);
     await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${fixtureAccountId}/dashboard$`));
-    await expect(page.getByText("Tell callers", { exact: false })).toHaveCount(0);
-
-    const after = await getVoiceProfile(db, fixtureAccountId);
-    expect(after?.disclosure).toBe(before?.disclosure);
   });
 });
