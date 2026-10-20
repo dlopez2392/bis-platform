@@ -177,6 +177,10 @@ export async function fileLead(ctx: {
       // to. The operator replies by hand from Conversations; that is the
       // design, not a gap.
       true,
+      // Item 8c: the ONE caller that says "this is the chat". The contact is Sofía's (author ai) and
+      // what she made or filled is recorded as her act on this conversation. The public form passes
+      // nothing here, so its contacts stay the customer's.
+      { chatId: ctx.conversationId },
     );
     log("lead filed", { conversationId: ctx.conversationId, submissionId: submission.id });
     return true;

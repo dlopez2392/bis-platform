@@ -1,6 +1,6 @@
 import type { serviceDb, Branding, CallOutcome } from "@bis/db";
 import {
-  createContact, fillContactBlanks, ensureConversation, createMessage, incrementUnreadCount,
+  createContact, fillContactBlanksReport, ensureConversation, createMessage, incrementUnreadCount,
   finishCallRow, emit, getAlertPhone, getContact, recordAutomationLog,
   ensureCallbackTask, setCallCard, recordLanguageSignal,
 } from "@bis/db";
@@ -10,6 +10,8 @@ import { sendEmailOrThrow } from "@/lib/consent/email-gate";
 import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
+import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { CallState } from "./call-state";
 import { classifyOutcome, wasServed, wasTransferred, callerSpoke } from "./call-state";
 import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
@@ -291,9 +293,15 @@ async function resolveOpenOpportunity(
  * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
  * "Caller"` plus the number, rather than leaving the conversation orphaned.
+ *
+ * `callId` (item 8c) is the call's own row: a contact made here is Sofía's `contact_created`, a fill
+ * her `contact_field_filled` per column written, recorded in ONE insert before this returns. Null
+ * (startCallRow failed open) records nothing and says so. Recording never changes what is returned.
  */
-async function resolveContactId(state: CallState, ctx: FinishContext): Promise<string | null> {
+async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
   if (state.contactId) return state.contactId;
+  const source = voiceSource(callId);
+  const acts: NewAiAct[] = [];
 
   const lead = state.leads[0];
   if (lead) {
@@ -308,6 +316,9 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       email: fields.email,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
+    if (!created.existing) {
+      acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+    }
     // Backfill ONLY the caller's own contact. The lead's email or callback
     // number is what the caller said, and the dedupe (email first, then
     // phone) can land it on someone else's record: the lead still goes
@@ -319,14 +330,16 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       try {
         const existing = (await getContact(ctx.db, ctx.accountId, created.id)) as { phone?: string | null } | null;
         if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
-          await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+          const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
             { firstName: firstName || undefined, lastName, email: fields.email },
             ACTOR_ID, ACTOR_TYPE);
+          acts.push(...fieldFillActs(source, created.id, filled));
         }
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
       }
     }
+    await recordActs(ctx.db, ctx.accountId, acts);
     return created.id;
   }
 
@@ -339,15 +352,20 @@ async function resolveContactId(state: CallState, ctx: FinishContext): Promise<s
       phone: ctx.callerNumber,
       source: "voice",
     }, ACTOR_ID, ACTOR_TYPE);
-    if (created.existing) {
+    if (!created.existing) {
+      acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+    } else {
       try {
-        await fillContactBlanks(ctx.db, ctx.accountId, created.id,
+        // A no-op on a caller-ID match (written comes back empty), so usually no act.
+        const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, created.id,
           { phone: ctx.callerNumber ?? undefined },
           ACTOR_ID, ACTOR_TYPE);
+        acts.push(...fieldFillActs(source, created.id, filled));
       } catch (e) {
         console.error(`finishCall fillContactBlanks failed for ${created.id}: ${String(e)}`);
       }
     }
+    await recordActs(ctx.db, ctx.accountId, acts);
     return created.id;
   }
 
@@ -420,7 +438,7 @@ export async function finishCall(
   let conversationId: string | null = null;
   if (meaningful) {
     try {
-      contactId = await resolveContactId(state, ctx);
+      contactId = await resolveContactId(state, ctx, meta.callRowId);
       if (contactId) {
         const conversation = await ensureConversation(ctx.db, ctx.accountId, contactId, ACTOR_ID, ACTOR_TYPE);
         conversationId = conversation.id;
@@ -600,7 +618,7 @@ export async function finishCall(
         contactId: null,
         // finishCall's own resolver: a call with a captured lead deserves the
         // richer contact, and it runs behind the send gate.
-        resolveContact: () => resolveContactId(state, ctx),
+        resolveContact: () => resolveContactId(state, ctx, meta.callRowId),
         language: spokenLanguage,
         brandName: brandDisplayName(ctx.branding),
         textbackBody: ctx.textbackBody,

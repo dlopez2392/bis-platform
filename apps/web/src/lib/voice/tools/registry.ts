@@ -2,7 +2,7 @@
 import {
   serviceDb,
   findUpcomingBookingForPhone,
-  createContact, fillContactBlanks, getContact,
+  createContact, fillContactBlanksReport, getContact,
   createBooking, SlotTakenError, setBookingStatus, getBookingById,
   markHandoffRequested,
   ensureConversation, createMessage, incrementUnreadCount,
@@ -29,6 +29,8 @@ import {
 } from "../call-state";
 import { detectCallerLanguage, clearCallerLanguageNow } from "../language";
 import { bookingMode } from "../booking-mode";
+import { recordActs, recordAct, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { HandoffTarget } from "../handoff";
 
 export type ToolName =
@@ -192,7 +194,12 @@ async function alertStaffOfPhoneChange(
   change: PhoneChange, contact: BookingContact | null,
 ): Promise<void> {
   const recipients = ctx.calendar.notify_emails ?? [];
-  if (recipients.length === 0) return;
+  if (recipients.length === 0) {
+    // Item 8c §7 (G1): a cancel-only call alerts nobody at the end (it is `abandoned`), so with no
+    // address this change reaches the business through the thread line alone. Said, by id only.
+    console.warn(`voice ${tool} ${bookingId}: no staff address on the calendar; thread line only`);
+    return;
+  }
   try {
     const brand = emailBrand(ctx.branding);
     const { subject, html, text } = bookingPhoneChangeAlertEmail({
@@ -426,6 +433,11 @@ export async function runTool(
       const slot = await bookableSlot(ctx.db, ctx.calendar, ctx.timezone, now, new Date(wanted));
       if (!slot) return { state, result: { ok: false, error: "that time isn't available — offer one from check_availability" } };
 
+      // Item 8c: what Sofía did on this call, recorded in ONE insert once the booking is in (or the
+      // moment the tool gives up after making the contact), so a hung database costs the caller at
+      // most ACT_RECORD_TIMEOUT_MS once per tool call. Never changes what the tool answers.
+      const source = voiceSource(ctx.callRowId);
+      const acts: NewAiAct[] = [];
       let contactId = state.contactId;
       if (!contactId) {
         const space = name.lastIndexOf(" ");
@@ -435,6 +447,9 @@ export async function runTool(
           { firstName, lastName, phone: phone ?? undefined, email: email ?? undefined, source: "voice" },
           "voice", "ai");
         contactId = created.id;
+        if (!created.existing) {
+          acts.push({ ...source, kind: "contact_created", contactId, target: {}, before: null, after: null });
+        }
         // Dedupe returns the existing row untouched — backfill blanks so a
         // repeat caller stops being "Caller" with no email (the unsendable-
         // reminder casualty). ONLY on the caller's own contact: the dedupe
@@ -448,9 +463,10 @@ export async function runTool(
           try {
             const existing = (await getContact(ctx.db, ctx.accountId, contactId)) as BookingContact | null;
             if (isCallerIdNumber(existing?.phone, ctx.callerNumber)) {
-              await fillContactBlanks(ctx.db, ctx.accountId, contactId,
+              const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, contactId,
                 { firstName, lastName, email: email ?? undefined },
                 "voice", "ai");
+              acts.push(...fieldFillActs(source, contactId, filled));
             }
           } catch (e) {
             console.error(`voice fillContactBlanks failed for ${contactId}: ${String(e)}`);
@@ -485,11 +501,18 @@ export async function runTool(
           meetingUrl,
         }, "voice", "ai"));
       } catch (e) {
+        // The contact (or its fills) is already written: recorded before this answer, whatever it is.
+        await recordActs(ctx.db, ctx.accountId, acts);
         if (e instanceof SlotTakenError) {
           return { state: { ...state, contactId }, result: { ok: false, slotTaken: true, error: "that time was just taken — offer another" } };
         }
         throw e;
       }
+      acts.push({
+        ...source, kind: "booking_created", contactId, target: { bookingId }, before: null,
+        after: { startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
+      });
+      await recordActs(ctx.db, ctx.accountId, acts);
 
       // S-09 C7: a phone booking is a sign at the booking, read strictly from the call so far (never the
       // profile, never calls.language). Best-effort: the booking is real.
@@ -598,7 +621,15 @@ export async function runTool(
         if (e instanceof SlotTakenError) return { state, result: { ok: false, slotTaken: true, error: "that time was just taken" } };
         throw e;
       }
-      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+      const { updatedAt: cancelledAt } = await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+      // Item 8c: ONE act for the move (the new row is not also a `booking_created`), its version the
+      // old booking's cancel stamp exactly: the compare-and-swap key its Undo restores against.
+      await recordAct(ctx.db, ctx.accountId, {
+        ...voiceSource(ctx.callRowId), kind: "booking_rescheduled", contactId: old.contact_id,
+        target: { bookingId: newId, fromBookingId: bookingId },
+        before: { startsAt: old.starts_at, endsAt: old.ends_at, version: cancelledAt },
+        after: { startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString() },
+      });
 
       // 2026-08-29 (final-review Important): this used to end here, silently —
       // a same-day VIDEO reschedule left the customer holding the OLD
@@ -680,7 +711,12 @@ export async function runTool(
       const owner = await checkCallerOwnsBooking(state, ctx, "cancel", bookingId, row.contact_id);
       if (!owner.owned) return { state, result: { ok: false, error: owner.error } };
 
-      await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+      const { updatedAt: cancelledAt } = await setBookingStatus(ctx.db, ctx.accountId, bookingId, "cancelled", "voice", "ai");
+      await recordAct(ctx.db, ctx.accountId, {
+        ...voiceSource(ctx.callRowId), kind: "booking_cancelled", contactId: row.contact_id,
+        target: { bookingId }, before: { startsAt: row.starts_at, endsAt: row.ends_at },
+        after: { version: cancelledAt },
+      });
 
       // Committed: now tell the business and the customer, best-effort. A
       // cancel's result stays exactly `{ ok: true }` — a failed customer

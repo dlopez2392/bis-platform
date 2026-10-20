@@ -24,7 +24,7 @@
 // `decideSms` in prepare, `deliverSms` in deliver.
 import type { serviceDb, AutomationLogRow } from "@bis/db";
 import {
-  createContact, fillContactBlanks, ensureConversation, createMessage,
+  createContact, fillContactBlanksReport, ensureConversation, createMessage,
   updateMessageStatus, hasRecentOutboundSms, recordAutomationLog, getVoiceProfile, getBranding,
   callerInTouchSince, chooseBody,
 } from "@bis/db";
@@ -35,6 +35,8 @@ import { LEDGER_RETRY_MS, pastRetryAge, type AutomationBlockReason } from "@/lib
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { defaultTextbackBody } from "./textback-body";
 import { recordUsageSafely } from "@/lib/billing/usage";
+import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
+import type { NewAiAct } from "@bis/db/ai-act-rules";
 
 /** The service-role client every voice write goes through, named the way
  *  finish-call.ts names it rather than reaching for @supabase/supabase-js,
@@ -156,20 +158,28 @@ export interface PendingTextback {
  */
 export async function contactForCallerId(
   db: VoiceDb, accountId: string, callerNumber: string,
+  /** The call's own row (item 8c): the act's source. Null records nothing, and says so. */
+  callId: string | null,
 ): Promise<string> {
+  const source = voiceSource(callId);
+  const acts: NewAiAct[] = [];
   const created = await createContact(db, accountId, {
     firstName: "Caller", phone: callerNumber, source: "voice",
   }, ACTOR_ID, ACTOR_TYPE);
-  if (created.existing) {
+  if (!created.existing) {
+    acts.push({ ...source, kind: "contact_created", contactId: created.id, target: {}, before: null, after: null });
+  } else {
     // Safe as it stands: this dedupes on the caller ID ALONE, so a match IS
     // the caller's own contact and the phone fill is a no-op. Never add an
     // email or name here without checking the match's phone is the caller ID.
     try {
-      await fillContactBlanks(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
+      const filled = await fillContactBlanksReport(db, accountId, created.id, { phone: callerNumber }, ACTOR_ID, ACTOR_TYPE);
+      acts.push(...fieldFillActs(source, created.id, filled));
     } catch (e) {
       console.error(`textback fillContactBlanks failed for ${created.id}: ${String(e)}`);
     }
   }
+  await recordActs(db, accountId, acts);
   return created.id;
 }
 
@@ -225,7 +235,7 @@ export async function prepareTextback(
   const body = chosen.text;
 
   const contactId = r.contactId
-    ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber));
+    ?? (r.resolveContact ? await r.resolveContact() : await contactForCallerId(db, accountId, r.callerNumber, r.callId));
   // A resolver that came back empty is not an error: `finishCall`'s can, when
   // there is neither a lead nor a caller id to build a contact from. Nothing
   // to hang a conversation on, so nothing to send.
