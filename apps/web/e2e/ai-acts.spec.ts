@@ -3,6 +3,7 @@ import { config as loadEnv } from "dotenv";
 import {
   serviceDb, createContact, assignPhoneNumber, startCallRow, finishCallRow,
   getOrCreateCalendar, createBooking, setBookingStatus, ensureConversation, createMessage,
+  recordAutomationLog, ensureCallbackTask,
   type SupabaseClient,
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
@@ -40,8 +41,11 @@ loadEnv({ path: ".env.local" });
  * which is Task 3's own path); a second booking B2, booked then immediately cancelled by a plain
  * `setBookingStatus` (standing in for "something else cancelled it since"), with its own, now-overtaken
  * `booking_created` act. On D: nothing but call K2's own AI-authored summary message (the same
- * `ensureConversation`/`createMessage` pair `finishCall` itself writes, actor "voice"/"ai") and a
- * `contact_created` act — `ai_contact_held_by`'s clean case, so D's removal is still safe.
+ * `ensureConversation`/`createMessage` pair `finishCall` itself writes, actor "voice"/"ai"), the two other
+ * rows `finishCall` writes for a real call (final review I-1): its `automation_log` row (source "voice",
+ * subject "call:<K2>", `finish-call.ts` ~:699) and its open callback To-do on K2 (`ensureCallbackTask`,
+ * ~:808), and a `contact_created` act — `ai_contact_held_by`'s clean case once 0092 counts her own call's
+ * log row as hers, so D's removal is still safe.
  *
  * ORDER (serial; the seed is shared, so each test's start is the previous test's end). The six behaviours
  * the plan names are covered, but NOT in the plan's own listed order: test 1 here opens B1's still-
@@ -51,7 +55,8 @@ loadEnv({ path: ".env.local" });
  * reappears after its toast's Undo redoes it (ambiguity F), so the Spanish reader's "Deshacer" is proven
  * on it near the end, after it has already been undone and redone once — proving it is "available" again,
  * not merely never touched.
- *   1. 360 px, pseudo-locale: open B1's popover, measure.
+ *   1. 360 px, pseudo-locale: open B1's popover, measure it, the rows and the overtaken (blocked) row; then
+ *      open D's typed-name dialog, measure it, and close it untouched.
  *   2. Booking undo, "Let them know" unticked: consumes B1.
  *   3. Field undo, then its toast's own Undo (the redo): consumes then restores the field act.
  *   4. Overtaken: B2, untouched by anything above.
@@ -99,6 +104,11 @@ let booking1Id = "";
 let booking2Id = "";
 let booking1StartsAt = "";
 let booking1EndsAt = "";
+// Each seeded act's id: a row is found by `data-ai-act-id`, never by its words (CI found the pseudo-locale
+// test waiting forever on an English "Already cancelled" filter).
+let actB1Id = "";
+let actB2Id = "";
+let actDId = "";
 
 const contactUrl = (id: string) => `/dashboard/accounts/${accountId}/contacts/${id}`;
 
@@ -150,11 +160,22 @@ test.beforeAll(async () => {
     conversationId: conversationDId, channel: "voice", direction: "inbound",
     subject: "Phone call", body: `Recorded: a new caller introduced themselves. Ref ${stamp}`,
   }, "voice", "ai");
+  const call2EndedAt = new Date();
   await finishCallRow(db, accountId, call2Id, {
-    outcome: "lead", endedAt: new Date(), durationSecs: 60, turnCount: 2,
+    outcome: "lead", endedAt: call2EndedAt, durationSecs: 60, turnCount: 2,
     transcript: [], summary: `Recorded: a new caller introduced themselves. Ref ${stamp}`, language: "en",
     contactId: contactDId, conversationId: conversationDId,
   });
+  // What `finishCall` also writes for every answered call (final review I-1): its own automation log row,
+  // sent, as source "voice" on subject "call:<id>" ...
+  await recordAutomationLog(db, {
+    accountId, source: "voice", channel: "ai", contactId: contactDId,
+    subjectKey: `call:${call2Id}`, status: "sent", reason: "",
+  });
+  // ... and, for a lead who wants a callback, the open callback To-do on that call, as Sofía ("voice"/"ai").
+  await ensureCallbackTask(db, accountId, {
+    callId: call2Id, contactId: contactDId, title: `Call back ${callerE164D}`, dueAt: call2EndedAt.toISOString(),
+  }, "voice", "ai");
 
   const calendar = await getOrCreateCalendar(db, accountId, ACTOR);
   const start1 = new Date(Date.now() + 10 * 86_400_000);
@@ -177,7 +198,7 @@ test.beforeAll(async () => {
   const { error: emailErr } = await db.from("contacts").update({ email: emailC }).eq("account_id", accountId).eq("id", contactCId);
   if (emailErr) throw new Error(`ai-acts e2e: writing C's email failed: ${emailErr.message}`);
 
-  await seedAct(db, {
+  actB1Id = await seedAct(db, {
     kind: "booking_created", target: { bookingId: booking1Id }, before: null,
     after: { startsAt: booking1StartsAt, endsAt: booking1EndsAt },
     actor: "voice", callId, chatId: null, contactId: contactCId,
@@ -186,12 +207,12 @@ test.beforeAll(async () => {
     kind: "contact_field_filled", target: { field: "email" }, before: { value: null }, after: { value: emailC },
     actor: "voice", callId, chatId: null, contactId: contactCId,
   });
-  await seedAct(db, {
+  actB2Id = await seedAct(db, {
     kind: "booking_created", target: { bookingId: booking2Id }, before: null,
     after: { startsAt: start2.toISOString(), endsAt: end2.toISOString() },
     actor: "voice", callId, chatId: null, contactId: contactCId,
   });
-  await seedAct(db, {
+  actDId = await seedAct(db, {
     kind: "contact_created", target: {}, before: null, after: null,
     actor: "voice", callId: call2Id, chatId: null, contactId: contactDId,
   });
@@ -213,6 +234,8 @@ test.afterAll(async () => {
   if (booking1Id || booking2Id) {
     await step("bookings", () => db.from("bookings").delete().eq("account_id", accountId).in("id", [booking1Id, booking2Id].filter(Boolean)));
   }
+  if (call2Id) await step("tasks (K2, defensive)", () => db.from("tasks").delete().eq("account_id", accountId).eq("call_id", call2Id));
+  if (call2Id) await step("automation_log (K2)", () => db.from("automation_log").delete().eq("account_id", accountId).eq("subject_key", `call:${call2Id}`));
   if (conversationDId) await step("messages (D, defensive)", () => db.from("messages").delete().eq("account_id", accountId).eq("conversation_id", conversationDId));
   if (contactDId) await step("conversations (D, defensive)", () => db.from("conversations").delete().eq("account_id", accountId).eq("contact_id", contactDId));
   if (callId) await step("calls (K)", () => db.from("calls").delete().eq("account_id", accountId).eq("id", callId));
@@ -236,17 +259,20 @@ test.afterAll(async () => {
 });
 
 /** One act's row: the flat container `act-row.tsx` wraps every act in, filtered to the one carrying the
- *  given control (or, for the overtaken case, the given reason line) — never positional, since a
- *  contact's acts render newest first and this seed's order is not the only thing a reader should have to
- *  track to find "the booking one" versus "the field one". */
+ *  given control — never positional, since a contact's acts render newest first and this seed's order is
+ *  not the only thing a reader should have to track to find "the booking one" versus "the field one". */
 function actRow(page: import("@playwright/test").Page, has: "booking" | "field" | "contact") {
   return recordPage(page).locator("[data-ai-act-row]").filter({ has: page.locator(`[data-ai-act-undo="${has}"]`) });
 }
+/** A row by its act's id (`data-ai-act-id`): the same in every language, the pseudo-locale included. */
+function rowOf(page: import("@playwright/test").Page, actId: string) {
+  return recordPage(page).locator(`[data-ai-act-row][data-ai-act-id="${actId}"]`);
+}
 function overtakenRow(page: import("@playwright/test").Page) {
-  return recordPage(page).locator("[data-ai-act-row]").filter({ hasText: w("aiActs.reason.alreadyCancelled") });
+  return rowOf(page, actB2Id);
 }
 
-test("at 360 px in the pseudo-locale, no element in an act row or the booking popover overflows", async ({ page }) => {
+test("at 360 px in the pseudo-locale, no element in an act row, the booking popover or the typed-name dialog overflows", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
   await page.goto(`${contactUrl(contactCId)}?locale=pseudo`);
   const row = actRow(page, "booking");
@@ -270,15 +296,32 @@ test("at 360 px in the pseudo-locale, no element in an act row or the booking po
       expect(clipFailure(b.scrollWidth, b.clientWidth, `${label} <${b.tag.toLowerCase()}> "${b.text}"`)).toBeNull();
     }
   };
+  // The overtaken row is found by its id and its state, never its words (the pseudo-locale pads them all).
+  const overtaken = overtakenRow(page);
+  await expect(overtaken).toHaveAttribute("data-ai-act-state", "blocked");
   await noOverflow(row, "booking act row");
   await noOverflow(actRow(page, "field"), "field act row");
-  await noOverflow(overtakenRow(page), "overtaken act row");
+  // Design I-3: a blocked row's reason sits under its source line, never squeezing the sentence.
+  await noOverflow(overtaken, "overtaken (blocked) act row");
   await noOverflow(popover, "booking popover");
 
   // Closed without confirming (Escape, not the ghost Cancel — the pseudo-locale pads every string, so the
   // Cancel button's accessible name is not literally "Cancel" here): B1 stays "available" for the next test.
   await page.keyboard.press("Escape");
   await expect(popover).toBeHidden();
+
+  // The typed-name dialog, on D's record: opened, measured, closed untouched (Escape), so D's act is still
+  // "available" for the contact-removal test.
+  await page.goto(`${contactUrl(contactDId)}?locale=pseudo`);
+  const contactRow = rowOf(page, actDId);
+  await expect(contactRow).toHaveAttribute("data-ai-act-state", "available");
+  await contactRow.locator('[data-ai-act-undo="contact"]').click();
+  const dialog = page.locator("[data-ai-act-contact-dialog]");
+  await expect(dialog).toBeVisible();
+  await noOverflow(contactRow, "contact act row");
+  await noOverflow(dialog, "typed-name dialog");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
 });
 
 test("Booking undo, \"Let them know\" unticked: no claim of telling the customer", async ({ page }) => {
@@ -313,13 +356,15 @@ test("Booking undo, \"Let them know\" unticked: no claim of telling the customer
   // No claim of telling the customer: the box was unticked, so no email was asked for.
   expect(a.undo_notified).toBe(false);
 
-  // The row now reads "Undone by You · …" (authorLabel's own-viewer case, `provenance.you`). Found fresh,
-  // never through the earlier `row` reference: that locator's own filter (`has` a booking Undo button) now
-  // matches nothing, so re-using it here would vacuously pass against an empty set.
+  // The row now reads "Undone by You · …" (authorLabel's own-viewer case, `provenance.you`). Found fresh by
+  // its act's id, never through the earlier `row` reference: that locator's own filter (`has` a booking
+  // Undo button) now matches nothing, so re-using it here would vacuously pass against an empty set.
   const undoneByYouPrefix = m["aiActs.undoneBy"].replace("{name}", m["provenance.you"]).split("{date}")[0]!.trim();
-  const undoneRow = recordPage(page).locator("[data-ai-act-row]").filter({ hasText: undoneByYouPrefix });
-  await expect(undoneRow).toBeVisible();
+  const undoneRow = rowOf(page, actB1Id);
+  await expect(undoneRow).toHaveAttribute("data-ai-act-state", "undone");
   await expect(undoneRow.locator("[data-ai-act-line]")).toContainText(undoneByYouPrefix);
+  // Design M-1: focus moved to the row's new line, since the Undo that had it is gone.
+  await expect(undoneRow.locator("[data-ai-act-line]")).toBeFocused();
   // No booking Undo button anywhere on the page any more (B1's is gone; B2 never had one).
   await expect(recordPage(page).locator('[data-ai-act-undo="booking"]')).toHaveCount(0);
 });
@@ -331,7 +376,9 @@ test("Field undo, then its toast's own Undo: Sofía's value back over the person
   await row.getByRole("button", { name: m["common.undo"], exact: true }).click();
 
   const fieldWord = w("aiActs.field.email");
-  const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("aiActs.toast.fieldUndone", "en", { field: fieldWord }) });
+  // `concierge_profiles.persona_name` defaults to "Sofía" (0019); the fixture account never renames it.
+  // The field was blank before her (`before.value` null), so the Undo REMOVED her value (design I-5).
+  const toast = page.locator("[data-sonner-toast]").filter({ hasText: w("aiActs.toast.fieldRemoved", "en", { field: fieldWord, persona: "Sofía" }) });
   await expect(toast).toBeVisible();
 
   const db = serviceDb();
@@ -340,8 +387,7 @@ test("Field undo, then its toast's own Undo: Sofía's value back over the person
   ).toEqual({ email: null });
 
   await toast.getByRole("button", { name: m["common.undo"], exact: true }).click();
-  // `concierge_profiles.persona_name` defaults to "Sofía" (0019); the fixture account never renames it.
-  const redoneToast = page.locator("[data-sonner-toast]").filter({ hasText: w("aiActs.toast.fieldRedone", "en", { persona: "Sofía" }) });
+  const redoneToast = page.locator("[data-sonner-toast]").filter({ hasText: w("aiActs.toast.fieldRedone", "en", { persona: "Sofía", field: fieldWord }) });
   await expect(redoneToast).toBeVisible();
 
   await expect.poll(async () =>
@@ -356,6 +402,7 @@ test("Overtaken: the already-cancelled booking's row carries its reason, no Undo
   await page.goto(contactUrl(contactCId));
   const row = overtakenRow(page);
   await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-ai-act-state", "blocked");
   await expect(row.locator("[data-ai-act-line]")).toHaveText(w("aiActs.reason.alreadyCancelled"));
   await expect(row.locator("[data-ai-act-undo]")).toHaveCount(0);
 });
@@ -370,8 +417,9 @@ test("the reader in Spanish", async ({ page }) => {
 
 test("Contact removal: an untouched customer, typed name, the call stays in Calls unlinked", async ({ page }) => {
   await page.goto(contactUrl(contactDId));
-  const row = actRow(page, "contact");
-  await expect(row).toBeVisible();
+  const row = rowOf(page, actDId);
+  // Her own call's log row and its open callback To-do are hers (final review I-1, 0092): still safe.
+  await expect(row).toHaveAttribute("data-ai-act-state", "available");
   await row.getByRole("button", { name: m["common.undo"], exact: true }).click();
 
   const dialog = page.getByRole("dialog");
@@ -379,15 +427,19 @@ test("Contact removal: an untouched customer, typed name, the call stays in Call
   await expect(dialog).toContainText(w("aiActs.contactDialog.title", "en", { name: contactNameD }));
   const confirm = dialog.getByRole("button", { name: m["aiActs.contactDialog.confirm"], exact: true });
   await expect(confirm).toBeDisabled();
-  await dialog.getByRole("textbox").fill(contactNameD);
+  await dialog.getByRole("textbox", { name: w("aiActs.contactDialog.label", "en", { name: contactNameD }), exact: true }).fill(contactNameD);
   await expect(confirm).toBeEnabled();
   await confirm.click();
 
-  await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/contacts(?:[/?#]|$)`));
+  // Final review I-2: the LIST, exactly — "/contacts" then the end, a query or a hash. The old pattern also
+  // matched "/contacts/<D's id>", the record page the test started on.
+  await expect(page).toHaveURL(new RegExp(`/dashboard/accounts/${accountId}/contacts/?(?:[?#]|$)`));
+  await expect(page.getByRole("main").locator("[data-contact-row]").first()).toBeVisible();
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["aiActs.toast.contactRemoved"] })).toBeVisible();
 
   const db = serviceDb();
-  const { data: gone } = await db.from("contacts").select("id").eq("account_id", accountId).eq("id", contactDId).maybeSingle();
+  const { data: gone, error: goneErr } = await db.from("contacts").select("id").eq("account_id", accountId).eq("id", contactDId).maybeSingle();
+  if (goneErr) throw new Error(`ai-acts e2e: contact re-read failed: ${goneErr.message}`);
   expect(gone, "contact removal must delete the contact row").toBeNull();
   const { data: callRow, error: callErr } = await db.from("calls").select("contact_id").eq("account_id", accountId).eq("id", call2Id).single();
   if (callErr) throw new Error(`ai-acts e2e: call re-read failed: ${callErr.message}`);
