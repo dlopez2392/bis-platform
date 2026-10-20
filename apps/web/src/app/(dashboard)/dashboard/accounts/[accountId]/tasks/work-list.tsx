@@ -173,6 +173,11 @@ function rawRowId(row: WorkRow): string {
   return row.id.slice(row.source.length + 1);
 }
 
+/** The row's link (or plain div): the whole first line below md, the old
+ *  `min-w-0 flex-1` from md up (`grow` + `md:basis-0` is `flex-1` without
+ *  the shorthand's own basis fighting `basis-full`). */
+const LINK_SIZE = "min-w-0 grow basis-full md:basis-0";
+
 function WorkRowItem({
   row,
   bucket,
@@ -215,26 +220,40 @@ function WorkRowItem({
 
   const body = (
     <>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-sm font-medium text-card-foreground">{primary}</span>
+      {/* Phone width (below md): this column takes the whole first line and
+          its words WRAP; the chip and date wrap onto the line under it. From
+          md up it is the old one-line `flex-1` (grow + basis 0) and truncates.
+          `grow basis-*` rather than `flex-1`, because `flex-1` sets the basis
+          itself and would fight `basis-full`. */}
+      <span data-work-row-text className="flex min-w-0 grow basis-full flex-col gap-0.5 md:basis-0">
+        <span data-work-row-title className="break-words text-sm font-medium text-card-foreground md:truncate">{primary}</span>
         {secondary || fromCall ? (
           <span className="flex min-w-0 items-center gap-2">
-            {secondary ? <span className="truncate text-xs text-muted-foreground">{secondary}</span> : null}
+            {secondary ? <span className="min-w-0 break-words text-xs text-muted-foreground md:truncate">{secondary}</span> : null}
             {fromCall ? <AiAuthorMark /> : null}
           </span>
         ) : null}
       </span>
-      <Badge variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
+      <Badge data-work-row-chip variant="chip" className={cn("shrink-0 gap-1.5 py-1 pr-2.5 pl-2", treatment.chip)}>
         <span className={cn("size-[7px] rounded-full", treatment.dot)} aria-hidden />
         {m[treatment.labelKey]}
       </Badge>
       {dateText ? (
-        <span className="shrink-0 text-xs text-muted-foreground">{dateText}</span>
+        <span data-work-row-date className="shrink-0 text-xs text-muted-foreground">{dateText}</span>
       ) : null}
     </>
   );
 
-  const rowClassName = "flex items-center gap-3 px-4 py-3 text-sm";
+  // The phone-width defect (owner's screenshot, 2026-10-20): this was one
+  // non-wrapping line, and the link it sits in is `min-w-0` beside the
+  // assignee picker and Done. At ~390px the link was narrower than its two
+  // `shrink-0` children (chip, date) alone, so the `min-w-0 flex-1` title
+  // column shrank to zero width — the title and contact vanished — and the
+  // chip and date overflowed the link onto the assignee picker. Below md the
+  // link now takes the row's whole first line and wraps its own content
+  // (title, then chip and date); the assignee and Done wrap onto the next
+  // line. From md up every `md:` class restores the one-line row.
+  const rowClassName = "flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pt-3 pb-2 text-sm md:flex-nowrap md:py-3";
   // S-07 3a: an expiry To-do links to its file (workRowHref).
   const href = workRowHref(accountId, row);
 
@@ -259,55 +278,62 @@ function WorkRowItem({
   // `<li>` covers the full row — informational side AND actions side —
   // regardless of which branch renders inside it.
   return (
-    <li className={cn(LIST_ROW, "flex items-center transition-colors hover:bg-[var(--surface-3)]")}>
+    <li data-work-row className={cn(LIST_ROW, "flex flex-wrap items-center transition-colors hover:bg-[var(--surface-3)] md:flex-nowrap")}>
       {href ? (
         <Link
+          data-work-row-link
           href={href}
-          className={cn(rowClassName, "min-w-0 flex-1")}
+          className={cn(rowClassName, LINK_SIZE)}
         >
           {body}
         </Link>
       ) : (
-        <div className={cn(rowClassName, "min-w-0 flex-1")}>{body}</div>
+        <div data-work-row-link className={cn(rowClassName, LINK_SIZE)}>{body}</div>
       )}
-      {/* F-085 part 1 (spec §9): a task's own holder, an inline pick with an
-          Undo toast, beside the link rather than inside it (a control in an
-          <a> is invalid markup). A conversation or booking has no holder of
-          its own: it is the customer's, set on the customer. */}
-      {assign && row.source === "task" ? (
-        <div className="min-w-0 max-w-[10rem] shrink">
-          <TaskAssigneeField
-            key={`${row.id}:${row.assigneeId ?? ""}`}
-            accountId={accountId}
-            taskId={rawRowId(row)}
-            value={row.assigneeId ?? null}
-            options={assign.members}
-          />
+      <div
+        data-work-row-actions
+        className="flex min-w-0 basis-full items-center gap-2 pr-4 pb-2 pl-2.5 md:basis-auto md:gap-0 md:pb-0 md:pl-0"
+      >
+        {/* F-085 part 1 (spec §9): a task's own holder, an inline pick with an
+            Undo toast, beside the link rather than inside it (a control in an
+            <a> is invalid markup). A conversation or booking has no holder of
+            its own: it is the customer's, set on the customer. */}
+        {assign && row.source === "task" ? (
+          <div className="min-w-0 max-w-[10rem] shrink">
+            <TaskAssigneeField
+              key={`${row.id}:${row.assigneeId ?? ""}`}
+              accountId={accountId}
+              taskId={rawRowId(row)}
+              value={row.assigneeId ?? null}
+              options={assign.members}
+            />
+          </div>
+        ) : null}
+        {/* On a phone Done sits at the line's right end, as it does on desktop. */}
+        <div className="ml-auto shrink-0 md:ml-0">
+          {/* A hold's To-do is decided, not ticked off (spec §6): its two
+              buttons replace Done. A CANCEL To-do keeps Done. */}
+          {row.consent?.action === "held" ? (
+            <ConsentHoldActions
+              taskId={rawRowId(row)}
+              contactId={row.contactId}
+              confirm={actions.confirmStopFromTask}
+              release={actions.notAStopFromTask}
+              undo={actions.undoHoldDecisionFromTask}
+            />
+          ) : (
+            <WorkRowActions
+              source={row.source}
+              rawId={rawRowId(row)}
+              contactId={row.contactId}
+              label={primary}
+              completeWorkTask={actions.completeWorkTask}
+              reopenWorkTask={actions.reopenWorkTask}
+              dismissToTask={actions.dismissToTask}
+              closeOutBooking={actions.closeOutBooking}
+            />
+          )}
         </div>
-      ) : null}
-      <div className="shrink-0 pr-4">
-        {/* A hold's To-do is decided, not ticked off (spec §6): its two
-            buttons replace Done. A CANCEL To-do keeps Done. */}
-        {row.consent?.action === "held" ? (
-          <ConsentHoldActions
-            taskId={rawRowId(row)}
-            contactId={row.contactId}
-            confirm={actions.confirmStopFromTask}
-            release={actions.notAStopFromTask}
-            undo={actions.undoHoldDecisionFromTask}
-          />
-        ) : (
-          <WorkRowActions
-            source={row.source}
-            rawId={rawRowId(row)}
-            contactId={row.contactId}
-            label={primary}
-            completeWorkTask={actions.completeWorkTask}
-            reopenWorkTask={actions.reopenWorkTask}
-            dismissToTask={actions.dismissToTask}
-            closeOutBooking={actions.closeOutBooking}
-          />
-        )}
       </div>
     </li>
   );
