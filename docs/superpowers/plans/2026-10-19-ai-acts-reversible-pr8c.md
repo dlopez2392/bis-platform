@@ -454,7 +454,7 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 | `aiActs.reason.changed` | Changed since | Cambió desde entonces |
 | `aiActs.reason.changedBy` | Changed since by {name} | {name} lo cambió después |
 | `aiActs.reason.hasActivity` | Has other activity since | Tiene otra actividad desde entonces |
-| `aiActs.reason.hasBooking` | Has a booking, so it stays. Delete it the usual way if it has to go. | Tiene una cita, así que se queda. Si debe quitarse, bórrelo de la forma habitual. |
+| `aiActs.reason.hasBooking` | Has a booking, so it stays. | Tiene una cita, así que se queda. |
 | `aiActs.reason.otherBooking` | They booked another time since | Reservó otra hora desde entonces |
 | `aiActs.reason.ownerOnly` | Only an Owner can remove a customer | Solo el Dueño puede quitar a un cliente |
 | `aiActs.undoneBy` | Undone by {name} · {date} | Deshecho por {name} · {date} |
@@ -960,7 +960,7 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 - **Q1 → `import`. YES.** The demo and CI seeds' contacts read "Import".
 - **Q2 → TRANSACTIONAL**, not `staff_typed`. The plan's reading is in Task 5 item 6: a new class `transactional` holding the one kind `booking.undo_notice`. An unsubscribe does not stop it, it may go at any hour, and it carries the unsubscribe footer.
 - **Q3 → email only.** With no email on file, the panel says to call them (`aiActs.notify.noEmail`). No text message.
-- **Q4 → a contact Sofía created who also has a booking STAYS.** The contact undo is refused with its own reason (`aiActs.reason.hasBooking`, "Has a booking, so it stays. Delete it the usual way if it has to go."). The SQL answers `has_booking`.
+- **Q4 → a contact Sofía created who also has a booking STAYS.** The contact undo is refused with its own reason (`aiActs.reason.hasBooking`, "Has a booking, so it stays." — the usual delete also refuses a contact with any booking (contacts.ts:1101-1107), so the copy names no path (orchestrator, 2026-10-19)). The SQL answers `has_booking`.
   - **Note for the owner's wording:** the usual delete (`deleteContacts`, `contacts.ts:1101-1107`) also skips a contact holding any booking, cancelled or not (`skippedBlocked`). "The usual way" therefore means after the booking itself is dealt with elsewhere; the copy stays as decided.
   - **Most web-chat leads are never removable by Undo either** (review minor): `enrich`'s instant reply writes an automation-authored outbound text into the thread (`sendInstantReply`, `enrich.ts:234` → `automations/send-sms.ts:135`). A lead with a business name gets a `client_group_members` row (`enrich.ts:136`). Both count as other activity. The Undo then shows its reason; this is D4 working as decided.
 - **Q5 (conditional):** if Task 0 read 3 is non-zero on production, Task 0 STOPS for the owner.
