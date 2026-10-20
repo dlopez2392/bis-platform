@@ -36,6 +36,7 @@ vi.mock("@/lib/email", async (io) => ({
 
 import {
   serviceDb, createAccount, deleteAccountCascade, createContact, getOrCreateCalendar, createBooking, insertAiActs, getAiAct,
+  recordAutomationLog, ensureCallbackTask,
 } from "@bis/db";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import { redoAiFieldFillAction, undoAiActAction } from "./actions";
@@ -292,12 +293,22 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
       expect(await undoAiActAction(A.id, actId, { typedName: "Rita Veg" })).toEqual({ ok: false, reason: "typedName" });
       expect(await exists(cid)).toBe(true);
     });
+    // Final review I-1: a REAL call also leaves, beside her summary message, the two rows `finishCall` writes
+    // for every answered call (`finish-call.ts` ~:699 and ~:808): its automation log row (source "voice",
+    // subject "call:<id>", sent) and, for a lead, the open callback To-do on that call, as Sofía. Both are
+    // hers (0092); without them this case passed while the Undo refused every real customer.
     it("the clean contact is removed, and its call stays in Calls with no customer", async () => {
       const { cid, k, actId } = await sofiasContact(A, "Iris", "+19565550120");
+      await recordAutomationLog(svc(), { accountId: A.id, source: "voice", channel: "ai", contactId: cid, subjectKey: `call:${k}`, status: "sent", reason: "" });
+      const todo = await ensureCallbackTask(svc(), A.id, { callId: k, contactId: cid, title: "Call back +19565550120", dueAt: new Date().toISOString() }, "voice", "ai");
       as(A, "owner");
       expect(await undoAiActAction(A.id, actId, { typedName: "Iris Vega" })).toEqual({ ok: true, control: "contact", removed: true });
       expect(await exists(cid)).toBe(false);
       expect(await must<{ contact_id: string | null }>(svc().from("calls").select("contact_id").eq("id", k).single(), "call")).toEqual({ contact_id: null });
+      // Her callback To-do went with the customer; the call's log row stays, unlinked.
+      expect(await must<unknown[]>(svc().from("tasks").select("id").eq("id", todo.id), "todo")).toHaveLength(0);
+      expect(await must<{ contact_id: string | null }[]>(svc().from("automation_log").select("contact_id").eq("account_id", A.id).eq("subject_key", `call:${k}`), "log"))
+        .toEqual([{ contact_id: null }]);
     });
     it("a contact with a note answers hasActivity, and the note and the contact stay", async () => {
       const { cid, actId } = await sofiasContact(A, "Eva", "+19565550121");

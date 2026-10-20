@@ -125,4 +125,56 @@ describe("lastFieldEditor (item 8c)", () => {
       const who = await lastFieldEditor(db, accountId, c.id, "firstName", new Date().toISOString());
       expect(who).toBeNull();
     }));
+
+  // Final review M-5: `updateContact` names the camel field ("firstName"), but a fill and a restore name the
+  // COLUMN ("first_name"). Email and phone are the same in both forms, so only a name field can tell.
+  it("a person's restore (which names the column, first_name) names the editor (mutation: match the camel name only -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Caller" }, "sofia", "ai");
+      await fillContactBlanksReport(db, accountId, c.id, { firstName: "Kim" }, "sofia", "ai");
+      const since = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await restoreContactFieldIf(db, accountId, c.id, "firstName", "Kim", "Caller", "user_restorer")).toBe("restored");
+      expect(await lastFieldEditor(db, accountId, c.id, "firstName", since)).toBe("user_restorer");
+    }));
+
+  it("a person's blank-fill (which names the column, last_name) names the editor", () =>
+    withTestAccount(async (db, accountId) => {
+      const c = await createContact(db, accountId, { firstName: "Lia" }, "t");
+      const since = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      // The first name rides along (matching), as `fillContactBlanksReport` requires before it fills a surname.
+      const r = await fillContactBlanksReport(db, accountId, c.id, { firstName: "Lia", lastName: "Ruiz" }, "user_filler", "user");
+      expect(r.fields).toEqual(["last_name"]);
+      expect(await lastFieldEditor(db, accountId, c.id, "lastName", since)).toBe("user_filler");
+    }));
+});
+
+// Plan Global constraints: every account-scoped read has a second-account case in which the OTHER account
+// holds matching rows (review M-d).
+describe("second account (item 8c, review M-d)", () => {
+  it("restoreContactFieldIf scoped to account A never writes account B's contact, which holds the expected value (mutation: drop .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const b = await createContact(dbB, accountB, { firstName: "Caller" }, "t");
+        await fillContactBlanksReport(dbB, accountB, b.id, { firstName: "Mia" }, "t");
+        expect(await restoreContactFieldIf(db, accountA, b.id, "firstName", "Mia", "Caller", "user_a")).toBe("changed");
+        expect((await getContact(dbB, accountB, b.id))!.first_name).toBe("Mia");
+        // The positive control: in its own account the same call restores.
+        expect(await restoreContactFieldIf(dbB, accountB, b.id, "firstName", "Mia", "Caller", "user_b")).toBe("restored");
+      });
+    }));
+
+  it("lastFieldEditor scoped to account A never names account B's editor of B's contact (mutation: drop .eq('account_id') -> FAILS)", () =>
+    withTestAccount(async (db, accountA) => {
+      await withTestAccount(async (dbB, accountB) => {
+        const b = await createContact(dbB, accountB, { firstName: "Noa" }, "t");
+        const since = new Date().toISOString();
+        await new Promise((r) => setTimeout(r, 5));
+        const { updateContact } = await import("../contacts");
+        await updateContact(dbB, accountB, b.id, { firstName: "Noah" }, "user_b_editor", "user");
+        expect(await lastFieldEditor(db, accountA, b.id, "firstName", since)).toBeNull();
+        expect(await lastFieldEditor(dbB, accountB, b.id, "firstName", since)).toBe("user_b_editor");
+      });
+    }));
 });

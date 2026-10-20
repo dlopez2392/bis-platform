@@ -173,8 +173,10 @@ describe("only the web chat tells enrich it is the chat", () => {
       return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [p] : [];
     });
   }
-  it("the one source passing { chatId } to enrich is lib/concierge/lead.ts (mutation: drop it there -> FAILS; pass it from the public form -> FAILS)", () => {
-    const callers = sources(SRC).filter((p) => /from "@\/lib\/forms\/enrich"|import\("@\/lib\/forms\/enrich"\)/.test(readFileSync(p, "utf8")));
+  // Only `src/lib` and `src/app` hold callers (review M-b): walking all of `src` took ~5 s under a parallel run
+  // and flaked on the default timeout, so the walk is narrowed and the timeout stated.
+  it("the one source passing { chatId } to enrich is lib/concierge/lead.ts (mutation: drop it there -> FAILS; pass it from the public form -> FAILS)", { timeout: 30_000 }, () => {
+    const callers = [join(SRC, "lib"), join(SRC, "app")].flatMap(sources).filter((p) => /from "@\/lib\/forms\/enrich"|import\("@\/lib\/forms\/enrich"\)/.test(readFileSync(p, "utf8")));
     expect(callers.length).toBeGreaterThanOrEqual(2);
     const passing = callers
       .filter((p) => /\{\s*chatId:/.test(readFileSync(p, "utf8")))

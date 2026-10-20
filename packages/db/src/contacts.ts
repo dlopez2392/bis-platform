@@ -728,10 +728,13 @@ export async function restoreContactFieldIf(
  * reason names who. Soft: a Technician's RLS fence on `events` sees none, and any read failure, both
  * answer null rather than throw — this is a display nicety, never load-bearing. Reads on the
  * REQUEST client, so RLS decides what the caller may see at all.
+ * Both forms of the field's name count (final review M-5): `updateContact` emits the camel name
+ * ("firstName"), while a blank-fill and `restoreContactFieldIf` emit the column ("first_name").
  */
 export async function lastFieldEditor(
   db: SupabaseClient, accountId: string, contactId: string, field: ContactFieldName, since: string,
 ): Promise<string | null> {
+  const names = [field, FIELD_COLUMN[field]];
   try {
     const { data, error } = await db.from("events").select("actor_id, payload")
       .eq("account_id", accountId).eq("type", "contact.updated").eq("actor_type", "user")
@@ -739,7 +742,8 @@ export async function lastFieldEditor(
       .order("created_at", { ascending: false }).limit(50);
     if (error) return null;
     for (const r of (data ?? []) as { actor_id: string; payload: { fields?: unknown } }[]) {
-      if (Array.isArray(r.payload?.fields) && r.payload.fields.includes(field)) return r.actor_id;
+      const fields: unknown = r.payload?.fields;
+      if (Array.isArray(fields) && names.some((n) => fields.includes(n))) return r.actor_id;
     }
     return null;
   } catch {
