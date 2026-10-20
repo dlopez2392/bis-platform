@@ -6,6 +6,8 @@ import { conciergeStrings } from "@/lib/concierge/strings";
 import { normalizeLocale, publicTabTitle } from "@/lib/forms/public-strings";
 import { publicFormTheme, parseHostMode } from "@/lib/branding/public-form-theme";
 import { PublicBrand } from "@/components/public-brand";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 import { ConciergeChat } from "./concierge-chat";
 import { loadProfile, loadProfileSafe, loadProfileBranding, UNBRANDED } from "./data";
 import "@/styles/public-brand.css";
@@ -98,6 +100,14 @@ export default async function ConciergePage({
   );
   const strings = conciergeStrings(locale);
   const greeting = locale === "es" ? profile.greeting_es : profile.greeting_en;
+  // S-47a (spec §5.2, D4): on Trial or On the chat always says it is an AI (the label and the
+  // first message) with no coin; the web has no halves to compare. Off renders exactly as before.
+  const saysAi = profile.disclosure === "trial" || profile.disclosure === "on";
+  const persona = profile.persona_name.trim() || "Sofía";
+  const aiLabel = saysAi ? t(m, "concierge.aiLabel", locale, { persona }) : null;
+  const firstMessage = saysAi
+    ? [greeting.trim(), t(m, "concierge.aiIntro", locale, { persona })].filter(Boolean).join(" ")
+    : greeting;
 
   // Real signatures, read from the source rather than assumed:
   //   publicFormTheme(branding, transparent, hostMode) returns
@@ -137,7 +147,8 @@ export default async function ConciergePage({
       {darkCss ? <style>{darkCss}</style> : null}
       <ConciergeChat
         publicId={publicId}
-        greeting={greeting}
+        greeting={firstMessage}
+        aiLabel={aiLabel}
         locale={locale}
         strings={strings}
         renderToken={issueRenderToken(publicId)}

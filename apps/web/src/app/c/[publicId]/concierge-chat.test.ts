@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   pickTurnUpdate, pickErrorUpdate, errorConversationId, conversationStore, recordTurn, type TurnResult,
   CLOSE_MESSAGE, brandMessage, shouldCloseOnKey,
-  ASK_MESSAGE_TYPE, parseAskMessage, askAllowedFrom,
+  ASK_MESSAGE_TYPE, parseAskMessage, askAllowedFrom, ConciergeChat,
 } from "./concierge-chat";
 import { CONCIERGE_MAX_MESSAGE_CHARS } from "@/lib/concierge/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
@@ -413,5 +415,40 @@ describe("host questions (bis-concierge-ask)", () => {
     // "null", so a sandboxed sender would match a host that declared it.
     expect(askAllowedFrom("null", "about:blank")).toBe(false);
     expect(askAllowedFrom("null", "data:text/html,hi")).toBe(false);
+  });
+});
+
+/**
+ * S-47a: the AI label is its own line at the top of the panel in EVERY mode.
+ * A bare panel with no brand draws no header row at all (the Ask BIS panel on
+ * the BIS website), and the label must not disappear with it.
+ */
+describe("ConciergeChat AI label (S-47a)", () => {
+  const base = {
+    publicId: "pub1", greeting: "Hi!", locale: "en" as const,
+    strings: conciergeStrings("en"), renderToken: "t", attribution: {},
+    brandAccent: "#112233", brandAccentForeground: "#ffffff",
+  };
+
+  it("renders the label on a bare panel with no brand (no header row)", () => {
+    // MUTATION: render the label only inside the header row — this FAILS.
+    const html = renderToStaticMarkup(createElement(ConciergeChat, {
+      ...base, bare: true, aiLabel: "Sofía · AI assistant",
+    }));
+    expect(html).not.toContain("bis-concierge-header");
+    expect(html).toContain('<p class="bis-concierge-ai-label" data-ai-label="">Sofía · AI assistant</p>');
+  });
+
+  it("renders the label under a branded header too", () => {
+    const html = renderToStaticMarkup(createElement(ConciergeChat, {
+      ...base, brand: createElement("span", null, "Acme"), aiLabel: "Sofía · AI assistant",
+    }));
+    expect(html).toContain("bis-concierge-header");
+    expect(html).toContain('data-ai-label="">Sofía · AI assistant</p>');
+  });
+
+  it("renders no label when aiLabel is absent", () => {
+    const html = renderToStaticMarkup(createElement(ConciergeChat, { ...base, bare: true }));
+    expect(html).not.toContain("data-ai-label");
   });
 });

@@ -111,6 +111,14 @@
   max-width: none;
   margin: 0;
 }
+/* S-47a: the AI label. Muted text on the panel's own surface, tokens only (the fallbacks are the
+   tokens' own light values, as every rule in this file carries). */
+.bis-concierge-ai-label {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted-foreground, #71717a);
+}
 /* Ghost, tokens only. 32px square: a comfortable target on a phone without
    growing the header row past the logo's own height. */
 .bis-concierge-close {

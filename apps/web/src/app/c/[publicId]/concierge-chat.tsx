@@ -291,7 +291,7 @@ function getServerTurns(): null {
  */
 export function ConciergeChat({
   publicId, greeting, locale, strings, renderToken, attribution,
-  brandAccent, brandAccentForeground, brand = null, bare = false,
+  brandAccent, brandAccentForeground, brand = null, bare = false, aiLabel = null,
 }: {
   publicId: string; greeting: string; locale: "en" | "es";
   strings: ConciergeStrings; renderToken: string;
@@ -312,6 +312,9 @@ export function ConciergeChat({
    *  visit ignores it — there is no host chrome to stand in. Esc still
    *  posts the close either way. */
   bare?: boolean;
+  /** S-47a: "{persona} · AI assistant" on Trial or On, null otherwise. Drawn as its own line at the top of
+   *  the panel in EVERY mode: a bare framed panel drops the header row, and the label must not go with it. */
+  aiLabel?: string | null;
 }) {
   // The greeting IS the empty state. It is the tenant's own copy, from their
   // own profile row — there is nothing to invent here.
@@ -506,6 +509,7 @@ export function ConciergeChat({
           )}
         </div>
       )}
+      {aiLabel ? <p className="bis-concierge-ai-label" data-ai-label="">{aiLabel}</p> : null}
       <ol className="bis-concierge-log" aria-live="polite">
         {messages.map((msg, i) => (
           <li key={i} className={`bis-msg bis-msg-${msg.role}`}>{msg.text}</li>
