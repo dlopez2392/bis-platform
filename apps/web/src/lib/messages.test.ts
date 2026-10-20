@@ -1229,3 +1229,114 @@ describe("Sofía's acts on the timeline, their Undo, reasons, notice and created
     expect(m["aiActs.notice.calendarFix.es"]).toBe("Si agregaste la nueva hora a tu calendario, cámbiala de nuevo a esta, por favor.");
   });
 });
+
+describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "voice.disclosure.legend": ["persona"],
+    "voice.disclosure.off": [],
+    "voice.disclosure.offHint": ["persona"],
+    "voice.disclosure.trial": [],
+    "voice.disclosure.trialHint": [],
+    "voice.disclosure.on": [],
+    "voice.disclosure.onHint": [],
+    "voice.disclosure.nextCall": [],
+    "voice.disclosure.results.title": [],
+    "voice.disclosure.results.period": [],
+    "voice.disclosure.results.said": [],
+    "voice.disclosure.results.didnt": [],
+    "voice.disclosure.results.counted": [],
+    "voice.disclosure.results.booked": [],
+    "voice.disclosure.results.hungUp": [],
+    "voice.disclosure.results.askedPerson": [],
+    "voice.disclosure.results.percent": ["percent"],
+    "voice.disclosure.results.noneYet": [],
+    "voice.disclosure.results.notEnough": [],
+    "voice.disclosure.results.notCounted": ["count"],
+    "voice.disclosure.results.notCountedOne": [],
+    "voice.disclosure.results.empty": [],
+    "voice.disclosure.results.emptyAction": [],
+    "voice.disclosure.results.error": [],
+    "concierge.aiLabel": ["persona"],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+
+  function paramsOf(s: string): string[] {
+    return [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+  }
+
+  it("every key exists with its Spanish twin, differing from the English (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const missing = KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`]);
+    expect(missing).toEqual([]);
+  });
+
+  it("names exactly its params, and the same set in both languages (mutation: rename {persona} to {name} in one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      const expected = [...EXPECTED_PARAMS[k]!].sort();
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual(expected);
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual(expected);
+    }
+  });
+
+  it("pins the plan's own sentences, both languages (mutation: change one word -> FAILS)", () => {
+    expect([m["voice.disclosure.legend"], m["voice.disclosure.legend.es"]]).toEqual([
+      "Tell callers {persona} is an AI", "Decir a quien llama que {persona} es una IA"]);
+    expect([m["voice.disclosure.trialHint"], m["voice.disclosure.trialHint.es"]]).toEqual([
+      "Half the calls, picked at random, hear it right after the greeting, so the two halves can be compared below. The website chat always says it.",
+      "La mitad de las llamadas, elegidas al azar, lo escuchan justo después del saludo, para comparar las dos mitades abajo. El chat del sitio web siempre lo dice."]);
+    expect([m["voice.disclosure.nextCall"], m["voice.disclosure.nextCall.es"]]).toEqual([
+      "Changes apply from the next call. Calls already made keep what they heard.",
+      "Los cambios aplican desde la siguiente llamada. Las llamadas ya hechas conservan lo que escucharon."]);
+    expect([m["voice.disclosure.results.title"], m["voice.disclosure.results.title.es"]]).toEqual([
+      "Saying it's an AI: how calls went", "Decir que es una IA: cómo fueron las llamadas"]);
+    expect([m["voice.disclosure.results.askedPerson"], m["voice.disclosure.results.askedPerson.es"]]).toEqual([
+      "Asked for a person", "Pidieron hablar con una persona"]);
+    expect([m["voice.disclosure.results.notCounted"], m["voice.disclosure.results.notCounted.es"]]).toEqual([
+      "{count} calls not counted (spam, or outside the trial)", "{count} llamadas no contadas (spam, o fuera de la prueba)"]);
+    expect([m["voice.disclosure.results.notCountedOne"], m["voice.disclosure.results.notCountedOne.es"]]).toEqual([
+      "1 call not counted (spam, or outside the trial)", "1 llamada no contada (spam, o fuera de la prueba)"]);
+    expect([m["concierge.aiLabel"], m["concierge.aiLabel.es"]]).toEqual([
+      "{persona} · AI assistant", "{persona} · asistente de IA"]);
+  });
+
+  it("the plural pair differs only by number, the contacts.count/contacts.countOne shape (mutation: template the singular with {count} -> FAILS)", () => {
+    expect(m["voice.disclosure.results.notCountedOne"]).not.toMatch(/\{count\}/);
+    expect(m["voice.disclosure.results.notCountedOne.es"]).not.toMatch(/\{count\}/);
+    expect(plural(m, "voice.disclosure.results.notCounted", 1, "en")).toBe("1 call not counted (spam, or outside the trial)");
+    expect(plural(m, "voice.disclosure.results.notCounted", 3, "en", { count: 3 })).toBe("3 calls not counted (spam, or outside the trial)");
+    expect(plural(m, "voice.disclosure.results.notCounted", 1, "es")).toBe("1 llamada no contada (spam, o fuera de la prueba)");
+  });
+
+  it("the named params interpolate through t() for both languages", () => {
+    expect(t(m, "voice.disclosure.legend", "en", { persona: "Sofía" })).toBe("Tell callers Sofía is an AI");
+    expect(t(m, "voice.disclosure.legend", "es", { persona: "Sofía" })).toBe("Decir a quien llama que Sofía es una IA");
+    expect(t(m, "voice.disclosure.results.percent", "en", { percent: 62 })).toBe("62%");
+    expect(t(m, "voice.disclosure.results.percent", "es", { percent: 62 })).toBe("62 %");
+    expect(t(m, "concierge.aiLabel", "en", { persona: "Sofía" })).toBe("Sofía · AI assistant");
+  });
+
+  // Every key here except concierge.aiLabel is operator copy (the Voice page's own settings card and its
+  // results card), so Spanish is usted. concierge.aiLabel is the website chat's own register (tú), the one
+  // named exception alongside the spoken phone sentence (D3, usted) — global constraints, Copy rules.
+  const TU_KEYS = new Set<string>(["concierge.aiLabel"]);
+
+  it("Spanish operator copy is usted, never tú (mutation: 'tu' into one operator .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const es = KEYS.filter((k) => !TU_KEYS.has(k)).map((k) => cat[`${k}.es`]!);
+    for (const s of es) expect(s).not.toMatch(/\b(escribe|intenta|recarga|tu|tus|contigo)\b/i);
+  });
+
+  it("the persona is always {persona}, never a typed 'Sofía', in every key (mutation: hard-code Sofía into one line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const all = KEYS.flatMap((k) => [cat[k]!, cat[`${k}.es`]!]);
+    for (const s of all) expect(s).not.toMatch(/Sofía|Sofia/);
+  });
+
+  it("no plumbing words reach the reader (mutation: write 'trial arm' into one key -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    const all = KEYS.flatMap((k) => [cat[k], cat[`${k}.es`]]);
+    const bad = all.filter((s) => /\b(flag|stamp|coin|trial arm|variant|disclosure_setting|null)\b/i.test(s ?? ""));
+    expect(bad).toEqual([]);
+  });
+});
