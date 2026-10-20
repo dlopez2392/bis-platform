@@ -85,7 +85,7 @@ Why Task 4 is MEDIUM, not HIGH: `recordAct` never throws and is awaited inside t
 | `apps/web/src/lib/voice/tools/registry.ts`, `finish-call.ts`, `textback.ts`, `apps/web/src/lib/forms/enrich.ts`, `apps/web/src/lib/concierge/lead.ts`, `apps/web/src/app/api/voice/texml/handoff-result/route.ts`, and their tests | 4 | call sites; §7 |
 | `apps/web/src/lib/ai-acts/kinds/*.ts`, `facts.ts`, `view.ts`, `actions.ts`, `notify.ts`, `undo-handlers.ts` (+ tests, + `actions.live.test.ts`) | 5 | new |
 | `apps/web/src/lib/proposals/kinds/contact-field.ts:20-43` | 5 | export `storedForm`, `isBlankOn`, `stillAsWritten` (no behaviour change) |
-| `apps/web/src/lib/consent/classes.ts:85-110` | 5 | the kind `staff.booking_undo_notice` (owner question Q2) |
+| `apps/web/src/lib/consent/classes.ts:81-110` (+ `classes.test.ts`, and every exhaustive switch over `EmailClass`) | 5 | the class `transactional` and its one kind `booking.undo_notice` (owner answer Q2) |
 | `apps/web/src/lib/record/loaders.ts` (8b-2 `:51-98`), `timeline-rows.ts`, `author-mark.ts` | 5 | `aiActs: true`, the facts read, the undoers' names, the row's view |
 | `apps/web/src/components/ai-acts/act-undo.tsx` (new, `"use client"`), `act-row.tsx` (new) | 6 | the controls |
 | `…/[contactId]/activity-timeline.tsx`, `…/[contactId]/page.tsx`, `apps/web/src/lib/record/record-facts.ts` (`factsView`) | 6 | the row, the "Added by" fact |
@@ -135,7 +135,7 @@ export type AiActData =
   | { kind: "booking_created"; target: { bookingId: string }; before: null; after: Slot }
   | { kind: "booking_rescheduled"; target: { bookingId: string; fromBookingId: string }; before: Slot & { version: string }; after: Slot }
   | { kind: "booking_cancelled"; target: { bookingId: string }; before: Slot; after: { version: string } }
-  | { kind: "contact_created"; target: { messageId?: string }; before: null; after: null }
+  | { kind: "contact_created"; target: { messageId?: string; submissionId?: string }; before: null; after: null }
   | { kind: "contact_field_filled"; target: { field: ContactFieldName }; before: { value: string | null }; after: { value: string } };
 export type NewAiAct = AiActData & { actor: AiActActor; callId: string | null; chatId: string | null; contactId: string };
 export type AiAct = NewAiAct & { id: string; accountId: string; createdAt: string; undoneAt: string | null; undoneBy: string | null; undoNotified: boolean };
@@ -143,7 +143,10 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
 ```
 
 - `version` is `setBookingStatus`'s returned `updatedAt` (`booking.ts:383-434`), i.e. the cancel's own `updated_at`. It is the compare-and-swap key, as `undoOperatorCancel`'s `version` is.
-- `target.messageId` is set only for a web-chat contact: it is the thread message `enrich` writes (`enrich.ts:179-182`). It is the one non-AI-authored message the delete may treat as hers.
+- `target.messageId` and `target.submissionId` are set only for a web-chat contact:
+  - `messageId` is the thread message `enrich` writes (`enrich.ts:179-182`), the one non-AI-authored message the delete may treat as hers;
+  - `submissionId` is the submission `enrich` was called with (its third argument), the one submission that is hers.
+  - Storing the submission id means `ai_contact_held_by` never reads `concierge_conversations`, which `authenticated` cannot SELECT (review I-1).
 - `ContactFieldName` comes from `@bis/db/proposal-rules`.
 
 ### The three SQL functions (0091; every one `set search_path = ''`, every name schema-qualified)
@@ -154,7 +157,13 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
    - Then, per kind, a compare-and-swap:
      - **`booking_created`**: `update bookings set status = 'cancelled', updated_at = p_now where account_id, id = target.bookingId, status = 'booked', starts_at > p_now`. On zero rows it reads the booking: `gone`, `already_cancelled` (not booked) or `already_happened`.
      - **`booking_cancelled`**: inside `begin … exception when exclusion_violation then return 'time_taken'; end`: `update … set status = 'booked', updated_at = p_now where … status = 'cancelled' and updated_at = (after ->> 'version')::timestamptz and starts_at > p_now and not exists (select 1 from bookings r where r.account_id = p_account_id and r.rescheduled_from_id = <id>)`. On zero rows: `rebooked` (status booked), `time_passed`, or `changed`.
-     - **`booking_rescheduled`**: one inner block. It cancels the NEW booking (`status = 'booked'`, `starts_at > p_now`, no replacement of it). Zero rows: `raise … 'ai_undo_new_changed'`. Then it restores the OLD one (`status = 'cancelled'`, `updated_at = before.version`, `starts_at > p_now`). Zero rows: `raise … 'ai_undo_old_changed'`. The handler maps `exclusion_violation` → `old_time_taken`, `ai_undo_new_changed` → `changed`, and `ai_undo_old_changed` → `changed`. The exception rolls the inner block back, so the new booking is never left cancelled without the old one restored.
+       - If the customer has booked another time separately since, the restore would leave them with two bookings. The DISPLAY shows `aiActs.reason.otherBooking` instead of an Undo (Task 5). The function does not refuse it, because a person may want both and the display has already said so (review minor).
+     - **`booking_rescheduled`**: one inner block.
+       1. It **deletes** the NEW booking: `delete from bookings where account_id, id = target.bookingId, status = 'booked', starts_at > p_now and not exists (… rescheduled_from_id = <new id>)`. Zero rows: `raise exception using errcode = 'ZA001'` (new booking changed).
+       2. It restores the OLD one (`status = 'cancelled'`, `updated_at = before.version`, `starts_at > p_now`). Zero rows: `raise exception using errcode = 'ZA002'` (old booking changed).
+       3. The handler maps by SQLSTATE, never by message text: `when exclusion_violation` → `old_time_taken`; `when sqlstate 'ZA001'` → `changed`; `when sqlstate 'ZA002'` → `changed`. Class `ZA` is unused by PostgreSQL. The exception rolls the inner block back, so the new booking is never gone without the old one restored.
+       - **Why delete, not cancel** (review I-4; `booking.ts:676-683` names this hazard): a cancelled new row would still carry `rescheduled_from_id` = the old booking. `bookingWasMoved(old)` would then read true, and `undoOperatorCancel` would refuse a later Undo on the old booking as `rescheduled` (`booking.ts:466-469`). Nulling the link instead would make the row count as a separate booking made, because the bookings counts filter on `rescheduled_from_id is null` with no status filter (`booking.ts:969`, `:996`). Deleting is `moveBooking`'s own take-back (`:678-681`). `calls.booking_id` on the rescheduling call goes null by its FK (`0019_voice_core.sql:50`, on delete set null); the call's outcome word is unchanged.
+       - **Assumption A6 (check in Task 1 case 8 and Task 5's notice test):** the restored old booking's `.ics` reuses the chain's UID with a SEQUENCE (`lib/booking/ics.ts:16-28`). After the undo, the customer's calendar app may hold the new time at a higher SEQUENCE than the email we send for the old time. The notice must build its `.ics` with a SEQUENCE greater than the deleted row's, or say plainly that the restored time is not offered as a calendar file. Task 5 reads how `calendarFileUrl` computes SEQUENCE and picks one; it STOPS if neither is possible.
    - Then `update ai_acts set undone_at = p_now, undone_by = p_by where id = p_act_id`, and it answers `undone`.
    - Events stay the TypeScript wrapper's (Task 3).
 2. **`public.ai_contact_held_by(p_account_id uuid, p_act_id uuid) returns text[]`**
@@ -165,21 +174,32 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
      | Table (FK) | Counts as hers | Otherwise |
      |---|---|---|
      | `calls` (set null) | `id = act.call_id` | `'calls'` |
-     | `tasks` (cascade) | `call_id = act.call_id` (her callback To-do) | `'tasks'` |
+     | `tasks` (cascade) | `call_id = act.call_id` AND `completed_at is null` AND `assigned_to is null` AND no `task.*` event with `actor_type = 'user'` names its id (`payload ->> 'taskId'`; the events `activities.ts:114`, `:141`, `:201`, `:216` and `assignment.ts:277` carry only `{taskId}`). A callback To-do a person completed, reopened or assigned is theirs, not hers (review I-2) | `'tasks'` |
      | `conversations` (no action) and their `messages` | a message with `author_kind = 'ai'`, or `id::text = act.target ->> 'messageId'` | `'messages'` |
      | `inbound_emails` on those conversations | never | `'inbound_emails'` |
-     | `form_submissions` (set null) | `id = (select submission_id from concierge_conversations where id = act.chat_id)` | `'form_submissions'` |
-     | `automation_log` (set null) | `source = 'textback' and subject_key = 'call:' \|\| act.call_id` | `'automation_log'` |
+     | `form_submissions` (set null) | `id::text = act.target ->> 'submissionId'` (no read of `concierge_conversations`, which `authenticated` cannot SELECT; review I-1) | `'form_submissions'` |
+     | `automation_log` (set null) | `source = 'textback' and subject_key = 'call:' \|\| act.call_id and status in ('sent', 'skipped', 'failed')`. A `held` text-back (`textback.ts:249-251`, released by `:440-470` with the payload's `contactId`) is NOT hers: it blocks until it resolves (review I-3) | `'automation_log'` |
      | `ai_acts` (cascade) | same `call_id` or same `chat_id` as the act | `'ai_acts'` |
-     | `proposals` (cascade) | `call_id = act.call_id` | `'proposals'` |
-     | `bookings` (restrict), `opportunities` (restrict), `notes`, `contact_tags`, `documents` (no action), `document_requests`, `document_requirement_skips`, `places`, `contact_relationships` (either column), `client_group_members`, `consent_events` (set null) | never | the table's name |
+     | `proposals` (cascade) | `call_id = act.call_id` AND `status in ('pending', 'expired')`. One a person accepted, edited or dismissed is theirs (review I-2) | `'proposals'` |
+     | `bookings` (restrict) | never. **Owner Q4: a contact with any booking stays**, and the reason is its own (`'bookings'` → `aiActs.reason.hasBooking`) | `'bookings'` |
+     | `opportunities` (restrict), `notes`, `contact_tags`, `documents` (no action), `document_requests`, `document_requirement_skips`, `places`, `contact_relationships` (either column), `client_group_members`, `consent_events` (set null) | never | the table's name |
      | `contact_duplicate_flags`, `record_summaries` (cascade) | always (a duplicate pair and a generated summary are not activity) | — |
      | `public.events`, not an FK | an event whose `actor_type <> 'user'` | `'edits'`: any `payload ->> 'contactId' = <contact>` event with `actor_type = 'user'` (a person edited, assigned, tagged or re-languaged it) |
+
+     **Why held text-backs block rather than get skipped inside the delete (I-3):** marking a queued customer text `skipped` from inside a deletion silently cancels a message. Blocking keeps the deletion's one job, deleting. The block lifts on its own once the release pass sends or skips the text, at most by the next 08:00. A deletion that went through would instead leave the release throwing on a missing contact every tick.
+
+     **The `edits` rule is a backstop, not the safety net (review minor):**
+     - Some person-made events name the contact under another key (bulk events carry `contactIds`), and some carry no contact at all.
+     - The safety net is the table-by-table list: every write a person makes ON the record lands in one of those tables, and each blocks.
+     - `edits` catches the field-only writes (a name changed, the language set) that leave no row elsewhere.
+     - **Accepted in writing:** the milliseconds between a person's write and its `emit`. A field edit whose event has not landed when statement 2 runs is not seen as an edit. The contact row is locked from statement 1, so the edit itself either committed before the lock (and its event follows within that request) or waits behind the delete and then fails.
 3. **`public.undo_ai_contact_created(p_account_id uuid, p_act_id uuid) returns text`**
-   - `security invoker`; execute for `service_role` only. It answers `deleted`, `has_activity` or `gone`.
+   - `security invoker`; execute for `service_role` only. It answers `deleted`, `has_activity`, `has_booking` or `gone`.
    - **Statement 1** locks: `perform 1 from contacts where account_id = p_account_id and id = <contact> for update`, then the same for that contact's `conversations`. A concurrent FK insert holds `FOR KEY SHARE`, so it waits or is waited on. This is `0083_inbound_never_log.sql:92-96`'s lock-then-fresh-snapshot shape.
    - **Statement 2**, a fresh snapshot: `public.ai_contact_held_by(...)`. Non-empty answers `has_activity`.
-   - **Statement 3** deletes that contact's messages, then its conversations, then the contact. Its tasks, proposals, acts (this one included), duplicate flags and summaries cascade. `calls.contact_id`, `calls.conversation_id` and `form_submissions.contact_id` go null by their own FKs. **The call stays in Calls, unlinked (D4).**
+   - **Statement 3** deletes that contact's messages, then its conversations, then the contact. Its tasks, proposals, acts (this one included), duplicate flags and summaries cascade. Every task and proposal left at this point is an untouched one of hers, by statement 2. `calls.contact_id`, `calls.conversation_id` and `form_submissions.contact_id` go null by their own FKs. **The call stays in Calls, unlinked (D4).**
+   - It answers `has_booking` instead of `has_activity` when `'bookings'` is among the tables (owner Q4), so the reason names it.
+   - **An inbound text during the lock (review minor):** the SMS webhook's `createContact` (`api/sms/inbound/route.ts:175-177`) dedupes on the phone and finds the contact being deleted. Its `ensureConversation` insert then waits on statement 1's lock and fails its FK once the delete commits. That throw is not caught at `:175-177`. **Task 5's reviewer reads the handler's top-level catch and confirms it answers 5xx**, so Telnyx retries (`:162-165`). The retry finds no contact, creates a fresh one and files the text. If the handler answers 200 instead, the text is lost: that is a finding, and the fix (catch the FK error and answer 503) goes to the fix round.
 
 ### Contact authors (0091)
 
@@ -205,6 +225,8 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
 - **A3** `fillContactBlanksReport` is the one fill on the voice path. `fillContactBlanks` (`contacts.ts:571-578`) only reads `.fields` off it. Check: Task 3 greps the callers.
 - **A4** No other lane has claimed 0091. Check: Task 0, `git log --all --oneline -- 'packages/db/supabase/migrations/0091*'` prints nothing.
 - **A5** The bis-ci and production backfill buckets equal Task 0's counts (below). Check: Task 10 reads the NOTICEs (MCP returns them) against them.
+- **A6** After a reschedule undo, the restored booking's calendar file can supersede the moved one in the customer's calendar app (UID/SEQUENCE, `lib/booking/ics.ts:16-28`). Check: Task 5 reads how `calendarFileUrl` derives SEQUENCE for a chain whose newest row was deleted, and pins it in the notice test. See "The model", function 1.
+- **A7** The inbound SMS webhook answers 5xx (so Telnyx retries) when a contact it matched is deleted under it. Check: Task 5's reviewer, see "The model", function 3.
 
 ---
 
@@ -229,11 +251,11 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
 
   | Who | Postgres | PostgREST | gateway |
   |---|---|---|---|
-  | Task 1 implementer | 55690 | — | — |
-  | Task 1 reviewer | 55691 | — | — |
+  | Task 1 implementer (PostgREST for cases 8 and 9's `withTestAccount` variants) | 55690 | 55698 | 55699 |
+  | Task 1 reviewer (Wave B has not started, so Task 3's reviewer ports are free) | 55691 | 55696 | 55697 |
   | Task 3 implementer, then Task 5 implementer (Task 3 stops its kit first) | 55692 | 55693 | 55694 |
   | Task 3 reviewer, then Task 5 reviewer | 55695 | 55696 | 55697 |
-  | Task 9 reviewer (after Task 1's review stops 55691) | 55691 | 55698 | 55699 |
+  | Task 9 reviewer (after Task 1's implementer and reviewer have stopped their kits) | 55691 | 55698 | 55699 |
 
   Stop your own kit only, as `…pr8b1.md` "The replica kit" says.
 - **Faithfulness:** the client-write digest on `pre` must equal bis-ci's (Task 0 reads it after 0090). 0091 must leave it UNCHANGED on `post`: no client write grant is added.
@@ -275,6 +297,7 @@ export function parseAiAct(row: unknown): AiAct | null; // kind by kind; null wh
 
 ## Task 0: Base, install, pre-reads (orchestrator)
 
+- [ ] **Gate:** bis-ci is at **0089** today (2026-10-19); 0090 waits for 8b-2's own rollout. Task 0 does not start until `max(version)` reads 0090's apply on BOTH projects; read 1 below checks it.
 - [ ] **After 8b-2 merges** (≥ 2026-10-20T05:35:46Z, with 0089 and 0090 on both projects): `git -C <WT> fetch origin && git -C <WT> merge origin/main`. The merge conflicts in nothing; this branch holds only the spec and this plan. Run `pnpm install`. Check A4.
 - [ ] Re-read every file:line this plan cites, on the merged tree:
   - the call sites (`registry.ts:434-436`, `:451-453`, `:481-486`, `:592-601`, `:683`; `finish-call.ts:296-357`; `textback.ts:157-174`, `:228`; `enrich.ts:97-106`, `:150`, `:179-182`, `:266-310`; `lead.ts:155-179`; `handoff-result/route.ts:352-365`);
@@ -355,20 +378,28 @@ The header carries:
      - A1: the version is written by a JS ISO string and read back equal.
      - **Mutation:** drop `updated_at = version` → the later-update case **FAILS**.
   8. **`booking_rescheduled`:**
-     - both untouched → old `booked`, new `cancelled`, act stamped;
+     - both untouched → old `booked`, the new row **gone**, act stamped;
+     - then `bookingWasMoved(old)` (`booking.ts:857`) is false;
+     - then a person's cancel of the old booking (`setBookingStatus` as `user`) followed by `undoOperatorCancel` with that cancel's version succeeds, not `rescheduled` (I-4). This runs as a `withTestAccount` case on the replica's PostgREST (ports in Global constraints);
      - the old slot taken by a third booking → `old_time_taken`, and the NEW booking is still `booked` (rolled back);
-     - the new booking cancelled meanwhile → `changed`.
-     - **Mutation:** move the old restore OUTSIDE the inner block → the taken case leaves new `cancelled` and **FAILS**.
+     - the new booking cancelled meanwhile → `changed` (SQLSTATE `ZA001`);
+     - the old booking's version moved → `changed` (`ZA002`).
+     - **Mutation:** move the old restore OUTSIDE the inner block → the taken case leaves the new row deleted and **FAILS**.
+     - **Mutation:** cancel the new row instead of deleting it → the `bookingWasMoved` case **FAILS**.
   9. **`ai_contact_held_by`, table by table:**
      - a contact with only her call, her summary message (`author_kind 'ai'`), her callback task, her textback log row, her proposal and a duplicate flag answers `{}`;
      - then, for EACH table in the table-by-table list's "otherwise" column, one case inserting one non-hers row answers exactly `{<that name>}`;
      - a `contact.updated` event with `actor_type 'user'` answers `{edits}`;
-     - a web-chat act: its own submission and its `messageId` message answer `{}`, and a second submission answers `{form_submissions}`.
+     - a web-chat act: its own submission (`target.submissionId`) and its `messageId` message answer `{}`, and a second submission answers `{form_submissions}`;
+     - **I-2:** her callback task once completed → `{tasks}`; once assigned → `{tasks}`; untouched but named by a `user` `task.reopened` event → `{tasks}`; her proposal once `accepted` → `{proposals}`, while `expired` → `{}`;
+     - **I-3:** her text-back log row with `status 'held'` → `{automation_log}`, and the same row `sent` → `{}`;
+     - **I-1:** the clean case and the notes case again, called through PostgREST as an **authenticated Owner JWT** (`withTestAccount`), with the same answers and no `42501`. **Mutation:** put back a `concierge_conversations` read → this case **FAILS** with `42501`.
      - **Guard case:** `select conrelid::regclass from pg_constraint where confrelid = 'public.contacts'::regclass and contype = 'f'` equals the test's typed list of 20 tables. A future FK fails here by name.
      - **Mutation:** drop the `notes` clause → the notes case **FAILS**.
   10. **`undo_ai_contact_created`:**
       - the clean contact → `deleted`; the contact, its conversation, her message, her task and the act are gone; the call row remains with `contact_id` null;
       - with a note → `has_activity`, and nothing is deleted;
+      - with a booking (even cancelled) → `has_booking`, and nothing is deleted (owner Q4);
       - a second call → `gone`.
       - **Mutation:** skip statement 2's check → the note case **FAILS** (and the note is gone, which the test asserts).
   11. **Function grants:**
@@ -388,9 +419,9 @@ The header carries:
 
 **Acceptance:** every case green on `post`; every mutation fails by name; the digest is unchanged; the md5 is in the report.
 
-**Review (HIGH):** opus bis-reviewer on 55691.
+**Review (HIGH):** opus bis-reviewer on 55691/55696/55697.
 - It re-runs four probes, one each in cases 8, 9 and 10, and one of its own choosing.
-- It applies 0091 to a fresh `pre` copy through `psql -1` AND through bare `psql` (autocommit). A failed self-check must leave nothing behind either way.
+- It applies 0091 to a fresh `pre` copy through `psql -1` only. There is no bare-`psql` autocommit step (review I-6): 0091 is a multi-statement additive file, and its only routes, `supabase db push` and MCP `apply_migration`, each run it as one transaction.
 - It checks the bytes.
 - It reads `pg_constraint` itself against the typed list.
 
@@ -423,6 +454,8 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 | `aiActs.reason.changed` | Changed since | Cambió desde entonces |
 | `aiActs.reason.changedBy` | Changed since by {name} | {name} lo cambió después |
 | `aiActs.reason.hasActivity` | Has other activity since | Tiene otra actividad desde entonces |
+| `aiActs.reason.hasBooking` | Has a booking, so it stays. Delete it the usual way if it has to go. | Tiene una cita, así que se queda. Si debe quitarse, bórrelo de la forma habitual. |
+| `aiActs.reason.otherBooking` | They booked another time since | Reservó otra hora desde entonces |
 | `aiActs.reason.ownerOnly` | Only an Owner can remove a customer | Solo el Dueño puede quitar a un cliente |
 | `aiActs.undoneBy` | Undone by {name} · {date} | Deshecho por {name} · {date} |
 | `aiActs.notify.label` | Let {name} know by email | Avisarle a {name} por correo |
@@ -453,11 +486,11 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 **What:**
 1. **`ai-act-rules.ts`**: the model above, plus `parseAiAct`. Add `"./ai-act-rules": "./src/ai-act-rules.ts"` to `package.json` `exports` (`:5-17`).
 2. **`ai-acts.ts`:**
-   - `insertAiAct(db, accountId, act: NewAiAct): Promise<{ id: string }>` (service client; throws).
+   - `insertAiActs(db, accountId, acts: readonly NewAiAct[]): Promise<void>`: ONE multi-row insert (service client; throws). Task 4 calls it once per site.
    - `getAiAct(db, accountId, id): Promise<AiAct | null>` (request client; RLS decides).
    - `listContactAiActs(db, accountId, who, page): Promise<AiAct[]>`, via `withTimelinePage(…, "created_at", page)` (`timeline-cursor.ts:75`). An unparseable row is dropped and logged by id.
    - `undoAiBookingAct(db, accountId, actId, by, now): Promise<AiBookingUndoOutcome>`. It wraps the RPC. On `undone` it emits `booking.status_changed` for each booking it moved, actor `by`/`user`, best-effort, as `setBookingStatus` does (`booking.ts:432`). `AiBookingUndoOutcome = "undone" | "already_undone" | "gone" | "already_cancelled" | "already_happened" | "rebooked" | "time_passed" | "time_taken" | "old_time_taken" | "changed"`.
-   - `aiContactHeldBy(db, accountId, actId): Promise<string[]>` and `undoAiContactCreated(db, accountId, actId): Promise<"deleted" | "has_activity" | "gone">`.
+   - `aiContactHeldBy(db, accountId, actId): Promise<string[]>` and `undoAiContactCreated(db, accountId, actId): Promise<"deleted" | "has_activity" | "has_booking" | "gone">`. After a reschedule undo, the wrapper emits `booking.status_changed` (booked) for the restored old booking only; the deleted new row emits nothing, and its act row (stamped undone) is its record.
    - `stampAiActUndone(db, accountId, actId, by, at): Promise<boolean>` (CAS `undone_at is null`). `clearAiActUndone(db, accountId, actId, by, at): Promise<boolean>` (CAS `undone_by = by and undone_at = at`; the field redo). `markAiActNotified(db, accountId, actId): Promise<void>`.
 3. **`contacts.ts`:**
    - `COLS` gains `author_kind, author_id`. It must stay ONE string literal (`:58-62`'s reason).
@@ -481,7 +514,7 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 
 **Tests (each with its mutation, run):**
 - `ai-acts.test.ts`, on the replica:
-  - `insertAiAct` then `getAiAct` round-trips every kind;
+  - `insertAiActs` then `getAiAct` round-trips every kind;
   - account B's id with A's act answers null while B holds one (**mutation:** drop `.eq("account_id")` → **FAILS**);
   - `listContactAiActs` pages across a cursor boundary, newest first;
   - `undoAiBookingAct` emits one `booking.status_changed` per moved booking with the undoer as actor (**mutation:** emit before checking the outcome → the `changed` case **FAILS**);
@@ -510,8 +543,13 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 **After:** Task 3. **No replica** (the tests mock `@bis/db`).
 
 **`apps/web/src/lib/ai-acts/record.ts`:**
-- `recordAct(db, accountId, act: NewAiAct): Promise<void>`.
-- It awaits `insertAiAct` inside `try`, and on any throw logs `ai act not recorded: kind=<k> account=<id> source=<call|chat>:<id> contact=<id>: <error code or name>`.
+- `recordActs(db, accountId, acts: readonly NewAiAct[]): Promise<void>`, with `recordAct(db, accountId, act)` = `recordActs(db, accountId, [act])`.
+- **One insert per site** (review I-5): a site that produces several acts (a contact plus its fills) collects them and calls `recordActs` ONCE, through Task 3's `insertAiActs`.
+- **Bounded:** `export const ACT_RECORD_TIMEOUT_MS = 1000`. It races the insert against that timer.
+  - On timeout it logs `ai act not recorded: timed out after 1000 ms kind=<k> account=<id> source=<call|chat>:<id>` and returns.
+  - The insert may still land later; its rows then simply appear. It is never awaited again.
+  - A live call waits at most one second per tool call for bookkeeping, never on a hung database.
+- On any throw it logs `ai act not recorded: kind=<k> account=<id> source=<call|chat>:<id> contact=<id>: <error code or name>`.
 - It never throws and never rethrows.
 - It skips (and logs `ai act not recorded: no source`) when `actor = "voice"` and `callId` is null, or `actor = "webchat"` and `chatId` is null (A2).
 
@@ -537,7 +575,7 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
   - `enrich` gains a ninth, optional parameter `webchat?: { chatId: string }`. Only `lead.ts:170` passes it, `{ chatId: ctx.conversationId }` (a `concierge_conversations` id, `lead.ts:65`). The public form passes nothing, so it records nothing and its contacts stay `customer`.
   - With `webchat` set:
     - `createContact` gets `author: { authorKind: "ai", authorId: null }`;
-    - a new contact (`!created.existing`) records `contact_created` AFTER `createMessage` (`:179-182`) succeeded, with `target { messageId: <that message's id> }`. `createMessage` returns its row; the call site captures it.
+    - a new contact (`!created.existing`) records `contact_created` AFTER `createMessage` (`:179-182`) succeeded, with `target { messageId: <that message's id>, submissionId }` (`submissionId` is `enrich`'s own third argument; review I-1). `createMessage` returns its row; the call site captures it.
     - `fillBlanks` returns, beside its business error, `filled: { field: ContactFieldName; before: string | null; after: string }[]` for the four columns only (from `current` at `:276` and the patch). Each is recorded as `contact_field_filled`.
   - Custom fields, the business and the attribution are not acts (ambiguity D).
 
@@ -558,10 +596,13 @@ A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
 
 **Tests (each with its mutation, run):**
 - `record.test.ts`:
-  - a throwing `insertAiAct` resolves and logs ids only;
+  - a throwing `insertAiActs` resolves and logs ids only;
   - the log carries no name or email (**mutation:** log the act's `after` → **FAILS**);
-  - a null source skips.
-- Per voice site: with `recordAct` mocked to throw (or `insertAiAct` mocked to throw under the real `recordAct`), the tool's `result` and returned `state` are `toEqual` the no-act run. **Mutation:** remove the `try` in `recordAct` → each site's case **FAILS**.
+  - a null source skips;
+  - **a hanging `insertAiActs`** (a promise that never settles), under fake timers: `recordActs` resolves at `ACT_RECORD_TIMEOUT_MS` and logs the timeout (**mutation:** await the insert without the race → **FAILS**, the test times out);
+  - two acts at one site make ONE `insertAiActs` call with both.
+- **I-5, the tool path:** `runTool("book_appointment", …)` with a hanging `insertAiActs` answers its result within `ACT_RECORD_TIMEOUT_MS + 50 ms` of fake time, and that result is `toEqual` the no-act run. The same holds for `reschedule_appointment` and `cancel_appointment`.
+- Per voice site: with `recordAct` mocked to throw (or `insertAiActs` mocked to throw under the real `recordAct`), the tool's `result` and returned `state` are `toEqual` the no-act run. **Mutation:** remove the `try` in `recordAct` → each site's case **FAILS**.
 - One act per filled field, none for an existing contact's `contact_created`. **Mutation:** record on `created.existing` → **FAILS**.
 - `booking_rescheduled` carries the cancel's `updatedAt` as `before.version`. **Mutation:** record `new Date().toISOString()` → **FAILS** (assert the exact value the `setBookingStatus` mock returned).
 - `enrich`: the public form call records nothing and stores `customer`; the chat call records `contact_created` with the message id and stores `ai`. **Mutation:** pass `webchat` from `f/[publicId]/actions.ts` → **FAILS**.
@@ -603,7 +644,7 @@ export type ActFacts = {
   canDelete: boolean;                             // requireAccountAccess().canManage
 };
 export type StillSafe = { ok: true } | { ok: false; reason: ActReason };
-export type ActReason = "alreadyCancelled" | "alreadyHappened" | "rebooked" | "timePassed" | "timeTaken" | "oldTimeTaken" | "changed" | "changedBy" | "hasActivity" | "ownerOnly";
+export type ActReason = "alreadyCancelled" | "alreadyHappened" | "rebooked" | "timePassed" | "timeTaken" | "oldTimeTaken" | "changed" | "changedBy" | "hasActivity" | "hasBooking" | "otherBooking" | "ownerOnly";
 export type ActKindDef<K extends AiActKind> = {
   kind: K;
   describe(act: AiAct & { kind: K }, ctx: { tr: Tr; zone: string }): { verb: string; detail: string | null };
@@ -620,7 +661,8 @@ Each kind's `stillSafe` mirrors its SQL twin exactly. The RPC or CAS is authorit
   - the old start passed → `timePassed`;
   - `slotTaken` on the old booking → `oldTimeTaken`.
 - **booking_cancelled:** `booked` → `rebooked`; passed → `timePassed`; the version differs or it was replaced → `changed`; `slotTaken` → `timeTaken`.
-- **contact_created:** `!canDelete` → `ownerOnly`; `heldBy` non-empty → `hasActivity`.
+- **contact_created:** `!canDelete` → `ownerOnly`; `heldBy` containing `bookings` → `hasBooking`; any other non-empty `heldBy` → `hasActivity`.
+- **booking_cancelled, extra (review minor):** the contact has another `booked` booking starting in the future that is not this one → `otherBooking`. `facts.ts` adds ONE read for it, only when a `booking_cancelled` act is on the page: the contact's future booked bookings (`.eq("contact_id").eq("status", "booked").gt("starts_at", now)`).
 - **contact_field_filled:** `!stillAsWritten(field, contact[col], after.value)` → `changedBy` when an editor is named, else `changed`.
 
 **2. `facts.ts`:** `readActFacts(db, accountId, contactId, acts, access): Promise<ActFacts>`, on the request client. It costs at most four reads plus one per booking act that needs an overlap answer, bounded by the timeline page (≤ 30 rows):
@@ -665,7 +707,7 @@ type AiActView = {
 - **contact_created:**
   1. `requireAccountOwner(accountId)`.
   2. `typedName` must equal the contact's display name under `purgeNameKey` (`lib/documents/rules.ts:78`); otherwise `{ ok: false, reason: "typedName" }`.
-  3. Call `undoAiContactCreated(serviceDb(), …)`. `deleted` → `{ ok: true, removed: true }`, and the caller navigates to the contacts list. `has_activity` → `{ ok: false, reason: "hasActivity" }`.
+  3. Call `undoAiContactCreated(serviceDb(), …)`. `deleted` → `{ ok: true, removed: true }`, and the caller navigates to the contacts list. `has_activity` → `{ ok: false, reason: "hasActivity" }`; `has_booking` → `{ ok: false, reason: "hasBooking" }`.
 - Every path: `revalidatePath` the record page (and the contacts list on a removal). Log ids only.
 
 **5. `notify.ts`:** `sendBookingUndoNotice({ accountId, act, contact, origin })`, on the service client.
@@ -675,10 +717,20 @@ type AiActView = {
   - **`booking_created` undone** → `bookingCancelledEmail`/`bookingCancelledSubject` for `after.startsAt`;
   - **`booking_cancelled` undone** → `bookingConfirmationEmail`/`bookingConfirmationSubject`, with the booking's own `cancel_token`, `meeting_url`, `calendarFileUrl` and cancel URL (read by id on the service client), built as `registry.ts:509-522` builds them;
   - **`booking_rescheduled` undone** → `bookingRescheduledEmail` for the restored old booking's time and token, with `bookingMoveUrl`, as `registry.ts:620-636`.
-- `sendEmailOrThrow` with `kind: "staff.booking_undo_notice"`, `contactId`, `language`, `origin`.
+- `sendEmailOrThrow` with `kind: "booking.undo_notice"`, `contactId`, `language`, `origin`.
 - **The channel** is email: the one the voice path's own confirmation used (Q3).
 
-**6. `classes.ts`:** add `"staff.booking_undo_notice": { class: "staff_typed", hours: "any", footer: "none" }` beside `staff.booking_cancel_notice` (`:99-103`), with the same comment's reasoning (Q2). Update any scan test that pins the kind list.
+**6. `classes.ts`: the owner's answer to Q2 is TRANSACTIONAL.**
+- No class of that name exists. The five classes are listed at `:81`. `customer_initiated` cannot carry it: scan 4 (`scans.test.ts:805-814`) pins that class to "only where the customer acted", and a staff Undo is not that.
+- So add a sixth member, `"transactional"`, to `EmailClass`, with exactly one kind: `"booking.undo_notice": { class: "transactional", hours: "any", footer: "unsubscribe" }`. It is a correction about the customer's own appointment:
+  - an unsubscribe does not stop it (the gate reads the unsubscribe ledger for `informational` and `marketing` only, decision 7, which is unchanged);
+  - it may go at any hour;
+  - it carries the unsubscribe footer, as every customer email that is not a person's own words does;
+  - stops, hard bounces and suppressions block it as they block every class.
+- Every exhaustive switch over `EmailClass` gains the case (grep `EmailClass` and `.class ===`).
+- `classes.test.ts` pins the class to that one kind (**mutation:** classify `automation.reminder` as `transactional` → **FAILS**).
+- Scan 4 is unchanged.
+- **This is the plan's reading of the owner's word.** If the orchestrator reads "transactional" as an existing class instead, Task 5 STOPS here.
 
 **7. Loaders and rows:**
 - `loadTimeline` (8b-2 `loaders.ts:61-98`) passes `aiActs: true`. After the page it runs:
@@ -903,7 +955,17 @@ Each step reads its own evidence; nothing is inferred from an earlier run.
 
 ---
 
-## Owner-level questions (flagged, not decided here; each has a default the plan builds unless the owner says otherwise)
+## Owner decisions (2026-10-19, answering the plan's Q1–Q4; Q5 stays conditional)
+
+- **Q1 → `import`. YES.** The demo and CI seeds' contacts read "Import".
+- **Q2 → TRANSACTIONAL**, not `staff_typed`. The plan's reading is in Task 5 item 6: a new class `transactional` holding the one kind `booking.undo_notice`. An unsubscribe does not stop it, it may go at any hour, and it carries the unsubscribe footer.
+- **Q3 → email only.** With no email on file, the panel says to call them (`aiActs.notify.noEmail`). No text message.
+- **Q4 → a contact Sofía created who also has a booking STAYS.** The contact undo is refused with its own reason (`aiActs.reason.hasBooking`, "Has a booking, so it stays. Delete it the usual way if it has to go."). The SQL answers `has_booking`.
+  - **Note for the owner's wording:** the usual delete (`deleteContacts`, `contacts.ts:1101-1107`) also skips a contact holding any booking, cancelled or not (`skippedBlocked`). "The usual way" therefore means after the booking itself is dealt with elsewhere; the copy stays as decided.
+  - **Most web-chat leads are never removable by Undo either** (review minor): `enrich`'s instant reply writes an automation-authored outbound text into the thread (`sendInstantReply`, `enrich.ts:234` → `automations/send-sms.ts:135`). A lead with a business name gets a `client_group_members` row (`enrich.ts:136`). Both count as other activity. The Undo then shows its reason; this is D4 working as decided.
+- **Q5 (conditional):** if Task 0 read 3 is non-zero on production, Task 0 STOPS for the owner.
+
+## The questions as they were put (kept for the record)
 
 - **Q1. The demo tenant's 40 seeded contacts** (`user:system_demo_seed`, #272), and bis-ci's `system_ci_seed`: mapped to **`import`** ("Import" on the record), in the backfill and for every future seed run, through `contactAuthor`'s `SEED_ACTORS`. Without this they would read as an unnameable person ("Someone on the team"). Recommendation: `import`, as the coordinator advised. The alternative is `automation`.
   - The seed writes contacts through `createContact` (`demo/seed.ts:437-440`, actor `ACTOR` = `"system_demo_seed"` at `:33`, default actor type `user`; CI seed `ci-seed/seed.ts:213-215`, `CI_SEED_ACTOR` with type `system`). So the new columns are set going forward with no seed edit.
