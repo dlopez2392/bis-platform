@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
@@ -218,6 +218,9 @@ function Row({ row, timezone, accountId, tr, customerLangs }: {
           verb={row.verbParts ? <SuggestionParts parts={row.verbParts} /> : row.verb}
           detail={row.detailParts ? <SuggestionParts parts={row.detailParts} /> : row.detail} />
       );
+    // item 8c (plan Task 3): a plain row, pending Task 5's own description, reason and Undo.
+    case "aiAct":
+      return <TimelineItem {...head} icon={Bot} />;
     default:
       return unknownKind(e);
   }

@@ -215,3 +215,20 @@ describe("an accepted suggestion's mark (item 8b-2)", () => {
     expect(personIdsOf([suggestion("user_dan"), suggestion("user_gone")])).toEqual(["user_dan", "user_gone"]);
   });
 });
+
+// item 8c: an act Sofia (or the web chat) took live is hers, never a person's — Task 5 gives it the
+// persona's own label; this is the type-only case only.
+describe("an ai_acts row's mark (item 8c)", () => {
+  const act: TimelineEntry = {
+    kind: "aiAct", id: "a1", at: AT, contactId: "c1",
+    act: {
+      id: "a1", accountId: "acct1", actor: "voice", callId: "k1", chatId: null, contactId: "c1",
+      kind: "contact_field_filled", target: { field: "firstName" }, before: { value: null }, after: { value: "Ana" },
+      createdAt: AT, undoneAt: null, undoneBy: null, undoNotified: false,
+    },
+  } as unknown as TimelineEntry;
+  it("is the ai mark (mutation: kind 'person' -> FAILS)", () => {
+    expect(authorOf(act)).toEqual({ kind: "ai", personId: null });
+    expect(authorMark(act, ctx()).kind).toBe("ai");
+  });
+});

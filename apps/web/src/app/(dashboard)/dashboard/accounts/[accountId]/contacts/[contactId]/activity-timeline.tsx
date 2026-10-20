@@ -1,4 +1,4 @@
-import { CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
+import { Bot, CalendarCheck, CalendarClock, CheckSquare, DollarSign, Download, FileText, Link2, ListChecks, Mail, MessageSquare, MessagesSquare, Paperclip, Phone, Send, ShieldAlert, Square,
          StickyNote } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
@@ -282,6 +282,9 @@ function Row({ row, hidden, completeAction, timezone, assign, holdOpen, accountI
     // item 8b-2 (spec 5.4; design review C1): an accepted suggestion, its words drawn from their parts.
     case "suggestion":
       return <TimelineItem {...head} {...suggestionWords(row)} icon={CheckSquare} />;
+    // item 8c (plan Task 3): a plain row, pending Task 5's own description, reason and Undo.
+    case "aiAct":
+      return <TimelineItem {...head} icon={Bot} />;
     default:
       return unknownKind(e);
   }

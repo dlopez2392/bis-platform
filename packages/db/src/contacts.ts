@@ -3,6 +3,8 @@ import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { normalisePhone } from "./phone";
 import type { AssigneeFilter } from "./assignment";
+import { contactAuthor, type RowAuthor } from "./provenance";
+import type { ContactFieldName } from "./proposal-rules";
 
 /**
  * S-02 A2: `companyName` is gone. The Business name is a group now
@@ -33,6 +35,10 @@ export type CreateContactInput = ContactInput & {
    *  explicitly assigns Unassigned; a user id assigns that person. Only
    *  `createContact` accepts this field. */
   assignedTo?: string | null;
+  /** item 8c: who made this contact, when the caller already knows (the import, which is always
+   *  `import`; a web-chat lead, always `ai`). `undefined` falls back to `contactAuthor(actorType,
+   *  actorId)` — the ordinary path, for every other caller. */
+  author?: RowAuthor;
 };
 
 // `sort_name` (0030, a stored generated column) rides along on every read —
@@ -56,8 +62,12 @@ export type CreateContactInput = ContactInput & {
 // `assigned_to` (F-085 part 1): the drawer's and the record page's "Assigned
 // to" field shows who holds the customer now. Read here, written only by
 // assignment.ts (see this file's own header).
+// `author_kind`/`author_id` (0091, item 8c): who created the contact, from the five provenance kinds
+// (contactAuthor's own set). Read here so the record page's "Added by" fact and the contact-created
+// act's Undo (a contact's own `canDelete`/`heldBy` display) have it off the SAME row every other field
+// comes from.
 const COLS =
-  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at";
+  "id, first_name, last_name, email, phone, company_name, source, custom, attribution, created_at, updated_at, sort_name, phone_country_unconfirmed, assigned_to, language, language_source, language_set_at, last_language_signal, last_language_signal_source, last_language_signal_at, language_hint_kept_at, author_kind, author_id";
 
 /**
  * A phone as the contact row stores it (F-009, consent chain spec §4.1 item
@@ -463,11 +473,17 @@ export async function createContact(
 
   // assigned_to is written HERE, not inside toRow: toRow is shared with
   // updateContact, which must never be able to set it (see
-  // CreateContactInput's own comment).
+  // CreateContactInput's own comment). author_kind/author_id likewise: an
+  // explicit input.author (the import, a web-chat lead) wins; every other
+  // caller gets contactAuthor's ordinary mapping of the actor it already
+  // passes. Never through toRow — updateContact must never be able to
+  // rewrite who made a contact.
+  const author = input.author ?? contactAuthor(actorType, actorId);
   const { data, error } = await db.from("contacts")
     .insert({
       account_id: accountId, ...toRow(input),
       ...(input.assignedTo !== undefined ? { assigned_to: input.assignedTo } : {}),
+      author_kind: author.authorKind, author_id: author.authorId,
     }).select("id").single();
   if (error || !data) throw new Error(`createContact failed: ${error?.message}`);
   await emit(db, accountId, "contact.created", actorId, { contactId: data.id, email, phone },
@@ -576,16 +592,29 @@ export async function fillContactBlanks(
   return (await fillContactBlanksReport(db, accountId, contactId, input, actorId, actorType)).fields;
 }
 
+/** `patch`'s snake_case column name, keyed to the field name an ai_acts row names (item 8c). */
+const COLUMN_FIELD: Readonly<Record<string, ContactFieldName>> = {
+  first_name: "firstName", last_name: "lastName", email: "email", phone: "phone",
+};
+
 /**
  * `fillContactBlanks`'s body, also answering whether the fill raised a duplicate flag (item 8b-1, plan
  * deviation 11): Undo of an accepted contact-field suggestion tells the person the possible duplicate it
  * found is still in Duplicates. One write path; `fillContactBlanks` reads `.fields` off this.
+ *
+ * `prior`/`written` (item 8c): what a `contact_field_filled` act needs to record, keyed by the camel
+ * field name and present only for a column this call actually wrote. `prior` is the column as read
+ * BEFORE the write (null when it was genuinely blank); `written` is the STORED form (`phoneFields`'s
+ * E.164 for a phone, never the raw input the caller passed).
  */
 export async function fillContactBlanksReport(
   db: SupabaseClient, accountId: string, contactId: string,
   input: { firstName?: string; lastName?: string; email?: string; phone?: string },
   actorId: string, actorType: ActorType = "user",
-): Promise<{ fields: string[]; flagged: boolean }> {
+): Promise<{
+  fields: string[]; flagged: boolean;
+  prior: Partial<Record<ContactFieldName, string | null>>; written: Partial<Record<ContactFieldName, string>>;
+}> {
   const row = await getContact(db, accountId, contactId);
   if (!row) throw new Error("fillContactBlanks: no such contact");
   const blank = (v: unknown) => v == null || String(v).trim() === "";
@@ -621,27 +650,101 @@ export async function fillContactBlanksReport(
   if (incomingPhone && blank(row.phone)) patch.phone = incomingPhone;
 
   const filled = Object.keys(patch);
-  if (filled.length === 0) return { fields: [], flagged: false };
+  if (filled.length === 0) return { fields: [], flagged: false, prior: {}, written: {} };
   // The phone is stored as every write stores it, with its country flag —
   // and that flag is a column this call actually writes, so it belongs in
-  // the reported/emitted field list too (review m7), not just in `written`.
-  const written = "phone" in patch ? { ...patch, ...phoneFields(String(patch.phone)) } : patch;
+  // the reported/emitted field list too (review m7), not just in `writtenRow`.
+  const writtenRow = "phone" in patch ? { ...patch, ...phoneFields(String(patch.phone)) } : patch;
   const reportedFields = "phone" in patch ? [...filled, "phone_country_unconfirmed"] : filled;
 
+  // item 8c: what the act needs, read BEFORE the write (prior) and from the column's actual stored
+  // form (written) — both keyed by the camel field name, only for columns `patch` names.
+  const prior: Partial<Record<ContactFieldName, string | null>> = {};
+  const written: Partial<Record<ContactFieldName, string>> = {};
+  for (const col of filled) {
+    const field = COLUMN_FIELD[col];
+    if (!field) continue;
+    prior[field] = (row as Record<string, unknown>)[col] as string | null ?? null;
+    const storedValue = col === "phone" ? writtenRow.phone : writtenRow[col];
+    if (typeof storedValue === "string") written[field] = storedValue;
+  }
+
   const { error } = await db.from("contacts")
-    .update({ ...written, updated_at: new Date().toISOString() })
+    .update({ ...writtenRow, updated_at: new Date().toISOString() })
     .eq("account_id", accountId).eq("id", contactId);
   if (error) throw new Error(`fillContactBlanks failed: ${error.message}`);
   await emit(db, accountId, "contact.updated", actorId, { contactId, fields: reportedFields }, actorType);
   // D-012 via this fill path too: a returning caller's email/phone can land
   // on a DIFFERENT contact's dedupe key exactly as a direct edit can (the
   // call proposal approval, the /b booking form, finish-call, textback and
-  // the voice tools all reach this function). `written` already carries
+  // the voice tools all reach this function). `writtenRow` already carries
   // only the columns THIS call is actually about to write — `email`/`phone`
   // are absent from it whenever `patch` never named them — so the shared
   // check below runs for no more than those.
-  const flagged = await flagDuplicatesAfterWrite(db, accountId, contactId, written);
-  return { fields: reportedFields, flagged };
+  const flagged = await flagDuplicatesAfterWrite(db, accountId, contactId, writtenRow);
+  return { fields: reportedFields, flagged, prior, written };
+}
+
+const FIELD_COLUMN: Readonly<Record<ContactFieldName, string>> = {
+  firstName: "first_name", lastName: "last_name", email: "email", phone: "phone",
+};
+
+/**
+ * Field undo (item 8c): puts one column back to `restore`, ONLY while it still holds exactly
+ * `expected` (the compare-and-swap `fillContactBlanksReport`'s `prior`/`written` pair is for) — a
+ * person's own later edit means `"changed"`, never clobbered. A phone restore writes `phoneFields`'s
+ * stored form (both columns, same as every other phone write); any other restore (an email restore of
+ * null included) writes `restore` as given. Emits `contact.updated` as `actorId` on `"restored"` only;
+ * runs on the REQUEST client (contacts' column UPDATE grant, 0053, already lets a signed-in person
+ * write these columns) so RLS decides who may call it at all.
+ */
+export async function restoreContactFieldIf(
+  db: SupabaseClient, accountId: string, contactId: string, field: ContactFieldName,
+  expected: string | null, restore: string | null, actorId: string,
+): Promise<"restored" | "changed"> {
+  const column = FIELD_COLUMN[field];
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (field === "phone") {
+    const fields = phoneFields(restore);
+    patch.phone = fields.phone;
+    patch.phone_country_unconfirmed = fields.phone_country_unconfirmed;
+  } else {
+    patch[column] = restore;
+  }
+  let q = db.from("contacts").update(patch).eq("account_id", accountId).eq("id", contactId);
+  // PostgREST's `eq.null` is not guaranteed IS NULL across every filter context the way `.is()` is
+  // (`updateContact`'s own phone comparisons take the same care); a restore back to a blank value
+  // compares with `.is()`.
+  q = expected === null ? q.is(column, null) : q.eq(column, expected);
+  const { data, error } = await q.select("id");
+  if (error) throw new Error(`restoreContactFieldIf failed: ${error.message}`);
+  if ((data ?? []).length === 0) return "changed";
+  await emit(db, accountId, "contact.updated", actorId, { contactId, fields: [column] }, "user");
+  return "restored";
+}
+
+/**
+ * The newest person who edited `field` after `since` (item 8c): the act-kind display's `changedBy`
+ * reason names who. Soft: a Technician's RLS fence on `events` sees none, and any read failure, both
+ * answer null rather than throw — this is a display nicety, never load-bearing. Reads on the
+ * REQUEST client, so RLS decides what the caller may see at all.
+ */
+export async function lastFieldEditor(
+  db: SupabaseClient, accountId: string, contactId: string, field: ContactFieldName, since: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await db.from("events").select("actor_id, payload")
+      .eq("account_id", accountId).eq("type", "contact.updated").eq("actor_type", "user")
+      .eq("payload->>contactId", contactId).gt("created_at", since)
+      .order("created_at", { ascending: false }).limit(50);
+    if (error) return null;
+    for (const r of (data ?? []) as { actor_id: string; payload: { fields?: unknown } }[]) {
+      if (Array.isArray(r.payload?.fields) && r.payload.fields.includes(field)) return r.actor_id;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 /** The three columns the contacts list can be sorted by, and the two

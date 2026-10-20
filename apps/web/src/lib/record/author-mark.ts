@@ -74,6 +74,8 @@ export function authorOf(entry: TimelineEntry): { kind: AuthorKind; personId: st
     // item 8b-2 (spec 5.4, 8.3): the person who ACCEPTED it, never Sofía, who only suggested it. One the
     // reader cannot name reads "Someone on the team", still the person mark.
     case "suggestion": return { kind: "person", personId: entry.suggestion.proposal.decidedBy };
+    // item 8c: an act Sofia or the web chat took live, with no person approving it, is always hers.
+    case "aiAct": return { kind: "ai", personId: null };
   }
 }
 

@@ -394,3 +394,22 @@ describe("an accepted suggestion row (item 8b-2)", () => {
     expect(timelineFailedText(["suggestions"], makeTr("es"))).toBe("No se pudo cargar: sugerencias aceptadas.");
   });
 });
+
+// item 8c: the type-only case only (plan Task 3) — an empty verb/status/detail, pinned so Task 5's
+// real description replaces it on purpose rather than by accident.
+describe("an ai_acts row, type-only (item 8c)", () => {
+  it("renders an empty verb/status/detail, pending Task 5's own description (mutation: a non-empty verb -> FAILS)", () => {
+    const entry: TimelineEntry = {
+      kind: "aiAct", id: "a1", at: "2026-10-09T16:12:00+00:00", contactId: "c1",
+      act: {
+        id: "a1", accountId: "acct1", actor: "voice", callId: "k1", chatId: null, contactId: "c1",
+        kind: "contact_field_filled", target: { field: "firstName" }, before: { value: null }, after: { value: "Ana" },
+        createdAt: "2026-10-09T16:12:00+00:00", undoneAt: null, undoneBy: null, undoNotified: false,
+      },
+    } as unknown as TimelineEntry;
+    const r = timelineRows([entry], {
+      zone: "America/Chicago", tr: makeTr("en"), author: { viewerId: null, names: {}, personaName: null, tr: makeTr("en") },
+    })[0]!;
+    expect([r.verb, r.status, r.detail]).toEqual(["", null, null]);
+  });
+});

@@ -49,6 +49,7 @@ const SOURCE_KEY: Record<TimelineSource, MessageKey> = {
   notes: "timeline.what.notes", todos: "timeline.what.todos", deals: "timeline.what.deals", forms: "timeline.what.forms",
   messages: "timeline.what.messages", bookings: "timeline.what.bookings", calls: "timeline.what.calls",
   documents: "timeline.what.documents", chats: "timeline.what.chats", suggestions: "timeline.what.suggestions",
+  ai_acts: "timeline.what.aiActs",
 };
 
 /** Stands in for the change inside the translated template, so the template can be split around it. No
@@ -189,6 +190,9 @@ function phrase(
       status: entry.share.deleted_at ? { tone: "muted", word: tr.text("documents.status.trashed") } : null,
       detail: tr.text(`documents.category.${entry.share.category}`),
     };
+    // item 8c (plan Task 3): the type's exhaustive case only. Task 5 replaces this with the act-kind
+    // registry's own description, reason and Undo.
+    case "aiAct": return { verb: "", status: null, detail: null };
   }
 }
 

@@ -166,3 +166,18 @@ describe("a share link in the drawer's Recent (S-07 3b)", () => {
     expect(rows.map((d) => d.verb)).toEqual(["opened Seguro 2026.pdf", "shared Seguro 2026.pdf"]);
   });
 });
+
+describe("an ai_acts row in the drawer's Recent, type-only (item 8c)", () => {
+  it("has no excerpt (mutation: return the act's `after` as the excerpt -> FAILS)", () => {
+    const entry: TimelineEntry = {
+      kind: "aiAct", id: "a1", at: AT, contactId: "c1",
+      act: {
+        id: "a1", accountId: "acct1", actor: "voice", callId: "k1", chatId: null, contactId: "c1",
+        kind: "contact_field_filled", target: { field: "firstName" }, before: { value: null }, after: { value: "Ana" },
+        createdAt: AT, undoneAt: null, undoneBy: null, undoNotified: false,
+      },
+    } as unknown as TimelineEntry;
+    const rows = view([entry]);
+    expect(rows[0]!.excerpt).toBeNull();
+  });
+});

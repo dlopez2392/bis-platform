@@ -19,7 +19,9 @@ export { createContact, updateContact, listContacts, getContact,
          addTagToContact, removeTagFromContact, listContactTags, fillContactBlanks, fillContactBlanksReport,
          countContacts, deleteContacts, addTagToContacts, removeTagFromContacts, listTags,
          listTagNamesForContacts, flagMatchesOf,
-         type ContactInput, type SortKey, type SortDir } from "./contacts";
+         type ContactInput, type CreateContactInput, type SortKey, type SortDir } from "./contacts";
+// item 8c: a field's own Undo (the compare-and-swap restore) and who most recently edited it.
+export { restoreContactFieldIf, lastFieldEditor } from "./contacts";
 export { readPhoneCountryFlag, setContactPhoneCountry, phoneFields } from "./contacts";
 export { recordLanguageSignal, setContactLanguage, restoreContactLanguage, keepContactLanguageHint, isLanguageTriple, LANGUAGE_SOURCES,
          type ContactLanguage, type LanguageSource, type LanguageSignalSource, type LanguageTriple } from "./contacts";
@@ -378,3 +380,14 @@ export {
 
 // Who made a timeline row (S-03 part 1, 1b; migration 0073). See ./provenance.ts.
 export { AUTHOR_KINDS, messageAuthor, bookingAuthor, type AuthorKind, type RowAuthor } from "./provenance";
+// Who created a contact (item 8c, migration 0091). See ./provenance.ts.
+export { contactAuthor, SEED_ACTORS } from "./provenance";
+
+// item 8c: Sofia's live acts, visible and reversible (migration 0091). The pure model is also the
+// subpath `@bis/db/ai-act-rules`, which web code imports from (no bare vi.mock factory can blank it).
+export * from "./ai-act-rules";
+export {
+  insertAiActs, getAiAct, listContactAiActs, undoAiBookingAct, aiContactHeldBy, undoAiContactCreated,
+  stampAiActUndone, clearAiActUndone, markAiActNotified,
+  type AiBookingUndoOutcome, type AiContactUndoOutcome,
+} from "./ai-acts";
