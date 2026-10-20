@@ -118,6 +118,25 @@ describe("sendBookingUndoNotice", () => {
     expect(sent().body).not.toContain("Agregar a tu calendario");
   });
 
+  it("review I-1: a move undone asks them to change their calendar back, in their language, in both parts; the other two notices do not (mutation: drop the sentence -> FAILS)", async () => {
+    const EN = "If you added the new time to your calendar, please change it back to this one.";
+    const ES = "Si agregó la nueva hora a su calendario, por favor cámbiela de nuevo a esta.";
+    const { db } = fakeDb(tables);
+    await sendBookingUndoNotice({ db, accountId: "A", act: moved, contact: { email: "ana@example.com", language: "en" }, origin: "https://app.example" });
+    expect(sent().body).toContain(EN);
+    expect(sent().html).toContain(EN);
+    gate.sendEmailOrThrow.mockClear();
+    await sendBookingUndoNotice({ db, accountId: "A", act: moved, contact: { email: "ana@example.com", language: "es" }, origin: "https://app.example" });
+    expect(sent().body).toContain(ES);
+    expect(sent().html).toContain(ES);
+    expect(sent().body).not.toContain(EN);
+    for (const act of [created, cancelled]) {
+      gate.sendEmailOrThrow.mockClear();
+      await sendBookingUndoNotice({ db, accountId: "A", act, contact: { email: "ana@example.com", language: "en" }, origin: "https://app.example" });
+      expect(sent().body).not.toContain(EN);
+    }
+  });
+
   it("no origin: no links at all, never a link to nowhere", async () => {
     const { db } = fakeDb(tables);
     await sendBookingUndoNotice({ db, accountId: "A", act: cancelled, contact: { email: "ana@example.com", language: null }, origin: null });

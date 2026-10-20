@@ -160,7 +160,7 @@ describe("sendEmail: what an unsubscribe stops (decision 7)", () => {
 });
 
 describe("sendEmail: a hard-bounced or complained address (D-016 item 3) — nothing stops it but the customer's own resubscribe", () => {
-  it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled", "staff.composer_email"] as const)(
+  it.each(["booking.confirmation", "forms.receipt", "voice.booked", "voice.moved", "voice.cancelled", "staff.composer_email", "booking.undo_notice"] as const)(
     "%s to a suppressed address is blocked `suppressed`, read on the LEDGER KEY (mutation: skip the suppression check for these kinds → FAILS)", async (kind) => {
       db.readEmailSuppression.mockResolvedValue({ method: "email_bounce", since: "2026-10-03T00:00:00Z", eventId: "s1" });
       expect(await sendEmail(base({ kind }), { db: CLIENT, env: ENV })).toEqual({ kind: "blocked", reason: "suppressed" });

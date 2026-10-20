@@ -112,6 +112,17 @@ describe("undoAiActAction: bookings", () => {
     expect(await undoAiActAction("A", "act1", { notify: true })).toEqual({ ok: true, control: "booking", told: "no" });
     expect(bis.markAiActNotified).not.toHaveBeenCalled();
   });
+  it("review M-2: the contact read for the notice throwing AFTER the undo answers undone, not told, never notAvailable (mutation: let it throw -> FAILS)", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.mocked(bis.getContact).mockRejectedValueOnce(new Error("contacts down for ana@example.com"));
+      expect(await undoAiActAction("A", "act1", { notify: true })).toEqual({ ok: true, control: "booking", told: "no" });
+      expect(sendBookingUndoNotice).not.toHaveBeenCalled();
+      const logged = errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(logged).toContain("act1");
+      expect(logged).not.toContain("ana@example.com");
+    } finally { errors.mockRestore(); }
+  });
   it("ticked with no email on file: not asked, nothing sent", async () => {
     state.contact = { id: "c1", email: null };
     expect(await undoAiActAction("A", "act1", { notify: true })).toEqual({ ok: true, control: "booking", told: "notAsked" });
@@ -138,6 +149,16 @@ describe("undoAiActAction: a field", () => {
     expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
     expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", "ana@example.com", null, "user_me");
     expect(order).toEqual(["requireAccountAccess", "getAiAct(request)", "restoreContactFieldIf(request)", "stampAiActUndone(service)"]);
+  });
+  it("review M-2: the stamp throwing AFTER the restore answers ok (the value is back) and logs the act id (mutation: let it throw -> FAILS)", async () => {
+    state.act = filled;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.mocked(bis.stampAiActUndone).mockRejectedValueOnce(new Error("ai_acts down"));
+      expect(await undoAiActAction("A", "act1", {})).toEqual({ ok: true, control: "field" });
+      expect(errors.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).toContain("act1");
+      expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/A/contacts/c1");
+    } finally { errors.mockRestore(); }
   });
   it("a value changed since answers changed and stamps nothing", async () => {
     state.act = filled;
@@ -176,6 +197,14 @@ describe("redoAiFieldFillAction", () => {
     expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
     expect(bis.restoreContactFieldIf).toHaveBeenCalledWith(REQUEST, "A", "c1", "email", null, "ana@example.com", "user_me");
     expect(bis.clearAiActUndone).toHaveBeenCalledWith(SERVICE, "A", "act1", "user_me", new Date("2026-10-20T08:00:00.123Z"));
+  });
+  it("the stamp clear throwing AFTER the redo's restore answers ok: Sofía's value is back (review M-2's twin)", async () => {
+    state.act = undone;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      vi.mocked(bis.clearAiActUndone).mockRejectedValueOnce(new Error("ai_acts down"));
+      expect(await redoAiFieldFillAction("A", "act1")).toEqual({ ok: true });
+    } finally { errors.mockRestore(); }
   });
   it("an act not undone answers changed; one undone by someone else answers notAvailable; neither writes", async () => {
     state.act = filled;

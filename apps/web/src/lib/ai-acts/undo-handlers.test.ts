@@ -85,12 +85,30 @@ describe("runFieldUndo", () => {
     expect(h.reload).toHaveBeenCalledTimes(1);
   });
 
-  it("an act the server could not find, or a typed-name miss, reads as the reload sentence, never a reason it does not have", async () => {
-    for (const reason of ["notAvailable", "typedName"] as const) {
-      const g = harness();
-      await runFieldUndo({ ...g, tr: en, field: "email", persona: "Lupe", undo: async (): Promise<UndoResult> => ({ ok: false, reason }), redo: vi.fn() });
-      expect(textOf(g.error.mock.calls[0]![0])).toBe("That didn't work. Reload the page, then try again.");
-    }
+  it("an act already undone or gone says so; the reload sentence is only for an action that never answered (review M-4; mutation: toast the reload sentence -> FAILS)", async () => {
+    const g = harness();
+    await runFieldUndo({ ...g, tr: en, field: "email", persona: "Lupe", undo: async (): Promise<UndoResult> => ({ ok: false, reason: "notAvailable" }), redo: vi.fn() });
+    expect(textOf(g.error.mock.calls[0]![0])).toBe("This can't be undone any more: It was already undone or removed");
+    expect(g.error.mock.calls[0]![1]).toBeUndefined();
+    const s = harness();
+    await runFieldUndo({ ...s, tr: es, field: "el correo", persona: "Lupe", undo: async (): Promise<UndoResult> => ({ ok: false, reason: "notAvailable" }), redo: vi.fn() });
+    expect(textOf(s.error.mock.calls[0]![0])).toBe("Ya no se puede deshacer: Ya se deshizo o ya no existe");
+  });
+  it("a typed name that did not match says so, in the reader's language (review M-4)", async () => {
+    const g = harness();
+    await runContactUndo({ ...g, tr: en, typedName: "Ana", listHref: "/x", undo: async (): Promise<UndoResult> => ({ ok: false, reason: "typedName" }) });
+    expect(textOf(g.error.mock.calls[0]![0])).toBe("The name didn't match. Type it exactly as shown.");
+    expect(g.navigate).not.toHaveBeenCalled();
+    const s = harness();
+    await runContactUndo({ ...s, tr: es, typedName: "Ana", listHref: "/x", undo: async (): Promise<UndoResult> => ({ ok: false, reason: "typedName" }) });
+    expect(textOf(s.error.mock.calls[0]![0])).toBe("El nombre no coincide. Escríbalo tal como aparece.");
+  });
+  it("a redo of an act gone says so too", async () => {
+    const g = harness();
+    await runFieldUndo({ ...g, tr: en, field: "email", persona: "Lupe", undo: async () => ({ ok: true, control: "field" }), redo: async () => ({ ok: false, reason: "notAvailable" }) });
+    g.success.mock.calls[0]![1]!.action!.onClick();
+    await flush();
+    expect(textOf(g.error.mock.calls[0]![0])).toBe("This can't be undone any more: It was already undone or removed");
   });
 });
 

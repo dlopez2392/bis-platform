@@ -1,7 +1,6 @@
 import { aiContactHeldBy, getContact, lastFieldEditor, type BookingStatus, type SupabaseClient } from "@bis/db";
 import type { AiAct } from "@bis/db/ai-act-rules";
-import { stillAsWritten } from "@/lib/proposals/kinds/contact-field";
-import { FIELD_COLUMN } from "./kinds/contact-field-filled";
+import { FIELD_COLUMN, holdsExactly } from "./kinds/contact-field-filled";
 import type { ActBookingFact, ActFacts } from "./kinds/types";
 
 /**
@@ -66,7 +65,7 @@ export async function readActFacts(
   }).filter((c) => byId.get(c.bookingId)?.status === "cancelled");
 
   const fieldActs = open.flatMap((a) => (a.kind === "contact_field_filled" ? [a] : []))
-    .filter((a) => !stillAsWritten(a.target.field, contact ? contact[FIELD_COLUMN[a.target.field]] : undefined, a.after.value));
+    .filter((a) => !holdsExactly(contact ? contact[FIELD_COLUMN[a.target.field]] : undefined, a.after.value));
   const contactActs = access.canDelete ? open.filter((a) => a.kind === "contact_created") : [];
 
   const [taken, futureBooked, held, editors] = await Promise.all([

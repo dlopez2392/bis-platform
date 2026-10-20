@@ -10,14 +10,16 @@ import {
   bookingCancelledEmail, bookingCancelledSubject, bookingConfirmationEmail, bookingConfirmationSubject,
   bookingRescheduledEmail, bookingRescheduledSubject,
 } from "@/lib/email/templates/booking";
-import { emailBrand } from "@/lib/email/templates/shell";
+import { emailBrand, escapeHtml, UNSUBSCRIBE_MARKER } from "@/lib/email/templates/shell";
+import { t } from "@/lib/i18n/t";
+import { m } from "@/lib/messages";
 
 type BookingAct = Extract<AiAct, { kind: "booking_created" | "booking_cancelled" | "booking_rescheduled" }>;
 
 /**
  * The customer's notice when staff undo one of Sofía's booking changes and leave "Let {name} know" ticked
  * (item 8c, D3; plan Task 5 item 5). It says what the booking is NOW, in the usual words: the voice tools'
- * own templates (`registry.ts`), never new copy.
+ * own templates (`registry.ts`), with one added sentence on the move notice only (review I-1, below).
  *   - a booking she made, undone: the cancellation, for the time she had booked;
  *   - a cancel she made, undone: the confirmation, with that booking's own cancel link, calendar file and
  *     video link;
@@ -70,9 +72,15 @@ export async function sendBookingUndoNotice(args: {
       };
     } else {
       const moveUrl = bookingMoveUrl(origin, b.publicId, b.cancelToken, locale);
+      const email = bookingRescheduledEmail({ brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl, moveUrl });
+      // Review I-1: Sofía's own move email offered a calendar file for the NEW time and this notice offers none
+      // (A6, above), so a customer who saved it still holds the wrong time. One sentence asks them to change it
+      // back, in both parts, inside the card (before the footer's marker, which the gate fills).
+      const fix = t(m, "aiActs.notice.calendarFix", locale);
       message = {
         subject: bookingRescheduledSubject(locale),
-        ...bookingRescheduledEmail({ brand, locale, whenBookerZone: whenCompanyZone, whenCompanyZone, cancelUrl, meetingUrl, moveUrl }),
+        text: `${email.text}\n\n${fix}`,
+        html: email.html.replace(UNSUBSCRIBE_MARKER, () => `<tr><td style="padding-top:16px;">${escapeHtml(fix)}</td></tr>\n      ${UNSUBSCRIBE_MARKER}`),
       };
     }
   }

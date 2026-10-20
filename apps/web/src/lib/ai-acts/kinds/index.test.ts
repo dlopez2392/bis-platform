@@ -172,9 +172,10 @@ describe("stillSafe: contact_created (spec 4.2 row 4)", () => {
 });
 
 describe("stillSafe: contact_field_filled (spec 4.2 row 5)", () => {
-  it("the field still holds her value, read the way the fill stored it: safe", () => {
+  it("the field still holds exactly her stored value: safe; any other spelling is not, because the restore compares exactly (review M-3; mutation: compare through stillAsWritten -> FAILS)", () => {
     expect(stillSafeOf(filled(), facts({ contact: { email: "ana@example.com" } }))).toEqual({ ok: true });
-    expect(stillSafeOf(filled(), facts({ contact: { email: "  Ana@Example.com " } }))).toEqual({ ok: true });
+    expect(stillSafeOf(filled("email", "kai@example.invalid"), facts({ contact: { email: "Kai@Example.invalid" } }))).toEqual({ ok: false, reason: "changed" });
+    expect(stillSafeOf(filled(), facts({ contact: { email: " ana@example.com" } }))).toEqual({ ok: false, reason: "changed" });
   });
   it("changed by a person the page can name: Changed since by {name}", () => {
     expect(stillSafeOf(filled(), facts({ contact: { email: "x@example.com" }, editors: { act1: "user_ana" } }))).toEqual({ ok: false, reason: "changedBy" });

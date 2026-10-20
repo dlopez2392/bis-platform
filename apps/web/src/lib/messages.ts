@@ -5228,6 +5228,13 @@ export const m = {
   "aiActs.contactDialog.body.es": "{persona} agregó a este cliente y no ha pasado nada más desde entonces. Quitarlo no se puede deshacer; la llamada sigue en Llamadas. Escriba {name} para confirmar.",
   "aiActs.contactDialog.confirm": "Remove customer",
   "aiActs.contactDialog.confirm.es": "Quitar cliente",
+  // item 8c, Task 5 review fixes (orchestrator ruling): I-1's sentence in the move-undo notice, and M-4's two refusals.
+  "aiActs.notice.calendarFix": "If you added the new time to your calendar, please change it back to this one.",
+  "aiActs.notice.calendarFix.es": "Si agregó la nueva hora a su calendario, por favor cámbiela de nuevo a esta.",
+  "aiActs.toast.typedNameMismatch": "The name didn't match. Type it exactly as shown.",
+  "aiActs.toast.typedNameMismatch.es": "El nombre no coincide. Escríbalo tal como aparece.",
+  "aiActs.reason.gone": "It was already undone or removed",
+  "aiActs.reason.gone.es": "Ya se deshizo o ya no existe",
   "record.facts.addedBy": "Added by {who}",
   "record.facts.addedBy.es": "Agregado por {who}",
 } as const;

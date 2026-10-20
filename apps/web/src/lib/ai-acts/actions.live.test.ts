@@ -218,6 +218,57 @@ describe.skipIf(!SECRET)("undoAiActAction against the replica", () => {
     expect(await first()).toBe("Noé");
   });
 
+  // Review M-6: the act must be read on the REQUEST client. A booking act alone cannot prove it (callerCanSee
+  // refuses another account's booking anyway), so these probes use the field and contact kinds, whose writes
+  // would otherwise reach the database. Mutation: read the act through serviceDb -> these FAIL.
+  describe("probes: another account and a Technician never reach a field or a contact (review M-6)", () => {
+    const email = async (cid: string) => (await must<{ email: string | null }>(svc().from("contacts").select("email").eq("id", cid).single(), "c")).email;
+    async function fieldAct(a: Acct, cid: string, value: string) {
+      return act(a, { kind: "contact_field_filled", actor: "voice", callId: await call(a, cid), chatId: null, contactId: cid,
+        target: { field: "email" }, before: { value: null }, after: { value } });
+    }
+    async function contactAct(a: Acct, cid: string) {
+      return act(a, { kind: "contact_created", actor: "voice", callId: await call(a, cid), chatId: null, contactId: cid, target: {}, before: null, after: null });
+    }
+
+    it("account B's Owner on A's field act, A's contact act and A's field redo: notAvailable, nothing written, while B holds its own", async () => {
+      const cid = await contact(A, { firstName: "Paz", lastName: "Mora", email: "paz-sofia@example.invalid", phone: "+19565550130" });
+      const fieldId = await fieldAct(A, cid, "paz-sofia@example.invalid");
+      const madeId = await contactAct(A, cid);
+      const undoneCid = await contact(A, { firstName: "Gil", email: "gil-before@example.invalid", phone: "+19565550131" });
+      const undoneId = await fieldAct(A, undoneCid, "gil-sofia@example.invalid");
+      const at = new Date().toISOString();
+      await must(svc().from("ai_acts").update({ undone_at: at, undone_by: B.people.owner.sub }).eq("id", undoneId).select("id"), "stamp");
+      const bc = await contact(B, { firstName: "Bo", email: "bo-sofia@example.invalid", phone: "+19565550132" });
+      const own = await fieldAct(B, bc, "bo-sofia@example.invalid");
+
+      as(B, "owner");
+      for (const acct of [A.id, B.id]) {
+        expect(await undoAiActAction(acct, fieldId, {}), `field via ${acct === A.id ? "A" : "B"}`).toEqual({ ok: false, reason: "notAvailable" });
+        expect(await undoAiActAction(acct, madeId, { typedName: "Paz Mora" }), "contact").toEqual({ ok: false, reason: "notAvailable" });
+        expect(await redoAiFieldFillAction(acct, undoneId), "redo").toEqual({ ok: false, reason: "notAvailable" });
+      }
+      expect(await email(cid)).toBe("paz-sofia@example.invalid");
+      expect(await actRow(A, fieldId)).toMatchObject({ undoneAt: null });
+      expect(await must<unknown[]>(svc().from("contacts").select("id").eq("id", cid), "c")).toHaveLength(1);
+      expect(await email(undoneCid)).toBe("gil-before@example.invalid");
+      expect(await actRow(A, undoneId)).toMatchObject({ undoneBy: B.people.owner.sub });
+      expect(await actRow(B, own)).toMatchObject({ undoneAt: null });
+    });
+
+    it("a Technician on an unassigned customer's field and contact acts: notAvailable, nothing written", async () => {
+      const cid = await contact(A, { firstName: "Uma", lastName: "Paz", email: "uma-sofia@example.invalid", phone: "+19565550133" });
+      const fieldId = await fieldAct(A, cid, "uma-sofia@example.invalid");
+      const madeId = await contactAct(A, cid);
+      as(A, "tech");
+      expect(await undoAiActAction(A.id, fieldId, {})).toEqual({ ok: false, reason: "notAvailable" });
+      expect(await undoAiActAction(A.id, madeId, { typedName: "Uma Paz" })).toEqual({ ok: false, reason: "notAvailable" });
+      expect(await email(cid)).toBe("uma-sofia@example.invalid");
+      expect(await actRow(A, fieldId)).toMatchObject({ undoneAt: null });
+      expect(await must<unknown[]>(svc().from("contacts").select("id").eq("id", cid), "c")).toHaveLength(1);
+    });
+  });
+
   describe("the contact undo", () => {
     async function sofiasContact(a: Acct, name: string, phone: string) {
       const cid = await contact(a, { firstName: name, lastName: "Vega", phone });

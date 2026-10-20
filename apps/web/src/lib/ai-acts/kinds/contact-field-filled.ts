@@ -1,6 +1,5 @@
 import type { ContactFieldName } from "@bis/db/proposal-rules";
 import type { MessageKey } from "@/lib/messages";
-import { stillAsWritten } from "@/lib/proposals/kinds/contact-field";
 import type { ActKindDef } from "./types";
 
 export const FIELD_COLUMN: Readonly<Record<ContactFieldName, "first_name" | "last_name" | "email" | "phone">> = {
@@ -10,10 +9,17 @@ export const FIELD_LABEL: Readonly<Record<ContactFieldName, MessageKey>> = {
   firstName: "aiActs.field.firstName", lastName: "aiActs.field.lastName", email: "aiActs.field.email", phone: "aiActs.field.phone",
 };
 
+/** Whether the column still holds EXACTLY the stored value the act names. `restoreContactFieldIf` compares
+ *  with `.eq(column, expected)`, byte for byte, so the display must too (review M-3): a case- or
+ *  space-insensitive reading would offer an Undo the server then refuses as changed. */
+export function holdsExactly(current: unknown, value: string): boolean {
+  return typeof current === "string" && current === value;
+}
+
 /**
  * Sofía filled a blank field with what the caller said (decision 19 as amended 2026-10-19, D1). Undo puts
  * the old value back at once while the field still holds exactly hers (`restoreContactFieldIf`'s
- * compare-and-swap), read the way the fill stored it (8b's `stillAsWritten`).
+ * compare-and-swap; `after.value` is the stored form the fill wrote, `fillContactBlanksReport`'s `written`).
  */
 export const contactFieldFilledKind: ActKindDef<"contact_field_filled"> = {
   kind: "contact_field_filled",
@@ -23,7 +29,7 @@ export const contactFieldFilledKind: ActKindDef<"contact_field_filled"> = {
   },
   stillSafe(act, facts) {
     const current = facts.contact ? facts.contact[FIELD_COLUMN[act.target.field]] : undefined;
-    if (stillAsWritten(act.target.field, current, act.after.value)) return { ok: true };
+    if (holdsExactly(current, act.after.value)) return { ok: true };
     return { ok: false, reason: facts.editors[act.id] ? "changedBy" : "changed" };
   },
 };

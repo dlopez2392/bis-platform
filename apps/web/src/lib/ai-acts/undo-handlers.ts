@@ -50,15 +50,17 @@ function sayer(tr: Common["tr"]): (text: string) => Words {
   };
 }
 
-/** A refusal's toast: the reason in words, or the reload sentence for an answer that names no reason. */
-function refuse({ toast, tr, reload }: Common, reason: UndoFailReason | "changed"): void {
+/** A refusal's toast, always the reason in words (review M-4): a typed name that did not match says so; an
+ *  act the server could not find, or already undone, says that. The reload sentence is for a throw only. */
+function refuse({ toast, tr }: Common, reason: UndoFailReason | "changed"): void {
   const say = sayer(tr);
-  if (reason === "notAvailable" || reason === "typedName") {
-    unreachable({ toast, tr, reload } as Common);
+  if (reason === "typedName") {
+    toast.error(say(tr.text("aiActs.toast.typedNameMismatch")));
     return;
   }
   // `changedBy` needs a name the client does not hold; the server never answers it (only the display does).
-  const words = tr.text(REASON_KEY[reason === "changedBy" ? "changed" : reason]);
+  const words = reason === "notAvailable" ? tr.text("aiActs.reason.gone")
+    : tr.text(REASON_KEY[reason === "changedBy" ? "changed" : reason]);
   toast.error(say(tr.text("aiActs.toast.notAvailable", { reason: words })));
 }
 

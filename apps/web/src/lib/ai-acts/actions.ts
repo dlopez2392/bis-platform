@@ -98,11 +98,12 @@ async function undoBooking(
   if (outcome !== "undone") return { ok: false, reason: BOOKING_REASON[outcome] };
   if (!notify) return { ok: true, control: "booking", told: "notAsked" };
 
-  // The record as this reader's own client sees it; no email on file means nobody was asked to be told.
-  const contact = (await getContact(await dbForRequest(), accountId, act.contactId)) as Record<string, unknown> | null;
-  const email = typeof contact?.email === "string" && contact.email.trim() ? contact.email : null;
-  if (!email) return { ok: true, control: "booking", told: "notAsked" };
+  // Everything below runs AFTER the undo committed (review M-2): a failure here is "not told", never "not
+  // undone". The record as this reader's own client sees it; no email on file means nobody was asked.
   try {
+    const contact = (await getContact(await dbForRequest(), accountId, act.contactId)) as Record<string, unknown> | null;
+    const email = typeof contact?.email === "string" && contact.email.trim() ? contact.email : null;
+    if (!email) return { ok: true, control: "booking", told: "notAsked" };
     await sendBookingUndoNotice({
       db: writer, accountId, act,
       contact: { email, language: typeof contact?.language === "string" ? contact.language : null },
@@ -127,9 +128,14 @@ async function undoField(
   // The compare-and-swap on the request client: the field must still hold exactly her value.
   const r = await restoreContactFieldIf(await dbForRequest(), accountId, act.contactId, act.target.field, act.after.value, act.before.value, userId);
   if (r === "changed") return { ok: false, reason: "changed" };
-  if (!(await stampAiActUndone(serviceDb(), accountId, act.id, userId, new Date()))) {
-    // Another Undo stamped it between our read and our write; the value is back either way.
-    console.error(`ai-acts: field act ${act.id} (account ${accountId}) was already stamped undone`);
+  // The value is back: a stamp that fails now is logged by id, never reported as a failed Undo (review M-2).
+  try {
+    if (!(await stampAiActUndone(serviceDb(), accountId, act.id, userId, new Date()))) {
+      // Another Undo stamped it between our read and our write; the value is back either way.
+      console.error(`ai-acts: field act ${act.id} (account ${accountId}) was already stamped undone`);
+    }
+  } catch (e) {
+    log("field restored but not stamped", accountId, act.id, e);
   }
   return { ok: true, control: "field" };
 }
@@ -166,8 +172,13 @@ export async function redoAiFieldFillAction(accountId: string, actId: string): P
     if (act.undoneBy !== access.userId) return { ok: false, reason: "notAvailable" };
     const r = await restoreContactFieldIf(db, accountId, act.contactId, act.target.field, act.before.value, act.after.value, access.userId);
     if (r === "changed") return { ok: false, reason: "changed" };
-    if (!(await clearAiActUndone(serviceDb(), accountId, actId, access.userId, new Date(act.undoneAt)))) {
-      console.error(`ai-acts: field act ${actId} (account ${accountId}) redone but its stamp had moved`);
+    // Sofía's value is back: a failed clear is logged by id, never reported as a failed redo (review M-2's twin).
+    try {
+      if (!(await clearAiActUndone(serviceDb(), accountId, actId, access.userId, new Date(act.undoneAt)))) {
+        console.error(`ai-acts: field act ${actId} (account ${accountId}) redone but its stamp had moved`);
+      }
+    } catch (e) {
+      log("field redone but its stamp not cleared", accountId, actId, e);
     }
     revalidate([recordPath(accountId, act.contactId)], accountId, actId);
     return { ok: true };
