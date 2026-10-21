@@ -1,7 +1,7 @@
 "use client";
 
 import { spanishIsStale } from "@bis/db/spanish-box";
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { MessageCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -39,10 +39,23 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   after_hours: "hours_then_message", enabled: false,
   textback_enabled: false, textback_body: "",
   textback_body_es: null, textback_body_es_basis: null,
-  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
 };
 
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];
+
+/**
+ * S-47a §5.4: the three-way setting's copy, built server-side (page.tsx, in the reader's own language)
+ * from `DISCLOSURE_VALUES` and handed down as plain strings. This file is "use client" and must NEVER
+ * import `@/lib/voice/disclosure` — that module imports `node:crypto` — so the three option values reach
+ * this component only through `options`, never recomputed here.
+ */
+export type DisclosureCopy = {
+  locale: "en" | "es";
+  legend: string;
+  nextCall: string;
+  options: Array<{ value: "off" | "trial" | "on"; label: string; hint: string }>;
+};
 
 // Exported (additive — no other symbol in this file changes) so the
 // text-back segment counter can be exercised directly the same way
@@ -50,11 +63,12 @@ const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "r
 // `VoiceSettings` export, which would drag in unrelated actions and props
 // just to reach this card's own preview state.
 export function VoiceProfileForm({
-  profile, brandName, action,
+  profile, brandName, action, disclosureCopy,
 }: {
   profile: VoiceProfileRow | null;
   brandName: string;
   action: (formData: FormData) => Promise<ActionResult>;
+  disclosureCopy: DisclosureCopy;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
   // Controlled, not the uncontrolled `defaultValue` every other field in this
@@ -291,6 +305,38 @@ export function VoiceProfileForm({
                 sms
               />
             </div>
+          </div>
+
+          {/* S-47a §5.4: the three-way setting, inside this card's ONE form so the card keeps exactly one
+              primary (rule 8) — Save below commits it with everything else. A `<fieldset
+              role="radiogroup">` with a `<legend>`, and per option a `<label>` holding ONLY the input and
+              the bare word — the hint is its own sibling `<p>`, tied by `aria-describedby`, so a screen
+              reader hears "Off"/"Trial"/"On" as the radio's accessible name and the hint as its
+              description (e2e's exact role names, `{ name: "On", exact: true }`, depend on this). */}
+          <div className="space-y-2 border-t border-border pt-4" lang={disclosureCopy.locale}>
+            <fieldset role="radiogroup" className="space-y-3">
+              <legend className="text-sm font-medium">{disclosureCopy.legend}</legend>
+              {disclosureCopy.options.map((o) => {
+                const hintId = `disclosure-hint-${o.value}`;
+                return (
+                  <div key={o.value} className="space-y-0.5">
+                    <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-8">
+                      <input
+                        type="radio"
+                        name="disclosure"
+                        value={o.value}
+                        defaultChecked={p.disclosure === o.value}
+                        aria-describedby={hintId}
+                        className="size-4 shrink-0 accent-[var(--accent)]"
+                      />
+                      {o.label}
+                    </label>
+                    <p id={hintId} className="text-xs text-muted-foreground">{o.hint}</p>
+                  </div>
+                );
+              })}
+            </fieldset>
+            <p className="text-xs text-muted-foreground">{disclosureCopy.nextCall}</p>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>
@@ -990,6 +1036,7 @@ export function VoiceSettings({
   accountId, profile, brandName, numbers, transferPhone, publishedForms, origin,
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
+  disclosureCopy, disclosureResults,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -1017,10 +1064,18 @@ export function VoiceSettings({
   enableConciergeAction: (formId: string) => Promise<EnableConciergeResult>;
   disableConciergeAction: () => Promise<ActionResult>;
   setForwardCallsAction: (on: boolean) => Promise<ActionResult>;
+  /** S-47a §5.4: the three-way setting's copy, built server-side (page.tsx). */
+  disclosureCopy: DisclosureCopy;
+  /** S-47a §5.3: the agency's results card, already resolved to a Suspense boundary by page.tsx — this
+   *  component never reads the data itself, only places the node. */
+  disclosureResults: ReactNode;
 }) {
   return (
     <div className="space-y-6">
-      <VoiceProfileForm profile={profile} brandName={brandName} action={saveProfileAction} />
+      <VoiceProfileForm
+        profile={profile} brandName={brandName} action={saveProfileAction} disclosureCopy={disclosureCopy}
+      />
+      {disclosureResults}
       <ConciergeCard
         accountId={accountId}
         profile={profile}

@@ -1982,6 +1982,77 @@ export const m = {
   "voice.forward.offToast": "Sofía is answering calls again",
   "voice.forward.saveFailed": "Could not change where calls go. Nothing was changed.",
 
+  // ── AI disclosure (S-47a, F-034, decision 20, migration 0093) ──────────
+  // Off / Trial / On decides whether {persona} says, right after the
+  // greeting, that she is an AI and the call is transcribed. On Trial a fair
+  // coin per call decides; the results card below compares the two halves
+  // without declaring a winner. "flag/stamp/coin/trial arm/variant" are
+  // plumbing words and stay out of every string here (global constraints).
+  "voice.disclosure.legend": "Tell callers {persona} is an AI",
+  "voice.disclosure.legend.es": "Decir a quien llama que {persona} es una IA",
+  "voice.disclosure.off": "Off",
+  "voice.disclosure.off.es": "Desactivado",
+  "voice.disclosure.offHint": "{persona} says it's an AI only when someone asks.",
+  "voice.disclosure.offHint.es": "{persona} dice que es una IA solo cuando se lo preguntan.",
+  "voice.disclosure.trial": "Trial",
+  "voice.disclosure.trial.es": "Prueba",
+  "voice.disclosure.trialHint": "Half the calls, picked at random, hear it right after the greeting, so the two halves can be compared below. The website chat always says it.",
+  "voice.disclosure.trialHint.es": "La mitad de las llamadas, elegidas al azar, lo escuchan justo después del saludo, para comparar las dos mitades abajo. El chat del sitio web siempre lo dice.",
+  "voice.disclosure.on": "On",
+  "voice.disclosure.on.es": "Activado",
+  "voice.disclosure.onHint": "Every call hears it right after the greeting, and the website chat says it too.",
+  "voice.disclosure.onHint.es": "Todas las llamadas lo escuchan justo después del saludo, y el chat del sitio web también lo dice.",
+  "voice.disclosure.nextCall": "Changes apply from the next call. Calls already made keep what they heard.",
+  "voice.disclosure.nextCall.es": "Los cambios aplican desde la siguiente llamada. Las llamadas ya hechas conservan lo que escucharon.",
+  "voice.disclosure.results.title": "Saying it's an AI: how calls went",
+  "voice.disclosure.results.title.es": "Decir que es una IA: cómo fueron las llamadas",
+  "voice.disclosure.results.period": "Every finished call made while this line was on Trial.",
+  "voice.disclosure.results.period.es": "Todas las llamadas terminadas mientras esta línea estuvo en Prueba.",
+  "voice.disclosure.results.said": "Said it was AI",
+  "voice.disclosure.results.said.es": "Dijo que era IA",
+  "voice.disclosure.results.didnt": "Didn't",
+  "voice.disclosure.results.didnt.es": "No lo dijo",
+  "voice.disclosure.results.counted": "Calls counted",
+  "voice.disclosure.results.counted.es": "Llamadas contadas",
+  "voice.disclosure.results.booked": "Booked",
+  "voice.disclosure.results.booked.es": "Agendaron",
+  "voice.disclosure.results.hungUp": "Hung up early",
+  "voice.disclosure.results.hungUp.es": "Colgaron antes",
+  "voice.disclosure.results.askedPerson": "Asked for a person",
+  "voice.disclosure.results.askedPerson.es": "Pidieron hablar con una persona",
+  "voice.disclosure.results.percent": "{percent}%",
+  "voice.disclosure.results.percent.es": "{percent} %",
+  "voice.disclosure.results.noneYet": "No calls yet",
+  "voice.disclosure.results.noneYet.es": "Aún no hay llamadas",
+  "voice.disclosure.results.notEnough": "Not enough calls yet to tell.",
+  "voice.disclosure.results.notEnough.es": "Todavía no hay suficientes llamadas para saberlo.",
+  // Plural pair, the contacts.count/contacts.countOne shape: "{count} calls
+  // not counted" vs "1 call not counted", never a template reused for one.
+  "voice.disclosure.results.notCounted": "{count} calls not counted (spam, or outside the trial)",
+  "voice.disclosure.results.notCounted.es": "{count} llamadas no contadas (spam, o fuera de la prueba)",
+  "voice.disclosure.results.notCountedOne": "1 call not counted (spam, or outside the trial)",
+  "voice.disclosure.results.notCountedOne.es": "1 llamada no contada (spam, o fuera de la prueba)",
+  "voice.disclosure.results.empty": "No calls since the trial started.",
+  "voice.disclosure.results.empty.es": "No hay llamadas desde que empezó la prueba.",
+  "voice.disclosure.results.emptyAction": "Each Trial call is counted here once it ends.",
+  "voice.disclosure.results.emptyAction.es": "Cada llamada de Prueba se cuenta aquí cuando termina.",
+  "voice.disclosure.results.emptyIdle": "Once a trial runs, how calls went with and without saying it's an AI shows here.",
+  "voice.disclosure.results.emptyIdle.es": "Cuando haga una prueba, aquí verá cómo fueron las llamadas al decir que es una IA y al no decirlo.",
+  "voice.disclosure.results.emptyIdleAction": "Choose Trial above and save.",
+  "voice.disclosure.results.emptyIdleAction.es": "Elija Prueba arriba y guarde.",
+  "voice.disclosure.results.error": "Couldn't load how calls went.",
+  "voice.disclosure.results.error.es": "No se pudo cargar cómo fueron las llamadas.",
+  // concierge.aiLabel (Task 5): the website chat's AI label, header and first
+  // message. Lives here, not lib/concierge/strings.ts (spec §6; ambiguity D).
+  // Spanish is tú, the chat's own register — the one exception the global
+  // constraints name, alongside the spoken phone sentence (D3, usted).
+  "concierge.aiLabel": "{persona} · AI assistant",
+  "concierge.aiLabel.es": "{persona} · asistente de IA",
+  // concierge.aiIntro: the chat's first message on Trial or On, spoken in the
+  // chat's own tú register like aiLabel above.
+  "concierge.aiIntro": "I'm {persona}, an AI assistant. This chat is saved so the team can follow up.",
+  "concierge.aiIntro.es": "Soy {persona}, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento.",
+
   // ── Website assistant — the same receptionist, answering on the website
   // instead of the phone. Copy here avoids the internal words for this
   // feature ("concierge", "widget", "embed", "public id") on purpose — this

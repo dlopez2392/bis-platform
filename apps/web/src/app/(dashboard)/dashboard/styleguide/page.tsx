@@ -69,6 +69,10 @@ import { SettingsFieldCards } from "./settings-field-cards";
 import { BillingCardStates } from "./billing-card-states";
 import { ClientAccessSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/settings/client-access-panel";
 import { LinkSiteSkeleton } from "@/app/(dashboard)/dashboard/accounts/[accountId]/website/link-site-card";
+import {
+  DisclosureResultsView, DisclosureResultsSkeleton,
+} from "@/app/(dashboard)/dashboard/accounts/[accountId]/voice/disclosure-results-view";
+import type { DisclosureResultsView as DisclosureResultsViewType } from "@/lib/voice/disclosure-results";
 import { PublicBrand } from "@/components/public-brand";
 import "@/styles/public-brand.css";
 import { EmbedSnippet } from "@/components/embed-snippet";
@@ -94,6 +98,28 @@ const suggestionColumns = () => SUGGESTION_TRS.map(({ key, tr }) => {
 const NO_SUGGESTION_ACTIONS = {
   accept: async () => ({ ok: false as const, error: "" }), editAccept: async () => ({ ok: false as const, error: "" }),
   discard: async () => ({ ok: false as const, error: "" }), undo: async () => ({ ok: false as const, error: "" }),
+};
+
+/** S-47a's results card (Task 7): the four states, typed literals — never computed by a client module, so
+ *  these never drift from what `disclosureResultsView` can actually produce. */
+const DISCLOSURE_RETRY = "/dashboard/accounts/acct-demo/voice";
+const DISCLOSURE_SPECIMENS: Record<"notEnough" | "past30" | "empty" | "emptyOn" | "error", DisclosureResultsViewType | { state: "error" }> = {
+  notEnough: {
+    state: "loaded",
+    said: { counted: 8, bookedPct: 38, hungUpPct: 13, askedPersonPct: 25 },
+    didnt: { counted: 3, bookedPct: 33, hungUpPct: 33, askedPersonPct: 0 },
+    notEnough: true, notCounted: 2,
+  },
+  past30: {
+    state: "loaded",
+    said: { counted: 64, bookedPct: 41, hungUpPct: 19, askedPersonPct: 14 },
+    didnt: { counted: 58, bookedPct: 36, hungUpPct: 24, askedPersonPct: 10 },
+    notEnough: false, notCounted: 5,
+  },
+  empty: { state: "empty", notCounted: 0 },
+  // A line on On that never ran a trial: the empty state still carries the footnote.
+  emptyOn: { state: "empty", notCounted: 3 },
+  error: { state: "error" },
 };
 
 /** The same `nav.*` keys the Locale section's en/es columns demonstrate
@@ -832,6 +858,34 @@ export default async function StyleguidePage({
           <div className="flex w-full flex-wrap items-start gap-6">
             <div className="w-full max-w-md"><ClientAccessSkeleton /></div>
             <div className="w-full max-w-md"><LinkSiteSkeleton linkedDomain={null} /></div>
+          </div>
+        </Section>
+
+        <Section title={m["voice.disclosure.results.title"]} file="accounts/[accountId]/voice/disclosure-results-view.tsx">
+          {/* Not a verdict, ever (rule 11: no hero): both halves' counts, the
+              30-per-half threshold's own sentence below it, empty and error
+              states, and the Suspense skeleton — English, Spanish and the
+              pseudo-locale (+35%), each column's own tr. */}
+          <div className="flex w-full flex-wrap items-start gap-6">
+            {([
+              { key: "en" as const, tr: makeTr("en") },
+              { key: "es" as const, tr: makeTr("es") },
+              { key: "pseudo" as const, tr: makeTr("en", true) },
+            ]).map(({ key, tr }) => (
+              // min-w-0: a flex item's automatic minimum is its min-content, so without it one long
+              // pseudo-locale word held this column open past a 375px viewport.
+              <div key={key} className="flex w-full min-w-0 max-w-sm flex-col gap-3">
+                <p className="font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                  {key}
+                </p>
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.notEnough} tr={tr} setting="trial" retryHref={DISCLOSURE_RETRY} />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.past30} tr={tr} setting="trial" retryHref={DISCLOSURE_RETRY} />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.empty} tr={tr} setting="trial" retryHref={DISCLOSURE_RETRY} />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.emptyOn} tr={tr} setting="on" retryHref={DISCLOSURE_RETRY} />
+                <DisclosureResultsView view={DISCLOSURE_SPECIMENS.error} tr={tr} setting="trial" retryHref={DISCLOSURE_RETRY} />
+              </div>
+            ))}
+            <div className="w-full min-w-0 max-w-sm"><DisclosureResultsSkeleton /></div>
           </div>
         </Section>
 

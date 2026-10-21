@@ -694,3 +694,38 @@ describe("saveVoiceProfileAction — the Spanish text-back box (Task 18)", () =>
     expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * S-47a §5.4, ambiguity G: a form that does not carry the field (a Setup step, say) must never reset the
+ * stored setting; an unknown value refuses the whole save rather than silently falling back to something.
+ */
+describe("saveVoiceProfileAction — the disclosure field (S-47a)", () => {
+  it("disclosure=on carries through to the patch", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", disclosure: "on" }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ disclosure: "on" }), expect.any(String));
+  });
+
+  it("an absent field leaves the stored setting alone — the patch carries NO disclosure key at all (mutation: default an absent field to 'off' → FAILS)", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both" }));
+    expect(r).toEqual({ ok: true });
+    const patch = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as Record<string, unknown>;
+    expect("disclosure" in patch).toBe(false);
+  });
+
+  it("an unknown value refuses the whole save, with no write", async () => {
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", disclosure: "maybe" }));
+    expect(r).toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("a non-agency caller is refused before any write, even with disclosure=on in the form", async () => {
+    guardFixture.isAgency = false;
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", disclosure: "on" }));
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+});

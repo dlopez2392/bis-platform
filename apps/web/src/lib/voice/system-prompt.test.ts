@@ -461,3 +461,44 @@ describe("buildSystemPrompt — Always take a message with a hidden caller ID", 
     expect(full).toContain(`${WARN} (one you book during this call can still be changed) — if they ask, offer to take a message instead.`);
   });
 });
+
+describe("buildSystemPrompt — the IDENTITY line follows what was said (S-47a)", () => {
+  // The whole pre-S-47a line (system-prompt.ts:72) for the base input, typed out: Rio Roofing, a caller,
+  // no transfer number. A prefix would let a change in the line's tail pass.
+  const OLD =
+    "IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as Rio Roofing and get straight to what the caller needs. If a caller asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then offer to take a message if they would rather talk to a person. Never claim to be human.";
+  const PHONE_DISCLOSED =
+    "IDENTITY — You have already told the caller that you are Sofía, an AI assistant. If they ask whether they are speaking with a person, a human, a bot, a robot, or an AI, confirm it plainly: you are an AI assistant. Then offer to take a message if they would rather talk to a person. Never claim to be human. Answer as Rio Roofing and get straight to what the caller needs.";
+  const WEB_DISCLOSED =
+    "IDENTITY — You have already told the visitor that you are Sofía, an AI assistant. If they ask whether they are speaking with a person, a human, a bot, a robot, or an AI, confirm it plainly: you are an AI assistant. Then use capture_lead to get their name and a way to reach them, and say the team will follow up if they would rather talk to a person. Never claim to be human. Answer as Rio Roofing and get straight to what the visitor needs.";
+
+  it("disclosed false (and absent) is byte-identical to before (mutation: always use the disclosed line → FAILS)", () => {
+    expect(buildSystemPrompt(baseInput({ disclosed: false }), now)).toBe(buildSystemPrompt(base, now));
+    expect(buildSystemPrompt(base, now).split("\n").find((l) => l.startsWith("IDENTITY"))).toBe(OLD);
+  });
+  it("disclosed with a blank persona falls back to Sofía, as the greeting does (mutation: use input.personaName raw → FAILS)", () => {
+    expect(buildSystemPrompt(baseInput({ disclosed: true, personaName: "  " }), now))
+      .toContain("IDENTITY — You have already told the caller that you are Sofía, an AI assistant.");
+  });
+  it("disclosed true on the phone swaps the line, and only that line", () => {
+    const p = buildSystemPrompt(baseInput({ disclosed: true }), now);
+    expect(p).toContain(PHONE_DISCLOSED);
+    expect(p).not.toContain(OLD);
+    expect(p.replace(PHONE_DISCLOSED, "X")).toBe(buildSystemPrompt(base, now).replace(/IDENTITY — [^\n]*/, "X"));
+  });
+  it("disclosed true with a transfer number offers the transfer", () => {
+    expect(buildSystemPrompt(baseInput({ disclosed: true, handoffAvailable: true }), now))
+      .toContain("Then offer to put them through to someone on the team if they would rather talk to a person.");
+  });
+  it("disclosed true on the web says visitor and the capture_lead follow-up", () => {
+    expect(buildSystemPrompt(baseInput({ disclosed: true, medium: "web" }), now)).toContain(WEB_DISCLOSED);
+  });
+  it("'Never claim to be human.' is on every call either way (mutation: drop it from the disclosed line → FAILS)", () => {
+    for (const disclosed of [false, true]) {
+      for (const medium of ["phone", "web"] as const) {
+        const identity = buildSystemPrompt(baseInput({ disclosed, medium }), now).split("\n").find((l) => l.startsWith("IDENTITY"));
+        expect(identity, `${disclosed}/${medium}`).toContain("Never claim to be human.");
+      }
+    }
+  });
+});

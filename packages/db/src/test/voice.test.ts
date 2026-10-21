@@ -688,6 +688,23 @@ describe("call handoff accessors", () => {
     });
   });
 
+  it("startCallRow stamps disclosed and disclosure_setting together when given, and leaves both null when not (S-47a, D5; mutations: drop disclosure_setting from the insert → FAILS; write disclosed: false when not given → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const said = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, disclosure: { disclosed: true, setting: "trial" } });
+      const didnt = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, disclosure: { disclosed: false, setting: "trial" } });
+      const on = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, disclosure: { disclosed: true, setting: "on" } });
+      const off = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null });
+      const { data, error } = await db.from("calls").select("id, disclosed, disclosure_setting").in("id", [said.id, didnt.id, on.id, off.id]);
+      expect(error, `calls select failed: ${error?.message}`).toBeNull();
+      type R = { id: string; disclosed: boolean | null; disclosure_setting: string | null };
+      const byId = Object.fromEntries((data ?? []).map((r: R) => [r.id, [r.disclosed, r.disclosure_setting]]));
+      expect(byId).toEqual({
+        [said.id]: [true, "trial"], [didnt.id]: [false, "trial"], [on.id]: [true, "on"], [off.id]: [null, null],
+      });
+    });
+  });
+
   it("markHandoffRequested stamps the moment the caller asked, and refuses a call in another account", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");

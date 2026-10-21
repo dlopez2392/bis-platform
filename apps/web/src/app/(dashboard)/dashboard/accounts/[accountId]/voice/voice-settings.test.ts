@@ -6,10 +6,25 @@ import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
   conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
+  type DisclosureCopy,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { isVoiceProfileDone } from "@/lib/setup/setup-status";
 import { renderedText } from "@/lib/rendered-text";
+
+/** S-47a: the server-built copy `VoiceProfileForm`'s disclosure fieldset renders from — English, the
+ *  three real option words/hints, in `DISCLOSURE_VALUES`'s own order. Shared across this file's render
+ *  helpers so every pre-existing call site stays unaffected by the new required prop. */
+const EN_DISCLOSURE_COPY: DisclosureCopy = {
+  locale: "en",
+  legend: m["voice.disclosure.legend"].replace("{persona}", "Sofía"),
+  nextCall: m["voice.disclosure.nextCall"],
+  options: [
+    { value: "off", label: m["voice.disclosure.off"], hint: m["voice.disclosure.offHint"].replace("{persona}", "Sofía") },
+    { value: "trial", label: m["voice.disclosure.trial"], hint: m["voice.disclosure.trialHint"] },
+    { value: "on", label: m["voice.disclosure.on"], hint: m["voice.disclosure.onHint"].replace("{persona}", "Sofía") },
+  ],
+};
 
 /**
  * The pure decision behind the website-assistant toggle's disabled state —
@@ -382,7 +397,7 @@ describe("ConciergeCard — the render proof", () => {
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
-    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   };
 
   function renderCard(opts: {
@@ -589,7 +604,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     languages: "en", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: true, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
-    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   };
 
   function render(over: Partial<VoiceProfileRow> = {}, brandName = "Rio Roofing"): string {
@@ -597,6 +612,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
       profile: { ...BASE_PROFILE, ...over },
       brandName,
       action: async () => ({ ok: true as const }),
+      disclosureCopy: EN_DISCLOSURE_COPY,
     }));
   }
 
@@ -684,6 +700,72 @@ describe("forwardSwitchState — the 'send calls straight to a person' switch", 
   });
 });
 
+/**
+ * S-47a §5.4: the three-way setting lives inside the profile card's own form, so one Save commits it with
+ * everything else (rule 8) — no second primary button anywhere in the card.
+ */
+describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
+  const PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "en", booking_enabled: true, after_hours: "hours_then_message",
+    enabled: true, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "trial",
+  };
+
+  function render(): string {
+    return renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+      disclosureCopy: EN_DISCLOSURE_COPY,
+    }));
+  }
+
+  it("renders three radios named 'disclosure', values off/trial/on, exactly the stored one checked, the three hints and the next-call line (mutation: give the fieldset its own primary Save → FAILS)", () => {
+    const html = render();
+    const radios = [...html.matchAll(/<input[^>]*name="disclosure"[^>]*>/g)].map((m) => m[0]);
+    expect(radios.length).toBe(3);
+    expect(radios.map((r) => /value="([^"]*)"/.exec(r)?.[1])).toEqual(["off", "trial", "on"]);
+    // Exactly the stored value ("trial") carries checked.
+    expect(radios.filter((r) => / checked(=""|)/.test(r)).length).toBe(1);
+    expect(/value="trial"[^>]*checked/.test(html) || /checked[^>]*value="trial"/.test(html)).toBe(true);
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.disclosure.off"]);
+    expect(text).toContain(m["voice.disclosure.trial"]);
+    expect(text).toContain(m["voice.disclosure.on"]);
+    expect(text).toContain(m["voice.disclosure.trialHint"]);
+    expect(text).toContain(m["voice.disclosure.nextCall"]);
+    // Still exactly ONE primary button in the card (the Save) — a second
+    // data-variant="default" would mean the fieldset grew its own primary.
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
+  });
+
+  it("each radio's accessible name is exactly the option word — the hint is its description, not part of the label", () => {
+    const html = render();
+    // The <label> wraps ONLY the input and the option's bare word, so the
+    // radio's accessible name never includes the hint sentence.
+    const labelMatch = /<label[^>]*>\s*<input[^>]*name="disclosure"[^>]*value="off"[^>]*\/?>\s*([^<]*)<\/label>/.exec(html);
+    expect(labelMatch?.[1]?.trim()).toBe(m["voice.disclosure.off"]);
+  });
+
+  it("each radio paints in the accent, as choice-tiles.tsx does (fix round; mutation: drop the class -> FAILS)", () => {
+    const radios = [...render().matchAll(/<input[^>]*name="disclosure"[^>]*>/g)].map((mm) => mm[0]);
+    expect(radios.length).toBe(3);
+    for (const r of radios) expect(r).toContain('class="size-4 shrink-0 accent-[var(--accent)]"');
+  });
+
+  it("lang covers the next-call line too, not only the fieldset (fix round; mutation: lang back on the fieldset -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+      disclosureCopy: { ...EN_DISCLOSURE_COPY, locale: "es", nextCall: m["voice.disclosure.nextCall.es"] },
+    }));
+    // The element carrying lang="es" must CONTAIN the next-call line: the wrapper div, opened before
+    // the fieldset and closed after the line.
+    expect(html).toMatch(new RegExp(`<div[^>]*lang="es"[^>]*>\\s*<fieldset[\\s\\S]*${m["voice.disclosure.nextCall.es"]}</p></div>`));
+    expect(html).not.toMatch(/<fieldset[^>]*lang=/);
+  });
+});
+
 
 // D-040: "Always take a message" now means no booking on calls at any hour,
 // which overrides the "Allow booking" box — said beside the choice, so a
@@ -695,12 +777,13 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     languages: "en", booking_enabled: true, after_hours: "message_only",
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
-    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   };
 
   it("renders the hint next to the After hours select", () => {
     const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
       profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+      disclosureCopy: EN_DISCLOSURE_COPY,
     }));
     expect(renderedText(html)).toContain(m["voice.profile.afterHoursHint"]);
     expect(m["voice.profile.afterHoursHint"]).toMatch(/book/i);
@@ -719,10 +802,11 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
     languages: "en", booking_enabled: true, after_hours: "message_only",
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
-    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   };
   const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {
     profile: { ...BASE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+    disclosureCopy: EN_DISCLOSURE_COPY,
   }));
   /** The booking checkbox's own button tag. */
   const bookingBox = (html: string) => {
@@ -760,7 +844,7 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
     languages: "both", booking_enabled: true, after_hours: "hours_then_message",
     enabled: true, textback_enabled: true, textback_body: "Custom English body.",
     textback_body_es: null, textback_body_es_basis: null,
-    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   };
 
   function render(over: Partial<VoiceProfileRow> = {}): string {
@@ -768,6 +852,7 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
       profile: { ...BASE_PROFILE, ...over },
       brandName: "Rio Roofing",
       action: async () => ({ ok: true as const }),
+      disclosureCopy: EN_DISCLOSURE_COPY,
     }));
   }
 

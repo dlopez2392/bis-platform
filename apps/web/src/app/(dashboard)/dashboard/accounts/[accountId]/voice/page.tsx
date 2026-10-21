@@ -1,17 +1,33 @@
+import { Suspense } from "react";
 import { headers } from "next/headers";
 import {
   serviceDb, getVoiceProfile, getBranding, getTransferPhone, listForms, type PhoneNumberRow,
+  type DisclosureSetting,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
 import { requireAgencyOnlyAccountAccess } from "@/lib/auth";
 import { brandDisplayName } from "@/lib/email/templates/shell";
-import { m } from "@/lib/messages";
-import { VoiceSettings } from "./voice-settings";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
+import { getPersonPrefs } from "@/lib/preferences/person-prefs";
+import { makeTr } from "@/lib/record/copy";
+import { m, type MessageKey } from "@/lib/messages";
+import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
+import { VoiceSettings, type DisclosureCopy } from "./voice-settings";
+import { DisclosureResultsCard, DisclosureResultsSkeleton } from "./disclosure-results-card";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
 } from "./actions";
+
+/** `voice.disclosure.<value>` / `voice.disclosure.<value>Hint` — the twin of `DISCLOSURE_VALUES`'s own
+ *  order, read here rather than built with a template literal so a typo'd key is a type error. */
+const DISCLOSURE_LABEL_KEY: Record<DisclosureSetting, MessageKey> = {
+  off: "voice.disclosure.off", trial: "voice.disclosure.trial", on: "voice.disclosure.on",
+};
+const DISCLOSURE_HINT_KEY: Record<DisclosureSetting, MessageKey> = {
+  off: "voice.disclosure.offHint", trial: "voice.disclosure.trialHint", on: "voice.disclosure.onHint",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -35,16 +51,18 @@ export default async function VoicePage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ from?: string }>;
+  searchParams: Promise<{ from?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
   // Set by the setup wizard's links, and by nothing else — the breadcrumb
-  // below appears only for someone who arrived mid-flow.
-  const { from } = await searchParams;
+  // below appears only for someone who arrived mid-flow. `locale` is S-47a's
+  // QA override for the disclosure setting and its results card below —
+  // the rest of this page stays English (decision 2; spec ambiguity F).
+  const { from, locale: localeParam } = await searchParams;
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h] =
+  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h, prefs] =
     await Promise.all([
       getVoiceProfile(db, accountId),
       db.from("phone_numbers")
@@ -93,6 +111,8 @@ export default async function VoicePage({
       // a draft has no `/f/<publicId>` a lead could land on.
       listForms(db, accountId),
       headers(),
+      // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
+      getPersonPrefs(),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
@@ -105,6 +125,40 @@ export default async function VoicePage({
   // the operator is actually on (localhost, a preview deploy, production).
   const proto = h.get("x-forwarded-proto") ?? "http";
   const origin = `${proto}://${h.get("host") ?? "localhost:3000"}`;
+
+  // S-47a §5.4, ambiguity F: this page is agency-only, so there is no
+  // account language to default from — `account: null` — and an operator
+  // defaults to English (`isOperator: true`), same precedent as
+  // calls/[callId]/page.tsx and settings/ai-section.tsx. ONLY the
+  // disclosure setting and its results card below read this; the rest of
+  // the page stays English (decision 2).
+  const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
+  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  const persona = profile?.persona_name?.trim() || "Sofía";
+  const disclosureCopy: DisclosureCopy = {
+    locale,
+    legend: tr.text("voice.disclosure.legend", { persona }),
+    nextCall: tr.text("voice.disclosure.nextCall"),
+    options: DISCLOSURE_VALUES.map((value) => ({
+      value,
+      label: tr.text(DISCLOSURE_LABEL_KEY[value]),
+      hint: tr.text(DISCLOSURE_HINT_KEY[value], { persona }),
+    })),
+  };
+  // The results card reads through THIS page's client (behind requireAgencyOnlyAccountAccess above),
+  // never one of its own; its empty state reads the STORED setting (no profile yet = the column's
+  // default, "off"); and its Retry keeps this page's own query (?from=, ?locale=).
+  const retryQuery = new URLSearchParams();
+  if (from) retryQuery.set("from", from);
+  if (localeParam) retryQuery.set("locale", localeParam);
+  const retryHref = `/dashboard/accounts/${accountId}/voice${retryQuery.size > 0 ? `?${retryQuery}` : ""}`;
+  const disclosureResults = (
+    <Suspense fallback={<DisclosureResultsSkeleton />}>
+      <DisclosureResultsCard
+        db={db} accountId={accountId} setting={profile?.disclosure ?? "off"} retryHref={retryHref} tr={tr}
+      />
+    </Suspense>
+  );
 
   const boundSaveProfile = saveVoiceProfileAction.bind(null, accountId);
   const boundAssignNumber = assignNumberAction.bind(null, accountId);
@@ -134,6 +188,8 @@ export default async function VoicePage({
           enableConciergeAction={boundEnableConcierge}
           disableConciergeAction={boundDisableConcierge}
           setForwardCallsAction={boundSetForwardCalls}
+          disclosureCopy={disclosureCopy}
+          disclosureResults={disclosureResults}
         />
       </div>
     </>

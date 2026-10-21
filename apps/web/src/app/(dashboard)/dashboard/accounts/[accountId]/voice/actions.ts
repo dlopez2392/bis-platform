@@ -35,6 +35,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { e164Of } from "@/lib/voice/phone-number";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
+import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { m } from "@/lib/messages";
@@ -69,6 +70,15 @@ export async function saveVoiceProfileAction(
   const languages = pickOne(String(formData.get("languages") ?? "both"), LANGUAGE_VALUES);
   const afterHours = pickOne(String(formData.get("after_hours") ?? "hours_then_message"), AFTER_HOURS_VALUES);
   if (!languages || !afterHours) return { ok: false, error: m["voice.profile.saveFailed"] };
+
+  // S-47a, ambiguity G: ABSENT (a form that does not carry the field, e.g. a
+  // future Setup step) leaves the stored setting alone — undefined, so the
+  // patch below omits the key entirely. PRESENT must be one of the three the
+  // CHECK allows, or the whole save refuses rather than silently falling
+  // back to something the operator never chose.
+  const disclosureRaw = formData.get("disclosure");
+  const disclosure = disclosureRaw === null ? undefined : pickOne(String(disclosureRaw), DISCLOSURE_VALUES);
+  if (disclosure === null) return { ok: false, error: m["voice.profile.saveFailed"] };
 
   // The client marks this field `required`, but that is not enforcement — a
   // blank/whitespace submission (bypassed form, stripped JS) must still land
@@ -126,6 +136,7 @@ export async function saveVoiceProfileAction(
     textback_body: textbackBody,
     textback_body_es: bodyEs,
     textback_body_es_basis: basis,
+    ...(disclosure === undefined ? {} : { disclosure }),
   };
 
   try {

@@ -444,6 +444,8 @@ export async function POST(
       // anonymous request to answer a question the prompt never asks.
       meetingType: "in_person",
       medium: "web",
+      // S-47a: on Trial or On the visitor has already read the label and the first message.
+      disclosed: profile.disclosure === "trial" || profile.disclosure === "on",
       // `buildSystemPrompt` itself resolves the one tool this surface has,
       // and never advertises take_message/log_transcript on the web — see
       // its `onWeb` branches. No append needed here (review of commit

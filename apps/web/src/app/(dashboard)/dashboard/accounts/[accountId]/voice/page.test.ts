@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { VoiceProfileRow } from "@bis/db";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
@@ -34,8 +35,10 @@ const serviceDbMock = vi.hoisted(() => ({
   getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(), listForms: vi.fn(),
 }));
 
+// One stable client, so the results card can be shown to receive THIS client rather than one of its own.
+const serviceClient = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock("@bis/db", () => ({
-  serviceDb: () => ({
+  serviceDb: () => (serviceClient.client ??= {
     from: (table: string) => {
       if (table === "phone_numbers") {
         return {
@@ -54,6 +57,20 @@ vi.mock("@bis/db", () => ({
   getBranding: (...a: unknown[]) => serviceDbMock.getBranding(...a),
   getTransferPhone: (...a: unknown[]) => serviceDbMock.getTransferPhone(...a),
   listForms: (...a: unknown[]) => serviceDbMock.listForms(...a),
+  // S-47a: never invoked in this test — `VoiceSettings` is stubbed below and
+  // never renders the `disclosureResults` prop it is handed — but the Global
+  // Constraints bare-`@bis/db`-factory grep requires every factory this file
+  // list names to carry the symbol `disclosure-results-card.tsx` imports.
+  getDisclosureResults: async () => ({
+    said: { counted: 0, booked: 0, abandoned: 0, askedPerson: 0 },
+    didnt: { counted: 0, booked: 0, abandoned: 0, askedPerson: 0 },
+    notCounted: 0,
+  }),
+}));
+
+const prefsFixture = vi.hoisted(() => ({ language: null as "en" | "es" | null }));
+vi.mock("@/lib/preferences/person-prefs", () => ({
+  getPersonPrefs: async () => ({ language: prefsFixture.language }),
 }));
 
 // "use server" modules cannot be imported into a vitest render.
@@ -71,6 +88,8 @@ const captured = vi.hoisted(() => ({
   props: null as {
     accountId?: string; brandName?: string; transferPhone?: string | null;
     publishedForms?: { id: string; name: string }[]; origin?: string;
+    disclosureCopy?: { locale: string; legend: string; options: { value: string }[] };
+    disclosureResults?: unknown;
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -88,14 +107,14 @@ const PROFILE: VoiceProfileRow = {
   languages: "both", booking_enabled: true, after_hours: "hours_then_message",
   enabled: true, textback_enabled: true, textback_body: "",
   textback_body_es: null, textback_body_es_basis: null,
-  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false,
+  public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
 };
 
-async function render() {
+async function render(searchParams: { from?: string; locale?: string } = {}) {
   captured.props = null;
   const el = await VoicePage({
     params: Promise.resolve({ accountId: "a1" }),
-    searchParams: Promise.resolve({}),
+    searchParams: Promise.resolve(searchParams),
   });
   renderToStaticMarkup(el);
   return captured.props!;
@@ -110,6 +129,7 @@ beforeEach(() => {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
   serviceDbMock.listForms.mockReset().mockResolvedValue([]);
+  prefsFixture.language = null;
 });
 
 /**
@@ -197,5 +217,55 @@ describe("voice settings page — the transfer number", () => {
     // transfer off without anyone deciding to.
     serviceDbMock.getTransferPhone.mockRejectedValue(new Error("db down"));
     await expect(render()).rejects.toThrow();
+  });
+});
+
+describe("voice settings page — the AI disclosure setting and results card (S-47a)", () => {
+  it("builds the three-way copy from DISCLOSURE_VALUES and hands the card a React node (mutation: build the options from a two-value list → FAILS)", async () => {
+    const props = await render();
+    expect(props.disclosureCopy?.locale).toBe("en");
+    expect(props.disclosureCopy?.options.map((o) => o.value)).toEqual(["off", "trial", "on"]);
+    expect(isValidElement(props.disclosureResults)).toBe(true);
+  });
+});
+
+/** The results card element inside the Suspense node the page hands VoiceSettings. */
+function cardProps(node: unknown): { db: unknown; accountId: string; setting: string; retryHref: string } {
+  if (!isValidElement(node)) throw new Error("disclosureResults is not an element");
+  const child = (node.props as { children: unknown }).children;
+  if (!isValidElement(child)) throw new Error("no card inside the Suspense boundary");
+  return child.props as { db: unknown; accountId: string; setting: string; retryHref: string };
+}
+
+describe("voice settings page — the results card's inputs (S-47a fix round)", () => {
+  it("hands the card the page's OWN client, never a second one (mutation: card calls serviceDb() itself -> in-account-service-reads FAILS; drop the prop -> this FAILS)", async () => {
+    const props = await render();
+    expect(serviceClient.client).not.toBeNull();
+    expect(cardProps(props.disclosureResults).db).toBe(serviceClient.client);
+    expect(cardProps(props.disclosureResults).accountId).toBe("a1");
+  });
+
+  it("hands the card the STORED setting, and off when there is no profile yet (the column default) (mutation: hard-code trial -> FAILS)", async () => {
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, disclosure: "on" });
+    expect(cardProps((await render()).disclosureResults).setting).toBe("on");
+    serviceDbMock.getVoiceProfile.mockResolvedValue(null);
+    expect(cardProps((await render()).disclosureResults).setting).toBe("off");
+  });
+
+  it("Retry keeps the page's own query (mutation: drop the query -> FAILS)", async () => {
+    expect(cardProps((await render()).disclosureResults).retryHref).toBe("/dashboard/accounts/a1/voice");
+    expect(cardProps((await render({ from: "setup", locale: "es" })).disclosureResults).retryHref)
+      .toBe("/dashboard/accounts/a1/voice?from=setup&locale=es");
+  });
+
+  it("?locale=pseudo reaches the disclosure copy under the QA flag (mutation: makeTr(locale) without requestPseudoMode -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      const props = await render({ locale: "pseudo" });
+      expect(props.disclosureCopy?.legend.startsWith("[Téll cállérs Sófíá ís án ÁÍ")).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

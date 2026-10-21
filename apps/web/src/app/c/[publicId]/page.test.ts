@@ -30,7 +30,9 @@ vi.mock("@bis/db", async () => {
   };
 });
 
+import { renderToStaticMarkup } from "react-dom/server";
 import ConciergePage, { generateMetadata } from "./page";
+import { ConciergeChat } from "./concierge-chat";
 
 const PROFILE = {
   id: "p1", account_id: "a1", persona_name: "Sofía",
@@ -191,5 +193,72 @@ describe("generateMetadata never throws, even when the underlying read fails", (
     await expect(
       generateMetadata({ params: Promise.resolve({ publicId: "abc123" }), searchParams: noSearchParams }),
     ).resolves.toEqual({ robots: { index: false, follow: false } });
+  });
+});
+
+// S-47a (spec §5.2, D4): on Trial or On the chat always says it is an AI —
+// a label at the top of the panel and a sentence after the greeting. No coin
+// on the web. Off renders exactly as before. Sentences typed out here, never
+// built from messages.ts.
+describe("ConciergePage says it is an AI on Trial or On (S-47a)", () => {
+  beforeEach(() => {
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-only-key");
+    getBrandingMock.mockResolvedValue({ brandName: "Acme Plumbing", brandLogoPath: null });
+  });
+
+  async function render(profile: Record<string, unknown>, sp: Record<string, string> = {}) {
+    getVoiceProfileAnyStatusByPublicIdMock.mockResolvedValue(profile);
+    const el = await ConciergePage({
+      params: Promise.resolve({ publicId: "abc123" }), searchParams: Promise.resolve(sp),
+    });
+    const children = (el.props.children as unknown[]).flat();
+    const chat = children.find(
+      (c): c is { type: unknown; props: { greeting: string; aiLabel?: string | null } } =>
+        typeof c === "object" && c !== null && (c as { type?: unknown }).type === ConciergeChat,
+    );
+    if (!chat) throw new Error("no ConciergeChat element");
+    return { el, chat, html: renderToStaticMarkup(el) };
+  }
+
+  // Fix round: the AI sentence comes FIRST, so a greeting that ends in a question still ends the message
+  // (mutation: back to greeting-then-intro -> FAILS).
+  it("On, English: the label, and the AI sentence BEFORE the greeting", async () => {
+    const { chat, html } = await render({ ...PROFILE, disclosure: "on" });
+    expect(html).toContain("Sofía · AI assistant");
+    expect(html).toContain('data-ai-label=""');
+    expect(chat.props.greeting).toBe(
+      "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hi! How can I help?",
+    );
+  });
+
+  it("Trial, Spanish: the label and the sentence in the chat's own register (tú)", async () => {
+    const { chat, html } = await render({ ...PROFILE, disclosure: "trial" }, { locale: "es" });
+    expect(html).toContain("Sofía · asistente de IA");
+    expect(chat.props.greeting).toBe(
+      "Soy Sofía, una asistente de inteligencia artificial. Este chat se guarda para que el equipo te dé seguimiento. ¡Hola!",
+    );
+  });
+
+  it("Off: no label anywhere and the greeting exactly as stored", async () => {
+    // MUTATION: treat "off" as disclosing — this FAILS.
+    const { chat, html } = await render({ ...PROFILE, disclosure: "off" });
+    expect(html).not.toContain("data-ai-label");
+    expect(chat.props.greeting).toBe("Hi! How can I help?");
+    expect(chat.props.aiLabel ?? null).toBeNull();
+  });
+
+  it("a blank greeting on On: the first message is the AI sentence alone, no trailing space", async () => {
+    const { chat } = await render({ ...PROFILE, greeting_en: "   ", disclosure: "on" });
+    expect(chat.props.greeting).toBe(
+      "I'm Sofía, an AI assistant. This chat is saved so the team can follow up.",
+    );
+  });
+
+  it("a blank persona falls back to Sofía in both the label and the sentence", async () => {
+    const { chat, html } = await render({ ...PROFILE, persona_name: "  ", disclosure: "on" });
+    expect(html).toContain("Sofía · AI assistant");
+    expect(chat.props.greeting).toBe(
+      "I'm Sofía, an AI assistant. This chat is saved so the team can follow up. Hi! How can I help?",
+    );
   });
 });

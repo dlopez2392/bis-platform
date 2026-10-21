@@ -96,6 +96,8 @@ import { detectCallerLanguage } from "@/lib/voice/language";
 import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
+import { decideDisclosure } from "@/lib/voice/disclosure";
+import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
 export const runtime = "nodejs";
@@ -1075,6 +1077,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       log("no handoff target for this call", { callId, accountId, reason: handoffTarget.reason });
     }
 
+    // --- Step 9c: does Sofía say she is an AI on this call (S-47a) --------
+    // After every gate, so a declined call never draws the coin and is never
+    // stamped. The answer drives three things together: the stamp on the
+    // row below, the sentence after the greeting, and the identity line.
+    const disclosure = decideDisclosure(profile.disclosure);
+
     // --- Step 10: open the call row, fail-open (a DB blip must not lose
     // the call itself — finishCall tolerates a null callRowId). -----------
     //
@@ -1090,10 +1098,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       const row = await startCallRow(db, accountId, {
         phoneNumberId: phoneRow.id, callerE164: callerNumber,
         ...(handoffToken ? { handoffToken } : {}),
+        ...(disclosure.setting === null
+          ? {}
+          : { disclosure: { disclosed: disclosure.disclose, setting: disclosure.setting } }),
       });
       callRowId = row.id;
     } catch (e) {
-      log("startCallRow failed — proceeding without a row", { callId, accountId, error: String(e) });
+      // The call goes on as decided; with no row it is simply left out of the results (spec §5.1).
+      log("startCallRow failed — proceeding without a row", { callId, accountId, error: loggableError(e) });
     }
 
     // --- Step 11: accept the call -----------------------------------------
@@ -1115,7 +1127,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // D-037: `openingGreeting` (lib/voice/greeting.ts) — a blank greeting
     // falls back in its own language, and a bilingual line opens with the
     // English greeting then the Spanish one.
-    const opening = openingGreeting(profile, businessName);
+    const opening = openingGreeting(profile, businessName, { disclose: disclosure.disclose, personaName: profile.persona_name });
 
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName,
@@ -1124,6 +1136,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
       callerNumber, meetingType: calendar.meeting_type,
       handoffAvailable: handoffTarget.available,
+      disclosed: disclosure.disclose,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 

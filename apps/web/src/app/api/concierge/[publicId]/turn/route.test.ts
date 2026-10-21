@@ -379,6 +379,25 @@ describe("POST /api/concierge/[publicId]/turn — answering", () => {
     expect(system).not.toContain("MESSAGES ONLY");
   });
 
+  // S-47a (D4): on Trial or On the visitor has already read the AI label and
+  // the first message, so the identity line says so. Off keeps the old line.
+  // MUTATION: pass `disclosed: false` always — the On case FAILS.
+  it.each(["on", "trial"] as const)("tells the model the visitor already knows it is an AI on %s", async (disclosure) => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, disclosure });
+    await firstTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain("IDENTITY — You have already told the visitor that you are Sofía, an AI assistant.");
+    expect(system).not.toContain("IDENTITY — Do not volunteer");
+  });
+
+  it("keeps the old identity line when the setting is off", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, disclosure: "off" });
+    await firstTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain("IDENTITY — Do not volunteer");
+    expect(system).not.toContain("You have already told the visitor");
+  });
+
   it("answers with words when the model returns only a tool call", async () => {
     fetchMock.mockResolvedValue(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "a table" }));
     const res = await laterTurn();

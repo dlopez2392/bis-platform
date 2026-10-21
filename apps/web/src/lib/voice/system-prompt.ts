@@ -66,10 +66,19 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     ? "This is a text chat: short messages, one question at a time, no long lists. Write plain text only — the chat shows your words exactly as written, so markdown appears as stray symbols: no asterisks or underscores for emphasis, no # headings."
     : "This is a phone call: short sentences, one question at a time, no bulleted lists read aloud.";
 
+  // S-47a (decision 20): when this caller or visitor has already been told she is an AI, the line says so
+  // and has her confirm it plainly if asked. Otherwise it is the pre-S-47a line, byte for byte.
+  // "Never claim to be human." is in both. The persona falls back to Sofía exactly as openingGreeting's does,
+  // so the prompt and the spoken sentence never name two different people.
+  const persona = input.personaName.trim() || "Sofía";
+  const identityLine = input.disclosed
+    ? `IDENTITY — You have already told the ${audienceWord} that you are ${persona}, an AI assistant. If they ask whether they are speaking with a person, a human, a bot, a robot, or an AI, confirm it plainly: you are an AI assistant. Then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human. Answer as ${input.businessName} and get straight to what the ${audienceWord} needs.`
+    : `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the ${audienceWord} needs. If a ${audienceWord} asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`;
+
   const lines: string[] = [
     `You are ${input.personaName}, ${role}.`,
     "",
-    `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the ${audienceWord} needs. If a ${audienceWord} asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`,
+    identityLine,
     "",
   ];
 
