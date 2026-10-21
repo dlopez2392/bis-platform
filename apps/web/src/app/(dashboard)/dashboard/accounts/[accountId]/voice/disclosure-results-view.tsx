@@ -113,7 +113,14 @@ export function DisclosureResultsSkeleton() {
     <Card aria-busy="true">
       <CardHeader>
         <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-4 w-64 max-w-full" />
+        {/* Was `w-64 max-w-full`: CardHeader is a CSS grid, and its one implicit
+            `auto` column sizes to the MAX-CONTENT of its widest child — a
+            percentage `max-width` can't resolve during that intrinsic-sizing
+            pass (the container's own width isn't settled yet), so the `w-64`
+            (256px) won regardless of `max-w-full`, widening the column (and
+            the whole card) 19px past a 375px viewport. A relative width never
+            has that fixed px floor. */}
+        <Skeleton className="h-4 w-2/3" />
       </CardHeader>
       <CardContent className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {[0, 1].map((col) => (
