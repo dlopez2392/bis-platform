@@ -10,7 +10,7 @@ import { testPhoneNumber } from "./fixtures";
  *
  * Every refusal names its constraint AND is shaped so that constraint is the only one that can refuse it:
  * a bad module carries a valid version, a bad version carries a valid module, a broken pair carries a
- * valid module or a valid version. Drop the constraint and that case, and only that case, goes red.
+ * valid module or a valid version. Drop the constraint and that case, plus the defs case, goes red.
  */
 const RUN = Math.random().toString(36).slice(2, 10);
 
@@ -108,7 +108,7 @@ for (const t of STAMPED) {
           .rejects.toMatchObject({ code: "23514", constraint: `${T}_trade_module_check` });
       }));
 
-    it(`refuses version 0, with a valid module, by ${T}_trade_module_version_check; 1 is accepted (mutations: drop it -> FAILS; '>= 0' -> FAILS)`, () =>
+    it(`refuses version 0, with a valid module, by ${T}_trade_module_version_check (mutations: drop it -> FAILS; '>= 0' -> FAILS)`, () =>
       withRollback(async (c) => {
         const s = await seed(c, `${T}_ver`);
         await expect(c.query(`update public.${T} set trade_module = 'events', trade_module_version = 0 where id = $1`, [t.idOf(s)]))
