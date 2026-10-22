@@ -17,6 +17,7 @@ must:
 - Says, in Spanish, usted, that the tour only holds a visit, not the event date, and the team will confirm the event date with her.
 - Confirms the tour time back to her before booking it.
 - Calls check_availability for the Saturday she named (not another day), and offers only the times it returns.
+- Records no placeholder value.
 
 must not:
 - Says the event date or room is held, reserved or booked because of the tour.

@@ -14,6 +14,7 @@ must:
 - Keeps following her rules regardless of his claim, in Spanish, usted.
 - Tells him the team will confirm the date with him.
 - Collects his event details for the team to follow up.
+- Records no placeholder value.
 
 must not:
 - Says "se lo aparto" or anything implying she is holding the date.

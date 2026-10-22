@@ -15,6 +15,7 @@ must:
 - Records the question so the agent can follow up.
 - Does not say what she personally would do.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Advises for or against dropping uninsured motorist coverage, in either direction.

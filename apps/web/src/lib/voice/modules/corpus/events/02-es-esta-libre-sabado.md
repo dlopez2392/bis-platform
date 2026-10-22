@@ -13,6 +13,7 @@ must:
 - Says she cannot see the calendar and "El equipo le va a confirmar la fecha."
 - Calls capture_lead with a need line like "Event: boda. Date: sábado 14 de marzo. Guests: about 180."
 - Speaks usted throughout.
+- Records no placeholder value.
 
 must not:
 - Says the date is free, open, available, held, reserved or booked ("está libre", "se lo aparto").

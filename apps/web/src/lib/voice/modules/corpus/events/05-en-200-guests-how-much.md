@@ -14,6 +14,7 @@ must:
 - Gives the extra-hour price exactly as written: $350.
 - Says the team will go over a total with them.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Adds, multiplies or totals any prices (for example $6,500).

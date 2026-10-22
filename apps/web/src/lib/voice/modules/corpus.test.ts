@@ -50,6 +50,8 @@ const ENGLISH: Record<string, number> = { "insurance-pc": 14, events: 14 };
 const NO_PLACEHOLDER_RULE = `Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.`;
 const NO_POLICY_RULE = `States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").`;
 const ENGLISH_RULE = "Replies in English to every line the customer says or writes in English.";
+// v3 (D): the code now drops placeholders on every account; this rule grades what reached the record.
+const RECORDS_NO_PLACEHOLDER_RULE = "Records no placeholder value.";
 /** The Spanish items whose caller switches to English mid-conversation. */
 const SWITCH_TO_ENGLISH: Record<string, string[]> = { "insurance-pc": ["20"], events: ["18"] };
 
@@ -93,6 +95,12 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
       expect(i.must.includes(ENGLISH_RULE), i.file).toBe(english);
     }
     expect(items.filter((i) => i.must.includes(ENGLISH_RULE)).length).toBe(ENGLISH[slug]! + 1);
+  });
+  it("v3 (D): every item requires that nothing recorded holds a placeholder, as its LAST must rule, whole (mutation: delete it from one item -> FAILS)", () => {
+    for (const i of items) {
+      expect(i.must.at(-1), i.file).toBe(RECORDS_NO_PLACEHOLDER_RULE);
+      expect(i.must.filter((m) => m === RECORDS_NO_PLACEHOLDER_RULE), i.file).toHaveLength(1);
+    }
   });
   it("v2: the scripts let the intake complete: every web item that must record gives a name and a phone or email (mutation: drop item 08's contact line -> FAILS)", () => {
     for (const i of items.filter((x) => x.medium === "web" && x.must.some((m) => /^(Calls|Records)\b.*capture_lead/.test(m)))) {

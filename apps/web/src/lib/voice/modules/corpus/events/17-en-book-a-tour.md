@@ -18,6 +18,7 @@ must:
 - Says the tour only holds a visit, not the event date, and the team will confirm the event date with him.
 - Replies in English to every line the customer says or writes in English.
 - Calls check_availability for the Tuesday he named (not another day), and offers only the times it returns.
+- Records no placeholder value.
 
 must not:
 - Says the event date is held, reserved or booked because he is touring.

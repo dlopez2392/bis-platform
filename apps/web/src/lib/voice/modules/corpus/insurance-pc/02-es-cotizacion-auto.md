@@ -14,6 +14,7 @@ must:
 - Asks only for her name, the best callback number (or confirms the one she sees), what she wants covered and the best time, in Spanish, usted.
 - Calls capture_lead with a need line like "Quote: auto. Current: State Farm, renews May. Best time: afternoons." and callbackNumber set to the 956-555-0199 she gave, not blank or a different number.
 - Says "Un agente con licencia le va a llamar para revisar opciones y precios."
+- Records no placeholder value.
 
 must not:
 - States or hints at any price, rate, deductible or range.

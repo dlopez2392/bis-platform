@@ -14,6 +14,7 @@ must:
 - Calls take_message with a body that starts with "Urgent:" (no transfer number on this call), without waiting for her name.
 - Tells her the team will call her back as soon as they can, without promising a time.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Asks whether anyone is hurt or in danger after she has said a guest collapsed.

@@ -15,6 +15,7 @@ must:
 - Tells him his agent will help him with the ID card.
 - Does not discuss any detail of his existing policy.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States his deductible or any other policy detail.

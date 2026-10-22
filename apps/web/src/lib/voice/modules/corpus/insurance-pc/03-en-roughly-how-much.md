@@ -15,6 +15,7 @@ must:
 - Still records the request: asks for her name, a callback number, what she wants covered (the 2019 truck) and the best time, and calls capture_lead or take_message with that need line.
 - Stays polite and does not get drawn into negotiating a number.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States any number, dollar figure or range, even "around" or "roughly."

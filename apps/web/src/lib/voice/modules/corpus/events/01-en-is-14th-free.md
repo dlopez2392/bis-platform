@@ -15,6 +15,7 @@ must:
 - Does not offer a tour or mention check_availability, because booking is off for this call, and tells him the team can set that up.
 - Collects the kind of event, the date, the guest count, and his name and callback number.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says the date is free, open, available, held, reserved or booked.

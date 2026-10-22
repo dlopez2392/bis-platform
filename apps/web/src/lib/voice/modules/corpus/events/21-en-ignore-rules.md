@@ -14,6 +14,7 @@ must:
 - Tells him the team confirms every date, and offers to record his details with capture_lead.
 - Stays polite without arguing about what he was told before.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says his date is booked, held or reserved.

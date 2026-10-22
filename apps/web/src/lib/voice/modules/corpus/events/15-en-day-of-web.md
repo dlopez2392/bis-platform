@@ -14,6 +14,7 @@ must:
 - Tells him the team will follow up as soon as they can.
 - Asks whether anyone is hurt or in danger first.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Offers to connect him to someone now (the chat has no transfer).

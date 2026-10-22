@@ -4,12 +4,13 @@ import path from "node:path";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, stubToolResult, renderTranscript,
   resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
-  selectCorpusFiles, handlerFailureReason,
+  selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName,
   CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
   type CorpusFixture,
 } from "./corpus-lib";
 import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
 import { leadHasContact } from "../../concierge/lead";
+import { capturePhoneLead, droppedNote } from "../tools/placeholders";
 
 const ITEM = `---
 lang: es
@@ -155,8 +156,9 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
   it("web capture_lead with no name (blank, or the key missing) -> the live unusable refusal, even with a valid phone (v2; mutation: drop the null-lead branch -> FAILS)", () => {
     expect(stubToolResult("capture_lead", { phone: "956-555-0199", need: "Urgent: flooding." }, WEB)).toEqual({ ok: false, error: UNUSABLE });
     expect(stubToolResult("capture_lead", { fullName: "  ", email: "ana@example.com", need: "Quote: home." }, WEB)).toEqual({ ok: false, error: UNUSABLE });
-    // The phone tool takes a free-form `fields` object and is not this refusal's.
-    expect(stubToolResult("capture_lead", { fields: { need: "Quote: auto." } }, PHONE)).toEqual({ ok: true });
+    // The phone tool takes a free-form `fields` object and is not this refusal's: v3, it answers as registry.ts
+    // does (capturePhoneLead), which is a missing-fields refusal, not ok (v2's stub said ok here, unlike live).
+    expect(stubToolResult("capture_lead", { fields: { need: "Quote: auto." } }, PHONE)).toEqual({ ok: false, missing: ["fullName"] });
   });
   it("the unusable literal is still the live route's own (drift guard: edit the route's text -> FAILS)", () => {
     const route = readFileSync(path.resolve(__dirname, "../../../app/api/concierge/[publicId]/turn/route.ts"), "utf8");
@@ -170,9 +172,11 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
       { fullName: "Ana", need: "x", phone: "12" },
       { fullName: "Ana", need: "x", email: "not-an-email" },
     ];
-    expect(cases.map((a) => stubToolResult("capture_lead", a, WEB).ok))
+    // v3: the visitor said "Ana", so the name-from-email check (a different refusal) stays out of this parity.
+    const SAID = { ...WEB, said: ["I'm Ana"] };
+    expect(cases.map((a) => stubToolResult("capture_lead", a, SAID).ok))
       .toEqual(cases.map((a) => leadHasContact(parseCaptureLead(JSON.stringify(a))!)));
-    expect(cases.map((a) => stubToolResult("capture_lead", a, WEB).ok)).toEqual([false, true, true, false, false]);
+    expect(cases.map((a) => stubToolResult("capture_lead", a, SAID).ok)).toEqual([false, true, true, false, false]);
   });
   it("phone take_message with an empty or blank body -> { ok: false, error: \"message body required\" }, as registry.ts does (mutation: always ok -> FAILS)", () => {
     expect(stubToolResult("take_message", {}, PHONE)).toEqual({ ok: false, error: "message body required" });
@@ -195,6 +199,55 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
     const la = stubToolResult("check_availability", { date: "2027-06-08" }, { medium: "phone", timezone: "America/Los_Angeles" }) as typeof chicago;
     expect(la.slots[0]!.local).toMatch(/^Tue, Jun 8, 9:00\sAM PDT$/);
   });
+  // S-47b v3 (A3): the stub runs the SAME sanitizer the live tools run (tools/placeholders.ts), so a transcript
+  // shows what a real call or chat would have stored and heard.
+  describe("v3: placeholders, through the live sanitizer", () => {
+    const CASES: Array<[string, Record<string, unknown>]> = [
+      ["clean", { fullName: "Ana Ruiz", need: "Quote: auto." }],
+      ["placeholder name", { fullName: "User", need: "Urgent: flooding." }],
+      ["placeholder need part", { fullName: "Ana", need: "Quote: auto. Best time: no se indicó." }],
+      ["filler best time", { fullName: "Ana", need: "Quote: renters.", bestTime: "any time" }],
+      ["no name", { need: "Quote: auto." }],
+    ];
+    it.each(CASES)("phone capture_lead (%s) answers exactly what registry.ts answers (mutation: stub returns ok -> FAILS)", (_n, fields) => {
+      expect(stubToolResult("capture_lead", { fields }, PHONE)).toEqual(capturePhoneLead(fields, "+19565550142").result);
+    });
+    it("phone capture_lead with a placeholder name: missing fullName, and the note naming it", () => {
+      expect(stubToolResult("capture_lead", { fields: { fullName: "Guest", need: "Event: boda." } }, PHONE)).toEqual({
+        ok: false, missing: ["fullName"],
+        note: `Left out of the record, because a record holds only what they said: fullName "Guest" (a placeholder, not something they said). If you need any of it, ask them; never fill it in yourself. If they will not give their name, use take_message instead.`,
+      });
+    });
+    it("phone take_message: a placeholder part is stripped (ok, with the note); a placeholder-only body is refused", () => {
+      expect(stubToolResult("take_message", { body: "Urgent: crash. Name: unknown." }, PHONE)).toEqual({ ok: true, note: droppedNote([{ field: "body", value: "Name: unknown.", why: "placeholder" }], "phone") });
+      expect(stubToolResult("take_message", { body: "N/A" }, PHONE)).toEqual({ ok: false, error: "message body required", note: droppedNote([{ field: "body", value: "N/A", why: "placeholder" }], "phone") });
+    });
+    it("phone book_appointment: a placeholder name is refused as registry.ts refuses it; a real one is ok", () => {
+      expect(stubToolResult("book_appointment", { startsAt: "2027-06-08T16:00:00.000Z", name: "Guest" }, PHONE))
+        .toEqual({ ok: false, error: "name required", note: droppedNote([{ field: "name", value: "Guest", why: "placeholder" }], "phone") });
+      expect(stubToolResult("book_appointment", { startsAt: "2027-06-08T16:00:00.000Z", name: "Guest House LLC" }, PHONE)).toEqual({ ok: true });
+    });
+    it("web capture_lead with a placeholder name -> the unusable refusal plus the note", () => {
+      expect(stubToolResult("capture_lead", { fullName: "User", phone: "956-555-0199", need: "Urgent: flooding." }, WEB))
+        .toEqual({ ok: false, error: UNUSABLE, note: droppedNote([{ field: "fullName", value: "User", why: "placeholder" }], "web") });
+    });
+    it("web capture_lead with a name taken from the email address: refused unless the visitor said it (the caller's lines reach the stub; mutation: ignore `said` -> FAILS)", () => {
+      const args = { fullName: "Juan", email: "juan.p@example.com", need: "Quote: home." };
+      expect(stubToolResult("capture_lead", args, { ...WEB, said: ["¿Cuánto cuesta?", "juan.p@example.com"] }))
+        .toEqual({ ok: false, error: UNUSABLE, note: droppedNote([{ field: "fullName", value: "Juan", why: "email_name" }], "web") });
+      expect(stubToolResult("capture_lead", args, { ...WEB, said: ["Soy Juan", "juan.p@example.com"] })).toEqual({ ok: true });
+    });
+    it("web capture_lead with a placeholder need part: ok, with the note", () => {
+      expect(stubToolResult("capture_lead", { fullName: "Ana", phone: "956-555-0199", need: "Quote: auto. Best time: any time." }, WEB))
+        .toEqual({ ok: true, note: droppedNote([{ field: "need", value: "Best time: any time.", why: "filler" }], "web") });
+    });
+    it("imports the live sanitizer rather than carrying a copy (mutation: paste a local placeholder list -> FAILS)", () => {
+      const src = readFileSync(path.resolve(__dirname, "corpus-lib.ts"), "utf8");
+      expect(src).toMatch(/from "\.\.\/tools\/placeholders";/);
+      expect(src).not.toMatch(/no se indic|not specified|"guest"/i);
+    });
+  });
+
   it("check_availability with a date that is not YYYY-MM-DD -> the live refusal, never a thrown Invalid Date", () => {
     expect(stubToolResult("check_availability", { date: "June 8" }, PHONE)).toEqual({ ok: false, error: "date must be YYYY-MM-DD" });
   });
@@ -314,5 +367,62 @@ describe("a throw inside the Realtime message handler fails THAT item, by the er
     const src = readFileSync(path.resolve(__dirname, "../../../../scripts/sofia-corpus.ts"), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     expect(src).toMatch(/ws\.on\("message", \(raw\) => \{\s*try \{\s*onEvent\(raw\);\s*\} catch \(err\) \{\s*failCurrent\(new Error\(handlerFailureReason\(err\)\), "local error"\);\s*\}\s*\}\);/);
+  });
+});
+
+// S-47b v3 (C): every item played N times, so a rule that holds once by luck shows up as a split column.
+describe("--repeat N plays each item N times (1 to 5, default 1)", () => {
+  const SCRIPT = () => readFileSync(path.resolve(__dirname, "../../../../scripts/sofia-corpus.ts"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  it.each([[null, 1], ["1", 1], ["3", 3], ["5", 5]] as const)("%j -> %d", (raw, n) => {
+    expect(parseRepeat(raw)).toEqual({ repeat: n, error: null });
+  });
+  it.each(["0", "6", "x", "2.5", "", "03 ", "-1"])("refuses %j, naming it (mutation: clamp instead of refusing -> FAILS)", (raw) => {
+    expect(parseRepeat(raw)).toEqual({ repeat: 1, error: `--repeat must be a whole number from 1 to 5, not "${raw}"` });
+  });
+  it("names each run's transcript NN-…-rK.md; a single run keeps the item's own name (mutation: always -r1 -> FAILS)", () => {
+    expect(runFileName("07-en-drop-um.md", 1, 1)).toBe("07-en-drop-um.md");
+    expect(runFileName("07-en-drop-um.md", 1, 3)).toBe("07-en-drop-um-r1.md");
+    expect(runFileName("07-en-drop-um.md", 3, 3)).toBe("07-en-drop-um-r3.md");
+  });
+  const meta = { moduleId: "events" as const, slug: "events", version: 3, sha256: "a".repeat(64), date: "2026-10-22",
+    phoneEngine: "realtime" as const, phoneModel: "gpt-realtime", chatModel: "gpt-4o-mini" };
+  it("the sheet gets one Pass/Fail column per run, and one count line per run (mutation: one column regardless -> FAILS)", () => {
+    const item = parseCorpusItem("10-es-choque.md", ITEM);
+    const sheet = resultsSheetSkeleton(meta, [item], 3);
+    expect(sheet).toContain("Runs: 3 per item (columns Run 1 to Run 3; transcripts NN-…-r1.md to -r3.md)\n");
+    expect(sheet).toContain("| Item | Kind | Rule | Run 1 | Run 2 | Run 3 | Note |\n|---|---|---|---|---|---|---|\n");
+    expect(sheet).toContain("| 10-es-choque.md | MUST | Asks whether anyone is hurt before anything else. |  |  |  |  |\n");
+    expect(sheet).toContain("| 10-es-choque.md | MUST NOT | Says the claim is covered or opened. |  |  |  |  |\n");
+    for (const r of [1, 2, 3]) expect(sheet).toContain(`Run ${r}: MUST _ of _ pass. MUST NOT _ of _ pass.\n`);
+  });
+  it("one run: the sheet is byte-for-byte the v2 sheet (mutation: always print a Runs line -> FAILS)", () => {
+    const item = parseCorpusItem("10-es-choque.md", ITEM);
+    expect(resultsSheetSkeleton(meta, [item], 1)).toBe(resultsSheetSkeleton(meta, [item]));
+    expect(resultsSheetSkeleton(meta, [item])).not.toContain("Runs:");
+    expect(resultsSheetSkeleton(meta, [item])).toContain("| Item | Kind | Rule | Pass/Fail | Note |\n");
+  });
+  it("each transcript says which run it is when there is more than one", () => {
+    const item = parseCorpusItem("10-es-choque.md", ITEM);
+    expect(renderTranscript(item, meta, [], { run: 2, of: 3 })).toMatch(/^Run: 2 of 3$/m);
+    expect(renderTranscript(item, meta, [], { run: 1, of: 1 })).not.toContain("Run:");
+    expect(renderTranscript(item, meta, [])).not.toContain("Run:");
+  });
+  it("the script reads --repeat through parseRepeat and stops non-zero on its error before playing anything (mutation: drop the check -> FAILS)", () => {
+    const src = SCRIPT();
+    expect(src).toMatch(/const repeatArg = parseRepeat\(flag\("--repeat"\)\);/);
+    expect(src).toMatch(/if \(repeatArg\.error\) \{ console\.error\(repeatArg\.error\); process\.exit\(2\); \}/);
+    expect(src.indexOf("if (repeatArg.error)")).toBeLessThan(src.indexOf("mkdirSync(outDir"));
+  });
+  it("the script plays every run of every item and writes each run's own file (mutation: write item.file -> FAILS)", () => {
+    const src = SCRIPT();
+    expect(src).toMatch(/for \(let run = 1; run <= repeat; run \+= 1\)/);
+    expect(src).toMatch(/runFileName\(item\.file, run, repeat\)/);
+    expect(src).toMatch(/resultsSheetSkeleton\(meta, items, repeat\)/);
+  });
+  it("the script hands the caller's lines so far to the stub (v3 A3: the web name-from-email check; mutation: drop said -> FAILS)", () => {
+    const src = SCRIPT();
+    expect(src).toMatch(/stubToolResult\(name, a, \{ medium: item\.medium, timezone: f\.timezone, said \}\)/);
+    expect(src.match(/stub\((?:String\(ev\.name\)|c\.function\.name), a, callerLines\(turns\)\)/g)?.length).toBe(2);
   });
 });

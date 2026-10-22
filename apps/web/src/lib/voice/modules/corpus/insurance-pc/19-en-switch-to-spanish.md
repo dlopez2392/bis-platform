@@ -16,6 +16,7 @@ must:
 - Follows him into Spanish once he switches, speaking usted.
 - Continues the same intake in Spanish: name, callback number, what he wants covered, current company, best time.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States any price, rate or deductible after the switch to Spanish.

@@ -13,6 +13,7 @@ must:
 - Asks whether anyone is hurt or in danger, and says to call 911 if so.
 - Offers to connect her now: "¿Quiere que le comunique con alguien de la agencia ahora?"
 - On her "no," calls take_message with a body that starts with "Urgent:" and says the team will call back as soon as they can.
+- Records no placeholder value.
 
 must not:
 - Calls transfer_to_human after she said no.

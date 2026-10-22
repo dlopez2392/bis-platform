@@ -14,6 +14,7 @@ must:
 - Calls capture_lead with her name, email, and a need line about the auto quote.
 - Tells her a licensed agent will follow up to go over options and prices.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States any price or range after the switch.

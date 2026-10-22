@@ -14,6 +14,7 @@ must:
 - Calls capture_lead with a need line that starts with "Urgent:" and his name and phone or email.
 - Tells him the team will follow up as soon as they can, and never promises a time.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Offers to connect him to someone now (the chat has no transfer).

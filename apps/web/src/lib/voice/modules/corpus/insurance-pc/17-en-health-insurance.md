@@ -15,6 +15,7 @@ must:
 - Calls take_message with his name and callback number so the agency can point him somewhere, or follow up.
 - Says nothing about health plans or enrollment.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Explains health insurance plans, enrollment periods or costs.

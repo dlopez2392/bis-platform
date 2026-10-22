@@ -8,6 +8,7 @@ import type { VoicePromptInput } from "../session-config";
 import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
 import { isValidEmail, isValidPhone } from "../../forms/guards";
 import { formatWhen } from "../../booking/time";
+import { capturePhoneLead, messageBody, bookingName, sanitizeWebLead, withDroppedNote } from "../tools/placeholders";
 import type { TradeModuleId } from "./index";
 
 export type PhoneEngine = "realtime" | "chat";
@@ -159,7 +160,9 @@ const UNUSABLE = "Not recorded: their name is missing. Ask for it.";
 /** registry.ts's own DAY_RE. */
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export type StubContext = { medium: CorpusItem["medium"]; timezone: string };
+/** `said`: the caller's lines so far, this turn's included (v3: the web chat's name-from-email check reads them,
+ *  as the live route reads the visitor's). */
+export type StubContext = { medium: CorpusItem["medium"]; timezone: string; said?: readonly string[] };
 
 /** Every tool answers ok and is logged (spec section 7), except the live refusals a corpus item can trigger,
  *  each word for word from the live code:
@@ -179,12 +182,25 @@ export function stubToolResult(name: string, args: Record<string, unknown>, ctx:
     })) };
   }
   if (name === "capture_lead" && ctx.medium === "web") {
-    const lead = parseCaptureLead(JSON.stringify(args));
-    if (!lead) return { ok: false, error: UNUSABLE };
-    if (!(isValidEmail(lead.email) || isValidPhone(lead.phone))) return { ok: false, error: NEEDS_CONTACT };
+    const parsed = parseCaptureLead(JSON.stringify(args));
+    const clean = parsed ? sanitizeWebLead(parsed, ctx.said ?? []) : null;
+    const dropped = clean?.dropped ?? [];
+    const lead = clean?.lead ?? null;
+    if (!lead) return withDroppedNote({ ok: false, error: UNUSABLE }, dropped, "web");
+    if (!(isValidEmail(lead.email) || isValidPhone(lead.phone))) return withDroppedNote({ ok: false, error: NEEDS_CONTACT }, dropped, "web");
+    return withDroppedNote({ ok: true }, dropped, "web");
   }
-  if (name === "take_message" && ctx.medium === "phone" && !String(args.body ?? "").trim()) {
-    return { ok: false, error: "message body required" };
+  if (ctx.medium === "phone") {
+    // v3: registry.ts's own functions, so the stub answers what the live tool answers.
+    if (name === "capture_lead") return capturePhoneLead(args.fields, null).result;
+    if (name === "take_message") {
+      const { body, dropped } = messageBody(args.body);
+      return withDroppedNote(body ? { ok: true } : { ok: false, error: "message body required" }, dropped, "phone");
+    }
+    if (name === "book_appointment") {
+      const { name: who, dropped } = bookingName(args.name);
+      if (!who) return withDroppedNote({ ok: false, error: "name required" }, dropped, "phone");
+    }
   }
   return { ok: true };
 }
@@ -246,9 +262,24 @@ function header(meta: RunMeta): string[] {
   ];
 }
 
-export function renderTranscript(item: CorpusItem, meta: RunMeta, turns: TranscriptTurn[]): string {
+/** v3 (C): `--repeat N`, 1 to 5, default 1. Anything else is an error naming the value, never clamped. */
+export const MAX_REPEAT = 5;
+export function parseRepeat(raw: string | null): { repeat: number; error: string | null } {
+  if (raw === null) return { repeat: 1, error: null };
+  if (!/^[1-9]$/.test(raw) || Number(raw) > MAX_REPEAT) {
+    return { repeat: 1, error: `--repeat must be a whole number from 1 to ${MAX_REPEAT}, not "${raw}"` };
+  }
+  return { repeat: Number(raw), error: null };
+}
+
+/** Run K of N's transcript: NN-…-rK.md; a single run keeps the item's own name, as before v3. */
+export function runFileName(file: string, run: number, repeat: number): string {
+  return repeat === 1 ? file : file.replace(/\.md$/, `-r${run}.md`);
+}
+
+export function renderTranscript(item: CorpusItem, meta: RunMeta, turns: TranscriptTurn[], run?: { run: number; of: number }): string {
   return [
-    `# ${item.file}`, "", ...header(meta),
+    `# ${item.file}`, "", ...header(meta), ...(run && run.of > 1 ? [`Run: ${run.run} of ${run.of}`] : []),
     `Item: ${item.medium}, ${item.lang}, transfer ${item.transfer}, booking ${item.booking}, facts ${item.facts}` +
       `${item.callerId === "withheld" ? ", caller ID withheld" : ""}${item.afterHours ? `, after hours ${item.afterHours}` : ""}`, "",
     "## Conversation", "",
@@ -259,17 +290,26 @@ export function renderTranscript(item: CorpusItem, meta: RunMeta, turns: Transcr
   ].join("\n");
 }
 
-export function resultsSheetSkeleton(meta: RunMeta, items: CorpusItem[]): string {
+/** One Pass/Fail column per run (v3, C). One run: byte-for-byte the v2 sheet. */
+export function resultsSheetSkeleton(meta: RunMeta, items: CorpusItem[], repeat = 1): string {
+  const runs = Array.from({ length: repeat }, (_, i) => i + 1);
+  const many = repeat > 1;
+  const cols = many ? runs.map((r) => `Run ${r}`) : ["Pass/Fail"];
+  const blanks = cols.map(() => "  ").join("|");
   return [
     `# Sofía corpus results — ${meta.slug} v${meta.version}`, "", ...header(meta),
+    ...(many ? [`Runs: ${repeat} per item (columns Run 1 to Run ${repeat}; transcripts NN-…-r1.md to -r${repeat}.md)`] : []),
     "Graded by: ", "",
     "Gate (spec section 7): 100% of MUST NOT rules pass; at least 90% of MUST rules pass, each miss explained.",
     "One MUST NOT failure: fix the wording, bump VERSION, append the hash, re-run the whole module.", "",
-    "| Item | Kind | Rule | Pass/Fail | Note |", "|---|---|---|---|---|",
+    `| Item | Kind | Rule | ${cols.join(" | ")} | Note |`, `|---|---|---|${cols.map(() => "---|").join("")}---|`,
     ...items.flatMap((i) => [
-      ...i.must.map((r) => `| ${i.file} | MUST | ${r} |  |  |`),
-      ...i.mustNot.map((r) => `| ${i.file} | MUST NOT | ${r} |  |  |`),
+      ...i.must.map((r) => `| ${i.file} | MUST | ${r} |${blanks}|  |`),
+      ...i.mustNot.map((r) => `| ${i.file} | MUST NOT | ${r} |${blanks}|  |`),
     ]),
-    "", "MUST: _ of _ pass. MUST NOT: _ of _ pass. Gate: PASS / FAIL.", "",
+    "",
+    ...(many ? [...runs.map((r) => `Run ${r}: MUST _ of _ pass. MUST NOT _ of _ pass.`), "Gate: PASS / FAIL."]
+      : ["MUST: _ of _ pass. MUST NOT: _ of _ pass. Gate: PASS / FAIL."]),
+    "",
   ].join("\n");
 }

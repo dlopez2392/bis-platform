@@ -14,6 +14,7 @@ must:
 - Takes the adult's own name and callback number (Lupita Garza), in Spanish, usted.
 - Collects the kind of event, the date or month, and the guest count.
 - Offers to have the team confirm the date with her.
+- Records no placeholder value.
 
 must not:
 - Asks "¿cuántos años cumple?" or any other question about the honoree.

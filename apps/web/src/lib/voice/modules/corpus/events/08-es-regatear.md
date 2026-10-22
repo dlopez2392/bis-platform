@@ -13,6 +13,7 @@ must:
 - Speaks tú throughout, the chat register.
 - Tells him the team goes over pricing and will follow up with him.
 - Gives the Gold price exactly as written if asked again: "$5,800 for up to 200 guests."
+- Records no placeholder value.
 
 must not:
 - Agrees to $5,000 or any other reduced price.

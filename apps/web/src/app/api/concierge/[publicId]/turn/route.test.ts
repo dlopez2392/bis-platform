@@ -989,7 +989,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
 
   it("a FILED capture: the model is told it worked, and writes the reply from that", async () => {
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }))
       .mockResolvedValueOnce(modelReplies("Got it, Ana. The team will be in touch."));
     const res = await laterTurn();
     const body = await res.json() as { reply: string };
@@ -1001,7 +1001,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
 
   it("the follow-up call cannot call the tool again", async () => {
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }))
       .mockResolvedValueOnce(modelReplies("Done."));
     await laterTurn();
     expect((sentToModel(1) as unknown as Sent).tool_choice).toBe("none");
@@ -1022,7 +1022,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
   });
 
   /** The tool result the follow-up call carried, parsed. */
-  function toolResult(): { ok: boolean; result?: string; error?: string } {
+  function toolResult(): { ok: boolean; result?: string; error?: string; note?: string } {
     return JSON.parse(String((sentToModel(1) as unknown as Sent).messages.at(-1)!.content));
   }
 
@@ -1052,7 +1052,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
 
   it("an email and phone that are not valid hold the lead the same way (the validators filing uses)", async () => {
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@", phone: "call me", need: "a table" }))
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@", phone: "call me", need: "a table" }))
       .mockResolvedValueOnce(modelReplies("Could I get an email or a number?"));
     await laterTurn();
     expect(dbFns.createSubmission).not.toHaveBeenCalled();
@@ -1078,6 +1078,48 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
       .toEqual(expect.arrayContaining([{ key: "n", label: "First name", value: "Ana" }]));
     const sent = JSON.parse(String((sentToModel(3) as unknown as Sent).messages.at(-1)!.content));
     expect(sent).toMatchObject({ ok: true });
+  });
+
+  // S-47b v3 (corpus run 2): placeholders never get stored (lib/voice/tools/placeholders.ts).
+  it("a placeholder name ('User') files NOTHING: the 'unusable' answer plus what was dropped and why (mutation: route skips sanitizeWebLead -> FAILS)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "User", phone: "9565550100", need: "Urgent: flooding." }))
+      .mockResolvedValueOnce(modelReplies("What's your name?"));
+    await laterTurn();
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    expect(toolResult()).toEqual({
+      ok: false, error: "Not recorded: their name is missing. Ask for it.",
+      note: `Left out of the record, because a record holds only what they said: fullName "User" (a placeholder, not something they said). If you need any of it, ask them; never fill it in yourself.`,
+    });
+  });
+  it("a name taken only from the email address files NOTHING; the visitor's own address does not count as saying it", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: [{ role: "visitor", text: "¿Más o menos cuánto cuesta asegurar mi casa?", at: "" }] });
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Juan", email: "juan.p@example.com", need: "Quote: home." }))
+      .mockResolvedValueOnce(modelReplies("¿Cómo te llamas?"));
+    await laterTurn({ text: "mi correo es juan.p@example.com" });
+    expect(dbFns.createSubmission).not.toHaveBeenCalled();
+    expect(toolResult().note).toContain(`fullName "Juan" (taken from their email address; they never said it)`);
+  });
+  it("the same name, said by the visitor in an EARLIER turn, files normally (the whole transcript is read)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: [{ role: "visitor", text: "Soy Juan", at: "" }] });
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Juan", email: "juan.p@example.com", need: "Quote: home." }))
+      .mockResolvedValueOnce(modelReplies("Gracias, Juan."));
+    await laterTurn({ text: "mi correo es juan.p@example.com" });
+    expect(dbFns.createSubmission).toHaveBeenCalledTimes(1);
+    expect(toolResult()).toEqual({ ok: true, result: "Recorded. The team will follow up with them." });
+  });
+  it("a placeholder part of the need is stripped before filing, and the model hears it", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", phone: "9565550100", need: "Quote: auto. Best time: no se indicó." }))
+      .mockResolvedValueOnce(modelReplies("Thanks, Ana."));
+    await laterTurn();
+    const [, , , input] = dbFns.createSubmission.mock.calls[0]!;
+    const answers = (input as { answers: { key: string; value: string }[] }).answers;
+    expect(answers.map((a) => a.value)).not.toContain("Quote: auto. Best time: no se indicó.");
+    expect(JSON.stringify(answers)).not.toContain("no se indic");
+    expect(toolResult()).toMatchObject({ ok: true, note: expect.stringContaining(`need "Best time: no se indicó."`) });
   });
 
   it("a lead filed with a way to reach them says the team will follow up", async () => {
@@ -1111,7 +1153,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
       .mockResolvedValue({ ...CONVERSATION, submission_id: "s-other-tab" });
     dbFns.setConciergeSubmission.mockResolvedValue(false);
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }))
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }))
       .mockResolvedValueOnce(modelReplies("Got it."));
     await laterTurn();
     const r = toolResult();
@@ -1128,7 +1170,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
     try {
       fetchMock.mockImplementationOnce(async () => {
         skew = 26_000;
-        return modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }, PRE_RESULT);
+        return modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }, PRE_RESULT);
       });
       const res = await laterTurn();
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1153,7 +1195,7 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
 
   it("when the follow-up call fails after a FILED capture, the visitor reads the fixed 'captured' line", async () => {
     fetchMock
-      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "ana@x.co", need: "a table" }, PRE_RESULT))
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Ana", email: "hello@x.co", need: "a table" }, PRE_RESULT))
       .mockRejectedValueOnce(new Error("timeout"));
     const res = await laterTurn();
     expect((await res.json() as { reply: string }).reply).toBe(conciergeStrings("en").captured);
@@ -1424,7 +1466,7 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     });
     const system = sentToModel().messages[0]!.content;
     expect(system).toContain(EVT);
-    expect(system).toContain(`- Once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
+    expect(system).toContain(` Then, once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
   });
 
   it("a later turn builds its prompt from the conversation's stamp, not the profile's current module (mutation: read profile.trade_module -> FAILS)", async () => {

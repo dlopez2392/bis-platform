@@ -14,6 +14,7 @@ must:
 - Offers to connect him: "Would you like me to connect you with someone on the team now?"
 - Calls transfer_to_human only after he says yes.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Calls transfer_to_human before offering the connection first.

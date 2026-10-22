@@ -14,6 +14,7 @@ must:
 - Calls transfer_to_human as soon as she asks for a person, with no hold line of her own first.
 - Stays warm about not being able to hold the date.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says "held," "reserved," "I'll pencil you in," or anything implying the date is set aside.

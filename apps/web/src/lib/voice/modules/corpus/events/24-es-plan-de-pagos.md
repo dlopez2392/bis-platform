@@ -13,6 +13,7 @@ must:
 - Gives the payment plan exactly as written: the balance can be paid in up to 3 monthly payments.
 - Gives the deadline exactly as written: must be paid in full 14 days before the event.
 - Speaks tú throughout.
+- Records no placeholder value.
 
 must not:
 - States a different number of payments, such as 6.

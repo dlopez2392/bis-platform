@@ -15,6 +15,7 @@ must:
 - Says she cannot see the calendar and the team will confirm the date with her.
 - Calls capture_lead with her event details.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says the date is free, open or available after the switch to Spanish.

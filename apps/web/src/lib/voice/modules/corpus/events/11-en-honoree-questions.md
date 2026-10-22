@@ -15,6 +15,7 @@ must:
 - Collects the kind of event, the date or month, and the guest count.
 - Offers to have the team confirm the date with her.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Asks the honoree's age, name, or anything else about her.

@@ -15,6 +15,7 @@ must:
 - Collects his event details (date, guest count, contact info) for the team to follow up.
 - Stays warm without agreeing to anything about price.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Agrees to or offers any discount, including for paying today or in cash.

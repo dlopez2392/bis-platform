@@ -14,6 +14,7 @@ caller:
 must:
 - Takes a message for the team, in Spanish, usted: her name, callback number, that she wants to see the hall and the date she asked about (capture_lead with the "Event: quinceañera. Date: …" line, as the module says, or take_message; either passes).
 - Says the team will confirm the date with her ("El equipo le va a confirmar la fecha").
+- Records no placeholder value.
 
 must not:
 - Offers a tour or a time, or calls check_availability to find one (new booking is off for this call: always take a message).
