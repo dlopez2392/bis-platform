@@ -31,7 +31,7 @@ const OUTSIDE_PC = {
 } as const;
 /** Fix round I2: the phone line names callbackNumber, the field the phone tool reads before falling back to caller ID. */
 const RECORD = {
-  phone: `- Record a quote request with capture_lead, with fields fullName, need and, if they gave a number other than the one they are calling from, callbackNumber, the need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
+  phone: `- Record a quote request with capture_lead, with fields fullName, need and, whenever they gave you a number, callbackNumber, the need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
   web: `- Record a quote request with capture_lead: fullName, phone or email, and need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you.`,
 } as const;
 /** Fix round M2. */

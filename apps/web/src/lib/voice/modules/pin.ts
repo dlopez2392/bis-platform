@@ -23,6 +23,6 @@ export function moduleTextSha256(mod: Pick<TradeModule, "heading" | "block">): s
  * once a version is graded, its results sheet records this hash and corpus.test.ts fails if they differ.
  */
 export const SHA256_HISTORY: Readonly<Record<TradeModuleId, readonly string[]>> = {
-  insurance_pc: ["778d30abb141ae1259cce4e11d6cd319ba8fbeffd430136dd62689964e3ff334"],
-  events: ["3a9c30f3133b236289d6b1ef6e8c6886df4ddf5898a28911a21bf87ff1ce31af"],
+  insurance_pc: ["871d340f7626489ca98cd0dedf643da136a43e5e6520198fa30f35c349799874"],
+  events: ["e9db9a25be740d84931d3e7ce645b2426eada6c0808abc72e1f7eee6439c697a"],
 };
