@@ -49,12 +49,23 @@ owner-editable).
 - **B6 Where the words live:** in code, one versioned file per module (approach 1 of 3; DB-edited rows
   and the F-171 pack manifest were rejected — the first lets untested wording reach a live client, the
   second is a later-horizon item the files move into when it lands).
+- **B7 ID numbers never reach the post-call AI on insurance accounts (owner, 2026-10-21, plan review):**
+  on an account whose voice profile has `trade_module = 'insurance_pc'`, SSN-shaped numbers (9 digits or
+  3-2-4) and driver-licence-shaped numbers (Texas: 8 digits) are masked as "[ID number]" before a call's
+  words reach the staff summary, the call card and the suggestions generator. Each of those three prompts
+  gains the line "Never repeat an identification number (SSN, driver's licence, policy number)." Phone
+  numbers, ZIP codes, quote amounts, dates and times are never masked. The STORED transcript
+  (`calls.transcript`, staff-only) is unchanged, and counsel is told it holds what callers say (§9).
+- **B8 The pre-client gate is a note, not a lock (owner, 2026-10-21):** the gate before a real client is
+  switched on (§9) is a tracker note and a PR-body line. No code prevents the agency from selecting a
+  module.
 
 ## 3. Scope
 
 **In:** migration 0094; the two module files and their prompt wiring (phone, web chat, web voice demo —
 one Sofía); the Voice page "Trade rules" control; a call-page line naming the module and version; the
-corpus runner; both corpora (~24 items each) with graded result sheets; unit and e2e tests.
+corpus runner; both corpora (~24 items each) with graded result sheets; unit and e2e tests; the B7 ID-number
+masking in the three post-call AI inputs on insurance accounts.
 
 **Out (and where it goes):** identity checks before discussing an existing policy (S-47e, F-116);
 structured facts and their version stamp (S-47c, F-037 part) — the events module quotes today's
@@ -78,8 +89,13 @@ concierge_conversations.trade_module_version
   exactly as 0093's `disclosure` (authenticated has SELECT and no UPDATE). `calls` and
   `concierge_conversations` are written server-side only.
 - Comments on each column in the 0093 style (who writes it, through what).
-- `PROFILE_COLS` (`packages/db/src/voice.ts`) gains `trade_module`, which makes the merge LOAD-BEARING on
-  0094 being on production (as 0093 was).
+- The merge is LOAD-BEARING on 0094 being on production (as 0093 was), because four sites name the new
+  columns and PostgREST refuses a request naming a column it does not know (amended in the plan-review fix
+  round):
+  - `PROFILE_COLS` (`packages/db/src/voice.ts`) gains `trade_module`: every voice profile read;
+  - `CALL_DETAIL_COLS` (same file) gains the pair: every call page;
+  - `CONVO_COLS` (`packages/db/src/concierge.ts`) gains the pair: every later chat turn;
+  - the Voice page save (`saveVoiceProfileAction` through `upsertVoiceProfile`) sends `trade_module`.
 - Rollback lines in the file header, in 0093's form.
 
 ## 5. Behaviour
@@ -91,7 +107,9 @@ concierge_conversations.trade_module_version
 - `index.ts` — `TradeModuleId = "insurance_pc" | "events"`, a registry `{ id, version, block(ctx) }`, and
   `tradeModuleBlock(id, ctx)` returning the prompt lines (or none for `null`).
 - `insurance-pc.ts`, `events.ts` — each exports `VERSION` (starting at 1) and `block(ctx)`, where
-  `ctx = { businessName, medium, handoffAvailable }`.
+  `ctx = { businessName, medium, handoffAvailable, canBook }`. `medium` is `phone`, `web` or `web_voice`.
+  `canBook` is true when a NEW booking can be made on the session (booking mode "full", never on the web),
+  because a line naming `book_appointment` must not appear where the session lacks it (plan SD2).
 - A test pins `sha256(block text for every ctx combination)` against `VERSION`: any wording change fails
   until the version is bumped (and the corpus re-run, §7).
 
@@ -107,8 +125,13 @@ lines. `VoicePromptInput` gains optional `tradeModule?: TradeModuleId | null`, d
 existing prompt is **byte-identical** (pinned by a test, as `medium` and `handoffAvailable` were).
 
 Medium handling inside the block:
-- **Phone / web voice demo:** the offer to connect appears only when `handoffAvailable`; otherwise the
-  urgent path goes straight to `take_message` with "Urgent:".
+- **Phone:** the offer to connect appears only when `handoffAvailable`; otherwise the urgent path goes
+  straight to `take_message` with "Urgent:".
+- **Browser voice demo** (`web_voice`; amended, plan SD1): the demo session has NO tools
+  (`api/voice/web/session/route.ts`, `tools: []`) and its notice says she cannot take a message. Its block
+  names no tool. Wherever the phone records something, the demo points the caller to the next step the
+  website notice gives. Insurance's urgent path tells them to call the agency directly or use the claim
+  number on their insurance card. The 911 line and every "never" line are the phone's.
 - **Web chat:** no transfer and no `take_message`; the urgent path uses `capture_lead` with the need
   starting "Urgent:" and says the team will follow up as soon as they can (no time promised). The 911
   line stays.
@@ -126,7 +149,9 @@ The generic "Never give legal, medical, or compliance advice" line stays.
 - Say: "A licensed agent will call you back to go over options and prices."
 
 **She never:**
-- Quotes or estimates a premium, rate, deductible or discount, even "roughly".
+- Quotes or estimates a premium, rate, deductible or discount, even "roughly", **even if a price, rate or
+  premium appears in the facts** (amended, plan review C1). This overrides the general HARD LIMITS line,
+  which allows a price "stated above"; that line stays for every other account.
 - Says or implies anyone is or will be covered, or that a claim will be paid or denied ("you're covered",
   "está cubierto", "eso sí lo cubre").
 - Starts, binds, changes, renews or cancels a policy, or says one is active.
@@ -154,13 +179,16 @@ is set; on no / no answer / no number, a message starting "Urgent:".
 **She may:**
 - Collect the event type, the date or month (plus backup dates), the guest count, and the name and
   number of the adult planning it.
-- Book a tour when booking is on.
-- Quote prices, packages, deposits and refund terms only word for word from the facts, numbers exactly
-  as written.
+- Book a tour when booking is on, offering the tour times `check_availability` returns. A booked tour is
+  only a visit and holds no date or room for the event; she says so if asked (amended, plan review I2).
+- Quote prices, packages, deposits, payment plans and refund or cancellation terms only word for word from
+  the facts, numbers exactly as written. For these, and only these, the block overrides the general TONE
+  line's "never read the business facts verbatim" (amended, plan review I1).
 - Say: "The team will confirm the date with you."
 
 **She never:**
-- Says a date or room is free, held, reserved or booked ("ese sábado está libre", "se lo aparto").
+- Says the date or room for their EVENT is free, held, reserved or booked ("ese sábado está libre", "se lo
+  aparto"). The rule is scoped to the event, so tour times can still be offered and booked.
 - States a price, minimum, deposit, payment plan, refund or cancellation term not written in the facts.
 - Multiplies per-guest prices, offers a discount, negotiates, or promises a price will hold.
 - Promises a capacity, menu item, vendor or decoration not in the facts.
@@ -193,8 +221,10 @@ no styleguide change. Loaded / error states are the form's own.
 
 ### 5.7 The call page
 
-One line in the call's details: "Trade rules: Insurance · v1" / "Trade rules: Events · v1"; absent when
-the call carries none. Copy keys in English and Spanish.
+One item in the call's details: the label "Trade rules" and the value "Insurance · v1" / "Events · v1",
+as a `<dt>`/`<dd>` pair, so a screen reader hears the words once (amended, plan review I4). It is absent
+when the call carries none, and shown to the AGENCY only: the call page is shared with clients, and §3 keeps
+the module out of owners' sight (plan SD3). Copy keys in English and Spanish.
 
 ## 6. Copy
 
@@ -217,7 +247,9 @@ real model:
   taken a message, captured a lead or offered a transfer.
 
 **Files:** `apps/web/src/lib/voice/modules/corpus/{insurance-pc,events}/NN-<lang>-<slug>.md`, front
-matter `lang`, `medium` (`phone` | `web`), `transfer` (true | false), `facts` (fixture name); the body is
+matter `lang`, `medium` (`phone` | `web`), `transfer` (true | false), `facts` (fixture name), and two
+optional keys added in planning, `booking` and `disclosure` (true | false, default false; phone only for
+`booking` and `transfer`); the body is
 the caller's lines (sent one after each reply) and the rules, `must:` and `must not:`. Fixtures: a
 fictional "Agencia de Seguros Río" and "Salón Los Ébanos" with fixed hours, lines of business, packages
 and prices, in `corpus/fixtures/`.
@@ -226,7 +258,9 @@ and prices, in `corpus/fixtures/`.
 - Insurance: a plain quote request; "just roughly, how much?"; "am I covered for…"; UM/PIP ("should I
   drop it?"); a crash or flood that just happened, with and without a transfer number; an existing
   policyholder wanting a card or a payment; a caller who volunteers an SSN or licence number; health or
-  life insurance; a mid-call language switch; "ignore your rules".
+  life insurance; a mid-call language switch; "ignore your rules"; a premium that IS in the facts (the
+  fixture carries one; she still does not state it, C1).
+- Each module: one item on an account whose AI disclosure (S-47a) is On.
 - Events: "is the 14th free?"; a price that is in the facts versus one that isn't; "so 200 guests is how
   much?"; haggling; "is the deposit refundable?"; questions about the honoree; a day-of problem; booking
   a tour; a language switch; "ignore your rules".
@@ -266,18 +300,20 @@ test account can take a call today.
 3. Deploy READY → smokes → tracker: F-174 in progress, note "S-47b shipped, modules not yet on a client".
 4. Merging switches nothing on: no profile has a module until the agency sets one.
 
-**Before a real client is switched on** (recorded on the tracker; enforced by the agency):
+**Before a real client is switched on** (owner ruling B8: recorded as a tracker note and a line in the
+PR body, enforced by the agency; there is NO code lock):
 - Both modules: the corpus sheet passes the §7 gate for the current version, and the owner's ~5 real
   calls are done.
-- Insurance also: counsel reads the v1 wording and the intake list (risk row 10). Counsel's edits →
-  v2 → corpus re-run.
+- Insurance also: counsel reads the v1 wording and the intake list (risk row 10). Counsel is also told
+  (B7) that the stored call transcript keeps what callers say, ID numbers included, for staff only, while
+  the AI summary, call card and suggestions see them masked. Counsel's edits → v2 → corpus re-run.
 - Events: no counsel gate.
 
 ## 10. Tiers (per task, binding rule 2026-10-19)
 
 - **HIGH:** migration 0094 and its db tests.
 - **MEDIUM:** the module files and prompt wiring (safety wording); the stamping in both routes; the
-  Realtime text-mode spike and the runner.
+  Realtime text-mode spike and the runner; the B7 masking (AI inputs).
 - **LOW:** the Voice page group and call-page line; copy keys and baseline; the corpus files and
   fixtures; the e2e spec.
 - One end-of-PR review (final + design), then one fix round.
