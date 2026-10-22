@@ -582,7 +582,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
 
   it("the web prompt's block names capture_lead and no transfer, even with handoffAvailable true (mutation: medium hard-coded 'phone' -> FAILS)", () => {
     const web = buildSystemPrompt(baseInput({ medium: "web", handoffAvailable: true, tradeModule: "events" }), now);
-    expect(web).toContain(`- Then use capture_lead with a need that starts with "Urgent:", and tell them the team will follow up as soon as they can. Never promise a time.`);
+    expect(web).toContain(`- Once they have answered that, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
     // Bounded to the block: system-prompt.ts:183-187 lists transfer_to_human in TOOLS whenever handoffAvailable
     // is set, on any medium, and that line is NOT this PR's to change. Only the block must not name it.
     const blockText = web.slice(web.indexOf(EVT), web.indexOf("\n\nTOOLS"));
@@ -591,15 +591,20 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
   });
 
   it("the phone block offers to connect only when handoffAvailable (mutation: handoffAvailable: true in the ctx -> FAILS)", () => {
-    const offer = `- Then offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
+    const offer = `- Once they have answered that, offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
     expect(buildSystemPrompt(baseInput({ handoffAvailable: true, tradeModule: "insurance_pc" }), now)).toContain(offer);
     expect(buildSystemPrompt(baseInput({ handoffAvailable: false, tradeModule: "insurance_pc" }), now)).not.toContain(offer);
   });
 
   it("canBook follows the booking MODE, not the checkbox: Always take a message drops the tour line (mutation: canBook: input.bookingEnabled -> FAILS)", () => {
-    const tour = "- If they would like to see the venue, you may book a tour with book_appointment. You may offer the tour times check_availability returns; a booked tour is only a visit and holds no date or room for their event, so say so if they ask.";
-    expect(buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "hours_then_message", tradeModule: "events" }), now)).toContain(tour);
-    expect(buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "message_only", tradeModule: "events" }), now)).not.toContain(tour);
+    const tour = "- If they would like to see the venue, you may book a tour with book_appointment. Call check_availability for the exact date they named (work it out from today's date above, and check that its weekday is the one they said), and offer only the times it returns. Never say a day has no tours or no times without checking that day. When they pick a time, confirm it back once, then book it. A booked tour is only a visit and holds no date or room for their event, so say so if they ask.";
+    const noVisit = "- You cannot book a visit or a tour here. Never offer, invite or ask for a day or a time to visit. If they want to see the venue, note it with the rest of what you record, and tell them the team will set up a visit with them.";
+    const full = buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "hours_then_message", tradeModule: "events" }), now);
+    const messageOnly = buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "message_only", tradeModule: "events" }), now);
+    expect(full).toContain(tour);
+    expect(full).not.toContain(noVisit);
+    expect(messageOnly).not.toContain(tour);
+    expect(messageOnly).toContain(noVisit);
   });
 
   it("the browser voice demo gets the demo variant (SD1)", () => {

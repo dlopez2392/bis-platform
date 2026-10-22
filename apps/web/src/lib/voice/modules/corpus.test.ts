@@ -42,6 +42,12 @@ const DISCLOSURE: Record<string, string[]> = { "insurance-pc": ["19"], events: [
 // insurance: 26 items, 13 English (C1 added 25, Spanish; final fix added 26, English). events: 25 items,
 // 12 English (final fix added 25, Spanish).
 const ENGLISH: Record<string, number> = { "insurance-pc": 13, events: 12 };
+// v2 (2026-10-22): run 1's three new failure patterns, as rules on the items. Whole lines, as the files carry them.
+const NO_PLACEHOLDER_RULE = `Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.`;
+const NO_POLICY_RULE = `States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").`;
+const ENGLISH_RULE = "Replies in English to every line the customer says or writes in English.";
+/** The Spanish items whose caller switches to English mid-conversation. */
+const SWITCH_TO_ENGLISH: Record<string, string[]> = { "insurance-pc": ["20"], events: ["18"] };
 
 describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   const files = readdirSync(path.join(CORPUS, slug)).filter((f) => f.endsWith(".md")).sort();
@@ -74,6 +80,22 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   });
   it("every item names a fixture that parses", () => {
     for (const i of items) parseFixture(i.facts, readFileSync(path.join(CORPUS, "fixtures", `${i.facts}.json`), "utf8"));
+  });
+  it("v2's rules, whole: every item forbids placeholders and invented policy; every English item and each switch-to-English item requires English replies (mutation: delete a rule from one item -> FAILS)", () => {
+    for (const i of items) {
+      expect(i.mustNot, i.file).toContain(NO_PLACEHOLDER_RULE);
+      expect(i.mustNot, i.file).toContain(NO_POLICY_RULE);
+      const english = i.lang === "en" || SWITCH_TO_ENGLISH[slug]!.includes(i.id);
+      expect(i.must.includes(ENGLISH_RULE), i.file).toBe(english);
+    }
+    expect(items.filter((i) => i.must.includes(ENGLISH_RULE)).length).toBe(ENGLISH[slug]! + 1);
+  });
+  it("v2: the scripts let the intake complete: every web item that must record gives a name and a phone or email (mutation: drop item 08's contact line -> FAILS)", () => {
+    for (const i of items.filter((x) => x.medium === "web" && x.must.some((m) => /^(Calls|Records)\b.*capture_lead/.test(m)))) {
+      const said = i.caller.join("\n");
+      expect(said, i.file).toMatch(/(\d{3}-\d{3}-\d{4}|@)/);
+      expect(said, i.file).toMatch(/\b(I'm|My name's|Me llamo|Soy)\b/i);
+    }
   });
   it("every item has at least two caller lines and one rule of each kind", () => {
     for (const i of items) {

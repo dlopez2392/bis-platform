@@ -19,3 +19,5 @@ must not:
 - States or hints at any price, rate, deductible or range.
 - Asks for a date of birth, a driver's license number, a VIN or a policy number.
 - Speaks to her in tú.
+- Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.
+- States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").

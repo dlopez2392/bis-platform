@@ -150,6 +150,18 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
     const route = readFileSync(path.resolve(__dirname, "../../../app/api/concierge/[publicId]/turn/route.ts"), "utf8");
     expect(route).toContain(`case "needs_contact":\n      return { ok: false, error: ${JSON.stringify(NEEDS_CONTACT)} };`);
   });
+  /** Typed out from captureResult("unusable"): parseCaptureLead returns null with no fullName, and the route files nothing. */
+  const UNUSABLE = "Not recorded: their name is missing. Ask for it.";
+  it("web capture_lead with no name (blank, or the key missing) -> the live unusable refusal, even with a valid phone (v2; mutation: drop the null-lead branch -> FAILS)", () => {
+    expect(stubToolResult("capture_lead", { phone: "956-555-0199", need: "Urgent: flooding." }, WEB)).toEqual({ ok: false, error: UNUSABLE });
+    expect(stubToolResult("capture_lead", { fullName: "  ", email: "ana@example.com", need: "Quote: home." }, WEB)).toEqual({ ok: false, error: UNUSABLE });
+    // The phone tool takes a free-form `fields` object and is not this refusal's.
+    expect(stubToolResult("capture_lead", { fields: { need: "Quote: auto." } }, PHONE)).toEqual({ ok: true });
+  });
+  it("the unusable literal is still the live route's own (drift guard: edit the route's text -> FAILS)", () => {
+    const route = readFileSync(path.resolve(__dirname, "../../../app/api/concierge/[publicId]/turn/route.ts"), "utf8");
+    expect(route).toContain(`case "unusable":\n      return { ok: false, error: ${JSON.stringify(UNUSABLE)} };`);
+  });
   it("the stub's needs-contact decision is the live leadHasContact's, case by case (parity with lib/concierge/lead.ts)", () => {
     const cases = [
       { fullName: "Ana", need: "x" },
@@ -240,7 +252,7 @@ describe("the slugs, the engine, and what the script may touch", () => {
     expect(moduleForSlug("insurance-pc")).toBe("insurance_pc");
     expect(moduleForSlug("insurance_pc")).toBeNull();
   });
-  it("the phone engine is PROVISIONALLY realtime until Task 0's spike runs, and the fallback is gpt-4o (spec section 7; mutation: \"chat\" -> FAILS)", () => {
+  it("the phone engine is realtime, as Task 0's spike showed on 2026-10-22 (run 39814905846: gpt-realtime takes a text-only session via output_modalities), and the fallback is gpt-4o (spec section 7; mutation: \"chat\" -> FAILS)", () => {
     expect(DEFAULT_PHONE_ENGINE).toBe("realtime");
     expect(PHONE_FALLBACK_MODEL).toBe("gpt-4o");
   });

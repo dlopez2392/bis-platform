@@ -146,7 +146,29 @@ Medium handling inside the block:
 
 The generic "Never give legal, medical, or compliance advice" line stays.
 
-### 5.3 Insurance (property and casualty), v1 — content
+### 5.3 Insurance (property and casualty) — content (v1, amended by v2)
+
+**v2 (2026-10-22), from corpus run 1** (GitHub run 39816008919; every rule graded, quoted evidence per item).
+What changed and why, each fixed at its cause in the block's text (`modules/insurance-pc.ts`):
+- **Language.** 13 of 25 English phone items got Spanish replies. Every v1 sample read `In Spanish: "…"` with
+  no condition, so a Spanish sentence sat in her instructions as a thing to say. The block now opens with
+  "Reply in the language they are using right now…", and every Spanish sample says "Only when they are
+  speaking Spanish, say instead:". The base LANGUAGE line is untouched (no-module prompts stay byte-identical).
+- **Record as soon as she knows the need.** She waited for a name and recorded nothing. Now: record as soon as
+  she knows what they need; the number is the one they gave, else caller ID when shown, else she asks for the
+  digits ("this phone" is not a number); no name on the phone → `take_message`; never end with the request
+  unrecorded. On the web a name is still required, because the chat route files nothing without one
+  (`captureResult("unusable")`); a first name is enough, and she never makes one up.
+- **No placeholders.** "User", "Guest", "Best time: any time", "no se indicó" are named and forbidden; she
+  never takes a name from an email address.
+- **No invented policy.** She never states a policy, promotion, rule, deadline or offering the facts do not
+  ("no payments by phone", "tarifa promocional"); she may say what she herself cannot do. C1 sharpened: she
+  never repeats, confirms or characterises any price or premium, including one the caller read on a flyer.
+- **The offer to connect is for the URGENT path only** (a routine change got three offers).
+- **Danger first.** The danger question comes before any tool call, and the offer (or the "Urgent:" message)
+  waits for its answer, so "nobody's hurt" is no longer read as "no" to the transfer; the urgent message
+  never waits for a name.
+
 
 **She may:**
 - Say which kinds of insurance the agency writes and which companies it works with, only if the facts say so.
@@ -182,7 +204,18 @@ in danger → call 911 first; she may add that the number to report a claim is u
 card; then the offer ("¿Quiere que le comunique con alguien de la agencia ahora?") where a transfer number
 is set; on no / no answer / no number, a message starting "Urgent:".
 
-### 5.4 Events and venues, v1 — content
+### 5.4 Events and venues — content (v1, amended by v2)
+
+**v2 (2026-10-22), from corpus run 1** (`modules/events.ts`): the same language line, Spanish-sample marker,
+record-as-soon-as, no-placeholder, no-invented-policy ("prices are fixed", "no discounts", "you arrange the
+decorations"), URGENT-only offer and danger-first changes as §5.3, plus:
+- **Every condition with a price or term**, every time ("for up to 200 guests" and "once" were dropped).
+- **The date sample** is now "I can't see the calendar, but the team will confirm the date with you."
+- **Visits.** Where no new booking can be made (booking off, "Always take a message", the web, the demo) she
+  never offers, invites or asks for a day or time to visit; the team sets up a visit. Where booking is on she
+  calls `check_availability` for the exact date named (weekday checked against today's date), offers only
+  the times it returns, never says a day has none without checking it, and books once they pick.
+
 
 **She may:**
 - Collect the event type, the date or month (plus backup dates), the guest count, and the name and
@@ -248,9 +281,9 @@ text is not catalogue copy (it is model instructions).
 `gpt-4o-mini` (concierge `route.ts:71`). Each corpus item names its medium; the runner uses that medium's
 real model:
 - **Phone:** a Realtime session opened text-only, with exactly `buildSystemPrompt(…, medium "phone")` and
-  `toolSchemas(…)` for that item's flags. **Assumption to verify first (plan Task 0 spike):** that
-  `gpt-realtime` accepts a text-only output modality. If it does not, phone items run on `gpt-4o` with the
-  same prompt and tools, the results sheet says so, and the real calls carry more weight.
+  `toolSchemas(…)` for that item's flags. **Verified 2026-10-22 (plan Task 0 spike, GitHub run
+  39814905846):** `gpt-realtime` accepts a text-only session through `output_modalities`. `gpt-4o` with the
+  same prompt and tools stays as the runner's `--phone-engine chat` fallback; a sheet that used it says so.
 - **Chat:** chat completions on `gpt-4o-mini` with the concierge's `CAPTURE_LEAD_TOOL`.
 - **Tools are stubbed** (each returns ok, except the live refusals a corpus item can trigger, and each is
   logged), so the transcript shows when she would have taken a message, captured a lead or offered a

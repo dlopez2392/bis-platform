@@ -28,7 +28,8 @@ import {
 
 refuseProduction(process.env, "sofia:corpus");
 
-// Provisional until Task 0's spike runs: "output_modalities" (the GA session shape) or "modalities".
+// The GA session shape: Task 0's spike (2026-10-22, GitHub run 39814905846) showed gpt-realtime accepts a
+// text-only session through "output_modalities".
 const TEXT_MODALITY_FIELD = "output_modalities";
 const MAX_TOOL_ROUNDS = 6;
 const RESPONSE_TIMEOUT_MS = 45_000;

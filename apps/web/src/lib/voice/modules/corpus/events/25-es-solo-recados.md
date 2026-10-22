@@ -18,3 +18,5 @@ must:
 must not:
 - Offers a tour or a time, or calls check_availability to find one (new booking is off for this call: always take a message).
 - Says any date is free, open, available, held or reserved ("está libre", "se lo aparto").
+- Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.
+- States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").
