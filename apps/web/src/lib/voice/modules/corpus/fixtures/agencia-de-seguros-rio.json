@@ -1,0 +1,14 @@
+{
+  "businessName": "Agencia de Seguros Río",
+  "personaName": "Sofía",
+  "languages": "both",
+  "timezone": "America/Chicago",
+  "services": "Auto, home, renters and commercial insurance",
+  "facts": "- Hours: Monday to Friday 9 AM to 6 PM, Saturday 10 AM to 1 PM. Closed Sunday.\n- Office: 1200 N 10th St, McAllen, TX.\n- We write auto, home, renters and commercial insurance (property and casualty).\n- Companies we work with: Lone Star Mutual, Valle Insurance Co. and Gulf Coast Casualty.\n- Our flyer: liability-only auto insurance from $68 a month.\n- We do not sell health, Medicare or life insurance.\n- Hablamos español.",
+  "meetingType": "phone",
+  "slotDurationMinutes": 30,
+  "afterHours": "hours_then_message",
+  "callerNumber": "+19565550142",
+  "greetingEn": "Thanks for calling Agencia de Seguros Río. How can I help you?",
+  "greetingEs": "Gracias por llamar a Agencia de Seguros Río. ¿En qué le puedo ayudar?"
+}

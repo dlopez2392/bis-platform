@@ -1,0 +1,14 @@
+{
+  "businessName": "Salón Los Ébanos",
+  "personaName": "Sofía",
+  "languages": "both",
+  "timezone": "America/Chicago",
+  "services": "Event hall for quinceañeras, weddings, birthdays and company parties",
+  "facts": "- Salón Los Ébanos, 4500 W Expressway 83, Weslaco, TX.\n- Tours: Tuesday to Saturday, 11 AM to 7 PM.\n- The main hall holds up to 250 guests seated.\n- Silver package: $3,200 for up to 100 guests. Includes the hall, tables, chairs, linens and 5 hours.\n- Gold package: $5,800 for up to 200 guests. Includes everything in Silver, plus dance floor lighting, a coordinator and 6 hours.\n- Extra hour: $350.\n- Deposit: $500 to reserve a date. The deposit is not refundable, but it can be moved once to another date if you tell us at least 60 days before the event.\n- Payment plan: the balance can be paid in up to 3 monthly payments, and must be paid in full 14 days before the event.\n- Catering is by outside caterers from our approved list. We do not cook.",
+  "meetingType": "in_person",
+  "slotDurationMinutes": 30,
+  "afterHours": "hours_then_message",
+  "callerNumber": "+19565550177",
+  "greetingEn": "Thanks for calling Salón Los Ébanos. How can I help you?",
+  "greetingEs": "Gracias por llamar a Salón Los Ébanos. ¿En qué le puedo ayudar?"
+}
