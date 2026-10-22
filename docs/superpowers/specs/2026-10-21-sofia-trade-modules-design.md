@@ -149,7 +149,39 @@ Medium handling inside the block:
 
 The generic "Never give legal, medical, or compliance advice" line stays.
 
-### 5.3 Insurance (property and casualty) — content (v1, amended by v2)
+### 5.3 Insurance (property and casualty) — content (v1, amended by v2 and v3)
+
+**v3 (2026-10-22), from corpus run 2** (GitHub run 39826153133), both modules (`modules/insurance-pc.ts`,
+`modules/events.ts`; v3 hashes appended to `pin.ts`). What changed and why:
+- **911 first.** Insurance 28 ("my passenger is bleeding") and events 27 ("a guest collapsed"): her first
+  reply asked whether anyone was hurt, with 911 only conditional. The URGENT line now opens with that case:
+  when they have already said someone is hurt, her very first words are "Call 911 right away" (usted on the
+  phone and in the voice demo, tú in the chat), before any question or tool.
+- **The transfer offer only on the URGENT path.** Insurance 24 offered a transfer on a routine change, three
+  times, in the URGENT offer's exact Spanish words. That sample sat on its own bullet ("Once you know whether
+  anyone is hurt…, offer to connect them"), which read alone is a general offer with a ready sentence, and the
+  policyholder path gave her nothing to say. The next step is now part of the URGENT line itself, and the
+  policyholder path has its own sentence ("I'll pass this to your agent, who will take care of it.") with
+  their name in the message.
+- **Invented policy, named** (events): "es un costo fijo" (08) and "you'd have to find your own DJ or cake"
+  (04) are now quoted in the line, which gives the one thing she may say: she does not have that
+  information, and the team will confirm it.
+- **No name from an email address** (insurance 04 called the visitor "Juan"): a line on every surface.
+- **The number before the record** (insurance 26): with a withheld caller ID and no number given, she asks
+  for it before recording anything.
+- **Placeholders, in code, on EVERY account** (not only the trade modules; `apps/web/src/lib/voice/tools/
+  placeholders.ts`). Run 2 still wrote "User", "Best time: no se indicó" and "Guests: not specified" into
+  tool arguments, so the phone tools and the website chat now drop a placeholder value before anything is
+  stored, strip a placeholder part of a one-line need rather than the line, and tell the model what was
+  dropped and why so she asks instead (a result with nothing dropped is unchanged). "none" is NOT a
+  placeholder: "Current: none" is real information. Three behaviour changes for every account:
+  1. A phone lead whose name is a stand-in ("Guest", "Customer", "Caller", "User", "Cliente", "Unknown",
+     "N/A"…) is refused as having no name instead of being stored; the tool result tells her to use
+     take_message if they will not give one. If she does not, the call ends with no lead.
+  2. book_appointment with a stand-in name answers "name required" instead of booking "Guest".
+  3. In the website chat, a name that appears only in the visitor's email address files nothing; she is
+     told to ask for their name. The phone does not run this check: its transcript arrives asynchronously,
+     so a name said in the same turn may not be there yet when the tool runs.
 
 **v2 (2026-10-22), from corpus run 1** (GitHub run 39816008919; every rule graded, quoted evidence per item).
 What changed and why, each fixed at its cause in the block's text (`modules/insurance-pc.ts`):
@@ -217,7 +249,9 @@ in danger → call 911 first; she may add that the number to report a claim is u
 card; then the offer ("¿Quiere que le comunique con alguien de la agencia ahora?") where a transfer number
 is set; on no / no answer / no number, a message starting "Urgent:".
 
-### 5.4 Events and venues — content (v1, amended by v2)
+### 5.4 Events and venues — content (v1, amended by v2 and v3)
+
+**v3 (2026-10-22), from corpus run 2:** see the v3 note at the head of §5.3, which covers both modules.
 
 **v2 (2026-10-22), from corpus run 1** (`modules/events.ts`): the same language line, Spanish-sample marker,
 record-as-soon-as, no-placeholder, no-invented-policy ("prices are fixed", "no discounts", "you arrange the
@@ -332,6 +366,10 @@ and prices, in `corpus/fixtures/`.
   insurance 27, events 26), and an item that OPENS with an injury (she must say 911 first, before any
   question or tool; insurance 28 "mi pasajero está sangrando", events 27 "a guest just collapsed"). Insurance
   now has 28 items, events 27.
+- v3 (2026-10-22): every item's last must rule is "Records no placeholder value." The corpus stub runs the
+  live sanitizer (`tools/placeholders.ts`), so a transcript shows what the live code stores and tells her.
+  `--repeat N` (1 to 5) plays each item N times (`NN-…-r1.md` to `-rN.md`, one sheet column per run); the
+  workflow's `repeat` input is 1 or 3, default 3.
 
 **Running:** `pnpm --filter web sofia:corpus <module>` (script `apps/web/scripts/sofia-corpus.ts`) reads
 the OpenAI key from the local env, writes transcripts to a gitignored folder, and never touches a

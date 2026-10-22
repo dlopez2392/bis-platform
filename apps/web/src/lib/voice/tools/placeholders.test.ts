@@ -9,7 +9,7 @@ import {
 
 /** Every "no value" placeholder, in any field, any case, with or without accents or a trailing period. */
 const GENERIC_STRIP = [
-  "not specified", "Not Specified.", "unspecified", "Unknown", "N/A", "n/a", "None", "not given",
+  "not specified", "Not Specified.", "unspecified", "Unknown", "N/A", "n/a", "not given",
   "No se indicó", "no se indico", "NO SE INDICÓ.", "No especificado", "no especificada", "Sin especificar",
   "Desconocido", "desconocida",
 ];
@@ -24,6 +24,19 @@ describe("isPlaceholderValue: a whole value that says nothing was given", () => 
   it.each(GENERIC_STRIP)("strips %j", (v) => { expect(isPlaceholderValue(v)).toBe(true); });
   it.each([...NAME_KEEP, ...BEST_TIME_FILLER, "Guest", "User", "no", "nonetheless", "unknown caller ID, call 956-555-0100"])(
     "keeps %j (not a generic placeholder)", (v) => { expect(isPlaceholderValue(v)).toBe(false); });
+});
+
+// Review fix (v3): "none" is real information, never a placeholder: "Current: none" is no current insurer,
+// "Guests: none yet" is a real answer. Re-adding "none" to the list fails these rows by name.
+describe("\"none\" and its Spanish forms are real answers, kept everywhere", () => {
+  it.each(["none", "None", "ninguno", "ninguna", "none yet"])("isPlaceholderValue keeps %j", (v) => {
+    expect(isPlaceholderValue(v)).toBe(false);
+  });
+  it.each(["Quote: auto. Current: none.", "Quote: auto. Current: ninguna.", "Event: boda. Guests: none yet.", "Current: none"])(
+    "keeps %j unchanged", (line) => { expect(stripPlaceholderSegments(line)).toEqual({ text: line, dropped: [] }); });
+  it("a phone lead field of \"none\" is kept", () => {
+    expect(sanitizeLeadFields({ fullName: "Ana", need: "Quote: auto. Current: none.", currentCompany: "none" }).dropped).toEqual([]);
+  });
 });
 
 describe("isPlaceholderName: a stand-in instead of a name", () => {
@@ -208,10 +221,10 @@ describe("sanitizeWebLead: the website chat's capture_lead", () => {
       .toEqual({ lead: null, dropped: [{ field: "fullName", value: "Juan", why: "email_name" }] });
   });
   it("strips the need's placeholder parts and a placeholder phone or email, keeps the rest", () => {
-    expect(sanitizeWebLead({ fullName: "Diana", email: "diana@example.com", phone: "none", need: "Quote: auto. Best time: any time." }, said))
+    expect(sanitizeWebLead({ fullName: "Diana", email: "diana@example.com", phone: "n/a", need: "Quote: auto. Best time: any time." }, said))
       .toEqual({
         lead: { fullName: "Diana", email: "diana@example.com", phone: "", need: "Quote: auto." },
-        dropped: [{ field: "phone", value: "none", why: "placeholder" }, { field: "need", value: "Best time: any time.", why: "filler" }],
+        dropped: [{ field: "phone", value: "n/a", why: "placeholder" }, { field: "need", value: "Best time: any time.", why: "filler" }],
       });
   });
   it("a clean lead passes through unchanged", () => {

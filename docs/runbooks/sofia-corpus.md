@@ -22,6 +22,7 @@ gh workflow run sofia-corpus.yml --ref main -f step=spike
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=events -f only=7
 gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=insurance-pc -f phone_engine=chat
+gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both -f repeat=1
 ```
 
 | Input | Values | Default |
@@ -30,6 +31,7 @@ gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=insurance-p
 | `module` | `both`, `insurance-pc`, `events` | `both` |
 | `phone_engine` | `realtime` (phone items on gpt-realtime, text only) or `chat` (phone items on gpt-4o) | `realtime` |
 | `only` | one item number, `7` or `07`; empty plays every item | empty |
+| `repeat` | 1 or 3: plays each item that many times; 3 writes NN-…-r1.md to -r3.md and a sheet with one column per run | 3 |
 
 The run uses the code's default Realtime model (`gpt-realtime`,
 `apps/web/src/lib/voice/session-config.ts`). If production's Vercel

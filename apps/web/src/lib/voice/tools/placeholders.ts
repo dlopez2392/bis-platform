@@ -21,9 +21,10 @@ function norm(s: string): string {
     .replace(/^["'“”«»(\[]+/, "").replace(/["'“”«»)\].,;:!?]+$/, "").trim();
 }
 
-/** Says nothing was given, in any field. */
+/** Says nothing was given, in any field. NOT "none" / "ninguno" / "ninguna" (review fix): those are real answers
+ *  ("Current: none" is no current insurer, "Guests: none yet"), and dropping them loses information. */
 const GENERIC = new Set([
-  "not specified", "unspecified", "unknown", "n/a", "none", "not given",
+  "not specified", "unspecified", "unknown", "n/a", "not given",
   "no se indico", "no especificado", "no especificada", "sin especificar", "desconocido", "desconocida",
 ]);
 /** A stand-in for a name. */
