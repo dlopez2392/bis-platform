@@ -215,6 +215,7 @@ export type ConciergeConversationRow = {
   trade_module: TradeModuleSetting | null; trade_module_version: number | null;
 };
 
+// trade_module, trade_module_version (0094): LOAD-BEARING. Read on every later chat turn, so a project without 0094 fails every chat past its first message.
 const CONVO_COLS =
   "id, account_id, form_id, ip_hash, turn_count, transcript, submission_id, " +
   "locale, attribution, origin, trade_module, trade_module_version";

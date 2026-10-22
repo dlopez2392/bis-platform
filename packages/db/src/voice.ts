@@ -74,6 +74,7 @@ const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
  * so a column added here and forgotten there returns a row missing it, typed
  * as present, with no type error and no failing test.
  */
+// trade_module (0094): LOAD-BEARING. Read on every call and every chat turn, so a project without 0094 fails every call.
 export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
