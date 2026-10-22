@@ -127,6 +127,7 @@ const PROFILE_ROW = {
   greeting_en: "Hi, thanks for calling Rio Roofing.", greeting_es: "Hola, gracias por llamar.",
   facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
+  trade_module: null,
 };
 const CALENDAR_ROW = {
   id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,

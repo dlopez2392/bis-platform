@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { newPublicId } from "./forms";
-import { PROFILE_COLS, getVoiceProfile, type VoiceProfileRow } from "./voice";
+import { PROFILE_COLS, getVoiceProfile, type VoiceProfileRow, type TradeModuleSetting } from "./voice";
 import { assistantProfileGap } from "./profile-ready";
 
 /** One side of one exchange. Same shape as `calls.transcript`'s
@@ -212,20 +212,23 @@ export type ConciergeConversationRow = {
   id: string; account_id: string; form_id: string; ip_hash: string;
   turn_count: number; transcript: ConciergeTurn[]; submission_id: string | null;
   locale: string; attribution: Record<string, string>; origin: string | null;
+  trade_module: TradeModuleSetting | null; trade_module_version: number | null;
 };
 
 const CONVO_COLS =
   "id, account_id, form_id, ip_hash, turn_count, transcript, submission_id, " +
-  "locale, attribution, origin";
+  "locale, attribution, origin, trade_module, trade_module_version";
 
 export async function createConciergeConversation(
   db: SupabaseClient,
   input: { accountId: string; formId: string; ipHash: string; locale: string;
-           attribution: Record<string, string>; origin: string | null },
+           attribution: Record<string, string>; origin: string | null;
+           tradeModule?: { module: TradeModuleSetting; version: number } },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("concierge_conversations").insert({
     account_id: input.accountId, form_id: input.formId, ip_hash: input.ipHash,
     locale: input.locale, attribution: input.attribution, origin: input.origin,
+    ...(input.tradeModule === undefined ? {} : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
   }).select("id").single();
   // The fallback covers `!data && !error` -- an insert that reports success
   // with no row and no error would otherwise render as "failed: undefined".

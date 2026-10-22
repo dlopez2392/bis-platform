@@ -386,6 +386,7 @@ export async function POST(
         form_id: profile.concierge_form_id, ip_hash: ipHash,
         turn_count: 0, transcript: [], submission_id: null,
         locale, attribution, origin,
+        trade_module: null, trade_module_version: null,
       };
     } else {
       // ── TURN 2+ ─────────────────────────────────────────────────────────

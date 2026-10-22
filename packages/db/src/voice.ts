@@ -10,6 +10,9 @@ export type PhoneNumberRow = {
 };
 /** 0093. Off / Trial / On (spec S-47a §4): the TypeScript twin of voice_profiles_disclosure_check. */
 export type DisclosureSetting = "off" | "trial" | "on";
+/** 0094. The TypeScript twin of voice_profiles_trade_module_check (and calls' and concierge_conversations'
+ *  module CHECKs): which trade rules Sofía follows (spec S-47b section 4). NULL = the general rules only. */
+export type TradeModuleSetting = "insurance_pc" | "events";
 export type VoiceProfileRow = {
   id: string; account_id: string; persona_name: string;
   greeting_en: string; greeting_es: string; facts: string; services: string;
@@ -28,6 +31,9 @@ export type VoiceProfileRow = {
   /** 0093. Whether Sofía says she is an AI right after the greeting. Agency-written through serviceDb()
    *  by saveVoiceProfileAction; authenticated has SELECT only (0020). */
   disclosure: DisclosureSetting;
+  /** 0094. Which trade rules Sofía follows on calls and in the chat; null = general rules only.
+   *  Agency-written through serviceDb() by saveVoiceProfileAction; authenticated has SELECT only. */
+  trade_module: TradeModuleSetting | null;
 };
 /**
  * `forward_calls` is omitted on purpose (0058): `setForwardCalls` is its only
@@ -72,7 +78,7 @@ export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
   "textback_body_es, textback_body_es_basis, " +
-  "public_id, concierge_enabled, concierge_form_id, forward_calls, disclosure";
+  "public_id, concierge_enabled, concierge_form_id, forward_calls, disclosure, trade_module";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,
@@ -303,12 +309,17 @@ export async function setForwardCalls(
  * row that tries). Named only when given, the same deployment-ordering reason
  * as the token: an Off account's insert is byte-identical to before, and 0093
  * goes to both projects before the build that sends it.
+ *
+ * `tradeModule` (0094, S-47b) writes `trade_module` and `trade_module_version` together, as one object, from
+ * the same profile read that built the call's prompt; 0094's pair CHECK refuses a row that splits them. Named
+ * only when given, for the same deployment-ordering reason as the token and the disclosure stamp.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
   input: {
     phoneNumberId: string; callerE164: string | null; handoffToken?: string;
     disclosure?: { disclosed: boolean; setting: "trial" | "on" };
+    tradeModule?: { module: TradeModuleSetting; version: number };
   },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
@@ -318,6 +329,9 @@ export async function startCallRow(
       ...(input.disclosure === undefined
         ? {}
         : { disclosed: input.disclosure.disclosed, disclosure_setting: input.disclosure.setting }),
+      ...(input.tradeModule === undefined
+        ? {}
+        : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
     })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);
@@ -974,13 +988,15 @@ export type CallListRow = {
 export type CallDetailRow = CallListRow & {
   turn_count: number; transcript: TranscriptEvent[];
   summary: string; booking_id: string | null;
+  trade_module: TradeModuleSetting | null; trade_module_version: number | null;
 };
 
 const CALL_LIST_COLS =
   "id, started_at, ended_at, duration_secs, outcome, language, caller_e164, contact_id, " +
   "conversation_id, contact:contacts(first_name, last_name)";
+// trade_module, trade_module_version (0094): LOAD-BEARING, so 0094 must be on a project before this build reads it.
 const CALL_DETAIL_COLS =
-  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id";
+  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version";
 
 export async function listCalls(
   db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},

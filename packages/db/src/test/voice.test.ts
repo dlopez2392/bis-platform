@@ -705,6 +705,22 @@ describe("call handoff accessors", () => {
     });
   });
 
+  it("startCallRow stamps trade_module and trade_module_version together when given, leaves both null when not, and getCall reads them back (S-47b; mutations: drop trade_module_version from the insert -> the pair CHECK refuses, FAILS; drop the pair from CALL_DETAIL_COLS -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const ins = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, tradeModule: { module: "insurance_pc", version: 1 } });
+      const ev = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, tradeModule: { module: "events", version: 3 } });
+      const none = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null });
+      const read = async (id: string) => {
+        const c = await getCall(db, accountId, id);
+        return [c?.trade_module, c?.trade_module_version];
+      };
+      expect(await read(ins.id)).toEqual(["insurance_pc", 1]);
+      expect(await read(ev.id)).toEqual(["events", 3]);
+      expect(await read(none.id)).toEqual([null, null]);
+    });
+  });
+
   it("markHandoffRequested stamps the moment the caller asked, and refuses a call in another account", async () => {
     await withTestAccount(async (db, accountId) => {
       const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");

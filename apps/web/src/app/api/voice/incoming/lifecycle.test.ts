@@ -188,6 +188,7 @@ const PROFILE_ROW = {
   greeting_en: "Hi, thanks for calling Rio Roofing.", greeting_es: "Hola, gracias por llamar.",
   facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
+  trade_module: null,
 };
 
 /** `handoffToken` is the value our own TeXML route smuggles onto the SIP URI

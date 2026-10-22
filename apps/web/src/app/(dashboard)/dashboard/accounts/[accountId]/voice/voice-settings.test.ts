@@ -398,6 +398,7 @@ describe("ConciergeCard — the render proof", () => {
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
   };
 
   function renderCard(opts: {
@@ -605,6 +606,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     enabled: true, textback_enabled: true, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}, brandName = "Rio Roofing"): string {
@@ -712,6 +714,7 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "trial",
+    trade_module: null,
   };
 
   function render(): string {
@@ -778,6 +781,7 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
   };
 
   it("renders the hint next to the After hours select", () => {
@@ -803,6 +807,7 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
     enabled: true, textback_enabled: false, textback_body: "",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
   };
   const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {
     profile: { ...BASE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
@@ -845,6 +850,7 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
     enabled: true, textback_enabled: true, textback_body: "Custom English body.",
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: null,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}): string {

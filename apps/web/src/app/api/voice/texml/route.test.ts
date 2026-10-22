@@ -56,6 +56,7 @@ const ENABLED_PROFILE = {
   greeting_en: "Hi", greeting_es: "Hola", facts: "-", services: "-",
   languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
+  trade_module: null,
 };
 
 beforeEach(() => {

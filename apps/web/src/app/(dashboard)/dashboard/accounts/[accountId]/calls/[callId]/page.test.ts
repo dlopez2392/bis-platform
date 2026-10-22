@@ -152,6 +152,8 @@ const CALL: CallDetailRow = {
   summary: "RECORDED — Booked: Ana Reyes at 2026-08-27T15:00:00Z · Intake: captured.",
   conversation_id: "cv1",
   booking_id: "bk1",
+  trade_module: null,
+  trade_module_version: null,
 };
 
 const FAILED_TEXTBACK = {

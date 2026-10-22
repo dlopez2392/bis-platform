@@ -40,6 +40,7 @@ const DEFAULT_PROFILE: Omit<VoiceProfileRow, "id" | "account_id"> = {
   textback_enabled: false, textback_body: "",
   textback_body_es: null, textback_body_es_basis: null,
   public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+  trade_module: null,
 };
 
 const STATUS_VALUES: PhoneNumberStatus[] = ["provisioned", "testing", "live", "released"];

@@ -384,6 +384,18 @@ describe("concierge accessors", () => {
       expect(await claimConciergeTurn(db, id, 2)).toBeNull();
     }));
 
+  it("createConciergeConversation stamps the trade module pair when given, and getConciergeConversation reads it; none leaves both null (S-47b; mutations: drop the pair from CONVO_COLS -> FAILS; write version 1 regardless -> FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const base = { accountId, formId: form.id, locale: "en", attribution: {}, origin: null };
+      const stamped = await createConciergeConversation(db, { ...base, ipHash: `tm1-${RUN}`, tradeModule: { module: "events", version: 4 } });
+      const plain = await createConciergeConversation(db, { ...base, ipHash: `tm2-${RUN}` });
+      const a = await getConciergeConversation(db, stamped.id);
+      const b = await getConciergeConversation(db, plain.id);
+      expect([a?.trade_module, a?.trade_module_version]).toEqual(["events", 4]);
+      expect([b?.trade_module, b?.trade_module_version]).toEqual([null, null]);
+    }));
+
   it("two concurrent claims at the boundary yield exactly one success", () =>
     withTestAccount(async (db, accountId) => {
       const form = await createForm(db, accountId, { name: "Leads" }, accountId);

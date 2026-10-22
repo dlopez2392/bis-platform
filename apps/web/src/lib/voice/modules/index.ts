@@ -3,11 +3,12 @@
 // untested wording can never reach a live client from a database row.
 //
 // Pure and crypto-free: system-prompt.ts imports this. The hash pin lives in ./pin.ts.
+import type { TradeModuleSetting } from "@bis/db";
 import * as insurancePc from "./insurance-pc";
 import * as events from "./events";
 
-/** The twin of voice_profiles_trade_module_check (0094). Task 4 re-points this to @bis/db's TradeModuleSetting. */
-export type TradeModuleId = "insurance_pc" | "events";
+/** The twin of voice_profiles_trade_module_check (0094). */
+export type TradeModuleId = TradeModuleSetting;
 
 /**
  * What a block may depend on, and nothing else:
