@@ -825,7 +825,7 @@ comment on column public.concierge_conversations.trade_module is
   'The trade rules this website chat runs under (insurance_pc or events), set once when the concierge turn route creates the conversation (createConciergeConversation); every later turn builds its prompt from this stamp, not from a fresh profile read. NULL for a chat with no module and for every chat before 0094. NULL exactly when trade_module_version is NULL (concierge_conversations_trade_module_pair_check). Server-written only.';
 
 comment on column public.concierge_conversations.trade_module_version is
-  'The VERSION of the module file whose wording this chat runs under, written with trade_module by the concierge turn route at conversation start (createConciergeConversation). A positive integer (concierge_conversations_trade_module_version_check); NULL exactly when trade_module is NULL. Server-written only.';
+  'The VERSION of the module file current when the conversation was created, written with trade_module by the concierge turn route at creation (createConciergeConversation). A positive integer (concierge_conversations_trade_module_version_check); NULL exactly when trade_module is NULL. Server-written only.';
 ```
 
 - [ ] **Step 5: Re-build the kit** (it applies 0094 to `post` with `psql -1`). Read the seven defs: `psql -h localhost -p 55700 -U postgres -d post -c "select conname, pg_get_constraintdef(oid) from pg_constraint where conname like '%trade_module%' order by 1"`. Check each says what the migration says, then paste all seven into the defs test's `toEqual({...})`. Run on `post`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55700/post; node node_modules/vitest/vitest.mjs run src/test/trade-modules-schema.test.ts src/test/ai-disclosure-schema.test.ts src/test/schema-grants-guard.test.ts src/test/server-only-writes-grants.test.ts src/test/concierge-grants.test.ts` → all green (read the run counts).
@@ -1965,17 +1965,34 @@ export const CONCIERGE_MODEL = "gpt-4o-mini";
   - the call card;
   - the suggestions (proposals) generator.
 - Those three prompts gain the line `Never repeat an identification number (SSN, driver's licence, policy number).`
-- The STORED transcript (`calls.transcript`, staff-only) is unchanged. Counsel is told it holds what callers say (spec §9).
+- **The recorded reason too (re-review R1).** `recordedReason(state)` (`call-card.ts:71-77`) returns the last `take_message` body or the first lead's `need`, raw. It reaches storage twice:
+  - the stored card's `reason`, through `composeCallCard` (`call-card.ts:214-222`, called at `finish-call.ts:859`);
+  - the callback line, through `callbackTaskTitle(callbackNumber, recordedReason(state))` (`finish-call.ts:418`). That line is the callback To-do's title (`:806-810`) and the alert email's callback line (`:492`).
+
+  The record page's AI summary then reads To-do titles (`lib/record/ai-summary-inputs.ts:251`). So on an insurance account, `finishCall` computes the masked recorded reason ONCE and uses it for both the card reason and the callback line.
+- The STORED transcript (`calls.transcript`, staff-only) is unchanged. So are the tool records Sofía made (the lead fields, `state.messages`) as written to the contact. Counsel is told both keep what was said or written (spec §9).
 
 **Files:**
 - Create: `apps/web/src/lib/voice/id-mask.ts`, `apps/web/src/lib/voice/id-mask.test.ts`
 - Modify:
   - `apps/web/src/lib/voice/summary-service.ts:46-77`: `opts.protectIds?: boolean`. When true, the rule is pushed onto `systemRules` and the user content is `maskIdNumbers(buildSummaryInput(state))`. The whole input is masked, because INTAKE (`summarize.ts:40-42`) echoes tool arguments the model wrote.
   - `apps/web/src/lib/voice/call-card.ts:166-183`: `opts.protectIds?: boolean`. When true, the system becomes `${SYSTEM} ${ID_RULE}`. The caller passes the masked transcript, which is also what `groundedEvidence` (`:197`) checks against, so the words shown on the card are the masked ones.
+  - `apps/web/src/lib/voice/call-card.ts:214-222` (R1): `composeCallCard(state, callerNumber, reading, recorded: string | null = recordedReason(state))`. The fourth parameter defaults to today's value, so every other caller is unchanged, and `reason` becomes `recorded ?? reading.reason`.
   - `apps/web/src/lib/proposals/generate.ts`: the input type (`:242-290`) gains `protectIds?: boolean`; `systemFor` (`:123-158`) gains a sixth parameter `protectIds: boolean` and appends ` ${ID_RULE}` when true; the call at `:357` passes it. `input.transcript` (masked by the caller) feeds both the model (`:358`) and every `groundedTurn` (`:444`, `:518`, `:568`), so stored evidence is masked too.
   - `apps/web/src/lib/voice/finish-call.ts`:
     - `FinishContext` (`:49-85`) gains `tradeModule?: TradeModuleId | null`.
-    - Compute once, above the summary (`:420`): `const protectIds = ctx.tradeModule === "insurance_pc"; const aiTranscript = protectIds ? maskTranscript(state.transcript) : state.transcript;`.
+    - Compute once, ABOVE the callback line (`:417`, which reads the reason):
+
+      ```ts
+      const protectIds = ctx.tradeModule === "insurance_pc";
+      const aiTranscript = protectIds ? maskTranscript(state.transcript) : state.transcript;
+      const rawReason = recordedReason(state);
+      const reason = protectIds && rawReason !== null ? maskIdNumbers(rawReason) : rawReason;
+      ```
+
+      `recordedReason` is already imported (`finish-call.ts:23-26`).
+    - `:418` becomes `callbackTaskTitle(callbackNumber, reason)`. One value then feeds the To-do title (`:806-810`) and the alert email's callback line (`:492`).
+    - `:859` becomes `composeCallCard(state, ctx.callerNumber, reading, reason)`.
     - Pass `protectIds` to `generateSummary` (`:422-424`).
     - Pass `aiTranscript` and `protectIds` to `readCallForCard` (`:857`) and to `generateProposals` (`:948-950`).
     - `finishCallRow` still writes `state.transcript`, raw.
@@ -1999,22 +2016,39 @@ import type { TranscriptEvent } from "@bis/db";
 export const ID_MASK = "[ID number]";
 export const ID_RULE = "Never repeat an identification number (SSN, driver's licence, policy number).";
 
-/** Not glued to a longer number: no digit, money sign, decimal or thousands separator, slash or hyphen just before. */
-const NOT_BEFORE = String.raw`(?<![\d$.,/-])`;
-/** And no digit just after, directly or after one separator (so a 10-digit phone is never cut to 9). */
-const NOT_AFTER = String.raw`(?![\d.,/-]?\d)`;
+/** Not glued to a longer number. A digit, money sign, decimal or thousands separator or slash right before
+ *  blocks a match. A separator blocks it only when a DIGIT precedes that separator, so "SSN-123-45-6789"
+ *  still masks while the tail of "95 62 92 16 96" does not. */
+const NOT_BEFORE = String.raw`(?<![\d$.,/]|\d[-.,/ ])`;
+/** And not followed by more digits (directly or after one separator), nor by "@" (an email's local part). */
+const NOT_AFTER = String.raw`(?![\d.,/ -]?\d|@)`;
+/** One separator in a digit-by-digit reading: a space, a hyphen, or a comma and a space ("1, 2, 3"). */
+const SEP = String.raw`(?:[ -]|, )`;
+/** Two years side by side ("between 2025 2026") are not a 4-4 licence (owner decision, re-review R2). */
+const NOT_YEAR_PAIR = String.raw`(?!(?:19|20)\d\d[ -](?:19|20)\d\d(?!\d))`;
 
+// The shapes masked, and the ones deliberately left out: 5-4 (ZIP+4), 2-2-4 / 4-2-2 (dates), 3-3-4 (phones).
 const ID_PATTERNS: readonly RegExp[] = [
-  new RegExp(String.raw`${NOT_BEFORE}\d{3}[ -]\d{2}[ -]\d{4}${NOT_AFTER}`, "g"),  // SSN 123-45-6789, 123 45 6789
-  new RegExp(String.raw`${NOT_BEFORE}\d{9}${NOT_AFTER}`, "g"),                     // SSN 123456789
-  new RegExp(String.raw`${NOT_BEFORE}\d{8}${NOT_AFTER}`, "g"),                     // Texas DL 12345678
-  // Read out digit by digit ("1 2 3 4 5 6 7 8"): exactly 8 or 9 single digits, and not the tail or head of a
-  // longer spoken run (a phone read digit by digit is 10).
-  new RegExp(String.raw`(?<![\d$.,/-]|\d[ -])\d(?:[ -]\d){7,8}(?![ -]?\d)`, "g"),
+  new RegExp(String.raw`${NOT_BEFORE}\d{3}[ -]\d{2}[ -]\d{4}${NOT_AFTER}`, "g"),           // SSN 3-2-4
+  new RegExp(String.raw`${NOT_BEFORE}\d{3}[ -]\d{2}[ -]\d{2}[ -]\d{2}${NOT_AFTER}`, "g"),  // SSN read 3-2-2-2
+  new RegExp(String.raw`${NOT_BEFORE}\d{3}[ -]\d{3}[ -]\d{3}${NOT_AFTER}`, "g"),           // SSN read 3-3-3
+  new RegExp(String.raw`${NOT_BEFORE}${NOT_YEAR_PAIR}\d{4}[ -]\d{4}${NOT_AFTER}`, "g"),    // DL read 4-4
+  new RegExp(String.raw`${NOT_BEFORE}\d{2}[ -]\d{2}[ -]\d{2}[ -]\d{2}${NOT_AFTER}`, "g"),  // DL read 2-2-2-2
+  new RegExp(String.raw`${NOT_BEFORE}\d{9}${NOT_AFTER}`, "g"),                             // SSN 123456789
+  new RegExp(String.raw`${NOT_BEFORE}\d{8}${NOT_AFTER}`, "g"),                             // Texas DL 12345678
+  // Read out digit by digit ("1 2 3 4 5 6 7 8", "1, 2, 3, …"): exactly 8 or 9 single digits, and not the
+  // tail or head of a longer spoken run (a phone read digit by digit is 10).
+  new RegExp(String.raw`(?<![\d$.,/-]|\d${SEP})\d(?:${SEP}\d){7,8}(?!${SEP}?\d)`, "g"),
 ];
 
+/** Unicode dashes (U+2010–U+2015, U+2212) become "-" and a no-break space (U+00A0) becomes " " BEFORE
+ *  matching, so "123–45–6789" from a transcriber is caught. The returned text is the normalised text. */
+function normalise(text: string): string {
+  return text.replace(/[‐-―−]/g, "-").replace(/ /g, " ");
+}
+
 export function maskIdNumbers(text: string): string {
-  return ID_PATTERNS.reduce((t, re) => t.replace(re, ID_MASK), text);
+  return ID_PATTERNS.reduce((t, re) => t.replace(re, ID_MASK), normalise(text));
 }
 
 export function maskTranscript(events: TranscriptEvent[]): TranscriptEvent[] {
@@ -2022,38 +2056,96 @@ export function maskTranscript(events: TranscriptEvent[]): TranscriptEvent[] {
 }
 ```
 
-**The test table** (`id-mask.test.ts`, every row a typed literal, in and out):
+**The test table** (`id-mask.test.ts`, every row a typed literal, in and out). These are the reviewer's 16 must-mask and 27 must-not rows (re-review R2). The orchestrator ran them all against the code above (`<SCRATCH>/planwriter-r2/idmask-final.mjs`, 2026-10-22): 0 misses, 0 false positives.
 
-| Input | Output | Why |
+Must mask (16):
+
+| Input | Output | Shape |
 |---|---|---|
-| `my social is 123-45-6789` | `my social is [ID number]` | SSN 3-2-4 |
-| `mi seguro social es 123 45 6789` | `mi seguro social es [ID number]` | SSN spaced, Spanish |
-| `SSN 123456789.` | `SSN [ID number].` | 9 digits, sentence end |
-| `mi seguro social es 1 2 3 4 5 6 7 8 9` | `mi seguro social es [ID number]` | read digit by digit |
-| `my license is 12345678` | `my license is [ID number]` | Texas DL |
-| `mi licencia es la 1 2 3 4 5 6 7 8` | `mi licencia es la [ID number]` | DL read digit by digit, Spanish |
+| `my social is 123-45-6789` | `my social is [ID number]` | 3-2-4 |
+| `mi seguro social es 123 45 6789` | `mi seguro social es [ID number]` | 3-2-4 spaced, Spanish |
+| `SSN 123456789.` | `SSN [ID number].` | 9, sentence end |
+| `mi seguro social es 1 2 3 4 5 6 7 8 9` | `mi seguro social es [ID number]` | digit by digit (9) |
+| `my license is 12345678` | `my license is [ID number]` | 8 |
+| `mi licencia es la 1 2 3 4 5 6 7 8` | `mi licencia es la [ID number]` | digit by digit (8), Spanish |
 | `licencia TX12345678` | `licencia TX[ID number]` | a letter prefix does not protect it |
-| `call me at 956-292-1696` | unchanged | phone 3-3-4 |
-| `mi número es 956 292 1696` | unchanged | phone spaced, Spanish |
-| `(956) 292-1696` | unchanged | phone |
-| `+19562921696` | unchanged | E.164, 11 digits |
-| `9562921696` | unchanged | 10 digits |
-| `nueve: 9 5 6 2 9 2 1 6 9 6` | unchanged | a phone read digit by digit (10) |
-| `ZIP 78501` / `el código postal es 78501-1234` | unchanged | ZIP and ZIP+4 |
-| `the quote was $1,250.00` / `salió en 1250 dólares` / `$12345678` | unchanged | amounts (a `$` protects even 8 digits) |
-| `March 14, 2027` / `nací el 14 de marzo de 1990` / `03/14/2027` / `2027-03-14` / `14 03 2027` | unchanged | dates |
-| `at 10:30` / `a las 10 30` | unchanged | times |
+| `DL 1234 5678` | `DL [ID number]` | 4-4 |
+| `licencia 1234-5678` | `licencia [ID number]` | 4-4 hyphen, Spanish |
+| `12 34 56 78` | `[ID number]` | 2-2-2-2 |
+| `123 45 67 89` | `[ID number]` | 3-2-2-2 |
+| `123-456-789` | `[ID number]` | 3-3-3 |
+| `1, 2, 3, 4, 5, 6, 7, 8, 9` | `[ID number]` | comma-space digit by digit |
+| `123–45–6789` (en dashes) | `[ID number]` | normalised dash |
+| `123 45 6789` (no-break spaces) | `[ID number]` | normalised space |
+| `SSN-123-45-6789` | `SSN-[ID number]` | a hyphen after a LETTER does not glue |
+
+Must not mask (27; the output is the normalised input):
+
+| Input | Why |
+|---|---|
+| `call me at 956-292-1696` | phone 3-3-4 |
+| `mi número es 956 292 1696` | phone spaced, Spanish |
+| `(956) 292-1696` | phone |
+| `+19562921696` | E.164, 11 digits |
+| `9562921696` | 10 digits |
+| `nueve: 9 5 6 2 9 2 1 6 9 6` | a phone read digit by digit (10) |
+| `ZIP 78501` | ZIP |
+| `el código postal es 78501-1234` | ZIP+4 (5-4 left out) |
+| `the quote was $1,250.00` | amount |
+| `salió en 1250 dólares` | amount, Spanish |
+| `$12345678` | a `$` protects even 8 digits |
+| `March 14, 2027` | date |
+| `nací el 14 de marzo de 1990` | date, Spanish |
+| `03/14/2027` | date |
+| `2027-03-14` | date (4-2-2 left out) |
+| `14 03 2027` | date (2-2-4 left out) |
+| `at 10:30` | time |
+| `a las 10 30` | time, Spanish |
+| `1-956-292-1696` | phone with country code |
+| `1 956 292 1696` | phone with country code, spaced |
+| `95 62 92 16 96` | a phone read in pairs (the not-after space guard) |
+| `956 29 21 696` | a phone read 3-2-2-3 |
+| `juan12345678@gmail.com` | an email's local part (the `@` guard) |
+| `9, 5, 6, 2, 9, 2, 1, 6, 9, 6` | a phone read digit by digit with commas |
+| `+52 1 899 123 4567` | a Mexican mobile |
+| `10 21 2026` | a date read in parts |
+| `between 2025 2026` | two years (the year-pair guard; owner decision) |
+
+**Mutation probes** (each was run against the table on 2026-10-22, and each fails at least the named row):
+
+| Mutation | Fails |
+|---|---|
+| drop the 3-2-4 pattern | `my social is 123-45-6789` |
+| drop 3-2-2-2 | `123 45 67 89` |
+| drop 3-3-3 | `123-456-789` |
+| drop 4-4 | `DL 1234 5678`, `licencia 1234-5678` |
+| drop 2-2-2-2 | `12 34 56 78` |
+| drop `NOT_YEAR_PAIR` | `between 2025 2026` |
+| drop `@` from `NOT_AFTER` | `juan12345678@gmail.com` |
+| drop the space from `NOT_AFTER`'s class | `95 62 92 16 96` |
+| `NOT_BEFORE` back to `(?<![\d$.,/-])` (any separator glues) | `SSN-123-45-6789` and `95 62 92 16 96` |
+| `NOT_BEFORE` without the `\d[-.,/ ]` branch | `95 62 92 16 96` |
+| remove `normalise` | `123–45–6789`, `123 45 6789` |
+| widen `{7,8}` to `{7,9}` | `nueve: 9 5 6 2 9 2 1 6 9 6` |
+| drop `$` from `NOT_BEFORE` | `$12345678` |
 
 Known limits, stated in the file's doc comment and in the PR body:
-- A bare 8- or 9-digit run with no `$` or separator is masked even when it is something else, such as a ZIP+4 written as `785011234`. That is the safe direction.
+- A bare 8- or 9-digit run with no separator may be masked even when it is something else (re-review R3). Read on 2026-10-22: `$ 12345678` (a space after the `$`), `10212026` (a date with no separators), `order #12345678`, and `785011234` (a ZIP+4 run together) are all masked. That is the safe direction. An email's local part is NOT masked: the `@` guard keeps it.
+- A year followed by a 4-digit number that is not a year (`2025 1234`) is still masked as 4-4. Only two years side by side are excluded.
 - Numbers spoken as WORDS ("uno dos tres") are not masked. The realtime transcription writes digits for spoken numbers in practice: a labelled assumption, read in Task 12's real calls.
 - Policy numbers and VINs have no fixed shape. They are covered by the prompt line, not by a pattern.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `id-mask.test.ts`: `it.each` over the table above, `expect(maskIdNumbers(input)).toBe(output)`. Then `maskTranscript` keeps `role` and `at` and masks only `text`.
-    - **Mutations:** drop the 3-2-4 pattern → the first row FAILS; widen `{7,8}` to `{7,9}` → the 10-digit spoken phone row FAILS; drop `$` from `NOT_BEFORE` → the `$12345678` row FAILS.
+  - `id-mask.test.ts`:
+    - Two `it.each` tables:
+      - the 16 must-mask rows: `expect(maskIdNumbers(input)).toBe(output)`;
+      - the 27 must-not rows: `expect(maskIdNumbers(input)).toBe(input)`. None of these inputs contains a Unicode dash or a no-break space, so the normalised input is the input.
+    - Write the two normalisation rows with `–` and ` ` escapes in the source, so the test file stays readable.
+    - `expect(MUST_MASK.length).toBe(16)` and `expect(MUST_NOT.length).toBe(27)` guard the tables from an empty loop.
+    - Then: `maskTranscript` keeps `role` and `at` and masks only `text`.
+    - **Mutations:** every row of the probe table above. Run each, paste the failing row, revert, `cmp`.
   - `summary-service.test.ts` (the `fetchImpl` capture at `:28-33`):
-    - With `protectIds: true` and a caller turn `my social is 123-45-6789`, the user message contains `my social is [ID number]` and not `6789`, and the system message ends with `Never repeat an identification number (SSN, driver's licence, policy number).`
+    - With `protectIds: true`, a caller turn `my social is 123-45-6789` and a `timezone` given, the user message contains `my social is [ID number]` and not `6789`. The system message ends with `Never repeat an identification number (SSN, driver's licence, policy number).`, which holds because Step 3 pushes the rule AFTER the timezone rule (R4). A second case with no `timezone` ends with it too.
     - With `protectIds` absent and the SAME transcript, the user message contains `123-45-6789` and the system has no such line. That pins "every other account is byte-identical". **Mutation:** mask always → FAILS.
   - `call-card.test.ts` (`modelReturning`):
     - With `protectIds: true` and the masked transcript, the request's system ends with the rule.
@@ -2066,16 +2158,27 @@ Known limits, stated in the file's doc comment and in the PR body:
     - `finishCallRow` receives the RAW `123-45-6789`.
 
     With `tradeModule: "events"` and with it absent, all three receive the raw turn and no `protectIds: true`. **Mutations:** mask the stored transcript → FAILS; compare against `"events"` → FAILS.
+  - `finish-call.test.ts`, the recorded reason (R1). A call whose `take_message` body is `Call back about my policy, SSN 123-45-6789`, with a caller number (so a callback is wanted), run three times:
+    - with `tradeModule: "insurance_pc"`:
+      - the stored card (`setCallCard`'s argument) has `reason` `Call back about my policy, SSN [ID number]`;
+      - the callback To-do (`ensureCallbackTask`'s `title`) contains `SSN [ID number]` and not `6789`;
+      - the alert email's text contains no `6789`;
+    - with `tradeModule: "events"`: the card reason and the To-do title carry the raw `123-45-6789`;
+    - with `tradeModule` absent: the same raw values.
+
+    **Mutations:** pass `recordedReason(state)` (raw) to `callbackTaskTitle` → the To-do assertion FAILS; drop the fourth argument at `:859` → the card assertion FAILS; mask regardless of the module → the `events` case FAILS.
   - `…/incoming/lifecycle.test.ts`, beside the `accountLanguage` case (`:358-367`): a profile with `trade_module: "insurance_pc"` reaches `finishCall`'s context as `tradeModule: "insurance_pc"`, and `null` reaches it as `null`. **Mutation:** drop the `finishCtx` line → FAILS.
 - [ ] **Step 2:** Run the six files → the new cases FAIL.
-- [ ] **Step 3:** Implement as above. Import `ID_RULE` in the three readers and `maskTranscript` in `finish-call.ts`. Import `type TradeModuleId` from `@/lib/voice/modules` in `finish-call.ts`.
+- [ ] **Step 3:** Implement as above.
+  - Import `ID_RULE` in the three readers. Import `maskTranscript` and `maskIdNumbers` in `finish-call.ts`, with `type TradeModuleId` from `@/lib/voice/modules`.
+  - In `summary-service.ts`, push `ID_RULE` onto `systemRules` AFTER the `if (opts.timezone) { … }` block (`:62-67`), immediately before `aiComplete` (R4). The rule is then always the last sentence.
 - [ ] **Step 4:** Re-run → PASS. Run each named mutation, paste, revert, `cmp`. Then run, unchanged: `summarize.test.ts`, `summary-service.fallback.test.ts`, `call-card.fallback.test.ts`, `proposals/generate.fallback.test.ts`, `proposals/grounding.test.ts` → PASS.
 - [ ] **Step 5:** Typecheck, eslint. Commit `voice: on insurance accounts, SSN- and licence-shaped numbers are masked before a call reaches the summary, the call card and the suggestions, and each of those prompts says never to repeat an ID number; the stored transcript is unchanged (S-47b, owner ruling B7)` with the trailers, naming every path.
 
 **Review (MEDIUM, sonnet, own worktree):**
 - Run the table's must-not rows against the patterns with two near-misses of your own (a 10-digit number read in pairs; a `$` amount with no comma).
 - Read every reader of `state.transcript` in `finish-call.ts` and confirm which ones get the masked copy: the three AI readers do, and the stored row and the eligibility check do not.
-- Check `recordedReason` (`call-card.ts:71`), which builds the card's fallback reason from tool arguments. Report whether an ID can reach a stored card through it, and file it as a finding, not a note, if it can.
+- Read every reader of `recordedReason` in `apps/web/src` (`grep -rn "recordedReason(" apps/web/src --include=*.ts`). On an insurance account, each must receive the masked value: `finish-call.ts:418`, and `composeCallCard` through its new parameter. Report any other caller as a finding.
 
 ---
 
@@ -3306,7 +3409,7 @@ describe("graded results sheets are bound to the exact words they graded (SD8)",
   - tokens only; both themes via `.dark`; the blur fallback (nothing new blurs);
   - rule 8 (the profile card still has one primary);
   - the radio group at 360 px in pseudo-locale (the longest hint is the insurance one);
-  - the call-page line in the header's `<dl>` at 360 px, beside the language chip;
+  - the call-page line in the header's `<dl>` at 360 px, beside the language chip. Its `<dt>` "Trade rules" is VISIBLE while the header's other terms are `sr-only` (plan review I4; re-review R6). The design reviewer decides whether that reads right, or whether the value needs a different treatment;
   - the 7 AM read of every new line in both languages.
 - [ ] **ONE fix agent** takes both reports' Critical, Important and agreed Minor items. Then a sonnet fix-review ONLY if the fix touched high-tier code (0094 or its db test, Task 1; M12). Otherwise the orchestrator reads the fix diff itself and re-runs the touched tests by path.
   - **0094 goes to production only with its reviewed md5 UNCHANGED.**
@@ -3346,7 +3449,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
     - "LOAD-BEARING: PROFILE_COLS, CALL_DETAIL_COLS, CONVO_COLS and the Voice page save (saveVoiceProfileAction's patch) name 0094's columns";
     - "No env var changes; nothing added to Preview";
     - "Merging switches nothing on: no profile has a module until the agency sets one".
-    - "Before a real client is switched on (owner ruling B8: a tracker note and this PR body, no code lock): the corpus sheet passes the gate for the current version, the owner's ~5 real calls are done, and for insurance counsel has read the wording, the intake list and the B7 masking (the stored transcript holds what callers say)";
+    - "Before a real client is switched on (owner ruling B8: a tracker note and this PR body, no code lock): the corpus sheet passes the gate for the current version, the owner's ~5 real calls are done, and for insurance counsel has read the wording, the intake list and the B7 masking (the stored transcript and Sofía's own message and lead records keep what was said or written)";
   - Only after step 4: `gh pr merge <n> --auto --squash --match-head-commit <sha>`, with the head SHA's `verify` and `e2e` green.
 - [ ] **7. After the deploy.**
   - The deployment is READY on the merge SHA and aliased to `app.bis-rgv.com`.
@@ -3383,7 +3486,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
     - set None, restore the facts, read both back.
   - Option 2: the browser voice demo on the account `SOFIA_WEB_NUMBER` names (say/never-say rules only).
   - Notes go in the sheet's "Real calls" line.
-- [ ] **6. Insurance only: counsel** reads the v1 wording (`…/modules/insurance-pc.ts`'s `block` output for all three surfaces; print it with a one-off `tsx -e` over `PIN_CONTEXTS`) and the B2 intake list (risk row 10), and is told (B7) that the stored call transcript keeps what callers say, ID numbers included, for staff only, while the AI summary, card and suggestions see them masked. Counsel's edits → v2 → the corpus re-run → a new sheet.
+- [ ] **6. Insurance only: counsel** reads the v1 wording (`…/modules/insurance-pc.ts`'s `block` output for all three surfaces; print it with a one-off `tsx -e` over `PIN_CONTEXTS`) and the B2 intake list (risk row 10), and is told (B7, spec §9): the stored transcript and Sofía's own message and lead records keep what was said or written, ID numbers included, for staff only; the AI summary, the card, the suggestions, the callback To-do title and alert line, and through that title the record page's AI summary, see them masked. Counsel's edits → v2 → the corpus re-run → a new sheet.
 - [ ] **7. Tracker:** F-174 stays `in_progress` until a module is live on a real client, with the evidence (sheet, calls, counsel) linked.
 
 ---
@@ -3393,7 +3496,10 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 - **SD5:** the chat and demo say "will get back to you" / "can go over options with you" instead of "will call you back". The phone keeps your sentence word for word.
 - The real-calls place (option 1, BIS's line with fixture facts for a short after-hours window, or option 2, the tool-less web demo) is yours to pick at Task 12. Option 1 is the only one that can show a message, a lead or a transfer.
 - The events corpus uses fixture prices. Until S-47c's structured facts, a real venue's prices are its own free-text facts, so the "word for word" rule is only as exact as what the agency types there.
-- **B7 limits:** a bare 8- or 9-digit run is masked even when it is not an ID (the safe direction); numbers spoken as words, policy numbers and VINs rely on the new prompt line alone. The stored transcript keeps what callers said, for staff. Counsel is told this (spec §9).
+- **B7 limits:**
+  - A bare 8- or 9-digit run may be masked even when it is not an ID: `$ 12345678`, a date written `10212026`, `order #12345678` (the safe direction). An email such as `juan12345678@gmail.com` is not masked.
+  - Numbers spoken as words, policy numbers and VINs rely on the new prompt line alone.
+  - The stored transcript keeps what callers said, and Sofía's own records (the message, the lead's fields) keep what she wrote, for staff only. Counsel is told this (spec §9).
 
 ## Owner questions
 

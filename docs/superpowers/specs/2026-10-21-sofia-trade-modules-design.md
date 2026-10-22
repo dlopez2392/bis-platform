@@ -53,9 +53,17 @@ owner-editable).
   on an account whose voice profile has `trade_module = 'insurance_pc'`, SSN-shaped numbers (9 digits or
   3-2-4) and driver-licence-shaped numbers (Texas: 8 digits) are masked as "[ID number]" before a call's
   words reach the staff summary, the call card and the suggestions generator. Each of those three prompts
-  gains the line "Never repeat an identification number (SSN, driver's licence, policy number)." Phone
-  numbers, ZIP codes, quote amounts, dates and times are never masked. The STORED transcript
-  (`calls.transcript`, staff-only) is unchanged, and counsel is told it holds what callers say (§9).
+  gains the line "Never repeat an identification number (SSN, driver's licence, policy number)."
+  - The reason Sofía recorded (the last message she took, else the lead's "need") is masked the same way
+    wherever it is stored: the call card's reason, and the callback To-do's title and the alert email's
+    callback line, which are one value. The record page's AI summary reads To-do titles, so it is reached
+    through that title and gets the masked text (re-review R1).
+  - Phone numbers, ZIP codes, quote amounts, dates, times and two years side by side are never masked.
+  - Caveat (R3): a bare 8- or 9-digit run with no separator may be masked even when it is something else,
+    for example "$ 12345678", a date written "10212026", or "order #12345678". That is the safe direction.
+    An email such as "juan12345678@gmail.com" is not masked.
+  - The STORED transcript (`calls.transcript`, staff-only) is unchanged, and so are the tool records Sofía
+    made (the lead's fields on the contact). Counsel is told both keep what was said or written (§9).
 - **B8 The pre-client gate is a note, not a lock (owner, 2026-10-21):** the gate before a real client is
   switched on (§9) is a tracker note and a PR-body line. No code prevents the agency from selecting a
   module.
@@ -305,8 +313,13 @@ PR body, enforced by the agency; there is NO code lock):
 - Both modules: the corpus sheet passes the §7 gate for the current version, and the owner's ~5 real
   calls are done.
 - Insurance also: counsel reads the v1 wording and the intake list (risk row 10). Counsel is also told
-  (B7) that the stored call transcript keeps what callers say, ID numbers included, for staff only, while
-  the AI summary, call card and suggestions see them masked. Counsel's edits → v2 → corpus re-run.
+  (B7) what keeps an ID number and what does not.
+  - Kept, for staff only: the stored call transcript keeps what callers said, and the records Sofía made
+    (the message she took, the lead's fields on the contact) keep what she wrote.
+  - Masked: the AI summary and the conversation message built from it, the call card, the suggestions,
+    the callback To-do title and the alert email's callback line, and through that title the record
+    page's AI summary.
+  - Counsel's edits → v2 → corpus re-run.
 - Events: no counsel gate.
 
 ## 10. Tiers (per task, binding rule 2026-10-19)
