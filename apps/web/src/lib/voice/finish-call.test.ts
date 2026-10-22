@@ -1984,6 +1984,23 @@ describe("finishCall — the recorded reason is masked once, on insurance accoun
     expect((dbMocks.ensureCallbackTask.mock.calls[0]![2] as { title: string }).title)
       .toBe("Call back at +19562921696: Call back about my policy, SSN 123-45-6789");
   });
+
+  // Final-fix M2: the To do title clamps the reason at 140 characters. The mask runs on the WHOLE reason
+  // first, so an SSN that straddles the cut is already "[ID number]" when the clamp cuts it ("[ID…").
+  // Clamp first and the cut keeps "123 45", which no pattern masks any more.
+  const PREFIX = "Please call back about the home and auto bundle, the renewal date and adding her son as a new driver on the policy. Her social is ";
+  it("insurance_pc: an SSN across the 140-character cut leaves no two digits of it in the To do title (mutation: clamp, then mask → FAILS)", async () => {
+    expect(PREFIX.length).toBe(130); // the SSN starts at 130 and ends past 140: it crosses the cut
+    const long = withMessage(
+      withTranscript(emptyCallState(), { role: "caller", text: "Please have someone call me about my policy.", at: "t" }),
+      { body: `${PREFIX}123 45 6789, and she prefers mornings.`, at: "t" },
+    );
+    await finishCall(long, { ...ctx, tradeModule: "insurance_pc" }, meta);
+    const title = (dbMocks.ensureCallbackTask.mock.calls[0]![2] as { title: string }).title;
+    expect(title).toBe(`Call back at +19562921696: ${PREFIX}[ID…`);
+    const reasonPart = title.slice("Call back at +19562921696: ".length);
+    expect(reasonPart).not.toMatch(/\d{2}/);
+  });
 });
 
 describe("finishCall — the caller's words become the contact's language (S-09 C5)", () => {

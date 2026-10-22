@@ -18,8 +18,8 @@ const MUST_MASK: readonly (readonly [string, string, string])[] = [
   ["123 45 67 89", "[ID number]", "3-2-2-2"],
   ["123-456-789", "[ID number]", "3-3-3"],
   ["1, 2, 3, 4, 5, 6, 7, 8, 9", "[ID number]", "comma-space digit by digit"],
-  ["123–45–6789", "[ID number]", "normalised dash (en dashes)"],
-  ["123 45 6789", "[ID number]", "normalised space (no-break spaces)"],
+  ["123\u201345\u20136789", "[ID number]", "normalised dash (en dashes, U+2013)"],
+  ["123\u00A045\u00A06789", "[ID number]", "normalised space (no-break spaces, U+00A0)"],
   ["SSN-123-45-6789", "SSN-[ID number]", "a hyphen after a LETTER does not glue"],
 ];
 

@@ -12,6 +12,16 @@
 //  - Numbers spoken as WORDS ("uno dos tres") are not masked. The realtime transcription writes digits for
 //    spoken numbers in practice: a labelled assumption, read in the owner's real calls.
 //  - Policy numbers and VINs have no fixed shape. The prompt line (ID_RULE) covers them, not a pattern.
+//  (Final-fix round, read 2026-10-22, each probed against this file:)
+//  - An SSN glued to another number is NOT masked: "call 956 123-45-6789" and "4 123-45-6789" stay as
+//    they are, because a digit and one separator right before it read as part of a longer number.
+//  - An ID split across two turns ("my social is 123 45", then "6789") is NOT masked: each turn is
+//    masked on its own, and neither half has an ID's shape.
+//  - Comma-separated groups ("123, 45, 6789") are NOT masked, deliberately: allowing a comma between
+//    groups also masks comma-separated year pairs ("between 2025, 2026"), which B7 forbids. Comma
+//    groups appeared in 0 of 363 production calls (final review, M1 declined).
+//  - The To do title clamps the reason at 140 characters AFTER the mask, so an ID that crosses the
+//    cut shows as "[ID…", never as a part of the number.
 import type { TranscriptEvent } from "@bis/db";
 
 export const ID_MASK = "[ID number]";
@@ -42,10 +52,12 @@ const ID_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`(?<![\d$.,/-]|\d${SEP})\d(?:${SEP}\d){7,8}(?!${SEP}?\d)`, "g"),
 ];
 
-/** Unicode dashes (U+2010–U+2015, U+2212) become "-" and a no-break space (U+00A0) becomes " " BEFORE
- *  matching, so "123–45–6789" from a transcriber is caught. The returned text is the normalised text. */
+/** Unicode dashes (U+2010 to U+2015, U+2212) become "-" and a no-break space (U+00A0) becomes " " BEFORE
+ *  matching, so "123-45-6789" written with en dashes by a transcriber is caught. They are written as
+ *  escapes here, never as the literal characters, so the range stays readable. The returned text is the
+ *  normalised text. */
 function normalise(text: string): string {
-  return text.replace(/[‐-―−]/g, "-").replace(/ /g, " ");
+  return text.replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\u00A0/g, " ");
 }
 
 export function maskIdNumbers(text: string): string {
