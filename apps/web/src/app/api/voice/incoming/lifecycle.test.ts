@@ -376,6 +376,29 @@ describe("runCallLifecycle — the account's language reaches finishCall (F-013)
   });
 });
 
+// S-47b, owner ruling B7: the profile's trade module reaches finishCall's context, from the SAME one
+// profile read that stamps the row and builds the prompt (Task 5's `tradeStamp`), so the post-call AI
+// masking follows the module this call actually ran under.
+describe("runCallLifecycle — the trade module reaches finishCall (S-47b, B7)", () => {
+  it("trade_module 'insurance_pc' reaches finishCall's context as tradeModule (mutation: drop the finishCtx line → undefined, FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "insurance_pc" });
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    expect(finishCallMock).toHaveBeenCalledTimes(1);
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ tradeModule: "insurance_pc" });
+  });
+  it("a NULL trade_module reaches finishCall's context as null, not undefined", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: null });
+    const { lifecycleDone, ws } = await startLifecycle();
+    ws.emit("close", 1000, Buffer.from(""));
+    await lifecycleDone;
+    const [, ctxArg] = finishCallMock.mock.calls[0]!;
+    expect(ctxArg).toMatchObject({ tradeModule: null });
+  });
+});
+
 // S-09 PR 2: the profile's Spanish text-back box reaches finishCall's
 // context too, pinned to the profile loaded at accept (same rule as
 // textbackBody right beside it).

@@ -4,6 +4,7 @@ import { groundedTurn } from "./grounding";
 import { callIsEligible } from "./eligibility";
 import { isValidEmail } from "@/lib/forms/guards";
 import { spokenPhone } from "@/lib/voice/phone-number";
+import { ID_RULE } from "@/lib/voice/id-mask";
 import { aiComplete } from "@/lib/ai/gateway";
 import { aiSafeError } from "@/lib/ai/log";
 
@@ -126,6 +127,7 @@ function systemFor(
   now: Date,
   timezone: string,
   callbackTodo: boolean,
+  protectIds: boolean,
 ): string {
   // THE MODEL'S ONLY CLOCK. Fix-wave Important 1: without this sentence the
   // model has no current date, no account zone, and no turn timestamps
@@ -155,6 +157,8 @@ function systemFor(
       openOpportunity.stageName
     }" stage, in a pipeline with these stages in order: ${stageNames}. If — and ONLY if — the call is clear evidence the deal moved to a LATER stage in that list, you may propose {"kind":"opportunity_stage","toStage":"<the exact name of one LATER stage from that list>","evidence":"..."}. The stage name must be spelled EXACTLY as given above. Never propose the current stage, and never propose an EARLIER stage — only a human may move a deal backwards. Never propose the LAST stage in that list — closing a deal is a judgement about money and outcome that one phone call cannot make, and only a human can record how it ended; this always gets refused, so do not waste a proposal on it.`;
   }
+  // S-47b, owner ruling B7 (insurance accounts): the transcript arrives masked; the model is also told.
+  if (protectIds) system = `${system} ${ID_RULE}`;
   return system;
 }
 
@@ -297,6 +301,10 @@ export async function generateProposals(input: {
    *  `calls.language` ("computed once, read twice"). Stored as each row's `evidence_lang`, since the
    *  evidence is the caller's own words in that language. */
   language: "en" | "es";
+  /** S-47b, owner ruling B7: an insurance account. The caller (finishCall) hands over the MASKED
+   *  transcript, which feeds the model and every `groundedTurn`, so stored evidence is masked too; this
+   *  flag adds the never-repeat line to the system. Absent = today's prompt. */
+  protectIds?: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<number> {
   let written = 0;
@@ -354,7 +362,7 @@ export async function generateProposals(input: {
       // proposals fit comfortably inside this; a runaway array does not.
       maxTokens: 2000,
       messages: [
-        { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo) },
+        { role: "system", content: systemFor(input.blankFields, input.openOpportunity, input.now, input.timezone, input.callbackTodo, input.protectIds ?? false) },
         { role: "user", content: transcriptForModel(input.transcript) },
       ],
       // Same 10s bound as the summary call. This runs after the row is

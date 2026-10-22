@@ -1177,6 +1177,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       notifyEmails: calendar.notify_emails, callerNumber, origin,
       profileLanguage: profile.languages, timezone: accountRow.timezone,
       accountLanguage: accountRow.language,
+      // S-47b, owner ruling B7: the module this call ran under (the same one read that stamped the row
+      // and built the prompt); insurance masks ID numbers before the post-call AI.
+      tradeModule: tradeStamp?.module ?? null,
       // Read off the profile loaded at step 7, so the text-back decision is
       // pinned to the profile that answered THIS call rather than re-read
       // minutes later at hangup, when an operator may have toggled it.

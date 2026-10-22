@@ -1440,6 +1440,24 @@ describe("generateProposals — no callback suggestion beside a callback To do",
   });
 });
 
+// S-47b, owner ruling B7: on an insurance account the suggestions are told never to repeat an ID number.
+// finishCall hands over the masked transcript; this generator only carries the line.
+describe("protectIds (insurance accounts, B7)", () => {
+  const RULE = "Never repeat an identification number (SSN, driver's licence, policy number).";
+
+  it("protectIds: true → the system carries the rule (mutation: never append it → FAILS)", async () => {
+    const f = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db: fakeDb(), protectIds: true, fetchImpl: f });
+    expect(systemPromptOf(f)).toContain(RULE);
+  });
+
+  it("absent → the system does not (mutation: append the rule unconditionally → FAILS)", async () => {
+    const f = modelReturning({ proposals: [] });
+    await generateProposals({ ...base, db: fakeDb(), fetchImpl: f });
+    expect(systemPromptOf(f)).not.toContain("identification number");
+  });
+});
+
 describe("proposal titles are English (orchestrator, with owner ruling O-2 item 3)", () => {
   it("the prompt says so, whatever language the call was in — so the English callback check is enough (mutation: drop the sentence → FAILS)", async () => {
     const f = modelReturning({ proposals: [] });

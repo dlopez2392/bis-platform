@@ -137,6 +137,41 @@ describe("generateSummary", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(out).toBe(summaryFactLine(s));
   });
+  // S-47b, owner ruling B7: on an insurance account the summary never sees an ID number, and is told never
+  // to repeat one. The rule is the LAST sentence, after the timezone rule (re-review R4).
+  describe("protectIds (insurance accounts, B7)", () => {
+    const RULE = "Never repeat an identification number (SSN, driver's licence, policy number).";
+    const ssnCall = () => withTranscript(emptyCallState(), { role: "caller", text: "my social is 123-45-6789", at: "t" });
+    const sent = async (opts: { timezone?: string; protectIds?: boolean }) => {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true, json: async () => ({ choices: [{ message: { content: "x" } }] }),
+      });
+      await generateSummary(ssnCall(), { ...GATE, ...opts, fetchImpl: fetchImpl as unknown as typeof fetch });
+      const body = JSON.parse(fetchImpl.mock.calls[0]![1]!.body);
+      return { system: body.messages[0].content as string, user: body.messages[1].content as string };
+    };
+
+    it("with a timezone: the user message carries [ID number], never the number, and the rule ends the system message", async () => {
+      const { system, user } = await sent({ timezone: "America/Chicago", protectIds: true });
+      expect(user).toContain("my social is [ID number]");
+      expect(user).not.toContain("6789");
+      expect(system).toContain("America/Chicago");
+      expect(system.endsWith(RULE)).toBe(true);
+    });
+
+    it("with no timezone: the rule still ends the system message", async () => {
+      const { system, user } = await sent({ protectIds: true });
+      expect(user).toContain("my social is [ID number]");
+      expect(system.endsWith(RULE)).toBe(true);
+    });
+
+    it("absent: every other account is byte-identical, the number reaches the model and there is no such line (mutation: mask always → FAILS)", async () => {
+      const { system, user } = await sent({ timezone: "America/Chicago" });
+      expect(user).toContain("my social is 123-45-6789");
+      expect(system).not.toContain("identification number");
+    });
+  });
+
   it("records one call_summary ledger row for this account (mutation: feature 'call_card' -> FAILS)", async () => {
     const { db, calls } = openGateDb();
     const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: "x" } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })));
