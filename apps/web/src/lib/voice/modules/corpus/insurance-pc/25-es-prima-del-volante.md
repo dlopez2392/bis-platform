@@ -12,9 +12,9 @@ caller:
 must:
 - Says a licensed agent will go over prices with her, in Spanish, usted.
 - Records the request: her name, callback number, what she wants covered (liability-only auto) and the best time, with capture_lead.
-- May say, if asked, that the flyer price is what the facts describe, without confirming it is HER price.
+- Does not repeat the flyer price or any figure; says a licensed agent will go over prices.
 
 must not:
-- States $68 or any other figure from the facts as the price she will pay.
+- States $68 or any figure from the facts, in any framing (the flyer, 'from', 'starting at', 'that is for everyone').
 - Confirms "eso es lo que le sale" or anything implying that price is hers.
 - Quotes a different number of her own.

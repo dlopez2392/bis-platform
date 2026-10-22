@@ -5,11 +5,14 @@
 import { toolSchemas } from "../tools/schemas";
 import { bookingMode } from "../booking-mode";
 import type { VoicePromptInput } from "../session-config";
-import { CAPTURE_LEAD_TOOL } from "../../concierge/prompt";
+import { CAPTURE_LEAD_TOOL, parseCaptureLead } from "../../concierge/prompt";
+import { isValidEmail, isValidPhone } from "../../forms/guards";
+import { formatWhen } from "../../booking/time";
 import type { TradeModuleId } from "./index";
 
 export type PhoneEngine = "realtime" | "chat";
-/** Set from Task 0's spike (ledger "s47b T0 spike"): "realtime" if gpt-realtime took a text-only session. */
+/** PROVISIONAL until Task 0's spike runs (ledger "s47b T0 spike"): "realtime" assumes gpt-realtime takes a
+ *  text-only session. If the spike says it does not, this becomes "chat" (spec section 7's fallback). */
 export const DEFAULT_PHONE_ENGINE: PhoneEngine = "realtime";
 /** Spec section 7's fallback for phone items when the Realtime model will not run text-only. */
 export const PHONE_FALLBACK_MODEL = "gpt-4o";
@@ -22,7 +25,12 @@ export function moduleForSlug(slug: string): TradeModuleId | null {
 
 export type CorpusItem = {
   file: string; id: string; lang: "en" | "es"; medium: "phone" | "web";
-  transfer: boolean; booking: boolean; disclosure: boolean; facts: string;
+  transfer: boolean; booking: boolean; disclosure: boolean;
+  /** "withheld" plays a phone call with no caller ID (callerNumber null). Phone only. */
+  callerId: "shown" | "withheld";
+  /** Overrides the fixture's after-hours mode; null = the fixture's. "message_only" turns new booking off. */
+  afterHours: CorpusFixture["afterHours"] | null;
+  facts: string;
   caller: string[]; must: string[]; mustNot: string[];
 };
 export type CorpusFixture = {
@@ -33,7 +41,7 @@ export type CorpusFixture = {
 };
 
 const FILE_RE = /^(\d{2})-(en|es)-[a-z0-9-]+\.md$/;
-const KEYS = new Set(["lang", "medium", "transfer", "booking", "disclosure", "facts"]);
+const KEYS = new Set(["lang", "medium", "transfer", "booking", "disclosure", "callerId", "afterHours", "facts"]);
 
 function bool(file: string, key: string, raw: string | undefined, dflt: boolean | null): boolean {
   if (raw === undefined) {
@@ -54,7 +62,7 @@ export function parseCorpusItem(file: string, text: string): CorpusItem {
   if (end < 0) throw new Error(`${file}: front matter is not closed with ---`);
   const fm: Record<string, string> = {};
   for (const l of lines.slice(1, end)) {
-    const m = /^([a-z]+):\s*(.*)$/.exec(l);
+    const m = /^([a-zA-Z]+):\s*(.*)$/.exec(l);
     if (!m) throw new Error(`${file}: bad front matter line "${l}"`);
     if (!KEYS.has(m[1]!)) throw new Error(`${file}: unknown front matter key "${m[1]}"`);
     fm[m[1]!] = m[2]!.trim();
@@ -70,6 +78,14 @@ export function parseCorpusItem(file: string, text: string): CorpusItem {
   // M15: an item may play an account whose AI disclosure is On (S-47a): the opening sentence and the
   // disclosed IDENTITY line, exactly as the live routes send them.
   const disclosure = bool(file, "disclosure", fm.disclosure, false);
+  // Final-fix item 10: two optional overrides of the fixture, each refusing any value but its own.
+  const callerId = fm.callerId ?? "shown";
+  if (callerId !== "shown" && callerId !== "withheld") throw new Error(`${file}: "callerId" must be shown or withheld, not "${callerId}"`);
+  const afterHours = fm.afterHours ?? null;
+  if (afterHours !== null && afterHours !== "hours_then_message" && afterHours !== "message_only") {
+    throw new Error(`${file}: "afterHours" must be hours_then_message or message_only, not "${afterHours}"`);
+  }
+  if (medium === "web" && callerId === "withheld") throw new Error(`${file}: a web item cannot have callerId: withheld (the chat has no caller ID)`);
   if (medium === "web" && transfer) throw new Error(`${file}: a web item cannot have transfer: true (the chat has none)`);
   if (medium === "web" && booking) throw new Error(`${file}: a web item cannot have booking: true (the chat has none)`);
 
@@ -86,7 +102,7 @@ export function parseCorpusItem(file: string, text: string): CorpusItem {
   if (sections.must.length === 0) throw new Error(`${file}: needs at least one must rule`);
   if (sections["must not"].length === 0) throw new Error(`${file}: needs at least one must not rule`);
   return {
-    file, id: name[1]!, lang, medium, transfer, booking, disclosure, facts: fm.facts,
+    file, id: name[1]!, lang, medium, transfer, booking, disclosure, callerId, afterHours, facts: fm.facts,
     caller: sections.caller, must: sections.must, mustNot: sections["must not"],
   };
 }
@@ -107,14 +123,15 @@ export function promptInputFor(item: CorpusItem, f: CorpusFixture, module: Trade
     return {
       personaName: f.personaName, businessName: f.businessName, facts: f.facts, services: f.services,
       languages: f.languages, bookingEnabled: false, timezone: f.timezone, slotDurationMinutes: 30,
-      afterHours: f.afterHours, callerNumber: null, meetingType: "in_person", medium: "web",
+      afterHours: item.afterHours ?? f.afterHours, callerNumber: null, meetingType: "in_person", medium: "web",
       disclosed: item.disclosure, tradeModule: module,
     };
   }
   return {
     personaName: f.personaName, businessName: f.businessName, facts: f.facts, services: f.services,
     languages: f.languages, bookingEnabled: item.booking, timezone: f.timezone,
-    slotDurationMinutes: f.slotDurationMinutes, afterHours: f.afterHours, callerNumber: f.callerNumber,
+    slotDurationMinutes: f.slotDurationMinutes, afterHours: item.afterHours ?? f.afterHours,
+    callerNumber: item.callerId === "withheld" ? null : f.callerNumber,
     meetingType: f.meetingType, handoffAvailable: item.transfer, disclosed: item.disclosure, tradeModule: module,
   };
 }
@@ -133,18 +150,58 @@ export function realtimeToolAsChat(schema: unknown): unknown {
   return { type: "function", function: { name: t.name, description: t.description, parameters: t.parameters } };
 }
 
-/** Every tool answers ok and is logged (spec section 7). check_availability answers exactly as the live tool
- *  does, `{ slots }` with no `ok` (registry.ts:297, M5), offering two times on the asked
- *  date, in the live tool's shape (registry.ts:290-297), so a tour can be booked. */
-export function stubToolResult(name: string, args: Record<string, unknown>): Record<string, unknown> {
+/** Word for word from captureResult("needs_contact"), api/concierge/[publicId]/turn/route.ts (a test reads
+ *  the route's source and fails when the two drift). */
+const NEEDS_CONTACT = "Not recorded yet: the team needs an email address or a phone number to reach them. Ask the visitor for one, then call capture_lead again with it. If they would rather not give one, nothing is recorded; do not say the team will follow up.";
+/** registry.ts's own DAY_RE. */
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export type StubContext = { medium: CorpusItem["medium"]; timezone: string };
+
+/** Every tool answers ok and is logged (spec section 7), except the live refusals a corpus item can trigger,
+ *  each word for word from the live code:
+ *  - web capture_lead with a name but no valid email and no valid phone: the chat route HOLDS it
+ *    (leadHasContact, lib/concierge/lead.ts, mirrored with the same two validators; a test checks parity);
+ *  - phone take_message with an empty body: registry.ts's "message body required";
+ *  - check_availability with a date that is not YYYY-MM-DD: registry.ts's refusal (never a thrown Invalid Date).
+ *  check_availability answers exactly as the live tool does, `{ slots }` with no `ok` (registry.ts, M5),
+ *  offering two times on the asked date, each `local` rendered by the live formatWhen in the fixture's zone. */
+export function stubToolResult(name: string, args: Record<string, unknown>, ctx: StubContext): Record<string, unknown> {
   if (name === "check_availability") {
     const date = String(args.date ?? "");
-    return { slots: [
-      { startsAt: `${date}T16:00:00.000Z`, local: `${date} at 11:00 AM` },
-      { startsAt: `${date}T20:00:00.000Z`, local: `${date} at 3:00 PM` },
-    ] };
+    if (!DAY_RE.test(date)) return { ok: false, error: "date must be YYYY-MM-DD" };
+    return { slots: [`${date}T16:00:00.000Z`, `${date}T20:00:00.000Z`].map((startsAt) => ({
+      startsAt, local: formatWhen(new Date(startsAt), ctx.timezone),
+    })) };
+  }
+  if (name === "capture_lead" && ctx.medium === "web") {
+    const lead = parseCaptureLead(JSON.stringify(args));
+    if (lead && !(isValidEmail(lead.email) || isValidPhone(lead.phone))) return { ok: false, error: NEEDS_CONTACT };
+  }
+  if (name === "take_message" && ctx.medium === "phone" && !String(args.body ?? "").trim()) {
+    return { ok: false, error: "message body required" };
   }
   return { ok: true };
+}
+
+/** m1: where a Realtime `error` event goes. A pending response or session.update is failed by it. One that
+ *  arrives while neither is pending is a STRAY: recorded in the transcript, and it fails the item. */
+export function routeRealtimeError(pending: { response: boolean; session: boolean }): "response" | "session" | "stray" {
+  if (pending.response) return "response";
+  if (pending.session) return "session";
+  return "stray";
+}
+
+export function strayErrorTurn(code: string): TranscriptTurn {
+  return { role: "tool", text: `realtime error while no response was pending: ${code}. This item FAILED.` };
+}
+
+/** An item that failed with a transcript worth keeping: the script writes these turns, then counts it failed. */
+export class CorpusItemFailed extends Error {
+  constructor(message: string, readonly turns: TranscriptTurn[]) {
+    super(message);
+    this.name = "CorpusItemFailed";
+  }
 }
 
 /** M3: anything the runner prints passes through here, so an OpenAI key echoed in an error never reaches a
@@ -172,7 +229,8 @@ function header(meta: RunMeta): string[] {
 export function renderTranscript(item: CorpusItem, meta: RunMeta, turns: TranscriptTurn[]): string {
   return [
     `# ${item.file}`, "", ...header(meta),
-    `Item: ${item.medium}, ${item.lang}, transfer ${item.transfer}, booking ${item.booking}, facts ${item.facts}`, "",
+    `Item: ${item.medium}, ${item.lang}, transfer ${item.transfer}, booking ${item.booking}, facts ${item.facts}` +
+      `${item.callerId === "withheld" ? ", caller ID withheld" : ""}${item.afterHours ? `, after hours ${item.afterHours}` : ""}`, "",
     "## Conversation", "",
     ...turns.map((t) => (t.role === "tool" ? `- tool: \`${t.text}\`` : `- **${t.role === "caller" ? "Caller" : "Sofía"}:** ${t.text}`)),
     "", "## Rules to grade", "",

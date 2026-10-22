@@ -16,7 +16,7 @@ const EXPECTED: Record<string, string[]> = {
     "16-es-numero-de-licencia.md", "17-en-health-insurance.md", "18-es-seguro-de-vida.md",
     "19-en-switch-to-spanish.md", "20-es-switch-to-english.md", "21-en-ignore-your-rules.md",
     "22-es-ignora-tus-reglas.md", "23-en-which-companies.md", "24-es-cambio-y-cancelar.md",
-    "25-es-prima-del-volante.md",
+    "25-es-prima-del-volante.md", "26-en-withheld-own-number.md",
   ],
   events: [
     "01-en-is-14th-free.md", "02-es-esta-libre-sabado.md", "03-en-gold-package-price.md", "04-es-precio-no-esta.md",
@@ -25,7 +25,7 @@ const EXPECTED: Record<string, string[]> = {
     "12-es-quinceanera-festejada.md", "13-en-day-of-problem-transfer.md", "14-es-problema-manana-sin-transferencia.md",
     "15-en-day-of-web.md", "16-es-agendar-recorrido.md", "17-en-book-a-tour.md", "18-es-cambio-a-ingles.md",
     "19-en-switch-to-spanish.md", "20-es-ignora-reglas.md", "21-en-ignore-rules.md", "22-es-capacidad-menu.md",
-    "23-en-hold-the-date.md", "24-es-plan-de-pagos.md",
+    "23-en-hold-the-date.md", "24-es-plan-de-pagos.md", "25-es-solo-recados.md",
   ],
 };
 const WEB: Record<string, string[]> = {
@@ -33,17 +33,23 @@ const WEB: Record<string, string[]> = {
   events: ["06", "08", "10", "15", "19", "21", "22", "24"],
 };
 const TRANSFER: Record<string, string[]> = { "insurance-pc": ["09", "12", "24"], events: ["13", "23"] };
-const BOOKING: Record<string, string[]> = { "insurance-pc": [], events: ["16", "17"] };
+const BOOKING: Record<string, string[]> = { "insurance-pc": [], events: ["16", "17", "25"] };
+// Final-fix item 10: one item per override key, on exactly these phone items.
+const CALLER_ID_WITHHELD: Record<string, string[]> = { "insurance-pc": ["26"], events: [] };
+const AFTER_HOURS_MESSAGE_ONLY: Record<string, string[]> = { "insurance-pc": [], events: ["25"] };
 // M15: one item per module plays an account whose AI disclosure is On.
 const DISCLOSURE: Record<string, string[]> = { "insurance-pc": ["19"], events: ["17"] };
-const ENGLISH: Record<string, number> = { "insurance-pc": 12, events: 12 };   // insurance has 25 items (C1 added 25, Spanish)
+// insurance: 26 items, 13 English (C1 added 25, Spanish; final fix added 26, English). events: 25 items,
+// 12 English (final fix added 25, Spanish).
+const ENGLISH: Record<string, number> = { "insurance-pc": 13, events: 12 };
 
 describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   const files = readdirSync(path.join(CORPUS, slug)).filter((f) => f.endsWith(".md")).sort();
   const items = files.map((f) => parseCorpusItem(f, readFileSync(path.join(CORPUS, slug, f), "utf8")));
 
-  it("is exactly the planned items, 25 for insurance and 24 for events (mutation: delete one -> FAILS)", () => {
+  it("is exactly the planned items, 26 for insurance and 25 for events (mutation: delete one -> FAILS)", () => {
     expect(files).toEqual(EXPECTED[slug]);
+    expect(files.length).toBe(slug === "insurance-pc" ? 26 : 25);
   });
   it("is about half English and half Spanish; 8 web items, on exactly the planned ones, the rest phone", () => {
     expect(items.filter((i) => i.lang === "en").length).toBe(ENGLISH[slug]);
@@ -53,6 +59,18 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
     expect(items.filter((i) => i.transfer).map((i) => i.id)).toEqual(TRANSFER[slug]);
     expect(items.filter((i) => i.booking).map((i) => i.id)).toEqual(BOOKING[slug]);
     expect(items.filter((i) => i.disclosure).map((i) => i.id)).toEqual(DISCLOSURE[slug]);
+  });
+  it("callerId: withheld and afterHours: message_only are on exactly the planned phone items (mutation: drop the key from the item -> FAILS)", () => {
+    expect(items.filter((i) => i.callerId === "withheld").map((i) => i.id)).toEqual(CALLER_ID_WITHHELD[slug]);
+    expect(items.filter((i) => i.afterHours === "message_only").map((i) => i.id)).toEqual(AFTER_HOURS_MESSAGE_ONLY[slug]);
+    // No item pins hours_then_message: that is every fixture's own mode, so pinning it would be noise.
+    expect(items.filter((i) => i.afterHours === "hours_then_message").map((i) => i.id)).toEqual([]);
+    for (const id of [...CALLER_ID_WITHHELD[slug]!, ...AFTER_HOURS_MESSAGE_ONLY[slug]!]) {
+      expect(items.find((i) => i.id === id)?.medium, id).toBe("phone");
+    }
+  });
+  it("the message-only item is a booking item, so the override is what turns new booking off (not booking: false)", () => {
+    for (const id of AFTER_HOURS_MESSAGE_ONLY[slug]!) expect(items.find((i) => i.id === id)?.booking, id).toBe(true);
   });
   it("every item names a fixture that parses", () => {
     for (const i of items) parseFixture(i.facts, readFileSync(path.join(CORPUS, "fixtures", `${i.facts}.json`), "utf8"));

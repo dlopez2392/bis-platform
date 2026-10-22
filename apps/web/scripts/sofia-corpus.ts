@@ -20,13 +20,15 @@ import { TRADE_MODULES } from "../src/lib/voice/modules";
 import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult,
-  renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
+  renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
+  DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
   type CorpusItem, type CorpusFixture, type PhoneEngine, type RunMeta, type TranscriptTurn,
 } from "../src/lib/voice/modules/corpus-lib";
 
 refuseProduction(process.env, "sofia:corpus");
 
-const TEXT_MODALITY_FIELD = "output_modalities";   // or "modalities", per Task 0's spike
+// Provisional until Task 0's spike runs: "output_modalities" (the GA session shape) or "modalities".
+const TEXT_MODALITY_FIELD = "output_modalities";
 const MAX_TOOL_ROUNDS = 6;
 const RESPONSE_TIMEOUT_MS = 45_000;
 
@@ -62,27 +64,38 @@ const safeJson = (raw: unknown): Record<string, unknown> => {
   try { return JSON.parse(String(raw ?? "{}")) as Record<string, unknown>; } catch { return {}; }
 };
 
-async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: string, lines: string[]): Promise<TranscriptTurn[]> {
+type Stub = (name: string, args: Record<string, unknown>) => Record<string, unknown>;
+
+async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: string, lines: string[], stub: Stub): Promise<TranscriptTurn[]> {
   const turns: TranscriptTurn[] = [];
   const ws = new WebSocket(`wss://api.openai.com/v1/realtime?model=${encodeURIComponent(REALTIME_MODEL)}`,
     { headers: { Authorization: `Bearer ${key}` } });
   const send = (o: unknown) => ws.send(JSON.stringify(o));
   let text = ""; let toolRounds = 0; let toolPending = false;
   let waiter: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  let sessionPending = false;
   let sessionReady: (() => void) | null = null;
   let sessionFailed: ((e: Error) => void) | null = null;
+  // m1: an error that arrives while no response and no session.update is pending is recorded here (and in
+  // the transcript) and fails this item at its next step, never dropped.
+  let stray: Error | null = null;
+  const failIfStray = () => { if (stray) { ws.close(); throw new CorpusItemFailed(stray.message, turns); } };
   ws.on("message", (raw) => {
     const ev = JSON.parse(String(raw)) as { type: string; delta?: string; name?: string; call_id?: string; arguments?: string; error?: { code?: string; type?: string } };
-    if (ev.type === "session.updated") sessionReady?.();
+    if (ev.type === "session.updated") { sessionPending = false; sessionReady?.(); }
     // M3: the error's CODE only, never its message (a message can echo a key or a header).
     else if (ev.type === "error") {
-      const e = new Error(`realtime error: ${ev.error?.code ?? ev.error?.type ?? "unknown"}`);
-      if (waiter) waiter.reject(e); else sessionFailed?.(e);
+      const code = ev.error?.code ?? ev.error?.type ?? "unknown";
+      const e = new Error(`realtime error: ${code}`);
+      const route = routeRealtimeError({ response: waiter !== null, session: sessionPending });
+      if (route === "response") waiter!.reject(e);
+      else if (route === "session") { sessionPending = false; sessionFailed?.(e); }
+      else { stray ??= e; turns.push(strayErrorTurn(code)); }
     }
     else if (ev.type === "response.output_text.delta") text += ev.delta ?? "";
     else if (ev.type === "response.function_call_arguments.done") {
       const a = safeJson(ev.arguments);
-      const result = stubToolResult(String(ev.name), a);
+      const result = stub(String(ev.name), a);
       turns.push({ role: "tool", text: `${ev.name}(${JSON.stringify(a)}) -> ${JSON.stringify(result)}` });
       send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: ev.call_id, output: JSON.stringify(result) } });
       toolPending = true;
@@ -103,6 +116,7 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
   await within("session.updated", new Promise<void>((res, rej) => {
     sessionReady = res;
     sessionFailed = rej;
+    sessionPending = true;
     send({ type: "session.update", session: {
       type: "realtime", model: REALTIME_MODEL, instructions: buildSystemPrompt(input, new Date()),
       tools, [TEXT_MODALITY_FIELD]: ["text"],
@@ -116,10 +130,12 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
   });
   await respond({ instructions: greeting });   // the live route's greeting send (incoming/route.ts, the greetTimer's response.create)
   for (const line of lines) {
+    failIfStray();
     turns.push({ role: "caller", text: line });
     send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: line }] } });
     await respond();
   }
+  failIfStray();
   ws.close();
   return turns;
 }
@@ -141,7 +157,7 @@ async function complete(model: string, messages: ChatMsg[], tools: unknown[], ma
 /** Chat completions: the website chat (its own model, budget notice and reply cap, as the concierge turn
  *  route builds them), or the phone fallback (gpt-4o, the phone prompt and tools, the greeting as a system
  *  instruction). */
-async function runChat(model: string, system: (turn: number) => string, tools: unknown[], lines: string[],
+async function runChat(model: string, system: (turn: number) => string, tools: unknown[], lines: string[], stub: Stub,
   opts: { greeting?: string; maxTokens?: number }): Promise<TranscriptTurn[]> {
   const turns: TranscriptTurn[] = []; const history: ChatMsg[] = [];
   if (opts.greeting) {
@@ -157,7 +173,7 @@ async function runChat(model: string, system: (turn: number) => string, tools: u
         history.push({ role: "assistant", content: msg.content ?? null, tool_calls: msg.tool_calls });
         for (const c of msg.tool_calls) {
           const a = safeJson(c.function.arguments);
-          const result = stubToolResult(c.function.name, a);
+          const result = stub(c.function.name, a);
           turns.push({ role: "tool", text: `${c.function.name}(${JSON.stringify(a)}) -> ${JSON.stringify(result)}` });
           history.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) });
         }
@@ -174,17 +190,20 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
   const f = fixtureFor(item.facts);
   const input = promptInputFor(item, f, moduleId!);
   const tools = toolsFor(item, input);
-  if (dryRun) return [{ role: "tool", text: `dry run: ${tools.map((t) => t.name).join(", ")}; prompt ${buildSystemPrompt(input, new Date()).length} chars` }];
+  const stub: Stub = (name, a) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone });
+  if (dryRun) {
+    return [{ role: "tool", text: `dry run: ${tools.map((t) => t.name).join(", ")}; caller ID ${input.callerNumber === null ? "withheld" : "shown"}; after hours ${input.afterHours}; prompt ${buildSystemPrompt(input, new Date()).length} chars` }];
+  }
   if (item.medium === "web") {
     // The chat route's system prompt per turn: the prompt plus budgetNotice(MAX - claimed + 1), claimed = turn.
     return runChat(CONCIERGE_MODEL, (turn) => buildSystemPrompt(input, new Date()) + budgetNotice(CONCIERGE_MAX_TURNS - Math.max(turn, 1) + 1),
-      tools.map((t) => t.schema), item.caller, { maxTokens: CONCIERGE_MAX_REPLY_TOKENS });
+      tools.map((t) => t.schema), item.caller, stub, { maxTokens: CONCIERGE_MAX_REPLY_TOKENS });
   }
   const greeting = openingGreeting({ languages: f.languages, greeting_en: f.greetingEn, greeting_es: f.greetingEs },
     f.businessName, { disclose: item.disclosure, personaName: f.personaName }).instruction;
-  if (phoneEngine === "realtime") return runRealtime(input, tools.map((t) => t.schema), greeting, item.caller);
+  if (phoneEngine === "realtime") return runRealtime(input, tools.map((t) => t.schema), greeting, item.caller, stub);
   return runChat(PHONE_FALLBACK_MODEL, () => buildSystemPrompt(input, new Date()), tools.map((t) => realtimeToolAsChat(t.schema)),
-    item.caller, { greeting });
+    item.caller, stub, { greeting });
 }
 
 async function main(): Promise<void> {
@@ -200,6 +219,8 @@ async function main(): Promise<void> {
       console.log(`ok   ${item.file}`);
     } catch (e) {
       failed += 1;
+      // m1: a failure that carries its turns (a stray Realtime error) still writes the transcript, which says so.
+      if (e instanceof CorpusItemFailed) writeFileSync(path.join(outDir, item.file), redact(renderTranscript(item, meta, e.turns)), "utf8");
       console.log(`FAIL ${item.file}: ${redact(e instanceof Error ? e.message : String(e))}`);
     }
   }
