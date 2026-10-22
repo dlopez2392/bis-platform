@@ -3,11 +3,14 @@
 import { createHash } from "node:crypto";
 import type { TradeModule, TradeModuleContext, TradeModuleId } from "./index";
 
-/** Every context a block can see: 3 media x handoff x canBook = 12. businessName is fixed: it is data. */
+/** Every context a block can see: 3 media x handoff x canBook x 3 language settings = 36 (12 until v2's fix
+ *  round added `languages`; v1's history entry was hashed over the 12 and is never recomputed). businessName is
+ *  fixed: it is data. */
 export const PIN_CONTEXTS: readonly TradeModuleContext[] = (["phone", "web", "web_voice"] as const).flatMap(
-  (medium) => [false, true].flatMap((handoffAvailable) => [false, true].map((canBook) => ({
-    businessName: "Pin Test Co", medium, handoffAvailable, canBook,
-  }))),
+  (medium) => [false, true].flatMap((handoffAvailable) => [false, true].flatMap((canBook) =>
+    (["en", "es", "both"] as const).map((languages) => ({
+      businessName: "Pin Test Co", medium, handoffAvailable, canBook, languages,
+    })))),
 );
 
 export function moduleTextSha256(mod: Pick<TradeModule, "heading" | "block">): string {
@@ -25,10 +28,10 @@ export function moduleTextSha256(mod: Pick<TradeModule, "heading" | "block">): s
 export const SHA256_HISTORY: Readonly<Record<TradeModuleId, readonly string[]>> = {
   insurance_pc: [
     "871d340f7626489ca98cd0dedf643da136a43e5e6520198fa30f35c349799874",
-    "8c3048bdfeffced1c05d251f0dd0020dfda10ada12ad8185d833c44f7d154079", // v2, 2026-10-22: corpus run 1's fixes
+    "034a1dededa15b781fbb44524e696f4438ac0e04860a46305744daed7b9ab538", // v2, 2026-10-22: corpus run 1's fixes (+ review fix round; v2 was never graded)
   ],
   events: [
     "e9db9a25be740d84931d3e7ce645b2426eada6c0808abc72e1f7eee6439c697a",
-    "c340f3ff4d089d7b9e2b98ebe41c8fafcb3e4aff025cb2ce0db886f4b6b04200", // v2, 2026-10-22: corpus run 1's fixes
+    "bd4eb06f12173ecaa902138344c8a20d9aaa8da5ff1a2af724971a6fbc950278", // v2, 2026-10-22: corpus run 1's fixes (+ review fix round; v2 was never graded)
   ],
 };

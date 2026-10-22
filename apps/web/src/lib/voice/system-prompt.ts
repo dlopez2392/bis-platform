@@ -136,6 +136,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       medium: input.medium ?? "phone",
       handoffAvailable: input.handoffAvailable === true,
       canBook: booking && !onWeb,
+      languages: input.languages,
     }),
     "",
     "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",

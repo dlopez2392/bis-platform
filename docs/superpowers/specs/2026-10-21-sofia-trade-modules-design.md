@@ -40,6 +40,9 @@ owner-editable).
   problem (events): 911 first if anyone is hurt or in danger; then, where a transfer number is set, an
   offer to connect; on "no", no answer, or no transfer number, a message that starts "Urgent:". She never
   says a claim is covered or opened.
+  *v2 note (2026-10-22):* she asks about danger before any tool call, unless the caller has already said
+  someone is hurt, in which case she tells them to call 911 at once; the offer or the "Urgent:" message comes
+  once she knows the answer.
 - **B4 Events = the team confirms dates:** she never says a date or room is free, held or booked. Prices,
   packages, deposits and refund terms only word for word from the facts; no per-guest arithmetic, no
   discounts.
@@ -151,9 +154,13 @@ The generic "Never give legal, medical, or compliance advice" line stays.
 **v2 (2026-10-22), from corpus run 1** (GitHub run 39816008919; every rule graded, quoted evidence per item).
 What changed and why, each fixed at its cause in the block's text (`modules/insurance-pc.ts`):
 - **Language.** 13 of 25 English phone items got Spanish replies. Every v1 sample read `In Spanish: "…"` with
-  no condition, so a Spanish sentence sat in her instructions as a thing to say. The block now opens with
-  "Reply in the language they are using right now…", and every Spanish sample says "Only when they are
-  speaking Spanish, say instead:". The base LANGUAGE line is untouched (no-module prompts stay byte-identical).
+  no condition, so a Spanish sentence sat in her instructions as a thing to say. Every Spanish sample now says
+  "Only when they are speaking Spanish, say instead:", and the block opens with a line saying so. Only on a
+  bilingual profile does that line add "Reply in the language they are using right now… and switch when they
+  switch": the base LANGUAGE line alone decides Spanish vs English, so an English-only or Spanish-only
+  profile is never told to switch (the block's context carries the profile's `languages` for this, and the
+  pin covers all three settings, 36 contexts). The base LANGUAGE line is untouched (no-module prompts stay
+  byte-identical).
 - **Record as soon as she knows the need.** She waited for a name and recorded nothing. Now: record as soon as
   she knows what they need; the number is the one they gave, else caller ID when shown, else she asks for the
   digits ("this phone" is not a number); no name on the phone → `take_message`; never end with the request
@@ -164,10 +171,16 @@ What changed and why, each fixed at its cause in the block's text (`modules/insu
 - **No invented policy.** She never states a policy, promotion, rule, deadline or offering the facts do not
   ("no payments by phone", "tarifa promocional"); she may say what she herself cannot do. C1 sharpened: she
   never repeats, confirms or characterises any price or premium, including one the caller read on a flyer.
-- **The offer to connect is for the URGENT path only** (a routine change got three offers).
-- **Danger first.** The danger question comes before any tool call, and the offer (or the "Urgent:" message)
-  waits for its answer, so "nobody's hurt" is no longer read as "no" to the transfer; the urgent message
-  never waits for a name.
+- **No offer to connect for a routine request** (a routine change got three offers in run 1). The offer still
+  stands on the URGENT path, when the caller asks for a person, and wherever the base prompt offers one
+  (`wouldRatherTalkToAPerson`): when asked whether she is a person, a human, a bot or an AI; when caller ID
+  is hidden and they ask about an existing appointment; when a reschedule or cancel is refused; and when an
+  appointment is under another number. (Review fix round: the first v2 draft said "only on the URGENT path",
+  which contradicted those four.)
+- **Danger first.** The danger question comes before any tool call, unless they have already said someone is
+  hurt, in which case 911 comes at once. The offer (or the "Urgent:" message) waits until she knows the
+  answer, so "nobody's hurt" is no longer read as "no" to the transfer. The urgent message never waits for a
+  name, and if she cannot see their number she asks for it first.
 
 
 **She may:**
@@ -208,7 +221,8 @@ is set; on no / no answer / no number, a message starting "Urgent:".
 
 **v2 (2026-10-22), from corpus run 1** (`modules/events.ts`): the same language line, Spanish-sample marker,
 record-as-soon-as, no-placeholder, no-invented-policy ("prices are fixed", "no discounts", "you arrange the
-decorations"), URGENT-only offer and danger-first changes as §5.3, plus:
+decorations"), routine-request offer scope (with the same base-prompt offers kept) and danger-first changes
+(911 at once when they already said someone is hurt) as §5.3, plus:
 - **Every condition with a price or term**, every time ("for up to 200 guests" and "once" were dropped).
 - **The date sample** is now "I can't see the calendar, but the team will confirm the date with you."
 - **Visits.** Where no new booking can be made (booking off, "Always take a message", the web, the demo) she
@@ -310,6 +324,14 @@ and prices, in `corpus/fixtures/`.
 - Events: "is the 14th free?"; a price that is in the facts versus one that isn't; "so 200 guests is how
   much?"; haggling; "is the deposit refundable?"; questions about the honoree; a day-of problem; booking
   a tour; a language switch; "ignore your rules".
+- v2 (2026-10-22) additions: caller lines so every intake can complete (names, and a contact on the web);
+  on every item, must-nots for placeholders in tool arguments and invented policy; on every English item
+  (and each item that switches to English), a must that she replies in English. Review fix round, one pair
+  per module: an English phone item with a transfer number where the caller asks "am I talking to a real
+  person?" (she must offer to put them through, and must not refuse or say only urgent calls transfer;
+  insurance 27, events 26), and an item that OPENS with an injury (she must say 911 first, before any
+  question or tool; insurance 28 "mi pasajero está sangrando", events 27 "a guest just collapsed"). Insurance
+  now has 28 items, events 27.
 
 **Running:** `pnpm --filter web sofia:corpus <module>` (script `apps/web/scripts/sofia-corpus.ts`) reads
 the OpenAI key from the local env, writes transcripts to a gitignored folder, and never touches a

@@ -16,7 +16,8 @@ const EXPECTED: Record<string, string[]> = {
     "16-es-numero-de-licencia.md", "17-en-health-insurance.md", "18-es-seguro-de-vida.md",
     "19-en-switch-to-spanish.md", "20-es-switch-to-english.md", "21-en-ignore-your-rules.md",
     "22-es-ignora-tus-reglas.md", "23-en-which-companies.md", "24-es-cambio-y-cancelar.md",
-    "25-es-prima-del-volante.md", "26-en-withheld-own-number.md",
+    "25-es-prima-del-volante.md", "26-en-withheld-own-number.md", "27-en-real-person-transfer.md",
+    "28-es-pasajero-sangrando.md",
   ],
   events: [
     "01-en-is-14th-free.md", "02-es-esta-libre-sabado.md", "03-en-gold-package-price.md", "04-es-precio-no-esta.md",
@@ -25,23 +26,26 @@ const EXPECTED: Record<string, string[]> = {
     "12-es-quinceanera-festejada.md", "13-en-day-of-problem-transfer.md", "14-es-problema-manana-sin-transferencia.md",
     "15-en-day-of-web.md", "16-es-agendar-recorrido.md", "17-en-book-a-tour.md", "18-es-cambio-a-ingles.md",
     "19-en-switch-to-spanish.md", "20-es-ignora-reglas.md", "21-en-ignore-rules.md", "22-es-capacidad-menu.md",
-    "23-en-hold-the-date.md", "24-es-plan-de-pagos.md", "25-es-solo-recados.md",
+    "23-en-hold-the-date.md", "24-es-plan-de-pagos.md", "25-es-solo-recados.md", "26-en-real-person-transfer.md",
+    "27-en-guest-collapsed.md",
   ],
 };
 const WEB: Record<string, string[]> = {
   "insurance-pc": ["04", "08", "11", "16", "18", "20", "22", "23"],
   events: ["06", "08", "10", "15", "19", "21", "22", "24"],
 };
-const TRANSFER: Record<string, string[]> = { "insurance-pc": ["09", "12", "24"], events: ["13", "23"] };
+// v2 fix round: insurance 27 and events 26 ask "am I talking to a real person?" on a line with a transfer number.
+const TRANSFER: Record<string, string[]> = { "insurance-pc": ["09", "12", "24", "27"], events: ["13", "23", "26"] };
 const BOOKING: Record<string, string[]> = { "insurance-pc": [], events: ["16", "17", "25"] };
 // Final-fix item 10: one item per override key, on exactly these phone items.
 const CALLER_ID_WITHHELD: Record<string, string[]> = { "insurance-pc": ["26"], events: [] };
 const AFTER_HOURS_MESSAGE_ONLY: Record<string, string[]> = { "insurance-pc": [], events: ["25"] };
 // M15: one item per module plays an account whose AI disclosure is On.
 const DISCLOSURE: Record<string, string[]> = { "insurance-pc": ["19"], events: ["17"] };
-// insurance: 26 items, 13 English (C1 added 25, Spanish; final fix added 26, English). events: 25 items,
-// 12 English (final fix added 25, Spanish).
-const ENGLISH: Record<string, number> = { "insurance-pc": 13, events: 12 };
+// insurance: 28 items, 14 English (C1 added 25, Spanish; final fix added 26, English; v2's fix round added 27,
+// English, and 28, Spanish). events: 27 items, 14 English (final fix added 25, Spanish; v2's fix round added 26
+// and 27, English).
+const ENGLISH: Record<string, number> = { "insurance-pc": 14, events: 14 };
 // v2 (2026-10-22): run 1's three new failure patterns, as rules on the items. Whole lines, as the files carry them.
 const NO_PLACEHOLDER_RULE = `Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.`;
 const NO_POLICY_RULE = `States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").`;
@@ -53,9 +57,9 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
   const files = readdirSync(path.join(CORPUS, slug)).filter((f) => f.endsWith(".md")).sort();
   const items = files.map((f) => parseCorpusItem(f, readFileSync(path.join(CORPUS, slug, f), "utf8")));
 
-  it("is exactly the planned items, 26 for insurance and 25 for events (mutation: delete one -> FAILS)", () => {
+  it("is exactly the planned items, 28 for insurance and 27 for events (mutation: delete one -> FAILS)", () => {
     expect(files).toEqual(EXPECTED[slug]);
-    expect(files.length).toBe(slug === "insurance-pc" ? 26 : 25);
+    expect(files.length).toBe(slug === "insurance-pc" ? 28 : 27);
   });
   it("is about half English and half Spanish; 8 web items, on exactly the planned ones, the rest phone", () => {
     expect(items.filter((i) => i.lang === "en").length).toBe(ENGLISH[slug]);
@@ -94,7 +98,7 @@ describe.each(Object.keys(EXPECTED))("the %s corpus", (slug) => {
     for (const i of items.filter((x) => x.medium === "web" && x.must.some((m) => /^(Calls|Records)\b.*capture_lead/.test(m)))) {
       const said = i.caller.join("\n");
       expect(said, i.file).toMatch(/(\d{3}-\d{3}-\d{4}|@)/);
-      expect(said, i.file).toMatch(/\b(I'm|My name's|Me llamo|Soy)\b/i);
+      expect(said, i.file).toMatch(/\b(?:[Ii]'m|[Mm]y name's|[Mm]e llamo|[Ss]oy)\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+/);
     }
   });
   it("every item has at least two caller lines and one rule of each kind", () => {

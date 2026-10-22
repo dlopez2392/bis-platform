@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { TRADE_MODULES, TRADE_MODULE_IDS, tradeModuleBlock, tradeModuleStamp, type TradeModuleId } from "./index";
 import { PIN_CONTEXTS, moduleTextSha256, SHA256_HISTORY } from "./pin";
 
-const CTX = { businessName: "Rio Roofing", medium: "phone", handoffAvailable: false, canBook: false } as const;
+const CTX = { businessName: "Rio Roofing", medium: "phone", handoffAvailable: false, canBook: false, languages: "both" } as const;
 
 describe("the registry", () => {
   it("holds exactly the two ids 0094's CHECK allows, in the Voice page's order", () => {
@@ -29,8 +29,9 @@ describe("the registry", () => {
 });
 
 describe("the text-hash pin (SD8): change a word and this fails until VERSION is bumped and a hash appended", () => {
-  it("hashes 12 contexts (guards the pin from an empty context list)", () => {
-    expect(PIN_CONTEXTS.length).toBe(12);
+  it("hashes 36 contexts: 3 media x handoff x canBook x 3 language settings (guards the pin from an empty or partial context list; mutation: drop a language setting -> FAILS)", () => {
+    expect(PIN_CONTEXTS.length).toBe(36);
+    expect(new Set(PIN_CONTEXTS.map((c) => c.languages))).toEqual(new Set(["en", "es", "both"]));
   });
   for (const id of TRADE_MODULE_IDS) {
     it(`${id}: history length is VERSION, the last entry is today's text, and no two versions share a hash (mutations: change one word in the module -> FAILS; bump VERSION without appending -> FAILS)`, () => {

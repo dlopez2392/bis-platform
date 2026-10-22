@@ -582,7 +582,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
 
   it("the web prompt's block names capture_lead and no transfer, even with handoffAvailable true (mutation: medium hard-coded 'phone' -> FAILS)", () => {
     const web = buildSystemPrompt(baseInput({ medium: "web", handoffAvailable: true, tradeModule: "events" }), now);
-    expect(web).toContain(`- Once they have answered that, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
+    expect(web).toContain(`- Once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
     // Bounded to the block: system-prompt.ts:183-187 lists transfer_to_human in TOOLS whenever handoffAvailable
     // is set, on any medium, and that line is NOT this PR's to change. Only the block must not name it.
     const blockText = web.slice(web.indexOf(EVT), web.indexOf("\n\nTOOLS"));
@@ -591,7 +591,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
   });
 
   it("the phone block offers to connect only when handoffAvailable (mutation: handoffAvailable: true in the ctx -> FAILS)", () => {
-    const offer = `- Once they have answered that, offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
+    const offer = `- Once you know whether anyone is hurt or in danger, offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
     expect(buildSystemPrompt(baseInput({ handoffAvailable: true, tradeModule: "insurance_pc" }), now)).toContain(offer);
     expect(buildSystemPrompt(baseInput({ handoffAvailable: false, tradeModule: "insurance_pc" }), now)).not.toContain(offer);
   });
@@ -605,6 +605,16 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
     expect(full).not.toContain(noVisit);
     expect(messageOnly).not.toContain(tour);
     expect(messageOnly).toContain(noVisit);
+  });
+
+  it("the profile's languages reach the block: only a bilingual profile is told to switch (fix round m-a; mutation: languages hard-coded 'both' in the ctx -> FAILS)", () => {
+    const sw = "and switch when they switch";
+    expect(buildSystemPrompt(baseInput({ languages: "both", tradeModule: "events" }), now)).toContain(sw);
+    for (const languages of ["en", "es"] as const) {
+      const p = buildSystemPrompt(baseInput({ languages, tradeModule: "events" }), now);
+      expect(p).toContain("- The Spanish lines below are only for when they are speaking Spanish; when they are speaking English, say the English line.");
+      expect(p).not.toContain(sw);
+    }
   });
 
   it("the browser voice demo gets the demo variant (SD1)", () => {
