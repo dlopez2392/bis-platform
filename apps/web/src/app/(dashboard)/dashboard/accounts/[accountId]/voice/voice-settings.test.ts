@@ -6,7 +6,7 @@ import {
   conciergeLockReason, shouldShowConciergeEmptyState, conciergeDestinationOptions,
   conciergeFormUnpublished, conciergeSnippetPublicId, conciergeToggleLocked, ConciergeCard,
   conciergeCanTurnOn, conciergeAttemptReenable, VoiceProfileForm, forwardSwitchState,
-  type DisclosureCopy,
+  type DisclosureCopy, type TradeRulesCopy,
 } from "./voice-settings";
 import { m } from "@/lib/messages";
 import { isVoiceProfileDone } from "@/lib/setup/setup-status";
@@ -23,6 +23,20 @@ const EN_DISCLOSURE_COPY: DisclosureCopy = {
     { value: "off", label: m["voice.disclosure.off"], hint: m["voice.disclosure.offHint"].replace("{persona}", "Sofía") },
     { value: "trial", label: m["voice.disclosure.trial"], hint: m["voice.disclosure.trialHint"] },
     { value: "on", label: m["voice.disclosure.on"], hint: m["voice.disclosure.onHint"].replace("{persona}", "Sofía") },
+  ],
+};
+
+/** S-47b section 5.6: the server-built copy `VoiceProfileForm`'s Trade rules fieldset renders from —
+ *  English, the three real option words/hints, in "none" then `TRADE_MODULE_IDS`'s own order. Shared
+ *  across this file's render helpers so every pre-existing call site stays unaffected by the new required
+ *  prop (same shape as `EN_DISCLOSURE_COPY` above). */
+const EN_TRADE_COPY: TradeRulesCopy = {
+  locale: "en",
+  legend: m["voice.tradeRules.legend"],
+  options: [
+    { value: "none", label: m["voice.tradeRules.none"], hint: m["voice.tradeRules.noneHint"].replace("{persona}", "Sofía") },
+    { value: "insurance_pc", label: m["voice.tradeRules.insurance_pc"], hint: m["voice.tradeRules.insurance_pcHint"].replace("{persona}", "Sofía") },
+    { value: "events", label: m["voice.tradeRules.events"], hint: m["voice.tradeRules.eventsHint"].replace("{persona}", "Sofía") },
   ],
 };
 
@@ -615,6 +629,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
       brandName,
       action: async () => ({ ok: true as const }),
       disclosureCopy: EN_DISCLOSURE_COPY,
+      tradeRulesCopy: EN_TRADE_COPY,
     }));
   }
 
@@ -721,6 +736,7 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
     return renderToStaticMarkup(createElement(VoiceProfileForm, {
       profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
       disclosureCopy: EN_DISCLOSURE_COPY,
+      tradeRulesCopy: EN_TRADE_COPY,
     }));
   }
 
@@ -761,6 +777,7 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
     const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
       profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
       disclosureCopy: { ...EN_DISCLOSURE_COPY, locale: "es", nextCall: m["voice.disclosure.nextCall.es"] },
+      tradeRulesCopy: EN_TRADE_COPY,
     }));
     // The element carrying lang="es" must CONTAIN the next-call line: the wrapper div, opened before
     // the fieldset and closed after the line.
@@ -769,6 +786,70 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
   });
 });
 
+/**
+ * S-47b section 5.6: the agency's Trade rules choice lives inside the profile card's own form, so one Save
+ * commits it with everything else (rule 8) — same shape as the disclosure group above.
+ */
+describe("VoiceProfileForm's Trade rules group (S-47b)", () => {
+  const PROFILE: VoiceProfileRow = {
+    id: "vp1", account_id: "a1", persona_name: "Sofía",
+    greeting_en: "Hi, thanks for calling.", greeting_es: "", facts: "", services: "",
+    languages: "en", booking_enabled: true, after_hours: "hours_then_message",
+    enabled: true, textback_enabled: false, textback_body: "",
+    textback_body_es: null, textback_body_es_basis: null,
+    public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+    trade_module: "events",
+  };
+
+  function render(over: Partial<VoiceProfileRow> = {}, trade = EN_TRADE_COPY): string {
+    return renderToStaticMarkup(createElement(VoiceProfileForm, {
+      profile: { ...PROFILE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
+      disclosureCopy: EN_DISCLOSURE_COPY, tradeRulesCopy: trade,
+    }));
+  }
+
+  it("renders three radios named 'trade_module', values none/insurance_pc/events, exactly the stored one checked, the three hints, and still exactly ONE primary (mutation: a second primary in the fieldset → FAILS)", () => {
+    const html = render();
+    const radios = [...html.matchAll(/<input[^>]*name="trade_module"[^>]*>/g)].map((mm) => mm[0]);
+    expect(radios.length).toBe(3);
+    expect(radios.map((r) => /value="([^"]*)"/.exec(r)?.[1])).toEqual(["none", "insurance_pc", "events"]);
+    // Exactly the stored value ("events") carries checked.
+    expect(radios.filter((r) => / checked(=""|)/.test(r)).length).toBe(1);
+    expect(/value="events"[^>]*checked/.test(html) || /checked[^>]*value="events"/.test(html)).toBe(true);
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.tradeRules.noneHint"].replace("{persona}", "Sofía"));
+    expect(text).toContain(m["voice.tradeRules.insurance_pcHint"].replace("{persona}", "Sofía"));
+    expect(text).toContain(m["voice.tradeRules.eventsHint"].replace("{persona}", "Sofía"));
+    // Still exactly ONE primary button in the card (the Save) — a second
+    // data-variant="default" would mean the Trade rules fieldset grew its own primary.
+    expect((html.match(/data-variant="default"/g) ?? []).length).toBe(1);
+  });
+
+  it("a profile with no trade module checks 'none' (mutation: defaultChecked={p.trade_module === o.value} → FAILS)", () => {
+    const html = render({ trade_module: null });
+    const radios = [...html.matchAll(/<input[^>]*name="trade_module"[^>]*>/g)].map((mm) => mm[0]);
+    expect(radios.filter((r) => / checked(=""|)/.test(r)).length).toBe(1);
+    expect(/value="none"[^>]*checked/.test(html) || /checked[^>]*value="none"/.test(html)).toBe(true);
+  });
+
+  it("the 'none' radio's accessible name is exactly the option word — the hint is its description, not part of the label", () => {
+    const html = render();
+    const labelMatch = /<label[^>]*>\s*<input[^>]*name="trade_module"[^>]*value="none"[^>]*\/?>\s*([^<]*)<\/label>/.exec(html);
+    expect(labelMatch?.[1]?.trim()).toBe(m["voice.tradeRules.none"]);
+  });
+
+  it("each radio paints in the accent, as the disclosure group does (mutation: drop the class -> FAILS)", () => {
+    const radios = [...render().matchAll(/<input[^>]*name="trade_module"[^>]*>/g)].map((mm) => mm[0]);
+    expect(radios.length).toBe(3);
+    for (const r of radios) expect(r).toContain('class="size-4 shrink-0 accent-[var(--accent)]"');
+  });
+
+  it("lang is on the wrapper div, not the fieldset, when the copy is Spanish", () => {
+    const html = render({}, { ...EN_TRADE_COPY, locale: "es" });
+    expect(html).toMatch(/<div[^>]*lang="es"[^>]*>\s*<fieldset/);
+    expect(html).not.toMatch(/<fieldset[^>]*lang=/);
+  });
+});
 
 // D-040: "Always take a message" now means no booking on calls at any hour,
 // which overrides the "Allow booking" box — said beside the choice, so a
@@ -788,6 +869,7 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     const html = renderToStaticMarkup(createElement(VoiceProfileForm, {
       profile: PROFILE, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
       disclosureCopy: EN_DISCLOSURE_COPY,
+      tradeRulesCopy: EN_TRADE_COPY,
     }));
     expect(renderedText(html)).toContain(m["voice.profile.afterHoursHint"]);
     expect(m["voice.profile.afterHoursHint"]).toMatch(/book/i);
@@ -812,6 +894,7 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
   const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {
     profile: { ...BASE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
     disclosureCopy: EN_DISCLOSURE_COPY,
+    tradeRulesCopy: EN_TRADE_COPY,
   }));
   /** The booking checkbox's own button tag. */
   const bookingBox = (html: string) => {
@@ -859,6 +942,7 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
       brandName: "Rio Roofing",
       action: async () => ({ ok: true as const }),
       disclosureCopy: EN_DISCLOSURE_COPY,
+      tradeRulesCopy: EN_TRADE_COPY,
     }));
   }
 

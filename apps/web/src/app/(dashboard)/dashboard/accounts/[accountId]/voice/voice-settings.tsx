@@ -58,18 +58,28 @@ export type DisclosureCopy = {
   options: Array<{ value: "off" | "trial" | "on"; label: string; hint: string }>;
 };
 
+/** S-47b section 5.6: the Trade rules group's copy, built server-side (page.tsx) from TRADE_MODULE_IDS, like
+ *  DisclosureCopy. This file is "use client" and never imports @/lib/voice/modules (that would ship the
+ *  prompt text to the browser). "none" posts as the word and saves as NULL. */
+export type TradeRulesCopy = {
+  locale: "en" | "es";
+  legend: string;
+  options: Array<{ value: "none" | "insurance_pc" | "events"; label: string; hint: string }>;
+};
+
 // Exported (additive — no other symbol in this file changes) so the
 // text-back segment counter can be exercised directly the same way
 // `ConciergeCard` is below, rather than only through the page-level
 // `VoiceSettings` export, which would drag in unrelated actions and props
 // just to reach this card's own preview state.
 export function VoiceProfileForm({
-  profile, brandName, action, disclosureCopy,
+  profile, brandName, action, disclosureCopy, tradeRulesCopy,
 }: {
   profile: VoiceProfileRow | null;
   brandName: string;
   action: (formData: FormData) => Promise<ActionResult>;
   disclosureCopy: DisclosureCopy;
+  tradeRulesCopy: TradeRulesCopy;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
   // Controlled, not the uncontrolled `defaultValue` every other field in this
@@ -338,6 +348,34 @@ export function VoiceProfileForm({
               })}
             </fieldset>
             <p className="text-xs text-muted-foreground">{disclosureCopy.nextCall}</p>
+          </div>
+
+          {/* S-47b section 5.6: the agency's trade rules, inside this card's ONE form (rule 8), in the same
+              radio pattern as the disclosure group above: the label holds only the input and the option's
+              words, and the hint is its own <p> tied by aria-describedby. */}
+          <div className="space-y-2 border-t border-border pt-4" lang={tradeRulesCopy.locale}>
+            <fieldset role="radiogroup" className="space-y-3">
+              <legend className="text-sm font-medium">{tradeRulesCopy.legend}</legend>
+              {tradeRulesCopy.options.map((o) => {
+                const hintId = `trade-rules-hint-${o.value}`;
+                return (
+                  <div key={o.value} className="space-y-0.5">
+                    <label className="flex min-h-11 items-center gap-2 text-sm md:min-h-8">
+                      <input
+                        type="radio"
+                        name="trade_module"
+                        value={o.value}
+                        defaultChecked={(p.trade_module ?? "none") === o.value}
+                        aria-describedby={hintId}
+                        className="size-4 shrink-0 accent-[var(--accent)]"
+                      />
+                      {o.label}
+                    </label>
+                    <p id={hintId} className="text-xs text-muted-foreground">{o.hint}</p>
+                  </div>
+                );
+              })}
+            </fieldset>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>
@@ -1037,7 +1075,7 @@ export function VoiceSettings({
   accountId, profile, brandName, numbers, transferPhone, publishedForms, origin,
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
-  disclosureCopy, disclosureResults,
+  disclosureCopy, disclosureResults, tradeRulesCopy,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -1070,11 +1108,14 @@ export function VoiceSettings({
   /** S-47a §5.3: the agency's results card, already resolved to a Suspense boundary by page.tsx — this
    *  component never reads the data itself, only places the node. */
   disclosureResults: ReactNode;
+  /** S-47b section 5.6: the Trade rules group's copy, built server-side (page.tsx). */
+  tradeRulesCopy: TradeRulesCopy;
 }) {
   return (
     <div className="space-y-6">
       <VoiceProfileForm
         profile={profile} brandName={brandName} action={saveProfileAction} disclosureCopy={disclosureCopy}
+        tradeRulesCopy={tradeRulesCopy}
       />
       {disclosureResults}
       <ConciergeCard

@@ -729,3 +729,47 @@ describe("saveVoiceProfileAction — the disclosure field (S-47a)", () => {
     expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * S-47b section 5.6: ABSENT leaves the stored module alone (the S-47a rule for `disclosure` above);
+ * "none" clears it (NULL = the general rules only); one of TRADE_MODULE_IDS sets it; anything else
+ * refuses the whole save.
+ */
+describe("saveVoiceProfileAction — the trade_module field (S-47b)", () => {
+  it("trade_module=events carries through to the patch", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", trade_module: "events" }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ trade_module: "events" }), expect.any(String));
+  });
+
+  it("trade_module=none clears it to NULL (mutation: map 'none' to undefined → FAILS)", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", trade_module: "none" }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledWith({}, "a1",
+      expect.objectContaining({ trade_module: null }), expect.any(String));
+  });
+
+  it("an absent field leaves the stored module alone — the patch carries NO trade_module key at all (mutation: default absent to null → FAILS)", async () => {
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both" }));
+    expect(r).toEqual({ ok: true });
+    const patch = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as Record<string, unknown>;
+    expect("trade_module" in patch).toBe(false);
+  });
+
+  it("an unknown value refuses the whole save, with no write", async () => {
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", trade_module: "law" }));
+    expect(r).toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("a non-agency caller is refused before any write, even with trade_module=events in the form", async () => {
+    guardFixture.isAgency = false;
+    const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", trade_module: "events" }));
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+});

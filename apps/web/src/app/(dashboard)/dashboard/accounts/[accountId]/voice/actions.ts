@@ -36,6 +36,7 @@ import { e164Of } from "@/lib/voice/phone-number";
 import { resolveHandoffTarget } from "@/lib/voice/handoff";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
+import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { m } from "@/lib/messages";
@@ -79,6 +80,18 @@ export async function saveVoiceProfileAction(
   const disclosureRaw = formData.get("disclosure");
   const disclosure = disclosureRaw === null ? undefined : pickOne(String(disclosureRaw), DISCLOSURE_VALUES);
   if (disclosure === null) return { ok: false, error: m["voice.profile.saveFailed"] };
+
+  // S-47b section 5.6: ABSENT leaves the stored module alone (the S-47a rule above); "none" clears it
+  // (NULL = the general rules only); one of TRADE_MODULE_IDS sets it; anything else refuses the whole save.
+  const tradeRaw = formData.get("trade_module");
+  let tradeModule: TradeModuleId | null | undefined;
+  if (tradeRaw === null) tradeModule = undefined;
+  else if (String(tradeRaw) === "none") tradeModule = null;
+  else {
+    const picked = pickOne(String(tradeRaw), TRADE_MODULE_IDS);
+    if (picked === null) return { ok: false, error: m["voice.profile.saveFailed"] };
+    tradeModule = picked;
+  }
 
   // The client marks this field `required`, but that is not enforcement — a
   // blank/whitespace submission (bypassed form, stripped JS) must still land
@@ -137,6 +150,7 @@ export async function saveVoiceProfileAction(
     textback_body_es: bodyEs,
     textback_body_es_basis: basis,
     ...(disclosure === undefined ? {} : { disclosure }),
+    ...(tradeModule === undefined ? {} : { trade_module: tradeModule }),
   };
 
   try {
