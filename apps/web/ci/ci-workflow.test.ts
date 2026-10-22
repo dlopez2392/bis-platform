@@ -636,16 +636,21 @@ describe("no workflow publishes Playwright traces, sessions or build output as a
     expect(offenders).toEqual([]);
   });
 
-  it("uploads only the two artifacts reviewed as safe to publish (a new upload must be added here, on purpose, with its reason)", () => {
+  it("uploads only the three artifacts reviewed as safe to publish (a new upload must be added here, on purpose, with its reason)", () => {
     // demo-screenshots: PNG pixels of the seeded, outbound-suppressed demo
     //   tenant, made FOR the public marketing site. The session that took them
     //   lives in screenshots/.auth/, outside this directory.
     // ci-project-<step>: catalog rows (schema, policies, grants, bucket
     //   settings, migration names) of the CI project, all of which the public
     //   migrations already spell out.
+    // sofia-corpus-<run>: ONE file, the corpus transcripts encrypted to the
+    //   owner's certificate (openssl cms, AES-256). Anyone can download it;
+    //   only the private key on the owner's machine opens it. The plaintext
+    //   folder is never a path here (pinned in the sofia-corpus.yml block).
     expect(all.map((u) => `${u.file} ${u.paths.join(",")}`).sort()).toEqual([
       "ci-project-setup.yml ${{ runner.temp }}/ci-project-setup/${{ inputs.step }}.tsv",
       "screenshots.yml apps/web/screenshots/out/",
+      "sofia-corpus.yml ${{ runner.temp }}/sofia-corpus-upload/sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}.cms",
     ]);
   });
 });
@@ -919,5 +924,155 @@ describe("seed-demo.yml rebuilds the production demo every morning, with a backu
   it("gates the seed itself on that check (mutation: drop the Seed step's `if:` -> FAILS)", () => {
     expect(text).toMatch(/- name: Seed\s*\n\s*if: steps\.fresh\.outputs\.skip != 'true'/);
     expect(text).toMatch(/- run: pnpm install --frozen-lockfile\s*\n\s*if: steps\.fresh\.outputs\.skip != 'true'/);
+  });
+});
+
+/**
+ * sofia-corpus.yml (S-47b) plays Sofía's test corpus against OpenAI with the
+ * repository's OPENAI_API_KEY, so the owner never handles the key. The
+ * repository is PUBLIC: its run logs and artifacts are readable by anyone. So
+ * the workflow is pinned to the narrowest shape it can have: a dispatch by
+ * hand and nothing else, the one secret on the one step that runs the tool,
+ * no database or auth value of any kind, dispatch inputs reaching the shell
+ * through env only, and one upload, the transcripts sealed to the owner's
+ * certificate by .github/scripts/sofia-corpus-seal.sh (tested for real in
+ * sofia-corpus-seal.test.ts).
+ */
+describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, and publishes only a sealed file", () => {
+  const corpusLines = codeLines(read("../../../.github/workflows/sofia-corpus.yml"));
+  const corpusJobs = jobs(corpusLines);
+  const runJob = corpusJobs.run;
+  if (!runJob) throw new Error('sofia-corpus.yml has no job "run"');
+  const corpusSteps = steps(runJob);
+  const SEAL = "bash .github/scripts/sofia-corpus-seal.sh";
+
+  /** Each step's own raw lines (from its dash to the next dash at the same indent). */
+  function stepBlocks(jobLines: string[]): string[][] {
+    const at = jobLines.findIndex((l) => /^\s+steps:\s*$/.test(l));
+    const body = jobLines.slice(at + 1);
+    const dashIndent = body.find((l) => /^\s*- /.test(l))!.search(/\S/);
+    const out: string[][] = [];
+    for (const line of body) {
+      if (/^\s*- /.test(line) && line.search(/\S/) === dashIndent) out.push([line]);
+      else out[out.length - 1]?.push(line);
+    }
+    return out;
+  }
+  const blocks = stepBlocks(runJob);
+  /** `NAME: value` pairs under one step's own `env:`. */
+  function blockEnv(block: string[]): Record<string, string> {
+    const at = block.findIndex((l) => /^\s+env:\s*$/.test(l));
+    if (at < 0) return {};
+    const envIndent = block[at]!.search(/\S/);
+    const out: Record<string, string> = {};
+    for (const line of block.slice(at + 1)) {
+      if (line.trim() !== "" && line.search(/\S/) <= envIndent) break;
+      const m = /^\s+([A-Za-z0-9_]+): (.+)$/.exec(line);
+      if (m?.[1] && m[2]) out[m[1]] = m[2].trim();
+    }
+    return out;
+  }
+  const toolBlock = blocks.find((b) => b[0]!.trim() === "- name: Run ${{ inputs.step }}");
+
+  it("is triggered by workflow_dispatch and nothing else (mutation: add `push:` or `schedule:` under on → FAILS)", () => {
+    const triggers = topLevelBlock(corpusLines, "on").flatMap((l) => /^ {2}([A-Za-z_]+):/.exec(l)?.[1] ?? []);
+    expect(triggers).toEqual(["workflow_dispatch"]);
+  });
+
+  it("takes exactly the four inputs: step, module, phone_engine and only", () => {
+    const on = topLevelBlock(corpusLines, "on");
+    const inputs = on.flatMap((l) => /^ {6}([A-Za-z_]+):\s*$/.exec(l)?.[1] ?? []);
+    expect(inputs).toEqual(["step", "module", "phone_engine", "only"]);
+  });
+
+  it("reads the repository with contents: read only, and queues its runs without ever cancelling one", () => {
+    expect(topLevelBlock(corpusLines, "permissions").map((l) => l.trim()).filter(Boolean)).toEqual(["contents: read"]);
+    expect(mapping(topLevelBlock(corpusLines, "concurrency"))).toEqual({ group: "sofia-corpus", "cancel-in-progress": "false" });
+  });
+
+  it("names one secret, OPENAI_API_KEY, on exactly one line: the tool step's own env (mutation: move it to a job- or workflow-level env → FAILS)", () => {
+    const mentions = corpusLines.filter((l) => /secrets/i.test(l)).map((l) => l.trim());
+    expect(mentions).toEqual(["OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}"]);
+    expect(toolBlock, "no step named `Run ${{ inputs.step }}`").toBeDefined();
+    expect(blockEnv(toolBlock!).OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(corpusLines.some((l) => /^env:/.test(l))).toBe(false);
+    expect(jobEnv(runJob)).toEqual({});
+  });
+
+  it("carries no Supabase, Postgres, Clerk or database value, and declares no environment (mutation: add `SUPABASE_DB_URL: …` or `environment: production` → FAILS)", () => {
+    const offenders = corpusLines.filter((l) =>
+      /supabase|clerk|DB_URL|DATABASE|\bPG(HOST|USER|PASSWORD|DATABASE|PORT)\b|environment:/i.test(l));
+    expect(offenders).toEqual([]);
+    expect(corpusLines.join("\n")).not.toContain(PROD_REF);
+  });
+
+  it("never interpolates an expression into a shell script: dispatch inputs reach bash through env only (mutation: `--only ${{ inputs.only }}` inside run → FAILS)", () => {
+    const interpolated: string[] = [];
+    corpusLines.forEach((line, i) => {
+      const m = /^(\s*)(?:- )?run:\s*(.*)$/.exec(line);
+      if (!m) return;
+      const indent = m[1]!.length;
+      const value = m[2]!.trim();
+      if (value !== "|" && value !== ">") {
+        if (value.includes("${{")) interpolated.push(line.trim());
+        return;
+      }
+      for (const next of corpusLines.slice(i + 1)) {
+        if (next.trim() !== "" && next.search(/\S/) <= indent + (line.trimStart().startsWith("- ") ? 2 : 0)) break;
+        if (next.includes("${{")) interpolated.push(next.trim());
+      }
+    });
+    expect(interpolated).toEqual([]);
+    // The one free-text input is checked before it is used.
+    expect(toolBlock!.join("\n")).toContain('[[ "$ONLY" =~ ^[0-9]{1,2}$ ]]');
+  });
+
+  it("seals the transcripts to the committed certificate, pinned by fingerprint, after the tool runs, even when an item failed", () => {
+    const toolAt = toolBlock ? blocks.indexOf(toolBlock) : -1;
+    const sealAt = corpusSteps.findIndex((s) => s.run?.startsWith(SEAL));
+    expect(toolAt).toBeGreaterThanOrEqual(0);
+    expect(sealAt).toBeGreaterThan(toolAt);
+    expect(corpusSteps[sealAt]!.id).toBe("seal");
+    expect(corpusSteps[sealAt]!.if).toBe("${{ !cancelled() && inputs.step == 'corpus' }}");
+    // The fifth argument is the certificate's SHA-256 pin (sofia-corpus-seal.test.ts checks it IS the committed certificate's).
+    expect(corpusSteps[sealAt]!.run).toBe(
+      `${SEAL} apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem ` +
+      "3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05");
+  });
+
+  it("uploads only after the seal step SUCCEEDED, so a refused seal publishes nothing (mutation: back to `!cancelled() && inputs.step == 'corpus'` → FAILS)", () => {
+    const sealAt = corpusSteps.findIndex((s) => s.run?.startsWith(SEAL));
+    const uploadAt = corpusSteps.findIndex((s) => /upload-artifact@/.test(s.uses ?? ""));
+    expect(uploadAt).toBeGreaterThan(sealAt);
+    expect(corpusSteps[uploadAt]!.if).toBe(
+      "${{ !cancelled() && inputs.step == 'corpus' && steps.seal.outcome == 'success' }}");
+  });
+
+  it("uploads one file, the sealed .cms, kept three days and failing loudly when missing (mutation: path apps/web/.sofia-corpus/ → FAILS)", () => {
+    const upload = blocks.find((b) => b.some((l) => /uses:\s*\S*upload-artifact@/.test(l)));
+    expect(upload).toBeDefined();
+    const withKeys = mapping(upload!.flatMap((l) => {
+      const m = /^ {10}([a-z-]+): (.+)$/.exec(l);
+      return m ? [`  ${m[1]}: ${m[2]}`] : [];
+    }));
+    expect(withKeys).toEqual({
+      name: "sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}",
+      path: "${{ runner.temp }}/sofia-corpus-upload/sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}.cms",
+      "if-no-files-found": "error",
+      "retention-days": "3",
+      "compression-level": "0",
+    });
+    expect(blocks.filter((b) => b.some((l) => /upload-artifact@/.test(l)))).toHaveLength(1);
+  });
+
+  it("pins every action it uses to a full commit SHA: a secret-bearing job runs no code a moved tag could swap in", () => {
+    const uses = corpusSteps.flatMap((s) => s.uses ?? []);
+    expect(uses.length).toBeGreaterThanOrEqual(4);
+    expect(uses.filter((u) => !/^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/.test(u))).toEqual([]);
+  });
+
+  it("checks out without persisting the GitHub token", () => {
+    const checkout = blocks.find((b) => b.some((l) => /uses:\s*actions\/checkout@/.test(l)));
+    expect(checkout?.map((l) => l.trim())).toContain("persist-credentials: false");
   });
 });

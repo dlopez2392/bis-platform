@@ -1,0 +1,184 @@
+name: Sofía corpus
+
+# Plays Sofía's S-47b test corpus (apps/web/scripts/sofia-corpus.ts) or the
+# Realtime text-only spike (apps/web/scripts/realtime-spike.ts) against
+# OpenAI with the repository's OPENAI_API_KEY secret, so the owner can run
+# them away from the dev machine without ever handling the key.
+#
+#   gh workflow run sofia-corpus.yml --ref main -f step=spike
+#   gh workflow run sofia-corpus.yml --ref main -f step=corpus -f module=both
+#
+# How to download and open the result: docs/runbooks/sofia-corpus.md.
+#
+# MANUAL ONLY. There is no push, schedule or pull_request trigger and there
+# must never be one: every run spends OpenAI money and plays a real model.
+#
+# THE REPOSITORY IS PUBLIC, so this run's log and artifacts are readable by
+# anyone signed in to GitHub. Therefore:
+#   - The key is set on the ONE step that runs the tool, never at job or
+#     workflow level, so no action and no other step ever holds it. Both
+#     tools read it from the environment only and never print it; an OpenAI
+#     error is logged by its code, never its message.
+#   - No database, auth or Supabase value is handed to this workflow at all:
+#     the corpus stubs every tool and touches no database (the runner also
+#     refuses a production Supabase variable, of which there is none here).
+#   - The log carries only the runner's per-item `ok`/`FAIL` lines and counts
+#     (and, for the spike, one JSON line per variant: event types and a capped
+#     reply). Transcripts never reach the log.
+#   - The transcripts are sealed (tar, then openssl cms, AES-256-CBC) to the
+#     owner's PUBLIC certificate, .github/sofia-corpus-recipient.pem, whose
+#     SHA-256 fingerprint is pinned below, so a swapped .pem is refused. The
+#     sealed file is the ONLY upload, and it is uploaded only when the seal
+#     step SUCCEEDED: .github/scripts/sofia-corpus-seal.sh checks that the
+#     upload directory holds exactly that one CMS enveloped file, and on any
+#     refusal it deletes the file, so a failed seal publishes nothing. The
+#     private key never leaves the owner's machine.
+#   - Dispatch inputs reach the shell through env only, never as ${{ }} text
+#     inside a script, and the one free-text input is checked first.
+# All of the above is pinned by apps/web/ci/ci-workflow.test.ts.
+
+run-name: "Sofía corpus: ${{ inputs.step }} (${{ inputs.module }}, ${{ inputs.phone_engine }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      step:
+        description: >-
+          spike: does gpt-realtime answer a text-only session (one JSON line
+          per variant in the log). corpus: play the corpus and upload the
+          sealed transcripts.
+        type: choice
+        required: true
+        # The cheaper run, so a stray click on "Run workflow" costs little.
+        default: spike
+        options:
+          - spike
+          - corpus
+      module:
+        description: Which corpus to play (corpus only).
+        type: choice
+        required: true
+        default: both
+        options:
+          - both
+          - insurance-pc
+          - events
+      phone_engine:
+        description: Phone items on gpt-realtime (text only) or on chat completions (corpus only).
+        type: choice
+        required: true
+        default: realtime
+        options:
+          - realtime
+          - chat
+      only:
+        description: One item number, such as 7 or 07 (corpus only). Empty plays every item.
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# One run at a time, and a RUNNING one is never cancelled: a run killed
+# mid-corpus would have spent the money without a result. A second dispatch
+# waits for the first. GitHub keeps only ONE waiting run per group, though:
+# a third dispatch while the second still waits cancels the second (which
+# never started, so it cost nothing) and waits in its place.
+concurrency:
+  group: sofia-corpus
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # 51 items at worst a few 45-second answers each; a normal run is well
+    # under half of this.
+    timeout-minutes: 60
+    steps:
+      # Every action is pinned to the commit its major tag named on
+      # 2026-10-22 (the tag ci.yml uses is in the comment above each), because
+      # this job holds a secret: a moved tag must not change the code it runs.
+      # actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      # pnpm/action-setup@v6, pnpm from package.json's "packageManager".
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+
+      # actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The ONE step that holds the key. `pnpm --silent` keeps pnpm's banner
+      # out of the log; what remains is the tools' own lines.
+      - name: Run ${{ inputs.step }}
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          STEP: ${{ inputs.step }}
+          MODULE: ${{ inputs.module }}
+          PHONE_ENGINE: ${{ inputs.phone_engine }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -uo pipefail
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::error::The repository secret OPENAI_API_KEY is not set. Nothing was run."
+            exit 1
+          fi
+          case "$STEP" in
+            spike)
+              pnpm --silent --filter web exec tsx scripts/realtime-spike.ts
+              exit $? ;;
+            corpus) ;;
+            *)
+              echo "::error::Unknown step: $STEP"
+              exit 1 ;;
+          esac
+          only_args=()
+          if [ -n "$ONLY" ]; then
+            if ! [[ "$ONLY" =~ ^[0-9]{1,2}$ ]]; then
+              echo "::error::'only' must be an item number such as 7 or 07."
+              exit 1
+            fi
+            only_args=(--only "$(printf '%02d' "$((10#$ONLY))")")
+          fi
+          case "$MODULE" in
+            both) modules=(insurance-pc events) ;;
+            insurance-pc|events) modules=("$MODULE") ;;
+            *) echo "::error::Unknown module: $MODULE"; exit 1 ;;
+          esac
+          failed=0
+          for m in "${modules[@]}"; do
+            echo "== $m =="
+            pnpm --silent --filter web sofia:corpus "$m" --phone-engine "$PHONE_ENGINE" "${only_args[@]}" || failed=1
+          done
+          exit "$failed"
+
+      # Even when an item failed: its transcript says why, and a partial run
+      # is still worth grading. Never on a cancelled run. The last argument is
+      # the certificate's SHA-256 fingerprint: replacing the key pair changes
+      # it here, visibly, in the same PR (docs/runbooks/sofia-corpus.md).
+      - name: Seal the transcripts to the owner's certificate
+        id: seal
+        if: ${{ !cancelled() && inputs.step == 'corpus' }}
+        shell: bash
+        run: bash .github/scripts/sofia-corpus-seal.sh apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem 3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05
+
+      # actions/upload-artifact@v7. ONLY when the seal step succeeded, and
+      # only the one file it checked, by its exact path, never a directory.
+      # Already encrypted, so not compressed again.
+      - name: Upload the sealed transcripts
+        if: ${{ !cancelled() && inputs.step == 'corpus' && steps.seal.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sofia-corpus-upload/sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}.cms
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
