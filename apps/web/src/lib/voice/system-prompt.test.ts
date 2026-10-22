@@ -583,7 +583,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
   it("the web prompt's block names capture_lead and no transfer, even with handoffAvailable true (mutation: medium hard-coded 'phone' -> FAILS)", () => {
     const web = buildSystemPrompt(baseInput({ medium: "web", handoffAvailable: true, tradeModule: "events" }), now);
     expect(web).toContain(`- Then use capture_lead with a need that starts with "Urgent:", and tell them the team will follow up as soon as they can. Never promise a time.`);
-    // Bounded to the block: system-prompt.ts:172-176 lists transfer_to_human in TOOLS whenever handoffAvailable
+    // Bounded to the block: system-prompt.ts:183-187 lists transfer_to_human in TOOLS whenever handoffAvailable
     // is set, on any medium, and that line is NOT this PR's to change. Only the block must not name it.
     const blockText = web.slice(web.indexOf(EVT), web.indexOf("\n\nTOOLS"));
     expect(blockText).toContain(EVT);

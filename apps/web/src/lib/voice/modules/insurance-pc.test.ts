@@ -18,6 +18,24 @@ const EVERYWHERE = [
 ];
 const UM_USTED = `- Never advise on uninsured or underinsured motorist coverage (UM/UIM) or personal injury protection (PIP), including whether to keep or reject it. Say: "A licensed agent has to go over that with you." In Spanish: "Eso lo tiene que revisar con usted un agente con licencia."`;
 const UM_TU = `- Never advise on uninsured or underinsured motorist coverage (UM/UIM) or personal injury protection (PIP), including whether to keep or reject it. Say: "A licensed agent has to go over that with you." In Spanish: "Eso lo tiene que revisar contigo un agente con licencia."`;
+/** Fix round I1: the two "say nothing" rules, whole, one per surface (PIN_CONTEXTS' businessName is "Pin Test Co"). */
+const POLICYHOLDER = {
+  phone: "- Someone who already has a policy with Pin Test Co (an ID card, a payment, a change, a question about their policy): take a message for their agent with take_message, and do not discuss any detail of their policy, even one they tell you.",
+  web: "- Someone who already has a policy with Pin Test Co (an ID card, a payment, a change, a question about their policy): use capture_lead so their agent can follow up, and do not discuss any detail of their policy, even one they tell you.",
+  web_voice: "- Someone who already has a policy with Pin Test Co (an ID card, a payment, a change, a question about their policy): tell them their agent can help, and point them to the next step the website notice below gives, and do not discuss any detail of their policy, even one they tell you.",
+} as const;
+const OUTSIDE_PC = {
+  phone: "- Health insurance, Medicare or life insurance: take a message for Pin Test Co with take_message, and say nothing about the product itself.",
+  web: "- Health insurance, Medicare or life insurance: use capture_lead so the team can follow up, and say nothing about the product itself.",
+  web_voice: "- Health insurance, Medicare or life insurance: point them to the next step the website notice below gives, and say nothing about the product itself.",
+} as const;
+/** Fix round I2: the phone line names callbackNumber, the field the phone tool reads before falling back to caller ID. */
+const RECORD = {
+  phone: `- Record a quote request with capture_lead, with fields fullName, need and, if they gave a number other than the one they are calling from, callbackNumber, the need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
+  web: `- Record a quote request with capture_lead: fullName, phone or email, and need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you.`,
+} as const;
+/** Fix round M2. */
+const AGENT_BOOKING = "- If they would rather set a time to talk with an agent, you may book one with book_appointment, with the same one line in its notes.";
 
 describe("insurance_pc v1: the must-never lines (mutation: delete any one line -> FAILS; make one phone-only -> FAILS)", () => {
   it.each(PIN_CONTEXTS.map((c) => [JSON.stringify(c), c] as const))("present, whole, in %s", (_n, ctx) => {
@@ -25,23 +43,39 @@ describe("insurance_pc v1: the must-never lines (mutation: delete any one line -
     for (const l of EVERYWHERE) expect(lines).toContain(l);
     expect(lines).toContain(ctx.medium === "web" ? UM_TU : UM_USTED);
   });
+  it.each(PIN_CONTEXTS.map((c) => [JSON.stringify(c), c] as const))("the policyholder and outside-P&C lines, whole, for the surface, in %s (mutation: delete either clause -> FAILS)", (_n, ctx) => {
+    const lines = block(ctx);
+    expect(lines).toContain(POLICYHOLDER[ctx.medium]);
+    expect(lines).toContain(OUTSIDE_PC[ctx.medium]);
+  });
+  it.each(PIN_CONTEXTS.map((c) => [JSON.stringify(c), c] as const))("the record line, whole, for the surface (the demo records nothing), in %s (mutation: drop callbackNumber from the phone line -> FAILS)", (_n, ctx) => {
+    const lines = block(ctx);
+    const want = ctx.medium === "web_voice" ? undefined : RECORD[ctx.medium];
+    expect(lines.find((l) => l.startsWith("- Record a quote request"))).toBe(want);
+  });
 });
 
 describe("insurance_pc v1: each surface names only the tools it has (SD1; the never-promise-a-tool rule)", () => {
   it("phone without a transfer number: take_message, never transfer_to_human; the Urgent: message line, whole", () => {
-    for (const ctx of all("phone").filter((c) => !c.handoffAvailable)) {
+    const phones = all("phone").filter((c) => !c.handoffAvailable);
+    expect(phones.length).toBe(2);
+    for (const ctx of phones) {
       const text = block(ctx).join("\n");
       expect(text).not.toContain("transfer_to_human");
       expect(block(ctx)).toContain(`- Then use take_message with a body that starts with "Urgent:", and tell them the team will call them back as soon as they can. Never promise a time.`);
     }
   });
   it("phone with a transfer number: the usted offer, then transfer_to_human, then Urgent: on no (mutation: offer regardless of handoffAvailable -> the previous case FAILS)", () => {
-    for (const ctx of all("phone").filter((c) => c.handoffAvailable)) {
+    const phones = all("phone").filter((c) => c.handoffAvailable);
+    expect(phones.length).toBe(2);
+    for (const ctx of phones) {
       expect(block(ctx)).toContain(`- Then offer to connect them: "Would you like me to connect you with someone at the agency now?" In Spanish: "¿Quiere que le comunique con alguien de la agencia ahora?" If they say yes, call transfer_to_human. If they say no, or do not answer, use take_message with a body that starts with "Urgent:", and tell them the team will call them back as soon as they can. Never promise a time.`);
     }
   });
   it("web chat: capture_lead only, tú, never take_message / transfer_to_human / book_appointment, even when handoff or canBook is true", () => {
-    for (const ctx of all("web")) {
+    const webs = all("web");
+    expect(webs.length).toBe(4);
+    for (const ctx of webs) {
       const text = block(ctx).join("\n");
       expect(text).toContain("capture_lead");
       for (const tool of ["take_message", "transfer_to_human", "book_appointment"]) expect(text).not.toContain(tool);
@@ -50,7 +84,9 @@ describe("insurance_pc v1: each surface names only the tools it has (SD1; the ne
     }
   });
   it("browser voice demo: names no tool at all (SD1)", () => {
-    for (const ctx of all("web_voice")) {
+    const demos = all("web_voice");
+    expect(demos.length).toBe(4);
+    for (const ctx of demos) {
       const text = block(ctx).join("\n");
       for (const tool of ["capture_lead", "take_message", "transfer_to_human", "book_appointment"]) expect(text).not.toContain(tool);
       expect(block(ctx)).toContain("- Then tell them you cannot pass a message on from here: they can call the agency directly, or use the number to report a claim on their insurance card.");
@@ -58,8 +94,10 @@ describe("insurance_pc v1: each surface names only the tools it has (SD1; the ne
   });
   it("book_appointment only on the phone with canBook (mutation: ignore canBook -> FAILS)", () => {
     for (const ctx of PIN_CONTEXTS) {
+      const want = ctx.medium === "phone" && ctx.canBook;
+      expect(block(ctx).includes(AGENT_BOOKING), JSON.stringify(ctx)).toBe(want);
       const has = block(ctx).join("\n").includes("book_appointment");
-      expect(has, JSON.stringify(ctx)).toBe(ctx.medium === "phone" && ctx.canBook);
+      expect(has, JSON.stringify(ctx)).toBe(want);
     }
   });
   it("the licensed-agent sentence per surface (SD5), whole", () => {

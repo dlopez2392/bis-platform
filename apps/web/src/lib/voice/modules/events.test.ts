@@ -6,6 +6,8 @@ const all = (medium: "phone" | "web" | "web_voice") => PIN_CONTEXTS.filter((c) =
 
 /** Identical in every context. Whole lines: an appended clause fails the match. */
 const EVERYWHERE = [
+  // Fix round I1: PIN_CONTEXTS' businessName is "Pin Test Co".
+  "- You do not have the calendar for Pin Test Co. You cannot see which dates or rooms are free, and nothing you say holds a date. The team confirms every date.",
   "- You may give prices, packages, deposits, payment plans and refund or cancellation terms only by repeating what the facts above say, word for word, with every number exactly as it is written there. For these, and only these, this overrides the TONE line about not reading the facts verbatim.",
   `- Never say or suggest that the date or room for their EVENT is free, open, available, held, reserved or booked. Never say "ese sábado está libre", "se lo aparto", "te lo aparto" or "you're all set for the 14th", or anything that means the same. If they ask whether a date is free, tell them you cannot see the calendar and the team will confirm the date with them.`,
   "- Never state a price, minimum, deposit, payment plan, refund or cancellation term that is not written in the facts above. If it is not there, tell them the team will go over it with them.",
@@ -18,6 +20,11 @@ const EVERYWHERE = [
 const DATE_USTED = `- When they ask about a date, tell them, in their language: "The team will confirm the date with you." In Spanish: "El equipo le va a confirmar la fecha."`;
 const DATE_TU = `- When they ask about a date, tell them, in their language: "The team will confirm the date with you." In Spanish: "El equipo te va a confirmar la fecha."`;
 const OFFER = `- Then offer to connect them: "Would you like me to connect you with someone on the team now?" In Spanish: "¿Quiere que le comunique con alguien del equipo ahora?" If they say yes, call transfer_to_human. If they say no, or do not answer, use take_message with a body that starts with "Urgent:", and tell them the team will call them back as soon as they can. Never promise a time.`;
+/** Fix round I2: the phone line names callbackNumber, the field the phone tool reads before falling back to caller ID. */
+const RECORD = {
+  phone: `- Record it with capture_lead, with fields fullName, need and, if they gave a number other than the one they are calling from, callbackNumber, the need written as one line in this shape: "Event: quinceañera. Date: Saturday March 14, or March 21. Guests: about 150." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
+  web: `- Record it with capture_lead: fullName, phone or email, and need written as one line in this shape: "Event: quinceañera. Date: Saturday March 14, or March 21. Guests: about 150." Leave out any part they did not give you.`,
+} as const;
 const TOUR = "- If they would like to see the venue, you may book a tour with book_appointment. You may offer the tour times check_availability returns; a booked tour is only a visit and holds no date or room for their event, so say so if they ask.";
 
 describe("events v1: the must-never lines (mutation: delete any one line -> FAILS; make one phone-only -> FAILS)", () => {
@@ -26,6 +33,10 @@ describe("events v1: the must-never lines (mutation: delete any one line -> FAIL
     for (const l of EVERYWHERE) expect(lines).toContain(l);
     expect(lines).toContain(ctx.medium === "web" ? DATE_TU : DATE_USTED);
     expect(lines).not.toContain(ctx.medium === "web" ? DATE_USTED : DATE_TU);
+  });
+  it.each(PIN_CONTEXTS.map((c) => [JSON.stringify(c), c] as const))("the record line, whole, for the surface (the demo records nothing), in %s (mutation: drop callbackNumber from the phone line -> FAILS)", (_n, ctx) => {
+    const want = ctx.medium === "web_voice" ? undefined : RECORD[ctx.medium];
+    expect(block(ctx).find((l) => l.startsWith("- Record it"))).toBe(want);
   });
 });
 

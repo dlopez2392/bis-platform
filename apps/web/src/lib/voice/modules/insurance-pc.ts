@@ -48,7 +48,7 @@ export function block(ctx: TradeModuleContext): string[] {
         `- You may take a quote request. Ask only for their name, ${chat ? "a phone number or email to reach them" : "the best number to call them back on"}, what they want covered (auto, home, renters, commercial, or something else) and the best time to reach them. If they mention which insurance company they have now, or the month their policy renews, note it; never ask for either.`,
         chat
           ? `- Record a quote request with capture_lead: fullName, phone or email, and need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you.`
-          : `- Record a quote request with capture_lead, with fields fullName and need, the need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
+          : `- Record a quote request with capture_lead, with fields fullName, need and, if they gave a number other than the one they are calling from, callbackNumber, the need written as one line in this shape: "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." Leave out any part they did not give you. If they will not give a name, use take_message with the same line instead.`,
       ]),
     ...(canBook ? ["- If they would rather set a time to talk with an agent, you may book one with book_appointment, with the same one line in its notes."] : []),
     chat
