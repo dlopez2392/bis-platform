@@ -49,3 +49,7 @@ export const CONCIERGE_MAX_MESSAGE_CHARS = 2_000;
  * `max_tokens`, and is skipped when the invocation is near `maxDuration`.
  */
 export const CONCIERGE_MAX_REPLY_TOKENS = 500;
+
+/** The website chat's model (SD6): the turn route and the corpus runner read this ONE constant, so the
+ *  corpus always plays the model the chat really uses. */
+export const CONCIERGE_MODEL = "gpt-4o-mini";

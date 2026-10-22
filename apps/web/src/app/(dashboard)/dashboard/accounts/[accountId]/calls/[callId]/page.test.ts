@@ -152,6 +152,8 @@ const CALL: CallDetailRow = {
   summary: "RECORDED — Booked: Ana Reyes at 2026-08-27T15:00:00Z · Intake: captured.",
   conversation_id: "cv1",
   booking_id: "bk1",
+  trade_module: null,
+  trade_module_version: null,
 };
 
 const FAILED_TEXTBACK = {
@@ -792,5 +794,73 @@ describe("CallDetailPage — the call card", () => {
     getVoiceProfileMock.mockResolvedValue({ persona_name: "  " });
     expect(text(await render(CALL))).toContain("Sofía · AI");
     err.mockRestore();
+  });
+});
+
+/**
+ * S-47b section 5.7: which trade rules this call ran under. AGENCY ONLY (spec section 3; SD3) — this page
+ * is shared with clients, and the module is not theirs to see. Absent when the call carries none.
+ */
+describe("CallDetailPage — the trade rules line (S-47b)", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true;
+  });
+
+  /** The <dd>'s own text, decoded the way `renderedText` decodes any other copy assertion in this file. */
+  const tradeRulesText = (html: string): string | null => {
+    const match = /<dd[^>]*data-trade-rules=""[^>]*>([^<]*)<\/dd>/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+  /** The <dt> immediately before the trade-rules <dd>, same bound shape. */
+  const tradeRulesLabel = (html: string): string | null => {
+    const match = /<dt[^>]*>([^<]*)<\/dt><dd[^>]*data-trade-rules=""/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+
+  it("names the module and version for the agency (mutation: a constant version → FAILS below)", async () => {
+    const html = await render({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
+    expect(tradeRulesText(html)).toBe("Insurance · v1");
+    expect(tradeRulesLabel(html)).toBe("Trade rules");
+  });
+
+  it("wraps the value under the label on a narrow screen, and never breaks the label itself (design D-M1; mutation: drop flex-wrap or whitespace-nowrap → FAILS)", async () => {
+    const html = await render({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
+    expect(html).toMatch(
+      /<div class="flex flex-wrap items-baseline gap-x-1\.5 gap-y-0\.5" lang="en"><dt class="whitespace-nowrap">Trade rules<\/dt><dd[^>]*data-trade-rules=""/);
+  });
+
+  it("reads in Spanish under the QA override (mutation: hardcode the English key → FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      getCallMock.mockResolvedValue({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
+      listFailedOutboundSmsMock.mockResolvedValue([]);
+      listProposalsForCallMock.mockResolvedValue([]);
+      const html = await CallDetailPage({
+        params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+        searchParams: Promise.resolve({ locale: "es" }),
+      }).then(renderToStaticMarkup);
+      expect(tradeRulesText(html)).toBe("Seguros · v1");
+      expect(tradeRulesLabel(html)).toBe("Reglas del giro");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("renders no trade-rules line for a call with no stamp", async () => {
+    const html = await render(CALL);
+    expect(html).not.toContain("data-trade-rules");
+  });
+
+  it("never shows a client the trade rules, even with a stamp on the call (mutation: drop isAgency && → FAILS)", async () => {
+    authFixture.isAgency = false;
+    const html = await render({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
+    expect(html).not.toContain("data-trade-rules");
+    expect(renderedText(html)).not.toContain("Trade rules");
+  });
+
+  it("reads the version off the call, not a constant (mutation: hardcode v1 → FAILS)", async () => {
+    const html = await render({ ...CALL, trade_module: "events", trade_module_version: 3 });
+    expect(tradeRulesText(html)).toBe("Events · v3");
   });
 });

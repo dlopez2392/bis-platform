@@ -43,6 +43,13 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomInt: (...a: unknown[]) => randomIntMock(...a),
 }));
 
+// S-47b: the stamp must be the REGISTRY's version, never a literal. Version 7 exists nowhere else, so a
+// route that writes 1 (or any constant) fails.
+vi.mock("@/lib/voice/modules/events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/voice/modules/events")>()),
+  VERSION: 7,
+}));
+
 // --- @bis/db ----------------------------------------------------------------
 const getPhoneNumberByE164Mock = vi.hoisted(() => vi.fn());
 const getVoiceProfileMock = vi.hoisted(() => vi.fn());
@@ -127,6 +134,7 @@ const PROFILE_ROW = {
   greeting_en: "Hi, thanks for calling Rio Roofing.", greeting_es: "Hola, gracias por llamar.",
   facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
+  trade_module: null,
 };
 const CALENDAR_ROW = {
   id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
@@ -943,3 +951,60 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
   });
 });
 
+
+describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
+  const acceptedInstructions = () => {
+    const [, init] = fetchMock.mock.calls[0]!;
+    return (JSON.parse(String((init as { body: string }).body)) as { instructions: string }).instructions;
+  };
+  const EVT = "TRADE RULES — EVENTS AND VENUES:";
+  const INS = "TRADE RULES — INSURANCE (PROPERTY AND CASUALTY):";
+
+  it("no module: the row is written exactly as before and the prompt carries no trade rules (mutation: always pass tradeModule, even null -> FAILS)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(acceptedInstructions()).not.toContain("TRADE RULES —");
+  });
+
+  it("events: the row is stamped with the registry's version and the prompt carries the events block (mutation: version: 1 literal -> FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "events" });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
+      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 } });
+    expect(acceptedInstructions()).toContain(EVT);
+    expect(acceptedInstructions()).not.toContain(INS);
+  });
+
+  it("ONE profile read decides both: a second read would answer insurance, and neither the stamp nor the prompt says insurance (mutation: re-read the profile for the prompt -> FAILS)", async () => {
+    getVoiceProfileMock
+      .mockResolvedValueOnce({ ...PROFILE_ROW, trade_module: "events" })
+      .mockResolvedValue({ ...PROFILE_ROW, trade_module: "insurance_pc" });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(getVoiceProfileMock).toHaveBeenCalledTimes(1);
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ tradeModule: { module: "events", version: 7 } });
+    expect(acceptedInstructions()).toContain(EVT);
+    expect(acceptedInstructions()).not.toContain(INS);
+  });
+
+  it("an id this build does not know gives no stamp and no rules, together", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "law" });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(acceptedInstructions()).not.toContain("TRADE RULES —");
+  });
+
+  it("a failed stamp still answers the call with the module's rules (fail-open, as step 10 always was)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "insurance_pc" });
+    startCallRowMock.mockRejectedValue(new Error("startCallRow failed: boom"));
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(acceptedInstructions()).toContain(INS);
+  });
+  // M17: no cap-decline case here. S-47a's "a Trial call declined by the per-account cap … writes no row"
+  // (this file, the saying-she-is-an-AI describe) already pins that a declined call never reaches step 10.
+});

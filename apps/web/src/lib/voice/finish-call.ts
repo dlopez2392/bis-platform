@@ -24,6 +24,8 @@ import {
   callbackWanted, callbackNumberOf, callbackTaskTitle, recordedReason,
   cardReadable, readCallForCard, composeCallCard, NO_READING,
 } from "./call-card";
+import { maskIdNumbers, maskTranscript } from "./id-mask";
+import type { TradeModuleId } from "@/lib/voice/modules";
 // STATIC, not the lazy `await import(...)` this repo otherwise reaches for
 // near route handlers: the documented page-data trap (a module-scope DB
 // import breaking `next build`'s page-data collection) doesn't apply to a
@@ -82,6 +84,10 @@ export interface FinishContext {
    *  may SPEAK) and to `calls.language` (what the caller spoke). NULL or
    *  absent means English, via `resolveLocale`. */
   accountLanguage?: Locale | null;
+  /** S-47b: the trade module this call ran under, from the SAME profile read that stamped the row and
+   *  built the prompt (route.ts's `tradeStamp`). `insurance_pc` masks SSN- and licence-shaped numbers
+   *  before the post-call AI (owner ruling B7). NULL or absent = no module, today's call. */
+  tradeModule?: TradeModuleId | null;
 }
 
 export interface FinishMeta {
@@ -408,6 +414,17 @@ export async function finishCall(
   // English text is the platform contradicting itself in front of the
   // customer, and two separate derivations is how that starts.
   const spokenLanguage = detectSpokenLanguage(state.transcript, ctx.profileLanguage);
+  // S-47b, owner ruling B7: on an insurance account, SSN- and licence-shaped numbers never reach the
+  // post-call AI. Computed ONCE, here, above the callback line that reads the reason:
+  //   - `aiTranscript` feeds the card reading and the suggestions (the summary masks its own whole input);
+  //   - `reason` (what Sofía wrote down) feeds the callback line (the To do's title and the alert email's
+  //     first line) AND the card's reason, so all three say the same, masked, thing.
+  // The STORED transcript (`finishCallRow` below) stays raw, and so does every non-AI reader of it
+  // (the language reads, `callIsEligible`): masking changes no eligibility.
+  const protectIds = ctx.tradeModule === "insurance_pc";
+  const aiTranscript = protectIds ? maskTranscript(state.transcript) : state.transcript;
+  const rawReason = recordedReason(state);
+  const reason = protectIds && rawReason !== null ? maskIdNumbers(rawReason) : rawReason;
   // The callback line, computed ONCE and read twice: it leads the staff alert
   // email and it IS the callback To do's title, so the two can never say
   // different things (review m2). Null when no person needs to call back
@@ -415,12 +432,13 @@ export async function finishCall(
   // there is no number to call. A call with nothing written down but a
   // number gets the bare "Call back at {number}" in both places.
   const callbackNumber = callbackWanted(state) ? callbackNumberOf(state, ctx.callerNumber) : null;
-  const callbackLine = callbackNumber ? callbackTaskTitle(callbackNumber, recordedReason(state)) : null;
+  const callbackLine = callbackNumber ? callbackTaskTitle(callbackNumber, reason) : null;
 
   let summary: string;
   try {
     summary = await generateSummary(state, {
       db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, ref: `call ${meta.callRowId ?? "(no row)"}`,
+      protectIds,
     });
   } catch (e) {
     console.error(`finishCall: generateSummary failed, falling back to fact line: ${String(e)}`);
@@ -854,9 +872,9 @@ export async function finishCall(
   if (meta.callRowId && stored) {
     try {
       const reading = cardReadable(state)
-        ? await readCallForCard(state.transcript, { db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, label: `finishCall ${meta.callRowId}` })
+        ? await readCallForCard(aiTranscript, { db: ctx.db, accountId: ctx.accountId, timezone: ctx.timezone, label: `finishCall ${meta.callRowId}`, protectIds })
         : NO_READING;
-      const card = composeCallCard(state, ctx.callerNumber, reading);
+      const card = composeCallCard(state, ctx.callerNumber, reading, reason);
       // The stored reason is English today; it follows the reader's language once owners can choose one (F-013 part 1, F-096; owner ruling 2026-10-09).
       if (card) await setCallCard(ctx.db, ctx.accountId, meta.callRowId, card);
     } catch (e) {
@@ -947,7 +965,7 @@ export async function finishCall(
       }
       const n = await generateProposals({
         db: ctx.db, accountId: ctx.accountId, callId: meta.callRowId,
-        contactId, outcome, transcript: state.transcript,
+        contactId, outcome, transcript: aiTranscript, protectIds,
         handoffRequested: wasTransferred(state), blankFields, openOpportunity,
         // Fix-wave Important 1: the model's only clock. `meta.endedAt` — not
         // a fresh `new Date()` read here — is this call's own instant, and

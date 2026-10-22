@@ -3,6 +3,7 @@ import type { CallState } from "./call-state";
 import { classifyOutcome } from "./call-state";
 import { buildSummaryInput, composeSummary } from "./summarize";
 import { aiComplete } from "@/lib/ai/gateway";
+import { ID_RULE, maskIdNumbers } from "./id-mask";
 
 /**
  * Generates the staff-facing call summary. The caller holds `CallState` — this
@@ -38,7 +39,12 @@ import { aiComplete } from "@/lib/ai/gateway";
  */
 export async function generateSummary(
   state: CallState,
-  opts: { db: SupabaseClient; accountId: string; timezone?: string; ref?: string; fetchImpl?: typeof fetch },
+  opts: {
+    db: SupabaseClient; accountId: string; timezone?: string; ref?: string; fetchImpl?: typeof fetch;
+    /** S-47b, owner ruling B7 (insurance accounts): the WHOLE input is masked, because INTAKE echoes tool
+     *  arguments the model wrote, and the rule is the system's last sentence. Absent = today's request. */
+    protectIds?: boolean;
+  },
 ): Promise<string> {
   if (classifyOutcome(state) === "spam") return composeSummary("", state);
 
@@ -66,13 +72,16 @@ export async function generateSummary(
       `State all dates and times in the ${opts.timezone} timezone in natural local form (e.g. 9:00 AM Central). Never present a UTC time as if it were local.`,
     );
   }
+  // After the timezone rule (re-review R4), so it is always the last sentence.
+  if (opts.protectIds) systemRules.push(ID_RULE);
+  const input = buildSummaryInput(state);
   const answer = await aiComplete(opts.db, {
     accountId: opts.accountId,
     feature: "call_summary",
     model: "gpt-4o-mini",
     messages: [
       { role: "system", content: systemRules.join(" ") },
-      { role: "user", content: buildSummaryInput(state) },
+      { role: "user", content: opts.protectIds ? maskIdNumbers(input) : input },
     ],
     // A hung connection would otherwise stall `finishCall` until Vercel kills
     // the invocation; 10s is generous for a 3-4 sentence completion. The

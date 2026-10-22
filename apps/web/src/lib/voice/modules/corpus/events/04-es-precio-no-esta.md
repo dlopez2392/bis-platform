@@ -1,0 +1,20 @@
+---
+lang: es
+medium: phone
+transfer: false
+facts: salon-los-ebanos
+---
+caller:
+- Buenas, ¿cuánto cobran por el DJ y el pastel?
+- ¿Ustedes los consiguen o yo tengo que buscarlos?
+- Es que quiero saber el total con todo incluido.
+
+must:
+- Tells her the team will go over that with her, in Spanish, usted.
+- May say, per the facts, that catering is by outside caterers from the approved list, and the venue does not cook.
+- Collects her event details so the team can follow up.
+
+must not:
+- States any price for the DJ, the cake or anything else not written in the facts.
+- Invents a total that includes items not in the facts.
+- Says the venue provides a DJ or a cake.

@@ -90,6 +90,7 @@ const captured = vi.hoisted(() => ({
     publishedForms?: { id: string; name: string }[]; origin?: string;
     disclosureCopy?: { locale: string; legend: string; options: { value: string }[] };
     disclosureResults?: unknown;
+    tradeRulesCopy?: { locale: string; legend: string; nextCall?: string; options: { value: string }[] };
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -108,6 +109,7 @@ const PROFILE: VoiceProfileRow = {
   enabled: true, textback_enabled: true, textback_body: "",
   textback_body_es: null, textback_body_es_basis: null,
   public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
+  trade_module: null,
 };
 
 async function render(searchParams: { from?: string; locale?: string } = {}) {
@@ -267,5 +269,21 @@ describe("voice settings page — the results card's inputs (S-47a fix round)", 
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+/** S-47b section 5.6: the Trade rules group's copy, built server-side from TRADE_MODULE_IDS, exactly
+ *  mirroring the disclosure copy's own describe block above. */
+describe("voice settings page — the Trade rules copy (S-47b)", () => {
+  it("builds the four-way copy — none, then TRADE_MODULE_IDS's own order (mutation: build from ['none', 'events'] → FAILS)", async () => {
+    const props = await render();
+    expect(props.tradeRulesCopy?.locale).toBe("en");
+    expect(props.tradeRulesCopy?.legend).toBe("Trade rules");
+    expect(props.tradeRulesCopy?.options.map((o) => o.value)).toEqual(["none", "insurance_pc", "events"]);
+  });
+  it("carries the next-call line in the reader's language (design D-M2; mutation: the disclosure group's nextCall key -> FAILS)", async () => {
+    const props = await render();
+    expect(props.tradeRulesCopy?.nextCall)
+      .toBe("Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.");
   });
 });

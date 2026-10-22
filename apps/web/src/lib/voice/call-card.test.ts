@@ -209,6 +209,42 @@ describe("readCallForCard: the model's reading, grounded", () => {
     expect(words.endsWith("…")).toBe(true);
     expect(words.length).toBeLessThanOrEqual(501);
   });
+  // S-47b, owner ruling B7: on an insurance account finishCall hands over the MASKED transcript, and the
+  // reading is told never to repeat an ID number.
+  describe("protectIds (insurance accounts, B7)", () => {
+    const RULE = "Never repeat an identification number (SSN, driver's licence, policy number).";
+    const masked = [
+      t("assistant", "Thanks for calling. How can I help?"),
+      t("caller", "my license is [ID number] and I need a quote"),
+    ];
+    const systemOf = (f: typeof fetch) =>
+      JSON.parse(((f as unknown as ReturnType<typeof vi.fn>).mock.calls[0]![1] as RequestInit).body as string)
+        .messages[0].content as string;
+
+    it("the system is the card's own system plus the rule, and nothing else (mutation: drop the rule → FAILS)", async () => {
+      const plain = modelReturning({ reason: null, quote: null });
+      await readCallForCard(masked, { ...GATE, fetchImpl: plain });
+      const guarded = modelReturning({ reason: null, quote: null });
+      await readCallForCard(masked, { ...GATE, protectIds: true, fetchImpl: guarded });
+      expect(systemOf(guarded)).toBe(`${systemOf(plain)} ${RULE}`);
+    });
+
+    it("a quote grounds against the masked turn: the words are the masked ones, and the card never holds the number", async () => {
+      const fetchImpl = modelReturning({ reason: "Wants a quote", quote: "my license is [ID number] and I need a quote" });
+      const reading = await readCallForCard(masked, { ...GATE, protectIds: true, fetchImpl });
+      expect(reading.callerWords).toBe("my license is [ID number] and I need a quote");
+      expect(JSON.stringify(reading)).not.toContain("12345678");
+    });
+
+    it("absent: the system is exactly today's, ending on its own last sentence with no such line", async () => {
+      const fetchImpl = modelReturning({ reason: null, quote: null });
+      await readCallForCard(masked, { ...GATE, fetchImpl });
+      const system = systemOf(fetchImpl);
+      expect(system.endsWith("Write reason in English even when the call was in Spanish; quote stays in the language the caller spoke.")).toBe(true);
+      expect(system).not.toContain("identification number");
+    });
+  });
+
   it("a reading that does not parse logs no word of it (plan deviation 6; mutation: log String(e) in the catch -> FAILS)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await readCallForCard(transcript, { ...GATE, fetchImpl: modelReturning("SENTINEL-OUTPUT-7f3 not json") })).toEqual(NO_READING);
@@ -242,5 +278,12 @@ describe("composeCallCard", () => {
 
   it("nothing to say at all → no card", () => {
     expect(composeCallCard(spoke(), null, NO_READING)).toBeNull();
+  });
+
+  it("a recorded reason handed in (finishCall's masked one, B7) is the card's reason; omitted, it is recordedReason(state) as before (mutation: ignore the fourth argument → FAILS)", () => {
+    const s = withMessage(spoke(), { body: "Call back about my policy, SSN 123-45-6789", at: "t" });
+    expect(composeCallCard(s, CALLER_ID, NO_READING, "Call back about my policy, SSN [ID number]")?.reason)
+      .toBe("Call back about my policy, SSN [ID number]");
+    expect(composeCallCard(s, CALLER_ID, NO_READING)?.reason).toBe("Call back about my policy, SSN 123-45-6789");
   });
 });

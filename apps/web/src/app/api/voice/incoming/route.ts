@@ -97,6 +97,7 @@ import { configuredOrigin } from "@/lib/email/origin";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
 import { decideDisclosure } from "@/lib/voice/disclosure";
+import { tradeModuleStamp } from "@/lib/voice/modules";
 import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -1082,6 +1083,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // stamped. The answer drives three things together: the stamp on the
     // row below, the sentence after the greeting, and the identity line.
     const disclosure = decideDisclosure(profile.disclosure);
+    // S-47b (spec section 5.5): the trade rules, from the ONE profile read above (step 7). The same value
+    // is stamped on the row and handed to the prompt, so the two cannot disagree; an id this build does
+    // not know gives neither.
+    const tradeStamp = tradeModuleStamp(profile.trade_module);
 
     // --- Step 10: open the call row, fail-open (a DB blip must not lose
     // the call itself — finishCall tolerates a null callRowId). -----------
@@ -1101,6 +1106,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         ...(disclosure.setting === null
           ? {}
           : { disclosure: { disclosed: disclosure.disclose, setting: disclosure.setting } }),
+        ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
       });
       callRowId = row.id;
     } catch (e) {
@@ -1137,6 +1143,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       callerNumber, meetingType: calendar.meeting_type,
       handoffAvailable: handoffTarget.available,
       disclosed: disclosure.disclose,
+      tradeModule: tradeStamp?.module ?? null,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 
@@ -1170,6 +1177,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       notifyEmails: calendar.notify_emails, callerNumber, origin,
       profileLanguage: profile.languages, timezone: accountRow.timezone,
       accountLanguage: accountRow.language,
+      // S-47b, owner ruling B7: the module this call ran under (the same one read that stamped the row
+      // and built the prompt); insurance masks ID numbers before the post-call AI.
+      tradeModule: tradeStamp?.module ?? null,
       // Read off the profile loaded at step 7, so the text-back decision is
       // pinned to the profile that answered THIS call rather than re-read
       // minutes later at hangup, when an operator may have toggled it.

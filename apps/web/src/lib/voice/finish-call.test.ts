@@ -1916,6 +1916,93 @@ describe("finishCall — the proposals know about the callback To do", () => {
   });
 });
 
+// S-47b, owner ruling B7: on an insurance account the three post-call AI readers (summary, call card,
+// suggestions) get the masked words and the never-repeat flag; the stored transcript stays raw. Any other
+// account (events, or no module) is today's call, byte for byte.
+describe("finishCall — ID numbers never reach the post-call AI on insurance accounts (B7)", () => {
+  const RAW = [{ role: "caller" as const, text: "my social is 123-45-6789", at: "t" }];
+  const MASKED = [{ role: "caller" as const, text: "my social is [ID number]", at: "t" }];
+  const call = () => withMessage(withTranscript(emptyCallState(), RAW[0]!), { body: "Call me about my policy", at: "t" });
+
+  it("insurance_pc: the summary is told to protect, the card reading and the suggestions get [ID number], and the stored row keeps the raw words (mutation: mask the stored transcript → FAILS)", async () => {
+    await finishCall(call(), { ...ctx, tradeModule: "insurance_pc" }, meta);
+    expect(summaryMocks.generateSummary.mock.calls[0]![1]).toMatchObject({ protectIds: true });
+    expect(cardMocks.readCallForCard).toHaveBeenCalledWith(MASKED, expect.objectContaining({ protectIds: true }));
+    expect(proposalsMocks.generateProposals).toHaveBeenCalledWith(expect.objectContaining({ transcript: MASKED, protectIds: true }));
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1", expect.objectContaining({ transcript: RAW }));
+  });
+
+  it.each([
+    ["events", "events" as const],
+    ["no module (null)", null],
+    ["no module (absent)", undefined],
+  ])("%s: all three get the raw turn and no protectIds: true (mutation: compare against \"events\" → FAILS)", async (_label, tradeModule) => {
+    const c: FinishContext = tradeModule === undefined ? ctx : { ...ctx, tradeModule };
+    await finishCall(call(), c, meta);
+    expect(summaryMocks.generateSummary.mock.calls[0]![1].protectIds).not.toBe(true);
+    expect(cardMocks.readCallForCard.mock.calls[0]![0]).toEqual(RAW);
+    expect(cardMocks.readCallForCard.mock.calls[0]![1].protectIds).not.toBe(true);
+    const proposalsInput = proposalsMocks.generateProposals.mock.calls[0]![0];
+    expect(proposalsInput.transcript).toEqual(RAW);
+    expect(proposalsInput.protectIds).not.toBe(true);
+    expect(dbMocks.finishCallRow).toHaveBeenCalledWith({}, "a1", "call1", expect.objectContaining({ transcript: RAW }));
+  });
+});
+
+// B7, re-review R1: what Sofía wrote down reaches the card's reason, the callback To do's title and the
+// alert email's callback line. On an insurance account the ONE masked reason feeds all three.
+describe("finishCall — the recorded reason is masked once, on insurance accounts (B7, R1)", () => {
+  const call = () => withMessage(
+    withTranscript(emptyCallState(), { role: "caller", text: "Please have someone call me about my policy.", at: "t" }),
+    { body: "Call back about my policy, SSN 123-45-6789", at: "t" },
+  );
+  const emailText = () => {
+    const sent = emailRefs.send.mock.calls[0]![0] as { body: string; html: string };
+    return `${sent.body}\n${sent.html}`;
+  };
+
+  it("insurance_pc: the card reason, the To do title and the alert email all carry [ID number], never the number (mutation: raw reason to callbackTaskTitle → FAILS; drop composeCallCard's fourth argument → FAILS)", async () => {
+    await finishCall(call(), { ...ctx, tradeModule: "insurance_pc" }, meta);
+    expect(dbMocks.setCallCard).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ reason: "Call back about my policy, SSN [ID number]" }));
+    const title = (dbMocks.ensureCallbackTask.mock.calls[0]![2] as { title: string }).title;
+    expect(title).toBe("Call back at +19562921696: Call back about my policy, SSN [ID number]");
+    expect(title).not.toContain("6789");
+    expect(emailRefs.send).toHaveBeenCalledTimes(1);
+    expect(emailText()).toContain("SSN [ID number]");
+    expect(emailText()).not.toContain("6789");
+  });
+
+  it.each([
+    ["events", "events" as const],
+    ["no module (absent)", undefined],
+  ])("%s: the card reason and the To do title carry the raw words, as today (mutation: mask regardless of the module → FAILS)", async (_label, tradeModule) => {
+    const c: FinishContext = tradeModule === undefined ? ctx : { ...ctx, tradeModule };
+    await finishCall(call(), c, meta);
+    expect(dbMocks.setCallCard).toHaveBeenCalledWith({}, "a1", "call1",
+      expect.objectContaining({ reason: "Call back about my policy, SSN 123-45-6789" }));
+    expect((dbMocks.ensureCallbackTask.mock.calls[0]![2] as { title: string }).title)
+      .toBe("Call back at +19562921696: Call back about my policy, SSN 123-45-6789");
+  });
+
+  // Final-fix M2: the To do title clamps the reason at 140 characters. The mask runs on the WHOLE reason
+  // first, so an SSN that straddles the cut is already "[ID number]" when the clamp cuts it ("[ID…").
+  // Clamp first and the cut keeps "123 45", which no pattern masks any more.
+  const PREFIX = "Please call back about the home and auto bundle, the renewal date and adding her son as a new driver on the policy. Her social is ";
+  it("insurance_pc: an SSN across the 140-character cut leaves no two digits of it in the To do title (mutation: clamp, then mask → FAILS)", async () => {
+    expect(PREFIX.length).toBe(130); // the SSN starts at 130 and ends past 140: it crosses the cut
+    const long = withMessage(
+      withTranscript(emptyCallState(), { role: "caller", text: "Please have someone call me about my policy.", at: "t" }),
+      { body: `${PREFIX}123 45 6789, and she prefers mornings.`, at: "t" },
+    );
+    await finishCall(long, { ...ctx, tradeModule: "insurance_pc" }, meta);
+    const title = (dbMocks.ensureCallbackTask.mock.calls[0]![2] as { title: string }).title;
+    expect(title).toBe(`Call back at +19562921696: ${PREFIX}[ID…`);
+    const reasonPart = title.slice("Call back at +19562921696: ".length);
+    expect(reasonPart).not.toMatch(/\d{2}/);
+  });
+});
+
 describe("finishCall — the caller's words become the contact's language (S-09 C5)", () => {
   const lead = { fields: { fullName: "Ana Ruiz", need: "roof quote", callbackNumber: "956 292 1696" } };
   const spoke = (text: string) => withLead(withTranscript(emptyCallState(), { role: "caller", text, at: "t" }), lead);

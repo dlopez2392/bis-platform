@@ -8,6 +8,7 @@
 // business will confirm by phone.
 import type { VoicePromptInput } from "./session-config";
 import { bookingMode } from "./booking-mode";
+import { tradeModuleBlock } from "./modules";
 
 export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // `bookingMode` (booking-mode.ts) — the same answer the session's tool
@@ -126,6 +127,16 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ? "- If you do not know something, say so, and use capture_lead to get their name and a way to reach them so the team can follow up."
       : "- If you do not know something, say so and take a message rather than guessing.",
     "- Never give legal, medical, or compliance advice.",
+    // S-47b (spec section 5.2): the account's trade rules, right after the general limits. None on the
+    // profile gives no lines at all, so every existing prompt is byte-identical (system-prompt.test.ts's
+    // digest). `canBook` is the booking MODE, not the checkbox: "Always take a message" drops new booking
+    // (D-040), and the web has no booking tool at all (SD2).
+    ...tradeModuleBlock(input.tradeModule, {
+      businessName: input.businessName,
+      medium: input.medium ?? "phone",
+      handoffAvailable: input.handoffAvailable === true,
+      canBook: booking && !onWeb,
+    }),
     "",
     "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
     // The WEB tool (CAPTURE_LEAD_TOOL, lib/concierge/prompt.ts) is FLAT —

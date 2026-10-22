@@ -115,11 +115,12 @@ test.afterAll(async () => {
   const db = serviceDb();
   if (priorProfile) {
     // Every column named rather than spread (concierge.spec.ts's own
-    // precedent), so a column added to VoiceProfileRow later shows up here
-    // as a typecheck-visible omission instead of silently not being
-    // restored. `forward_calls` is excluded on purpose — upsertVoiceProfile
-    // refuses it; it is written only by setForwardCalls, which this file
-    // never calls.
+    // precedent): `VoiceProfilePatch` is `Partial<Omit<VoiceProfileRow, ...>>`
+    // (voice.ts:46), so omitting a column here is not a type error — naming
+    // every column is what makes an omission visible to a READER of this
+    // file, not to the typechecker. `forward_calls` is excluded on purpose —
+    // upsertVoiceProfile refuses it; it is written only by setForwardCalls,
+    // which this file never calls.
     const p = priorProfile;
     await upsertVoiceProfile(db, fixtureRef.accountId, {
       persona_name: p.persona_name, greeting_en: p.greeting_en, greeting_es: p.greeting_es,
@@ -127,7 +128,7 @@ test.afterAll(async () => {
       booking_enabled: p.booking_enabled, after_hours: p.after_hours, enabled: p.enabled,
       textback_enabled: p.textback_enabled, textback_body: p.textback_body,
       public_id: p.public_id, concierge_enabled: p.concierge_enabled,
-      concierge_form_id: p.concierge_form_id,
+      concierge_form_id: p.concierge_form_id, trade_module: p.trade_module,
     }, fixtureRef.clerkUserId);
   } else {
     // There was no profile before this file ran, so the only faithful

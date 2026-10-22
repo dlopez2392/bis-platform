@@ -38,6 +38,7 @@ import { groundedEvidence } from "@/lib/proposals/grounding";
 import { m } from "@/lib/messages";
 import { aiComplete } from "@/lib/ai/gateway";
 import { aiSafeError } from "@/lib/ai/log";
+import { ID_RULE } from "./id-mask";
 
 /** What the post-call reading found. Both null = nothing (no key, a failed
  *  request, or a call that never said why). */
@@ -162,10 +163,17 @@ const SYSTEM = [
  * refused or hung request (10 s, the summary's bound), unparseable content
  * and an ungrounded quote all come back as nothing, and the card falls back
  * to what was written down on the call.
+ *
+ * `protectIds` (S-47b, owner ruling B7, insurance accounts): the system gains the never-repeat rule. The
+ * caller hands over the MASKED transcript, which is also what the quote is grounded against, so the words
+ * on the card are the masked ones.
  */
 export async function readCallForCard(
   transcript: TranscriptEvent[],
-  opts: { db: SupabaseClient; accountId: string; timezone: string; fetchImpl?: typeof fetch; label?: string },
+  opts: {
+    db: SupabaseClient; accountId: string; timezone: string; fetchImpl?: typeof fetch; label?: string;
+    protectIds?: boolean;
+  },
 ): Promise<CardReading> {
   const label = opts.label ?? "readCallForCard";
   try {
@@ -179,7 +187,7 @@ export async function readCallForCard(
       responseFormat: { type: "json_object" },
       maxTokens: 300,
       messages: [
-        { role: "system", content: SYSTEM },
+        { role: "system", content: opts.protectIds ? `${SYSTEM} ${ID_RULE}` : SYSTEM },
         { role: "user", content: transcript.map((e) => `${e.role}: ${e.text}`).join("\n") },
       ],
       timeoutMs: 10_000,
@@ -210,13 +218,18 @@ export async function readCallForCard(
 /**
  * The card as stored. Null — no card at all — for a spam call (a robocall,
  * or a call where nobody spoke), and for a call that left nothing to show.
+ *
+ * `recorded` defaults to `recordedReason(state)`, so every caller that omits it is unchanged. `finishCall`
+ * passes the reason it already computed (masked on an insurance account, S-47b B7), the same value its
+ * callback line reads, so the card and the To do can never disagree.
  */
 export function composeCallCard(
   state: CallState, callerNumber: string | null, reading: CardReading,
+  recorded: string | null = recordedReason(state),
 ): CallCard | null {
   if (state.recordedCaller || classifyOutcome(state) === "spam") return null;
   const card: CallCard = {
-    reason: recordedReason(state) ?? reading.reason,
+    reason: recorded ?? reading.reason,
     callbackNumber: callbackNumberOf(state, callerNumber),
     callerWords: reading.callerWords,
   };

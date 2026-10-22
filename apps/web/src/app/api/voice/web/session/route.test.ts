@@ -79,6 +79,7 @@ const PROFILE_ROW = {
   facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
   textback_enabled: false, textback_body: null,
+  trade_module: null,
 };
 const CALENDAR_ROW = {
   id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
@@ -242,5 +243,24 @@ describe("POST /api/voice/web/session — how many sessions this route will mint
     const res = await POST(requestWithValidTicket());
     expect(res.status).toBe(503);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/voice/web/session — trade rules (S-47b)", () => {
+  const sentInstructions = () => {
+    const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
+    return (JSON.parse(String(init.body)) as { session: { instructions: string } }).session.instructions;
+  };
+  it("passes the profile's module into the demo's prompt, in the demo's tool-less variant (mutation: drop tradeModule from the demo's input -> FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "insurance_pc" });
+    expect((await POST(req())).status).toBe(200);
+    const s = sentInstructions();
+    expect(s).toContain("TRADE RULES — INSURANCE (PROPERTY AND CASUALTY):");
+    expect(s).toContain("- Then tell them you cannot pass a message on from here: they can call the agency directly, or use the number to report a claim on their insurance card.");
+  });
+  it("no module: no trade rules", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: null });
+    await POST(req());
+    expect(sentInstructions()).not.toContain("TRADE RULES —");
   });
 });

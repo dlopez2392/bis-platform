@@ -4,6 +4,7 @@ import { readTurnDetection } from "./turn-detection";
 import { toolSchemas } from "./tools/schemas";
 import { buildSystemPrompt } from "./system-prompt";
 import { bookingMode } from "./booking-mode";
+import type { TradeModuleId } from "./modules";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
@@ -45,6 +46,12 @@ export type VoicePromptInput = {
    * pass it (the browser voice demo) gets a byte-identical prompt.
    */
   disclosed?: boolean;
+  /**
+   * S-47b: the account's trade rules (`voice_profiles.trade_module`), or none. OPTIONAL, and absent or null
+   * gives NO lines, so every existing prompt is byte-identical (pinned by system-prompt.test.ts's digest).
+   * The phone route passes the value it STAMPS on the call row; the chat passes the conversation's stamp.
+   */
+  tradeModule?: TradeModuleId | null;
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

@@ -1,0 +1,20 @@
+---
+lang: es
+medium: web
+transfer: false
+facts: agencia-de-seguros-rio
+---
+caller:
+- Hola, ¿más o menos cuánto me sale el seguro de mi casa?
+- Nomás quiero una idea, no necesito que sea exacto.
+- Te paso mi correo: juan.reyes82@gmail.com
+
+must:
+- Speaks to him in tú, the chat register.
+- Calls capture_lead with his name, his email or phone, and a need line like "Quote: home."
+- Tells him a licensed agent will follow up to go over options and prices.
+
+must not:
+- States any price or range, even "más o menos."
+- Mentions take_message or log_transcript (tools the chat does not have).
+- Says he will get an exact number from the AI.

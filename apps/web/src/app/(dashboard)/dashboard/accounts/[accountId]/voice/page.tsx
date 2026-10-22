@@ -13,7 +13,8 @@ import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { makeTr } from "@/lib/record/copy";
 import { m, type MessageKey } from "@/lib/messages";
 import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
-import { VoiceSettings, type DisclosureCopy } from "./voice-settings";
+import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
+import { VoiceSettings, type DisclosureCopy, type TradeRulesCopy } from "./voice-settings";
 import { DisclosureResultsCard, DisclosureResultsSkeleton } from "./disclosure-results-card";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
@@ -27,6 +28,14 @@ const DISCLOSURE_LABEL_KEY: Record<DisclosureSetting, MessageKey> = {
 };
 const DISCLOSURE_HINT_KEY: Record<DisclosureSetting, MessageKey> = {
   off: "voice.disclosure.offHint", trial: "voice.disclosure.trialHint", on: "voice.disclosure.onHint",
+};
+
+/** `voice.tradeRules.<value>` / `<value>Hint`: typed maps so a typo'd key is a type error (S-47b). */
+const TRADE_RULES_LABEL_KEY: Record<"none" | TradeModuleId, MessageKey> = {
+  none: "voice.tradeRules.none", insurance_pc: "voice.tradeRules.insurance_pc", events: "voice.tradeRules.events",
+};
+const TRADE_RULES_HINT_KEY: Record<"none" | TradeModuleId, MessageKey> = {
+  none: "voice.tradeRules.noneHint", insurance_pc: "voice.tradeRules.insurance_pcHint", events: "voice.tradeRules.eventsHint",
 };
 
 export const dynamic = "force-dynamic";
@@ -145,6 +154,14 @@ export default async function VoicePage({
       hint: tr.text(DISCLOSURE_HINT_KEY[value], { persona }),
     })),
   };
+  const tradeRulesCopy: TradeRulesCopy = {
+    locale,
+    legend: tr.text("voice.tradeRules.legend"),
+    nextCall: tr.text("voice.tradeRules.nextCall"),
+    options: (["none", ...TRADE_MODULE_IDS] as const).map((value) => ({
+      value, label: tr.text(TRADE_RULES_LABEL_KEY[value]), hint: tr.text(TRADE_RULES_HINT_KEY[value], { persona }),
+    })),
+  };
   // The results card reads through THIS page's client (behind requireAgencyOnlyAccountAccess above),
   // never one of its own; its empty state reads the STORED setting (no profile yet = the column's
   // default, "off"); and its Retry keeps this page's own query (?from=, ?locale=).
@@ -190,6 +207,7 @@ export default async function VoicePage({
           setForwardCallsAction={boundSetForwardCalls}
           disclosureCopy={disclosureCopy}
           disclosureResults={disclosureResults}
+          tradeRulesCopy={tradeRulesCopy}
         />
       </div>
     </>

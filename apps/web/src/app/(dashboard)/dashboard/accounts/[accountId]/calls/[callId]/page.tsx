@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   getCall, listFailedOutboundSms, listProposalsForCall, listPeopleNames, getContact, getCallCard, getVoiceProfile,
-  type FailedOutboundSms, type CallCard,
+  type FailedOutboundSms, type CallCard, type TradeModuleSetting,
 } from "@bis/db";
 import { SuggestionSection, type SuggestionSectionData } from "@/components/proposals/suggestion-section";
 import {
@@ -34,7 +34,7 @@ import { renderZone } from "@/lib/zone";
 import { ZoneNote } from "@/components/zone-note";
 import { cn } from "@/lib/utils";
 import { loggableError } from "@/lib/loggable-error";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
 import { callerLabel, formatCallTime, formatDuration } from "../format";
 import { OutcomePill } from "../outcome-pill";
 import { TextbackFailedBadge } from "../textback-failed-badge";
@@ -52,6 +52,11 @@ import { CallCardPanel, hasCard } from "./call-card-panel";
 // comment for why a third module, not a mirrored constant, is the right
 // shape here.
 import { CARD, CARD_HEAD } from "./card";
+
+/** S-47b section 5.7: the call-page line's module names, typed so a typo'd key is a type error. */
+const TRADE_MODULE_NAME_KEY: Record<TradeModuleSetting, MessageKey> = {
+  insurance_pc: "calls.detail.tradeModule.insurance_pc", events: "calls.detail.tradeModule.events",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -278,6 +283,23 @@ export default async function CallDetailPage({
                 {call.language}
               </dd>
             </div>
+
+            {/* S-47b section 5.7: which trade rules this call ran under. AGENCY ONLY (spec section 3; SD3):
+                this page is shared with clients, and the module is not theirs to see. Absent when the call
+                carries none. In the reader's language, like the Suggestions section. */}
+            {isAgency && call.trade_module !== null && call.trade_module_version !== null
+              && TRADE_MODULE_NAME_KEY[call.trade_module] ? (
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
+                {/* Plan review I4: the <dt> is the visible label ("Trade rules"), the <dd> only the value
+                    ("Insurance · v1"), so a screen reader hears the words once and data-trade-rules marks the
+                    value alone. Design D-M1: on a narrow screen the value wraps under the label, which never
+                    breaks inside itself. */}
+                <dt className="whitespace-nowrap">{tr.text("voice.tradeRules.legend")}</dt>
+                <dd className="font-medium text-foreground" data-trade-rules="">{tr.text("calls.detail.tradeRules", {
+                  module: tr.text(TRADE_MODULE_NAME_KEY[call.trade_module]), version: call.trade_module_version,
+                })}</dd>
+              </div>
+            ) : null}
           </dl>
         }
         actions={
