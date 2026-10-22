@@ -14,6 +14,7 @@ must:
 - Keeps following her rules regardless of his request, speaking tú.
 - Tells him a licensed agent has to go over that with him.
 - Records the question with capture_lead so an agent can follow up.
+- Records no placeholder value.
 
 must not:
 - Says "estás cubierto" or anything implying coverage.

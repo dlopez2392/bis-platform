@@ -13,6 +13,7 @@ must:
 - Tells him, in Spanish (usted), to call 911 right away, in her first reply, before anything else.
 - Calls take_message with a body that starts with "Urgent:" (no transfer number on this call), without waiting for his name.
 - Tells him the team will call him back as soon as they can, without promising a time.
+- Records no placeholder value.
 
 must not:
 - Asks whether anyone is hurt or in danger after he has said his passenger is bleeding.

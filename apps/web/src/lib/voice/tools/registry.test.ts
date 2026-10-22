@@ -261,6 +261,30 @@ describe("capture_lead / take_message / log_transcript mutate state only", () =>
     expect(result).toMatchObject({ ok: true });
     expect(state.messages[0]).toMatchObject({ body: "call me back", callbackNumber: "+19562921696" });
   });
+  // S-47b v3 (corpus run 2): placeholders never get stored, on every account (tools/placeholders.ts).
+  it("capture_lead: a placeholder name is absent, so nothing is stored and the model is told why (mutation: registry ignores the sanitizer -> FAILS)", async () => {
+    const { state, result } = await runTool(emptyCallState(), ctx, "capture_lead", { fields: { fullName: "User", need: "Urgent: flooding." } });
+    expect(result).toEqual({ ok: false, missing: ["fullName"], note: expect.stringContaining(`fullName "User" (a placeholder, not something they said)`) });
+    expect(state.leads).toHaveLength(0);
+  });
+  it("capture_lead: a placeholder part of the need is stripped before it is stored", async () => {
+    const { state, result } = await runTool(emptyCallState(), ctx, "capture_lead",
+      { fields: { fullName: "Ana", need: "Event: quinceañera. Date: not specified, in April. Guests: not specified." } });
+    expect(result).toMatchObject({ ok: true, note: expect.stringContaining(`need "Guests: not specified."`) });
+    expect(state.leads[0]!.fields).toEqual({ fullName: "Ana", need: "Event: quinceañera. Date: in April.", callbackNumber: "+19562921696" });
+  });
+  it("capture_lead: a clean lead answers exactly {ok: true}, as before", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "capture_lead", { fields: { fullName: "Guest House LLC", need: "Quote: commercial. Best time: anytime after 3pm." } });
+    expect(result).toEqual({ ok: true });
+  });
+  it("take_message: a placeholder part of the body is stripped; a body that is only a placeholder is refused", async () => {
+    const one = await runTool(emptyCallState(), ctx, "take_message", { body: "Urgent: crash on 10th St. Name: not specified." });
+    expect(one.result).toEqual({ ok: true, note: expect.stringContaining(`body "Name: not specified."`) });
+    expect(one.state.messages[0]!.body).toBe("Urgent: crash on 10th St.");
+    const none = await runTool(emptyCallState(), ctx, "take_message", { body: "No se indicó" });
+    expect(none.result).toMatchObject({ ok: false, error: "message body required" });
+    expect(none.state.messages).toHaveLength(0);
+  });
   it("log_transcript appends and coerces role", async () => {
     const { state } = await runTool(emptyCallState(), ctx, "log_transcript", { role: "assistant", text: "hi" });
     expect(state.transcript[0]).toMatchObject({ role: "assistant", text: "hi" });
@@ -281,6 +305,23 @@ describe("book_appointment", () => {
     dbMocks.createBooking.mockResolvedValue({ id: "bk1", cancelToken: "tok123" });
     dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
     sendMock.mockReset().mockResolvedValue({ providerMessageId: "x" });
+  });
+
+  it("S-47b v3: a placeholder name is no name: refused before any contact or booking, with the note (mutation: skip bookingName -> FAILS)", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Guest", emailDeclined: true });
+    expect(result).toEqual({ ok: false, error: "name required", note: expect.stringContaining(`name "Guest" (a placeholder, not something they said)`) });
+    expect(dbMocks.createContact).not.toHaveBeenCalled();
+    expect(dbMocks.createBooking).not.toHaveBeenCalled();
+  });
+
+  it("S-47b v3: a placeholder part of the notes is stripped before the booking is written", async () => {
+    const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
+      { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, notes: "Tour. Guests: no se indicó." });
+    expect(result).toMatchObject({ ok: true });
+    expect((result as { note?: string }).note).toBe(
+      `Left out of the record, because a record holds only what they said: notes "Guests: no se indicó." (a placeholder, not something they said). If you need any of it, ask them; never fill it in yourself.`);
+    expect(dbMocks.createBooking.mock.calls[0]![2]).toMatchObject({ note: "Tour." });
   });
 
   it("refuses to book when email was neither given nor explicitly declined", async () => {

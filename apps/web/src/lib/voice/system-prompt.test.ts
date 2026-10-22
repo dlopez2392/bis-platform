@@ -582,7 +582,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
 
   it("the web prompt's block names capture_lead and no transfer, even with handoffAvailable true (mutation: medium hard-coded 'phone' -> FAILS)", () => {
     const web = buildSystemPrompt(baseInput({ medium: "web", handoffAvailable: true, tradeModule: "events" }), now);
-    expect(web).toContain(`- Once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
+    expect(web).toContain(` Then, once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
     // Bounded to the block: system-prompt.ts:183-187 lists transfer_to_human in TOOLS whenever handoffAvailable
     // is set, on any medium, and that line is NOT this PR's to change. Only the block must not name it.
     const blockText = web.slice(web.indexOf(EVT), web.indexOf("\n\nTOOLS"));
@@ -591,7 +591,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
   });
 
   it("the phone block offers to connect only when handoffAvailable (mutation: handoffAvailable: true in the ctx -> FAILS)", () => {
-    const offer = `- Once you know whether anyone is hurt or in danger, offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
+    const offer = ` Then, once you know whether anyone is hurt or in danger, offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
     expect(buildSystemPrompt(baseInput({ handoffAvailable: true, tradeModule: "insurance_pc" }), now)).toContain(offer);
     expect(buildSystemPrompt(baseInput({ handoffAvailable: false, tradeModule: "insurance_pc" }), now)).not.toContain(offer);
   });
@@ -619,7 +619,7 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
 
   it("the browser voice demo gets the demo variant (SD1)", () => {
     expect(buildSystemPrompt(baseInput({ medium: "web_voice", tradeModule: "events" }), now))
-      .toContain("- Then tell them you cannot pass a message on from here, and point them to the next step the website notice below gives.");
+      .toContain(" Then tell them you cannot pass a message on from here, and point them to the next step the website notice below gives.");
   });
 
   it("the generic legal/medical line stays, and the business name reaches the block", () => {

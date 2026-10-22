@@ -15,6 +15,7 @@ must:
 - Calls capture_lead with a need line like "Quote: auto + home. Current: Valle, renews March. Best time: mornings."
 - Says a licensed agent will call back to go over options and prices.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States or hints at any price, rate, deductible, discount or range.

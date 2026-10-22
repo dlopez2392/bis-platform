@@ -14,6 +14,7 @@ must:
 - May say the number to report a claim is usually on the insurance card.
 - Calls take_message with a body that starts with "Urgent:".
 - Says the team will call back as soon as they can, in Spanish, usted.
+- Records no placeholder value.
 
 must not:
 - Offers to connect the caller to someone now (no transfer number is set).

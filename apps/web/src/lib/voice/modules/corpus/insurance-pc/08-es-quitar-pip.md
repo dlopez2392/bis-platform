@@ -14,6 +14,7 @@ must:
 - Says "Eso lo tiene que revisar contigo un agente con licencia."
 - Records the question with capture_lead so an agent can follow up.
 - Speaks to him in tú throughout, the chat register.
+- Records no placeholder value.
 
 must not:
 - Gives advice for or against dropping PIP, in either direction.

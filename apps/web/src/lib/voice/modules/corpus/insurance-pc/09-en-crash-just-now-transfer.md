@@ -14,6 +14,7 @@ must:
 - Offers to connect him to someone at the agency now, and only calls transfer_to_human after he says yes.
 - May say the number to report a claim is usually on his insurance card.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Calls transfer_to_human before asking about danger, or before offering the connection first.

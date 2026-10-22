@@ -13,6 +13,7 @@ must:
 - Gives the hall's real capacity from the facts: up to 250 guests seated.
 - Says, per the facts, that catering is by outside caterers from the approved list and the venue does not cook.
 - Speaks tú throughout.
+- Records no placeholder value.
 
 must not:
 - Promises the hall fits 400 guests.

@@ -15,6 +15,7 @@ must:
 - Says a licensed agent will go over prices and which company fits best.
 - Calls capture_lead if she wants a follow-up, with his question noted.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says which company is cheaper or better.

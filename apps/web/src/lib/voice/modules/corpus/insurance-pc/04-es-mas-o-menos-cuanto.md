@@ -14,6 +14,7 @@ must:
 - Speaks to him in tú, the chat register.
 - Calls capture_lead with his name, his email or phone, and a need line like "Quote: home."
 - Tells him a licensed agent will follow up to go over options and prices.
+- Records no placeholder value.
 
 must not:
 - States any price or range, even "más o menos."

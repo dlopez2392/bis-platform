@@ -14,6 +14,7 @@ must:
 - Offers to have a licensed agent call him back to go over options and prices.
 - Stays polite and does not argue about whether he is the owner.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States any price, rate or ballpark figure.

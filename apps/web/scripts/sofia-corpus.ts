@@ -1,8 +1,9 @@
-// pnpm --filter web sofia:corpus <insurance-pc|events> [--only NN] [--phone-engine realtime|chat] [--dry-run]
+// pnpm --filter web sofia:corpus <insurance-pc|events> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]
 //
 // S-47b (spec section 7): plays each corpus item's caller lines through Sofía's REAL prompt and tools for
 // that item's medium, one line after each reply, with every tool stubbed (ok, and logged), and writes one
-// transcript per item plus an ungraded results sheet to apps/web/.sofia-corpus/ (gitignored). A PERSON
+// transcript per item plus an ungraded results sheet to apps/web/.sofia-corpus/ (gitignored). --repeat N (1 to 5,
+// default 1; v3) plays each item N times and writes NN-…-r1.md to -rN.md, with one sheet column per run. A PERSON
 // grades every rule (owner decision B5); the graded sheet goes to docs/superpowers/results/.
 //
 // It never touches a database and never reads an env file. OPENAI_API_KEY comes from the shell only and is
@@ -21,7 +22,7 @@ import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult,
   renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
-  selectCorpusFiles, handlerFailureReason,
+  selectCorpusFiles, handlerFailureReason, parseRepeat, runFileName,
   DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
   type CorpusItem, type CorpusFixture, type PhoneEngine, type RunMeta, type TranscriptTurn,
 } from "../src/lib/voice/modules/corpus-lib";
@@ -37,9 +38,12 @@ const RESPONSE_TIMEOUT_MS = 45_000;
 const args = process.argv.slice(2);
 const slug = args[0] ?? "";
 const moduleId = moduleForSlug(slug);
-if (!moduleId) { console.error("usage: sofia:corpus <insurance-pc|events> [--only NN] [--phone-engine realtime|chat] [--dry-run]"); process.exit(2); }
+if (!moduleId) { console.error("usage: sofia:corpus <insurance-pc|events> [--only NN] [--repeat N] [--phone-engine realtime|chat] [--dry-run]"); process.exit(2); }
 const flag = (n: string) => { const i = args.indexOf(n); return i < 0 ? null : args[i + 1] ?? null; };
 const only = flag("--only");
+const repeatArg = parseRepeat(flag("--repeat"));
+if (repeatArg.error) { console.error(repeatArg.error); process.exit(2); }
+const repeat = repeatArg.repeat;
 const engineArg = flag("--phone-engine");
 const phoneEngine: PhoneEngine = engineArg === "chat" || engineArg === "realtime" ? engineArg : DEFAULT_PHONE_ENGINE;
 const dryRun = args.includes("--dry-run");
@@ -66,7 +70,9 @@ const safeJson = (raw: unknown): Record<string, unknown> => {
   try { return JSON.parse(String(raw ?? "{}")) as Record<string, unknown>; } catch { return {}; }
 };
 
-type Stub = (name: string, args: Record<string, unknown>) => Record<string, unknown>;
+/** `said`: the caller's lines so far (v3: the web chat's name-from-email check reads them, as the live route does). */
+type Stub = (name: string, args: Record<string, unknown>, said: string[]) => Record<string, unknown>;
+const callerLines = (turns: TranscriptTurn[]) => turns.filter((t) => t.role === "caller").map((t) => t.text);
 
 async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: string, lines: string[], stub: Stub): Promise<TranscriptTurn[]> {
   const turns: TranscriptTurn[] = [];
@@ -100,7 +106,7 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
     else if (ev.type === "response.output_text.delta") text += ev.delta ?? "";
     else if (ev.type === "response.function_call_arguments.done") {
       const a = safeJson(ev.arguments);
-      const result = stub(String(ev.name), a);
+      const result = stub(String(ev.name), a, callerLines(turns));
       turns.push({ role: "tool", text: `${ev.name}(${JSON.stringify(a)}) -> ${JSON.stringify(result)}` });
       send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: ev.call_id, output: JSON.stringify(result) } });
       toolPending = true;
@@ -188,7 +194,7 @@ async function runChat(model: string, system: (turn: number) => string, tools: u
         history.push({ role: "assistant", content: msg.content ?? null, tool_calls: msg.tool_calls });
         for (const c of msg.tool_calls) {
           const a = safeJson(c.function.arguments);
-          const result = stub(c.function.name, a);
+          const result = stub(c.function.name, a, callerLines(turns));
           turns.push({ role: "tool", text: `${c.function.name}(${JSON.stringify(a)}) -> ${JSON.stringify(result)}` });
           history.push({ role: "tool", tool_call_id: c.id, content: JSON.stringify(result) });
         }
@@ -205,7 +211,7 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
   const f = fixtureFor(item.facts);
   const input = promptInputFor(item, f, moduleId!);
   const tools = toolsFor(item, input);
-  const stub: Stub = (name, a) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone });
+  const stub: Stub = (name, a, said) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone, said });
   if (dryRun) {
     return [{ role: "tool", text: `dry run: ${tools.map((t) => t.name).join(", ")}; caller ID ${input.callerNumber === null ? "withheld" : "shown"}; after hours ${input.afterHours}; prompt ${buildSystemPrompt(input, new Date()).length} chars` }];
   }
@@ -228,19 +234,24 @@ async function main(): Promise<void> {
   const items = picked.files.map((f) => parseCorpusItem(f, readFileSync(path.join(dir, f), "utf8")));
   let failed = 0;
   for (const item of items) {
-    try {
-      const turns = await runItem(item);
-      writeFileSync(path.join(outDir, item.file), redact(renderTranscript(item, meta, turns)), "utf8");
-      console.log(`ok   ${item.file}`);
-    } catch (e) {
-      failed += 1;
-      // m1: a failure that carries its turns (a stray Realtime error) still writes the transcript, which says so.
-      if (e instanceof CorpusItemFailed) writeFileSync(path.join(outDir, item.file), redact(renderTranscript(item, meta, e.turns)), "utf8");
-      console.log(`FAIL ${item.file}: ${redact(e instanceof Error ? e.message : String(e))}`);
+    for (let run = 1; run <= repeat; run += 1) {
+      const file = runFileName(item.file, run, repeat);
+      const which = { run, of: repeat };
+      try {
+        const turns = await runItem(item);
+        writeFileSync(path.join(outDir, file), redact(renderTranscript(item, meta, turns, which)), "utf8");
+        console.log(`ok   ${file}`);
+      } catch (e) {
+        failed += 1;
+        // m1: a failure that carries its turns (a stray Realtime error) still writes the transcript, which says so.
+        if (e instanceof CorpusItemFailed) writeFileSync(path.join(outDir, file), redact(renderTranscript(item, meta, e.turns, which)), "utf8");
+        console.log(`FAIL ${file}: ${redact(e instanceof Error ? e.message : String(e))}`);
+      }
     }
   }
-  writeFileSync(path.join(outDir, "results-sheet.md"), resultsSheetSkeleton(meta, items), "utf8");
-  console.log(`${items.length - failed} of ${items.length} played; transcripts and the ungraded sheet in ${outDir}`);
+  writeFileSync(path.join(outDir, "results-sheet.md"), resultsSheetSkeleton(meta, items, repeat), "utf8");
+  const plays = items.length * repeat;
+  console.log(`${plays - failed} of ${plays} played (${items.length} items x ${repeat}); transcripts and the ungraded sheet in ${outDir}`);
   process.exit(failed > 0 ? 1 : 0);
 }
 

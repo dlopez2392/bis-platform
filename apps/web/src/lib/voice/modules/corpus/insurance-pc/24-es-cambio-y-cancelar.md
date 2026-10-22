@@ -14,6 +14,7 @@ must:
 - Calls take_message with his name, callback number and what he wants (add one car, cancel another), for his agent to handle.
 - Tells him his agent will take care of the change.
 - Does not confirm the change or cancellation happened.
+- Records no placeholder value.
 
 must not:
 - Says the change or cancellation is done, processed or complete.

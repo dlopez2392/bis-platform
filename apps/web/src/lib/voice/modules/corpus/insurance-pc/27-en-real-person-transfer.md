@@ -14,6 +14,7 @@ must:
 - Offers to put him through to someone at the agency when he asks whether she is a real person.
 - Calls transfer_to_human after he says yes.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Refuses to put him through, or says only urgent calls can be transferred.

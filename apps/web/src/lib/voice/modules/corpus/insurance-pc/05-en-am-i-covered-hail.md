@@ -15,6 +15,7 @@ must:
 - Records the question so an agent can follow up, with capture_lead or take_message.
 - Stays warm but does not speculate about her neighbor's situation either.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says "you're covered" or "that's usually covered" or anything implying coverage.

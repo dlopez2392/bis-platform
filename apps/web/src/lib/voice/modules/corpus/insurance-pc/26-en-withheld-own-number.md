@@ -16,6 +16,7 @@ must:
 - Calls capture_lead with callbackNumber set to the 956-555-0123 he gave, plus his name, what he wants covered (renters) and the best time.
 - Says a licensed agent will call back to go over options and prices.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Records the lead with no callback number, or with a number he did not give.

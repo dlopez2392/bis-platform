@@ -979,10 +979,26 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
     expect(triggers).toEqual(["workflow_dispatch"]);
   });
 
-  it("takes exactly the four inputs: step, module, phone_engine and only", () => {
+  it("takes exactly the five inputs: step, module, phone_engine, only and repeat", () => {
     const on = topLevelBlock(corpusLines, "on");
     const inputs = on.flatMap((l) => /^ {6}([A-Za-z_]+):\s*$/.exec(l)?.[1] ?? []);
-    expect(inputs).toEqual(["step", "module", "phone_engine", "only"]);
+    expect(inputs).toEqual(["step", "module", "phone_engine", "only", "repeat"]);
+  });
+
+  // S-47b v3 (C): each item played three times by default, so a rule that held once by luck shows as a split.
+  it("repeat is a choice of 1 or 3, default 3, reaching the runner through the tool step's env and checked again in bash (mutation: default 1, or `--repeat ${{ inputs.repeat }}` -> FAILS)", () => {
+    const on = topLevelBlock(corpusLines, "on");
+    const at = on.findIndex((l) => /^ {6}repeat:\s*$/.test(l));
+    const block: string[] = [];
+    for (const l of on.slice(at + 1)) { if (/^ {6}\S/.test(l)) break; if (l.trim()) block.push(l.trim()); }
+    expect(block).toContain("type: choice");
+    expect(block).toContain('default: "3"');
+    expect(block.slice(block.indexOf("options:") + 1)).toEqual(['- "1"', '- "3"']);
+    expect(blockEnv(toolBlock!).REPEAT).toBe("${{ inputs.repeat }}");
+    const script = toolBlock!.join("\n");
+    expect(script).toContain('case "$REPEAT" in');
+    expect(script).toContain('1|3) ;;');
+    expect(script).toContain('pnpm --silent --filter web sofia:corpus "$m" --phone-engine "$PHONE_ENGINE" --repeat "$REPEAT" "${only_args[@]}" || failed=1');
   });
 
   it("reads the repository with contents: read only, and queues its runs without ever cancelling one", () => {

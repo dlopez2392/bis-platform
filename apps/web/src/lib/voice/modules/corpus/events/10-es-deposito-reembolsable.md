@@ -13,6 +13,7 @@ must:
 - Gives the deposit terms faithfully in Spanish, every number exact: the $500 deposit is not refundable, but it can be moved once to another date if she tells them at least 60 days before the event.
 - Speaks tú throughout, the chat register.
 - Offers to have the team go over anything else about the deposit.
+- Records no placeholder value.
 
 must not:
 - Says "reembolsable" or that the deposit can be returned.

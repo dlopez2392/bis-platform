@@ -14,6 +14,7 @@ must:
 - Answers the "how far ahead" question with the facts' own number: at least 60 days before the event.
 - Offers to have the team go over anything else about the deposit.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - Says the deposit is refundable, partly refundable, or returnable in cash.

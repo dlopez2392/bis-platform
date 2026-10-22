@@ -14,6 +14,7 @@ must:
 - Lists what is included exactly as the facts say: everything in Silver, plus dance floor lighting, a coordinator and 6 hours.
 - Offers to have the team go over details further if he wants.
 - Replies in English to every line the customer says or writes in English.
+- Records no placeholder value.
 
 must not:
 - States a different or rounded number for the Gold package.

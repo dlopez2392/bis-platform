@@ -29,9 +29,11 @@ export const SHA256_HISTORY: Readonly<Record<TradeModuleId, readonly string[]>> 
   insurance_pc: [
     "871d340f7626489ca98cd0dedf643da136a43e5e6520198fa30f35c349799874",
     "034a1dededa15b781fbb44524e696f4438ac0e04860a46305744daed7b9ab538", // v2, 2026-10-22: corpus run 1's fixes (+ review fix round; v2 was never graded)
+    "e2ac40e1fa7ba605a944b5edbffdafe637d54887374568fe64f1083b8adcaa6f", // v3, 2026-10-22: corpus run 2's fixes (911 first, offer only on the URGENT line, email names, ask the number first)
   ],
   events: [
     "e9db9a25be740d84931d3e7ce645b2426eada6c0808abc72e1f7eee6439c697a",
     "bd4eb06f12173ecaa902138344c8a20d9aaa8da5ff1a2af724971a6fbc950278", // v2, 2026-10-22: corpus run 1's fixes (+ review fix round; v2 was never graded)
+    "ce771aa40a6c456bd5a82f521108af4fe4eb674ba665353e2754f223aba73082", // v3, 2026-10-22: corpus run 2's fixes (911 first, offer only on the URGENT line, invented policy named, email names, ask the number first)
   ],
 };

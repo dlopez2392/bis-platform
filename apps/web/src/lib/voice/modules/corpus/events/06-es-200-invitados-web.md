@@ -13,6 +13,7 @@ must:
 - Gives the Silver price exactly as written: "$3,200 for up to 100 guests."
 - Gives the Gold price exactly as written: "$5,800 for up to 200 guests," since 200 guests fits Gold.
 - Speaks tú throughout, the chat register.
+- Records no placeholder value.
 
 must not:
 - Adds, multiplies or totals any prices.

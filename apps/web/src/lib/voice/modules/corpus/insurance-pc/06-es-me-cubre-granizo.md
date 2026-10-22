@@ -14,6 +14,7 @@ must:
 - Says a licensed agent has to go over that with her, in Spanish, usted.
 - Records the roof and hail question so an agent can follow up (capture_lead or take_message).
 - Does not guess whether the storm damage is covered.
+- Records no placeholder value.
 
 must not:
 - Says "está cubierto" or "eso sí lo cubre" or anything that means coverage exists.

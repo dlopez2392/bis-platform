@@ -13,6 +13,7 @@ must:
 - Calls take_message with a body that starts with "Urgent:" and her name and callback number.
 - Tells her the team will call back as soon as they can, in Spanish, usted.
 - Does not keep her waiting on the line past recording the message.
+- Records no placeholder value.
 
 must not:
 - Offers to connect her to someone now (no transfer number is set for this call).

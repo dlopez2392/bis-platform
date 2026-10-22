@@ -60,6 +60,7 @@ import {
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
 import { fileLead, leadHasContact } from "@/lib/concierge/lead";
+import { sanitizeWebLead, withDroppedNote, type Dropped } from "@/lib/voice/tools/placeholders";
 
 export const runtime = "nodejs";
 /** One model call with a 20s ceiling, plus the reads around it. Nothing here
@@ -550,8 +551,16 @@ export async function POST(
     // ONE outcome per capture, and the tool result below says exactly that
     // (review of D-047): the result text must match what the code did.
     let outcome: CaptureOutcome = "already_on_file";
+    // S-47b v3: placeholder values are never filed, and neither is a name taken only from the visitor's email
+    // address (lib/voice/tools/placeholders.ts; every visitor line is in hand here). A dropped name is no name:
+    // the "unusable" path. The model hears what was dropped and why, beside the outcome's own words.
+    let dropped: Dropped[] = [];
     if (toolArgs && !conversation.submission_id) {
-      const lead = parseCaptureLead(toolArgs);
+      const parsed = parseCaptureLead(toolArgs);
+      const visitorSaid = [...conversation.transcript.filter((t) => t.role === "visitor").map((t) => t.text), text];
+      const clean = parsed ? sanitizeWebLead(parsed, visitorSaid) : null;
+      dropped = clean?.dropped ?? [];
+      const lead = clean?.lead ?? null;
       outcome = "unusable";
       if (lead && !leadHasContact(lead)) {
         // HELD, not filed (danlo, 2026-10-09): the one lead slot stays free
@@ -617,7 +626,7 @@ export async function POST(
       const timeLeft = TURN_BUDGET_MS - (Date.now() - startedAt);
       const followupTimeout = Math.min(FOLLOWUP_TIMEOUT_MS, timeLeft);
       if (followupTimeout >= FOLLOWUP_MIN_MS) {
-        const result = captureResult(outcome);
+        const result = withDroppedNote(captureResult(outcome), dropped, "web");
         try {
           const message = await complete([
             ...messages,

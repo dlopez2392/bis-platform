@@ -256,7 +256,7 @@ describe("POST /api/voice/web/session — trade rules (S-47b)", () => {
     expect((await POST(req())).status).toBe(200);
     const s = sentInstructions();
     expect(s).toContain("TRADE RULES — INSURANCE (PROPERTY AND CASUALTY):");
-    expect(s).toContain("- Then tell them you cannot pass a message on from here: they can call the agency directly, or use the number to report a claim on their insurance card.");
+    expect(s).toContain(" Then tell them you cannot pass a message on from here: they can call the agency directly, or use the number to report a claim on their insurance card.");
   });
   it("no module: no trade rules", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: null });

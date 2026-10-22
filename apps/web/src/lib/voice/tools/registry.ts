@@ -32,6 +32,7 @@ import { bookingMode } from "../booking-mode";
 import { recordActs, recordAct, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
 import type { HandoffTarget } from "../handoff";
+import { capturePhoneLead, messageBody, bookingName, stripPlaceholderSegments, withDroppedNote, type Dropped } from "./placeholders";
 
 export type ToolName =
   | "check_availability" | "book_appointment" | "reschedule_appointment"
@@ -72,7 +73,6 @@ const MANAGE_TOOLS: ReadonlySet<ToolName> = new Set([
 ]);
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const REQUIRED_LEAD_FIELDS = ["fullName", "need"] as const;
 
 /**
  * What a refused booking lookup or change offers the caller instead: a person
@@ -329,22 +329,20 @@ export async function runTool(
     }
 
     case "capture_lead": {
-      const fields: Record<string, string> = {};
-      const raw = (args?.fields && typeof args.fields === "object") ? args.fields : {};
-      for (const [k, v] of Object.entries(raw)) fields[k] = String(v ?? "").trim();
-      if (!fields.callbackNumber && ctx.callerNumber) fields.callbackNumber = ctx.callerNumber;
-      const missing = REQUIRED_LEAD_FIELDS.filter((f) => !fields[f]);
-      if (missing.length > 0) return { state, result: { ok: false, missing } };
-      return { state: withLead(state, { fields }), result: { ok: true } };
+      // S-47b v3: a placeholder value is never stored (placeholders.ts, on every account); a placeholder
+      // name is no name, so the no-name path applies. The corpus stub runs this same function.
+      const { fields, result } = capturePhoneLead(args?.fields, ctx.callerNumber);
+      if (result.ok !== true) return { state, result };
+      return { state: withLead(state, { fields }), result };
     }
 
     case "take_message": {
-      const body = String(args?.body ?? "").trim();
-      if (!body) return { state, result: { ok: false, error: "message body required" } };
+      const { body, dropped } = messageBody(args?.body);
+      if (!body) return { state, result: withDroppedNote({ ok: false, error: "message body required" }, dropped, "phone") };
       const callbackNumber = e164Of(String(args?.callbackNumber ?? "")) ?? ctx.callerNumber ?? undefined;
       return {
         state: withMessage(state, { body, callbackNumber, at: now.toISOString() }),
-        result: { ok: true },
+        result: withDroppedNote({ ok: true }, dropped, "phone"),
       };
     }
 
@@ -357,8 +355,11 @@ export async function runTool(
     }
 
     case "book_appointment": {
-      const name = String(args?.name ?? "").trim();
-      if (!name) return { state, result: { ok: false, error: "name required" } };
+      // S-47b v3: a placeholder name ("Guest") is no name, and a placeholder part of the notes is not stored.
+      const { name, dropped: nameDropped } = bookingName(args?.name);
+      if (!name) return { state, result: withDroppedNote({ ok: false, error: "name required" }, nameDropped, "phone") };
+      const notes = stripPlaceholderSegments(String(args?.notes ?? ""));
+      const notesDropped: Dropped[] = notes.dropped.map((value) => ({ field: "notes", value, why: "placeholder" }));
 
       // Checked before the phone/email refusal below: a caller who DID give a
       // phone number but garbled it deserves "say that again", not the generic
@@ -497,7 +498,7 @@ export async function runTool(
         ({ id: bookingId, cancelToken } = await createBooking(ctx.db, ctx.accountId, {
           calendarId: ctx.calendar.id, contactId,
           startsAt: slot.startsAt, endsAt: slot.endsAt,
-          note: String(args?.notes ?? "").trim() || undefined,
+          note: notes.text || undefined,
           meetingUrl,
         }, "voice", "ai"));
       } catch (e) {
@@ -563,12 +564,12 @@ export async function runTool(
         id: bookingId, contactName: name,
         startsAt: slot.startsAt.toISOString(), endsAt: slot.endsAt.toISOString(),
       });
-      return { state: next, result: {
+      return { state: next, result: withDroppedNote({
         ok: true, bookingId,
         startsAt: slot.startsAt.toISOString(),
         startsAtLocal: formatWhen(slot.startsAt, ctx.timezone),
         ...(emailFailed ? { emailFailed: true } : {}),
-      } };
+      }, notesDropped, "phone") };
     }
 
     case "reschedule_appointment": {

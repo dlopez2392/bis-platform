@@ -14,6 +14,7 @@ must:
 - Calls take_message with his name, callback number and that he wants to pay his bill, for his agent to handle.
 - Tells him an agent will help him with the payment.
 - Does not take any card details from him.
+- Records no placeholder value.
 
 must not:
 - Takes or repeats back any card digits.

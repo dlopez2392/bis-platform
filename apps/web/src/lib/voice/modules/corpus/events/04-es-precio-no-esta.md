@@ -14,6 +14,7 @@ must:
 - Tells her the team will go over that with her, in Spanish, usted.
 - May say, per the facts, that catering is by outside caterers from the approved list, and the venue does not cook.
 - Collects her event details so the team can follow up.
+- Records no placeholder value.
 
 must not:
 - States any price for the DJ, the cake or anything else not written in the facts.
