@@ -24,14 +24,18 @@ function norm(s: string): string {
 /** Says nothing was given, in any field. NOT "none" / "ninguno" / "ninguna" (review fix): those are real answers
  *  ("Current: none" is no current insurer, "Guests: none yet"), and dropping them loses information. */
 const GENERIC = new Set([
-  "not specified", "unspecified", "unknown", "n/a", "not given",
-  "no se indico", "no especificado", "no especificada", "sin especificar", "desconocido", "desconocida",
+  "not specified", "unspecified", "n/a", "not given",
+  "no se indico", "no especificado", "no especificada", "sin especificar",
 ]);
+/** "I don't know" is a real answer (review I-2: "Injuries: unknown" on an urgent message must survive), so these
+ *  are stand-ins ONLY as a whole name or contact value, never inside a need, a message or notes. */
+const UNKNOWN = new Set(["unknown", "desconocido", "desconocida"]);
 /** A stand-in for a name. */
 const NAME_STANDINS = new Set(["user", "guest", "customer", "cliente", "caller"]);
-/** "Any time" as a best time is a filler, not a time they gave (only ever judged as a best time). */
+/** "Any time" as a best time is a filler, not a time they gave (only ever judged as a best time, and only where
+ *  what they said is known and never mentions it: review M-4). */
 const FILLER_TIMES = new Set(["any time", "anytime", "cualquier hora", "a cualquier hora"]);
-/** Best-time labels and field keys, letters only: "Best time", bestTime, best_time, "Mejor hora". */
+/** Best-time labels, letters only: "Best time", "Mejor hora". */
 const BEST_TIME_KEYS = new Set(["besttime", "besttimetocall", "besttimetoreach", "mejorhora", "mejorhorario", "mejormomento"]);
 const NAME_KEYS = new Set(["fullname", "name", "firstname", "lastname"]);
 const keyOf = (s: string) => norm(s).replace(/[^a-z]/g, "");
@@ -41,7 +45,12 @@ export function isPlaceholderValue(value: string): boolean {
 }
 export function isPlaceholderName(value: string): boolean {
   const v = norm(value);
-  return GENERIC.has(v) || NAME_STANDINS.has(v);
+  return GENERIC.has(v) || UNKNOWN.has(v) || NAME_STANDINS.has(v);
+}
+/** A whole phone number or email value that is no contact at all. */
+export function isPlaceholderContact(value: string): boolean {
+  const v = norm(value);
+  return GENERIC.has(v) || UNKNOWN.has(v);
 }
 export function isFillerBestTime(value: string): boolean {
   return FILLER_TIMES.has(norm(value));
@@ -49,19 +58,32 @@ export function isFillerBestTime(value: string): boolean {
 
 /** Where a "Label: value" segment starts: the line's start, or after . ; , ! ? and a space. */
 const LABEL = /(\p{L}+(?: \p{L}+){0,3}):[ \t]+/gu;
+/** A period after one of these is an abbreviation, not the end of a segment (review M-3: "Mr. Smith: n/a"). */
+const ABBREVIATION = /(?:^|[\s(])(?:mr|mrs|ms|dr|sr|sra|srta|jr|e\.g|i\.e|etc|vs|\p{L})\.\s+$/iu;
+
+/** What they said, as one lower-case accent-free line of words, so a phrase can be looked for whole. */
+const saidLine = (said: readonly string[]) => ` ${said.map((t) => norm(t)).join(" ").replace(/[^a-z0-9]+/g, " ").replace(/anytime/g, "any time")} `;
+/** A filler best time is one they never said themselves (any spelling of "any time"; "a cualquier hora" = "cualquier hora"). */
+function saidTheFiller(value: string, said: readonly string[]): boolean {
+  const phrase = norm(value).replace(/[^a-z0-9]+/g, " ").replace(/anytime/g, "any time").replace(/^a /, "").trim();
+  return saidLine(said).includes(` ${phrase} `);
+}
 
 /**
- * Drops each "Label: value" segment whose value is a placeholder (a filler time under a best-time label), and
- * each whole comma part of a value that is one. Text with no labels is judged whole. `dropped` lists what went,
- * as written.
+ * Drops each "Label: value" segment whose value is a placeholder, and each whole comma part of a value that is one.
+ * Text with no labels is judged whole. `dropped` lists what went, as written.
+ *
+ * A filler time under a best-time label is dropped only when `said` (what they said) is given and never mentions
+ * it. With no `said` (the phone, whose transcript arrives asynchronously) "any time" is always kept.
  */
-export function stripPlaceholderSegments(text: string): { text: string; dropped: string[] } {
+export function stripPlaceholderSegments(text: string, said?: readonly string[]): { text: string; dropped: string[] } {
   const input = text.trim();
   if (isPlaceholderValue(input)) return { text: "", dropped: [input] };
   const starts: Array<{ at: number; label: string; len: number }> = [];
   for (const m of input.matchAll(LABEL)) {
     const at = m.index ?? 0;
-    if (at === 0 || /[.;,!?]\s+$/.test(input.slice(0, at))) starts.push({ at, label: m[1]!, len: m[0].length });
+    const before = input.slice(0, at);
+    if (at === 0 || (/[.;,!?]\s+$/.test(before) && !ABBREVIATION.test(before))) starts.push({ at, label: m[1]!, len: m[0].length });
   }
   if (starts.length === 0) return { text: input, dropped: [] };
   const dropped: string[] = [];
@@ -72,7 +94,8 @@ export function stripPlaceholderSegments(text: string): { text: string; dropped:
     const tail = /[.;,!?]?\s*$/.exec(rest)![0];
     const value = rest.slice(0, rest.length - tail.length);
     const bestTime = BEST_TIME_KEYS.has(keyOf(s.label));
-    const empty = (v: string) => isPlaceholderValue(v) || (bestTime && isFillerBestTime(v));
+    const empty = (v: string) => isPlaceholderValue(v)
+      || (bestTime && said !== undefined && isFillerBestTime(v) && !saidTheFiller(v, said));
     const parts = value.split(/,\s+/);
     const kept = parts.filter((p) => !empty(p));
     if (kept.length === parts.length) { out += raw; return; }
@@ -87,14 +110,17 @@ function whyOf(segment: string): DroppedWhy {
   const m = /^(\p{L}+(?: \p{L}+){0,3}):\s*(.*)$/u.exec(segment);
   return m && BEST_TIME_KEYS.has(keyOf(m[1]!)) && isFillerBestTime(m[2]!) ? "filler" : "placeholder";
 }
-function stripField(field: string, value: string): { value: string; dropped: Dropped[] } {
-  const r = stripPlaceholderSegments(value);
+function stripField(field: string, value: string, said?: readonly string[]): { value: string; dropped: Dropped[] } {
+  const r = stripPlaceholderSegments(value, said);
   return { value: r.text, dropped: r.dropped.map((v) => ({ field, value: v, why: whyOf(v) })) };
 }
 
-/** Accent- and case-insensitive whole words, with every email address taken out first. */
+/** An email address alone, bounded by spaces or by , ; : / < > ( ) [ ] and quotes, so a name typed against it
+ *  ("Dan,dan@x.com", "name:Dan,email:dan@x.com", "Dan<dan@x.com>") stays said (review I-1). */
+const EMAIL = /[^\s,;:/<>()[\]"'“”«»]+@[^\s,;:/<>()[\]"'“”«»]+/g;
+/** Accent- and case-insensitive whole words, with every email address (and only the address) taken out first. */
 function saidWords(said: readonly string[]): Set<string> {
-  return new Set(said.map((t) => norm(t.replace(/\S+@\S+/g, " "))).join(" ").split(/[^a-z]+/).filter(Boolean));
+  return new Set(said.map((t) => norm(t.replace(EMAIL, " "))).join(" ").split(/[^a-z]+/).filter(Boolean));
 }
 
 /**
@@ -111,17 +137,19 @@ export function nameTakenFromEmail(fullName: string, email: string, said: readon
   return !words.some((w) => heard.has(w));
 }
 
-/** The phone capture_lead fields (free-form keys). Values arrive trimmed. */
+/** The phone capture_lead fields (free-form keys). Values arrive trimmed. No filler-time check: the phone cannot
+ *  reliably know what the caller said when the tool runs, so "any time" is kept here. */
 export function sanitizeLeadFields(raw: Record<string, string>): { fields: Record<string, string>; dropped: Dropped[] } {
   const fields: Record<string, string> = {};
   const dropped: Dropped[] = [];
   for (const [k, v] of Object.entries(raw)) {
     if (!v) { fields[k] = v; continue; }
     const key = keyOf(k);
+    const contact = key === "email" || key === "phone" || key === "callbacknumber";
     if (NAME_KEYS.has(key) && isPlaceholderName(v)) { dropped.push({ field: k, value: v, why: "placeholder" }); continue; }
-    if (BEST_TIME_KEYS.has(key) && isFillerBestTime(v)) { dropped.push({ field: k, value: v, why: "filler" }); continue; }
+    if (contact && isPlaceholderContact(v)) { dropped.push({ field: k, value: v, why: "placeholder" }); continue; }
     if (isPlaceholderValue(v)) { dropped.push({ field: k, value: v, why: "placeholder" }); continue; }
-    if (NAME_KEYS.has(key) || key === "email" || key === "phone" || key === "callbacknumber") { fields[k] = v; continue; }
+    if (NAME_KEYS.has(key) || contact) { fields[k] = v; continue; }
     const r = stripField(k, v);
     dropped.push(...r.dropped);
     if (r.value) fields[k] = r.value;
@@ -131,7 +159,7 @@ export function sanitizeLeadFields(raw: Record<string, string>): { fields: Recor
 
 const WHY: Record<DroppedWhy, string> = {
   placeholder: "a placeholder, not something they said",
-  filler: "a filler, not a time they gave",
+  filler: "a filler they never said; record a best time only if they give one",
   email_name: "taken from their email address; they never said it",
 };
 
@@ -193,12 +221,12 @@ export function sanitizeWebLead(lead: WebLead, said: readonly string[]): { lead:
   if (isPlaceholderName(lead.fullName)) return { lead: null, dropped: [{ field: "fullName", value: lead.fullName, why: "placeholder" }] };
   if (nameTakenFromEmail(lead.fullName, lead.email, said)) return { lead: null, dropped: [{ field: "fullName", value: lead.fullName, why: "email_name" }] };
   const contact = (field: "email" | "phone") => {
-    if (lead[field] && isPlaceholderValue(lead[field])) { dropped.push({ field, value: lead[field], why: "placeholder" }); return ""; }
+    if (lead[field] && isPlaceholderContact(lead[field])) { dropped.push({ field, value: lead[field], why: "placeholder" }); return ""; }
     return lead[field];
   };
   const email = contact("email");
   const phone = contact("phone");
-  const need = stripField("need", lead.need);
+  const need = stripField("need", lead.need, said);
   dropped.push(...need.dropped);
   return { lead: { fullName: lead.fullName, email, phone, need: need.value }, dropped };
 }

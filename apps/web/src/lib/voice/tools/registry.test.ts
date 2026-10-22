@@ -278,8 +278,8 @@ describe("capture_lead / take_message / log_transcript mutate state only", () =>
     expect(result).toEqual({ ok: true });
   });
   it("take_message: a placeholder part of the body is stripped; a body that is only a placeholder is refused", async () => {
-    const one = await runTool(emptyCallState(), ctx, "take_message", { body: "Urgent: crash on 10th St. Name: unknown." });
-    expect(one.result).toEqual({ ok: true, note: expect.stringContaining(`body "Name: unknown."`) });
+    const one = await runTool(emptyCallState(), ctx, "take_message", { body: "Urgent: crash on 10th St. Name: not specified." });
+    expect(one.result).toEqual({ ok: true, note: expect.stringContaining(`body "Name: not specified."`) });
     expect(one.state.messages[0]!.body).toBe("Urgent: crash on 10th St.");
     const none = await runTool(emptyCallState(), ctx, "take_message", { body: "No se indicó" });
     expect(none.result).toMatchObject({ ok: false, error: "message body required" });
@@ -319,6 +319,8 @@ describe("book_appointment", () => {
     const { result } = await runTool(emptyCallState(), ctx, "book_appointment",
       { startsAt: "2027-06-01T14:00:00.000Z", name: "Ana Ruiz", emailDeclined: true, notes: "Tour. Guests: no se indicó." });
     expect(result).toMatchObject({ ok: true });
+    expect((result as { note?: string }).note).toBe(
+      `Left out of the record, because a record holds only what they said: notes "Guests: no se indicó." (a placeholder, not something they said). If you need any of it, ask them; never fill it in yourself.`);
     expect(dbMocks.createBooking.mock.calls[0]![2]).toMatchObject({ note: "Tour." });
   });
 

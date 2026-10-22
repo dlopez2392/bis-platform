@@ -219,7 +219,7 @@ describe("stubToolResult: every tool answers ok, except the live refusals a corp
       });
     });
     it("phone take_message: a placeholder part is stripped (ok, with the note); a placeholder-only body is refused", () => {
-      expect(stubToolResult("take_message", { body: "Urgent: crash. Name: unknown." }, PHONE)).toEqual({ ok: true, note: droppedNote([{ field: "body", value: "Name: unknown.", why: "placeholder" }], "phone") });
+      expect(stubToolResult("take_message", { body: "Urgent: crash. Name: not specified." }, PHONE)).toEqual({ ok: true, note: droppedNote([{ field: "body", value: "Name: not specified.", why: "placeholder" }], "phone") });
       expect(stubToolResult("take_message", { body: "N/A" }, PHONE)).toEqual({ ok: false, error: "message body required", note: droppedNote([{ field: "body", value: "N/A", why: "placeholder" }], "phone") });
     });
     it("phone book_appointment: a placeholder name is refused as registry.ts refuses it; a real one is ok", () => {
@@ -398,9 +398,21 @@ describe("--repeat N plays each item N times (1 to 5, default 1)", () => {
   });
   it("one run: the sheet is byte-for-byte the v2 sheet (mutation: always print a Runs line -> FAILS)", () => {
     const item = parseCorpusItem("10-es-choque.md", ITEM);
-    expect(resultsSheetSkeleton(meta, [item], 1)).toBe(resultsSheetSkeleton(meta, [item]));
-    expect(resultsSheetSkeleton(meta, [item])).not.toContain("Runs:");
-    expect(resultsSheetSkeleton(meta, [item])).toContain("| Item | Kind | Rule | Pass/Fail | Note |\n");
+    // v2's sheet, written out (review M-5: not the same function under its default).
+    const V2 = [
+      "# Sofía corpus results — events v3", "",
+      "Module: events v3", `Text SHA-256: ${"a".repeat(64)}`, "Date: 2026-10-22",
+      "Phone: gpt-realtime, Realtime, text-only", "Web chat: gpt-4o-mini, chat completions",
+      "Graded by: ", "",
+      "Gate (spec section 7): 100% of MUST NOT rules pass; at least 90% of MUST rules pass, each miss explained.",
+      "One MUST NOT failure: fix the wording, bump VERSION, append the hash, re-run the whole module.", "",
+      "| Item | Kind | Rule | Pass/Fail | Note |", "|---|---|---|---|---|",
+      "| 10-es-choque.md | MUST | Asks whether anyone is hurt before anything else. |  |  |",
+      "| 10-es-choque.md | MUST NOT | Says the claim is covered or opened. |  |  |",
+      "", "MUST: _ of _ pass. MUST NOT: _ of _ pass. Gate: PASS / FAIL.", "",
+    ].join("\n");
+    expect(resultsSheetSkeleton(meta, [item], 1)).toBe(V2);
+    expect(resultsSheetSkeleton(meta, [item])).toBe(V2);
   });
   it("each transcript says which run it is when there is more than one", () => {
     const item = parseCorpusItem("10-es-choque.md", ITEM);

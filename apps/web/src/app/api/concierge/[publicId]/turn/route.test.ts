@@ -1101,6 +1101,23 @@ describe("POST /api/concierge/[publicId]/turn — the capture's result reaches t
     expect(dbFns.createSubmission).not.toHaveBeenCalled();
     expect(toolResult().note).toContain(`fullName "Juan" (taken from their email address; they never said it)`);
   });
+  // Review I-3: the most common capture, name and email in the SAME message that triggers capture_lead.
+  it("a name typed in the CURRENT message counts as said: name and email together file (mutation: drop this turn's text from what was said -> FAILS)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: [{ role: "visitor", text: "¿Más o menos cuánto cuesta asegurar mi casa?", at: "" }] });
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Juan", email: "juan.p@example.com", need: "Quote: home." }))
+      .mockResolvedValueOnce(modelReplies("Gracias, Juan."));
+    await laterTurn({ text: "Soy Juan, mi correo es juan.p@example.com" });
+    expect(dbFns.createSubmission).toHaveBeenCalledTimes(1);
+    expect(toolResult()).toEqual({ ok: true, result: "Recorded. The team will follow up with them." });
+  });
+  it("a name joined to the address by a comma in the current message is still said (review I-1)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(modelCallsCaptureLead({ fullName: "Dan", email: "dan@example.com", need: "Quote: auto." }))
+      .mockResolvedValueOnce(modelReplies("Thanks, Dan."));
+    await laterTurn({ text: "Dan,dan@example.com" });
+    expect(dbFns.createSubmission).toHaveBeenCalledTimes(1);
+  });
   it("the same name, said by the visitor in an EARLIER turn, files normally (the whole transcript is read)", async () => {
     dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, transcript: [{ role: "visitor", text: "Soy Juan", at: "" }] });
     fetchMock

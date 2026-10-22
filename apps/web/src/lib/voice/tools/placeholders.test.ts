@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
-  isPlaceholderValue, isPlaceholderName, isFillerBestTime, stripPlaceholderSegments, nameTakenFromEmail,
-  sanitizeLeadFields, capturePhoneLead, messageBody, bookingName, sanitizeWebLead, droppedNote, withDroppedNote,
+  isPlaceholderValue, isPlaceholderName, isPlaceholderContact, isFillerBestTime, stripPlaceholderSegments,
+  nameTakenFromEmail, sanitizeLeadFields, capturePhoneLead, messageBody, bookingName, sanitizeWebLead, droppedNote,
+  withDroppedNote,
 } from "./placeholders";
 
 // S-47b v3 (corpus run 2): placeholder values never get stored, on every account. Each table row is one pattern;
@@ -9,16 +10,19 @@ import {
 
 /** Every "no value" placeholder, in any field, any case, with or without accents or a trailing period. */
 const GENERIC_STRIP = [
-  "not specified", "Not Specified.", "unspecified", "Unknown", "N/A", "n/a", "not given",
+  "not specified", "Not Specified.", "unspecified", "N/A", "n/a", "not given",
   "No se indicó", "no se indico", "NO SE INDICÓ.", "No especificado", "no especificada", "Sin especificar",
-  "Desconocido", "desconocida",
 ];
+/** "I don't know" is a real answer (review I-2), so these are placeholders ONLY as a whole name or contact value. */
+const UNKNOWN = ["Unknown", "unknown", "Desconocido", "desconocida"];
 /** Only as a NAME. */
 const NAME_ONLY_STRIP = ["User", "Guest", "guest", "Customer", "Cliente", "Caller"];
 /** Real values that merely contain a placeholder word. */
 const NAME_KEEP = ["Guest House LLC", "Usera", "Nonestop Plumbing", "Ana Ruiz", "Users", "Callery Ortiz", "Cliente Hernández", "Unknown Mortal Orchestra"];
 const BEST_TIME_FILLER = ["any time", "Anytime", "anytime.", "cualquier hora", "A cualquier hora"];
 const BEST_TIME_KEEP = ["anytime after 3pm", "any time before noon", "cualquier hora después de las 3", "mornings", "en la mañana"];
+/** The visitor said nothing about a time: the only case in which a filler best time is dropped. */
+const NOTHING_SAID: readonly string[] = [];
 
 describe("isPlaceholderValue: a whole value that says nothing was given", () => {
   it.each(GENERIC_STRIP)("strips %j", (v) => { expect(isPlaceholderValue(v)).toBe(true); });
@@ -33,10 +37,29 @@ describe("\"none\" and its Spanish forms are real answers, kept everywhere", () 
     expect(isPlaceholderValue(v)).toBe(false);
   });
   it.each(["Quote: auto. Current: none.", "Quote: auto. Current: ninguna.", "Event: boda. Guests: none yet.", "Current: none"])(
-    "keeps %j unchanged", (line) => { expect(stripPlaceholderSegments(line)).toEqual({ text: line, dropped: [] }); });
+    "keeps %j unchanged", (line) => { expect(stripPlaceholderSegments(line, NOTHING_SAID)).toEqual({ text: line, dropped: [] }); });
   it("a phone lead field of \"none\" is kept", () => {
     expect(sanitizeLeadFields({ fullName: "Ana", need: "Quote: auto. Current: none.", currentCompany: "none" }).dropped).toEqual([]);
   });
+});
+
+// Review I-2: "unknown" is the caller saying "I don't know", the same class as "none". It is kept inside a need,
+// a message or notes (an urgent message must not lose "they don't know if anyone is hurt"); only a whole name or
+// contact value of "unknown" is a stand-in. Re-adding "unknown" to the generic list fails these rows by name.
+describe("\"unknown\" / \"desconocido(a)\" are real answers, kept inside what was said", () => {
+  it.each(UNKNOWN)("isPlaceholderValue keeps %j", (v) => { expect(isPlaceholderValue(v)).toBe(false); });
+  it.each([
+    "Urgent: car crash. Injuries: unknown.",
+    "Quote: auto. Current insurer: Unknown. Best time: mornings.",
+    "Prior claims: unknown, one in 2019",
+    "Urgente: choque. Heridos: desconocido.",
+    "Evento: boda. Invitados: desconocida.",
+  ])("keeps %j unchanged", (line) => { expect(stripPlaceholderSegments(line, NOTHING_SAID)).toEqual({ text: line, dropped: [] }); });
+  it("an urgent message keeps \"Injuries: unknown.\"", () => {
+    expect(messageBody("Urgent: car crash. Injuries: unknown.")).toEqual({ body: "Urgent: car crash. Injuries: unknown.", dropped: [] });
+  });
+  it.each(UNKNOWN)("but %j as a whole NAME is a stand-in", (v) => { expect(isPlaceholderName(v)).toBe(true); });
+  it.each(UNKNOWN)("and %j as a whole CONTACT value is a stand-in", (v) => { expect(isPlaceholderContact(v)).toBe(true); });
 });
 
 describe("isPlaceholderName: a stand-in instead of a name", () => {
@@ -56,17 +79,17 @@ describe("stripPlaceholderSegments: drops the placeholder part of a one-line nee
     ["Quote: auto. Best time: not specified.", "Quote: auto.", ["Best time: not specified."]],
     ["Event: quinceañera. Date: not specified, in April. Guests: not specified.", "Event: quinceañera. Date: in April.", ["Date: not specified", "Guests: not specified."]],
     ["Event: quinceañera. Date: sábado 9 de mayo. Guests: no se indicó.", "Event: quinceañera. Date: sábado 9 de mayo.", ["Guests: no se indicó."]],
-    // The filler best time, EN and ES.
+    // The filler best time, EN and ES, when nothing they said mentions it.
     ["Quote: renters. Best time: any time.", "Quote: renters.", ["Best time: any time."]],
     ["Cotización: casa. Mejor hora: cualquier hora.", "Cotización: casa.", ["Mejor hora: cualquier hora."]],
     // A middle segment, a comma-separated segment, a Spanish label.
-    ["Quote: home. Current: unknown. Best time: mornings.", "Quote: home. Best time: mornings.", ["Current: unknown."]],
-    ["Event: boda, Guests: unknown", "Event: boda", ["Guests: unknown"]],
-    ["Evento: boda. Invitados: desconocido. Fecha: 14 de marzo.", "Evento: boda. Fecha: 14 de marzo.", ["Invitados: desconocido."]],
+    ["Quote: home. Current: not given. Best time: mornings.", "Quote: home. Best time: mornings.", ["Current: not given."]],
+    ["Event: boda, Guests: N/A", "Event: boda", ["Guests: N/A"]],
+    ["Evento: boda. Invitados: sin especificar. Fecha: 14 de marzo.", "Evento: boda. Fecha: 14 de marzo.", ["Invitados: sin especificar."]],
     ["Urgent: crash on 10th St. Name: N/A.", "Urgent: crash on 10th St.", ["Name: N/A."]],
   ];
   it.each(STRIP)("%j -> %j", (input, out, dropped) => {
-    const r = stripPlaceholderSegments(input);
+    const r = stripPlaceholderSegments(input, NOTHING_SAID);
     expect(r.text).toBe(out);
     expect(r.dropped).toEqual(dropped);
   });
@@ -80,13 +103,35 @@ describe("stripPlaceholderSegments: drops the placeholder part of a one-line nee
     "Quote: auto. Notes: any time.",
     "Event: quinceañera. Date: Saturday March 14, or March 21. Guests: about 150.",
     "Quote: auto. He said unknown, then remembered.",
+    // Review M-3: an abbreviation's period does not start a label, so nothing is cut at "Mr." or "e.g.".
+    "Mr. Smith: not specified",
+    "Callback for Mrs. Lopez: N/A",
+    "e.g. Name: N/A",
+    "Ask for Dr. Ruiz: n/a",
   ];
   it.each(KEEP)("keeps %j unchanged", (input) => {
-    expect(stripPlaceholderSegments(input)).toEqual({ text: input, dropped: [] });
+    expect(stripPlaceholderSegments(input, NOTHING_SAID)).toEqual({ text: input, dropped: [] });
   });
   it("a whole line that is only a placeholder becomes empty", () => {
     expect(stripPlaceholderSegments("No especificado")).toEqual({ text: "", dropped: ["No especificado"] });
     expect(stripPlaceholderSegments("Best time: not specified.")).toEqual({ text: "", dropped: ["Best time: not specified."] });
+  });
+});
+
+// Review M-4: "any time" is a filler only when they never said it. The website chat knows what the visitor typed;
+// the phone does not reliably (its transcript arrives asynchronously), so the phone never drops "any time".
+describe("a real \"any time\" is kept: a filler only when what they said is known and never mentions it", () => {
+  it.each([
+    ["Any time works for me", "Quote: renters. Best time: any time."],
+    ["llámenme a cualquier hora", "Cotización: casa. Mejor hora: cualquier hora."],
+    ["anytime is fine", "Quote: renters. Best time: any time."],
+    ["any time is fine", "Quote: renters. Best time: anytime."],
+  ])("said %j: %j is kept", (said, line) => {
+    expect(stripPlaceholderSegments(line, ["I need a quote", said])).toEqual({ text: line, dropped: [] });
+  });
+  it("what they said unknown (no `said`, the phone): \"any time\" is kept", () => {
+    expect(stripPlaceholderSegments("Quote: renters. Best time: any time.")).toEqual({ text: "Quote: renters. Best time: any time.", dropped: [] });
+    expect(capturePhoneLead({ fullName: "Ana", need: "Quote: renters. Best time: any time.", bestTime: "any time" }, null).result).toEqual({ ok: true });
   });
 });
 
@@ -101,9 +146,23 @@ describe("nameTakenFromEmail: a name that only appears in their email address", 
     ["said with its accent", "Jose", "jose.r@example.com", ["me llamo José", "jose.r@example.com"], false],
     ["no email", "Juan", "", ["hola"], false],
     ["a word inside a longer word is not saying it", "Ana", "ana.g@example.com", ["I live on Anaya Street", "ana.g@example.com"], true],
+    // Review I-1: the name joined to the address by punctuation is still said; only the address itself is removed.
+    ["typed 'Dan,dan@x.com'", "Dan", "dan@x.com", ["Dan,dan@x.com"], false],
+    ["typed 'Dan,dan@x.com' (two words)", "Dan Lopez", "dan.lopez@x.com", ["Dan Lopez,dan.lopez@x.com"], false],
+    ["typed 'Dan/dan@x.com'", "Dan", "dan@x.com", ["Dan/dan@x.com"], false],
+    ["typed 'name:Dan,email:dan@x.com'", "Dan", "dan@x.com", ["name:Dan,email:dan@x.com"], false],
+    ["typed 'Dan<dan@x.com>'", "Dan", "dan@x.com", ["Dan<dan@x.com>"], false],
+    ["typed 'Dan;dan@x.com'", "Dan", "dan@x.com", ["Dan;dan@x.com"], false],
+    ["typed '(Dan)dan@x.com'", "Dan", "dan@x.com", ["(Dan)dan@x.com"], false],
+    ["typed '\"Dan\"dan@x.com'", "Dan", "dan@x.com", ["\"Dan\"dan@x.com"], false],
+    ["only the address, with punctuation around it: still taken", "Dan", "dan@x.com", ["email:dan@x.com,"], true],
   ];
   it.each(T)("%s", (_n, fullName, email, said, want) => {
     expect(nameTakenFromEmail(fullName, email, said)).toBe(want);
+  });
+  it("sanitizeWebLead files 'Dan' typed as 'Dan<dan@x.com>' (review I-1's own probe)", () => {
+    expect(sanitizeWebLead({ fullName: "Dan", email: "dan@x.com", phone: "", need: "Quote: auto." }, ["Dan<dan@x.com>"]).lead)
+      .toEqual({ fullName: "Dan", email: "dan@x.com", phone: "", need: "Quote: auto." });
   });
 });
 
@@ -114,7 +173,7 @@ describe("droppedNote: what the model hears about a dropped value", () => {
       { field: "need", value: "Best time: any time.", why: "filler" },
       { field: "fullName", value: "Juan", why: "email_name" },
     ], "web")).toBe(
-      `Left out of the record, because a record holds only what they said: fullName "User" (a placeholder, not something they said); need "Best time: any time." (a filler, not a time they gave); fullName "Juan" (taken from their email address; they never said it). If you need any of it, ask them; never fill it in yourself.`,
+      `Left out of the record, because a record holds only what they said: fullName "User" (a placeholder, not something they said); need "Best time: any time." (a filler they never said; record a best time only if they give one); fullName "Juan" (taken from their email address; they never said it). If you need any of it, ask them; never fill it in yourself.`,
     );
   });
   it("on the phone, a dropped name adds the take_message path (the module's own no-name path)", () => {
@@ -130,17 +189,13 @@ describe("droppedNote: what the model hears about a dropped value", () => {
   });
 });
 
-describe("every best-time label and key, EN and ES (one row per label, so deleting one fails its row)", () => {
+describe("every best-time label, EN and ES (one row per label, so deleting one fails its row)", () => {
   it.each(["Best time", "Best time to call", "Best time to reach", "Mejor hora", "Mejor horario", "Mejor momento"])(
-    "a %s segment with a filler time is dropped", (label) => {
-      expect(stripPlaceholderSegments(`Quote: auto. ${label}: any time.`)).toEqual({ text: "Quote: auto.", dropped: [`${label}: any time.`] });
-    });
-  it.each(["bestTime", "best_time_to_call", "bestTimeToReach", "mejorHora", "mejor_horario", "mejorMomento"])(
-    "a %s field with a filler time is dropped", (key) => {
-      expect(sanitizeLeadFields({ fullName: "Ana", need: "x", [key]: "cualquier hora" }).dropped).toEqual([{ field: key, value: "cualquier hora", why: "filler" }]);
+    "a %s segment with a filler time is dropped when they never said it", (label) => {
+      expect(stripPlaceholderSegments(`Quote: auto. ${label}: any time.`, NOTHING_SAID)).toEqual({ text: "Quote: auto.", dropped: [`${label}: any time.`] });
     });
   it("'any time' under any other label is kept (only a best time can be a filler)", () => {
-    expect(stripPlaceholderSegments("Quote: auto. Hora: any time.").dropped).toEqual([]);
+    expect(stripPlaceholderSegments("Quote: auto. Hora: any time.", NOTHING_SAID).dropped).toEqual([]);
   });
 });
 
@@ -164,11 +219,10 @@ describe("sanitizeLeadFields: the phone capture_lead fields", () => {
       { field: "need", value: "Best time: no se indicó.", why: "placeholder" },
     ]);
   });
-  it("a filler best time in its own field is dropped; a real one and any other field's 'any time' are kept", () => {
-    expect(sanitizeLeadFields({ fullName: "Ana", need: "Quote: home.", bestTime: "any time" }))
-      .toEqual({ fields: { fullName: "Ana", need: "Quote: home." }, dropped: [{ field: "bestTime", value: "any time", why: "filler" }] });
-    expect(sanitizeLeadFields({ fullName: "Ana", need: "Quote: home.", best_time: "anytime after 3pm", notes: "any time" }).dropped).toEqual([]);
-    expect(sanitizeLeadFields({ fullName: "Ana", need: "Best time: any time." }).dropped).toEqual([{ field: "need", value: "Best time: any time.", why: "filler" }]);
+  it("an 'unknown' need is kept: only a name or contact value of 'unknown' is a stand-in", () => {
+    expect(sanitizeLeadFields({ fullName: "Ana", need: "unknown", phone: "Desconocido" })).toEqual({
+      fields: { fullName: "Ana", need: "unknown" }, dropped: [{ field: "phone", value: "Desconocido", why: "placeholder" }],
+    });
   });
   it("keeps every real value untouched", () => {
     const fields = { fullName: "Guest House LLC", need: "Quote: commercial. Best time: anytime after 3pm.", callbackNumber: "956-555-0123" };
@@ -200,12 +254,13 @@ describe("capturePhoneLead: the whole phone capture_lead answer, shared by regis
 
 describe("messageBody and bookingName (take_message, book_appointment)", () => {
   it("strips placeholder parts of a message body; a body that is only a placeholder is empty", () => {
-    expect(messageBody("Urgent: crash on 10th St. Name: unknown.")).toEqual({ body: "Urgent: crash on 10th St.", dropped: [{ field: "body", value: "Name: unknown.", why: "placeholder" }] });
+    expect(messageBody("Urgent: crash on 10th St. Name: not specified.")).toEqual({ body: "Urgent: crash on 10th St.", dropped: [{ field: "body", value: "Name: not specified.", why: "placeholder" }] });
     expect(messageBody("No se indicó")).toEqual({ body: "", dropped: [{ field: "body", value: "No se indicó", why: "placeholder" }] });
     expect(messageBody("  call me back ")).toEqual({ body: "call me back", dropped: [] });
   });
   it("a placeholder booking name is no name; a real one is kept", () => {
     expect(bookingName("Guest")).toEqual({ name: "", dropped: [{ field: "name", value: "Guest", why: "placeholder" }] });
+    expect(bookingName("Unknown")).toEqual({ name: "", dropped: [{ field: "name", value: "Unknown", why: "placeholder" }] });
     expect(bookingName(" Guest House LLC ")).toEqual({ name: "Guest House LLC", dropped: [] });
   });
 });
@@ -221,11 +276,14 @@ describe("sanitizeWebLead: the website chat's capture_lead", () => {
       .toEqual({ lead: null, dropped: [{ field: "fullName", value: "Juan", why: "email_name" }] });
   });
   it("strips the need's placeholder parts and a placeholder phone or email, keeps the rest", () => {
-    expect(sanitizeWebLead({ fullName: "Diana", email: "diana@example.com", phone: "n/a", need: "Quote: auto. Best time: any time." }, said))
+    expect(sanitizeWebLead({ fullName: "Diana", email: "diana@example.com", phone: "unknown", need: "Quote: auto. Best time: any time." }, said))
       .toEqual({
         lead: { fullName: "Diana", email: "diana@example.com", phone: "", need: "Quote: auto." },
-        dropped: [{ field: "phone", value: "n/a", why: "placeholder" }, { field: "need", value: "Best time: any time.", why: "filler" }],
+        dropped: [{ field: "phone", value: "unknown", why: "placeholder" }, { field: "need", value: "Best time: any time.", why: "filler" }],
       });
+  });
+  it("a best time the visitor really typed as 'any time' is filed", () => {
+    expect(sanitizeWebLead({ fullName: "Diana", email: "diana@example.com", phone: "", need: "Quote: auto. Best time: any time." }, [...said, "any time is fine"]).dropped).toEqual([]);
   });
   it("a clean lead passes through unchanged", () => {
     const lead = { fullName: "Diana", email: "diana@example.com", phone: "", need: "Quote: auto." };

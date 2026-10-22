@@ -173,15 +173,24 @@ The generic "Never give legal, medical, or compliance advice" line stays.
   placeholders.ts`). Run 2 still wrote "User", "Best time: no se indicó" and "Guests: not specified" into
   tool arguments, so the phone tools and the website chat now drop a placeholder value before anything is
   stored, strip a placeholder part of a one-line need rather than the line, and tell the model what was
-  dropped and why so she asks instead (a result with nothing dropped is unchanged). "none" is NOT a
-  placeholder: "Current: none" is real information. Three behaviour changes for every account:
+  dropped and why so she asks instead (a result with nothing dropped is unchanged). Real answers are never
+  placeholders: "none"/"ninguno"/"ninguna" ("Current: none" is no current insurer) and "unknown"/
+  "desconocido(a)" ("Injuries: unknown" on an urgent message means they do not know) are kept inside a need,
+  a message or notes. "Unknown" is a stand-in only as a WHOLE name or contact value. "Any time" as a best time
+  is dropped only in the website chat, and only when the visitor never typed it; the phone always keeps it,
+  because it cannot reliably know what the caller said when the tool runs (its transcript arrives
+  asynchronously). Three behaviour changes for every account:
   1. A phone lead whose name is a stand-in ("Guest", "Customer", "Caller", "User", "Cliente", "Unknown",
      "N/A"…) is refused as having no name instead of being stored; the tool result tells her to use
      take_message if they will not give one. If she does not, the call ends with no lead.
   2. book_appointment with a stand-in name answers "name required" instead of booking "Guest".
   3. In the website chat, a name that appears only in the visitor's email address files nothing; she is
-     told to ask for their name. The phone does not run this check: its transcript arrives asynchronously,
-     so a name said in the same turn may not be there yet when the tool runs.
+     told to ask for their name. "Said" means the visitor's own text, every turn including the current one,
+     with only the email address itself removed (an address stops at a space or at , ; : / < > ( ) [ ] and
+     quotes, so "Dan,dan@x.com" still says "Dan"). The cost: on the chat's last permitted turn a refused name
+     files nothing, even with a valid email, because the visitor cannot answer again. The phone does not run
+     this check: its transcript arrives asynchronously, so a name said in the same turn may not be there yet
+     when the tool runs.
 
 **v2 (2026-10-22), from corpus run 1** (GitHub run 39816008919; every rule graded, quoted evidence per item).
 What changed and why, each fixed at its cause in the block's text (`modules/insurance-pc.ts`):
