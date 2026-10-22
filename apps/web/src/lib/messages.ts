@@ -2042,6 +2042,27 @@ export const m = {
   "voice.disclosure.results.emptyIdleAction.es": "Elija Prueba arriba y guarde.",
   "voice.disclosure.results.error": "Couldn't load how calls went.",
   "voice.disclosure.results.error.es": "No se pudo cargar cómo fueron las llamadas.",
+  // S-47b: the Voice page's Trade rules group and the call page's line (agency only). Usted.
+  "voice.tradeRules.legend": "Trade rules",
+  "voice.tradeRules.legend.es": "Reglas del giro",
+  "voice.tradeRules.none": "None — general rules only",
+  "voice.tradeRules.none.es": "Ninguna — solo las reglas generales",
+  "voice.tradeRules.noneHint": "{persona} follows only the rules every account has.",
+  "voice.tradeRules.noneHint.es": "{persona} sigue solo las reglas que tiene toda cuenta.",
+  "voice.tradeRules.insurance_pc": "Insurance (property & casualty)",
+  "voice.tradeRules.insurance_pc.es": "Seguros de daños (auto, casa y negocio)",
+  "voice.tradeRules.insurance_pcHint": "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy.",
+  "voice.tradeRules.insurance_pcHint.es": "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza.",
+  "voice.tradeRules.events": "Events and venues",
+  "voice.tradeRules.events.es": "Eventos y salones",
+  "voice.tradeRules.eventsHint": "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from the business facts.",
+  "voice.tradeRules.eventsHint.es": "{persona} toma los datos del evento para que el equipo los confirme, nunca dice que una fecha está libre y da precios solo palabra por palabra de los datos del negocio.",
+  "calls.detail.tradeRules": "{module} · v{version}",
+  "calls.detail.tradeRules.es": "{module} · v{version}",
+  "calls.detail.tradeModule.insurance_pc": "Insurance",
+  "calls.detail.tradeModule.insurance_pc.es": "Seguros",
+  "calls.detail.tradeModule.events": "Events",
+  "calls.detail.tradeModule.events.es": "Eventos",
   // concierge.aiLabel (Task 5): the website chat's AI label, header and first
   // message. Lives here, not lib/concierge/strings.ts (spec §6; ambiguity D).
   // Spanish is tú, the chat's own register — the one exception the global

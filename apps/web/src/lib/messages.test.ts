@@ -1361,3 +1361,78 @@ describe("S-47a: AI disclosure copy, English and Spanish (plan Task 2)", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "voice.tradeRules.legend": [],
+    "voice.tradeRules.none": [],
+    "voice.tradeRules.noneHint": ["persona"],
+    "voice.tradeRules.insurance_pc": [],
+    "voice.tradeRules.insurance_pcHint": ["persona"],
+    "voice.tradeRules.events": [],
+    "voice.tradeRules.eventsHint": ["persona"],
+    "calls.detail.tradeRules": ["module", "version"],
+    "calls.detail.tradeModule.insurance_pc": [],
+    "calls.detail.tradeModule.events": [],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+  const paramsOf = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+
+  it("the key list itself is the ten this plan names (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(10);
+  });
+
+  // calls.detail.tradeRules is "{module} · v{version}" in BOTH languages (plan review I4): the words
+  // "Trade rules" live in the <dt>, so the value carries none. It is the one key allowed to match its twin.
+  const SAME_IN_BOTH = new Set<string>(["calls.detail.tradeRules"]);
+
+  it("every key exists with its Spanish twin, differing from the English except the one named (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    expect(KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || (!SAME_IN_BOTH.has(k) && cat[k] === cat[`${k}.es`]))).toEqual([]);
+  });
+
+  it("names exactly its params, the same set in both languages (mutation: {version} -> {v} in one .es -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+    }
+  });
+
+  it("pins every sentence, both languages (mutation: change one word -> FAILS)", () => {
+    const pairs: Array<[string, string, string]> = [
+      ["voice.tradeRules.legend", "Trade rules", "Reglas del giro"],
+      ["voice.tradeRules.none", "None — general rules only", "Ninguna — solo las reglas generales"],
+      ["voice.tradeRules.noneHint", "{persona} follows only the rules every account has.", "{persona} sigue solo las reglas que tiene toda cuenta."],
+      ["voice.tradeRules.insurance_pc", "Insurance (property & casualty)", "Seguros de daños (auto, casa y negocio)"],
+      ["voice.tradeRules.insurance_pcHint",
+        "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy.",
+        "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza."],
+      ["voice.tradeRules.events", "Events and venues", "Eventos y salones"],
+      ["voice.tradeRules.eventsHint",
+        "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from the business facts.",
+        "{persona} toma los datos del evento para que el equipo los confirme, nunca dice que una fecha está libre y da precios solo palabra por palabra de los datos del negocio."],
+      ["calls.detail.tradeRules", "{module} · v{version}", "{module} · v{version}"],
+      ["calls.detail.tradeModule.insurance_pc", "Insurance", "Seguros"],
+      ["calls.detail.tradeModule.events", "Events", "Eventos"],
+    ];
+    const cat = m as Record<string, string>;
+    for (const [k, en, es] of pairs) expect([cat[k], cat[`${k}.es`]], k).toEqual([en, es]);
+  });
+
+  it("interpolates through t() in both languages", () => {
+    expect(t(m, "calls.detail.tradeRules", "en", { module: "Insurance", version: 1 })).toBe("Insurance · v1");
+    expect(t(m, "calls.detail.tradeRules", "es", { module: "Seguros", version: 1 })).toBe("Seguros · v1");
+  });
+
+  it("Spanish is usted, the persona is never typed, no plumbing word reaches the reader (mutations: 'tu' / 'Sofía' / 'trade_module' into one line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(cat[`${k}.es`]).not.toMatch(/\b(tu|tus|contigo|escribe|intenta)\b/i);
+      for (const s of [cat[k]!, cat[`${k}.es`]!]) {
+        expect(s).not.toMatch(/Sofía|Sofia/);
+        expect(s.replace(/\{\w+\}/g, "")).not.toMatch(/\b(insurance_pc|trade_module|stamp|null|flag|module)\b/i);
+      }
+    }
+  });
+});
