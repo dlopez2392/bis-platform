@@ -153,7 +153,7 @@ The generic "Never give legal, medical, or compliance advice" line stays.
 - Take a quote request through `capture_lead` / `take_message`, the need written in one line, e.g.
   "Quote: auto + home. Current: State Farm, renews March. Best time: mornings." — kind of insurance,
   current company and renewal month only if offered, best time to call.
-- Book a time with an agent when booking is on.
+- Book a time with an agent when a new booking can be made (booking mode full, phone only; SD2).
 - Say: "A licensed agent will call you back to go over options and prices."
 
 **She never:**
@@ -187,7 +187,7 @@ is set; on no / no answer / no number, a message starting "Urgent:".
 **She may:**
 - Collect the event type, the date or month (plus backup dates), the guest count, and the name and
   number of the adult planning it.
-- Book a tour when booking is on, offering the tour times `check_availability` returns. A booked tour is
+- Book a tour when a new booking can be made (booking mode full, phone only; SD2), offering the tour times `check_availability` returns. A booked tour is
   only a visit and holds no date or room for the event; she says so if asked (amended, plan review I2).
 - Quote prices, packages, deposits, payment plans and refund or cancellation terms only word for word from
   the facts, numbers exactly as written. For these, and only these, the block overrides the general TONE
@@ -215,7 +215,8 @@ where a transfer number is set; otherwise a message starting "Urgent:".
 - **Web chat:** the concierge turn route (`api/concierge/[publicId]/turn/route.ts`) does the same on the
   conversation row when it is created, and builds every turn's prompt from the stamped module (not a
   fresh profile read), so a chat that spans an agency change keeps one set of rules. The plan confirms the
-  exact creation site.
+  exact creation site. A chat that spans a deploy keeps its module, and runs the module text current at
+  each turn's build (the stamped version records the version at creation).
 - **Web voice demo** (`api/voice/web/session`): passes the profile's module into the prompt; no row to
   stamp.
 
@@ -251,13 +252,17 @@ real model:
   `gpt-realtime` accepts a text-only output modality. If it does not, phone items run on `gpt-4o` with the
   same prompt and tools, the results sheet says so, and the real calls carry more weight.
 - **Chat:** chat completions on `gpt-4o-mini` with the concierge's `CAPTURE_LEAD_TOOL`.
-- **Tools are stubbed** (each returns ok and is logged), so the transcript shows when she would have
-  taken a message, captured a lead or offered a transfer.
+- **Tools are stubbed** (each returns ok, except the live refusals a corpus item can trigger, and each is
+  logged), so the transcript shows when she would have taken a message, captured a lead or offered a
+  transfer. The refusals are word for word from the live code: the chat's capture_lead with no valid email
+  or phone, the phone's take_message with an empty body, and check_availability with a malformed date.
 
 **Files:** `apps/web/src/lib/voice/modules/corpus/{insurance-pc,events}/NN-<lang>-<slug>.md`, front
 matter `lang`, `medium` (`phone` | `web`), `transfer` (true | false), `facts` (fixture name), and two
 optional keys added in planning, `booking` and `disclosure` (true | false, default false; phone only for
-`booking` and `transfer`); the body is
+`booking` and `transfer`), and two optional keys added in the final fix round: `callerId` (`shown` |
+`withheld`, default shown; phone only; withheld plays a call with no caller ID) and `afterHours`
+(`hours_then_message` | `message_only`, default the fixture's; message_only drops new booking); the body is
 the caller's lines (sent one after each reply) and the rules, `must:` and `must not:`. Fixtures: a
 fictional "Agencia de Seguros Río" and "Salón Los Ébanos" with fixed hours, lines of business, packages
 and prices, in `corpus/fixtures/`.
@@ -319,6 +324,13 @@ PR body, enforced by the agency; there is NO code lock):
   - Masked: the AI summary and the conversation message built from it, the call card, the suggestions,
     the callback To-do title and the alert email's callback line, and through that title the record
     page's AI summary.
+  - Known limits of the mask (masking is by shape, `apps/web/src/lib/voice/id-mask.ts`), each NOT masked:
+    an SSN glued to another number ("call 956 123-45-6789"); an ID split across two turns ("my social is
+    123 45", then "6789"); comma-separated groups ("123, 45, 6789"), deliberately, because allowing
+    commas would also mask comma-separated year pairs ("between 2025, 2026"); numbers spoken as words;
+    and policy numbers and VINs, which have no fixed shape (the prompt's never-repeat line covers them).
+    And the callback To-do title clamps the masked reason at 140 characters, so an ID across the cut
+    shows as "[ID…".
   - Counsel's edits → v2 → corpus re-run.
 - Events: no counsel gate.
 
