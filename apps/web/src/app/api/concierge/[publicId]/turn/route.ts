@@ -52,8 +52,9 @@ import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_CONVERSATIONS_PER_IP,
   CONCIERGE_IP_WINDOW_MS, CONCIERGE_MAX_CONVERSATIONS_PER_ACCOUNT_PER_DAY,
   CONCIERGE_ACCOUNT_WINDOW_MS, CONCIERGE_MAX_MESSAGE_CHARS,
-  CONCIERGE_MAX_REPLY_TOKENS,
+  CONCIERGE_MAX_REPLY_TOKENS, CONCIERGE_MODEL,
 } from "@/lib/concierge/guards";
+import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
@@ -67,8 +68,9 @@ export const maxDuration = 30;
 
 /** Same model the rest of this repo's text work uses (`summary-service.ts`,
  *  `proposals/generate.ts`) — a receptionist answering questions from a
- *  facts block is not a reasoning workload. */
-const MODEL = "gpt-4o-mini";
+ *  facts block is not a reasoning workload. One constant (S-47b, SD6), so the
+ *  corpus runner plays the model this chat really uses. */
+const MODEL = CONCIERGE_MODEL;
 const MODEL_TIMEOUT_MS = 20_000;
 /** D-047's second call, the one that hears the capture's result. Shorter
  *  than the first: it writes one sentence from a known outcome. */
@@ -362,9 +364,15 @@ export async function POST(
           .filter(([, v]) => typeof v === "string") as [string, string][],
       ));
 
+      // S-47b (spec section 5.5): the chat's trade rules are decided ONCE, here, from the profile this
+      // request already read, and stamped on the conversation. Every turn's prompt reads the stamp, so a
+      // chat that spans an agency change keeps one set of rules.
+      const tradeStamp = tradeModuleStamp(profile.trade_module);
+
       const created = await createConciergeConversation(db, {
         accountId: profile.account_id, formId: profile.concierge_form_id,
         ipHash, locale, attribution, origin,
+        ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
       });
       conversationId = created.id;
       openedId = created.id;
@@ -386,7 +394,7 @@ export async function POST(
         form_id: profile.concierge_form_id, ip_hash: ipHash,
         turn_count: 0, transcript: [], submission_id: null,
         locale, attribution, origin,
-        trade_module: null, trade_module_version: null,
+        trade_module: tradeStamp?.module ?? null, trade_module_version: tradeStamp?.version ?? null,
       };
     } else {
       // ── TURN 2+ ─────────────────────────────────────────────────────────
@@ -447,6 +455,9 @@ export async function POST(
       medium: "web",
       // S-47a: on Trial or On the visitor has already read the label and the first message.
       disclosed: profile.disclosure === "trial" || profile.disclosure === "on",
+      // S-47b: the CONVERSATION's stamp (written at creation, turn 1 above, or read back on turn 2+), never the
+      // profile's current module.
+      tradeModule: conversation.trade_module,
       // `buildSystemPrompt` itself resolves the one tool this surface has,
       // and never advertises take_message/log_transcript on the web — see
       // its `onWeb` branches. No append needed here (review of commit

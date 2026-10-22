@@ -111,6 +111,13 @@ vi.mock("@bis/db", async (importOriginal) => {
 });
 vi.mock("@/lib/forms/enrich", () => ({ enrich: enrichMock }));
 
+// S-47b: the stamp must be the REGISTRY's version, never a literal. Version 7 exists nowhere else, so a
+// route that writes 1 (or any constant) fails.
+vi.mock("@/lib/voice/modules/events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/voice/modules/events")>()),
+  VERSION: 7,
+}));
+
 import { POST } from "./route";
 import { signRenderToken, RENDER_TOKEN_FIELD, HONEYPOT_FIELD } from "@/lib/forms/guards";
 import {
@@ -134,12 +141,14 @@ const PROFILE = {
   // conversation's own `restrict` column. Same literal on both would leave
   // every assertion below blind to which one the route actually read.
   public_id: PUBLIC_ID, concierge_enabled: true, concierge_form_id: "form-now",
+  trade_module: null,
 };
 
 const CONVERSATION = {
   id: "c1", account_id: "a1", form_id: "form-then", ip_hash: "h",
   turn_count: 1, transcript: [], submission_id: null, locale: "en",
   attribution: {}, origin: null,
+  trade_module: null, trade_module_version: null,
 };
 
 /** One exchange already on file: the conversation's first turn was answered. */
@@ -1391,5 +1400,51 @@ describe("POST /api/concierge/[publicId]/turn — a lead's chat files on the cus
     expect(dbFns.recordUsage).toHaveBeenCalledTimes(1);
     expect(dbFns.recordUsage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ meter: "ai_chats", sourceRef: `conversation:${STORED}` }));
     expect(dbFns.syncWebchatTurns).toHaveBeenCalledWith(expect.anything(), "a1", STORED);
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
+  const EVT = "TRADE RULES — EVENTS AND VENUES:";
+  const INS = "TRADE RULES — INSURANCE (PROPERTY AND CASUALTY):";
+
+  it("turn 1, no module: the conversation is created exactly as before and the prompt carries no rules (mutation: pass tradeModule: null -> FAILS)", async () => {
+    await firstTurn();
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", formId: "form-now", ipHash: expect.any(String), locale: "en", attribution: {}, origin: null,
+    });
+    expect(sentToModel().messages[0]!.content).not.toContain("TRADE RULES —");
+  });
+
+  it("turn 1, events: the conversation is stamped with the registry's version and the first prompt carries the web events block (mutation: version literal -> FAILS)", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, trade_module: "events" });
+    await firstTurn();
+    expect(dbFns.createConciergeConversation).toHaveBeenCalledWith(expect.anything(), {
+      accountId: "a1", formId: "form-now", ipHash: expect.any(String), locale: "en", attribution: {}, origin: null,
+      tradeModule: { module: "events", version: 7 },
+    });
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(EVT);
+    expect(system).toContain(`- Then use capture_lead with a need that starts with "Urgent:", and tell them the team will follow up as soon as they can. Never promise a time.`);
+  });
+
+  it("a later turn builds its prompt from the conversation's stamp, not the profile's current module (mutation: read profile.trade_module -> FAILS)", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, trade_module: "events" });
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, trade_module: "insurance_pc", trade_module_version: 1 });
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(INS);
+    expect(system).not.toContain(EVT);
+  });
+
+  it("a chat begun with no module keeps none after the agency sets one (mutation: fall back to the profile -> FAILS)", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, trade_module: "events" });
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, trade_module: null, trade_module_version: null });
+    await laterTurn();
+    expect(sentToModel().messages[0]!.content).not.toContain("TRADE RULES —");
+  });
+
+  it("the model is CONCIERGE_MODEL, gpt-4o-mini (SD6)", async () => {
+    await firstTurn();
+    expect(sentToModel().model).toBe("gpt-4o-mini");
   });
 });
