@@ -33,6 +33,7 @@ const EN_DISCLOSURE_COPY: DisclosureCopy = {
 const EN_TRADE_COPY: TradeRulesCopy = {
   locale: "en",
   legend: m["voice.tradeRules.legend"],
+  nextCall: m["voice.tradeRules.nextCall"],
   options: [
     { value: "none", label: m["voice.tradeRules.none"], hint: m["voice.tradeRules.noneHint"].replace("{persona}", "Sofía") },
     { value: "insurance_pc", label: m["voice.tradeRules.insurance_pc"], hint: m["voice.tradeRules.insurance_pcHint"].replace("{persona}", "Sofía") },
@@ -842,6 +843,14 @@ describe("VoiceProfileForm's Trade rules group (S-47b)", () => {
     const radios = [...render().matchAll(/<input[^>]*name="trade_module"[^>]*>/g)].map((mm) => mm[0]);
     expect(radios.length).toBe(3);
     for (const r of radios) expect(r).toContain('class="size-4 shrink-0 accent-[var(--accent)]"');
+  });
+
+  it("says, right under the group, that a change applies from the next call or chat (design D-M2; mutation: drop the <p> -> FAILS)", () => {
+    const html = render();
+    expect(html).toContain(
+      '</fieldset><p class="text-xs text-muted-foreground">Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.</p>');
+    // It belongs to the trade-rules group: after the trade_module radios, not the disclosure group's line.
+    expect(html.indexOf("Calls and chats already under way")).toBeGreaterThan(html.lastIndexOf('name="trade_module"'));
   });
 
   it("lang is on the wrapper div, not the fieldset, when the copy is Spanish", () => {

@@ -90,7 +90,7 @@ const captured = vi.hoisted(() => ({
     publishedForms?: { id: string; name: string }[]; origin?: string;
     disclosureCopy?: { locale: string; legend: string; options: { value: string }[] };
     disclosureResults?: unknown;
-    tradeRulesCopy?: { locale: string; legend: string; options: { value: string }[] };
+    tradeRulesCopy?: { locale: string; legend: string; nextCall?: string; options: { value: string }[] };
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -280,5 +280,10 @@ describe("voice settings page — the Trade rules copy (S-47b)", () => {
     expect(props.tradeRulesCopy?.locale).toBe("en");
     expect(props.tradeRulesCopy?.legend).toBe("Trade rules");
     expect(props.tradeRulesCopy?.options.map((o) => o.value)).toEqual(["none", "insurance_pc", "events"]);
+  });
+  it("carries the next-call line in the reader's language (design D-M2; mutation: the disclosure group's nextCall key -> FAILS)", async () => {
+    const props = await render();
+    expect(props.tradeRulesCopy?.nextCall)
+      .toBe("Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.");
   });
 });

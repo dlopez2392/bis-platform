@@ -64,6 +64,8 @@ export type DisclosureCopy = {
 export type TradeRulesCopy = {
   locale: "en" | "es";
   legend: string;
+  /** Design D-M2: the line under the group, as the disclosure group has its own. */
+  nextCall: string;
   options: Array<{ value: "none" | "insurance_pc" | "events"; label: string; hint: string }>;
 };
 
@@ -376,6 +378,7 @@ export function VoiceProfileForm({
                 );
               })}
             </fieldset>
+            <p className="text-xs text-muted-foreground">{tradeRulesCopy.nextCall}</p>
           </div>
 
           <SubmitButton pending={pending}>{m["voice.profile.save"]}</SubmitButton>

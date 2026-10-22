@@ -1371,6 +1371,7 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
     "voice.tradeRules.insurance_pcHint": ["persona"],
     "voice.tradeRules.events": [],
     "voice.tradeRules.eventsHint": ["persona"],
+    "voice.tradeRules.nextCall": [],
     "calls.detail.tradeRules": ["module", "version"],
     "calls.detail.tradeModule.insurance_pc": [],
     "calls.detail.tradeModule.events": [],
@@ -1378,8 +1379,8 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
   const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
   const paramsOf = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
 
-  it("the key list itself is the ten this plan names (guards the loops below from vacuity)", () => {
-    expect(KEYS.length).toBe(10);
+  it("the key list itself is the ten this plan names, plus the final fix's nextCall (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(11);
   });
 
   // calls.detail.tradeRules is "{module} · v{version}" in BOTH languages (plan review I4): the words
@@ -1410,8 +1411,11 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
         "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza."],
       ["voice.tradeRules.events", "Events and venues", "Eventos y salones"],
       ["voice.tradeRules.eventsHint",
-        "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from the business facts.",
+        "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Facts.",
         "{persona} toma los datos del evento para que el equipo los confirme, nunca dice que una fecha está libre y da precios solo palabra por palabra de los datos del negocio."],
+      ["voice.tradeRules.nextCall",
+        "Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.",
+        "Los cambios aplican desde la siguiente llamada o chat. Las llamadas y los chats ya en curso conservan las reglas con las que empezaron."],
       ["calls.detail.tradeRules", "{module} · v{version}", "{module} · v{version}"],
       ["calls.detail.tradeModule.insurance_pc", "Insurance", "Seguros"],
       ["calls.detail.tradeModule.events", "Events", "Eventos"],

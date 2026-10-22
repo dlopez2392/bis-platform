@@ -813,7 +813,7 @@ describe("CallDetailPage — the trade rules line (S-47b)", () => {
   };
   /** The <dt> immediately before the trade-rules <dd>, same bound shape. */
   const tradeRulesLabel = (html: string): string | null => {
-    const match = /<dt>([^<]*)<\/dt><dd[^>]*data-trade-rules=""/.exec(html);
+    const match = /<dt[^>]*>([^<]*)<\/dt><dd[^>]*data-trade-rules=""/.exec(html);
     return match ? renderedText(match[1]!) : null;
   };
 
@@ -821,6 +821,12 @@ describe("CallDetailPage — the trade rules line (S-47b)", () => {
     const html = await render({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
     expect(tradeRulesText(html)).toBe("Insurance · v1");
     expect(tradeRulesLabel(html)).toBe("Trade rules");
+  });
+
+  it("wraps the value under the label on a narrow screen, and never breaks the label itself (design D-M1; mutation: drop flex-wrap or whitespace-nowrap → FAILS)", async () => {
+    const html = await render({ ...CALL, trade_module: "insurance_pc", trade_module_version: 1 });
+    expect(html).toMatch(
+      /<div class="flex flex-wrap items-baseline gap-x-1\.5 gap-y-0\.5" lang="en"><dt class="whitespace-nowrap">Trade rules<\/dt><dd[^>]*data-trade-rules=""/);
   });
 
   it("reads in Spanish under the QA override (mutation: hardcode the English key → FAILS)", async () => {

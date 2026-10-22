@@ -157,6 +157,7 @@ export default async function VoicePage({
   const tradeRulesCopy: TradeRulesCopy = {
     locale,
     legend: tr.text("voice.tradeRules.legend"),
+    nextCall: tr.text("voice.tradeRules.nextCall"),
     options: (["none", ...TRADE_MODULE_IDS] as const).map((value) => ({
       value, label: tr.text(TRADE_RULES_LABEL_KEY[value]), hint: tr.text(TRADE_RULES_HINT_KEY[value], { persona }),
     })),

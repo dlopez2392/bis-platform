@@ -289,11 +289,12 @@ export default async function CallDetailPage({
                 carries none. In the reader's language, like the Suggestions section. */}
             {isAgency && call.trade_module !== null && call.trade_module_version !== null
               && TRADE_MODULE_NAME_KEY[call.trade_module] ? (
-              <div className="flex items-center gap-1.5" lang={tr.locale}>
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
                 {/* Plan review I4: the <dt> is the visible label ("Trade rules"), the <dd> only the value
                     ("Insurance · v1"), so a screen reader hears the words once and data-trade-rules marks the
-                    value alone. */}
-                <dt>{tr.text("voice.tradeRules.legend")}</dt>
+                    value alone. Design D-M1: on a narrow screen the value wraps under the label, which never
+                    breaks inside itself. */}
+                <dt className="whitespace-nowrap">{tr.text("voice.tradeRules.legend")}</dt>
                 <dd className="font-medium text-foreground" data-trade-rules="">{tr.text("calls.detail.tradeRules", {
                   module: tr.text(TRADE_MODULE_NAME_KEY[call.trade_module]), version: call.trade_module_version,
                 })}</dd>
