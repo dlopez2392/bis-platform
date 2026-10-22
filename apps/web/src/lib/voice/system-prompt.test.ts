@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "./system-prompt";
 import type { VoicePromptInput } from "./session-config";
+import { TRADE_MODULES } from "./modules";
 
 const base = {
   personaName: "Sofía", businessName: "Rio Roofing",
@@ -500,5 +502,114 @@ describe("buildSystemPrompt — the IDENTITY line follows what was said (S-47a)"
         expect(identity, `${disclosed}/${medium}`).toContain("Never claim to be human.");
       }
     }
+  });
+});
+
+// S-47b: every combination this file's existing inputs can take. A literal list, so the loop's reach is
+// asserted (1728 prompts) rather than assumed.
+function everyExistingInput(): VoicePromptInput[] {
+  const out: VoicePromptInput[] = [];
+  for (const medium of [undefined, "phone", "web", "web_voice"] as const)
+    for (const handoffAvailable of [undefined, false, true] as const)
+      for (const languages of ["en", "es", "both"] as const)
+        for (const bookingEnabled of [true, false])
+          for (const afterHours of ["hours_then_message", "message_only"] as const)
+            for (const meetingType of ["in_person", "phone", "video"] as const)
+              for (const callerNumber of ["+19562921696", null])
+                for (const disclosed of [false, true])
+                  out.push({
+                    ...base, languages, bookingEnabled, afterHours, meetingType, callerNumber, disclosed,
+                    ...(medium === undefined ? {} : { medium }),
+                    ...(handoffAvailable === undefined ? {} : { handoffAvailable }),
+                  });
+  return out;
+}
+function digestOf(prompts: string[]): string {
+  const h = createHash("sha256");
+  for (const p of prompts) h.update(`${p}\u0000`);
+  return h.digest("hex");
+}
+/** sha256 over all 1728 prompts as they were at 6c123483, BEFORE S-47b touched system-prompt.ts. */
+const PRE_S47B_DIGEST = "222fe52521c0ad6aa22744a03dfb182c11ad06185e1cce8a54cdaa7d027300ba";
+
+describe("buildSystemPrompt — no trade module is byte-identical to before S-47b", () => {
+  it("covers 1728 combinations (guards the digest from an empty loop)", () => {
+    expect(everyExistingInput().length).toBe(1728);
+  });
+  it("with no tradeModule key, every combination is byte-identical to 6c123483 (mutation: push an unconditional \"\" before TOOLS -> FAILS)", () => {
+    expect(digestOf(everyExistingInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47B_DIGEST);
+  });
+});
+
+describe("buildSystemPrompt — the trade module block (S-47b)", () => {
+  const ANCHOR = "- Never give legal, medical, or compliance advice.";
+  const INS = "TRADE RULES — INSURANCE (PROPERTY AND CASUALTY):";
+  const EVT = "TRADE RULES — EVENTS AND VENUES:";
+
+  it("tradeModule: null is byte-identical to before, across all 1728 combinations (mutation: treat null as a module -> FAILS)", () => {
+    expect(digestOf(everyExistingInput().map((i) => buildSystemPrompt({ ...i, tradeModule: null }, now)))).toBe(PRE_S47B_DIGEST);
+  });
+
+  it("sits right after the HARD LIMITS lines: the anchor, a blank line, the heading; and removing it gives back the prompt without it (48 combinations)", () => {
+    let seen = 0;
+    for (const id of ["insurance_pc", "events"] as const)
+      for (const medium of ["phone", "web", "web_voice"] as const)
+        for (const handoffAvailable of [false, true])
+          for (const bookingEnabled of [true, false])
+            for (const afterHours of ["hours_then_message", "message_only"] as const) {
+              const input = baseInput({ medium, handoffAvailable, bookingEnabled, afterHours });
+              const without = buildSystemPrompt(input, now);
+              const withIt = buildSystemPrompt({ ...input, tradeModule: id }, now);
+              const lines = withIt.split("\n");
+              const at = lines.indexOf(ANCHOR);
+              expect(lines[at + 1]).toBe("");
+              expect(lines[at + 2]).toBe(TRADE_MODULES[id].heading);
+              const blockLines = lines.slice(at + 3, lines.indexOf("", at + 3));
+              expect(withIt.replace(`\n\n${TRADE_MODULES[id].heading}\n${blockLines.join("\n")}`, "")).toBe(without);
+              seen += 1;
+            }
+    expect(seen).toBe(48);
+  });
+
+  it("each module's heading appears only for that module (mutation: always use insurance -> FAILS)", () => {
+    const ins = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc" }), now);
+    const evt = buildSystemPrompt(baseInput({ tradeModule: "events" }), now);
+    expect(ins.split(INS).length - 1).toBe(1);
+    expect(ins).not.toContain(EVT);
+    expect(evt.split(EVT).length - 1).toBe(1);
+    expect(evt).not.toContain(INS);
+  });
+
+  it("the web prompt's block names capture_lead and no transfer, even with handoffAvailable true (mutation: medium hard-coded 'phone' -> FAILS)", () => {
+    const web = buildSystemPrompt(baseInput({ medium: "web", handoffAvailable: true, tradeModule: "events" }), now);
+    expect(web).toContain(`- Then use capture_lead with a need that starts with "Urgent:", and tell them the team will follow up as soon as they can. Never promise a time.`);
+    // Bounded to the block: system-prompt.ts:172-176 lists transfer_to_human in TOOLS whenever handoffAvailable
+    // is set, on any medium, and that line is NOT this PR's to change. Only the block must not name it.
+    const blockText = web.slice(web.indexOf(EVT), web.indexOf("\n\nTOOLS"));
+    expect(blockText).toContain(EVT);
+    expect(blockText).not.toContain("transfer_to_human");
+  });
+
+  it("the phone block offers to connect only when handoffAvailable (mutation: handoffAvailable: true in the ctx -> FAILS)", () => {
+    const offer = `- Then offer to connect them: "Would you like me to connect you with someone at the agency now?"`;
+    expect(buildSystemPrompt(baseInput({ handoffAvailable: true, tradeModule: "insurance_pc" }), now)).toContain(offer);
+    expect(buildSystemPrompt(baseInput({ handoffAvailable: false, tradeModule: "insurance_pc" }), now)).not.toContain(offer);
+  });
+
+  it("canBook follows the booking MODE, not the checkbox: Always take a message drops the tour line (mutation: canBook: input.bookingEnabled -> FAILS)", () => {
+    const tour = "- If they would like to see the venue, you may book a tour with book_appointment. You may offer the tour times check_availability returns; a booked tour is only a visit and holds no date or room for their event, so say so if they ask.";
+    expect(buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "hours_then_message", tradeModule: "events" }), now)).toContain(tour);
+    expect(buildSystemPrompt(baseInput({ bookingEnabled: true, afterHours: "message_only", tradeModule: "events" }), now)).not.toContain(tour);
+  });
+
+  it("the browser voice demo gets the demo variant (SD1)", () => {
+    expect(buildSystemPrompt(baseInput({ medium: "web_voice", tradeModule: "events" }), now))
+      .toContain("- Then tell them you cannot pass a message on from here, and point them to the next step the website notice below gives.");
+  });
+
+  it("the generic legal/medical line stays, and the business name reaches the block", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc" }), now);
+    expect(p).toContain(ANCHOR);
+    expect(p).toContain("a licensed agent at Rio Roofing.");
   });
 });
