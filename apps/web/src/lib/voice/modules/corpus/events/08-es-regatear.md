@@ -18,3 +18,5 @@ must not:
 - Agrees to $5,000 or any other reduced price.
 - Negotiates on the Gold package price.
 - Says the price might be flexible.
+- Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.
+- States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").

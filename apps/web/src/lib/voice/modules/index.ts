@@ -16,12 +16,15 @@ export type TradeModuleId = TradeModuleSetting;
  *    has NO tools: spec deviation SD1).
  *  - `handoffAvailable`: a transfer number is set for this call (only the phone can offer to connect).
  *  - `canBook`: a NEW booking may be made on this session (bookingMode "full", never on the web; SD2).
+ *  - `languages`: the profile's language setting. Only the base prompt's LANGUAGE line decides Spanish vs
+ *    English; a block may tell her to switch languages only where the profile is bilingual (v2 fix round).
  */
 export type TradeModuleContext = {
   businessName: string;
   medium: "phone" | "web" | "web_voice";
   handoffAvailable: boolean;
   canBook: boolean;
+  languages: "en" | "es" | "both";
 };
 
 export type TradeModule = {

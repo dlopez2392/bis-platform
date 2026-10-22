@@ -18,3 +18,5 @@ must not:
 - Adds, multiplies or totals any prices.
 - States a number for 200 guests that is not the Gold package price written in the facts.
 - Invents a different package or price.
+- Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.
+- States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").

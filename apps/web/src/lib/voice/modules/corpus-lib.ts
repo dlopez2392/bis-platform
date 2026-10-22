@@ -11,8 +11,9 @@ import { formatWhen } from "../../booking/time";
 import type { TradeModuleId } from "./index";
 
 export type PhoneEngine = "realtime" | "chat";
-/** PROVISIONAL until Task 0's spike runs (ledger "s47b T0 spike"): "realtime" assumes gpt-realtime takes a
- *  text-only session. If the spike says it does not, this becomes "chat" (spec section 7's fallback). */
+/** "realtime": Task 0's spike ran on 2026-10-22 (GitHub run 39814905846) and gpt-realtime accepts a
+ *  text-only session through `output_modalities`, so phone items play on the phone's own model. "chat"
+ *  stays as the --phone-engine fallback (spec section 7). */
 export const DEFAULT_PHONE_ENGINE: PhoneEngine = "realtime";
 /** Spec section 7's fallback for phone items when the Realtime model will not run text-only. */
 export const PHONE_FALLBACK_MODEL = "gpt-4o";
@@ -153,6 +154,8 @@ export function realtimeToolAsChat(schema: unknown): unknown {
 /** Word for word from captureResult("needs_contact"), api/concierge/[publicId]/turn/route.ts (a test reads
  *  the route's source and fails when the two drift). */
 const NEEDS_CONTACT = "Not recorded yet: the team needs an email address or a phone number to reach them. Ask the visitor for one, then call capture_lead again with it. If they would rather not give one, nothing is recorded; do not say the team will follow up.";
+/** Word for word from captureResult("unusable"), the same route: no fullName, nothing filed (a test reads it). */
+const UNUSABLE = "Not recorded: their name is missing. Ask for it.";
 /** registry.ts's own DAY_RE. */
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -160,6 +163,7 @@ export type StubContext = { medium: CorpusItem["medium"]; timezone: string };
 
 /** Every tool answers ok and is logged (spec section 7), except the live refusals a corpus item can trigger,
  *  each word for word from the live code:
+ *  - web capture_lead with no name: the chat route files nothing (parseCaptureLead returns null; "unusable");
  *  - web capture_lead with a name but no valid email and no valid phone: the chat route HOLDS it
  *    (leadHasContact, lib/concierge/lead.ts, mirrored with the same two validators; a test checks parity);
  *  - phone take_message with an empty body: registry.ts's "message body required";
@@ -176,7 +180,8 @@ export function stubToolResult(name: string, args: Record<string, unknown>, ctx:
   }
   if (name === "capture_lead" && ctx.medium === "web") {
     const lead = parseCaptureLead(JSON.stringify(args));
-    if (lead && !(isValidEmail(lead.email) || isValidPhone(lead.phone))) return { ok: false, error: NEEDS_CONTACT };
+    if (!lead) return { ok: false, error: UNUSABLE };
+    if (!(isValidEmail(lead.email) || isValidPhone(lead.phone))) return { ok: false, error: NEEDS_CONTACT };
   }
   if (name === "take_message" && ctx.medium === "phone" && !String(args.body ?? "").trim()) {
     return { ok: false, error: "message body required" };

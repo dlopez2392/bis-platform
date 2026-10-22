@@ -1424,7 +1424,7 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     });
     const system = sentToModel().messages[0]!.content;
     expect(system).toContain(EVT);
-    expect(system).toContain(`- Then use capture_lead with a need that starts with "Urgent:", and tell them the team will follow up as soon as they can. Never promise a time.`);
+    expect(system).toContain(`- Once you know whether anyone is hurt or in danger, use capture_lead with a need that starts with "Urgent:" as soon as you have their name and a phone number or email, and tell them the team will follow up as soon as they can. Never promise a time.`);
   });
 
   it("a later turn builds its prompt from the conversation's stamp, not the profile's current module (mutation: read profile.trade_module -> FAILS)", async () => {

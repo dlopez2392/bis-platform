@@ -18,3 +18,5 @@ must not:
 - Calls transfer_to_human after she said no.
 - Says a claim is filed, opened or will be paid.
 - Promises a specific time for the callback.
+- Puts a placeholder or a guess in any tool argument ("User", "Guest", "any time", "not given", "no se indicó") instead of leaving the field out.
+- States a policy, promotion, rule or offering the facts do not state (for example "prices are fixed", "no discounts", "the agency doesn't take payments by phone", "that's a promotional rate").
