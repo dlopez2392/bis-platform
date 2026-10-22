@@ -21,6 +21,7 @@ import { moduleTextSha256 } from "../src/lib/voice/modules/pin";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, realtimeToolAsChat, stubToolResult,
   renderTranscript, resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
+  selectCorpusFiles, handlerFailureReason,
   DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
   type CorpusItem, type CorpusFixture, type PhoneEngine, type RunMeta, type TranscriptTurn,
 } from "../src/lib/voice/modules/corpus-lib";
@@ -80,17 +81,20 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
   // the transcript) and fails this item at its next step, never dropped.
   let stray: Error | null = null;
   const failIfStray = () => { if (stray) { ws.close(); throw new CorpusItemFailed(stray.message, turns); } };
-  ws.on("message", (raw) => {
+  // An error event, or a throw in this file's own handling of an event, goes to whatever is waiting.
+  const failCurrent = (e: Error, code: string) => {
+    const route = routeRealtimeError({ response: waiter !== null, session: sessionPending });
+    if (route === "response") waiter!.reject(e);
+    else if (route === "session") { sessionPending = false; sessionFailed?.(e); }
+    else { stray ??= e; turns.push(strayErrorTurn(code)); }
+  };
+  const onEvent = (raw: unknown) => {
     const ev = JSON.parse(String(raw)) as { type: string; delta?: string; name?: string; call_id?: string; arguments?: string; error?: { code?: string; type?: string } };
     if (ev.type === "session.updated") { sessionPending = false; sessionReady?.(); }
     // M3: the error's CODE only, never its message (a message can echo a key or a header).
     else if (ev.type === "error") {
       const code = ev.error?.code ?? ev.error?.type ?? "unknown";
-      const e = new Error(`realtime error: ${code}`);
-      const route = routeRealtimeError({ response: waiter !== null, session: sessionPending });
-      if (route === "response") waiter!.reject(e);
-      else if (route === "session") { sessionPending = false; sessionFailed?.(e); }
-      else { stray ??= e; turns.push(strayErrorTurn(code)); }
+      failCurrent(new Error(`realtime error: ${code}`), code);
     }
     else if (ev.type === "response.output_text.delta") text += ev.delta ?? "";
     else if (ev.type === "response.function_call_arguments.done") {
@@ -104,6 +108,16 @@ async function runRealtime(input: VoicePromptInput, tools: unknown[], greeting: 
       text = "";
       if (toolPending && toolRounds < MAX_TOOL_ROUNDS) { toolPending = false; toolRounds += 1; send({ type: "response.create" }); }
       else { toolPending = false; const w = waiter; waiter = null; w?.resolve(); }
+    }
+  };
+  // A throw while handling an event (a stub's RangeError on an impossible date, an unparseable frame) would
+  // escape the socket's listener and end the whole run. It fails THIS item instead, by the error's class only,
+  // and the run goes on to the next item.
+  ws.on("message", (raw) => {
+    try {
+      onEvent(raw);
+    } catch (err) {
+      failCurrent(new Error(handlerFailureReason(err)), "local error");
     }
   });
   // M14: every awaited event has a timeout, so a socket that never opens or a session that is never
@@ -208,9 +222,9 @@ async function runItem(item: CorpusItem): Promise<TranscriptTurn[]> {
 
 async function main(): Promise<void> {
   const dir = path.join(corpusDir, slug);
-  const files = readdirSync(dir).filter((f) => f.endsWith(".md")).sort()
-    .filter((f) => only === null || f.startsWith(`${only}-`));
-  const items = files.map((f) => parseCorpusItem(f, readFileSync(path.join(dir, f), "utf8")));
+  const picked = selectCorpusFiles(readdirSync(dir), only, slug);
+  if (picked.error) { console.error(picked.error); process.exit(2); }
+  const items = picked.files.map((f) => parseCorpusItem(f, readFileSync(path.join(dir, f), "utf8")));
   let failed = 0;
   for (const item of items) {
     try {

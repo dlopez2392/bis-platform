@@ -15,6 +15,7 @@
 // the no-key exit and the no-message rule.
 import WebSocket from "ws";
 import { buildRealtimeSessionConfig, REALTIME_MODEL } from "../src/lib/voice/session-config";
+import { realtimeErrorWhy } from "./realtime-spike-why";
 
 const VARIANTS = ["output_modalities", "modalities"] as const;
 type Variant = (typeof VARIANTS)[number];
@@ -22,12 +23,10 @@ type SpikeResult = { variant: Variant; ok: boolean; why: string; seen: string[];
 
 const TEXT_CAP = 400;
 const TIMEOUT_MS = 30_000;
-/** A field name from an error's `param`, never free text. */
-const safeParam = (p: unknown) => (typeof p === "string" ? p.replace(/[^\w.[\]-]/g, "").slice(0, 80) : "");
 
 type RealtimeEvent = {
   type?: string; delta?: string;
-  error?: { code?: string; type?: string; param?: string };
+  error?: unknown;
   response?: { status?: string };
 };
 
@@ -69,9 +68,7 @@ function trySession(key: string, variant: Variant): Promise<SpikeResult> {
       const type = typeof ev.type === "string" ? ev.type : "(no type)";
       seen.push(type);
       if (type === "error") {
-        const e = ev.error ?? {};
-        const param = safeParam(e.param);
-        finish(false, `error: ${e.code ?? "no code"} / ${e.type ?? "no type"}${param ? ` / param ${param}` : ""}`);
+        finish(false, realtimeErrorWhy(ev.error));
       } else if (type === "session.updated") {
         ws.send(JSON.stringify({ type: "conversation.item.create", item: { type: "message", role: "user",
           content: [{ type: "input_text", text: "Hi, what are your hours?" }] } }));

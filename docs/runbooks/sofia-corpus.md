@@ -36,7 +36,10 @@ The run uses the code's default Realtime model (`gpt-realtime`,
 `REALTIME_MODEL` names a different model, this run does not play the model
 that live calls use. Note that on the results sheet.
 
-Runs queue one at a time and are never cancelled.
+Runs go one at a time, and a running one is never cancelled. A second
+dispatch waits for the first. GitHub keeps only ONE waiting run, though: a
+third dispatch made while the second is still waiting cancels the second.
+That run never started, so it cost nothing. The third waits in its place.
 
 ## 2. Watch and read the log
 
@@ -51,8 +54,15 @@ gh run view <run id> --log
   `why` names an OpenAI error by its code, type and param only.
 - **corpus**: `== insurance-pc ==`, then `ok   NN-….md` or `FAIL NN-….md:
   <reason>` per item, then `N of M played`. The job is red when any item
-  failed. The sealed file is uploaded anyway, because a failed item's
-  transcript says what happened.
+  failed. The transcripts are still sealed and uploaded, because a failed
+  item's transcript says what happened. The upload runs only when the seal
+  step itself succeeded. If the seal refuses (a certificate that is not the
+  pinned one, nothing to seal, a check after encryption that fails), it
+  deletes what it wrote and nothing is uploaded. Read its one error line in
+  the log.
+- An `only` number that matches no item in a module (for example `26` in
+  `events`) fails that module with `--only 26 selects no item in events`.
+  It never counts as a green run of zero items.
 
 ## 3. Download
 
@@ -106,36 +116,62 @@ Every module's run folder holds one transcript per item and an ungraded
 sheet under `docs/superpowers/results/`. The transcripts themselves stay in
 the gitignored `.sofia-corpus/` and are never committed.
 
-## 6. The certificate, and replacing it
+## 6. The certificate, its pin, and replacing them
 
 `.github/sofia-corpus-recipient.pem` is the public half: an X.509
-certificate, `CN=bis-sofia-corpus`, valid until 2036-10-19, SHA-256
+certificate, `CN=bis-sofia-corpus`, RSA 3072, valid until 2036-10-19, SHA-256
 fingerprint `3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05`.
-`apps/web/ci/sofia-corpus-seal.test.ts` fails if that file ever holds a
-private key.
+
+That fingerprint is PINNED. `sofia-corpus.yml` passes it to the seal script,
+and the script refuses any certificate whose fingerprint differs. A
+certificate swapped in by a PR therefore never receives the transcripts, even
+one with the same CN. `apps/web/ci/sofia-corpus-seal.test.ts` fails if any of
+these happen: the file holds a private key, the file's fingerprint stops
+matching the pin, or the workflow passes a different pin.
 
 To replace the pair (if the key is lost or exposed), on the owner's machine,
 in Git Bash:
 
 ```
-MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=bis-sofia-corpus" \
+MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=bis-sofia-corpus" \
   -keyout ~/.bis-corpus-key.pem -out sofia-corpus-recipient.pem
+openssl x509 -in sofia-corpus-recipient.pem -noout -fingerprint -sha256
 ```
 
-Then replace `.github/sofia-corpus-recipient.pem` with the new certificate
-through a PR, and update the fingerprint above. Files sealed to the old
-certificate open only with the old key.
+Then, in ONE PR, change all of these together, so the reviewer sees the pin
+move:
+
+1. `.github/sofia-corpus-recipient.pem`: the new certificate.
+2. The fingerprint at the end of the seal step's `run:` line in
+   `.github/workflows/sofia-corpus.yml`.
+3. `COMMITTED_PIN` in `apps/web/ci/sofia-corpus-seal.test.ts`, and the same
+   literal in the seal-step case of `apps/web/ci/ci-workflow.test.ts`.
+4. The fingerprint and "valid until" above.
+
+A PR that changes the certificate without the pin goes red. A PR that changes
+the pin without a matching reason from the owner should be refused. Files
+sealed to the old certificate open only with the old key.
 
 ## What guards this
 
 - `apps/web/ci/ci-workflow.test.ts`, the `sofia-corpus.yml` block. It pins
   that the workflow runs only by hand and holds the key on one step. It also
   pins that the workflow carries no Supabase, Clerk or database value, passes
-  inputs through env only, pins every action to a commit SHA, and uploads only
-  the `.cms` file.
+  inputs through env only, pins every action to a commit SHA, seals with the
+  pinned fingerprint, and uploads only the `.cms` file, only after the seal
+  step succeeded.
 - `apps/web/ci/sofia-corpus-seal.test.ts` tests `.github/scripts/sofia-corpus-seal.sh`
-  for real. It proves the round trip with a throwaway key pair, and that the
-  script refuses each of these: a recipient file holding a private key, an
-  empty source, a crowded or nested upload folder, and a wrong name.
+  for real. It proves the round trip with a throwaway key pair, and AES-256-CBC
+  in the sealed file. It also proves the script refuses each of these: a
+  certificate that is not the pinned one (even with the same CN), a pin that
+  is not a SHA-256 fingerprint, a recipient file holding a private key, an
+  empty source, a crowded or nested upload folder, and a wrong name. Finally,
+  it proves a check that fails after encryption leaves the upload folder
+  empty.
 - `apps/web/ci/realtime-spike.test.ts` pins that the spike stops with exit 2
-  when there is no key, and that it never prints an error's free-text message.
+  when there is no key, and that its error line (`realtime-spike-why.ts`)
+  never carries an error's message, `toString` or JSON form.
+- `apps/web/src/lib/voice/modules/corpus-lib.test.ts` pins that an `only`
+  matching no item stops the runner non-zero. It also pins that a throw while
+  handling a Realtime event fails that one item, by the error's class only,
+  and the run goes on.

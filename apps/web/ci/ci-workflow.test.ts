@@ -1027,18 +1027,25 @@ describe("sofia-corpus.yml runs by hand only, holds the OpenAI key on one step, 
     expect(toolBlock!.join("\n")).toContain('[[ "$ONLY" =~ ^[0-9]{1,2}$ ]]');
   });
 
-  it("seals the transcripts with the committed certificate after the tool runs, then uploads, in that order, even when an item failed", () => {
+  it("seals the transcripts to the committed certificate, pinned by fingerprint, after the tool runs, even when an item failed", () => {
     const toolAt = toolBlock ? blocks.indexOf(toolBlock) : -1;
     const sealAt = corpusSteps.findIndex((s) => s.run?.startsWith(SEAL));
-    const uploadAt = corpusSteps.findIndex((s) => /upload-artifact@/.test(s.uses ?? ""));
     expect(toolAt).toBeGreaterThanOrEqual(0);
     expect(sealAt).toBeGreaterThan(toolAt);
-    expect(uploadAt).toBeGreaterThan(sealAt);
-    const corpusOnly = "${{ !cancelled() && inputs.step == 'corpus' }}";
-    expect(corpusSteps[sealAt]!.if).toBe(corpusOnly);
-    expect(corpusSteps[uploadAt]!.if).toBe(corpusOnly);
+    expect(corpusSteps[sealAt]!.id).toBe("seal");
+    expect(corpusSteps[sealAt]!.if).toBe("${{ !cancelled() && inputs.step == 'corpus' }}");
+    // The fifth argument is the certificate's SHA-256 pin (sofia-corpus-seal.test.ts checks it IS the committed certificate's).
     expect(corpusSteps[sealAt]!.run).toBe(
-      `${SEAL} apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem`);
+      `${SEAL} apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem ` +
+      "3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05");
+  });
+
+  it("uploads only after the seal step SUCCEEDED, so a refused seal publishes nothing (mutation: back to `!cancelled() && inputs.step == 'corpus'` → FAILS)", () => {
+    const sealAt = corpusSteps.findIndex((s) => s.run?.startsWith(SEAL));
+    const uploadAt = corpusSteps.findIndex((s) => /upload-artifact@/.test(s.uses ?? ""));
+    expect(uploadAt).toBeGreaterThan(sealAt);
+    expect(corpusSteps[uploadAt]!.if).toBe(
+      "${{ !cancelled() && inputs.step == 'corpus' && steps.seal.outcome == 'success' }}");
   });
 
   it("uploads one file, the sealed .cms, kept three days and failing loudly when missing (mutation: path apps/web/.sofia-corpus/ → FAILS)", () => {

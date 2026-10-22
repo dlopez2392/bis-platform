@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   parseCorpusItem, parseFixture, promptInputFor, toolsFor, stubToolResult, renderTranscript,
   resultsSheetSkeleton, moduleForSlug, redact, routeRealtimeError, strayErrorTurn, CorpusItemFailed,
+  selectCorpusFiles, handlerFailureReason,
   CORPUS_SLUGS, DEFAULT_PHONE_ENGINE, PHONE_FALLBACK_MODEL,
   type CorpusFixture,
 } from "./corpus-lib";
@@ -262,5 +263,44 @@ describe("the slugs, the engine, and what the script may touch", () => {
   it("redact strips an sk- key from any text it prints (M3; mutation: return the text unchanged -> FAILS)", () => {
     expect(redact("bad key sk-proj-AbC_123-xyz* rejected")).toBe("bad key sk-[redacted] rejected");
     expect(redact("no key here")).toBe("no key here");
+  });
+});
+
+describe("--only that selects nothing is an error, never a green run of zero items", () => {
+  const files = ["02-es-b.md", "01-en-a.md", "notes.txt", "26-en-z.md"];
+  it("plays every .md in file order without --only", () => {
+    expect(selectCorpusFiles(files, null, "events")).toEqual({ files: ["01-en-a.md", "02-es-b.md", "26-en-z.md"], error: null });
+  });
+  it("keeps the one item --only names", () => {
+    expect(selectCorpusFiles(files, "02", "events")).toEqual({ files: ["02-es-b.md"], error: null });
+  });
+  it("names the number and the module when --only matches no item (mutation: return error null for an empty pick -> FAILS)", () => {
+    expect(selectCorpusFiles(files, "27", "events")).toEqual({ files: [], error: "--only 27 selects no item in events" });
+  });
+  it("the script stops non-zero on that error, before playing anything (mutation: drop the check -> FAILS)", () => {
+    const src = readFileSync(path.resolve(__dirname, "../../../../scripts/sofia-corpus.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/if \(picked\.error\) \{ console\.error\(picked\.error\); process\.exit\(2\); \}/);
+  });
+});
+
+describe("a throw inside the Realtime message handler fails THAT item, by the error's kind only", () => {
+  const SENTINEL = "SENTINEL caller said 555-0142";
+  it("names the error's class, never its message (a message can carry transcript text; mutation: append the message -> FAILS)", () => {
+    const reason = handlerFailureReason(new RangeError(SENTINEL));
+    expect(reason).toBe("local error while handling a Realtime event: RangeError");
+    expect(reason).not.toContain("SENTINEL");
+  });
+  it("answers for something thrown that is not an Error", () => {
+    expect(handlerFailureReason(SENTINEL)).toBe("local error while handling a Realtime event: unknown");
+    expect(handlerFailureReason({ name: `x ${SENTINEL}` })).toBe("local error while handling a Realtime event: unknown");
+  });
+  it("stubToolResult's RangeError on an impossible date is exactly such a throw (the reviewer's 2026-13-01)", () => {
+    expect(() => stubToolResult("check_availability", { date: "2026-13-01" }, { medium: "phone", timezone: "America/Chicago" })).toThrow(RangeError);
+  });
+  it("the script's message handler catches every throw and routes it like an error event (mutation: drop the try/catch -> FAILS)", () => {
+    const src = readFileSync(path.resolve(__dirname, "../../../../scripts/sofia-corpus.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/ws\.on\("message", \(raw\) => \{\s*try \{\s*onEvent\(raw\);\s*\} catch \(err\) \{\s*failCurrent\(new Error\(handlerFailureReason\(err\)\), "local error"\);\s*\}\s*\}\);/);
   });
 });

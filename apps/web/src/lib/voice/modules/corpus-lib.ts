@@ -210,6 +210,21 @@ export function redact(text: string): string {
   return text.replace(/sk-[\w*-]+/g, "sk-[redacted]");
 }
 
+/** The items a run plays: every `.md` in file order, or the one `--only NN` names. An `--only` that names no
+ *  item is an ERROR, never a green run of zero items (the workflow's log would read "0 of 0 played", ok). */
+export function selectCorpusFiles(files: string[], only: string | null, slug: string): { files: string[]; error: string | null } {
+  const picked = files.filter((f) => f.endsWith(".md")).sort().filter((f) => only === null || f.startsWith(`${only}-`));
+  return { files: picked, error: only !== null && picked.length === 0 ? `--only ${only} selects no item in ${slug}` : null };
+}
+
+/** Why an item failed when the Realtime message handler itself threw (a stub's RangeError, an unparseable
+ *  frame): the error's CLASS only. Its message can carry transcript text or a raw frame, and the runner's FAIL
+ *  line goes to a public workflow log. */
+export function handlerFailureReason(err: unknown): string {
+  const name = err instanceof Error && /^\w{1,40}$/.test(err.name) ? err.name : "unknown";
+  return `local error while handling a Realtime event: ${name}`;
+}
+
 export type TranscriptTurn = { role: "caller" | "sofia" | "tool"; text: string };
 export type RunMeta = {
   moduleId: TradeModuleId; slug: string; version: number; sha256: string; date: string;

@@ -25,11 +25,14 @@ name: Sofía corpus
 #   - The log carries only the runner's per-item `ok`/`FAIL` lines and counts
 #     (and, for the spike, one JSON line per variant: event types and a capped
 #     reply). Transcripts never reach the log.
-#   - The transcripts are sealed (tar, then openssl cms, AES-256) to the
-#     owner's PUBLIC certificate, .github/sofia-corpus-recipient.pem, and the
-#     sealed file is the ONLY upload: .github/scripts/sofia-corpus-seal.sh
-#     fails the job unless the upload directory holds exactly that one CMS
-#     enveloped file. The private key never leaves the owner's machine.
+#   - The transcripts are sealed (tar, then openssl cms, AES-256-CBC) to the
+#     owner's PUBLIC certificate, .github/sofia-corpus-recipient.pem, whose
+#     SHA-256 fingerprint is pinned below, so a swapped .pem is refused. The
+#     sealed file is the ONLY upload, and it is uploaded only when the seal
+#     step SUCCEEDED: .github/scripts/sofia-corpus-seal.sh checks that the
+#     upload directory holds exactly that one CMS enveloped file, and on any
+#     refusal it deletes the file, so a failed seal publishes nothing. The
+#     private key never leaves the owner's machine.
 #   - Dispatch inputs reach the shell through env only, never as ${{ }} text
 #     inside a script, and the one free-text input is checked first.
 # All of the above is pinned by apps/web/ci/ci-workflow.test.ts.
@@ -77,8 +80,11 @@ on:
 permissions:
   contents: read
 
-# One run at a time, never cancelled: a second dispatch waits for the first,
-# and a run killed mid-corpus would have spent the money without a result.
+# One run at a time, and a RUNNING one is never cancelled: a run killed
+# mid-corpus would have spent the money without a result. A second dispatch
+# waits for the first. GitHub keeps only ONE waiting run per group, though:
+# a third dispatch while the second still waits cancels the second (which
+# never started, so it cost nothing) and waits in its place.
 concurrency:
   group: sofia-corpus
   cancel-in-progress: false
@@ -155,17 +161,20 @@ jobs:
           exit "$failed"
 
       # Even when an item failed: its transcript says why, and a partial run
-      # is still worth grading. Never on a cancelled run.
+      # is still worth grading. Never on a cancelled run. The last argument is
+      # the certificate's SHA-256 fingerprint: replacing the key pair changes
+      # it here, visibly, in the same PR (docs/runbooks/sofia-corpus.md).
       - name: Seal the transcripts to the owner's certificate
+        id: seal
         if: ${{ !cancelled() && inputs.step == 'corpus' }}
         shell: bash
-        run: bash .github/scripts/sofia-corpus-seal.sh apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem
+        run: bash .github/scripts/sofia-corpus-seal.sh apps/web/.sofia-corpus "$RUNNER_TEMP/sofia-corpus-upload" "sofia-corpus-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" .github/sofia-corpus-recipient.pem 3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05
 
-      # actions/upload-artifact@v7. The ONE file the seal step checked, by
-      # its exact path, never a directory. Already encrypted, so not
-      # compressed again.
+      # actions/upload-artifact@v7. ONLY when the seal step succeeded, and
+      # only the one file it checked, by its exact path, never a directory.
+      # Already encrypted, so not compressed again.
       - name: Upload the sealed transcripts
-        if: ${{ !cancelled() && inputs.step == 'corpus' }}
+        if: ${{ !cancelled() && inputs.step == 'corpus' && steps.seal.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: sofia-corpus-${{ github.run_id }}-${{ github.run_attempt }}

@@ -16,6 +16,13 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT = fileURLToPath(new URL("../../../.github/scripts/sofia-corpus-seal.sh", import.meta.url)).replace(/\\/g, "/");
 const COMMITTED_CERT = fileURLToPath(new URL("../../../.github/sofia-corpus-recipient.pem", import.meta.url));
+const WORKFLOW = fileURLToPath(new URL("../../../.github/workflows/sofia-corpus.yml", import.meta.url));
+/**
+ * The committed certificate's SHA-256 fingerprint. The seal refuses any other
+ * certificate, so a PR that swaps the .pem (even for one with the same CN)
+ * cannot redirect the transcripts without also changing this line.
+ */
+const COMMITTED_PIN = "3A:6A:8F:8F:74:82:B0:F0:F0:B3:6E:12:ED:98:6F:95:C6:16:BC:D5:AC:76:78:9E:3F:5A:63:4E:32:61:7C:05";
 
 // Real bash, openssl and tar several times per case; Windows starts them slowly.
 vi.setConfig({ testTimeout: 60_000 });
@@ -53,8 +60,28 @@ function sh(script: string, env: NodeJS.ProcessEnv = process.env) {
   return spawnSync(bash, ["-c", script], { cwd: root, env, encoding: "utf8" });
 }
 
-function seal(src: string, out: string, name: string, recipient: string) {
-  return spawnSync(bash, [SCRIPT, p(src), p(out), name, p(recipient)], { cwd: root, encoding: "utf8" });
+/** The throwaway certificate's SHA-256 fingerprint, the pin every throwaway seal passes unless a case says otherwise. */
+let certPin = "";
+
+function seal(src: string, out: string, name: string, recipient: string, pin = certPin) {
+  return spawnSync(bash, [SCRIPT, p(src), p(out), name, p(recipient), pin], { cwd: root, encoding: "utf8" });
+}
+
+/** `openssl x509 -fingerprint -sha256`'s value, as openssl prints it (colon-separated, upper case). */
+function fingerprintOf(file: string): string {
+  const r = sh(`openssl x509 -in '${p(file)}' -noout -fingerprint -sha256`);
+  if (r.status !== 0) throw new Error(`no fingerprint for ${file}: ${r.stderr}`);
+  return r.stdout.trim().replace(/^[^=]*=/, "");
+}
+
+/** A self-signed certificate (and its key) made in a temp folder, with the given CN. */
+function makeCert(dir: string, cn: string): { key: string; cert: string } {
+  fs.mkdirSync(dir, { recursive: true });
+  const k = path.join(dir, "key.pem");
+  const c = path.join(dir, "cert.pem");
+  const made = sh(`openssl req -x509 -newkey rsa:2048 -nodes -keyout '${p(k)}' -out '${p(c)}' -subj '/CN=${cn}' -days 1`, noPathConversion);
+  if (made.status !== 0) throw new Error(`could not make a certificate: ${made.stderr}`);
+  return { key: k, cert: c };
 }
 
 /** A fresh case directory with a corpus-shaped source folder. */
@@ -89,6 +116,7 @@ beforeAll(() => {
   cert = path.join(root, "throwaway-cert.pem");
   const made = sh(`openssl req -x509 -newkey rsa:2048 -nodes -keyout '${p(key)}' -out '${p(cert)}' -subj '/CN=sofia-seal-test' -days 1`, noPathConversion);
   if (made.status !== 0) throw new Error(`could not make a throwaway key pair: ${made.stderr}`);
+  certPin = fingerprintOf(cert);
 });
 
 afterAll(() => {
@@ -116,6 +144,45 @@ describe("sofia-corpus-seal.sh seals the corpus to one certificate and leaves no
     expect(sh(`openssl cms -cmsout -inform DER -in '${p(file)}' -noout -print`).stdout).toContain("pkcs7-envelopedData");
     expect(sh(`tar tzf '${p(file)}'`).status).not.toBe(0);
     expect(fs.readFileSync(file).includes(Buffer.from("is the 14th free"))).toBe(false);
+  });
+
+  it("encrypts the content with AES-256-CBC (mutation: -aes128 → FAILS)", () => {
+    const { src, out } = corpusCase("cipher");
+    expect(seal(src, out, "sofia-corpus-50-1", cert).status).toBe(0);
+    const printed = sh(`openssl cms -cmsout -inform DER -in '${p(path.join(out, "sofia-corpus-50-1.cms"))}' -noout -print`).stdout;
+    expect(printed).toMatch(/algorithm: aes-256-cbc \(2\.16\.840\.1\.101\.3\.4\.1\.42\)/);
+  });
+
+  it("refuses a certificate whose SHA-256 fingerprint is not the pinned one, even with the corpus's own CN, and writes nothing (a swapped certificate would seal to its owner; mutation: drop the fingerprint comparison → FAILS)", () => {
+    const { src, out } = corpusCase("impostor");
+    const impostor = makeCert(path.join(root, "impostor", "pair"), "bis-sofia-corpus");
+    const r = seal(src, out, "sofia-corpus-51-1", impostor.cert, COMMITTED_PIN);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/fingerprint/i);
+    expect(fs.existsSync(out) ? fs.readdirSync(out) : []).toEqual([]);
+  });
+
+  it("refuses a pin that is not a SHA-256 fingerprint: an empty or short pin never means 'any certificate' (mutation: skip the comparison when the pin is empty → FAILS)", () => {
+    const { src, out } = corpusCase("bad-pin");
+    expect(seal(src, out, "sofia-corpus-52-1", cert, "").status).not.toBe(0);
+    expect(seal(src, out, "sofia-corpus-52-1", cert, certPin.slice(0, 20)).status).not.toBe(0);
+    expect(fs.existsSync(out) ? fs.readdirSync(out) : []).toEqual([]);
+  });
+
+  it("leaves the upload directory EMPTY when a check after encryption fails, so the workflow can never upload a refused file (mutation: drop the EXIT trap that removes it → FAILS)", () => {
+    const { src, out } = corpusCase("post-check");
+    // A `tar` that claims any file is a readable archive: the script's last check must then refuse.
+    const fake = path.join(root, "post-check", "fake-bin");
+    fs.mkdirSync(fake);
+    fs.writeFileSync(path.join(fake, "tar"), '#!/usr/bin/env bash\nif [ "$1" = "tzf" ]; then exit 0; fi\nexec "$REAL_TAR" "$@"\n');
+    const r = sh([
+      `fake="$(command -v cygpath >/dev/null 2>&1 && cygpath -u '${p(fake)}' || printf %s '${p(fake)}')"`,
+      `chmod +x "$fake/tar"`,
+      `REAL_TAR="$(command -v tar)" PATH="$fake:$PATH" bash '${SCRIPT}' '${p(src)}' '${p(out)}' sofia-corpus-53-1 '${p(cert)}' '${certPin}'`,
+    ].join("\n"));
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("opens as a plain archive");
+    expect(fs.readdirSync(out)).toEqual([]);
   });
 
   it("refuses a recipient file that holds a private key, and writes nothing (mutation: drop the PRIVATE KEY check → FAILS)", () => {
@@ -188,5 +255,21 @@ describe("the committed recipient is a public certificate and nothing more", () 
     const r = sh(`openssl x509 -in '${p(COMMITTED_CERT)}' -noout -subject`);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toContain("CN=bis-sofia-corpus");
+  });
+
+  it("has exactly the pinned SHA-256 fingerprint (replacing the key pair changes this literal, visibly, in the same PR)", () => {
+    expect(fingerprintOf(COMMITTED_CERT)).toBe(COMMITTED_PIN);
+  });
+
+  it("is what sofia-corpus.yml seals to, with this same pin as the script's fifth argument (mutation: change the pin in the workflow → FAILS)", () => {
+    const workflow = fs.readFileSync(WORKFLOW, "utf8");
+    expect(workflow).toContain(` .github/sofia-corpus-recipient.pem ${COMMITTED_PIN}\n`);
+  });
+
+  it("seals with that pin: the real certificate passes its own check", () => {
+    const { src, out } = corpusCase("committed");
+    const r = seal(src, out, "sofia-corpus-54-1", COMMITTED_CERT, COMMITTED_PIN);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.readdirSync(out)).toEqual(["sofia-corpus-54-1.cms"]);
   });
 });
