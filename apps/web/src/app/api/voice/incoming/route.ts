@@ -40,7 +40,7 @@
 //     that's why `runCallLifecycle` delays it by `PHONE_GREETING_DELAY_MS`
 //     (default 900ms) rather than firing it the instant the socket opens.
 //
-//  3. Fail-open, deliberately, in exactly three places. This list is what a
+//  3. Fail-open, deliberately, in exactly five places. This list is what a
 //     future auditor checks the code against, so it is kept exhaustive on
 //     purpose — a site missing from it reads as a bug to be "hardened":
 //
@@ -55,6 +55,16 @@
 //         guard rather than leaving it armed, so the call degrades to
 //         exactly the pre-guard behaviour and runs to the cost cap. A bug in
 //         a cost optimisation must never cut off a paying customer.
+//       - The knowledge snapshot RPC, `ensureKnowledgeSnapshot` (S-47c,
+//         after step 9) — a failure answers the call UNSTAMPED, with the
+//         knowledge it read; the record of what she knew is not worth a
+//         caller.
+//       - The services read, `listVoiceServices` (S-47c, before step 9) —
+//         fails SOFT: the call is answered without the price list, with the
+//         free text and the hours, and is not stamped. Its price line fails
+//         CLOSED (owner ruling C20): with the list unknown, the HARD LIMITS
+//         price line forbids every amount, so nothing left in the prose can
+//         be quoted. Answering is the open half; quoting never is.
 //
 //     Signature verification and account resolution are NOT fail-open —
 //     those gate who gets to talk to a tenant's AI at all. Neither is the
@@ -1079,9 +1089,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // tool list and the handoff tool is only advertised when there is
     // somewhere to send them (`toolSchemas`' third argument).
     //
-    // Its own try/catch, and it fails CLOSED rather than open: the two
-    // fail-open branches in this route (the caps, `startCallRow`) both
-    // protect the caller's ability to be ANSWERED. This one protects a
+    // Its own try/catch, and it fails CLOSED rather than open: the
+    // fail-open branches in this route (the caps, `startCallRow`, the two
+    // knowledge reads) all protect the caller's ability to be ANSWERED. This one protects a
     // promise — "let me put you through" — and a promise made off a failed
     // read is a caller told they are being transferred and then hung up on.
     // The call itself still happens; only the transfer option is missing.
