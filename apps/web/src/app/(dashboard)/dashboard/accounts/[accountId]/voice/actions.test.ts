@@ -923,6 +923,10 @@ describe("saveServicesAction (S-47c)", () => {
 
   it("on an insurance profile (C13) a new row arrives as after_visit and a stored row's price is sent back unchanged (mutation: read insurance as false -> FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "insurance_pc" });
+    // The row IS stored (the C13 guard only lets a price through that is already on the list).
+    dbMocks.listVoiceServices.mockResolvedValue([{ id: "r1", account_id: "a1", position: 1, created_at: "x",
+      name_en: "Catering", name_es: null, description_en: null, description_es: null, price_kind: "per_unit",
+      amount_cents: 1850, amount_max_cents: null, unit_en: "guest", unit_es: "invitado" }]);
     const stored = row({ name_en: "Catering", price_kind: "per_unit", amount: "18.50", unit_en: "guest", unit_es: "invitado" });
     const added = row({ name_en: "Auto policy review", price_kind: "", amount: "" });
     const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([stored, added]) }));
@@ -933,6 +937,13 @@ describe("saveServicesAction (S-47c)", () => {
       { name_en: "Auto policy review", name_es: null, description_en: null, description_es: null, price_kind: "after_visit",
         amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null },
     ]);
+  });
+
+  it("on insurance (C13) a hand-built NEW priced row is refused with the invalid sentence and nothing is written (mutation: drop the check -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "insurance_pc" });
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row({ name_en: "Crafted", amount: "999" })]) }));
+    expect(r).toEqual({ ok: false, error: m["voice.knowledge.invalid"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
   });
 
   it("off insurance, a row with no kind is refused (the insurance rule is read from the profile, not the form)", async () => {

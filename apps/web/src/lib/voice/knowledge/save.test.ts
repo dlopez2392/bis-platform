@@ -145,6 +145,41 @@ describe("saveKnowledgeParts (spec 4.1, 5.7; SD10)", () => {
     expect(db.saveVoiceKnowledge).not.toHaveBeenCalled();
   });
 
+  describe("insurance (C13): the services part may carry only prices already stored", () => {
+    const INSURANCE = { ...PROFILE, trade_module: "insurance_pc" };
+    const svc = (o: Record<string, unknown>) => ({ name_en: "Policy review", name_es: null, description_en: null, description_es: null,
+      price_kind: "after_visit" as const, amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null, ...o });
+
+    it("a NEW priced row is invalid and nothing is written (mutation: drop the check -> FAILS)", async () => {
+      db.getVoiceProfile.mockResolvedValue(INSURANCE);
+      const crafted = [svc({ name_en: "Crafted", price_kind: "fixed", amount_cents: 99900 })];
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { services: crafted as never })).toEqual({ ok: false, reason: "invalid" });
+      expect(db.saveVoiceKnowledge).not.toHaveBeenCalled();
+    });
+
+    it("the stored priced row, renamed, is saved with its price, beside a new after_visit row", async () => {
+      db.getVoiceProfile.mockResolvedValue(INSURANCE);
+      const kept = svc({ name_en: "Full inspection", price_kind: "fixed", amount_cents: 9900 });
+      const services = [kept, svc({})] as never;
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { services })).toEqual({ ok: true, version: 5 });
+      expect(sent().parts).toEqual({ services: [kept, svc({})] });
+    });
+
+    it("the check reads the list re-read on the retry, never the first attempt's", async () => {
+      db.getVoiceProfile.mockResolvedValue(INSURANCE);
+      db.listVoiceServices.mockResolvedValueOnce(ROWS).mockResolvedValueOnce([]);
+      db.saveVoiceKnowledge.mockResolvedValueOnce({ status: "stale" });
+      const kept = [svc({ name_en: "Inspection", price_kind: "fixed", amount_cents: 9900 })] as never;
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { services: kept })).toEqual({ ok: false, reason: "invalid" });
+      expect(db.saveVoiceKnowledge).toHaveBeenCalledTimes(1);
+    });
+
+    it("off insurance a new priced row is an ordinary save", async () => {
+      const priced = [svc({ name_en: "New", price_kind: "fixed", amount_cents: 99900 })] as never;
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { services: priced })).toEqual({ ok: true, version: 5 });
+    });
+  });
+
   it("second account: every read and the RPC name the given account and no other (mutation: a fixed id -> FAILS)", async () => {
     await saveKnowledgeParts(CLIENT, "acc-two", "user_1", { facts: "x" });
     for (const f of [db.getVoiceProfile, db.listVoiceServices, db.readAccountTimezone, db.getLatestKnowledgeVersion, db.saveVoiceKnowledge]) {

@@ -170,6 +170,26 @@ export function servicesFromForm(rows: readonly ServiceForm[], o: { insurance: b
   return { ok: true, services };
 }
 
+/**
+ * C13, the save layer's half: on an insurance account the card can only send a price back as it was stored, so
+ * every posted row that carries one (any kind but after_visit, the no-number kind a row added there becomes) must
+ * match a stored row's price exactly (kind, both amounts, both units). Names and descriptions may differ: the card
+ * shows them there, so an operator can rename a priced row. Each stored row matches at most one posted row, so a
+ * price cannot be copied onto a second service. False means a hand-built POST is planting a price that would be
+ * spoken once the module changes off insurance.
+ */
+export function insurancePricesKept(posted: readonly VoiceServiceInput[], stored: readonly VoiceServiceInput[]): boolean {
+  const unused = [...stored];
+  for (const p of posted) {
+    if (p.price_kind === "after_visit") continue;
+    const i = unused.findIndex((s) => s.price_kind === p.price_kind && s.amount_cents === p.amount_cents
+      && s.amount_max_cents === p.amount_max_cents && s.unit_en === p.unit_en && s.unit_es === p.unit_es);
+    if (i < 0) return false;
+    unused.splice(i, 1);
+  }
+  return true;
+}
+
 /** A line break can only come from a hand-built POST (an input cannot hold one), so it reads the card's generic
  *  refusal; too many reads the cap. */
 export function serviceErrorKey(e: ServiceError): MessageKey {

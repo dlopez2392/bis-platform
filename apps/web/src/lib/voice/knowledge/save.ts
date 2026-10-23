@@ -6,6 +6,7 @@ import {
   type KnowledgeParts, type serviceDb,
 } from "@bis/db";
 import { buildKnowledgePayload } from "./payload";
+import { insurancePricesKept } from "./validate";
 
 type Db = ReturnType<typeof serviceDb>;
 export type SaveOutcome = { ok: true; version: number } | { ok: false; reason: "stale" | "no_profile" | "invalid" | "failed" };
@@ -27,6 +28,10 @@ export async function saveKnowledgeParts(db: Db, accountId: string, actor: strin
         readAccountTimezone(db, accountId), getLatestKnowledgeVersion(db, accountId),
       ]);
       if (!profile || !timezone) return { ok: false, reason: "no_profile" };
+      // C13: on insurance a services part may carry only prices already on the list read in THIS attempt.
+      if (parts.services && profile.trade_module === "insurance_pc" && !insurancePricesKept(parts.services, rows)) {
+        return { ok: false, reason: "invalid" };
+      }
       const payload = buildKnowledgePayload({
         facts: parts.facts ?? profile.facts,
         servicesText: parts.services_text ?? profile.services,

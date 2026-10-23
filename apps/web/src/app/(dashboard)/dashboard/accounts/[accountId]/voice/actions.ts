@@ -239,7 +239,8 @@ export async function saveBusinessHoursAction(accountId: string, formData: FormD
 /**
  * The Services & prices card (S-47c, spec 5.7). Writes ONLY the list, through the snapshot RPC. On an
  * `insurance_pc` account (C13) a row added there has no kind and is saved as `after_visit`; whether the account
- * is insurance is read from the stored profile, never taken from the form.
+ * is insurance is read from the stored profile, never taken from the form. A priced row there must be one
+ * already stored (saveKnowledgeParts checks it against the list it reads anyway); any other is `invalid`.
  */
 export async function saveServicesAction(accountId: string, formData: FormData): Promise<ActionResult> {
   const { userId, isAgency } = await requireAccountAccess(accountId);
