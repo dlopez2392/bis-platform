@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { VoiceServiceInput } from "@bis/db";
 import {
   formFromHours, hoursFromForm, parseDollars, dollarsOf, formFromServices, servicesFromForm,
-  hoursErrorKey, serviceErrorKey, parseHoursFormJson, parseServicesFormJson, insurancePricesKept,
+  hoursErrorKey, serviceErrorKey, parseHoursFormJson, parseServicesFormJson, keepStoredInsurancePrices,
   type HoursFormDay, type ServiceForm,
 } from "./validate";
 
@@ -240,35 +240,59 @@ describe("servicesFromForm (spec 5.7; C13, C16)", () => {
   });
 });
 
-describe("insurancePricesKept (C13: on insurance a price can only be one already stored, never a new one)", () => {
+describe("keepStoredInsurancePrices (C13, C21: on insurance a price is kept only by an unchanged stored row)", () => {
   const svc = (o: Partial<VoiceServiceInput>): VoiceServiceInput => ({
     name_en: "Policy review", name_es: null, description_en: null, description_es: null,
     price_kind: "after_visit", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null, ...o,
   });
   const CATERING = svc({ name_en: "Catering", name_es: "Banquete", price_kind: "per_unit", amount_cents: 1850, unit_en: "guest", unit_es: "invitado" });
+  /** What a neutralised row becomes: its names and descriptions, the no-number kind, nothing priced. */
+  const afterVisit = (r: VoiceServiceInput): VoiceServiceInput =>
+    ({ ...r, price_kind: "after_visit", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null });
 
-  it("a NEW priced row (a hand-built POST) is refused, a fixed amount or a free claim alike (mutation: always true -> FAILS)", () => {
-    expect(insurancePricesKept([svc({ name_en: "Crafted", price_kind: "fixed", amount_cents: 99900 })], [])).toBe(false);
-    expect(insurancePricesKept([svc({ name_en: "Crafted", price_kind: "free" })], [CATERING])).toBe(false);
-    expect(insurancePricesKept([svc({ price_kind: "per_unit", amount_cents: 1851, unit_en: "guest", unit_es: "invitado" })], [CATERING])).toBe(false);
-    expect(insurancePricesKept([svc({ price_kind: "per_unit", amount_cents: 1850, unit_en: "guest", unit_es: "persona" })], [CATERING])).toBe(false);
+  it("a crafted priced row (a hand-built POST) is saved as after_visit with no amount and no unit (mutation: return posted unchanged -> FAILS)", () => {
+    expect(keepStoredInsurancePrices([svc({ name_en: "Crafted", price_kind: "fixed", amount_cents: 99900 })], [])).toEqual([{
+      name_en: "Crafted", name_es: null, description_en: null, description_es: null,
+      price_kind: "after_visit", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null,
+    }]);
+    const free = svc({ name_en: "Crafted", price_kind: "free" });
+    expect(keepStoredInsurancePrices([free], [CATERING])).toEqual([afterVisit(free)]);
   });
 
-  it("a stored priced row sent back unchanged is kept", () => {
-    expect(insurancePricesKept([CATERING], [CATERING])).toBe(true);
+  it("a stored name with a different price shape is after_visit: one cent, or one unit, off (mutation: compare the name only -> FAILS)", () => {
+    const cent = { ...CATERING, amount_cents: 1851 };
+    const unit = { ...CATERING, unit_es: "persona" };
+    expect(keepStoredInsurancePrices([cent], [CATERING])).toEqual([afterVisit(cent)]);
+    expect(keepStoredInsurancePrices([unit], [CATERING])).toEqual([afterVisit(unit)]);
   });
 
-  it("a stored priced row renamed or redescribed on insurance keeps its price (the card shows names and descriptions there)", () => {
-    expect(insurancePricesKept([{ ...CATERING, name_en: "Event catering", name_es: null, description_en: "Hot food." }], [CATERING])).toBe(true);
+  it("an unchanged stored priced row keeps its price, whatever its description and Spanish name now say", () => {
+    expect(keepStoredInsurancePrices([CATERING], [CATERING])).toEqual([CATERING]);
+    const redescribed = { ...CATERING, name_es: null, description_en: "Hot food." };
+    expect(keepStoredInsurancePrices([redescribed], [CATERING])).toEqual([redescribed]);
   });
 
-  it("two posted rows claiming one stored price: the second is refused (mutation: never consume a match -> FAILS)", () => {
-    expect(insurancePricesKept([CATERING, { ...CATERING, name_en: "Catering copy" }], [CATERING])).toBe(false);
-    expect(insurancePricesKept([CATERING, { ...CATERING, name_en: "Catering copy" }], [CATERING, { ...CATERING, name_en: "Other" }])).toBe(true);
+  it("C21: a RENAMED stored priced row becomes after_visit and keeps its new name (mutation: drop the name_en comparison -> FAILS)", () => {
+    expect(keepStoredInsurancePrices([{ ...CATERING, name_en: "Event catering" }], [CATERING])).toEqual([{
+      name_en: "Event catering", name_es: "Banquete", description_en: null, description_es: null,
+      price_kind: "after_visit", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null,
+    }]);
   });
 
-  it("after_visit rows (the no-number kind every row added on insurance becomes) always pass", () => {
-    expect(insurancePricesKept([svc({}), svc({ name_en: "Claims help" })], [])).toBe(true);
+  it("the English name is compared trimmed on both sides (mutation: compare untrimmed -> FAILS)", () => {
+    expect(keepStoredInsurancePrices([{ ...CATERING, name_en: " Catering " }], [CATERING])).toEqual([{ ...CATERING, name_en: " Catering " }]);
+    expect(keepStoredInsurancePrices([CATERING], [{ ...CATERING, name_en: "Catering  " }])).toEqual([CATERING]);
+  });
+
+  it("two posted rows claiming one stored row: the second becomes after_visit (mutation: never consume a match -> FAILS)", () => {
+    expect(keepStoredInsurancePrices([CATERING, CATERING], [CATERING])).toEqual([CATERING, afterVisit(CATERING)]);
+    expect(keepStoredInsurancePrices([CATERING, CATERING], [CATERING, CATERING])).toEqual([CATERING, CATERING]);
+  });
+
+  it("after_visit rows pass untouched and claim nothing, in order", () => {
+    const review = svc({});
+    const claims = svc({ name_en: "Claims help" });
+    expect(keepStoredInsurancePrices([review, CATERING, claims], [CATERING])).toEqual([review, CATERING, claims]);
   });
 });
 

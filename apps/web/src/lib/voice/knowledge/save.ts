@@ -6,7 +6,7 @@ import {
   type KnowledgeParts, type serviceDb,
 } from "@bis/db";
 import { buildKnowledgePayload } from "./payload";
-import { insurancePricesKept } from "./validate";
+import { keepStoredInsurancePrices } from "./validate";
 
 type Db = ReturnType<typeof serviceDb>;
 export type SaveOutcome = { ok: true; version: number } | { ok: false; reason: "stale" | "no_profile" | "invalid" | "failed" };
@@ -28,18 +28,19 @@ export async function saveKnowledgeParts(db: Db, accountId: string, actor: strin
         readAccountTimezone(db, accountId), getLatestKnowledgeVersion(db, accountId),
       ]);
       if (!profile || !timezone) return { ok: false, reason: "no_profile" };
-      // C13: on insurance a services part may carry only prices already on the list read in THIS attempt.
-      if (parts.services && profile.trade_module === "insurance_pc" && !insurancePricesKept(parts.services, rows)) {
-        return { ok: false, reason: "invalid" };
-      }
+      // C13, C21: on insurance a services part keeps a price only on an unchanged row of the list read in THIS
+      // attempt; every other priced row is saved as after_visit. Built from the caller's `parts` every attempt.
+      const sent: KnowledgeParts = parts.services && profile.trade_module === "insurance_pc"
+        ? { ...parts, services: keepStoredInsurancePrices(parts.services, rows) }
+        : parts;
       const payload = buildKnowledgePayload({
-        facts: parts.facts ?? profile.facts,
-        servicesText: parts.services_text ?? profile.services,
+        facts: sent.facts ?? profile.facts,
+        servicesText: sent.services_text ?? profile.services,
         timezone,
-        businessHours: "business_hours" in parts ? parts.business_hours : profile.business_hours,
-        services: parts.services ?? rows,
+        businessHours: "business_hours" in sent ? sent.business_hours : profile.business_hours,
+        services: sent.services ?? rows,
       });
-      const r = await saveVoiceKnowledge(db, accountId, { actor, parts, payload, baseVersion });
+      const r = await saveVoiceKnowledge(db, accountId, { actor, parts: sent, payload, baseVersion });
       if (r.status === "ok") return { ok: true, version: r.version };
       if (r.status !== "stale") return { ok: false, reason: r.status };
     }

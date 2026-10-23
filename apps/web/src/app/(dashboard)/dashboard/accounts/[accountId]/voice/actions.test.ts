@@ -939,11 +939,15 @@ describe("saveServicesAction (S-47c)", () => {
     ]);
   });
 
-  it("on insurance (C13) a hand-built NEW priced row is refused with the invalid sentence and nothing is written (mutation: drop the check -> FAILS)", async () => {
+  it("on insurance (C13, C21) a hand-built NEW priced row is saved as after_visit, its price dropped (mutation: drop the insurance rule -> FAILS)", async () => {
     dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "insurance_pc" });
+    dbMocks.listVoiceServices.mockResolvedValue([]);
     const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row({ name_en: "Crafted", amount: "999" })]) }));
-    expect(r).toEqual({ ok: false, error: m["voice.knowledge.invalid"] });
-    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+    expect(r).toEqual({ ok: true });
+    expect(knowledgeCall().parts.services).toEqual([
+      { name_en: "Crafted", name_es: null, description_en: null, description_es: null, price_kind: "after_visit",
+        amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null },
+    ]);
   });
 
   it("off insurance, a row with no kind is refused (the insurance rule is read from the profile, not the form)", async () => {

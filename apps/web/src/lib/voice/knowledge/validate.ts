@@ -157,7 +157,8 @@ function serviceFromForm(row: ServiceForm, insurance: boolean): { ok: true; serv
 }
 
 /** The card's list to the stored shape, in order; the first refused row is the one reported. A row that came in
- *  carrying a stored kind is validated and saved exactly as sent, on insurance too ("sent back as it was stored"). */
+ *  carrying a stored kind is validated as sent, on insurance too ("sent back as it was stored"); whether its price
+ *  survives there is the save layer's call (keepStoredInsurancePrices, C21). */
 export function servicesFromForm(rows: readonly ServiceForm[], o: { insurance: boolean }):
   { ok: true; services: VoiceServiceInput[] } | { ok: false; error: ServiceError } {
   if (rows.length > MAX_SERVICES) return { ok: false, error: { code: "tooMany", name: "" } };
@@ -171,23 +172,30 @@ export function servicesFromForm(rows: readonly ServiceForm[], o: { insurance: b
 }
 
 /**
- * C13, the save layer's half: on an insurance account the card can only send a price back as it was stored, so
- * every posted row that carries one (any kind but after_visit, the no-number kind a row added there becomes) must
- * match a stored row's price exactly (kind, both amounts, both units). Names and descriptions may differ: the card
- * shows them there, so an operator can rename a priced row. Each stored row matches at most one posted row, so a
- * price cannot be copied onto a second service. False means a hand-built POST is planting a price that would be
- * spoken once the module changes off insurance.
+ * C13 and C21, the save layer's half, on an insurance account only. The card there shows no price, so it can only
+ * send a price back exactly as it was stored. A posted row that carries one (any kind but after_visit, the
+ * no-number kind a row added there becomes) keeps it only when it matches a not-yet-claimed stored row on the
+ * English name (trimmed) AND the whole price (kind, both amounts, both units). Every other priced row is saved as
+ * after_visit with no amount and no unit: a renamed row (owner ruling C21, 2026-10-23: renaming a priced service
+ * there drops its price, and the card says so), a price copied onto a second row (each stored row is claimed at
+ * most once), and a hand-built POST planting a price that would be spoken once the module changes off insurance.
+ * Neutralised, never refused, so the operator's names and descriptions are still saved.
  */
-export function insurancePricesKept(posted: readonly VoiceServiceInput[], stored: readonly VoiceServiceInput[]): boolean {
-  const unused = [...stored];
-  for (const p of posted) {
-    if (p.price_kind === "after_visit") continue;
-    const i = unused.findIndex((s) => s.price_kind === p.price_kind && s.amount_cents === p.amount_cents
-      && s.amount_max_cents === p.amount_max_cents && s.unit_en === p.unit_en && s.unit_es === p.unit_es);
-    if (i < 0) return false;
-    unused.splice(i, 1);
-  }
-  return true;
+export function keepStoredInsurancePrices(
+  posted: readonly VoiceServiceInput[], stored: readonly VoiceServiceInput[],
+): VoiceServiceInput[] {
+  const unclaimed = [...stored];
+  return posted.map((p) => {
+    if (p.price_kind === "after_visit") return p;
+    const i = unclaimed.findIndex((s) => s.name_en.trim() === p.name_en.trim()
+      && s.price_kind === p.price_kind && s.amount_cents === p.amount_cents && s.amount_max_cents === p.amount_max_cents
+      && s.unit_en === p.unit_en && s.unit_es === p.unit_es);
+    if (i >= 0) {
+      unclaimed.splice(i, 1);
+      return p;
+    }
+    return { ...p, price_kind: "after_visit", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null };
+  });
 }
 
 /** A line break can only come from a hand-built POST (an input cannot hold one), so it reads the card's generic

@@ -3,7 +3,8 @@
 Status: owner decisions C1–C4 and the section 4 data model approved in conversation 2026-10-21/23; the
 open sections were settled with the owner's "go with your recommendations" (C5–C10, 2026-10-23), and the
 owner answered the first draft's questions the same day (C11–C17), read the twelve price sentences
-(C18), and ruled on the two questions the implementation plan raised (C19, C20). There are no open
+(C18), ruled on the two questions the implementation plan raised (C19, C20) and on the one the final
+review raised (C21). There are no open
 questions (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
 "↳ F-037 (part)", 2.5–3 ew). Part a (disclosure, F-034) shipped in #279, part b (trade modules, F-174 part)
 in #280–#283; d (the one switch, F-084) and e (identity checks, F-116 part) follow in their own specs.
@@ -122,6 +123,16 @@ The owner's rulings on the implementation plan's questions (2026-10-23):
   events module's "word for word from the facts above" from reopening prices). An empty list (the read succeeded, no rows) keeps today's line, byte for byte. An insurance
   account keeps today's line on a failed read (its module forbids every quote and overrides that line).
   The browser voice demo reads its live list the same way and follows the same rule.
+
+The owner's ruling on the final review (2026-10-23):
+
+- **C21 On insurance, renaming a priced row drops its price.** On an insurance account, a service row that
+  carries a stored price keeps that price only while its English name is unchanged; renaming it makes it
+  "price given after a visit", and the card says so with a one-line hint. The save layer enforces it: a
+  posted priced row keeps its price only when it matches a not-yet-claimed stored row on the English name
+  (trimmed) and the whole price (kind, both amounts, both units); every other priced row (a renamed one, a
+  second copy of one stored price, or a hand-built POST) is saved as `after_visit` with no amount and no
+  unit, never refused (5.7).
 
 ## 3. Scope
 
@@ -401,6 +412,10 @@ A pure `factsWarnings(facts, servicesText, { hasHours, hasPriceList })` in `lib/
   it out. Refund and cancellation terms without an amount can stay." `factsWarnings` returns the matches
   (text and position), so the Notice and its test read the same list. Without a list, nothing (today's
   behaviour).
+- **On an insurance account** (C13) no amount is ever said, with a list or without one, so the amounts
+  Notice shows whenever an amount is found and reads instead: "{persona} never gives prices on insurance
+  accounts, so these amounts in the Facts or Services box will not be said: {amounts}. You can take them
+  out." The Facts box's hint there promises no prices card either.
 
 Flags never block a save; they are re-computed live as the operator types.
 
@@ -483,7 +498,9 @@ page renders on the server, so there is no loading state beyond the page's own.
     Select, the amount and unit fields and the sentence preview are hidden, and the row shows only the
     names and descriptions. A row added there is saved as `after_visit` (the one kind with no number). A
     row that already carries a price keeps it untouched in the database (the form sends it back as it was
-    stored) but shows none of it. A Notice says: "On insurance accounts {persona} names these services
+    stored) but shows none of it, as long as its English name is unchanged (C21): while an edited row that
+    was loaded with a price has a changed English name, a one-line hint under the name says "Renaming this
+    service removes the price stored for it.", and the save stores it as `after_visit`. A Notice says: "On insurance accounts {persona} names these services
     but never gives a price." If the account's trade module is later set to none or events, the prices
     show again, and rows added under insurance read "given after a visit" until edited.
 - Each Save: a "Saved" toast as the other Voice cards; a refused save keeps the operator's edits (the
@@ -587,4 +604,4 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
 No open questions. The first draft's Q1–Q7 were answered by the owner on 2026-10-23 and are decisions
 C11–C17, Q8 (the owner's read of the twelve price sentences) is C18, and the implementation plan's two
 questions (closed hours under "Always take a message"; the price line on a failed list read) are C19 and
-C20 (section 2).
+C20 (section 2). The final review's question (what renaming a priced row does on insurance) is C21.
