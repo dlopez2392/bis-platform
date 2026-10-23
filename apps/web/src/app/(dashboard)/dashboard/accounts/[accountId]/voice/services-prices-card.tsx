@@ -225,10 +225,10 @@ export function ServiceRowEditor({
       {preview ? (
         <div className="space-y-1 rounded-[var(--radius-ctl)] border border-[var(--line)] bg-[var(--surface-1)] p-3">
           <p className="text-xs text-muted-foreground">
-            <span className="font-medium text-card-foreground">{tr.text("voice.services.previewEn")}:</span> {preview.en}
+            <span className="font-medium text-card-foreground">{tr.text("voice.services.previewEn")}:</span> <span data-preview="en" lang="en">{preview.en}</span>
           </p>
           <p className="text-xs text-muted-foreground">
-            <span className="font-medium text-card-foreground">{tr.text("voice.services.previewEs")}:</span> {preview.es}
+            <span className="font-medium text-card-foreground">{tr.text("voice.services.previewEs")}:</span> <span data-preview="es" lang="es">{preview.es}</span>
           </p>
         </div>
       ) : null}
