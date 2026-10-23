@@ -1411,8 +1411,8 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
         "{persona} toma solicitudes de cotización para que un agente con licencia devuelva la llamada, y nunca da precios, ni dice que alguien está cubierto, ni habla de una póliza."],
       ["voice.tradeRules.events", "Events and venues", "Eventos y salones"],
       ["voice.tradeRules.eventsHint",
-        "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Facts.",
-        "{persona} toma los datos del evento para que el equipo los confirme, nunca dice que una fecha está libre y da precios solo palabra por palabra de los datos del negocio."],
+        "{persona} takes event details for the team to confirm, never says a date is free, and gives prices only word for word from Services & prices, or from Facts when there is no list.",
+        "{persona} toma los datos del evento para que el equipo los confirme, nunca dice que una fecha está libre y da precios solo palabra por palabra de Servicios y precios, o de los datos del negocio cuando no hay lista."],
       ["voice.tradeRules.nextCall",
         "Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.",
         "Los cambios aplican desde la siguiente llamada o chat. Las llamadas y los chats ya en curso conservan las reglas con las que empezaron."],
@@ -1436,6 +1436,247 @@ describe("S-47b: trade rules copy, English and Spanish (plan Task 2)", () => {
       for (const s of [cat[k]!, cat[`${k}.es`]!]) {
         expect(s).not.toMatch(/Sofía|Sofia/);
         expect(s.replace(/\{\w+\}/g, "")).not.toMatch(/\b(insurance_pc|trade_module|stamp|null|flag|module)\b/i);
+      }
+    }
+  });
+});
+
+describe("S-47c: structured facts copy, English and Spanish (plan Task 2)", () => {
+  const EXPECTED_PARAMS: Record<string, readonly string[]> = {
+    "voice.hours.title": [],
+    "voice.hours.body": ["persona"],
+    "voice.hours.zone": ["zone"],
+    "voice.hours.day.mon": [],
+    "voice.hours.day.tue": [],
+    "voice.hours.day.wed": [],
+    "voice.hours.day.thu": [],
+    "voice.hours.day.fri": [],
+    "voice.hours.day.sat": [],
+    "voice.hours.day.sun": [],
+    "voice.hours.open": [],
+    "voice.hours.from": [],
+    "voice.hours.to": [],
+    "voice.hours.addSpan": [],
+    "voice.hours.removeSpan": [],
+    "voice.hours.midnightHint": [],
+    "voice.hours.copyFromCalendar": [],
+    "voice.hours.copyFromCalendarNone": [],
+    "voice.hours.clear": [],
+    "voice.hours.save": [],
+    "voice.hours.saved": [],
+    "voice.hours.cleared": [],
+    "voice.hours.empty": ["persona"],
+    "voice.hours.setHours": [],
+    "voice.hours.error.blank": ["day"],
+    "voice.hours.error.endBeforeStart": ["day"],
+    "voice.hours.error.overlap": ["day"],
+    "voice.hours.error.noDay": [],
+    "voice.hours.saveFailed": [],
+    "voice.services.title": [],
+    "voice.services.titleInsurance": [],
+    "voice.services.body": ["persona"],
+    "voice.services.insuranceNotice": ["persona"],
+    "voice.services.empty": ["persona"],
+    "voice.services.add": [],
+    "voice.services.max": [],
+    "voice.services.moveUp": [],
+    "voice.services.moveDown": [],
+    "voice.services.edit": [],
+    "voice.services.done": [],
+    "voice.services.remove": [],
+    "voice.services.removing": [],
+    "voice.services.keep": [],
+    "voice.services.nameEn": [],
+    "voice.services.nameEs": [],
+    "voice.services.descriptionEn": [],
+    "voice.services.descriptionEs": [],
+    "voice.services.kind": [],
+    "voice.services.kind.fixed": [],
+    "voice.services.kind.from": [],
+    "voice.services.kind.range": [],
+    "voice.services.kind.per_unit": [],
+    "voice.services.kind.free": [],
+    "voice.services.kind.after_visit": [],
+    "voice.services.amount": [],
+    "voice.services.amountMin": [],
+    "voice.services.amountMax": [],
+    "voice.services.unitEn": [],
+    "voice.services.unitEs": [],
+    "voice.services.previewEn": ["persona"],
+    "voice.services.previewEs": ["persona"],
+    "voice.services.save": [],
+    "voice.services.saved": [],
+    "voice.services.saveFailed": [],
+    "voice.services.loadFailed": [],
+    "voice.services.error.name": [],
+    "voice.services.error.amount": ["name"],
+    "voice.services.error.range": ["name"],
+    "voice.services.error.units": ["name"],
+    "voice.services.error.tooLong": ["name"],
+    "voice.services.summary.range": ["max", "min"],
+    "voice.services.summary.perUnit": ["amount", "unit"],
+    "voice.knowledge.stale": [],
+    "voice.knowledge.noProfile": [],
+    "voice.knowledge.invalid": [],
+    "voice.facts.hoursNotice": ["persona"],
+    "voice.facts.hoursHint": ["persona"],
+    "voice.facts.amountsNotice": ["amounts", "persona"],
+    "calls.detail.knowledge": [],
+    "calls.detail.knowledgeLink": ["persona", "version"],
+    "voice.knowledge.title": ["persona"],
+    "voice.knowledge.savedBy": ["date", "person", "version"],
+    "voice.knowledge.recordedAutomatically": ["date", "version"],
+    "voice.knowledge.facts": [],
+    "voice.knowledge.servicesText": [],
+    "voice.knowledge.hours": [],
+    "voice.knowledge.prices": [],
+    "voice.knowledge.inEnglish": [],
+    "voice.knowledge.inSpanish": [],
+    "voice.knowledge.nothing": [],
+    "voice.knowledge.noHours": [],
+    "voice.knowledge.noPrices": [],
+    "voice.knowledge.older": [],
+    "voice.knowledge.newer": [],
+    "voice.knowledge.back": [],
+    "voice.knowledge.notFound": ["version"],
+    "voice.knowledge.loadFailed": [],
+  };
+  const KEYS = Object.keys(EXPECTED_PARAMS) as (keyof typeof m)[];
+  const paramsOf = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!).sort();
+
+  it("the key list itself is the 97 rows this plan's Task 2 table names (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(97);
+  });
+
+  it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    expect(KEYS.filter((k) => !cat[k] || !cat[`${k}.es`] || cat[k] === cat[`${k}.es`])).toEqual([]);
+  });
+
+  it("names exactly its params, the same set in both languages (mutation: {zone} -> {z} in one .es -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(paramsOf(cat[k]!), `"${k}" (en)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+      expect(paramsOf(cat[`${k}.es`]!), `"${k}" (es)`).toEqual([...EXPECTED_PARAMS[k]!].sort());
+    }
+  });
+
+  it("pins every sentence, both languages (mutation: change one word -> FAILS)", () => {
+    const pairs: Array<[string, string, string]> = [
+      ["voice.hours.title", "Business hours", "Horario del negocio"],
+      ["voice.hours.body", "{persona} tells callers whether you're open right now from these hours. Bookable times still come from the calendar.", "{persona} les dice a quienes llaman si está abierto en este momento según este horario. Los horarios para citas siguen saliendo del calendario."],
+      ["voice.hours.zone", "Times are in {zone}.", "Las horas están en {zone}."],
+      ["voice.hours.day.mon", "Monday", "Lunes"],
+      ["voice.hours.day.tue", "Tuesday", "Martes"],
+      ["voice.hours.day.wed", "Wednesday", "Miércoles"],
+      ["voice.hours.day.thu", "Thursday", "Jueves"],
+      ["voice.hours.day.fri", "Friday", "Viernes"],
+      ["voice.hours.day.sat", "Saturday", "Sábado"],
+      ["voice.hours.day.sun", "Sunday", "Domingo"],
+      ["voice.hours.open", "Open", "Abierto"],
+      ["voice.hours.from", "Opens", "Abre"],
+      ["voice.hours.to", "Closes", "Cierra"],
+      ["voice.hours.addSpan", "Add hours", "Agregar horas"],
+      ["voice.hours.removeSpan", "Remove these hours", "Quitar estas horas"],
+      ["voice.hours.midnightHint", "To close at midnight, set the closing time to 12:00 AM.", "Para cerrar a medianoche, ponga la hora de cierre en 12:00 a. m."],
+      ["voice.hours.copyFromCalendar", "Copy from calendar", "Copiar del calendario"],
+      ["voice.hours.copyFromCalendarNone", "The calendar has no hours to copy yet.", "El calendario todavía no tiene horas para copiar."],
+      ["voice.hours.clear", "Clear hours", "Quitar el horario"],
+      ["voice.hours.save", "Save hours", "Guardar horario"],
+      ["voice.hours.saved", "Business hours saved", "Horario guardado"],
+      ["voice.hours.cleared", "Business hours cleared", "Horario quitado"],
+      ["voice.hours.empty", "Add your hours so {persona} can tell callers whether you're open right now.", "Agregue su horario para que {persona} pueda decirles a quienes llaman si está abierto en este momento."],
+      ["voice.hours.setHours", "Set hours", "Poner horario"],
+      ["voice.hours.error.blank", "{day}: fill in both times, or remove those hours.", "{day}: llene las dos horas, o quite esas horas."],
+      ["voice.hours.error.endBeforeStart", "{day}: each closing time must be after its opening time.", "{day}: cada hora de cierre debe ser después de la de apertura."],
+      ["voice.hours.error.overlap", "{day}: these hours overlap.", "{day}: estas horas se cruzan."],
+      ["voice.hours.error.noDay", "Mark at least one day open, or clear the hours.", "Marque al menos un día abierto, o quite el horario."],
+      ["voice.hours.saveFailed", "Couldn't save the hours. Try again.", "No se pudo guardar el horario. Intente de nuevo."],
+      ["voice.services.title", "Services & prices", "Servicios y precios"],
+      ["voice.services.titleInsurance", "Services", "Servicios"],
+      ["voice.services.body", "{persona} says these prices exactly as written below, and no others.", "{persona} dice estos precios tal como están escritos abajo, y ningún otro."],
+      ["voice.services.insuranceNotice", "On insurance accounts {persona} names these services but never gives a price.", "En cuentas de seguros, {persona} nombra estos servicios pero nunca da un precio."],
+      ["voice.services.empty", "List your services and prices so {persona} quotes them exactly.", "Anote sus servicios y precios para que {persona} los diga exactamente."],
+      ["voice.services.add", "Add a service", "Agregar un servicio"],
+      ["voice.services.max", "You can list up to 50 services.", "Puede anotar hasta 50 servicios."],
+      ["voice.services.moveUp", "Move up", "Subir"],
+      ["voice.services.moveDown", "Move down", "Bajar"],
+      ["voice.services.edit", "Edit", "Editar"],
+      ["voice.services.done", "Done", "Listo"],
+      ["voice.services.remove", "Remove", "Quitar"],
+      ["voice.services.removing", "Removed when you save", "Se quita al guardar"],
+      ["voice.services.keep", "Keep", "Conservar"],
+      ["voice.services.nameEn", "Name in English", "Nombre en inglés"],
+      ["voice.services.nameEs", "Name in Spanish (optional)", "Nombre en español (opcional)"],
+      ["voice.services.descriptionEn", "Description in English (optional)", "Descripción en inglés (opcional)"],
+      ["voice.services.descriptionEs", "Description in Spanish (optional)", "Descripción en español (opcional)"],
+      ["voice.services.kind", "How it's priced", "Cómo se cobra"],
+      ["voice.services.kind.fixed", "Fixed price", "Precio fijo"],
+      ["voice.services.kind.from", "Starting price", "Precio desde"],
+      ["voice.services.kind.range", "Price range", "Rango de precio"],
+      ["voice.services.kind.per_unit", "Price per unit", "Precio por unidad"],
+      ["voice.services.kind.free", "Free", "Sin costo"],
+      ["voice.services.kind.after_visit", "Priced after a visit", "Precio después de una visita"],
+      ["voice.services.amount", "Price in dollars", "Precio en dólares"],
+      ["voice.services.amountMin", "Lowest price in dollars", "Precio más bajo en dólares"],
+      ["voice.services.amountMax", "Highest price in dollars", "Precio más alto en dólares"],
+      ["voice.services.unitEn", "Unit in English (for example, guest)", "Unidad en inglés (por ejemplo, guest)"],
+      ["voice.services.unitEs", "Unit in Spanish (for example, invitado)", "Unidad en español (por ejemplo, invitado)"],
+      ["voice.services.previewEn", "What {persona} says in English", "Lo que {persona} dice en inglés"],
+      ["voice.services.previewEs", "What {persona} says in Spanish", "Lo que {persona} dice en español"],
+      ["voice.services.save", "Save services", "Guardar servicios"],
+      ["voice.services.saved", "Services saved", "Servicios guardados"],
+      ["voice.services.saveFailed", "Couldn't save the services. Try again.", "No se pudieron guardar los servicios. Intente de nuevo."],
+      ["voice.services.loadFailed", "Couldn't load the services. Reload the page to try again.", "No se pudieron cargar los servicios. Recargue la página para intentar de nuevo."],
+      ["voice.services.error.name", "Give every service a name in English.", "Póngale a cada servicio un nombre en inglés."],
+      ["voice.services.error.amount", "Add the price for {name}.", "Agregue el precio de {name}."],
+      ["voice.services.error.range", "For {name}, the highest price must be more than the lowest.", "En {name}, el precio más alto debe ser mayor que el más bajo."],
+      ["voice.services.error.units", "Add the unit in English and in Spanish for {name}.", "Agregue la unidad en inglés y en español para {name}."],
+      ["voice.services.error.tooLong", "{name}: use at most 80 characters for a name, 300 for a description and 30 for a unit.", "{name}: use como máximo 80 caracteres para un nombre, 300 para una descripción y 30 para una unidad."],
+      ["voice.services.summary.range", "{min} to {max}", "{min} a {max}"],
+      ["voice.services.summary.perUnit", "{amount} per {unit}", "{amount} por {unit}"],
+      ["voice.knowledge.stale", "Someone else just saved this. Reload to see their change.", "Alguien más acaba de guardar esto. Recargue la página para ver su cambio."],
+      ["voice.knowledge.noProfile", "Save the voice profile above first.", "Primero guarde el perfil de voz de arriba."],
+      ["voice.knowledge.invalid", "Something in this card couldn't be saved. Check it and try again.", "Algo en esta tarjeta no se pudo guardar. Revíselo e intente de nuevo."],
+      ["voice.facts.hoursNotice", "Facts mentions hours. {persona} uses Business hours below, so take regular hours out of Facts. A closure on a specific date can stay.", "Los datos mencionan horarios. {persona} usa el Horario del negocio de abajo, así que quite el horario normal de los datos. Un cierre en una fecha específica puede quedarse."],
+      ["voice.facts.hoursHint", "Add Business hours below so {persona} can tell callers whether you are open right now.", "Agregue el Horario del negocio abajo para que {persona} pueda decirles a quienes llaman si está abierto en este momento."],
+      ["voice.facts.amountsNotice", "{persona} gives prices only from Services & prices, so these amounts in Facts or Services will not be said: {amounts}. Add each one she should say as its own row (a deposit or a fee too), or take it out. Refund and cancellation terms without an amount can stay.", "{persona} da precios solo de Servicios y precios, así que no dirá estos montos de los datos o los servicios: {amounts}. Agregue cada uno que deba decir como su propia fila (también un depósito o una cuota), o quítelo. Los términos de reembolso y cancelación sin monto pueden quedarse."],
+      ["calls.detail.knowledge", "Knowledge", "Conocimiento"],
+      ["calls.detail.knowledgeLink", "What {persona} knew (#{version})", "Lo que {persona} sabía (#{version})"],
+      ["voice.knowledge.title", "What {persona} knew", "Lo que {persona} sabía"],
+      ["voice.knowledge.savedBy", "Version {version} · saved {date} by {person}", "Versión {version} · guardada el {date} por {person}"],
+      ["voice.knowledge.recordedAutomatically", "Version {version} · recorded automatically {date}", "Versión {version} · registrada automáticamente el {date}"],
+      ["voice.knowledge.facts", "Facts", "Datos"],
+      ["voice.knowledge.servicesText", "Services (free text)", "Servicios (texto libre)"],
+      ["voice.knowledge.hours", "Business hours", "Horario del negocio"],
+      ["voice.knowledge.prices", "Services and prices", "Servicios y precios"],
+      ["voice.knowledge.inEnglish", "In English", "En inglés"],
+      ["voice.knowledge.inSpanish", "In Spanish", "En español"],
+      ["voice.knowledge.nothing", "Nothing was written here.", "No había nada escrito aquí."],
+      ["voice.knowledge.noHours", "No business hours were set.", "No había horario del negocio."],
+      ["voice.knowledge.noPrices", "No services were listed.", "No había servicios en la lista."],
+      ["voice.knowledge.older", "Older", "Anterior"],
+      ["voice.knowledge.newer", "Newer", "Más reciente"],
+      ["voice.knowledge.back", "Back to Voice", "Volver a Voz"],
+      ["voice.knowledge.notFound", "This account has no version {version}.", "Esta cuenta no tiene la versión {version}."],
+      ["voice.knowledge.loadFailed", "Couldn't load this version. Reload the page to try again.", "No se pudo cargar esta versión. Recargue la página para intentar de nuevo."],
+    ];
+    const cat = m as Record<string, string>;
+    for (const [k, en, es] of pairs) expect([cat[k], cat[`${k}.es`]], k).toEqual([en, es]);
+  });
+
+  it("interpolates through t() in both languages", () => {
+    expect(t(m, "voice.hours.zone", "en", { zone: "America/Chicago" })).toBe("Times are in America/Chicago.");
+    expect(t(m, "voice.hours.zone", "es", { zone: "America/Chicago" })).toBe("Las horas están en America/Chicago.");
+  });
+
+  it("Spanish is usted, the persona is never typed, no plumbing word reaches the reader (mutations: 'tu' / 'Sofía' / 'jsonb' into one line -> FAILS)", () => {
+    const cat = m as Record<string, string>;
+    for (const k of KEYS) {
+      expect(cat[`${k}.es`]).not.toMatch(/\b(tu|tus|contigo|escribe|intenta)\b/i);
+      for (const s of [cat[k]!, cat[`${k}.es`]!]) {
+        expect(s).not.toMatch(/Sofía|Sofia/);
+        expect(s.replace(/\{\w+\}/g, "")).not.toMatch(/\b(jsonb|null|payload|price_kind|per_unit|RPC|snapshot)\b/i);
       }
     }
   });
