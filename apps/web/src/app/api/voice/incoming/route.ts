@@ -75,7 +75,7 @@ import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
   countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
-  getTransferPhone, listPhoneNumbersForAccount,
+  getTransferPhone, listPhoneNumbersForAccount, listVoiceServices, ensureKnowledgeSnapshot,
   type Branding,
 } from "@bis/db";
 import {
@@ -98,6 +98,7 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
 import { decideDisclosure } from "@/lib/voice/disclosure";
 import { tradeModuleStamp } from "@/lib/voice/modules";
+import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
 import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -1039,9 +1040,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, declined: capsReason });
     }
 
+    // S-47c (spec 5.5; plan SD9, SD18): the price list, read beside the account and calendar reads below so it adds
+    // no wait of its own. Started HERE, below every gate (step 8), so a declined call reads nothing. Fail-soft: a
+    // failed read answers with the free text and the hours (both on the profile read at step 7), no list, and
+    // records nothing. Its rejection handler is attached on creation, so it can never reject unhandled.
+    const servicesP = listVoiceServices(db, accountId).then(
+      (rows) => rows,
+      (e: unknown) => {
+        log("knowledge: services read failed — answering without the price list", { callId, accountId, error: loggableError(e) });
+        return null;
+      },
+    );
+
     // --- Step 9: account/branding context + the tenant's booking calendar -
     const accountRow = await loadAccountContext(db, accountId);
     const calendar = await getOrCreateCalendar(db, accountId, "voice", "ai");
+
+    // ONE payload: it is what ensure_knowledge_snapshot records AND what builds the prompt below, so the call's
+    // stamp and its prompt cannot disagree (spec 5.5, C4). The snapshot RPC runs while step 9b's reads do (SD18);
+    // like servicesP, its handler is attached on creation and it never rejects.
+    const services = await servicesP;
+    const knowledge = knowledgeFromLive({ profile, timezone: accountRow.timezone, services });
+    if (services !== null && knowledge.listUnavailable) {
+      // The read succeeded but a stored row could not render: the same posture as a failed read (SD9, C20).
+      log("knowledge: a stored service could not be rendered — answering without the price list", { callId, accountId });
+    }
+    const versionP: Promise<number | null> = knowledge.recordable
+      ? ensureKnowledgeSnapshot(db, accountId, knowledge.payload).then(
+        (v) => v,
+        (e: unknown) => {
+          log("knowledge: snapshot failed — the call answers unstamped", { callId, accountId, error: loggableError(e) });
+          return null;
+        })
+      : Promise.resolve(null);
 
     // --- Step 9b: where a caller who asks for a person can be sent --------
     // Resolved HERE, above the accept, because the accept body carries the
@@ -1098,6 +1129,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // left unset rather than written empty, so "no token" and "a token that
     // is the empty string" cannot be confused.
     const handoffToken = extractHandoffToken(event.data);
+    // S-47c: never rejects (its handler was attached at creation); null = unstamped (a failed RPC or no record).
+    const knowledgeVersion = await versionP;
     let callRowId: string | null = null;
     try {
       const row = await startCallRow(db, accountId, {
@@ -1107,6 +1140,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? {}
           : { disclosure: { disclosed: disclosure.disclose, setting: disclosure.setting } }),
         ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
+        ...(knowledgeVersion === null ? {} : { knowledgeVersion }),
       });
       callRowId = row.id;
     } catch (e) {
@@ -1135,15 +1169,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // English greeting then the Spanish one.
     const opening = openingGreeting(profile, businessName, { disclose: disclosure.disclose, personaName: profile.persona_name });
 
+    // S-47c: the facts, the Services text, the hours and the list all come from the payload stamped above.
+    const pk = promptKnowledge(knowledge.payload);
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName,
-      facts: profile.facts, services: profile.services, languages: profile.languages,
+      facts: pk.facts, services: pk.services, languages: profile.languages,
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
       callerNumber, meetingType: calendar.meeting_type,
       handoffAvailable: handoffTarget.available,
       disclosed: disclosure.disclose,
       tradeModule: tradeStamp?.module ?? null,
+      businessHours: pk.businessHours, priceList: pk.priceList,
+      // C20: the list could not be read, so no amount may be quoted this call.
+      priceListUnavailable: knowledge.listUnavailable,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 

@@ -56,6 +56,9 @@ import {
 } from "@/lib/concierge/guards";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
+  knowledgeFromLive, parseKnowledgePayload, promptKnowledge, type KnowledgePayload,
+} from "@/lib/voice/knowledge/payload";
+import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
 import { conciergeStrings } from "@/lib/concierge/strings";
@@ -188,6 +191,7 @@ export async function POST(
     getConciergeConversation, claimConciergeTurn, appendConciergeTurns,
     countConciergeConversationsByIp, countConciergeConversationsForAccount,
     brandDisplayName, recordAutomationLog, syncWebchatTurns,
+    listVoiceServices, ensureKnowledgeSnapshot, getKnowledgeSnapshot,
   } = await import("@bis/db");
 
   const ipHash = hashIp(clientIp(req.headers));
@@ -268,6 +272,10 @@ export async function POST(
 
     let conversationId: string;
     let conversation: ConciergeConversationRow;
+    // S-47c: what this turn's prompt knows (facts, Services text, hours, list, zone), and whether the list read
+    // failed (C20). Set on every path below, before the claim.
+    let knowledge: KnowledgePayload;
+    let listUnavailable = false;
     let businessName: string;
     let timezone: string;
     let apiKey: string;
@@ -370,10 +378,31 @@ export async function POST(
       // chat that spans an agency change keeps one set of rules.
       const tradeStamp = tradeModuleStamp(profile.trade_module);
 
+      // S-47c (spec 5.5): the chat's knowledge is decided ONCE, here, and stamped on the conversation; every later
+      // turn reads the stamped snapshot. Fail-soft and fail-open exactly as the phone (SD9): a failed list read
+      // records nothing and closes prices (C20); a failed RPC starts the chat unstamped.
+      const servicesRows = await listVoiceServices(db, profile.account_id).catch((e: unknown) => {
+        log("knowledge: services read failed — answering without the price list", { accountId: profile.account_id, error: String(e) });
+        return null;
+      });
+      const live = knowledgeFromLive({ profile, timezone, services: servicesRows });
+      if (servicesRows !== null && live.listUnavailable) {
+        log("knowledge: a stored service could not be rendered — answering without the price list", { accountId: profile.account_id });
+      }
+      const knowledgeVersion = live.recordable
+        ? await ensureKnowledgeSnapshot(db, profile.account_id, live.payload).catch((e: unknown) => {
+          log("knowledge: snapshot failed — the chat starts unstamped", { accountId: profile.account_id, error: String(e) });
+          return null;
+        })
+        : null;
+      knowledge = live.payload;
+      listUnavailable = live.listUnavailable; // C20
+
       const created = await createConciergeConversation(db, {
         accountId: profile.account_id, formId: profile.concierge_form_id,
         ipHash, locale, attribution, origin,
         ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
+        ...(knowledgeVersion === null ? {} : { knowledgeVersion }),
       });
       conversationId = created.id;
       openedId = created.id;
@@ -396,7 +425,7 @@ export async function POST(
         turn_count: 0, transcript: [], submission_id: null,
         locale, attribution, origin,
         trade_module: tradeStamp?.module ?? null, trade_module_version: tradeStamp?.version ?? null,
-        knowledge_version: null,
+        knowledge_version: knowledgeVersion,
       };
     } else {
       // ── TURN 2+ ─────────────────────────────────────────────────────────
@@ -422,6 +451,27 @@ export async function POST(
       const ctx2 = await resolveAccountContext(profile.account_id);
       if (!ctx2.ok) return ctx2.response;
       businessName = ctx2.businessName; timezone = ctx2.timezone; apiKey = ctx2.apiKey;
+
+      // S-47c (C4, SD12, SD13): a stamped chat keeps its starting knowledge, its zone included. A read ERROR throws
+      // into the route's catch below (503, no turn spent: this runs before the claim); a missing or unreadable
+      // snapshot falls back to the live read.
+      const stamped = existing.knowledge_version === null ? null
+        : await getKnowledgeSnapshot(db, profile.account_id, existing.knowledge_version);
+      const parsed = stamped ? parseKnowledgePayload(stamped.payload) : null;
+      if (parsed) {
+        knowledge = parsed;
+      } else {
+        if (existing.knowledge_version !== null) {
+          log("knowledge: stamped snapshot unreadable — this turn uses the live knowledge", { conversationId, version: existing.knowledge_version });
+        }
+        const rows = await listVoiceServices(db, profile.account_id).catch((e: unknown) => {
+          log("knowledge: services read failed — answering without the price list", { conversationId, error: String(e) });
+          return null;
+        });
+        const liveNow = knowledgeFromLive({ profile, timezone, services: rows });
+        knowledge = liveNow.payload;
+        listUnavailable = liveNow.listUnavailable; // C20; a stamped snapshot always had its list
+      }
     }
 
     // THE TURN CAP. Atomic, so two turns posted together cannot both pass.
@@ -438,15 +488,20 @@ export async function POST(
       return quiet(conversationId, "", true, strings.ended);
     }
 
+    // S-47c: the facts, the Services text, the hours, the list and the zone all come from `knowledge` (the stamped
+    // snapshot, or this request's live read on turn 1 and on an unstamped chat).
+    const pk = promptKnowledge(knowledge);
     const system = buildSystemPrompt({
       personaName: profile.persona_name, businessName,
-      facts: profile.facts, services: profile.services,
+      facts: pk.facts, services: pk.services,
       languages: profile.languages,
       // FALSE regardless of the tenant's own setting, exactly as the web demo
       // forces it: no booking tool reaches this session, and a prompt that
       // promised booking would promise something that cannot happen here.
       bookingEnabled: false,
-      timezone, slotDurationMinutes: 30,
+      // SD13: the payload's zone, so a stamped chat's date line and its Right now line agree with its hours. On
+      // turn 1 and an unstamped chat the payload's zone IS the account's.
+      timezone: knowledge.timezone, slotDurationMinutes: 30,
       afterHours: profile.after_hours, callerNumber: null,
       // Inert while `bookingEnabled` is false — `meetingType` and
       // `slotDurationMinutes` are read only inside that branch of
@@ -460,6 +515,8 @@ export async function POST(
       // S-47b: the CONVERSATION's stamp (written at creation, turn 1 above, or read back on turn 2+), never the
       // profile's current module.
       tradeModule: conversation.trade_module,
+      businessHours: pk.businessHours, priceList: pk.priceList,
+      priceListUnavailable: listUnavailable, // C20
       // `buildSystemPrompt` itself resolves the one tool this surface has,
       // and never advertises take_message/log_transcript on the web — see
       // its `onWeb` branches. No append needed here (review of commit

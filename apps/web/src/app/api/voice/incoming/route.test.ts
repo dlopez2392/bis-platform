@@ -61,6 +61,10 @@ const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
 const deleteCallRowMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
+// S-47c: the price list read and the snapshot RPC (step 9). Listed in the bare factory below: an unlisted
+// export throws inside the route's fail-open catches, and every call would silently run unstamped.
+const listVoiceServicesMock = vi.hoisted(() => vi.fn());
+const ensureKnowledgeSnapshotMock = vi.hoisted(() => vi.fn());
 // Records the route's own inline `accounts` select so a test can assert the
 // query actually hit `accounts` filtered by the resolved account id, not
 // just that SOME `.select().eq().single()` chain was called — a mock that
@@ -124,6 +128,8 @@ vi.mock("@bis/db", () => ({
   // it is a different route (see the same note in lifecycle.test.ts).
   getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
+  listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
+  ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
 }));
 
 import { POST } from "./route";
@@ -199,6 +205,9 @@ beforeEach(() => {
   deleteCallRowMock.mockReset().mockResolvedValue(undefined);
   getTransferPhoneMock.mockReset().mockResolvedValue(null);
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([]);
+  // S-47c: a successful read with no rows, and version 5, so every answered call is stamped.
+  listVoiceServicesMock.mockReset().mockResolvedValue([]);
+  ensureKnowledgeSnapshotMock.mockReset().mockResolvedValue(5);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 
@@ -591,7 +600,7 @@ describe("POST /api/voice/incoming — happy path", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(
-      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" },
+      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 },
     );
     expect(getOrCreateCalendarMock).toHaveBeenCalledWith(expect.anything(), "acct1", "voice", "ai");
   });
@@ -887,7 +896,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
   it("off (no setting on the row): no stamp named and the old identity line — the existing shape assertion still holds", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
     expect(acceptedInstructions()).toContain(OLD);
     expect(randomIntMock).not.toHaveBeenCalled();
   });
@@ -897,7 +906,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" } });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" }, knowledgeVersion: 5 });
     expect(acceptedInstructions()).toContain(DISCLOSED);
   });
 
@@ -908,7 +917,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     await POST(req());
     expect(randomIntMock).toHaveBeenCalledWith(2);
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" } });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" }, knowledgeVersion: 5 });
     expect(acceptedInstructions()).toContain(OLD);
   });
 
@@ -964,7 +973,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
   it("no module: the row is written exactly as before and the prompt carries no trade rules (mutation: always pass tradeModule, even null -> FAILS)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -973,7 +982,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 } });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5 });
     expect(acceptedInstructions()).toContain(EVT);
     expect(acceptedInstructions()).not.toContain(INS);
   });
@@ -994,7 +1003,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "law" });
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696" });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -1008,4 +1017,78 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
   });
   // M17: no cap-decline case here. S-47a's "a Trial call declined by the per-account cap … writes no row"
   // (this file, the saying-she-is-an-AI describe) already pins that a declined call never reaches step 10.
+});
+
+describe("POST /api/voice/incoming — what Sofía knows (S-47c)", () => {
+  const acceptedInstructions = () => {
+    const [, init] = fetchMock.mock.calls[0]!;
+    return (JSON.parse(String((init as { body: string }).body)) as { instructions: string }).instructions;
+  };
+  const ROW = { id: "s1", account_id: "acct1", position: 1, created_at: "2026-10-23T00:00:00Z", name_en: "Haircut", name_es: null,
+    description_en: null, description_es: null, price_kind: "fixed", amount_cents: 2500, amount_max_cents: null, unit_en: null, unit_es: null };
+  const SENTENCE = `- Haircut — English: "The price for Haircut is $25." Spanish: "El precio de Haircut es $25."`;
+
+  it("the row is stamped with the version the RPC returned, and the prompt is built from the SAME payload the RPC was given (mutation: build the prompt from a second read -> FAILS)", async () => {
+    listVoiceServicesMock.mockResolvedValue([ROW]);
+    ensureKnowledgeSnapshotMock.mockResolvedValue(42);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ knowledgeVersion: 42 });
+    const [, accountId, payload] = ensureKnowledgeSnapshotMock.mock.calls[0]! as [unknown, string, { services: { sentence_en: string }[]; facts: string }];
+    expect(accountId).toBe("acct1");
+    expect(payload.services.map((s) => s.sentence_en)).toEqual(["The price for Haircut is $25."]);
+    expect(payload.facts).toBe(PROFILE_ROW.facts);
+    expect(acceptedInstructions()).toContain(SENTENCE);
+    expect(listVoiceServicesMock).toHaveBeenCalledTimes(1);
+    expect(getVoiceProfileMock).toHaveBeenCalledTimes(1);
+  });
+  it("the profile's hours reach the prompt and the payload (mutation: drop businessHours from promptInput -> FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, business_hours: { tue: [["08:00", "18:00"]] } });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(acceptedInstructions()).toContain("BUSINESS HOURS (");
+    expect((ensureKnowledgeSnapshotMock.mock.calls[0]![2] as { business_hours: unknown }).business_hours).toEqual({ tue: [["08:00", "18:00"]] });
+  });
+  it("the RPC failing leaves the call unstamped and ANSWERED, with the knowledge it read (fail-open)", async () => {
+    listVoiceServicesMock.mockResolvedValue([ROW]);
+    ensureKnowledgeSnapshotMock.mockRejectedValue(new Error("ensureKnowledgeSnapshot failed: boom"));
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect("knowledgeVersion" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
+    expect(acceptedInstructions()).toContain(SENTENCE);
+  });
+  it("the services read failing: no RPC, unstamped, free text and hours kept, no list, the C20 closed price line (SD9; mutations: ensure the empty-list payload -> FAILS; drop priceListUnavailable from promptInput -> FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, business_hours: { tue: [["08:00", "18:00"]] } });
+    listVoiceServicesMock.mockRejectedValue(new Error("listVoiceServices failed: boom"));
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+    expect("knowledgeVersion" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
+    expect(acceptedInstructions()).toContain("BUSINESS HOURS (");
+    expect(acceptedInstructions()).not.toContain("SERVICES AND PRICES");
+    expect(acceptedInstructions()).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it("an EMPTY list read keeps today's price line (C20 is for a failed read only)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(acceptedInstructions()).toContain("- Never quote a price, rate, or estimate unless one is stated above.");
+    expect(acceptedInstructions()).not.toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
+  });
+  it("no hours and no list: no hours block and no list in the prompt, and the call is still stamped (spec 8.4; byte identity itself is system-prompt.test.ts's PRE_S47C_DIGEST)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(acceptedInstructions()).not.toContain("BUSINESS HOURS");
+    expect(acceptedInstructions()).not.toContain("SERVICES AND PRICES");
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ knowledgeVersion: 5 });
+  });
+  it("a call declined by the per-account cap reads no services and records no snapshot (the arrangement of the S-47a Trial cap-decline case above)", async () => {
+    countCallsSinceMock.mockResolvedValue(999);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true, declined: "per-account" });
+    expect(listVoiceServicesMock).not.toHaveBeenCalled();
+    expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+  });
 });
