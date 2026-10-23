@@ -25,6 +25,7 @@ import { useFormSubmit } from "@/lib/forms/use-form-submit";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import type { MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
+import { amountsInText } from "@/lib/voice/knowledge/facts-warnings";
 import { formatUsd, PRICE_KINDS, priceSentence, type PriceKind } from "@/lib/voice/knowledge/price-sentence";
 import { formFromServices, parseDollars, servicesFromForm, type ServiceForm } from "@/lib/voice/knowledge/validate";
 import { useFocusAfterRender } from "./focus-after-render";
@@ -80,6 +81,30 @@ export function postableServices(rows: readonly ServiceRowState[]): ServiceForm[
     name_en: r.name_en, name_es: r.name_es, description_en: r.description_en, description_es: r.description_es,
     price_kind: r.price_kind, amount: r.amount, amount_max: r.amount_max, unit_en: r.unit_en, unit_es: r.unit_es,
   }));
+}
+
+export type ServiceAmountMatch = { name: string; text: string };
+
+/**
+ * S-47c follow-up: an amount typed into a row's own NAME or DESCRIPTION — not its price fields — is
+ * read to the caller as written, which off insurance contradicts the HARD LIMITS line (no amount
+ * outside the price sentence) and on insurance is said at all (5.4: names and descriptions go into
+ * the prompt as written there). Scans all four fields of every row passed in (the card calls this
+ * with `postableServices(rows)`, so a row staged for removal is already excluded), reusing
+ * facts-warnings.ts's own amount matcher and its false-positive guards. Each match is tagged with the
+ * row's own English name, or its Spanish one when the English name is still blank.
+ */
+export function serviceAmountMatches(
+  rows: readonly Pick<ServiceForm, "name_en" | "name_es" | "description_en" | "description_es">[],
+): ServiceAmountMatch[] {
+  const out: ServiceAmountMatch[] = [];
+  for (const row of rows) {
+    const name = row.name_en.trim() || row.name_es.trim();
+    for (const field of [row.name_en, row.name_es, row.description_en, row.description_es]) {
+      for (const text of amountsInText(field)) out.push({ name, text });
+    }
+  }
+  return out;
 }
 
 /** C21: on insurance, a row loaded with a price whose English name (trimmed) now differs will be saved as
@@ -417,6 +442,13 @@ export function ServicesPricesCard({
     );
   }
 
+  // S-47c follow-up: live, like the Facts flags above this card — recomputed on every keystroke, never
+  // blocking Save. Scans exactly what Save would post (removed rows excluded).
+  const amountMatches = serviceAmountMatches(postableServices(rows));
+  const amountsText = amountMatches
+    .map((a) => `${a.name || tr.text("voice.services.unnamed")}: "${a.text}"`)
+    .join(", ");
+
   const atMax = rows.length >= 50;
   const addButton = (
     <Button id={addId} type="button" variant="ghost" size="sm" disabled={atMax} aria-describedby={atMax ? maxHintId : undefined} onClick={addRow}>
@@ -435,6 +467,13 @@ export function ServicesPricesCard({
             sentence in the foreground ink (design review I8, components/zone-note.tsx). */}
         {insurance ? (
           <Notice tone="warn" role="note" className="text-foreground">{tr.text("voice.services.insuranceNotice", { persona })}</Notice>
+        ) : null}
+        {/* S-47c follow-up: an amount typed into a name or description, never a blocker (design review
+            I8 precedent: a note, not an assertive alert, with the foreground ink). */}
+        {amountMatches.length > 0 ? (
+          <Notice tone="warn" role="note" className="text-foreground">
+            {tr.text(insurance ? "voice.services.amountsNoticeInsurance" : "voice.services.amountsNotice", { persona, amounts: amountsText })}
+          </Notice>
         ) : null}
         {rows.length === 0 ? (
           <EmptyState icon={Tag} title={tr.text("voice.services.empty", { persona })} action={addButton} />

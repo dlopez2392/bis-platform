@@ -43,15 +43,29 @@ const AMOUNT = new RegExp(
 const PHRASE_END = /[.,;:!?\r\n]/;
 const FIVE_WORDS = /^(?:[ \t]+[^\s]+){0,5}/;
 
-function amountsIn(box: string, source: AmountMatch["source"]): AmountMatch[] {
-  const out: AmountMatch[] = [];
+/** The bare match: an amount plus the words that follow it, up to the end of its phrase. Shared by
+ *  `amountsIn` below (Facts/Services, tagged with a source) and `amountsInText` (the Services & prices
+ *  card's own name/description fields, which are neither box — spec 5.3 follow-up). */
+function matchAmounts(box: string): { index: number; text: string }[] {
+  const out: { index: number; text: string }[] = [];
   for (const m of box.matchAll(AMOUNT)) {
     const rest = box.slice(m.index + m[0].length);
     const stop = rest.search(PHRASE_END);
     const words = FIVE_WORDS.exec(stop === -1 ? rest : rest.slice(0, stop))![0];
-    out.push({ source, index: m.index, text: (m[0] + words).trimEnd() });
+    out.push({ index: m.index, text: (m[0] + words).trimEnd() });
   }
   return out;
+}
+
+function amountsIn(box: string, source: AmountMatch["source"]): AmountMatch[] {
+  return matchAmounts(box).map((m) => ({ source, ...m }));
+}
+
+/** Exported for the Services & prices card (spec 5.3 follow-up, the HARD LIMITS contradiction): the
+ *  same amount matcher and phrase-end guard as `amountsIn`, bare (no "facts"/"services" source — a
+ *  service row's name or description is neither box), so an amount typed into either is caught too. */
+export function amountsInText(text: string): string[] {
+  return matchAmounts(text).map((m) => m.text);
 }
 
 export function factsWarnings(

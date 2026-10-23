@@ -880,12 +880,12 @@ describe("CallDetailPage — the Knowledge link (S-47c)", () => {
     const html = await render({ ...CALL, knowledge_version: 3 });
     expect(html).toContain('<dd class="font-medium text-foreground" data-knowledge="">');
     expect(renderedText(html)).toContain("What Sofía knew (#3)");
-    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/3"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/3?call=call1"');
   });
 
   it("the link reads as a link at rest: an underline in the strong line colour, not only on hover (design review; mutation: hover:underline only → FAILS)", async () => {
     const html = await render({ ...CALL, knowledge_version: 3 });
-    const link = /<a[^>]*href="\/dashboard\/accounts\/acct1\/voice\/knowledge\/3"[^>]*>/.exec(html)?.[0] ?? "";
+    const link = /<a[^>]*href="\/dashboard\/accounts\/acct1\/voice\/knowledge\/3\?call=call1"[^>]*>/.exec(html)?.[0] ?? "";
     expect(link).toMatch(/class="[^"]*(?<![\w:-])underline(?![\w-])/);
     expect(link).toContain("decoration-[var(--line-strong)]");
     expect(link).toContain("underline-offset-2");
@@ -900,7 +900,14 @@ describe("CallDetailPage — the Knowledge link (S-47c)", () => {
   it("reads the version off the call, not a constant (mutation: hardcode #3 → FAILS)", async () => {
     const html = await render({ ...CALL, knowledge_version: 7 });
     expect(renderedText(html)).toContain("What Sofía knew (#7)");
-    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/7"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/7?call=call1"');
+  });
+
+  // S-47c follow-up (spec 5.4, C13): the knowledge page reads THIS call's own trade module only when
+  // it knows which call it came from — so the link must carry it, every time it renders at all.
+  it("carries ?call=<callId>, the route's own call id (mutation: drop the query → FAILS)", async () => {
+    const html = await render({ ...CALL, knowledge_version: 3 });
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/3?call=call1"');
   });
 
   it("renders no Knowledge line for a call with no stamp (mutation: render it unconditionally → FAILS)", async () => {

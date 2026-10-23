@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, FileQuestion } from "lucide-react";
 import {
-  serviceDb, getKnowledgeSnapshot, getLatestKnowledgeVersion, getVoiceProfile, listPeopleNames,
+  serviceDb, getCall, getKnowledgeSnapshot, getLatestKnowledgeVersion, getVoiceProfile, listPeopleNames,
 } from "@bis/db";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
@@ -76,16 +76,25 @@ function ServiceLine({ label, value, lang }: { label: string; value: string; lan
  * Every read failure (the persona, the person lookup) folds into the same error state: this screen has
  * one job, showing this snapshot, so one boundary around the whole read phase is the screen's boundary
  * (rule 5), not a card's. Loading is `./loading.tsx` (rule 7).
+ *
+ * `?call=` (S-47c follow-up, spec 5.4, C13): the call page's Knowledge link names the call it came
+ * from. The snapshot payload never records which trade module shaped it (5.4: it is the SAME payload
+ * either way) — only the call's own `trade_module` does — so when `call` names a call of THIS account
+ * (the same `getCall` the call page itself uses) whose OWN `knowledge_version` is the version being
+ * viewed, and that module is `insurance_pc`, the Services & prices section drops every sentence and
+ * amount, showing names and descriptions only, with a note explaining why. A call of another account
+ * (getCall's own account filter returns null) or one stamped with a different version is ignored —
+ * this page renders exactly as it would with no `call` at all.
  */
 export default async function VoiceKnowledgePage({
   params,
   searchParams,
 }: {
   params: Promise<{ accountId: string; version: string }>;
-  searchParams?: Promise<{ locale?: string }>;
+  searchParams?: Promise<{ locale?: string; call?: string }>;
 }) {
   const { accountId, version: versionParam } = await params;
-  const { locale: localeParam } = (await searchParams) ?? {};
+  const { locale: localeParam, call: callParam } = (await searchParams) ?? {};
   await requireAgencyOnlyAccountAccess(accountId);
 
   const prefs = await getPersonPrefs();
@@ -114,14 +123,22 @@ export default async function VoiceKnowledgePage({
     version: number; latest: number; savedLine: string;
     facts: string; servicesText: string; hoursLines: string[] | null;
     services: ShownService[];
+    /** True only when `?call=` names a call of THIS account, stamped with THIS version, whose own
+     *  trade module is `insurance_pc` (spec 5.4, C13) — never derived from the payload itself. */
+    insuranceCall: boolean;
   };
   try {
-    const [snapshot, latest, profile] = await Promise.all([
+    const [snapshot, latest, profile, call] = await Promise.all([
       getKnowledgeSnapshot(db, accountId, version),
       getLatestKnowledgeVersion(db, accountId),
       getVoiceProfile(db, accountId),
+      // Same read the call page itself uses (getCall), scoped to THIS route's accountId: a call of
+      // another account comes back null from that filter alone, which this page then treats as "no
+      // call" (ignored), never as a reason to trust it.
+      callParam ? getCall(db, accountId, callParam) : Promise.resolve(null),
     ]);
     persona = profile?.persona_name?.trim() || "Sofía";
+    const insuranceCall = call !== null && call.knowledge_version === version && call.trade_module === "insurance_pc";
     if (!snapshot) {
       state = { kind: "not-found" };
     } else {
@@ -153,6 +170,7 @@ export default async function VoiceKnowledgePage({
             description_en: s.description_en, description_es: s.description_es,
             sentence_en: s.sentence_en, sentence_es: s.sentence_es,
           })),
+          insuranceCall,
         };
       }
     }
@@ -213,6 +231,13 @@ export default async function VoiceKnowledgePage({
 
           <section className="space-y-1">
             <h4 className={headingClass}>{tr.text("voice.knowledge.prices")}</h4>
+            {/* S-47c follow-up (spec 5.4, C13): the call this page was opened from ran under the
+                insurance module, which was given names and descriptions only, never a sentence — so
+                the sentences below are hidden and this note says why, instead of the page overstating
+                what she knew on that call. */}
+            {state.insuranceCall ? (
+              <p className="text-xs text-muted-foreground">{tr.text("voice.knowledge.insuranceCallNote", { persona })}</p>
+            ) : null}
             {state.services.length > 0 ? (
               <ul className="space-y-3">
                 {state.services.map((s) => (
@@ -223,8 +248,12 @@ export default async function VoiceKnowledgePage({
                     {s.name_es ? <ServiceLine label={tr.text("voice.knowledge.nameEs")} value={s.name_es} lang="es" /> : null}
                     {s.description_en ? <ServiceLine label={tr.text("voice.knowledge.aboutEn")} value={s.description_en} lang="en" /> : null}
                     {s.description_es ? <ServiceLine label={tr.text("voice.knowledge.aboutEs")} value={s.description_es} lang="es" /> : null}
-                    <ServiceLine label={tr.text("voice.knowledge.inEnglish")} value={s.sentence_en} lang="en" />
-                    <ServiceLine label={tr.text("voice.knowledge.inSpanish")} value={s.sentence_es} lang="es" />
+                    {!state.insuranceCall ? (
+                      <>
+                        <ServiceLine label={tr.text("voice.knowledge.inEnglish")} value={s.sentence_en} lang="en" />
+                        <ServiceLine label={tr.text("voice.knowledge.inSpanish")} value={s.sentence_es} lang="es" />
+                      </>
+                    ) : null}
                   </li>
                 ))}
               </ul>
