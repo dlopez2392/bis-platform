@@ -1,8 +1,9 @@
 # S-47 part c: business hours, services and prices that Sofía quotes exactly, with a version stamp on calls (F-037 part 1, migration 0095)
 
 Status: owner decisions C1–C4 and the section 4 data model approved in conversation 2026-10-21/23; the
-open sections were settled with the owner's "go with your recommendations" (C5–C10, 2026-10-23). This
-file is awaiting the owner's read. Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
+open sections were settled with the owner's "go with your recommendations" (C5–C10, 2026-10-23), and the
+owner answered the first draft's questions the same day (C11–C17). One item stays open: the owner's read
+of the twelve price sentences (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
 "↳ F-037 (part)", 2.5–3 ew). Part a (disclosure, F-034) shipped in #279, part b (trade modules, F-174 part)
 in #280–#283; d (the one switch, F-084) and e (identity checks, F-116 part) follow in their own specs.
 F-037 part 2 (owner-edited versioned facts, visibility tiers, freshness; `crm-features.md` row 1500) builds
@@ -75,6 +76,30 @@ Settled on the owner's "go with your recommendations" (2026-10-23):
   corpus run (the modules are paused); unit tests pin every rendered sentence per price kind in both
   languages, and the byte-identity digests.
 
+The owner's answers to the first draft's questions (2026-10-23):
+
+- **C11 Any amount she should say is a row on the list.** A deposit, a fee or a minimum with an amount
+  becomes its own row (for example "Deposit to hold a date", fixed, $500). Refund and cancellation terms
+  with no amount stay in Facts. The Voice page's Facts flag lists each amount it found, so the operator
+  knows exactly what to move (5.3).
+- **C12 No trade-module change.** The trade modules are paused (owner, 2026-10-23; a structured-intake
+  redesign comes later), so S-47c changes no module file, no `VERSION` and no pin. Events v3's "the facts
+  above" is pointed at the list by the base prompt alone (5.4).
+- **C13 Insurance shows no amounts anywhere.** On an `insurance_pc` account the prompt lists service
+  names and descriptions only, and the Voice page hides the price fields (5.4, 5.7).
+- **C14 Closed means a message, unless they ask or it is urgent.** When structured hours say the business
+  is closed right now, Sofía puts a caller through only when the caller asks for a person or a trade
+  module's urgent path applies; otherwise she takes a message. Exactly how this meets the base prompt's
+  offers is 5.2.1. Accounts without structured hours, and every account while it is open, are unchanged.
+- **C15 Automatic snapshots are accepted.** The snapshot recorded at call or chat start when what she
+  is about to be given differs from the latest snapshot, though no Voice page save recorded it (5.6), is
+  part of C4.
+- **C16 A `per_unit` row needs both units.** It cannot be saved without `unit_en` AND `unit_es`; there is
+  no English fallback for the unit (the name keeps its fallback, C2). Enforced by the database CHECK
+  (4), and validated first by the Save action so the operator gets a sentence instead of a refusal.
+- **C17 Hours are readable by every account member,** as Facts already are: `business_hours` lives on
+  `voice_profiles` and keeps that table's SELECT grant.
+
 ## 3. Scope
 
 **In:** migration 0095 (the hours column, the services table, the snapshots table, the two stamp columns,
@@ -87,7 +112,7 @@ call-page link; copy keys; unit, route, db and e2e tests.
 serializer (F-037 part 2); holiday and special-date hours (F-037 part 2; until then a dated closure stays
 in Facts, see 5.3); services with durations that the booking page offers (F-047 part); packages and menus
 (F-166); showing the knowledge version in the web-chat inbox (a later read, nothing stores less for it);
-any change to module wording (would be a module `VERSION` bump plus a corpus run, Q2); a corpus run.
+any change to module wording (the modules are paused, C12); a corpus run.
 
 ## 4. Data (migration 0095, tier HIGH)
 
@@ -115,7 +140,7 @@ voice_services
   voice_services_price_shape_check — each kind carries exactly its amounts:
     fixed, from       amount_cents set; amount_max_cents, unit_en, unit_es null
     range             amount_cents and amount_max_cents set, amount_max_cents > amount_cents; units null
-    per_unit          amount_cents and unit_en set; amount_max_cents null; unit_es optional
+    per_unit          amount_cents, unit_en and unit_es set (C16); amount_max_cents null
     free, after_visit amount_cents, amount_max_cents, unit_en, unit_es all null
 
 voice_knowledge_snapshots
@@ -149,7 +174,7 @@ concierge_conversations.knowledge_version integer null check (> 0)
   policy (`(select app.is_agency()) or (select app.is_account_owner(app.current_account_id()))`, every
   helper coalesced, the plpgsql-NULL lesson). Client Owners may read; Staff, Technicians and anon may not;
   no client role writes anything. `voice_profiles.business_hours` inherits that table's grants:
-  `authenticated` has SELECT (every member of the tenant, as for `facts` today) and no UPDATE.
+  `authenticated` has SELECT (every member of the tenant, as for `facts` today; accepted, C17) and no UPDATE.
 - **The client-write digest is unchanged** (`proposals-drop.test.ts`, `51|0dd3e2d7…`), and
   `schema-grants-guard.test.ts`'s EXPECTED_WRITES gains nothing: both new tables have RLS on and no
   client write.
@@ -219,8 +244,8 @@ PostgREST refuses a request naming a column, table or function it does not know,
 ### 5.1 The renderers (pure, `apps/web/src/lib/voice/knowledge/`, tier MEDIUM)
 
 - `price-sentence.ts`: `priceSentence(service, "en" | "es")`. One template per kind and language, no other
-  wording anywhere. `{N}` is the name (Spanish: `name_es`, else `name_en`), `{U}` the unit (Spanish:
-  `unit_es`, else `unit_en`), `{A}`/`{B}` the amounts:
+  wording anywhere. `{N}` is the name (Spanish: `name_es`, else `name_en`), `{U}` the unit (`unit_en` in
+  English, `unit_es` in Spanish; both are required, C16, so there is no fallback), `{A}`/`{B}` the amounts:
 
   | kind | English | Spanish |
   |---|---|---|
@@ -285,8 +310,9 @@ The last sentence is what keeps the events module (5.4) working without a wordin
   "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need,
   say so and say when it opens. You can still answer questions from what you know above{, and book a time
   that check_availability returns — only where a new booking can be made}. For anything that needs someone
-  on the team, take a message and say the team will call them back once it opens." Open now: no line (the
-  Right now line already says until when).
+  on the team, take a message and say the team will call them back once it opens.{ If they ask for a
+  person, or it is urgent, you can still put them through. — only when `handoffAvailable`, C14}" Open now:
+  no line (the Right now line already says until when).
 - Phone, "Always take a message": the MESSAGES ONLY line, unchanged (it holds whatever the hours).
 - Web chat and voice demo: today's conditional "AFTER HOURS — If the business is closed right now…" line
   (shown only under "Always take a message") becomes the definite one when closed, and is left out when
@@ -295,6 +321,46 @@ The last sentence is what keeps the events module (5.4) working without a wordin
   when closed (it had nothing).
 
 The calendar still governs what `check_availability` returns; nothing here changes the slot engine.
+
+#### 5.2.1 Closed now and the offer of a person (C14)
+
+Today the base prompt has one string for what Sofía offers someone who would rather talk to a person,
+`wouldRatherTalkToAPerson`: on the phone, "offer to put them through to someone on the team" when
+`handoffAvailable` (a transfer number is set for this call), else "offer to take a message". It is used in
+four places: the IDENTITY line (asked whether she is a person or an AI), the hidden-caller-ID line (an
+existing appointment cannot be looked up), the reschedule/cancel refusal, and the other-number line. When
+`handoffAvailable`, the session also carries `transfer_to_human`, and its TOOLS line says to call it "as
+soon as the caller asks to speak to a person, or accepts when you offer".
+
+S-47c adds one derived flag in `buildSystemPrompt`, `closedNow`: true only on the PHONE medium, only when
+`businessHours` is set, and only when `openNowLine` says closed. When `closedNow` is false (no structured
+hours, open right now, or the web chat or voice demo) nothing below applies and every line is today's.
+Accounts without structured hours therefore stay byte-identical (the C3 digests). When `closedNow` is true
+and `handoffAvailable`:
+
+1. `wouldRatherTalkToAPerson` resolves to the existing no-transfer string, "offer to take a message", byte
+   for byte, in all four places. She no longer volunteers a transfer.
+2. `transfer_to_human` stays on the session (`toolSchemas` still receives `handoffAvailable`;
+   `session-config.ts` is unchanged), so a caller who asks can still be put through. Its TOOLS line
+   becomes: "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only
+   when the caller asks to speak to a person{, or when they accept the offer on the URGENT path in the
+   trade rules above — only when the account has a trade module}. Do not ask them to hold first; that line
+   is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and
+   take a message instead."
+3. The trade module still receives `handoffAvailable: true` in its context, so its URGENT path still makes
+   its offer, word for word (C12: no module change). The module's "offer to connect them … wherever the
+   general rules above say to offer a person" now finds the general rules saying "take a message", which is
+   the intended result. Its "if they ask to speak to a person themselves, put them through" agrees with
+   point 2.
+4. The AFTER HOURS closed line (5.2) carries the matching sentence: "If they ask for a person, or it is
+   urgent, you can still put them through."
+5. "Always take a message" keeps its MESSAGES ONLY line unchanged, including its existing "If they ask for
+   a person, or it cannot wait, you can still put them through", open or closed. The hours do not change
+   that setting (it already holds at every hour).
+
+With `handoffAvailable` false, nothing here changes anything: there was no transfer to suppress. An account
+without a trade module has no URGENT path, so when it is closed she puts a caller through only when they
+ask.
 
 ### 5.3 Facts that conflict (the Voice page flags, C1 and C3)
 
@@ -305,29 +371,35 @@ A pure `factsWarnings(facts, servicesText, { hasHours, hasPriceList })` in `lib/
   Business hours below, so take regular hours out of Facts. A closure on a specific date can stay."
   Without structured hours, a gentler hint: "Add Business hours below so {persona} can tell callers whether
   you are open right now."
-- **Amounts in Facts or Services** ("$40", "40 dollars", "40 dólares", "USD"): with a price list, a Notice:
-  "Facts has a price in it. {persona} gives prices only from Services & prices, so this amount will not be
-  quoted. Move it there or take it out." Without a list, nothing (today's behaviour).
+- **Amounts in Facts or Services** ("$40", "40 dollars", "40 dólares", "USD"): with a price list, a Notice
+  that names each amount found, in the order it appears, with a few words around it (C11): "{persona} gives
+  prices only from Services & prices, so these amounts in Facts will not be said: "$500 deposit to hold
+  the date", "$35 per guest". Add each one she should say as its own row (a deposit or a fee too), or take
+  it out. Refund and cancellation terms without an amount can stay." `factsWarnings` returns the matches
+  (text and position), so the Notice and its test read the same list. Without a list, nothing (today's
+  behaviour).
 
 Flags never block a save; they are re-computed live as the operator types.
 
 ### 5.4 The trade modules (C6, C7)
 
-No module file changes; `VERSION` stays 3 for both; `pin.ts`'s history is untouched.
+No module file changes; `VERSION` stays 3 for both; `pin.ts`'s history is untouched (C12: the modules are
+paused, and a structured-intake redesign comes later).
 
 - **Events** (`modules/events.ts` v3) says prices are given "only by repeating what the facts above say,
   word for word" and never one "not written in the facts above". The list sits ABOVE the module block
   (inside WHAT YOU KNOW), so it is part of "the facts above", and the HARD LIMITS line's last sentence says
   outright that "in the facts" means the list. A list sentence read word for word satisfies the module
-  rule, and an amount left in the prose is excluded by the HARD LIMITS line. Deposits and refund terms with
-  an amount are a question (Q1). Whether v4 should name the list itself is Q2.
+  rule, and an amount left in the prose is excluded by the HARD LIMITS line. A deposit, fee or minimum she
+  should say is a row on the list; refund and cancellation terms without an amount stay in Facts, where the
+  module still lets her give them word for word (C11).
 - **Insurance** (`modules/insurance-pc.ts` v3) never quotes, "even if a price … appears in the facts
   above", and says it overrides the HARD LIMITS line. As defence in depth, on an account whose trade module
   is `insurance_pc` the SERVICES AND PRICES block lists the service names and descriptions only, with no
   sentence and no amount, and the HARD LIMITS price line stays today's: the prompt never carries a number
   insurance could be talked into reading. The snapshot payload is the same either way (it records the
-  account's knowledge; the call's `trade_module` stamp records which rules shaped it). The Voice page says
-  so on that card (5.7). Q3 asks the owner to confirm.
+  account's knowledge; the call's `trade_module` stamp records which rules shaped it). The Voice page hides
+  the price fields on that account (5.7, C13).
 - The placeholder sanitizer and the post-call ID masking (B7) are not touched.
 
 ### 5.5 Where each surface reads its knowledge
@@ -354,7 +426,8 @@ every case, not only after a Voice page save: an account that has not been saved
 account on day one), a profile written outside the Voice page (`packages/db/src/demo/seed.ts` writes facts
 through `upsertVoiceProfile`), a renderer change (`renderer_version`), or a build rolled back and forward.
 When the live payload matches the latest snapshot, which is the normal case, it is one read and no write.
-Such a snapshot says "Recorded automatically" on its page (5.8).
+Such a snapshot says "Recorded automatically" on its page (5.8). The owner accepted these automatic
+snapshots as part of C4 (C15).
 
 ### 5.7 The Voice page (agency only)
 
@@ -379,8 +452,17 @@ page renders on the server, so there is no loading state beyond the page's own.
   two unit fields), descriptions; and a live preview of the English and the Spanish sentence, from
   `priceSentence`, the same function the prompt uses. "Add a service" (ghost); at most 50. Remove is staged
   until Save (the card's Save is the commit; nothing is destroyed before it). Empty state: "List your
-  services and prices so {persona} quotes them exactly." with Add a service. On an insurance account a
-  Notice: "On insurance accounts {persona} names these services but never gives a price."
+  services and prices so {persona} quotes them exactly." with Add a service.
+  - A `per_unit` row needs both unit fields (C16): the Save action refuses it first, naming the row ("Add
+    the unit in English and in Spanish for {name}"), and the CHECK refuses it again if anything gets past
+    the action. The action's validation exists for the sentence, not for safety.
+  - **On an insurance account (C13)** the card is titled "Services" and shows no price at all: the kind
+    Select, the amount and unit fields and the sentence preview are hidden, and the row shows only the
+    names and descriptions. A row added there is saved as `after_visit` (the one kind with no number). A
+    row that already carries a price keeps it untouched in the database (the form sends it back as it was
+    stored) but shows none of it. A Notice says: "On insurance accounts {persona} names these services
+    but never gives a price." If the account's trade module is later set to none or events, the prices
+    show again, and rows added under insurance read "given after a visit" until edited.
 - Each Save: a "Saved" toast as the other Voice cards; a refused save keeps the operator's edits (the
   `use-form-submit` rule from the calendar panel) and says why.
 - The profile card's Facts and Services boxes save through the same RPC (only the `facts` and
@@ -407,7 +489,7 @@ New keys, English and Spanish, through the catalogue (`lib/messages.ts`, `.es` k
 regenerated): both card titles, descriptions, empty states and hints; the weekday labels if the calendar's
 are not reusable as keys; Open, Add hours, Remove, Copy from calendar, Clear hours, the timezone line; the
 six price-kind labels and their amount-field labels; the preview labels; the validation messages; the stale
-message; the insurance Notice; the two Facts flags and the hint; the call-page label and link; the
+message; the `per_unit` units message (C16); the insurance title "Services" and its Notice (C13); the two Facts flags with their list of amounts (C11) and the hint; the call-page label and link; the
 knowledge page's headings. Two existing keys change: `voice.profile.factsHint` ("Hours, pricing,
 policies…") → "Policies and anything else a caller might ask about. Hours and prices go in their own cards
 below." and `voice.tradeRules.eventsHint` ("…gives prices only word for word from Facts") → "…gives prices
@@ -417,8 +499,8 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
 ## 7. Tests
 
 - **Renderers:** `priceSentence` for every kind in both languages, as literal strings (12 fixtures),
-  including the Spanish-name and Spanish-unit fallbacks, cents, thousands; the shape refusals (a `range`
-  without its maximum throws). `hoursLines` and `openNowLine`: open, lunch gap, closed today, closed until
+  including the Spanish-name fallback, cents, thousands; the shape refusals (a `range` without its
+  maximum, or a `per_unit` without either unit, throws). `hoursLines` and `openNowLine`: open, lunch gap, closed today, closed until
   tomorrow, closed until Monday, the "24:00"/"00:00" join, a DST-change day in `America/Chicago`.
   `buildKnowledgePayload` is deterministic (same input, deep-equal output, stable key order).
 - **Byte identity (C3):** before `system-prompt.ts` is touched, record `PRE_S47C_DIGEST` over every
@@ -426,12 +508,21 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
   fields absent, null and empty; `PRE_S47B_DIGEST` stays green too.
 - **Prompt:** hours alone add the BUSINESS HOURS block and change nothing else; a list alone adds the list
   and swaps exactly the one HARD LIMITS line; insurance gets names only and today's HARD LIMITS line; the
-  AFTER HOURS variants per medium × setting × open/closed. Guards on the specific sentences, never on a
-  heading (a test a comment could satisfy is vacuous). `pin.ts` hashes unchanged (no module text moved).
-- **Facts flags:** each pattern in both languages, and the false-positive guards (a phone number, a ZIP, a
-  year, "24/7" not read as an amount).
+  AFTER HOURS variants per medium × setting × open/closed. C14, phone with a transfer number: closed now,
+  all four offer sites read "offer to take a message", the TOOLS line is the closed variant (with the
+  URGENT clause only when a module is set), `toolSchemas` still carries `transfer_to_human`, and the module
+  block is byte-identical to the open-now one; open now, the prompt equals the no-hours prompt plus the
+  BUSINESS HOURS block and nothing else; web chat and voice demo, closed or open, no C14 line at all.
+  Guards on the specific sentences, never on a heading (a test a comment could satisfy is vacuous).
+  `pin.ts` hashes unchanged (no module text moved).
+- **Facts flags:** each pattern in both languages, the list of amounts returned in order with their
+  surrounding words (C11), and the false-positive guards (a phone number, a ZIP, a year, "24/7" not read as
+  an amount).
+- **Voice page (insurance, C13):** on an `insurance_pc` account no amount, unit, kind or sentence renders,
+  a new row saves as `after_visit`, and a stored row's price is sent back unchanged.
 - **db (HIGH):** 0095's shape; the price-shape CHECK accepts each kind with exactly its amounts and refuses
-  each extra or missing one (one mutation probe per clause); the newline CHECKs; position bounds and
+  each extra or missing one (one mutation probe per clause, including `per_unit` with no `unit_es`, C16);
+  the newline CHECKs; position bounds and
   uniqueness; snapshot uniqueness, the UPDATE trigger and the revoked UPDATE/DELETE for service_role, and an
   account delete still cascading; the two FKs (a stamp naming a missing version refused; NULL admitted);
   `save_voice_knowledge`: ok, `stale`, `no_profile`, `invalid`, no new version on an equal payload, version
@@ -468,26 +559,11 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
   keys and baseline; the palette keywords; the e2e spec.
 - One end-of-PR review (final + design), then one fix round.
 
-## 10. Open questions (not settled by the code; the owner's call)
+## 10. Open item
 
-- **Q1 Deposits and fees in Facts (events).** C3 makes every amount outside the list unquotable, so a
-  venue's "$500 deposit" in Facts stops being said. Recommendation: anything with an amount goes on the
-  list as its own row (e.g. "Deposit to hold a date", fixed $500); refund TERMS without an amount stay in
-  Facts. Confirm.
-- **Q2 Events v4.** S-47c points events v3's "the facts above" at the list through the base prompt's HARD
-  LIMITS line, with no module change. Should a later events v4 name the list itself? That is a wording
-  change: a `VERSION` bump, a new pin hash and a corpus re-run once modules un-pause. Not done here.
-- **Q3 Insurance with a list.** Names and descriptions only, no amounts in the prompt, HARD LIMITS
-  unchanged (5.4). Confirm, or hide the Services & prices card's amount fields on insurance accounts too.
-- **Q4 Closed now and the transfer offer.** When the business is closed, should Sofía still offer to put a
-  caller through (where a transfer number is set)? S-47c changes nothing there; the number may be an
-  owner's cell.
-- **Q5 Snapshots nobody saved (5.6).** Recording a "system" snapshot at call start extends C4 beyond Voice
-  page saves. It is what makes every stamp true; confirm it is acceptable.
-- **Q6 The Spanish unit.** A `per_unit` row with no Spanish unit falls back to the English one ("por
-  guest"), as the name does (C2). The preview shows it. Confirm, or require the Spanish unit.
-- **Q7 Who reads what.** Services and snapshots are Owners-only to clients (C4/section 4), but
-  `business_hours` sits on `voice_profiles`, which every tenant member can read, as Facts already can.
-  Acceptable for hours (public information)? Owners have no screen for any of it until F-037 part 2.
-- **Q8 The sentences themselves.** The twelve templates in 5.1 are the words callers will hear; they want
-  the owner's 7 AM read in both languages before the plan pins them.
+The first draft's Q1–Q7 were answered by the owner on 2026-10-23 and are decisions C11–C17 (section 2).
+One item stays open:
+
+- **Q8 The twelve price sentences (5.1).** They are the words callers will hear. The owner reads them in
+  both languages (the 7 AM read) before the plan pins them as literal test fixtures. Until then the table
+  in 5.1 is a draft, and nothing else in this spec depends on its exact wording.
