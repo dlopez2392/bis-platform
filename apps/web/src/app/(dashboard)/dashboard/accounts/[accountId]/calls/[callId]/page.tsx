@@ -308,7 +308,9 @@ export default async function CallDetailPage({
               <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
                 <dt className="whitespace-nowrap">{tr.text("calls.detail.knowledge")}</dt>
                 <dd className="font-medium text-foreground" data-knowledge="">
-                  <Link href={`${base}/voice/knowledge/${call.knowledge_version}`} className="underline-offset-2 hover:underline">
+                  {/* Underlined at rest (design review): in a row of plain values, a link that only shows
+                      itself on hover reads as one more value. */}
+                  <Link href={`${base}/voice/knowledge/${call.knowledge_version}`} className="underline decoration-[var(--line-strong)] underline-offset-2">
                     {tr.text("calls.detail.knowledgeLink", { persona: personaName, version: call.knowledge_version })}
                   </Link>
                 </dd>

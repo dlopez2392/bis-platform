@@ -883,6 +883,14 @@ describe("CallDetailPage — the Knowledge link (S-47c)", () => {
     expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/3"');
   });
 
+  it("the link reads as a link at rest: an underline in the strong line colour, not only on hover (design review; mutation: hover:underline only → FAILS)", async () => {
+    const html = await render({ ...CALL, knowledge_version: 3 });
+    const link = /<a[^>]*href="\/dashboard\/accounts\/acct1\/voice\/knowledge\/3"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(link).toMatch(/class="[^"]*(?<![\w:-])underline(?![\w-])/);
+    expect(link).toContain("decoration-[var(--line-strong)]");
+    expect(link).toContain("underline-offset-2");
+  });
+
   it("uses the account's own persona name, not a constant (mutation: hardcode Sofía → FAILS)", async () => {
     getVoiceProfileMock.mockResolvedValue({ persona_name: "Max" });
     const html = await render({ ...CALL, knowledge_version: 3 });
