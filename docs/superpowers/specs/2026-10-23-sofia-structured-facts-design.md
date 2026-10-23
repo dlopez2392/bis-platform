@@ -2,8 +2,8 @@
 
 Status: owner decisions C1–C4 and the section 4 data model approved in conversation 2026-10-21/23; the
 open sections were settled with the owner's "go with your recommendations" (C5–C10, 2026-10-23), and the
-owner answered the first draft's questions the same day (C11–C17). One item stays open: the owner's read
-of the twelve price sentences (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
+owner answered the first draft's questions the same day (C11–C17) and read the twelve price sentences
+(C18). There are no open questions (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
 "↳ F-037 (part)", 2.5–3 ew). Part a (disclosure, F-034) shipped in #279, part b (trade modules, F-174 part)
 in #280–#283; d (the one switch, F-084) and e (identity checks, F-116 part) follow in their own specs.
 F-037 part 2 (owner-edited versioned facts, visibility tiers, freshness; `crm-features.md` row 1500) builds
@@ -99,6 +99,10 @@ The owner's answers to the first draft's questions (2026-10-23):
   (4), and validated first by the Save action so the operator gets a sentence instead of a refusal.
 - **C17 Hours are readable by every account member,** as Facts already are: `business_hours` lives on
   `voice_profiles` and keeps that table's SELECT grant.
+- **C18 The twelve price sentences (owner's read, 2026-10-23).** All six English sentences stand as
+  drafted. Two Spanish ones change: `from` is "El precio de {N} es desde {A}." and `after_visit` is "El
+  precio de {N} se lo damos después de una visita." The other four Spanish sentences stand. The table in
+  5.1 is final, and the plan pins it as literal test fixtures.
 
 ## 3. Scope
 
@@ -250,11 +254,11 @@ PostgREST refuses a request naming a column, table or function it does not know,
   | kind | English | Spanish |
   |---|---|---|
   | fixed | The price for {N} is {A}. | El precio de {N} es {A}. |
-  | from | The price for {N} starts at {A}. | El precio de {N} empieza en {A}. |
+  | from | The price for {N} starts at {A}. | El precio de {N} es desde {A}. |
   | range | The price for {N} is between {A} and {B}. | El precio de {N} es de {A} a {B}. |
   | per_unit | The price for {N} is {A} per {U}. | El precio de {N} es {A} por {U}. |
   | free | There is no charge for {N}. | {N} no tiene costo. |
-  | after_visit | The price for {N} is given after a visit. | El precio de {N} se da después de una visita. |
+  | after_visit | The price for {N} is given after a visit. | El precio de {N} se lo damos después de una visita. |
 
   Amounts: US dollars, whole dollars without cents ("$25", "$1,200"), otherwise two decimals ("$25.50");
   the same `en-US` formatting in both languages (the RGV market writes and says "$1,200"). The "price
@@ -559,11 +563,7 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
   keys and baseline; the palette keywords; the e2e spec.
 - One end-of-PR review (final + design), then one fix round.
 
-## 10. Open item
+## 10. Open questions
 
-The first draft's Q1–Q7 were answered by the owner on 2026-10-23 and are decisions C11–C17 (section 2).
-One item stays open:
-
-- **Q8 The twelve price sentences (5.1).** They are the words callers will hear. The owner reads them in
-  both languages (the 7 AM read) before the plan pins them as literal test fixtures. Until then the table
-  in 5.1 is a draft, and nothing else in this spec depends on its exact wording.
+No open questions. The first draft's Q1–Q7 were answered by the owner on 2026-10-23 and are decisions
+C11–C17, and Q8 (the owner's read of the twelve price sentences) is C18 (section 2).
