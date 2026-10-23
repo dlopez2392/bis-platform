@@ -628,3 +628,25 @@ describe("buildSystemPrompt — the trade module block (S-47b)", () => {
     expect(p).toContain("a licensed agent at Rio Roofing.");
   });
 });
+
+// S-47c (spec section 7): every existing combination × trade module (none, insurance_pc, events). A literal list,
+// so the loop's reach is asserted (5184 prompts) rather than assumed. Recorded on the UNMODIFIED system-prompt.ts,
+// which at this plan's base is main 044b1ab2's (Task 0's base check).
+function everyS47cBaseInput(): VoicePromptInput[] {
+  const out: VoicePromptInput[] = [];
+  for (const i of everyExistingInput())
+    for (const tradeModule of [undefined, "insurance_pc", "events"] as const)
+      out.push(tradeModule === undefined ? i : { ...i, tradeModule });
+  return out;
+}
+/** sha256 over all 5184 prompts as they were at 044b1ab2, BEFORE S-47c touched system-prompt.ts. */
+const PRE_S47C_DIGEST = "f41acd22cb3282c0c11b9b925d04e53b372e6b3a1fe90f6ee6ed3567743fbfd1";
+
+describe("buildSystemPrompt — no hours and no list is byte-identical to before S-47c (C3)", () => {
+  it("covers 5184 combinations (guards the digest from an empty loop)", () => {
+    expect(everyS47cBaseInput().length).toBe(5184);
+  });
+  it("with neither new key, every combination is byte-identical to 044b1ab2 (mutation: push an unconditional \"\" after the Services line -> FAILS)", () => {
+    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47C_DIGEST);
+  });
+});
