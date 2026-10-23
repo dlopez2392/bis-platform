@@ -11,7 +11,7 @@
 
 **Tech stack:** Next.js App Router (server components, server actions), Supabase Postgres + PostgREST, plpgsql, vitest, Playwright, `pg`.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-sofia-structured-facts-design.md` at `d3c377aa`. Decisions C1–C18 are the owner's and are not reopened. Every file:line below was read at `d3c377aa` (= `main` `044b1ab2` + the spec; `git diff 044b1ab2 d3c377aa --stat` touches only that spec file).
+**Spec:** `docs/superpowers/specs/2026-10-23-sofia-structured-facts-design.md` at `d3c377aa`, plus C19 and C20 (owner rulings of 2026-10-23 on this plan's first draft, added to spec §2 and §10 in the plan's fix commit). Decisions C1–C20 are the owner's and are not reopened. Every file:line below was read at `d3c377aa` (= `main` `044b1ab2` + the spec; `git diff 044b1ab2 d3c377aa --stat` touches only that spec file).
 
 **Base:** `feat/s47c-facts` at `d3c377aa`.
 - `<WT>` = `C:\Users\danlo\bis-platform\.claude\worktrees\s47c` (Git Bash: `/c/Users/danlo/bis-platform/.claude/worktrees/s47c`).
@@ -38,12 +38,12 @@ Path abbreviations:
   - The Voice page profile Save: Facts and Services now go through `save_voice_knowledge` (spec §5.7 last bullet), so the existing card's Save fails without 0095.
   - `getConciergeConversation` is also read by `packages/db/src/webchat.ts` (the web-chat sync).
   **Resolution:** no scope change; the merge gate already waits for 0095 on production. The 0095 header, the PR body and Task 12 name all of them.
-- **SD4. Teardown: the two new tables must stay OFF `ACCOUNT_OWNED_TABLES`.** Evidence: `deleteAccountCascade` deletes every listed table with `.delete()` as `service_role` (`packages/db/src/account-teardown.ts:139-142`); spec §4 gives `service_role` no DELETE, so listing either would throw 42501 on every test account's teardown and every demo re-seed (the `consent_events` precedent, `:75-87`). Both tables carry `account_id … on delete cascade`, so the final `accounts` delete (`:152`) carries them away. Also: `public.events.account_id` has NO cascade (`0001_tenancy.sql:60`) and `calls.account_id` and `voice_profiles.account_id` are `on delete restrict` (`0019_voice_core.sql:46`, `:24`), so the db test's cascade case deletes `calls`, the chat, the form, the profile and the number first (deleteAccountCascade's own order) and writes no `events` row. **Resolution:** Task 5 adds a paragraph to the `account-teardown.ts` doc block; Task 1's test asserts neither table is on the list.
+- **SD4. Teardown: the two new tables must stay OFF `ACCOUNT_OWNED_TABLES`.** Evidence: `deleteAccountCascade` deletes every listed table with `.delete()` as `service_role` (`packages/db/src/account-teardown.ts:139-142`); spec §4 gives `service_role` no DELETE, so listing either would throw 42501 on every test account's teardown and every demo re-seed (the `consent_events` precedent, `:75-87`). Both tables carry `account_id … on delete cascade`, so the final `accounts` delete (`:152`) carries them away. Also: `public.events.account_id` has NO cascade (`0001_tenancy.sql:60`) and `calls.account_id` and `voice_profiles.account_id` are `on delete restrict` (`0019_voice_core.sql:46`, `:24`), so the db test's cascade case deletes `calls`, the chat, the form, the profile and the number first (deleteAccountCascade's own order) and writes no `events` row. **Resolution:** Task 5 adds a paragraph to the `account-teardown.ts` doc block; Task 1's test asserts neither table is on the list. The e2e fixture sweep reuses the same list (`apps/web/e2e/fixtures/sweep.ts:43` imports `ACCOUNT_OWNED_TABLES`, `:125` loops over it inside its own `deleteAccountCascade` at `:91`), so the one exclusion covers it too.
 - **SD5. The phone's closed AFTER HOURS line says "or it is urgent" only when there is a trade module.** Spec §5.2's template ends "If they ask for a person, or it is urgent, you can still put them through" whenever `handoffAvailable`; §5.2.1's last paragraph and C14 say an account without a trade module puts a closed-hours caller through "only when they ask", and §5.2.1 point 2's TOOLS line says "Call it only when the caller asks … {, or … URGENT path … only when the account has a trade module}". With no module the template would contradict the TOOLS line in the same prompt. **Resolution:** with a module: "If they ask for a person, or it is urgent, you can still put them through."; without: "If they ask for a person, you can still put them through." This is C14 word for word, not a new rule.
 - **SD6. The web chat's and the voice demo's definite AFTER HOURS lines keep today's tail.** Spec §5.2 gives "AFTER HOURS — The business is closed right now (see Right now above); say so briefly and {use capture_lead … / take a message …}". Evidence: today's lines are `system-prompt.ts:273` (web: "…say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.") and `:274` (demo: "…say so briefly and take a message; do not attempt anything else."). **Resolution:** replace only the conditional opening ("If the business is closed right now, ") with "The business is closed right now (see Right now above); "; the tail stays byte-for-byte. Literals in "The model".
 - **SD7. A service's description line.** Spec §5.2 shows `  About it: <description in the language spoken, if any>`, but the prompt is built once, before anyone speaks. **Resolution:** each description that exists gets its own line, `  About it, in English: …` and `  About it, in Spanish: …`; she answers in the language she is speaking (the base LANGUAGE line decides). Descriptions are not prices, so the "word for word" rule does not bind them.
 - **SD8. The insurance block's heading.** Spec §5.4/C13 say an `insurance_pc` account's block lists names and descriptions only, but the spec's heading ("SERVICES AND PRICES (the only prices you may give; …)") promises prices. **Resolution:** on insurance, the heading is `SERVICES (what the business offers):` and each item is `- {name_en}` plus ` (in Spanish: {name_es})` when there is one; the HARD LIMITS price line stays today's (spec §5.4).
-- **SD9. A failed services read on the phone.** Spec §5.5: "the call goes on, unstamped, with the knowledge it could read (the profile's free text if the services read failed)". The hours live on the profile row, which was read. **Resolution:** the prompt keeps the free text AND the hours, carries no list (so the HARD LIMITS line is today's), `ensure` is NOT called (a payload with an unknown list would record a lie), and the row is unstamped. The same rule on the chat's first turn and in the voice demo. If a stored row cannot render (impossible past the CHECK, but defended), the same path is taken.
+- **SD9. A failed services read on the phone.** Spec §5.5: "the call goes on, unstamped, with the knowledge it could read (the profile's free text if the services read failed)". The hours live on the profile row, which was read. **Resolution:** the prompt keeps the free text AND the hours, carries no list, `ensure` is NOT called (a payload with an unknown list would record a lie), and the row is unstamped. **The price line follows owner decision C20 (2026-10-23):** because the list could not be read, the HARD LIMITS price line is the fixed CLOSED price line ("The model, The prompt lines"), so no amount left in the prose can be quoted; she gives no price and offers to take their details. This holds on the phone, at chat creation, on an unstamped chat turn, and in the voice demo (it reads its live list the same way; the ruling names the first three, and the demo is the same read with the same risk). An EMPTY list (the read succeeded, no rows) is not a failure: today's line, byte for byte (C3). On an `insurance_pc` account a failed read keeps today's line (the module already forbids every quote and overrides that line, C13). If a stored row cannot render (impossible past the CHECK, but defended), the same failed-read path is taken.
 - **SD10. What the stale check compares.** Spec §4.1: `p_base_version` "no longer the latest (`stale`: someone saved in between; the action re-reads and retries once …)". **Resolution:** `p_base_version` is the latest version the ACTION read (0 when there is none) immediately before it built the payload from a fresh read of the other parts, not what the page loaded. The one retry re-reads everything, so it never overwrites another person's part: each card writes only its own part, and the payload's other parts are always the stored ones. An automatic call-start snapshot in that window also reads as stale, and the retry absorbs it.
 - **SD11. Midnight as a closing time.** `<input type="time">` holds `00:00`–`23:59`; it cannot hold `24:00`, which `normalizeOpenHours` uses as the end of a day (`apps/web/src/lib/booking/slots.ts:124-155`). **Resolution:** a CLOSING time of `00:00` means midnight and is stored `"24:00"`; a stored `"24:00"` shows as `00:00` in a closing field. An opening time of `00:00` stays `"00:00"`.
 - **SD12. A stamped chat whose snapshot read fails.** Spec §5.5 says a later turn reads the stamped snapshot, and a chat with NO stamp reads the live profile; it does not say what a failed read of a stamped one does. **Resolution:** a read ERROR is thrown into the route's existing catch, which answers `unavailable()` (503) without spending the turn (`…/turn/route.ts:765-770`), the posture of every other read in that route. A snapshot that is missing or does not parse (bad data) falls back to the live knowledge with one log line (ids only).
@@ -55,7 +55,9 @@ Path abbreviations:
 - **SD18. Where the two added round trips sit on the phone path.** Spec §5.5 says the services read runs "in parallel"; it says nothing of the RPC. **Resolution:** the services read starts before step 9's account read and is awaited after it; `ensure` starts right after step 9 (it needs the zone) and is awaited at step 10, so it overlaps step 9b's two handoff reads (`…/incoming/route.ts:1063-1076`). Task 0 reads the latency.
 - **SD19. Weekday labels.** `calendar.settings.day.*` (`apps/web/src/lib/messages.ts:1668-1674`) have no `.es` twins. **Resolution:** new `voice.hours.day.*` keys with twins (spec §6 allows it).
 - **SD20. The amounts flag names both boxes.** Spec §5.3 checks amounts in Facts OR Services but its Notice says "these amounts in Facts". **Resolution:** the copy says "in Facts or Services" (the list it shows covers both). Read by the design reviewer at the 7 AM read.
-- **SD21. The RPCs RAISE (not return a status) on a programming error:** a null argument or a blank actor (22004, `go_live`'s shape, `0063_go_live.sql:91-93`), and `ensure` on an account that does not exist (P0002). Every status the spec names is a return value.
+- **SD21. The RPCs RAISE (not return a status) on a programming error:** a null argument or a blank actor (22004, `go_live`'s shape, `0063_go_live.sql:91-93`), and `ensure` on an account that does not exist (P0002). Every status the spec names is a return value. `ensure` also raises 55P03 when the account row stays held past its own 2s `lock_timeout`; the routes fail open (unstamped).
+- **SD22. The restrictive Owners-only policy also requires the row's account.** Spec §4 writes it as `(select app.is_agency()) or (select app.is_account_owner(app.current_account_id()))`. 0095 uses 0066's shape (`0066_staff_and_roles.sql:95-98`): `coalesce(is_agency, false) or (account_id = current_account_id() and is_account_owner(current_account_id()))`. Stricter, never looser: a row of another account fails the restrictive policy on its own. Consequence for the tests (plan review, 2026-10-23): the cross-account read case is covered by the two policies TOGETHER, so a loosened member-read policy alone leaves it green; Task 1's policy pin is what catches that mutation.
+- **SD23. `ensure_knowledge_snapshot` takes no lock in the usual case** (plan review, 2026-10-23). Spec §4.1 says both RPCs lock the account row first. **Resolution:** `ensure` reads the latest snapshot unlocked and answers it when the payload is equal (every call after the first on an unchanged account); only an append locks the row, re-reads, and appends unless another start got there first. A function-level `lock_timeout` of 2s bounds the wait. Version numbers still never collide (every append is under the lock), and `save_voice_knowledge` still locks first.
 - **Confirmed, not deviations:**
   - The incoming route reads the profile ONCE at step 7 (`…/incoming/route.ts:925`), the account at step 9 (`:1043`), and stamps at step 10 (`:1103-1110`); the chat creates its row on turn 1 (`…/turn/route.ts:373-377`) and reads it back on turn 2+ (`:402`). Spec §5.5's sites are right.
   - No PostgREST embed names `calls` or `concierge_conversations` (`grep -rn "calls(\|concierge_conversations(\|calls!"` over `packages/db/src` and `apps/web/src`, excluding tests: no hit), so the new composite FKs add no embedding ambiguity.
@@ -64,11 +66,10 @@ Path abbreviations:
 
 ## Owner questions
 
-- **OQ1. Under "Always take a message", does a closed business change who she offers to put through?** (Blocks Task 4 only; the orchestrator asks with choice tiles, memory "Choice tiles", recommended first, before dispatching Task 4.)
-  - The conflict: spec §5.2.1 makes `closedNow` independent of the after-hours setting, so when closed its point 2 TOOLS line ("the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person …") applies under "Always take a message" too. But its point 5 keeps that setting's MESSAGES ONLY line unchanged "open or closed", and that line says "If they ask for a person, or it cannot wait, you can still put them through" (`system-prompt.ts:266`). On an account with a transfer number and NO trade module, the closed prompt would then say both "only when the caller asks" and "or it cannot wait". A model resolves contradictory lines unpredictably.
-  - **Recommended: (B) C14's closed-hours changes (the four offers become "offer to take a message"; the closed TOOLS line) apply only under "Follow business hours, then take a message".** "Always take a message" already holds at every hour (spec §5.2.1 point 5's own words) and its line already says when to put someone through, so under it nothing about transfers changes with the hours. Implementation: `closedNow` also requires `input.afterHours === "hours_then_message"`; one more condition and two test cases.
-  - (A) The spec literally: `closedNow` under both settings; the contradiction above stays in the prompt on no-module accounts.
-  - Until answered, Task 4 is not dispatched. The rest of the plan does not depend on the answer.
+None open. Two owner rulings of 2026-10-23 settled what this plan first raised; both are recorded in spec §2:
+
+- **C19 (was OQ1).** Under "Always take a message" the closed-hours changes (the four offers of a person become "offer to take a message"; the closed TOOLS line) do NOT apply: `closedNow` requires "Follow business hours, then take a message". That setting already holds at every hour and its own MESSAGES ONLY line says when to put someone through, so the prompt never says both "only when the caller asks" and "or it cannot wait". (History: the plan's first draft asked this as OQ1 with this answer recommended.)
+- **C20 (SD9's price posture).** When the price-list READ FAILS (an error, not an empty list), the HARD LIMITS price line is the fixed CLOSED price line: she gives no price, says the business will confirm pricing and offers to take their details. An empty list keeps today's line. Insurance keeps today's line on a failed read (SD9).
 
 ---
 
@@ -76,7 +77,7 @@ Path abbreviations:
 
 | Task | What | Tier | Owner | Review |
 |---|---|---|---|---|
-| 0 | `pnpm install`, A-checks, MCP reads, the latency read, OQ1 to the owner, re-read every cite (orchestrator) | — | orchestrator | — |
+| 0 | `pnpm install`, A-checks, MCP reads, the latency read, re-read every cite (orchestrator) | — | orchestrator | — |
 | 1 | Migration 0095, the two RPCs, the validator, their db proof (withRollback + a two-session lock test) | **HIGH** | bis-db-schema (opus) | opus bis-reviewer in its OWN detached worktree, own replica, mutation probes; re-review on any change; orchestrator applies once |
 | 2 | Every new and changed copy key, English and Spanish | LOW | bis-frontend | none |
 | 3 | The pure renderers: price sentence, hours lines, open-now, payload, Facts flags | MEDIUM | bis-voice | one sonnet bis-reviewer, own worktree |
@@ -96,7 +97,7 @@ Path abbreviations:
   - Task 2: `apps/web/src/lib/messages.ts`, `apps/web/src/lib/messages.test.ts`.
   - Task 3: `…/knowledge/{price-sentence,hours,payload,facts-warnings}.ts` + their four tests.
 - **Wave B** (parallel):
-  - Task 4 (after Task 3 and OQ1): `…/knowledge/prompt-blocks.ts` (+ test), `apps/web/src/lib/voice/system-prompt.ts`, `apps/web/src/lib/voice/system-prompt.test.ts`, `apps/web/src/lib/voice/session-config.ts`.
+  - Task 4 (after Task 3): `…/knowledge/prompt-blocks.ts` (+ test), `apps/web/src/lib/voice/system-prompt.ts`, `apps/web/src/lib/voice/system-prompt.test.ts`, `apps/web/src/lib/voice/session-config.ts`.
   - Task 5 (after Task 1's review approves; needs 0095 on its replica): `packages/db/src/{voice,concierge,voice-knowledge,index,account-teardown}.ts`, `packages/db/src/test/{voice,concierge,voice-knowledge}.test.ts`, `packages/db/src/voice-forward.test.ts`, one line in each of `…/knowledge/{price-sentence,payload}.ts` (type re-point), and the typed literals / bare factories Task 5 lists (all test files plus `…/voice/voice-settings.tsx:35-45`).
 - **Wave C** (parallel):
   - Task 6 (after Tasks 4, 5): `…/incoming/route.ts` (+ `route.test.ts`, `lifecycle.test.ts`), `…/turn/route.ts` (+ `route.test.ts`), `…/websession/route.ts` (+ `route.test.ts`).
@@ -235,7 +236,7 @@ export function buildKnowledgePayload(input: { facts: string; servicesText: stri
   businessHours: unknown; services: readonly ServiceInput[] }): KnowledgePayload;
 export function parseKnowledgePayload(raw: unknown): KnowledgePayload | null;
 export function knowledgeFromLive(input: { profile: { facts: string; services: string; business_hours?: unknown };
-  timezone: string; services: readonly ServiceInput[] | null }): { payload: KnowledgePayload; recordable: boolean };
+  timezone: string; services: readonly ServiceInput[] | null }): { payload: KnowledgePayload; recordable: boolean; listUnavailable: boolean };   // listUnavailable: the read failed or a row could not render (C20)
 export function promptKnowledge(p: KnowledgePayload): { facts: string; services: string;
   businessHours: OpenHours | null; priceList: RenderedService[] | null };
 
@@ -248,6 +249,7 @@ export function factsWarnings(facts: string, servicesText: string, o: { hasHours
 // apps/web/src/lib/voice/session-config.ts — VoicePromptInput gains (Task 4):
   businessHours?: OpenHours | null;
   priceList?: RenderedService[] | null;
+  priceListUnavailable?: boolean;   // C20: the list read FAILED; absent or false = no change
 ```
 
 `OpenHours` is `apps/web/src/lib/booking/slots.ts:10`, structurally identical to `WeeklyHours`.
@@ -261,6 +263,8 @@ export function factsWarnings(facts: string, servicesText: string, o: { hasHours
 - A list item: `- {name_en} — English: "{sentence_en}" Spanish: "{sentence_es}"`; insurance: `- {name_en}` or `- {name_en} (in Spanish: {name_es})`. Then, each only when present: `  About it, in English: {description_en}` and `  About it, in Spanish: {description_es}` (two leading spaces).
 - The list's HARD LIMITS price line (replaces `system-prompt.ts:125` only when a list is given and the account is not insurance):
   `- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices "in the facts", it means this list.`
+- The CLOSED price line (C20; replaces `system-prompt.ts:125` when the price-list read FAILED and the account is not insurance; an empty list and insurance keep today's line):
+  `- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.`
 - Phone, "Follow business hours", closed now (`B` = booking mode full, `H` = `handoffAvailable`, `M` = a trade module's block is in the prompt):
   `AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above{B: ", and book a time that check_availability returns"}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.{H and M: " If they ask for a person, or it is urgent, you can still put them through."}{H and not M: " If they ask for a person, you can still put them through."}`
 - Web chat, closed now: `AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.`
@@ -357,7 +361,7 @@ export function factsWarnings(facts: string, servicesText: string, o: { hasHours
 - **Logs:** ids and codes only. Never a caller number, a name, a fact, a price, a prompt line, a payload or a key.
 
 ---
-## Task 0: Pre-reads, the latency read, OQ1 (orchestrator)
+## Task 0: Pre-reads and the latency read (orchestrator)
 
 - [ ] **Install once.** `cd <WT> && pnpm install --frozen-lockfile --prefer-offline`. No agent runs `pnpm install` in `<WT>` after this.
 - [ ] **A1:** `git -C <WT> log --all --oneline -- 'packages/db/supabase/migrations/0095*'` prints nothing; `ls <WT>/packages/db/supabase/migrations | tail -1` is `0094_trade_modules.sql`.
@@ -379,7 +383,6 @@ export function factsWarnings(facts: string, servicesText: string, o: { hasHours
   2. The incoming route's own duration today: Vercel MCP `get_runtime_logs` for the production deployment, path `/api/voice/incoming`, last 14 days; record the count, p50 and max duration.
   3. Fallback if (1) or (2) has no duration: say so in the ledger and read it later from Preview instead (Task 12 step 3 times ten web-demo session mints on bis-ci before and after Task 6's build is deployed to Preview; the demo route gains the same services read).
   - **Gate:** if (1)'s p95 for a single round trip exceeds 300 ms, STOP before dispatching Task 6 and tell the owner (the added RPC is sequential with step 10 only if step 9b finishes first; see SD18).
-- [ ] **OQ1 to the owner** with choice tiles (recommended first). Record the answer in the ledger and put it in Task 4's brief. Task 4 is not dispatched before it.
 - [ ] **Ports** 55433-55445 free (`Get-NetTCPConnection -LocalPort <p> -State Listen` for each, PowerShell). If any is taken, shift the whole table by 20 and amend this plan in one commit.
 - [ ] **Ledger line** `s47c T0: …` with every value. Put the digest into Task 1's and Task 5's briefs.
 
@@ -565,7 +568,7 @@ describe("0095 voice_services: one line per text column, lengths, positions", ()
       await expect(insertService(c, accountId, { ...VALID.per_unit!, position: 2, unit_es: "u".repeat(31) }))
         .rejects.toMatchObject({ code: "23514", constraint: "voice_services_unit_es_check" });
     }));
-  it("positions 1 and 50 are accepted; 0 and 51 refused by voice_services_position_check; a repeat by the unique key", () =>
+  it("positions 1 and 50 are accepted; 0 is refused by voice_services_position_check (51 and a repeat have their own cases below)", () =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "pos");
       await insertService(c, accountId, { ...VALID.fixed!, position: 1 });
@@ -783,11 +786,30 @@ describe("0095 RLS: Owners read, Staff and Technicians do not, other accounts do
       await actAsMember(c, s.accountId, s.orgId, role);
       expect(await counts(c, s.accountId)).toEqual({ services: 0, snaps: 0 });
     }));
-  it("an Owner of ANOTHER account reads neither (mutation: member-read using (true) -> FAILS)", () =>
+  // The two policies TOGETHER keep another account out: the restrictive Owners-only policy carries its own
+  // `account_id = current_account_id()` clause (0066's shape; SD22), so loosening either one alone leaves this case
+  // green. The policy pin below is what catches a loosened member-read policy (plan review, 2026-10-23).
+  it("an Owner of ANOTHER account reads neither (the member-read and Owners-only policies together)", () =>
     withRollback(async (c) => {
       const a = await seeded(c, "xa"); const b = await seed(c, "xb");
       await actAsMember(c, b.accountId, b.orgId, "owner");
       expect(await counts(c, a.accountId)).toEqual({ services: 0, snaps: 0 });
+    }));
+  it("the four policies, as defined (mutations: member-read using (true) -> FAILS; drop the account_id clause from owners_only -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { rows } = await c.query<{ polname: string; polpermissive: boolean; q: string }>(
+        `select polname, polpermissive, pg_get_expr(polqual, polrelid) as q from pg_policy
+          where polrelid in ('public.voice_services'::regclass, 'public.voice_knowledge_snapshots'::regclass) order by 1`);
+      // Read off the plan writer's PG18 replica with this file's SQL applied (2026-10-23). If CI's PostgreSQL 17
+      // deparses one differently, the implementer pastes CI's text after reading that it says the same thing.
+      const OWNERS_ONLY = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND ( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner)))`;
+      const MEMBER_READ = "(app.is_agency() OR (account_id = app.current_account_id()))";
+      expect(rows).toEqual([
+        { polname: "voice_knowledge_snapshots_member_read", polpermissive: true, q: MEMBER_READ },
+        { polname: "voice_knowledge_snapshots_owners_only", polpermissive: false, q: OWNERS_ONLY },
+        { polname: "voice_services_member_read", polpermissive: true, q: MEMBER_READ },
+        { polname: "voice_services_owners_only", polpermissive: false, q: OWNERS_ONLY },
+      ]);
     }));
   it("the agency reads both", () =>
     withRollback(async (c) => {
@@ -1367,15 +1389,26 @@ grant execute on function public.save_voice_knowledge(uuid, text, jsonb, jsonb, 
 comment on function public.save_voice_knowledge(uuid, text, jsonb, jsonb, integer) is
   'Every Voice page knowledge save (0095, decision C9). Under a lock on the account row: answers no_profile (no account or no voice profile), stale (p_base_version is not the latest snapshot version, 0 for none) or invalid (a malformed part, or any row a CHECK or key refuses), writing nothing; otherwise, in one transaction, writes the named parts (facts, services_text into voice_profiles.services, business_hours, and services, which replaces the whole list at positions 1..n), records voice_profile.updated naming them, and appends a snapshot of p_payload by p_actor unless the latest payload already equals it. Raises 22004 on a null argument or a blank actor. EXECUTE: service_role only, through serviceDb behind the app agency check.';
 
--- 8. The call and chat start snapshot (spec 4.1, 5.6).
+-- 8. The call and chat start snapshot (spec 4.1, 5.6). The usual case (nothing changed since the latest
+--    snapshot) takes no lock at all: it reads the latest and answers it. Only an append locks the account row,
+--    then reads again, because another start may have appended the same payload meanwhile. The function-level
+--    lock_timeout of 2s bounds the wait on a held row; the callers treat the resulting error as unstamped.
 create function public.ensure_knowledge_snapshot(p_account_id uuid, p_payload jsonb)
-returns integer language plpgsql security definer set search_path = '' as $$
+returns integer language plpgsql security definer set search_path = '' set lock_timeout = '2s' as $$
 declare
   v_latest integer;
   v_latest_payload jsonb;
 begin
   if p_account_id is null or p_payload is null then
     raise exception 'ensure_knowledge_snapshot: a required argument is null' using errcode = '22004';
+  end if;
+  select s.version, s.payload into v_latest, v_latest_payload
+    from public.voice_knowledge_snapshots s
+   where s.account_id = p_account_id
+   order by s.version desc
+   limit 1;
+  if v_latest is not null and v_latest_payload = p_payload then
+    return v_latest;
   end if;
   perform 1 from public.accounts where id = p_account_id for no key update;
   if not found then
@@ -1396,10 +1429,10 @@ end $$;
 revoke all on function public.ensure_knowledge_snapshot(uuid, jsonb) from public, anon, authenticated, service_role;
 grant execute on function public.ensure_knowledge_snapshot(uuid, jsonb) to service_role;
 comment on function public.ensure_knowledge_snapshot(uuid, jsonb) is
-  'At call and chat start (0095, spec 5.6): under a lock on the account row, answers the latest snapshot version when its payload equals p_payload, else appends p_payload as the next version by system and answers it. Raises 22004 on a null argument and P0002 when the account does not exist; a payload that is not an object is refused by the table CHECK. The callers fail open (the call or chat goes on unstamped). EXECUTE: service_role only.';
+  'At call and chat start (0095, spec 5.6): answers the latest snapshot version when its payload equals p_payload, taking no lock; otherwise locks the account row (lock_timeout 2s), reads again, and appends p_payload as the next version by system unless it is now equal. Raises 22004 on a null argument, P0002 when the account does not exist, 55P03 when the row stays held past 2s; a payload that is not an object is refused by the table CHECK. The callers fail open (the call or chat goes on unstamped). EXECUTE: service_role only.';
 ```
 
-**Plan-writer check (2026-10-23; evidence that the SQL above is sound, NOT a substitute for Steps 5–8).** The SQL block above, extracted from this plan file, was applied with `psql -1` to a PG18 replica built by `replica.sh` on top of every migration through 0094 (port 55460, outside this lane's ports; stopped since). It applied cleanly. On `post`: the client-write digest read `51|0dd3e2d7e19f3f3649a893cfd9967d94`. As `service_role`, `save_voice_knowledge` answered, in order: ok v1; ok v1 (an equal payload); stale; invalid (a `per_unit` row without `unit_es` sent with a Facts change — Facts stayed as before, A4); invalid (`amount_cents` `"12.5"`); invalid (an unknown part); ok v2 (hours cleared with JSON null). `ensure_knowledge_snapshot` then answered 2 (equal) and 3 (new, `created_by` system). The three events read `{"fields": ["facts", "business_hours", "voice_services"]}`, `{"fields": ["facts"]}`, `{"fields": ["business_hours"]}`. The table owner's UPDATE of a snapshot raised the trigger; `service_role`'s insert into `voice_services` was denied; an unknown kind was refused by `voice_services_price_kind_check` (first by name). With real memberships, an Owner read 1 service and 1 snapshot, a Staff member 0 and 0, the agency 1; the agency token's `ensure` was denied. The validator answered t/f/f/f for a valid week with touching spans and a 24:00 end, `{}`, an overlap, and a 24:00 start. The defs query below read 30 rows. Not run by the plan writer: the vitest files, the lock test, the mutations, the rollback.
+**Plan-writer check (2026-10-23; evidence that the SQL above is sound, NOT a substitute for Steps 5–8).** The SQL block above, extracted from this plan file, was applied with `psql -1` to a PG18 replica built by `replica.sh` on top of every migration through 0094 (port 55460, outside this lane's ports; stopped since). It applied cleanly. On `post`: the client-write digest read `51|0dd3e2d7e19f3f3649a893cfd9967d94`. As `service_role`, `save_voice_knowledge` answered, in order: ok v1; ok v1 (an equal payload); stale; invalid (a `per_unit` row without `unit_es` sent with a Facts change — Facts stayed as before, A4); invalid (`amount_cents` `"12.5"`); invalid (an unknown part); ok v2 (hours cleared with JSON null). `ensure_knowledge_snapshot` then answered 2 (equal) and 3 (new, `created_by` system). The three events read `{"fields": ["facts", "business_hours", "voice_services"]}`, `{"fields": ["facts"]}`, `{"fields": ["business_hours"]}`. The table owner's UPDATE of a snapshot raised the trigger; `service_role`'s insert into `voice_services` was denied; an unknown kind was refused by `voice_services_price_kind_check` (first by name). With real memberships, an Owner read 1 service and 1 snapshot, a Staff member 0 and 0, the agency 1; the agency token's `ensure` was denied. The validator answered t/f/f/f for a valid week with touching spans and a 24:00 end, `{}`, an overlap, and a 24:00 start. The defs query below read 30 rows. After the plan review (2026-10-23) `ensure_knowledge_snapshot` gained its unlocked fast path and its 2s lock_timeout; the revised file was re-applied cleanly to a fresh `post` (the byte rules re-checked: 0 non-ASCII, 0 backslash, 20 dollar signs, 2 `cascade`, 4 `''`) and its lock behaviour read by hand (Step 6). Not run by the plan writer: the vitest files, the mutations, the rollback.
 
 - [ ] **Step 5: Re-build the kit** (it applies 0095 to `post` with `psql -1`). Read every def: `psql -h localhost -p 55433 -U postgres -d post -c "select conname, pg_get_constraintdef(oid) from pg_constraint where contype <> 'n' and (conrelid in ('public.voice_services'::regclass, 'public.voice_knowledge_snapshots'::regclass) or conname in ('voice_profiles_business_hours_check','calls_knowledge_version_check','calls_knowledge_version_fkey','concierge_conversations_knowledge_version_check','concierge_conversations_knowledge_version_fkey')) order by 1"` (expected: **30** rows, read by the plan writer on 2026-10-23 off a PG18 replica with this file's SQL applied: see "Plan-writer check" below). Check each says what the migration says, then paste all into the defs test's `toEqual({...})`. Run on `post`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55433/post; node node_modules/vitest/vitest.mjs run src/test/structured-facts-schema.test.ts src/test/trade-modules-schema.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/concierge-grants.test.ts src/test/go-live-grants.test.ts` → all green (all seven are withRollback-only, read 2026-10-23). Read the run counts.
 
@@ -1412,11 +1445,17 @@ import "dotenv/config";
 import { TEST_ORG_ID_PREFIX } from "../org-id";
 
 /**
- * 0095 (spec 4.1): both RPCs lock the account row FOR NO KEY UPDATE before they read the latest version, so two
- * knowledge writes on one account queue and version numbers never collide. Proven directly: while session A holds
- * an open ensure_knowledge_snapshot, session B's own FOR NO KEY UPDATE on that account row times out (55P03), and
- * B can still insert a call that references the account (A5: FOR KEY SHARE does not conflict). Then two concurrent
- * ensures of one NEW payload make exactly one row: B waits for A, then finds A's payload equal and answers it.
+ * 0095 (spec 4.1): every knowledge WRITE locks the account row FOR NO KEY UPDATE before it reads the latest
+ * version, so two writes on one account queue and version numbers never collide. Proven directly:
+ *  - while session A holds an open ensure that APPENDS, session B's own FOR NO KEY UPDATE on that row times out
+ *    (55P03), and B can still insert a call that references the account (A5: FOR KEY SHARE does not conflict);
+ *  - while A holds the row, B's save_voice_knowledge times out too (its lock comes before its stale check, so a
+ *    deliberately stale base proves it: without the lock B would answer stale at once);
+ *  - two concurrent ensures of one NEW payload make exactly one row: B waits, re-reads, finds A's payload, answers it;
+ *  - the call-start fast path: an ensure whose payload equals the latest snapshot takes NO lock, so it answers while
+ *    another session holds the row (plan review 2026-10-23, item 6);
+ *  - a held row fails open: an ensure that must append gives up after its own lock_timeout of 2s (55P03), which the
+ *    routes treat as unstamped. B's statement_timeout of 5s makes a missing lock_timeout fail as 57014, not hang.
  */
 const URL = process.env.SUPABASE_DB_URL;
 const RUN = Math.random().toString(36).slice(2, 10);
@@ -1443,7 +1482,7 @@ async function cleanup(c: Client, acct: string | null) {
 }
 
 describe("0095: knowledge writes serialise on the account row", () => {
-  it("an open ensure holds the account row lock; a call insert on that account does not wait (mutation: drop `for no key update` from ensure -> FAILS)", async () => {
+  it("an open appending ensure holds the account row lock; a call insert on that account does not wait (mutation 14: drop `for no key update` from ensure -> FAILS)", async () => {
     const seedC = conn(); const a = conn(); const b = conn();
     await Promise.all([seedC.connect(), a.connect(), b.connect()]);
     let acct: string | null = null;
@@ -1483,30 +1522,96 @@ describe("0095: knowledge writes serialise on the account row", () => {
       await Promise.all([seedC.end(), a.end(), b.end()]);
     }
   });
+
+  it("save_voice_knowledge waits on the account row: with A's appending ensure open, B's save times out (mutation 19: drop `for no key update` from save_voice_knowledge -> B answers stale, FAILS)", async () => {
+    const seedC = conn(); const a = conn(); const b = conn();
+    await Promise.all([seedC.connect(), a.connect(), b.connect()]);
+    let acct: string | null = null;
+    try {
+      acct = (await seedAccount(seedC, "save")).acct;
+      await a.query("begin");
+      expect((await a.query<{ v: number }>(ENSURE, [acct, JSON.stringify({ s: 1 })])).rows[0]!.v).toBe(1);
+      await b.query("begin");
+      await b.query("set local lock_timeout = '300ms'");
+      // base 99 is deliberately stale: the lock comes before the stale check, so only a missing lock answers.
+      await expect(b.query("select public.save_voice_knowledge($1, 'user_lock', $2::jsonb, $3::jsonb, 99) as r",
+        [acct, JSON.stringify({ facts: "x" }), JSON.stringify({ v: 1 })])).rejects.toMatchObject({ code: "55P03" });
+      await b.query("rollback");
+      await a.query("rollback");
+    } finally {
+      await a.query("rollback").catch(() => {}); await b.query("rollback").catch(() => {});
+      await cleanup(seedC, acct);
+      await Promise.all([seedC.end(), a.end(), b.end()]);
+    }
+  });
+
+  it("an equal payload answers without the lock: B's ensure returns the latest while A holds the row (mutation 20: lock before the first read -> FAILS)", async () => {
+    const seedC = conn(); const a = conn(); const b = conn();
+    await Promise.all([seedC.connect(), a.connect(), b.connect()]);
+    let acct: string | null = null;
+    try {
+      acct = (await seedAccount(seedC, "fast")).acct;
+      expect((await seedC.query<{ v: number }>(ENSURE, [acct, JSON.stringify({ f: 1 })])).rows[0]!.v).toBe(1); // committed
+      await a.query("begin");
+      await a.query("select 1 from accounts where id = $1 for no key update", [acct]);
+      await b.query("set statement_timeout = '1s'");
+      expect((await b.query<{ v: number }>(ENSURE, [acct, JSON.stringify({ f: 1 })])).rows[0]!.v).toBe(1);
+      await a.query("rollback");
+    } finally {
+      await a.query("rollback").catch(() => {});
+      await b.query("reset statement_timeout").catch(() => {});
+      await cleanup(seedC, acct);
+      await Promise.all([seedC.end(), a.end(), b.end()]);
+    }
+  });
+
+  it("a held row fails open: an ensure that must append gives up after its own 2s lock_timeout with 55P03 (mutation 21: drop the function's lock_timeout -> 57014, FAILS)", async () => {
+    const seedC = conn(); const a = conn(); const b = conn();
+    await Promise.all([seedC.connect(), a.connect(), b.connect()]);
+    let acct: string | null = null;
+    try {
+      acct = (await seedAccount(seedC, "held")).acct;
+      await a.query("begin");
+      await a.query("select 1 from accounts where id = $1 for no key update", [acct]);
+      await b.query("set statement_timeout = '5s'");
+      await expect(b.query(ENSURE, [acct, JSON.stringify({ h: 1 })])).rejects.toMatchObject({ code: "55P03" });
+      await a.query("rollback");
+    } finally {
+      await a.query("rollback").catch(() => {});
+      await b.query("reset statement_timeout").catch(() => {});
+      await cleanup(seedC, acct);
+      await Promise.all([seedC.end(), a.end(), b.end()]);
+    }
+  });
 });
 ```
 
+  The plan writer ran the three behaviours above by hand on a PG18 replica with this plan's SQL (2026-10-23): with a row held, an equal-payload ensure answered `1` in 171 ms, a new-payload ensure failed `lock timeout` after 2,193 ms, and a stale-base save under `lock_timeout 300ms` failed `lock timeout` (and answered `stale` once the row was released).
+
   Payloads travel as query parameters (`JSON.stringify`), never as quoted JSON inside the SQL text, so no file in this task holds a backslash escape (memory "Lane pipeline", 2026-10-22: the Bash tool decodes backslashes; write test files with the Write tool). Run it on `post` (green) and on `pre` (red: no function). The snapshot rows the second case commits are removed by the account delete (the table owner's referential action), which is also a live proof of SD4.
 
-- [ ] **Step 7: Run each mutation** on `post`. For each: edit the migration, rebuild the kit, run BOTH new files, paste the failing assertion line, edit back, `cmp`.
+- [ ] **Step 7: Run each mutation** on `post`. For each: edit the migration, rebuild the kit, run BOTH new files, paste the failing assertion line, edit back, `cmp`. The defs pin and the policy pin catch most schema mutations too, so MORE reds than each line lists are expected; a line lists the behavioural cases that must be among them.
   1. Drop `voice_services_price_shape_check` → every REFUSE case FAILS.
-  2. In the shape CHECK, drop `and unit_es is not null` from the per_unit branch → only "per_unit without the Spanish unit (C16)" FAILS.
+  2. In the shape CHECK, drop `and unit_es is not null` from the per_unit branch → "per_unit without the Spanish unit (C16)", the RPC's "invalid: a per_unit row without its Spanish unit (C16)", "a bad list sent WITH a facts change" and the defs pin FAIL.
   3. Drop `voice_services_name_en_one_line` → "a line feed in name_en" and "a carriage return" FAIL.
   4. `position between 1 and 51` → "position 51 is refused" FAILS.
-  5. Drop `voice_services_account_position_key` → "one account cannot hold two rows" and "the services are replaced in order" (positions) FAIL.
+  5. Drop `voice_services_account_position_key` → "one account cannot hold two rows" and the defs pin FAIL ("the services are replaced in order" stays green: its delete runs first).
   6. Drop the trigger → "an UPDATE raises 55000" FAILS.
   7. Append `grant update on public.voice_knowledge_snapshots to service_role;` → "table privileges" and "service_role cannot write" FAIL.
-  8. Drop `voice_services_owners_only` → "a staff member reads neither" FAILS.
-  9. Replace `voice_services_member_read`'s USING with `(true)` → "an Owner of ANOTHER account reads neither" FAILS.
+  8. Drop `voice_services_owners_only` → "a staff member reads neither" and the policy pin FAIL.
+  9. Replace `voice_services_member_read`'s USING with `(true)` → the policy pin FAILS (the cross-account case stays green: the Owners-only policy still requires the account, SD22).
   10. Drop `calls_knowledge_version_fkey` (both statements) → the calls FK and cross-account cases FAIL.
   11. In `save_voice_knowledge`, delete the stale `if … return … 'stale'` → the stale case FAILS.
   12. In `save_voice_knowledge`, replace the equality branch with an unconditional append → "an equal payload records no new version" FAILS.
   13. In `save_voice_knowledge`, move the profile `update` above `begin` (out of the block) → "a bad list sent WITH a facts change" FAILS.
-  14. Drop `for no key update` from `ensure_knowledge_snapshot` → the lock test's first case FAILS.
+  14. Drop `for no key update` from `ensure_knowledge_snapshot` → the lock test's "an open appending ensure holds the account row lock" FAILS.
   15. Append `grant execute on function public.save_voice_knowledge(uuid, text, jsonb, jsonb, integer) to authenticated;` → "function privileges" FAILS.
   16. In the validator, delete the `v_from_m < v_prev_m` check → "overlapping spans" and "spans out of order" FAIL.
   17. Delete `comment on column public.voice_services.unit_es` → the comments case FAILS.
   18. Change `snapshots.account_id` to `on delete restrict` → the cascade case FAILS.
+  19. Drop `for no key update` from `save_voice_knowledge` → the lock test's "save_voice_knowledge waits on the account row" FAILS (it answers stale instead of timing out).
+  20. In `ensure_knowledge_snapshot`, move the account-row lock above the first read (no unlocked fast path) → the lock test's "an equal payload answers without the lock" FAILS.
+  21. Drop `set lock_timeout = '2s'` from `ensure_knowledge_snapshot`'s header → the lock test's "a held row fails open" FAILS (the statement_timeout fires instead: 57014, not 55P03).
 
 - [ ] **Step 8: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the ROLLBACK lines in order; then `select count(*) from pg_constraint where conname like '%knowledge_version%' or conname like 'voice_services%' or conname like 'voice_knowledge%'` → `0`, `select to_regproc('public.save_voice_knowledge')` → NULL. Drop `rb`.
@@ -1531,7 +1636,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Review (HIGH):** opus bis-reviewer in its own detached worktree, with its own kit on 55434.
 - Applies 0095 to a fresh `pre` copy through `psql -1` only; reads every def itself.
-- Re-runs mutations 2, 11, 13 and 14, plus three of its own: `grant select on public.voice_services to anon` (the table-privilege case must catch it); swap `'after_visit'` for `'after-visit'` in `voice_services_price_kind_check` (only the accept case and the defs pin can catch it); and remove `or (p_parts ? 'services' and jsonb_typeof(p_parts -> 'services') <> 'array')` (the "services as an object" case must still go red, by the cast or the block, and the reviewer says which).
+- Re-runs mutations 2, 9, 11, 13, 14, 19 and 20, plus three of its own: `grant select on public.voice_services to anon` (the table-privilege case must catch it); swap `'after_visit'` for `'after-visit'` in `voice_services_price_kind_check` (only the accept case and the defs pin can catch it); and remove `or (p_parts ? 'services' and jsonb_typeof(p_parts -> 'services') <> 'array')` (the "services as an object" case must still go red, by the cast or the block, and the reviewer says which).
 - Checks the bytes and the md5, and that no comment string or `--` line holds an apostrophe.
 - Reads both RPCs for a path that writes before the lock, a status returned after a write outside the block, or a definer function that names an unqualified object a caller could shadow (`set search_path = ''` everywhere).
 - A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
@@ -1868,18 +1973,21 @@ describe("parseKnowledgePayload", () => {
 
 describe("knowledgeFromLive (spec 5.5; SD9)", () => {
   const profile = { facts: "We fix roofs.", services: "Roofs", business_hours: { tue: [["08:00", "12:00"]] } };
-  it("rows read: the payload carries them and is recordable", () => {
+  it("rows read: the payload carries them, is recordable, and the list is available", () => {
     const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: [SVC] });
-    expect(r.recordable).toBe(true);
+    expect([r.recordable, r.listUnavailable]).toEqual([true, false]);
     expect(r.payload.services.map((s) => s.sentence_en)).toEqual(["The price for Haircut is $25."]);
   });
-  it("the services read failed (null): free text and hours kept, no list, NOT recordable (mutation: recordable true -> FAILS)", () => {
+  it("the services read failed (null): free text and hours kept, no list, NOT recordable, list unavailable (C20; mutation: recordable true -> FAILS)", () => {
     const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: null });
-    expect(r).toMatchObject({ recordable: false, payload: { facts: "We fix roofs.", services: [], business_hours: { tue: [["08:00", "12:00"]] } } });
+    expect(r).toMatchObject({ recordable: false, listUnavailable: true, payload: { facts: "We fix roofs.", services: [], business_hours: { tue: [["08:00", "12:00"]] } } });
   });
   it("a row that cannot render (bad data) is treated as a failed read, never a throw", () => {
     const bad = { ...SVC, price_kind: "per_unit" as const, unit_en: "hour", unit_es: null };
-    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [bad] })).toMatchObject({ recordable: false, payload: { services: [] } });
+    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [bad] })).toMatchObject({ recordable: false, listUnavailable: true, payload: { services: [] } });
+  });
+  it("an EMPTY list read is not a failure: recordable, list available (C20: today's price line; mutation: treat [] as a failed read -> FAILS)", () => {
+    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [] })).toMatchObject({ recordable: true, listUnavailable: false });
   });
 });
 
@@ -2164,7 +2272,7 @@ export function buildKnowledgePayload(input: {
 
   Then `parseKnowledgePayload(raw)`: `null` unless `raw` is a plain object with `schema === 1`, `facts`/`services_text`/`timezone` strings, `business_hours` null or an object (passed through `usableHours`; a non-null value that yields null fails the parse), `hours_lines` null or an array of strings, `renderer_version` a positive integer, and `services` an array whose every entry has an integer `position`, string `name_en`, string-or-null `name_es`/`description_en`/`description_es`/`unit_en`/`unit_es`, `price_kind` in `PRICE_KINDS`, integer-or-null amounts, and string `sentence_en`/`sentence_es`. It returns a NEW object in `buildKnowledgePayload`'s key order (so `toStrictEqual` round-trips). It never re-renders a sentence: a stored snapshot is what she was given then, whatever the renderer says now.
 
-  `knowledgeFromLive({ profile, timezone, services })`: `services === null` → `buildKnowledgePayload` with `services: []`, `recordable: false` (SD9). Otherwise build with the rows (each mapped to `ServiceInput` by its ten fields, never spread, so a row's `id`/`account_id`/`position`/`created_at` never enter the payload); if that throws (a row that cannot render), log nothing here (the routes log) and return the `services: []` payload with `recordable: false`.
+  `knowledgeFromLive({ profile, timezone, services })`: `services === null` → `buildKnowledgePayload` with `services: []`, `recordable: false`, `listUnavailable: true` (SD9, C20). Otherwise build with the rows (each mapped to `ServiceInput` by its ten fields, never spread, so a row's `id`/`account_id`/`position`/`created_at` never enter the payload); if that throws (a row that cannot render), log nothing here (the routes log) and return the `services: []` payload with `recordable: false`, `listUnavailable: true`. Rows read (an empty list included) → `recordable: true`, `listUnavailable: false`.
 
   `promptKnowledge(p)`: `{ facts: p.facts, services: p.services_text, businessHours: p.business_hours, priceList: p.services.length === 0 ? null : p.services.map(({ name_en, name_es, description_en, description_es, sentence_en, sentence_es }) => ({ name_en, name_es, description_en, description_es, sentence_en, sentence_es })) }`.
 
@@ -2181,7 +2289,7 @@ export function buildKnowledgePayload(input: {
 ---
 ## Task 4 (MEDIUM): `PRE_S47C_DIGEST` first, then the prompt blocks and the wiring (bis-voice)
 
-**Dispatch gate:** OQ1 answered (Task 0). This task's text implements the RECOMMENDED answer (B); if the owner picks (A), the brief says so and the implementer drops the `input.afterHours === "hours_then_message"` term from `closedNow` and swaps the two OQ1 cases' expectations (both marked below).
+**Dispatch gate:** Task 3 committed. Owner decisions C19 and C20 (spec §2, 2026-10-23) are settled and implemented below.
 
 **Files:**
 - Modify: `apps/web/src/lib/voice/system-prompt.test.ts` (Step 1 appends the digest; Step 3 appends the S-47c describes)
@@ -2244,6 +2352,11 @@ export const SERVICES_NAMES_ONLY_HEADING = "SERVICES (what the business offers):
 export const LIST_PRICE_LINE =
   "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
 
+/** Owner decision C20 (2026-10-23): replaces the HARD LIMITS price line when the price-list READ FAILED on a non-insurance
+ *  account, so no amount left in the prose can be quoted while the list is unknown. An EMPTY list keeps today's line. */
+export const CLOSED_PRICE_LINE =
+  "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.";
+
 export const AFTER_HOURS_CLOSED_WEB =
   "AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
 export const AFTER_HOURS_CLOSED_WEB_VOICE =
@@ -2285,7 +2398,7 @@ export function servicesBlock(list: readonly RenderedService[], namesOnly: boole
 
   (`\"in the facts\"` is the only escape in the file: a double quote inside a double-quoted TS string. Write the file with the Write tool.)
 
-  `…/knowledge/prompt-blocks.test.ts`: every exported string and every branch of the two functions as a typed literal: the three headings, `LIST_PRICE_LINE`, both closed web lines, `afterHoursClosedPhoneLine` for all 8 combinations of its three booleans (a literal table of 8 rows), `transferToolLineClosed(true)` and `(false)`, `servicesBlock([], …)` → `[]`, a two-service list with and without `namesOnly` (one service with both descriptions and a Spanish name, one with neither). Mutations: drop the `hasTradeRules` branch of `person` → the SD5 rows FAIL; print `sentence_en` on insurance → FAILS.
+  `…/knowledge/prompt-blocks.test.ts`: every exported string and every branch of the two functions as a typed literal: the three headings, `LIST_PRICE_LINE`, `CLOSED_PRICE_LINE` (C20), both closed web lines, `afterHoursClosedPhoneLine` for all 8 combinations of its three booleans (a literal table of 8 rows), `transferToolLineClosed(true)` and `(false)`, `servicesBlock([], …)` → `[]`, a two-service list with and without `namesOnly` (one service with both descriptions and a Spanish name, one with neither). Mutations: drop the `hasTradeRules` branch of `person` → the SD5 rows FAIL; print `sentence_en` on insurance → FAILS.
 
 - [ ] **Step 3: Write the failing prompt tests.** Append to `system-prompt.test.ts` (move the imports up to the file's existing imports):
 
@@ -2316,6 +2429,7 @@ const NAMES_BLOCK = `\n\n${["SERVICES (what the business offers):", "- Haircut (
   "  About it, in English: Wash and cut.", "  About it, in Spanish: Lavado y corte."].join("\n")}`;
 const TODAY_PRICE = "- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.";
 const LIST_PRICE = "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
+const CLOSED_PRICE = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.";
 const PUT_THROUGH = "offer to put them through to someone on the team";
 const TOOL_TODAY = "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
 const TOOL_CLOSED = "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
@@ -2323,9 +2437,10 @@ const TOOL_CLOSED_URGENT = "- transfer_to_human() — the business is closed rig
 const lastLine = (p: string) => p.split("\n").at(-1);
 
 describe("buildSystemPrompt — S-47c digests", () => {
-  it("null and empty new fields are byte-identical too, across all 5184 (mutation: treat [] as a list -> FAILS; treat {} as hours -> FAILS)", () => {
+  it("null, empty and false new fields are byte-identical too, across all 5184 (mutations: treat [] as a list -> FAILS; treat {} as hours -> FAILS; close the price line when priceListUnavailable is false -> FAILS)", () => {
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: null, priceList: null }, now)))).toBe(PRE_S47C_DIGEST);
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: {}, priceList: [] }, now)))).toBe(PRE_S47C_DIGEST);
+    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, priceListUnavailable: false }, now)))).toBe(PRE_S47C_DIGEST);
   });
 });
 
@@ -2362,7 +2477,7 @@ describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
     const p = buildSystemPrompt(baseInput({ medium: "web_voice", afterHours: "hours_then_message", businessHours: CLOSED_H }), now);
     expect(lastLine(p)).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
   });
-  it("closed now, phone, Follow business hours: the closed line, booking clause only where a new booking can be made (mutation: canBook from bookingEnabled -> no change here, so also see the message_only case)", () => {
+  it("closed now, phone, Follow business hours: the closed line, with the booking clause when booking is on and the person clause per SD5 (mutation: drop the hasTradeRules branch -> FAILS)", () => {
     expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: false, businessHours: CLOSED_H }), now))).toBe(
       "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens.");
     expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: false, handoffAvailable: true, businessHours: CLOSED_H }), now))).toBe(
@@ -2424,9 +2539,8 @@ describe("buildSystemPrompt — closed now and the offer of a person (C14, spec 
     const demo = buildSystemPrompt({ ...PHONE, medium: "web_voice", businessHours: CLOSED_H }, now);
     expect(demo).toContain(PUT_THROUGH); // today's demo wording, untouched
   });
-  // OQ1 (B, recommended): under Always take a message nothing about transfers changes with the hours.
-  // If the owner chose (A): these two expectations flip (PUT_THROUGH absent; TOOL_CLOSED present).
-  it("OQ1: Always take a message, closed: the offers and the TOOLS line are today's (mutation: drop the afterHours term from closedNow -> FAILS)", () => {
+  // C19 (owner, 2026-10-23; asked as OQ1 in the first draft): under Always take a message nothing about transfers changes with the hours.
+  it("C19: Always take a message, closed: the offers and the TOOLS line are today's (mutation: drop the afterHours term from closedNow -> FAILS)", () => {
     const p = buildSystemPrompt({ ...PHONE, afterHours: "message_only", businessHours: CLOSED_H }, now);
     expect(p).toContain(PUT_THROUGH);
     expect(p).toContain(TOOL_TODAY);
@@ -2460,6 +2574,23 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
     expect(p.indexOf("SERVICES AND PRICES")).toBeLessThan(p.indexOf("TRADE RULES — EVENTS AND VENUES:"));
     expect(p).toContain("- You may give prices, packages, deposits, payment plans and refund or cancellation terms only by repeating what the facts above say, word for word, with every number exactly as it is written there. For these, and only these, this overrides the TONE line about not reading the facts verbatim.");
   });
+  it("C20: a FAILED list read closes the price line, on every surface, and changes nothing else (mutation: ignore priceListUnavailable -> FAILS)", () => {
+    for (const medium of ["phone", "web", "web_voice"] as const) {
+      const input = baseInput({ medium });
+      const closed = buildSystemPrompt({ ...input, priceList: null, priceListUnavailable: true }, now);
+      expect(closed).toContain(CLOSED_PRICE);
+      expect(closed).not.toContain(TODAY_PRICE);
+      expect(closed.replace(CLOSED_PRICE, TODAY_PRICE)).toBe(buildSystemPrompt(input, now));
+    }
+  });
+  it("C20: an EMPTY list is not a failure: today's line, byte for byte (mutation: treat [] as unavailable -> FAILS)", () => {
+    expect(buildSystemPrompt(baseInput({ priceList: [], priceListUnavailable: false }), now)).toBe(buildSystemPrompt(baseInput(), now));
+  });
+  it("C20: insurance keeps today's line on a failed read (the module already forbids every quote; mutation: close it on insurance -> FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc", priceListUnavailable: true }), now);
+    expect(p).toContain(TODAY_PRICE);
+    expect(p).not.toContain(CLOSED_PRICE);
+  });
 });
 ```
 
@@ -2480,6 +2611,12 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
    * call or chat is stamped with. OPTIONAL; absent, null or [] gives no lines and keeps today's HARD LIMITS line.
    */
   priceList?: RenderedService[] | null;
+  /**
+   * S-47c, owner decision C20: true only when the price-list READ FAILED (knowledgeFromLive's listUnavailable). The
+   * HARD LIMITS price line is then the closed one (no price at all) unless the account is insurance. OPTIONAL;
+   * absent or false changes nothing, so every existing prompt is byte-identical.
+   */
+  priceListUnavailable?: boolean;
 ```
 
   - `system-prompt.ts`:
@@ -2488,7 +2625,7 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
 
 ```ts
   // S-47c (spec 5.2, 5.2.1, C5, C14): structured hours, only when at least one day is open (SD17). `closedNow`
-  // is the PHONE under "Follow business hours" with the hours saying closed right now (OQ1: B); while it holds, the
+  // is the PHONE under "Follow business hours" with the hours saying closed right now (C19); while it holds, the
   // offers of a person become "offer to take a message" and the TOOLS line says not to offer a transfer, while
   // transfer_to_human stays on the session (toolSchemas is unchanged) for a caller who asks or an URGENT path.
   const hoursBlock = hasOpenDay(input.businessHours) ? businessHoursBlock(input.businessHours, input.timezone, now) : null;
@@ -2519,7 +2656,7 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
     ...servicesBlock(priceList ?? [], insurance),
 ```
 
-    - `:125` becomes `priceList && !insurance ? LIST_PRICE_LINE : \`- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.\`,` (today's line byte for byte in the else; C13/§5.4 keep it on insurance).
+    - `:125` becomes `insurance ? TODAY : priceList ? LIST_PRICE_LINE : input.priceListUnavailable === true ? CLOSED_PRICE_LINE : TODAY,` where `TODAY` stands for today's line written out in place, byte for byte (`- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`). C13/§5.4 keep it on insurance, failed read or not; C20 closes it on a failed read elsewhere; an empty list keeps it. Add `CLOSED_PRICE_LINE` to the `prompt-blocks` import.
     - `:184-188`: `lines.push(closedNow ? transferToolLineClosed(tradeBlock.length > 0) : "<today's line, byte for byte>");`
     - `:260-276` becomes:
 
@@ -2542,12 +2679,12 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
 ```
 
 - [ ] **Step 5:** Re-run `system-prompt.test.ts` and `…/knowledge/prompt-blocks.test.ts` → PASS. Then, unchanged: `src/lib/voice/session-config.test.ts`, `src/lib/voice/greeting.test.ts`, `src/lib/voice/modules` (all four test files: `pin.ts`'s hashes must not move), `…/incoming/route.test.ts`, `…/incoming/lifecycle.test.ts`, `…/websession/route.test.ts`, `…/turn/route.test.ts`, `src/lib/voice/modules/corpus-lib.test.ts` → all PASS (their prompts are byte-identical). Run `pnpm --filter web sofia:corpus events --dry-run` (the corpus graph still loads under `tsx`; if the dry run needs a key, it is a finding: report it, never read `.env.local`).
-- [ ] **Step 6: Mutations** (paste each failing line, revert by `cp` + `cmp`): an unconditional `""` after the Services line; `[]` treated as a list; `{}` treated as hours; the block placed after HARD LIMITS; today's price line kept beside the list line; sentences printed on insurance; `wouldRatherTalkToAPerson` ignoring `closedNow`; the module ctx given `handoffAvailable: !closedNow`; the transfer tool line ignoring `closedNow`; `closedNow` without the `afterHours` term (OQ1 case); `canBook: input.bookingEnabled` in the phone closed line.
+- [ ] **Step 6: Mutations** (paste each failing line, revert by `cp` + `cmp`): an unconditional `""` after the Services line; `[]` treated as a list; `{}` treated as hours; the block placed after HARD LIMITS; today's price line kept beside the list line; sentences printed on insurance; `wouldRatherTalkToAPerson` ignoring `closedNow`; the module ctx given `handoffAvailable: !closedNow`; the transfer tool line ignoring `closedNow`; `closedNow` without the `afterHours` term (the C19 case); the closed price line used for an empty list, or not used for a failed read (C20).
 - [ ] **Step 7:** `pnpm --filter web typecheck`; eslint on the five files. Commit `voice: Sofía is given the business hours with an open-now line and the price list as fixed sentences; a closed phone offers a message, not a transfer; no hours and no list is byte-identical (S-47c)` naming them.
 
 **Review (MEDIUM, opus, own detached worktree):**
 - **Recompute `PRE_S47C_DIGEST` independently:** in your worktree, `git show 044b1ab2:apps/web/src/lib/voice/system-prompt.ts > <your-wt>/apps/web/src/lib/voice/system-prompt.ts` (keep a `cp` of the branch file first); the modules are identical at `044b1ab2` and HEAD (`git diff 044b1ab2 HEAD -- apps/web/src/lib/voice/modules` prints nothing). Run `pnpm --filter web exec vitest run src/lib/voice/system-prompt.test.ts -t "byte-identical to 044b1ab2"`, read the run count, and confirm the pinned hex is what the `044b1ab2` file produces. Restore by `cp` + `cmp`, never `git checkout`.
-- Read every new line against spec §5.2/§5.2.1/§5.4 and SD5–SD8 word by word; hunt a prompt where two lines contradict each other (the OQ1 class).
+- Read every new line against spec §5.2/§5.2.1/§5.4 and SD5–SD8 word by word; hunt a prompt where two lines contradict each other (the C19 class).
 - Re-run two mutations of your choice.
 
 ---
@@ -2746,7 +2883,7 @@ describe("POST /api/voice/incoming — what Sofía knows (S-47c)", () => {
     expect("knowledgeVersion" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
     expect(acceptedInstructions()).toContain(SENTENCE);
   });
-  it("the services read failing: no RPC, unstamped, free text and hours kept, no list (SD9; mutation: ensure the empty-list payload -> FAILS)", async () => {
+  it("the services read failing: no RPC, unstamped, free text and hours kept, no list, the C20 closed price line (SD9; mutations: ensure the empty-list payload -> FAILS; drop priceListUnavailable from promptInput -> FAILS)", async () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, business_hours: { tue: [["08:00", "18:00"]] } });
     listVoiceServicesMock.mockRejectedValue(new Error("listVoiceServices failed: boom"));
     unwrapMock.mockResolvedValue(callIncomingEvent());
@@ -2755,12 +2892,20 @@ describe("POST /api/voice/incoming — what Sofía knows (S-47c)", () => {
     expect("knowledgeVersion" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
     expect(acceptedInstructions()).toContain("BUSINESS HOURS (");
     expect(acceptedInstructions()).not.toContain("SERVICES AND PRICES");
+    expect(acceptedInstructions()).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
-  it("no hours and no list: the prompt is byte-identical to a prompt built without the new inputs, and the call is still stamped (spec 8.4)", async () => {
+  it("an EMPTY list read keeps today's price line (C20 is for a failed read only)", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(acceptedInstructions()).toContain("- Never quote a price, rate, or estimate unless one is stated above.");
+    expect(acceptedInstructions()).not.toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
+  });
+  it("no hours and no list: no hours block and no list in the prompt, and the call is still stamped (spec 8.4; byte identity itself is system-prompt.test.ts's PRE_S47C_DIGEST)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(acceptedInstructions()).not.toContain("BUSINESS HOURS");
+    expect(acceptedInstructions()).not.toContain("SERVICES AND PRICES");
     expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ knowledgeVersion: 5 });
   });
   it("a call declined by the per-account cap reads no services and records no snapshot (the arrangement of route.test.ts:917-925)", async () => {
@@ -2787,11 +2932,24 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
       amount_cents: 9900, amount_max_cents: null, unit_en: null, unit_es: null,
       sentence_en: "The price for Tables is $99.", sentence_es: "El precio de Tables es $99." }],
   };
-  it("turn 1 stamps the conversation with the version the RPC returned and builds the first prompt from that payload", async () => {
+  it("turn 1 stamps the conversation with the version the RPC returned and builds the first prompt from that payload, list included (mutation: build the prompt without priceList -> FAILS)", async () => {
+    dbFns.listVoiceServices.mockResolvedValue([{ id: "s1", account_id: "a1", position: 1, created_at: "x", name_en: "Benches", name_es: null,
+      description_en: null, description_es: null, price_kind: "from", amount_cents: 4500, amount_max_cents: null, unit_en: null, unit_es: null }]);
     dbFns.ensureKnowledgeSnapshot.mockResolvedValue(7);
     await firstTurn();
     expect(dbFns.createConciergeConversation.mock.calls[0]![1]).toMatchObject({ knowledgeVersion: 7 });
-    expect(sentToModel().messages[0]!.content).toContain(PROFILE.facts);
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(PROFILE.facts);
+    expect(system).toContain(`- Benches — English: "The price for Benches starts at $45." Spanish: "El precio de Benches es desde $45."`);
+    const sent = dbFns.ensureKnowledgeSnapshot.mock.calls[0]![2] as { services: { sentence_en: string }[] };
+    expect(sent.services.map((x) => x.sentence_en)).toEqual(["The price for Benches starts at $45."]);
+  });
+  it("turn 1 with the services read failing: unstamped, and the C20 closed price line", async () => {
+    dbFns.listVoiceServices.mockRejectedValue(new Error("listVoiceServices failed: boom"));
+    await firstTurn();
+    expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
+    expect("knowledgeVersion" in (dbFns.createConciergeConversation.mock.calls[0]![1] as object)).toBe(false);
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
   });
   it("a later turn builds from the STAMPED snapshot after the profile changed (C4; mutation: read the live profile -> FAILS)", async () => {
     dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, facts: "LIVE facts that changed." });
@@ -2812,6 +2970,12 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
     expect(dbFns.getKnowledgeSnapshot).not.toHaveBeenCalled();
     expect(dbFns.listVoiceServices).toHaveBeenCalledTimes(1);
     expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
+  });
+  it("an unstamped later turn whose services read fails gets the C20 closed price line", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: null });
+    dbFns.listVoiceServices.mockRejectedValue(new Error("boom"));
+    await laterTurn();
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
   });
   it("a stamped snapshot read that THROWS answers 503 and spends no turn (SD12)", async () => {
     dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
@@ -2835,7 +2999,7 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
 });
 ```
 
-  - Append to `…/websession/route.test.ts`: "the demo's prompt carries the live list and hours, records nothing and stamps nothing" (`listVoiceServicesMock` resolves one row → the instructions contain its English sentence; the module has no `ensureKnowledgeSnapshot` in its destructure: assert the factory's `ensureKnowledgeSnapshot` — add it as a spy — was never called); "a failed services read still mints the session, without the list" (status 200, no `SERVICES AND PRICES`).
+  - Append to `…/websession/route.test.ts`: "the demo's prompt carries the live list and hours, records nothing and stamps nothing" (`listVoiceServicesMock` resolves one row → the instructions contain its English sentence; the module has no `ensureKnowledgeSnapshot` in its destructure: assert the factory's `ensureKnowledgeSnapshot` — add it as a spy — was never called); "a failed services read still mints the session, without the list and with the C20 closed price line" (status 200, no `SERVICES AND PRICES`, the closed line present; SD9: the demo is the same read with the same risk).
 - [ ] **Step 2:** Run the four route test files → the new cases FAIL; the existing ones go red only where an exact assertion now lacks the stamp (fix those by adding `knowledgeVersion: 5`, never by loosening to `objectContaining`).
 - [ ] **Step 3: Implement.**
   - **Incoming route.** Just before step 9 (`:1042`):
@@ -2869,8 +3033,8 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
       : Promise.resolve(null);
 ```
 
-    Step 10: before the `try` (`:1102`), `const knowledgeVersion = await versionP;` (it never rejects); the `startCallRow` input gains `...(knowledgeVersion === null ? {} : { knowledgeVersion }),` after the trade-module spread. `promptInput` (`:1138-1147`): `const pk = promptKnowledge(knowledge.payload);` above it; `facts: pk.facts, services: pk.services,` in place of `facts: profile.facts, services: profile.services,`; and `businessHours: pk.businessHours, priceList: pk.priceList,` after `tradeModule`.
-  - **Turn route.** Declare `let knowledge: KnowledgePayload;` beside `let conversation` (`:270`). Turn 1, after `ctx1` and before the trade stamp (`:358`):
+    Step 10: before the `try` (`:1102`), `const knowledgeVersion = await versionP;` (it never rejects); the `startCallRow` input gains `...(knowledgeVersion === null ? {} : { knowledgeVersion }),` after the trade-module spread. `promptInput` (`:1138-1147`): `const pk = promptKnowledge(knowledge.payload);` above it; `facts: pk.facts, services: pk.services,` in place of `facts: profile.facts, services: profile.services,`; and `businessHours: pk.businessHours, priceList: pk.priceList, priceListUnavailable: knowledge.listUnavailable,` after `tradeModule` (C20).
+  - **Turn route.** Declare `let knowledge: KnowledgePayload;` and `let listUnavailable = false;` beside `let conversation` (`:270`). Turn 1, after `ctx1` and before the trade stamp (`:358`):
 
 ```ts
       // S-47c (spec 5.5): the chat's knowledge is decided ONCE, here, and stamped on the conversation; every later
@@ -2887,6 +3051,7 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
         })
         : null;
       knowledge = live.payload;
+      listUnavailable = live.listUnavailable; // C20
 ```
 
     The `createConciergeConversation` input gains `...(knowledgeVersion === null ? {} : { knowledgeVersion }),`; the in-memory `conversation` literal (`:393-399`) gains `knowledge_version: knowledgeVersion,`. Turn 2+, after `ctx2` (`:424`), before the claim:
@@ -2904,14 +3069,16 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
           log("knowledge: stamped snapshot unreadable — this turn uses the live knowledge", { conversationId, version: existing.knowledge_version });
         }
         const rows = await listVoiceServices(db, profile.account_id).catch(() => null);
-        knowledge = knowledgeFromLive({ profile, timezone, services: rows }).payload;
+        const liveNow = knowledgeFromLive({ profile, timezone, services: rows });
+        knowledge = liveNow.payload;
+        listUnavailable = liveNow.listUnavailable; // C20; a stamped snapshot always had its list
       }
 ```
 
-    The prompt (`:440-468`): `const pk = promptKnowledge(knowledge);` above it; `facts: pk.facts, services: pk.services,` in place of the profile's; `timezone: knowledge.timezone,` in place of `timezone,` (SD13; on turn 1 and an unstamped turn the payload's zone IS the account's); `businessHours: pk.businessHours, priceList: pk.priceList,` after `tradeModule`.
-  - **Web session route.** After the calendar read (`:174`): `const rows = await listVoiceServices(db, accountId).catch(() => null);` then `const pk = promptKnowledge(knowledgeFromLive({ profile, timezone: acct.timezone, services: rows }).payload);` and in `promptInput`: `facts: pk.facts, services: pk.services,` and `businessHours: pk.businessHours, priceList: pk.priceList,`. No RPC, no stamp (spec 5.5). Log the failed read like the phone (ids only).
+    The prompt (`:440-468`): `const pk = promptKnowledge(knowledge);` above it; `facts: pk.facts, services: pk.services,` in place of the profile's; `timezone: knowledge.timezone,` in place of `timezone,` (SD13; on turn 1 and an unstamped turn the payload's zone IS the account's); `businessHours: pk.businessHours, priceList: pk.priceList, priceListUnavailable: listUnavailable,` after `tradeModule`.
+  - **Web session route.** After the calendar read (`:174`): `const rows = await listVoiceServices(db, accountId).catch(() => null);` then `const live = knowledgeFromLive({ profile, timezone: acct.timezone, services: rows }); const pk = promptKnowledge(live.payload);` and in `promptInput`: `facts: pk.facts, services: pk.services,` and `businessHours: pk.businessHours, priceList: pk.priceList, priceListUnavailable: live.listUnavailable,` (C20, SD9). No RPC, no stamp (spec 5.5). Log the failed read like the phone (ids only).
 - [ ] **Step 4:** Re-run the four files → PASS. Then, unchanged: `src/lib/concierge/*.test.ts`, `src/lib/voice/system-prompt.test.ts`, every source-scanning test (`grep -rln "readFileSync\|webSources\|code(" apps/web/src --include=*.test.ts`, run by path).
-- [ ] **Step 5:** Run the named mutations (the second read for the prompt, `businessHours` dropped, ensure on a failed read, the live profile on a stamped turn, the payload's zone ignored), paste, revert, `cmp`.
+- [ ] **Step 5:** Run the named mutations (the second read for the prompt, `businessHours` dropped, `priceListUnavailable` dropped on each surface (C20), ensure on a failed read, the live profile on a stamped turn, the payload's zone ignored, `priceList` dropped on turn 1), paste, revert, `cmp`.
 - [ ] **Step 6:** Typecheck, eslint. Commit `voice: every call and website chat is stamped with the knowledge snapshot its prompt was built from, a chat keeps its starting knowledge, and the voice demo reads the live hours and prices (S-47c)` with the trailers, naming every path.
 
 **Review (MEDIUM, sonnet, own worktree):** read the incoming route from step 7 to step 13 for any path where the stamp and the prompt could come from two payloads, or a second profile read; read the turn route for any path where a stamped chat's prompt reads the live profile; check the `versionP` promise can never reject unhandled (its handler is attached on creation); re-run the stamped-turn mutation.
@@ -2924,7 +3091,7 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
 
 **Files:**
 - Create: `…/knowledge/validate.ts` (+ `validate.test.ts`), `…/knowledge/save.ts` (+ `save.test.ts`).
-- Modify: `…/voice/actions.ts` (imports `:27-42`; `saveVoiceProfileAction` `:65-165`; two new exported actions after it) and `…/voice/actions.test.ts` (`dbMocks` at `:9-19` gains `saveVoiceKnowledge`, `listVoiceServices`, `getLatestKnowledgeVersion`, `readAccountTimezone`; three new describes).
+- Modify: `…/voice/actions.ts` (imports `:27-42`; `saveVoiceProfileAction` `:65-165`; two new exported actions after it) and `…/voice/actions.test.ts` (`dbMocks` at `:9-19` gains `saveVoiceKnowledge`, `listVoiceServices`, `getLatestKnowledgeVersion`, `readAccountTimezone`; three new describes). The file's `beforeEach` (`:68-75`) resets every mock and its default profile carries `facts: "stuff"` (`:70`), so every existing profile-save case now takes the SD14 path into the snapshot save: give the four new mocks WORKING defaults there, after the reset: `readAccountTimezone` → `"America/Chicago"`, `getLatestKnowledgeVersion` → `0`, `listVoiceServices` → `[]`, `saveVoiceKnowledge` → `{ status: "ok", version: 1 }`.
 
 **Interfaces:**
 - Consumes: Task 2's keys; Task 3's `buildKnowledgePayload`, `PRICE_KINDS`, `HOURS_DAYS_MONDAY_FIRST`; Task 5's functions and types.
@@ -3005,7 +3172,7 @@ export async function saveServicesAction(accountId: string, formData: FormData):
 - **The call-page link** (`…/call/page.tsx`, before `</dl>` at `:303`; spec §5.8): agency only and only when `call.knowledge_version !== null`, exactly the trade-rules item's rule and markup (`:287-302`): a visible `<dt>` `calls.detail.knowledge` and a `<dd data-knowledge="">` holding a `Link` to `/dashboard/accounts/${accountId}/voice/knowledge/${call.knowledge_version}` with the text `calls.detail.knowledgeLink` (`{ persona: personaName, version }`; `personaName` is already resolved at `:162-172`). The page is shared with clients (S-47b SD3): a client never sees it.
 - **Palette:** `apps/web/src/lib/palette/registry.ts:73`'s `"/voice"` list gains `"hours", "prices", "services", "horario", "precios"` (spec §5.7); one case in `registry.test.ts` beside `:164-171` asserting all five (mutation: drop one → FAILS).
 - **Baselines:** `pnpm --filter web exec tsx scripts/generate-i18n-baseline.ts`. Read the diff line by line: it may only REMOVE entries or leave both files unchanged (every new key is twinned and no JSX literal copy was added). An added entry is a finding: fix the copy, never the baseline.
-- **Tests:** the knowledge page (agency renders a saved version with its person and both sentences; `system` reads "recorded automatically"; version 1 has no Older, the latest has no Newer; a bad or missing version is the not-found state; a throwing read is the error state; a client is redirected by the guard; Spanish with `?locale=es`); the call page (agency + stamped → the link with exactly `What Sofía knew (#3)` and the right `href`; agency + unstamped → no `data-knowledge`; client + stamped → no `data-knowledge` and no "Knowledge" text; mutation: drop `isAgency &&` → FAILS). Run those, `registry.test.ts`, `in-account-service-reads.test.ts`, `src/lib/i18n/{ratchet,request-locale-callers}.test.ts` by path; typecheck; eslint. Commit `ui: the agency sees what Sofía knew on each call, version by version, and the palette finds hours and prices (S-47c)` naming every path.
+- **Tests:** the knowledge page (agency renders a saved version with its person and both sentences; `system` reads "recorded automatically"; version 1 has no Older, the latest has no Newer; a bad or missing version is the not-found state; a throwing read is the error state; a client is redirected by the guard; Spanish with `?locale=es`; **second account:** every read (`getKnowledgeSnapshot`, `getLatestKnowledgeVersion`, `getVoiceProfile`) is called with the route's own `accountId` and no other, asserted on the mocks' arguments; mutation: read the snapshot without the account → FAILS); the call page (agency + stamped → the link with exactly `What Sofía knew (#3)` and the right `href`; agency + unstamped → no `data-knowledge`; client + stamped → no `data-knowledge` and no "Knowledge" text; mutation: drop `isAgency &&` → FAILS). Run those, `registry.test.ts`, `in-account-service-reads.test.ts`, `src/lib/i18n/{ratchet,request-locale-callers}.test.ts` by path; typecheck; eslint. Commit `ui: the agency sees what Sofía knew on each call, version by version, and the palette finds hours and prices (S-47c)` naming every path.
 
 ---
 
@@ -3025,11 +3192,11 @@ export async function saveServicesAction(accountId: string, formData: FormData):
 ## Task 11: Final review, design review, one fix agent (checkpoint)
 
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff d3c377aa...HEAD`, in its own detached worktree, with replica 55441/55442/55443.
-  - Read spec §§4–9 and this plan (SDs, OQ1's answer).
+  - Read spec §§2 and 4–9 (C19, C20 included) and this plan (SDs).
   - Run every touched test file by path, both typechecks, and on `post`: `structured-facts-schema`, `structured-facts-lock`, `voice-knowledge`, `voice`, `concierge`, `voice-schema`, `webchat`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `concierge-grants`.
   - Re-check 0095's md5 against Task 1's.
   - Three probes of its own: a byte-identity probe (a stray space on the no-hours path); a stamp/prompt split (the incoming route building the prompt from a second `knowledgeFromLive`); a C14 probe (the closed TOOLS line kept when open).
-  - **Hunt:** a no-hours, no-list prompt that differs by one byte; a stamp that disagrees with the prompt's payload; a later chat turn reading the live profile; a price said in any wording but the sentence (a template drift between `price-sentence.ts` and spec §5.1); an amount reaching an insurance prompt; a prompt that both forbids and permits a transfer (OQ1, SD5); a Spanish sentence with a wrong accent; a write path to the new tables other than the two RPCs; a client role that can read Staff-hidden rows; a card with two primaries; a refused save that loses the operator's edits; a vacuous test (a guard a comment satisfies; a loop that never ran; an assertion built by the function under test).
+  - **Hunt:** a no-hours, no-list prompt that differs by one byte; a stamp that disagrees with the prompt's payload; a later chat turn reading the live profile; a price said in any wording but the sentence (a template drift between `price-sentence.ts` and spec §5.1); an amount reaching an insurance prompt; a prompt that both forbids and permits a transfer (C19, SD5); a failed list read whose price line is not the C20 closed line, or an empty list whose line is; a Spanish sentence with a wrong accent; a write path to the new tables other than the two RPCs; a client role that can read Staff-hidden rows; a card with two primaries; a refused save that loses the operator's edits; a vacuous test (a guard a comment satisfies; a loop that never ran; an assertion built by the function under test).
 - [ ] **bis-design-reviewer, opus**, on Tasks 8–9's diff, with a running build if the orchestrator provides one (source audit otherwise):
   - tokens only; both themes via `.dark`; the blur fallback (nothing new blurs; cards never blur);
   - rule 8 (three cards, three primaries); rule 5 (each card's loaded/empty/error; the knowledge page's three states); rule 6 (Clear hours' Undo; staged removal);
@@ -3060,7 +3227,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
   - Ledger: `0095 APPLIED to production … NEVER RE-APPLY`.
 - [ ] **5. Parity.** Runbook §5 (`docs/runbooks/ci-supabase-project.md:184-207`): `-f step=fingerprint` on bis-ci and `packages/db/supabase/parity/fingerprint.sql` on production; equal on every 0095 object (columns, constraints, policies, the trigger, the four functions, grants).
 - [ ] **6. PR and merge.**
-  - `gh pr create`. The body names: C1–C18 (owner-approved) and SD1–SD21 with their resolutions; OQ1's answer; both apply lines; the tiers; "LOAD-BEARING: PROFILE_COLS (every profile read: calls, chat turns, the chat page, the Voice page, every profile save), CALL_DETAIL_COLS, CONVO_COLS (chat turns, the web chat sync), the startCallRow and createConciergeConversation stamps, listVoiceServices, getKnowledgeSnapshot, and the two RPCs (call and chat start; every Voice page knowledge save, the profile card's Facts and Services included)"; "No env var changes; nothing added to Preview"; "Merging changes no prompt by itself: an account's prompt changes only once the agency saves hours or a list for it. From the first call after deploy every call carries a knowledge version (spec 5.6, C15)".
+  - `gh pr create`. The body names: C1–C20 (owner-approved) and SD1–SD23 with their resolutions; both apply lines; the tiers; "LOAD-BEARING: PROFILE_COLS (every profile read: calls, chat turns, the chat page, the Voice page, every profile save), CALL_DETAIL_COLS, CONVO_COLS (chat turns, the web chat sync), the startCallRow and createConciergeConversation stamps, listVoiceServices, getKnowledgeSnapshot, and the two RPCs (call and chat start; every Voice page knowledge save, the profile card's Facts and Services included)"; "No env var changes; nothing added to Preview"; "Merging changes no prompt by itself: an account's prompt changes only once the agency saves hours or a list for it. From the first call after deploy every call carries a knowledge version (spec 5.6, C15)".
   - Only after step 4: `gh pr merge <n> --auto --squash --match-head-commit <sha>`, with the head SHA's `verify` and `e2e` green.
 - [ ] **7. After the deploy** (READY on the merge SHA, aliased to `app.bis-rgv.com`):
   - Smokes: `/` 200, `/sign-in` 200, `/api/cron/reminders` 401, `/b/bogus` 404.
@@ -3074,7 +3241,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 ## Notes for the owner (no decision reopened)
 
 - **Every account gets snapshot #1 on its first call after deploy** (C15): a `system` row whose payload is its current free text. Nothing in any prompt changes until the agency saves hours or a list.
-- **A closed business, by setting** (C14 as implemented): under "Follow business hours", closed now, Sofía offers a message instead of a transfer and puts a caller through only when they ask (or, with a trade module, on its urgent path). Under "Always take a message", see OQ1.
+- **A closed business, by setting** (C14 as implemented): under "Follow business hours", closed now, Sofía offers a message instead of a transfer and puts a caller through only when they ask (or, with a trade module, on its urgent path). Under "Always take a message" nothing about transfers changes with the hours (C19).
+- **A failed price-list read** (C20): she gives no price on that call or chat turn and offers to take their details; an empty list changes nothing.
 - **The amounts flag** lists what it finds in Facts AND Services (SD20). It is a regex, so it can miss an amount written in words ("forty dollars") and can flag a non-price that looks like one; it never blocks a save.
 - **Midnight** is entered as a 12:00 AM closing time (SD11).
 
@@ -3096,11 +3264,13 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | §2 C11 amounts as rows; the flag lists each amount | Task 3 (`factsWarnings`), Task 8 (Notice), Task 2 (copy) |
 | §2 C12 no module change; events pointed at the list by the base prompt | Task 4 (`LIST_PRICE_LINE`'s last sentence; events test); "Not touched" |
 | §2 C13 insurance shows no amounts; names only in the prompt; fields hidden | Task 4 (names-only block, SD8), Task 7 (`after_visit`), Task 8 |
-| §2 C14 closed = a message unless asked or urgent | Task 4 (closed offers, TOOLS line, SD5); OQ1 |
+| §2 C14 closed = a message unless asked or urgent | Task 4 (closed offers, TOOLS line, SD5); C19 |
 | §2 C15 automatic snapshots | Task 1 (`ensure`), Task 6, Task 9 ("recorded automatically") |
 | §2 C16 per_unit needs both units | Task 1 (CHECK + mutation 2), Task 3 (throws), Task 7 (the named error) |
 | §2 C17 hours readable by every member | Task 1 (Staff read case) |
 | §2 C18 the twelve sentences | "The twelve price sentences"; Task 3 (`SPEC_TABLE` + twelve literals) |
+| §2 C19 closed-hours changes only under "Follow business hours" | Task 4 (`closedNow`, the C19 case and its mutation) |
+| §2 C20 a failed list read closes the price line; an empty list does not; insurance keeps its line | Task 3 (`listUnavailable`), Task 4 (`CLOSED_PRICE_LINE`, its cases), Task 6 (the signal on all three surfaces); SD9 |
 | §3 Scope in/out | File map; "Not touched" |
 | §4 data, grants, policies, comments, rollback | Task 1 (SD2, SD4) |
 | §4.1 the two RPCs | Task 1 |
@@ -3108,7 +3278,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | §4.3 load-bearing sites | Task 5; SD3; Task 12 steps 4, 6 |
 | §5.1 renderers | Task 3 |
 | §5.2 the prompt (blocks, HARD LIMITS line, after hours) | Task 4 (SD5–SD8, SD17) |
-| §5.2.1 closed now and the offer of a person | Task 4; OQ1 |
+| §5.2.1 closed now and the offer of a person | Task 4; C19 |
 | §5.3 Facts flags | Task 3, Task 8 (SD20) |
 | §5.4 trade modules | Task 4 (insurance, events cases) |
 | §5.5 where each surface reads its knowledge; the latency read | Task 6 (SD9, SD12, SD13, SD18); Task 0 |
@@ -3119,4 +3289,4 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | §7 tests (renderers, digests, prompt, flags, insurance UI, db, routes, actions, e2e) | Tasks 1, 3, 4, 5, 6, 7, 8, 10 |
 | §8 rollout | Task 12 |
 | §9 tiers | Tiers table |
-| §10 no open questions | OQ1 is a contradiction inside the spec's own text (§5.2.1 points 2 and 5), not a reopened decision |
+| §10 no open questions | C19 and C20 are recorded in §2 and §10 (spec updated in the plan's fix commit) |

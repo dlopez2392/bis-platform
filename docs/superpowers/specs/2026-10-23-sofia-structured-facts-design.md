@@ -2,8 +2,9 @@
 
 Status: owner decisions C1–C4 and the section 4 data model approved in conversation 2026-10-21/23; the
 open sections were settled with the owner's "go with your recommendations" (C5–C10, 2026-10-23), and the
-owner answered the first draft's questions the same day (C11–C17) and read the twelve price sentences
-(C18). There are no open questions (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
+owner answered the first draft's questions the same day (C11–C17), read the twelve price sentences
+(C18), and ruled on the two questions the implementation plan raised (C19, C20). There are no open
+questions (section 10). Part c of S-47 (parallel work, `docs/crm-features.md` §4.3, row
 "↳ F-037 (part)", 2.5–3 ew). Part a (disclosure, F-034) shipped in #279, part b (trade modules, F-174 part)
 in #280–#283; d (the one switch, F-084) and e (identity checks, F-116 part) follow in their own specs.
 F-037 part 2 (owner-edited versioned facts, visibility tiers, freshness; `crm-features.md` row 1500) builds
@@ -103,6 +104,23 @@ The owner's answers to the first draft's questions (2026-10-23):
   drafted. Two Spanish ones change: `from` is "El precio de {N} es desde {A}." and `after_visit` is "El
   precio de {N} se lo damos después de una visita." The other four Spanish sentences stand. The table in
   5.1 is final, and the plan pins it as literal test fixtures.
+
+The owner's rulings on the implementation plan's questions (2026-10-23):
+
+- **C19 Closed hours change nothing under "Always take a message".** The 5.2.1 changes (the four offers of a
+  person become "offer to take a message"; the closed TOOLS line) apply only under "Follow business hours,
+  then take a message": `closedNow` requires that setting. "Always take a message" already holds at every
+  hour, and its MESSAGES ONLY line (5.2.1 point 5) keeps saying when to put someone through, so the prompt
+  never says both "only when the caller asks" and "or it cannot wait".
+- **C20 A failed price-list read closes the price line.** When the read of the account's services FAILS (an
+  error, not an empty list) on the phone, at chat creation or on an unstamped chat turn, the HARD LIMITS
+  price line becomes a fixed closed line: she gives no price, says the business will confirm pricing and
+  offers to take their details, so no amount left in the prose can be quoted while the list is unknown. The
+  line is pinned in the plan ("- Do not give, confirm or estimate any price, rate or amount right now, not
+  even one written above. If asked, say the business will confirm pricing and offer to take their
+  details."). An empty list (the read succeeded, no rows) keeps today's line, byte for byte. An insurance
+  account keeps today's line on a failed read (its module forbids every quote and overrides that line).
+  The browser voice demo reads its live list the same way and follows the same rule.
 
 ## 3. Scope
 
@@ -566,4 +584,6 @@ the prompt lines are not catalogue copy (they are model input), and are pinned b
 ## 10. Open questions
 
 No open questions. The first draft's Q1–Q7 were answered by the owner on 2026-10-23 and are decisions
-C11–C17, and Q8 (the owner's read of the twelve price sentences) is C18 (section 2).
+C11–C17, Q8 (the owner's read of the twelve price sentences) is C18, and the implementation plan's two
+questions (closed hours under "Always take a message"; the price line on a failed list read) are C19 and
+C20 (section 2).
