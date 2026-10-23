@@ -27,7 +27,7 @@ import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import type { ActionResult, EnableConciergeResult } from "./actions";
-import { BusinessHoursCard } from "./business-hours-card";
+import { BusinessHoursCard, type CalendarRead } from "./business-hours-card";
 import { ServicesPricesCard } from "./services-prices-card";
 import { FactsFlags } from "./facts-flags";
 import type { VoiceServiceInput } from "@bis/db";
@@ -122,6 +122,9 @@ export function VoiceProfileForm({
   // unchanged, so this touches nothing about what Save writes.
   const [factsText, setFactsText] = useState(p.facts);
   const [servicesText, setServicesText] = useState(p.services);
+  // S-47c (design review I6): the STORED module, as page.tsx reads it for the Services card. On insurance no
+  // price is ever said, so the Facts hint promises no prices card and every amount in the two boxes is flagged.
+  const insurance = p.trade_module === "insurance_pc";
   // Which language the default previews in. `detectSpokenLanguage` decides
   // this per call at send time, and for a Spanish-only line it can only ever
   // answer "es" — so previewing English there would show the operator a
@@ -240,11 +243,11 @@ export function VoiceProfileForm({
               onChange={(e) => setFactsText(e.target.value)}
               className={nativeFieldClass}
             />
-            <p className="text-xs text-muted-foreground">{m["voice.profile.factsHint"]}</p>
+            <p className="text-xs text-muted-foreground">{m[insurance ? "voice.profile.factsHintInsurance" : "voice.profile.factsHint"]}</p>
             {/* S-47c (Task 8, spec 5.3): recomputed live from both textareas' own values; never
                 blocks Save — this reads nothing the form's onSubmit above reads. */}
             <FactsFlags
-              facts={factsText} servicesText={servicesText} hasHours={hasHours} hasPriceList={hasPriceList}
+              facts={factsText} servicesText={servicesText} hasHours={hasHours} hasPriceList={hasPriceList} insurance={insurance}
               locale={locale} pseudo={pseudo} persona={persona}
             />
           </div>
@@ -1113,7 +1116,7 @@ export function VoiceSettings({
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
   disclosureCopy, disclosureResults, tradeRulesCopy,
-  persona, locale, pseudo, timezone, storedHours, calendarHours, insurance, services,
+  persona, locale, pseudo, timezone, storedHours, calendar, insurance, services,
   hasHours, hasPriceList, saveBusinessHoursAction, saveServicesAction,
 }: {
   accountId: string;
@@ -1157,8 +1160,8 @@ export function VoiceSettings({
   /** `readAccountTimezone`'s own return — null only for an account whose zone was never set. */
   timezone: string | null;
   storedHours: OpenHours | null;
-  /** The calendar's raw `open_hours`, or null when its read failed or the account has none. */
-  calendarHours: unknown;
+  /** The calendar's raw `open_hours` (null when the account has none), or its failed read. */
+  calendar: CalendarRead;
   insurance: boolean;
   /** `listVoiceServices`'s result, wrapped by page.tsx so a failed read is the Services card's own
    *  ERROR state (spec 5.7), never the whole page's. */
@@ -1179,7 +1182,7 @@ export function VoiceSettings({
       />
       <BusinessHoursCard
         locale={locale} pseudo={pseudo} persona={persona} timezone={timezone}
-        storedHours={storedHours} calendarHours={calendarHours} action={saveBusinessHoursAction}
+        storedHours={storedHours} calendar={calendar} action={saveBusinessHoursAction}
       />
       <ServicesPricesCard
         locale={locale} pseudo={pseudo} persona={persona} insurance={insurance} services={services}

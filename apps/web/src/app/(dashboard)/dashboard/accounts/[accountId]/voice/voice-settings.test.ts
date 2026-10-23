@@ -862,6 +862,23 @@ describe("VoiceProfileForm's Trade rules group (S-47b)", () => {
     expect(html).toMatch(/<div[^>]*lang="es"[^>]*>\s*<fieldset/);
     expect(html).not.toMatch(/<fieldset[^>]*lang=/);
   });
+
+  // S-47c design review I6: on a STORED insurance module the Facts box promises no prices card, and its
+  // amounts flag reads the insurance sentence even with no price list.
+  it("on insurance the Facts hint promises no prices card and the amounts flag is the insurance one (mutation: ignore the stored module -> FAILS)", () => {
+    const text = renderedText(render({ trade_module: "insurance_pc", facts: "A $500 deposit to hold the date." }));
+    expect(text).toContain("Policies and anything else a caller might ask about. Hours go in their own card below. Prices are never given on insurance accounts.");
+    expect(text).not.toContain(m["voice.profile.factsHint"]);
+    expect(text).toContain("Sofía never gives prices on insurance accounts");
+  });
+
+  it("off insurance the Facts hint is the usual one, and with no price list there is no amounts flag", () => {
+    const text = renderedText(render({ trade_module: "events", facts: "A $500 deposit to hold the date." }));
+    expect(text).toContain(m["voice.profile.factsHint"]);
+    expect(text).not.toContain(m["voice.profile.factsHintInsurance"]);
+    // The flag's own words (the insurance radio's hint, on this same card, also says "never gives prices").
+    expect(text).not.toContain("so these amounts in the Facts or Services box will not be said");
+  });
 });
 
 // D-040: "Always take a message" now means no booking on calls at any hour,

@@ -40,24 +40,26 @@ loadEnv({ path: ".env.local" });
  * `enabled: false` — never `business_hours`, which `upsertVoiceProfile` refuses at run time) and sets the
  * fixture's calendar to Monday-Friday 09:00-17:00 so test 1's "Copy from calendar" has rows to copy.
  *
- * ORDER (serial; the seed and the saved state are shared). Test 1 saves business hours, test 2 adds and
- * saves one price-list row, test 3 clears both — each depends on the state the one before it left.
+ * ORDER (serial; the seed and the saved state are shared). First, the 360px measure (fills the grid, saves
+ * nothing). Then test 1 saves business hours, test 2 adds and saves one price-list row, test 3 clears both —
+ * each depends on the state the one before it left.
  *
  * SELECTOR ASSUMPTIONS (Task 8's cards are not committed as this file is written; each is pinned to the
  * plan's own description of the markup, §Task 8, and is a finding for the final review if Task 8's real
  * markup differs):
  *   - Each card's root carries its plan-given id (`#business-hours`, `#services-prices`).
  *   - The hours grid renders its seven day rows Monday first, each open day's two `Input type="time"`
- *     fields labelled exactly `m["voice.hours.from"]` ("Opens") and `m["voice.hours.to"]` ("Closes"); with
- *     only Monday-Friday open (the seeded calendar, and the saved hours), the FIRST such labelled pair in
- *     DOM order is Monday's — there is no day before it that could also be open.
+ *     fields labelled with their day (`m["voice.hours.from"]`, "Opens on {day}", and `m["voice.hours.to"]`,
+ *     "Closes on {day}"; the fix round named the day in every label), so Monday's pair is addressed by
+ *     "Opens on Monday" / "Closes on Monday" directly. Each span group carries `data-hours-span`.
  *   - The services card's kind control is a `combobox` whose accessible name is `m["voice.services.kind"]`
  *     ("How it's priced"), opening options in a portal reached from `page`, not the card (Radix's own
  *     pattern, as `calendar-meeting-settings.spec.ts`'s "Meeting type" select).
  *   - "Add a service" opens its new row inline, in edit mode, immediately — there is no separate "Edit"
  *     click on a row that has nothing yet to collapse-display.
  *   - The per-row "Remove" button sits on the collapsed (non-editing) row, per the plan's "ghost Move
- *     up / Move down / Edit / Remove" on each row, not only inside its edit view.
+ *     up / Move down / Edit / Remove" on each row, not only inside its edit view. Each row button's
+ *     accessible name carries the service ("Edit Catering", "Remove Catering"; the fix round).
  */
 test.describe.configure({ mode: "serial", timeout: 60_000 });
 
@@ -224,6 +226,38 @@ test.afterAll(async () => {
   if (problems.length > 0) throw new Error(`structured-facts e2e cleanup left the fixture dirty:\n${problems.join("\n")}`);
 });
 
+/** Monday's two time fields, by the labels that name their day (see SELECTOR ASSUMPTIONS). */
+const MONDAY_OPENS = m["voice.hours.from"].replace("{day}", m["voice.hours.day.mon"]);
+const MONDAY_CLOSES = m["voice.hours.to"].replace("{day}", m["voice.hours.day.mon"]);
+
+/**
+ * The fix round's measure (design review I1): on a 360px phone the open grid's span groups (two 8rem time
+ * fields, the "to" and the remove button) must wrap inside the card, never push the page sideways. Source review
+ * could only read the classes; this reads the laid-out boxes. Saves nothing: Copy from calendar only fills
+ * the grid, so the serial tests below start from the state the seed left.
+ */
+test("Business hours at 360px wide: the open grid stays inside its card and the page never scrolls sideways", async ({ page }) => {
+  test.skip(!fixtureRef, "No client fixture — the setup project creates it; run the full suite.");
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto(`/dashboard/accounts/${accountId}/voice`);
+  const hoursCard = page.locator("#business-hours");
+
+  await hoursCard.getByRole("button", { name: m["voice.hours.copyFromCalendar"], exact: true }).click();
+  const spans = hoursCard.locator("[data-hours-span]");
+  // Monday to Friday, one span each: the seeded calendar.
+  await expect(spans).toHaveCount(5);
+
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth, "the page scrolls sideways at 360px").toBeLessThanOrEqual(clientWidth);
+
+  const cardRight = await hoursCard.evaluate((el) => el.getBoundingClientRect().right);
+  const spanRights = await spans.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().right));
+  expect(spanRights.length).toBe(5);
+  for (const right of spanRights) expect(right, "a span group sticks out of the hours card").toBeLessThanOrEqual(cardRight);
+});
+
 test("Business hours: Copy from calendar, save, reload, see the rows", async ({ page }) => {
   test.skip(!fixtureRef, "No client fixture — the setup project creates it; run the full suite.");
   await page.goto(`/dashboard/accounts/${accountId}/voice`);
@@ -231,10 +265,8 @@ test("Business hours: Copy from calendar, save, reload, see the rows", async ({ 
 
   await hoursCard.getByRole("button", { name: m["voice.hours.copyFromCalendar"], exact: true }).click();
 
-  // Monday is the first open day in the grid (Monday first; only Mon-Fri are open) — see the
-  // SELECTOR ASSUMPTIONS note at the top of this file.
-  await expect(hoursCard.getByLabel(m["voice.hours.from"], { exact: true }).first()).toHaveValue("09:00");
-  await expect(hoursCard.getByLabel(m["voice.hours.to"], { exact: true }).first()).toHaveValue("17:00");
+  await expect(hoursCard.getByLabel(MONDAY_OPENS, { exact: true })).toHaveValue("09:00");
+  await expect(hoursCard.getByLabel(MONDAY_CLOSES, { exact: true })).toHaveValue("17:00");
 
   await hoursCard.getByRole("button", { name: m["voice.hours.save"], exact: true }).click();
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["voice.hours.saved"] })).toBeVisible();
@@ -244,8 +276,8 @@ test("Business hours: Copy from calendar, save, reload, see the rows", async ({ 
   await expect.poll(() => getLatestKnowledgeVersion(db, accountId)).toBe(priorVersion + 1);
 
   await page.reload();
-  await expect(hoursCard.getByLabel(m["voice.hours.from"], { exact: true }).first()).toHaveValue("09:00");
-  await expect(hoursCard.getByLabel(m["voice.hours.to"], { exact: true }).first()).toHaveValue("17:00");
+  await expect(hoursCard.getByLabel(MONDAY_OPENS, { exact: true })).toHaveValue("09:00");
+  await expect(hoursCard.getByLabel(MONDAY_CLOSES, { exact: true })).toHaveValue("17:00");
 });
 
 test("Services: add a per_unit row, see both preview sentences, save, reload, see it", async ({ page }) => {
@@ -282,6 +314,14 @@ test("Services: add a per_unit row, see both preview sentences, save, reload, se
 
   await page.reload();
   await expect(servicesCard.getByText("Catering", { exact: true })).toBeVisible();
+
+  // The fix round (design review I5): Edit puts the focus in that row's English name, and Done puts it back
+  // on that row's Edit — measured in the browser, which source review could not do.
+  const edit = servicesCard.getByRole("button", { name: m["voice.services.editNamed"].replace("{name}", "Catering"), exact: true });
+  await edit.click();
+  await expect(servicesCard.getByLabel(m["voice.services.nameEn"], { exact: true })).toBeFocused();
+  await servicesCard.getByRole("button", { name: m["voice.services.done"], exact: true }).click();
+  await expect(edit).toBeFocused();
 });
 
 test("Clear both: hours and the service", async ({ page }) => {
@@ -295,7 +335,7 @@ test("Clear both: hours and the service", async ({ page }) => {
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: m["voice.hours.cleared"] })).toBeVisible();
   await expect.poll(() => getVoiceProfile(db, accountId).then((p) => p?.business_hours)).toBeNull();
 
-  await servicesCard.getByRole("button", { name: m["voice.services.remove"], exact: true }).click();
+  await servicesCard.getByRole("button", { name: m["voice.services.removeNamed"].replace("{name}", "Catering"), exact: true }).click();
   await expect(servicesCard.getByText(m["voice.services.removing"], { exact: true })).toBeVisible();
 
   await servicesCard.getByRole("button", { name: m["voice.services.save"], exact: true }).click();

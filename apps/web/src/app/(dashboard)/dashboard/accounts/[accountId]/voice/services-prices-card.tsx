@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * S-47c (plan Task 8; spec 5.7, C13): the Services & prices card. Writes ONLY
+ * S-47c (plan Task 8; spec 5.7, C13, C21): the Services & prices card. Writes ONLY
  * through `saveServicesAction` (Task 7), the knowledge snapshot RPC. Every
  * edit is staged in this card's own state until "Save services" — nothing a
- * row's Remove does is destroyed before Save (spec 5.7), and a refused save
+ * saved row's Remove does is destroyed before Save (spec 5.7), and a refused save
  * keeps every edit (`useFormSubmit`).
  */
 import { useId, useMemo, useState } from "react";
@@ -16,6 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
 import { Notice } from "@/components/ui/notice";
 import { EmptyState } from "@/components/empty-state";
 import { SubmitButton } from "../../submit-button";
@@ -26,6 +27,7 @@ import type { MessageKey } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import { formatUsd, PRICE_KINDS, priceSentence, type PriceKind } from "@/lib/voice/knowledge/price-sentence";
 import { formFromServices, parseDollars, servicesFromForm, type ServiceForm } from "@/lib/voice/knowledge/validate";
+import { useFocusAfterRender } from "./focus-after-render";
 import type { ActionResult } from "./actions";
 
 const KIND_LABEL_KEY: Record<PriceKind, MessageKey> = {
@@ -33,7 +35,20 @@ const KIND_LABEL_KEY: Record<PriceKind, MessageKey> = {
   per_unit: "voice.services.kind.per_unit", free: "voice.services.kind.free", after_visit: "voice.services.kind.after_visit",
 };
 
-export type ServiceRowState = ServiceForm & { id: string; removed: boolean; editing: boolean };
+/** The lengths `servicesFromForm` accepts (and the CHECKs hold): the fields stop there instead of refusing on Save. */
+const MAX_NAME = 80;
+const MAX_DESCRIPTION = 300;
+const MAX_UNIT = 30;
+
+/** `origin` is the row as last saved — its English name and whether it carried a price — or null for a row
+ *  added in this visit and never saved. C21 reads it (renaming a priced row on insurance drops the price), and
+ *  so does Remove (a never-saved row goes at once; a saved one is staged until Save). */
+export type ServiceRowState = ServiceForm & {
+  id: string; removed: boolean; editing: boolean;
+  origin: { name_en: string; priced: boolean } | null;
+};
+
+const isPriced = (kind: ServiceForm["price_kind"]) => kind !== "" && kind !== "after_visit";
 
 /** A brand-new row (spec 5.7): `price_kind: ""` always, whichever account this opens on. On insurance
  *  there is no kind Select to ever change it away from blank, and the server reads that as
@@ -46,22 +61,63 @@ export function newServiceRow(): ServiceForm {
   };
 }
 
-function toRowState(rows: readonly VoiceServiceInput[]): ServiceRowState[] {
-  return formFromServices(rows).map((f) => ({ ...f, id: crypto.randomUUID(), removed: false, editing: false }));
+export function toRowState(rows: readonly VoiceServiceInput[]): ServiceRowState[] {
+  return formFromServices(rows).map((f) => ({
+    ...f, id: crypto.randomUUID(), removed: false, editing: false,
+    origin: { name_en: f.name_en, priced: isPriced(f.price_kind) },
+  }));
 }
 
 /**
  * What "Save services" actually posts (spec 5.7): every row NOT staged for removal, in the card's
  * current order, stripped back to the plain `ServiceForm` the server validates — never this card's
- * own `id`/`removed`/`editing`. Reads nothing about `insurance`: a stored row this card never opened
- * for editing posts back exactly the kind and amounts it was loaded with, insurance or not, because
- * this function never rewrites a field — only a card state change (through the editor) ever does.
+ * own `id`/`removed`/`editing`/`origin`. Reads nothing about `insurance`: a stored row posts back exactly
+ * the kind and amounts it was loaded with, insurance or not, because this function never rewrites a
+ * field. Whether a price survives a rename on insurance is the server's call (C21), from its own read.
  */
 export function postableServices(rows: readonly ServiceRowState[]): ServiceForm[] {
   return rows.filter((r) => !r.removed).map((r): ServiceForm => ({
     name_en: r.name_en, name_es: r.name_es, description_en: r.description_en, description_es: r.description_es,
     price_kind: r.price_kind, amount: r.amount, amount_max: r.amount_max, unit_en: r.unit_en, unit_es: r.unit_es,
   }));
+}
+
+/** C21: on insurance, a row loaded with a price whose English name (trimmed) now differs will be saved as
+ *  "priced after a visit" — the server's rule (keepStoredInsurancePrices), said before Save rather than after. */
+export function renameDropsPrice(row: ServiceRowState, insurance: boolean): boolean {
+  return insurance && row.origin !== null && row.origin.priced && row.name_en.trim() !== row.origin.name_en.trim();
+}
+
+/** Remove (spec 5.7): a row never saved goes at once (there is nothing to keep it for); a saved row is
+ *  staged until Save, so nothing stored is destroyed before the card's commit. */
+export function removeRow(rows: readonly ServiceRowState[], id: string): ServiceRowState[] {
+  const row = rows.find((r) => r.id === id);
+  if (!row) return [...rows];
+  if (row.origin === null) return rows.filter((r) => r.id !== id);
+  return rows.map((r) => (r.id === id ? { ...r, removed: true, editing: false } : r));
+}
+
+/**
+ * The card after a successful Save (design review I3): the staged rows are gone, every editor is closed, and
+ * every row is now a SAVED row whose `origin` is what was just stored. On insurance that includes C21: a
+ * renamed priced row was stored as after_visit with nothing priced, so the card holds the same, and a new row
+ * (no kind) was stored as after_visit.
+ */
+export function settleAfterSave(rows: readonly ServiceRowState[], insurance: boolean): ServiceRowState[] {
+  return rows.filter((r) => !r.removed).map((r) => {
+    const dropped = renameDropsPrice(r, insurance);
+    const next: ServiceRowState = dropped
+      ? { ...r, price_kind: "after_visit", amount: "", amount_max: "", unit_en: "", unit_es: "" }
+      : insurance && r.price_kind === "" ? { ...r, price_kind: "after_visit" } : { ...r };
+    return { ...next, editing: false, origin: { name_en: next.name_en, priced: isPriced(next.price_kind) } };
+  });
+}
+
+/** After Move up/down the pressed arrow keeps the focus on the moved row, unless the row just reached the end
+ *  it was moving to (that arrow is now disabled), when the other arrow takes it (design review I5). */
+export function moveFocusTarget(delta: -1 | 1, newIndex: number, count: number): "up" | "down" {
+  if (delta === -1) return newIndex === 0 ? "down" : "up";
+  return newIndex === count - 1 ? "up" : "down";
 }
 
 /**
@@ -102,34 +158,62 @@ function amountSummary(row: ServiceForm, tr: Tr): string | null {
   }
 }
 
-function ServiceRowView({
+/** The collapsed row. Its buttons name the service ("Edit Catering"), and carry ids (`<row id>-edit` and so
+ *  on) so the card can put focus back on the right one after the row re-renders (design review I5). A staged
+ *  row fades only what will go — the name, kind and amount — never its status word or its Keep (I7). */
+export function ServiceRowView({
   row, index, count, insurance, tr, onMove, onEdit, onRemove, onKeep,
 }: {
   row: ServiceRowState; index: number; count: number; insurance: boolean; tr: Tr;
-  onMove: (delta: number) => void; onEdit: () => void; onRemove: () => void; onKeep: () => void;
+  onMove: (delta: -1 | 1) => void; onEdit: () => void; onRemove: () => void; onKeep: () => void;
 }) {
-  const kindLabel = row.price_kind ? tr.text(KIND_LABEL_KEY[row.price_kind]) : "";
+  const named = row.name_en.trim() !== "";
+  const name = named ? row.name_en : tr.text("voice.services.unnamed");
+  // C13 (final review I3): insurance shows no price at all, the kind included.
+  const kindLabel = !insurance && row.price_kind ? tr.text(KIND_LABEL_KEY[row.price_kind]) : "";
   const summary = insurance ? null : amountSummary(row, tr);
+  const fade = row.removed && "opacity-50";
   return (
-    <li className={cn("flex flex-wrap items-center gap-2 border-t border-[var(--row-line)] py-2 first:border-t-0", row.removed && "opacity-50")}>
-      <span className="min-w-0 flex-1 truncate font-medium text-card-foreground">{row.name_en || tr.text("voice.services.nameEn")}</span>
-      {kindLabel ? <span className="shrink-0 text-xs text-muted-foreground">{kindLabel}</span> : null}
-      {summary ? <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{summary}</span> : null}
+    <li className="flex flex-wrap items-center gap-2 border-t border-[var(--row-line)] py-2 first:border-t-0">
+      <span className={cn("min-w-0 flex-1 truncate", named ? "font-medium text-card-foreground" : "text-muted-foreground", fade)}>{name}</span>
+      {kindLabel ? <span className={cn("shrink-0 text-xs text-muted-foreground", fade)}>{kindLabel}</span> : null}
+      {summary ? <span className={cn("shrink-0 text-xs text-muted-foreground tabular-nums", fade)}>{summary}</span> : null}
       {row.removed ? (
         <>
           <span className="text-xs text-muted-foreground">{tr.text("voice.services.removing")}</span>
-          <Button type="button" variant="ghost" size="xs" onClick={onKeep}>{tr.text("voice.services.keep")}</Button>
+          <Button
+            id={`${row.id}-keep`} type="button" variant="ghost" size="xs"
+            aria-label={tr.text("voice.services.keepNamed", { name })} onClick={onKeep}
+          >
+            {tr.text("voice.services.keep")}
+          </Button>
         </>
       ) : (
         <>
-          <Button type="button" variant="ghost" size="xs" aria-label={tr.text("voice.services.moveUp")} disabled={index === 0} onClick={() => onMove(-1)}>
+          <Button
+            id={`${row.id}-up`} type="button" variant="ghost" size="xs"
+            aria-label={tr.text("voice.services.moveUp", { name })} disabled={index === 0} onClick={() => onMove(-1)}
+          >
             <ArrowUp className="size-3.5" aria-hidden />
           </Button>
-          <Button type="button" variant="ghost" size="xs" aria-label={tr.text("voice.services.moveDown")} disabled={index === count - 1} onClick={() => onMove(1)}>
+          <Button
+            id={`${row.id}-down`} type="button" variant="ghost" size="xs"
+            aria-label={tr.text("voice.services.moveDown", { name })} disabled={index === count - 1} onClick={() => onMove(1)}
+          >
             <ArrowDown className="size-3.5" aria-hidden />
           </Button>
-          <Button type="button" variant="ghost" size="xs" onClick={onEdit}>{tr.text("voice.services.edit")}</Button>
-          <Button type="button" variant="ghost" size="xs" onClick={onRemove}>{tr.text("voice.services.remove")}</Button>
+          <Button
+            id={`${row.id}-edit`} type="button" variant="ghost" size="xs"
+            aria-label={tr.text("voice.services.editNamed", { name })} onClick={onEdit}
+          >
+            {tr.text("voice.services.edit")}
+          </Button>
+          <Button
+            id={`${row.id}-remove`} type="button" variant="ghost" size="xs"
+            aria-label={tr.text("voice.services.removeNamed", { name })} onClick={onRemove}
+          >
+            {tr.text("voice.services.remove")}
+          </Button>
         </>
       )}
     </li>
@@ -141,35 +225,41 @@ function ServiceRowView({
  * can prove the insurance face (no kind Select, no amount/unit field, no preview, no "$" anywhere —
  * spec 5.7, C13) and the live preview directly, without simulating a click on "Edit" (this repo's
  * render harness, `renderToStaticMarkup`, never fires one — `voice-settings.test.ts`'s own note on
- * `ConciergeCard`).
+ * `ConciergeCard`). `dropsPrice` is `renameDropsPrice` for this row (C21): the one-line hint under the
+ * English name, tied to it by `aria-describedby`.
  */
 export function ServiceRowEditor({
-  rowId, row, insurance, locale, pseudo, onChange, onDone,
+  rowId, row, insurance, dropsPrice, locale, pseudo, onChange, onDone,
 }: {
-  rowId: string; row: ServiceForm; insurance: boolean; locale: "en" | "es"; pseudo: boolean;
+  rowId: string; row: ServiceForm; insurance: boolean; dropsPrice: boolean; locale: "en" | "es"; pseudo: boolean;
   onChange: (patch: Partial<ServiceForm>) => void; onDone: () => void;
 }) {
   const tr = useMemo(() => makeTr(locale, pseudo), [locale, pseudo]);
   const preview = serviceRowPreview(row, insurance);
   const hasAmountFields = row.price_kind === "fixed" || row.price_kind === "from"
     || row.price_kind === "range" || row.price_kind === "per_unit";
+  const hintId = `${rowId}-name-en-hint`;
   return (
-    <li className="space-y-3 border-t border-[var(--row-line)] bg-[var(--surface-2)] px-3 py-3 first:border-t-0" lang={locale}>
+    <li className="space-y-3 rounded-[var(--radius-ctl)] border-t border-[var(--row-line)] bg-[var(--surface-2)] px-3 py-3 first:border-t-0" lang={locale}>
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${rowId}-name-en`}>{tr.text("voice.services.nameEn")}</Label>
-          <Input id={`${rowId}-name-en`} value={row.name_en} onChange={(e) => onChange({ name_en: e.target.value })} />
+          <Input
+            id={`${rowId}-name-en`} aria-describedby={dropsPrice ? hintId : undefined} maxLength={MAX_NAME}
+            value={row.name_en} onChange={(e) => onChange({ name_en: e.target.value })}
+          />
+          {dropsPrice ? <p id={hintId} className="text-xs text-muted-foreground">{tr.text("voice.services.renameDropsPrice")}</p> : null}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`${rowId}-name-es`}>{tr.text("voice.services.nameEs")}</Label>
-          <Input id={`${rowId}-name-es`} value={row.name_es} onChange={(e) => onChange({ name_es: e.target.value })} />
+          <Input id={`${rowId}-name-es`} maxLength={MAX_NAME} value={row.name_es} onChange={(e) => onChange({ name_es: e.target.value })} />
         </div>
       </div>
       {!insurance ? (
         <div className="space-y-1.5">
           <Label htmlFor={`${rowId}-kind`}>{tr.text("voice.services.kind")}</Label>
           <Select value={row.price_kind} onValueChange={(v) => onChange({ price_kind: v as PriceKind })}>
-            <SelectTrigger id={`${rowId}-kind`} className="w-full"><SelectValue placeholder={tr.text("voice.services.kind")} /></SelectTrigger>
+            <SelectTrigger id={`${rowId}-kind`} className="w-full"><SelectValue placeholder={tr.text("voice.services.kindPlaceholder")} /></SelectTrigger>
             <SelectContent>
               {PRICE_KINDS.map((k) => (
                 <SelectItem key={k} value={k}>{tr.text(KIND_LABEL_KEY[k])}</SelectItem>
@@ -202,11 +292,11 @@ export function ServiceRowEditor({
             <>
               <div className="space-y-1.5">
                 <Label htmlFor={`${rowId}-unit-en`}>{tr.text("voice.services.unitEn")}</Label>
-                <Input id={`${rowId}-unit-en`} value={row.unit_en} onChange={(e) => onChange({ unit_en: e.target.value })} />
+                <Input id={`${rowId}-unit-en`} maxLength={MAX_UNIT} value={row.unit_en} onChange={(e) => onChange({ unit_en: e.target.value })} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor={`${rowId}-unit-es`}>{tr.text("voice.services.unitEs")}</Label>
-                <Input id={`${rowId}-unit-es`} value={row.unit_es} onChange={(e) => onChange({ unit_es: e.target.value })} />
+                <Input id={`${rowId}-unit-es`} maxLength={MAX_UNIT} value={row.unit_es} onChange={(e) => onChange({ unit_es: e.target.value })} />
               </div>
             </>
           ) : null}
@@ -215,11 +305,17 @@ export function ServiceRowEditor({
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor={`${rowId}-desc-en`}>{tr.text("voice.services.descriptionEn")}</Label>
-          <Input id={`${rowId}-desc-en`} value={row.description_en} onChange={(e) => onChange({ description_en: e.target.value })} />
+          <Textarea
+            id={`${rowId}-desc-en`} maxLength={MAX_DESCRIPTION} rows={2}
+            value={row.description_en} onChange={(e) => onChange({ description_en: e.target.value })}
+          />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor={`${rowId}-desc-es`}>{tr.text("voice.services.descriptionEs")}</Label>
-          <Input id={`${rowId}-desc-es`} value={row.description_es} onChange={(e) => onChange({ description_es: e.target.value })} />
+          <Textarea
+            id={`${rowId}-desc-es`} maxLength={MAX_DESCRIPTION} rows={2}
+            value={row.description_es} onChange={(e) => onChange({ description_es: e.target.value })}
+          />
         </div>
       </div>
       {preview ? (
@@ -250,44 +346,60 @@ export function ServicesPricesCard({
   action: (formData: FormData) => Promise<ActionResult>;
 }) {
   const tr = useMemo(() => makeTr(locale, pseudo), [locale, pseudo]);
-  const maxHintId = useId();
+  const baseId = useId();
+  const maxHintId = `${baseId}-max`;
+  const addId = `${baseId}-add`;
+  const focusAfterRender = useFocusAfterRender();
   const [rows, setRows] = useState<ServiceRowState[]>(() => (services.ok ? toRowState(services.rows) : []));
 
   const { pending, onSubmit } = useFormSubmit(async (formData) => {
-    await notifyActionResult(() => action(formData), toast, {
+    await notifyActionResult(async () => {
+      const result = await action(formData);
+      // Design review I3: a successful Save leaves no staged row and no open editor behind.
+      if (result.ok) setRows((current) => settleAfterSave(current, insurance));
+      return result;
+    }, toast, {
       success: tr.text("voice.services.saved"),
       crashed: tr.text("common.actionCrashed"),
     });
   });
 
-  function move(id: string, delta: number) {
+  // Each row action puts the focus somewhere that still exists after the re-render (design review I5).
+  function move(id: string, delta: -1 | 1) {
+    const index = rows.findIndex((r) => r.id === id);
+    const target = index + delta;
+    if (index === -1 || target < 0 || target >= rows.length) return;
     setRows((current) => {
-      const index = current.findIndex((r) => r.id === id);
-      const target = index + delta;
-      if (index === -1 || target < 0 || target >= current.length) return current;
       const next = [...current];
       [next[index], next[target]] = [next[target]!, next[index]!];
       return next;
     });
+    focusAfterRender(`${id}-${moveFocusTarget(delta, target, rows.length)}`);
   }
   function patch(id: string, p: Partial<ServiceForm>) {
     setRows((current) => current.map((r) => (r.id === id ? { ...r, ...p } : r)));
   }
   function startEdit(id: string) {
     setRows((current) => current.map((r) => ({ ...r, editing: r.id === id })));
+    focusAfterRender(`${id}-name-en`);
   }
   function closeEdit(id: string) {
     setRows((current) => current.map((r) => (r.id === id ? { ...r, editing: false } : r)));
+    focusAfterRender(`${id}-edit`);
   }
-  function stageRemove(id: string) {
-    setRows((current) => current.map((r) => (r.id === id ? { ...r, removed: true, editing: false } : r)));
+  function remove(id: string) {
+    const neverSaved = rows.find((r) => r.id === id)?.origin === null;
+    setRows((current) => removeRow(current, id));
+    focusAfterRender(neverSaved ? addId : `${id}-keep`);
   }
   function keep(id: string) {
     setRows((current) => current.map((r) => (r.id === id ? { ...r, removed: false } : r)));
+    focusAfterRender(`${id}-remove`);
   }
   function addRow() {
-    const row: ServiceRowState = { ...newServiceRow(), id: crypto.randomUUID(), removed: false, editing: true };
+    const row: ServiceRowState = { ...newServiceRow(), id: crypto.randomUUID(), removed: false, editing: true, origin: null };
     setRows((current) => [...current.map((r) => ({ ...r, editing: false })), row]);
+    focusAfterRender(`${row.id}-name-en`);
   }
 
   const titleKey = insurance ? "voice.services.titleInsurance" : "voice.services.title";
@@ -307,7 +419,7 @@ export function ServicesPricesCard({
 
   const atMax = rows.length >= 50;
   const addButton = (
-    <Button type="button" variant="ghost" size="sm" disabled={atMax} aria-describedby={atMax ? maxHintId : undefined} onClick={addRow}>
+    <Button id={addId} type="button" variant="ghost" size="sm" disabled={atMax} aria-describedby={atMax ? maxHintId : undefined} onClick={addRow}>
       {tr.text("voice.services.add")}
     </Button>
   );
@@ -319,7 +431,11 @@ export function ServicesPricesCard({
         {insurance ? null : <CardDescription>{tr.text("voice.services.body", { persona })}</CardDescription>}
       </CardHeader>
       <CardContent className="space-y-4">
-        {insurance ? <Notice tone="warn">{tr.text("voice.services.insuranceNotice", { persona })}</Notice> : null}
+        {/* A standing fact about this account, there on first paint: a note, not an assertive alert, and a
+            sentence in the foreground ink (design review I8, components/zone-note.tsx). */}
+        {insurance ? (
+          <Notice tone="warn" role="note" className="text-foreground">{tr.text("voice.services.insuranceNotice", { persona })}</Notice>
+        ) : null}
         {rows.length === 0 ? (
           <EmptyState icon={Tag} title={tr.text("voice.services.empty", { persona })} action={addButton} />
         ) : (
@@ -330,14 +446,15 @@ export function ServicesPricesCard({
               {rows.map((row, index) => (
                 row.editing ? (
                   <ServiceRowEditor
-                    key={row.id} rowId={row.id} row={row} insurance={insurance} locale={locale} pseudo={pseudo}
+                    key={row.id} rowId={row.id} row={row} insurance={insurance} dropsPrice={renameDropsPrice(row, insurance)}
+                    locale={locale} pseudo={pseudo}
                     onChange={(p) => patch(row.id, p)} onDone={() => closeEdit(row.id)}
                   />
                 ) : (
                   <ServiceRowView
                     key={row.id} row={row} index={index} count={rows.length} insurance={insurance} tr={tr}
                     onMove={(delta) => move(row.id, delta)} onEdit={() => startEdit(row.id)}
-                    onRemove={() => stageRemove(row.id)} onKeep={() => keep(row.id)}
+                    onRemove={() => remove(row.id)} onKeep={() => keep(row.id)}
                   />
                 )
               ))}

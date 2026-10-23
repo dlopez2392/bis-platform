@@ -3,9 +3,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { VoiceServiceInput } from "@bis/db";
 import {
-  ServicesPricesCard, ServiceRowEditor, newServiceRow, postableServices, serviceRowPreview,
+  ServicesPricesCard, ServiceRowEditor, ServiceRowView, newServiceRow, postableServices, serviceRowPreview,
+  renameDropsPrice, removeRow, settleAfterSave, moveFocusTarget, toRowState,
   type ServiceRowState,
 } from "./services-prices-card";
+import { makeTr } from "@/lib/record/copy";
 import { formFromServices, type ServiceForm } from "@/lib/voice/knowledge/validate";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
@@ -43,20 +45,21 @@ describe("newServiceRow — a brand-new row", () => {
 describe("postableServices — what 'Save services' actually posts", () => {
   it("leaves a staged-removed row out of the posted list, in order (spec 5.7; mutation: post it anyway -> FAILS)", () => {
     const rows: ServiceRowState[] = [
-      { ...CATERING, id: "a", removed: false, editing: false },
-      { ...newServiceRow(), name_en: "Bar service", id: "b", removed: true, editing: false },
-      { ...newServiceRow(), name_en: "Rentals", id: "c", removed: false, editing: true },
+      { ...CATERING, id: "a", removed: false, editing: false, origin: null },
+      { ...newServiceRow(), name_en: "Bar service", id: "b", removed: true, editing: false, origin: null },
+      { ...newServiceRow(), name_en: "Rentals", id: "c", removed: false, editing: true, origin: null },
     ];
     const posted = postableServices(rows);
     expect(posted.map((r) => r.name_en)).toEqual(["Catering", "Rentals"]);
   });
 
   it("strips the card's own id/removed/editing, posting the plain ServiceForm shape", () => {
-    const posted = postableServices([{ ...CATERING, id: "a", removed: false, editing: false }]);
+    const posted = postableServices([{ ...CATERING, id: "a", removed: false, editing: false, origin: null }]);
     expect(posted).toEqual([CATERING]);
     expect(Object.keys(posted[0]!)).not.toContain("id");
     expect(Object.keys(posted[0]!)).not.toContain("removed");
     expect(Object.keys(posted[0]!)).not.toContain("editing");
+    expect(Object.keys(posted[0]!)).not.toContain("origin");
   });
 
   // C13: a stored row this card never opened for editing posts back EXACTLY the kind and amounts it
@@ -69,7 +72,7 @@ describe("postableServices — what 'Save services' actually posts", () => {
       price_kind: "fixed", amount_cents: 15000, amount_max_cents: null, unit_en: null, unit_es: null,
     };
     const loaded = formFromServices([stored])[0]!;
-    const posted = postableServices([{ ...loaded, id: "x", removed: false, editing: false }]);
+    const posted = postableServices([{ ...loaded, id: "x", removed: false, editing: false, origin: null }]);
     expect(posted).toEqual([loaded]);
     expect(posted[0]!.price_kind).toBe("fixed");
     expect(posted[0]!.amount).toBe("150");
@@ -100,7 +103,7 @@ describe("serviceRowPreview — the live preview (spec 5.7)", () => {
 describe("ServiceRowEditor — the insurance face (spec 5.7, C13)", () => {
   it("shows the kind Select, the amount/unit fields and the preview off insurance", () => {
     const html = renderToStaticMarkup(createElement(ServiceRowEditor, {
-      rowId: "r1", row: CATERING, insurance: false, locale: "en", pseudo: false,
+      rowId: "r1", row: CATERING, insurance: false, dropsPrice: false, locale: "en", pseudo: false,
       onChange: () => {}, onDone: () => {},
     }));
     const text = renderedText(html);
@@ -117,7 +120,7 @@ describe("ServiceRowEditor — the insurance face (spec 5.7, C13)", () => {
   // "only when the row happens to be blank"). Mutation: drop any one `!insurance` guard -> FAILS.
   it("hides the kind Select, every amount/unit field and the preview on insurance, for a stored row with a real kind and amount", () => {
     const html = renderToStaticMarkup(createElement(ServiceRowEditor, {
-      rowId: "r1", row: CATERING, insurance: true, locale: "en", pseudo: false,
+      rowId: "r1", row: CATERING, insurance: true, dropsPrice: false, locale: "en", pseudo: false,
       onChange: () => {}, onDone: () => {},
     }));
     const text = renderedText(html);
@@ -136,7 +139,7 @@ describe("ServiceRowEditor — the insurance face (spec 5.7, C13)", () => {
 
   it("still shows the English/Spanish name and description fields on insurance", () => {
     const html = renderToStaticMarkup(createElement(ServiceRowEditor, {
-      rowId: "r1", row: CATERING, insurance: true, locale: "en", pseudo: false,
+      rowId: "r1", row: CATERING, insurance: true, dropsPrice: false, locale: "en", pseudo: false,
       onChange: () => {}, onDone: () => {},
     }));
     expect(html).toContain('id="r1-name-en"');
@@ -210,5 +213,170 @@ describe("ServicesPricesCard — insurance", () => {
     expect(text).toContain(m["voice.services.insuranceNotice"].replace("{persona}", "Sofía"));
     expect(text).not.toContain(m["voice.services.body"].replace("{persona}", "Sofía"));
     expect(html).not.toContain("$");
+  });
+
+  // Final review I3 / design review I2: the collapsed row showed "Price per unit" on insurance.
+  it("the collapsed row names no kind on insurance, for a stored row of every kind (mutation: show the kind label -> FAILS)", () => {
+    const kinds = ["fixed", "from", "range", "per_unit", "free", "after_visit"] as const;
+    const rows: VoiceServiceInput[] = kinds.map((price_kind, i) => ({
+      name_en: `Service ${i}`, name_es: null, description_en: null, description_es: null, price_kind,
+      amount_cents: price_kind === "free" || price_kind === "after_visit" ? null : 1000,
+      amount_max_cents: price_kind === "range" ? 2000 : null,
+      unit_en: price_kind === "per_unit" ? "guest" : null, unit_es: price_kind === "per_unit" ? "invitado" : null,
+    }));
+    const text = renderedText(render({ insurance: true, services: { ok: true, rows } }));
+    expect(text).toContain("Service 5");
+    for (const k of kinds) expect(text).not.toContain(m[`voice.services.kind.${k}`]);
+    // Off insurance the same rows DO name their kind, so the negative above is not vacuous.
+    const off = renderedText(render({ insurance: false, services: { ok: true, rows } }));
+    for (const k of kinds) expect(off).toContain(m[`voice.services.kind.${k}`]);
+  });
+
+  it("the insurance Notice is a note with the foreground ink, never an alert (design review I8; mutation: Notice's default role -> FAILS)", () => {
+    const html = render({ insurance: true, services: { ok: true, rows: [CATERING_ROW] } });
+    const notice = /<div[^>]*data-slot="notice"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(notice).toContain('role="note"');
+    expect(notice).toMatch(/class="[^"]*\btext-foreground\b/);
+  });
+});
+
+const tr = makeTr("en");
+const stored = (o: Partial<ServiceRowState> = {}): ServiceRowState => ({
+  ...toRowState([CATERING_ROW])[0]!, id: "r1", ...o,
+});
+
+describe("renameDropsPrice — C21: on insurance, renaming a row loaded with a price drops that price", () => {
+  it("true only on insurance, for a row loaded with a price, whose English name now differs, trimmed (mutation: drop the name check -> FAILS)", () => {
+    expect(renameDropsPrice(stored({ name_en: "Event catering" }), true)).toBe(true);
+    expect(renameDropsPrice(stored(), true)).toBe(false);
+    expect(renameDropsPrice(stored({ name_en: "  Catering " }), true)).toBe(false);
+    expect(renameDropsPrice(stored({ name_en: "Event catering" }), false)).toBe(false);
+  });
+
+  it("false for a row loaded with no price and for a new row (mutation: ignore the loaded price -> FAILS)", () => {
+    const afterVisit = toRowState([{ ...CATERING_ROW, price_kind: "after_visit", amount_cents: null, unit_en: null, unit_es: null }])[0]!;
+    expect(renameDropsPrice({ ...afterVisit, name_en: "Renamed" }, true)).toBe(false);
+    expect(renameDropsPrice({ ...newServiceRow(), name_en: "Renamed", id: "n", removed: false, editing: true, origin: null }, true)).toBe(false);
+  });
+
+  it("the editor shows the one-line hint under the English name, tied to it (mutation: never render the hint -> FAILS)", () => {
+    const html = renderToStaticMarkup(createElement(ServiceRowEditor, {
+      rowId: "r1", row: { ...CATERING, name_en: "Event catering" }, insurance: true, dropsPrice: true, locale: "en", pseudo: false,
+      onChange: () => {}, onDone: () => {},
+    }));
+    expect(renderedText(html)).toContain("Renaming this service removes the price stored for it.");
+    expect(html).toMatch(/<input[^>]*id="r1-name-en"[^>]*aria-describedby="r1-name-en-hint"/);
+    const quiet = renderToStaticMarkup(createElement(ServiceRowEditor, {
+      rowId: "r1", row: CATERING, insurance: true, dropsPrice: false, locale: "en", pseudo: false,
+      onChange: () => {}, onDone: () => {},
+    }));
+    expect(renderedText(quiet)).not.toContain("Renaming this service removes the price stored for it.");
+  });
+});
+
+describe("removeRow — a never-saved row goes at once; a saved one is staged until Save", () => {
+  it("drops a row added in this visit, and stages a loaded one (mutation: stage every row -> FAILS)", () => {
+    const fresh: ServiceRowState = { ...newServiceRow(), name_en: "Tents", id: "n", removed: false, editing: true, origin: null };
+    const rows = [stored(), fresh];
+    expect(removeRow(rows, "n").map((r) => r.id)).toEqual(["r1"]);
+    const staged = removeRow(rows, "r1");
+    expect(staged.find((r) => r.id === "r1")).toMatchObject({ removed: true, editing: false });
+    expect(staged.length).toBe(2);
+  });
+});
+
+describe("settleAfterSave — the card after a successful Save (design review I3)", () => {
+  it("prunes the staged rows and closes every editor (mutation: keep removed rows -> FAILS)", () => {
+    const rows = [stored({ id: "a", removed: true }), stored({ id: "b", editing: true }), stored({ id: "c" })];
+    const after = settleAfterSave(rows, false);
+    expect(after.map((r) => r.id)).toEqual(["b", "c"]);
+    expect(after.every((r) => !r.editing && !r.removed)).toBe(true);
+  });
+
+  it("every kept row is now a saved row: Remove stages it, and its loaded name is the name just saved", () => {
+    const fresh: ServiceRowState = { ...newServiceRow(), name_en: "Tents", price_kind: "free", id: "n", removed: false, editing: true, origin: null };
+    const [saved] = settleAfterSave([fresh], false);
+    expect(saved!.origin).toEqual({ name_en: "Tents", priced: true });
+    expect(removeRow([saved!], "n")[0]).toMatchObject({ removed: true });
+  });
+
+  it("on insurance a renamed priced row now holds what the server stored: after a visit, nothing priced (C21; mutation: keep its price -> FAILS)", () => {
+    const [after] = settleAfterSave([stored({ name_en: "Event catering", editing: true })], true);
+    expect(after).toMatchObject({
+      name_en: "Event catering", price_kind: "after_visit", amount: "", amount_max: "", unit_en: "", unit_es: "",
+      origin: { name_en: "Event catering", priced: false },
+    });
+    const [kept] = settleAfterSave([stored()], true);
+    expect(kept).toMatchObject({ price_kind: "per_unit", amount: "35", origin: { name_en: "Catering", priced: true } });
+  });
+});
+
+describe("moveFocusTarget — which arrow keeps the focus after a move (design review I5)", () => {
+  it("the same arrow, unless the row reached the end it was moving to (mutation: always the same arrow -> FAILS)", () => {
+    expect(moveFocusTarget(-1, 1, 3)).toBe("up");
+    expect(moveFocusTarget(-1, 0, 3)).toBe("down");
+    expect(moveFocusTarget(1, 1, 3)).toBe("down");
+    expect(moveFocusTarget(1, 2, 3)).toBe("up");
+  });
+});
+
+describe("ServiceRowView — the collapsed row", () => {
+  const view = (row: ServiceRowState, insurance = false) => renderToStaticMarkup(createElement(ServiceRowView, {
+    row, index: 0, count: 2, insurance, tr, onMove: () => {}, onEdit: () => {}, onRemove: () => {}, onKeep: () => {},
+  }));
+
+  it("its buttons name the service, and carry the ids focus returns to (design review I5 and D)", () => {
+    const html = view(stored());
+    for (const label of ["Move Catering up", "Move Catering down", "Edit Catering", "Remove Catering"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+    for (const id of ["r1-up", "r1-down", "r1-edit", "r1-remove"]) expect(html).toContain(`id="${id}"`);
+  });
+
+  it("a staged row fades only its name, kind and amount; the status word and Keep stay full strength (design review I7; mutation: fade the whole li -> FAILS)", () => {
+    const html = view(stored({ removed: true }));
+    // The bare class only: the Keep button's own `disabled:opacity-50` variant is not a fade.
+    const fades = /(?<![\w:-])opacity-50/g;
+    expect(html).not.toMatch(/<li[^>]*(?<![\w:-])opacity-50/);
+    expect((html.match(fades) ?? []).length).toBe(3);
+    expect(html).toContain('aria-label="Keep Catering"');
+    expect(html).toContain('id="r1-keep"');
+    expect(html).toMatch(/<span class="text-xs text-muted-foreground">Removed when you save<\/span>/);
+  });
+
+  it("an unnamed row reads a muted 'New service', never the field's label (mutation: show 'Name in English' -> FAILS)", () => {
+    const html = view({ ...newServiceRow(), id: "n", removed: false, editing: false, origin: null });
+    expect(renderedText(html)).toContain("New service");
+    expect(renderedText(html)).not.toContain(m["voice.services.nameEn"]);
+    expect(html).toContain('aria-label="Edit New service"');
+  });
+});
+
+describe("ServiceRowEditor — the fix round's fields", () => {
+  const html = renderToStaticMarkup(createElement(ServiceRowEditor, {
+    rowId: "r1", row: { ...CATERING, price_kind: "" }, insurance: false, dropsPrice: false, locale: "en", pseudo: false,
+    onChange: () => {}, onDone: () => {},
+  }));
+
+  it("the panel takes the control radius (mutation: drop rounded -> FAILS)", () => {
+    expect(html).toMatch(/<li[^>]*class="[^"]*rounded-\[var\(--radius-ctl\)\]/);
+  });
+
+  it("caps each field at the length the save accepts: names 80, descriptions 300 (textareas), units 30 (mutation: drop a maxLength -> FAILS)", () => {
+    expect(html).toMatch(/<input[^>]*id="r1-name-en"[^>]*maxLength="80"/);
+    expect(html).toMatch(/<input[^>]*id="r1-name-es"[^>]*maxLength="80"/);
+    expect(html).toMatch(/<textarea[^>]*id="r1-desc-en"[^>]*maxLength="300"/);
+    expect(html).toMatch(/<textarea[^>]*id="r1-desc-es"[^>]*maxLength="300"/);
+    const perUnit = renderToStaticMarkup(createElement(ServiceRowEditor, {
+      rowId: "r1", row: CATERING, insurance: false, dropsPrice: false, locale: "en", pseudo: false,
+      onChange: () => {}, onDone: () => {},
+    }));
+    expect(perUnit).toMatch(/<input[^>]*id="r1-unit-en"[^>]*maxLength="30"/);
+    expect(perUnit).toMatch(/<input[^>]*id="r1-unit-es"[^>]*maxLength="30"/);
+  });
+
+  it("the kind Select's placeholder is neutral, not a second copy of its label (mutation: placeholder = the label -> FAILS)", () => {
+    expect(renderedText(html)).toContain("Choose one");
+    expect(renderedText(html).split(m["voice.services.kind"]).length - 1).toBe(1);
   });
 });

@@ -99,7 +99,7 @@ const captured = vi.hoisted(() => ({
     disclosureResults?: unknown;
     tradeRulesCopy?: { locale: string; legend: string; nextCall?: string; options: { value: string }[] };
     persona?: string; locale?: string; pseudo?: boolean;
-    timezone?: string | null; storedHours?: unknown; calendarHours?: unknown;
+    timezone?: string | null; storedHours?: unknown; calendar?: { ok: true; hours: unknown } | { ok: false };
     insurance?: boolean; services?: { ok: true; rows: unknown[] } | { ok: false };
     hasHours?: boolean; hasPriceList?: boolean;
   } | null,
@@ -316,19 +316,20 @@ describe("voice settings page — the Business hours / Services & prices cards' 
     expect(props.timezone).toBe("America/Denver");
   });
 
-  it("hands the Business hours card the calendar's raw open_hours, or null when there is none (mutation: drop the read -> FAILS)", async () => {
+  it("hands the Business hours card the calendar's raw open_hours, or null hours when there is no calendar (mutation: drop the read -> FAILS)", async () => {
     serviceDbMock.getCalendarForAccount.mockResolvedValue({ open_hours: { mon: [["08:00", "18:00"]] } });
-    expect((await render()).calendarHours).toEqual({ mon: [["08:00", "18:00"]] });
+    expect((await render()).calendar).toEqual({ ok: true, hours: { mon: [["08:00", "18:00"]] } });
     serviceDbMock.getCalendarForAccount.mockResolvedValue(null);
-    expect((await render()).calendarHours).toBeNull();
+    expect((await render()).calendar).toEqual({ ok: true, hours: null });
   });
 
-  it("a failing calendar read degrades to null rather than failing the page (mutation: let it throw -> FAILS)", async () => {
+  it("a failing calendar read is its OWN state, not 'no hours', and the page still renders (mutation: fold the failure into null hours -> FAILS)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     serviceDbMock.getCalendarForAccount.mockRejectedValue(new Error("db down"));
     const props = await render();
     errSpy.mockRestore();
-    expect(props.calendarHours).toBeNull();
+    expect(props.calendar).toEqual({ ok: false });
+    expect(props.accountId).toBe("a1");
   });
 
   it("hands the Services card the list, wrapped ok (mutation: pass the bare array -> FAILS)", async () => {

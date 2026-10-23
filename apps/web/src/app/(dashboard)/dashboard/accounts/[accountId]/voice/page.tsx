@@ -18,6 +18,7 @@ import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
 import { hasOpenDay } from "@/lib/voice/knowledge/hours";
 import { VoiceSettings, type DisclosureCopy, type TradeRulesCopy } from "./voice-settings";
 import { DisclosureResultsCard, DisclosureResultsSkeleton } from "./disclosure-results-card";
+import type { CalendarRead } from "./business-hours-card";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
@@ -145,11 +146,16 @@ export default async function VoicePage({
         }
       })(),
       // Cosmetic only (the "Copy from calendar" ghost button's own source) — a failed read just
-      // disables that one button, the same precedent as the brand-name read above.
-      getCalendarForAccount(db, accountId).catch((e) => {
-        console.error(`voice: calendar lookup failed for account ${accountId}: ${String(e)}`);
-        return null;
-      }),
+      // disables that one button, the same precedent as the brand-name read above. Its OWN state, never
+      // folded into "no hours": the card must not tell the operator the calendar has none when it could
+      // not look (design review).
+      getCalendarForAccount(db, accountId).then(
+        (calendar): CalendarRead => ({ ok: true, hours: calendar?.open_hours ?? null }),
+        (e: unknown): CalendarRead => {
+          console.error(`voice: calendar lookup failed for account ${accountId}: ${String(e)}`);
+          return { ok: false };
+        },
+      ),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
@@ -250,7 +256,7 @@ export default async function VoicePage({
           pseudo={pseudo}
           timezone={timezone}
           storedHours={profile?.business_hours ?? null}
-          calendarHours={calendar?.open_hours ?? null}
+          calendar={calendar}
           insurance={insurance}
           services={servicesRead}
           hasHours={hasHours}

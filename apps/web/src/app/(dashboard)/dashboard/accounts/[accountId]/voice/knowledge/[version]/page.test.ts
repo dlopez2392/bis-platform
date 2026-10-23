@@ -27,6 +27,10 @@ const dbMocks = vi.hoisted(() => ({
   getVoiceProfile: vi.fn<(...a: unknown[]) => Promise<VoiceProfileRow | null>>(),
   listPeopleNames: vi.fn<(...a: unknown[]) => Promise<Record<string, string>>>(async () => ({})),
 }));
+/** The request client (RLS): the one listPeopleNames must be called with (packages/db/src/record.ts: "No
+ *  service-role read names anyone"). */
+const REQUEST = vi.hoisted(() => ({ tag: "dbForRequest" }));
+vi.mock("@/lib/db", () => ({ dbForRequest: async () => REQUEST }));
 vi.mock("@bis/db", () => ({
   serviceDb: () => SERVICE,
   getKnowledgeSnapshot: (...a: unknown[]) => dbMocks.getKnowledgeSnapshot(...a),
@@ -60,7 +64,8 @@ const PAYLOAD = buildKnowledgePayload({
   },
   services: [
     {
-      name_en: "Catering", name_es: "Banquete", description_en: null, description_es: null,
+      name_en: "Catering", name_es: "Banquete",
+      description_en: "Hot food served at your event.", description_es: "Comida caliente servida en su evento.",
       price_kind: "per_unit", amount_cents: 3500, amount_max_cents: null, unit_en: "guest", unit_es: "invitado",
     },
   ],
@@ -91,8 +96,9 @@ describe("VoiceKnowledgePage — loaded", () => {
   it("renders the saved version, its person and both price sentences (mutation: drop the person lookup → FAILS)", async () => {
     const html = await render("3");
     expect(html).toContain("What Sofía knew");
-    expect(renderedText(html)).toContain("Version 3");
-    expect(renderedText(html)).toContain("saved");
+    // The card is titled by its version, so it never repeats the page header (design review).
+    expect(html).toMatch(/<h3[^>]*>Version 3<\/h3>/);
+    expect(renderedText(html)).toContain("Saved");
     expect(renderedText(html)).toContain("Ana Reyes");
     expect(html).toContain("Licensed and insured.");
     expect(html).toContain("Nothing was written here.");
@@ -105,9 +111,9 @@ describe("VoiceKnowledgePage — loaded", () => {
   it("reads 'recorded automatically' for a system snapshot, with no person name (mutation: drop the system check → FAILS)", async () => {
     dbMocks.getKnowledgeSnapshot.mockResolvedValue({ ...SNAPSHOT, created_by: "system" });
     const html = await render("3");
-    expect(renderedText(html)).toContain("recorded automatically");
+    expect(renderedText(html)).toContain("Recorded automatically");
     expect(renderedText(html)).not.toContain("Ana Reyes");
-    expect(renderedText(html)).not.toContain("saved");
+    expect(renderedText(html)).not.toContain("Saved");
     expect(dbMocks.listPeopleNames).not.toHaveBeenCalled();
   });
 
@@ -147,12 +153,58 @@ describe("VoiceKnowledgePage — loaded", () => {
     try {
       const html = await render("3", { locale: "es" });
       expect(html).toContain("Lo que Sofía sabía");
-      expect(renderedText(html)).toContain("guardada");
+      expect(renderedText(html)).toContain("Guardada");
       expect(renderedText(html)).toContain("Anterior");
       expect(renderedText(html)).toContain("Más reciente");
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("VoiceKnowledgePage — the fix round", () => {
+  it("names the saver through the REQUEST client, never the service client (record.ts: no service-role read names anyone; mutation: pass serviceDb() -> FAILS)", async () => {
+    await render("3");
+    expect(dbMocks.listPeopleNames).toHaveBeenCalledWith(REQUEST, ["user_42"]);
+    expect(dbMocks.listPeopleNames).not.toHaveBeenCalledWith(SERVICE, expect.anything());
+  });
+
+  it("shows what she was told about each service: the Spanish name and both descriptions, each marked with its language (mutation: drop the About lines -> FAILS)", async () => {
+    const html = await render("3");
+    const text = renderedText(html);
+    expect(text).toContain("Name in Spanish");
+    expect(html).toMatch(/<dd lang="es">Banquete<\/dd>/);
+    expect(text).toContain("About it, in English");
+    expect(html).toMatch(/<dd lang="en">Hot food served at your event\.<\/dd>/);
+    expect(text).toContain("About it, in Spanish");
+    expect(html).toMatch(/<dd lang="es">Comida caliente servida en su evento\.<\/dd>/);
+  });
+
+  it("each price sentence is marked with its language (mutation: drop lang on a dd -> FAILS)", async () => {
+    const html = await render("3");
+    expect(html).toMatch(/<dd lang="en">The price for Catering is \$35 per guest\.<\/dd>/);
+    expect(html).toMatch(/<dd lang="es">El precio de Banquete es \$35 por invitado\.<\/dd>/);
+  });
+
+  it("the four sections are h4s under the card's h3, and the services section reads 'Services & prices' (mutation: h3 sections -> FAILS)", async () => {
+    const html = await render("3");
+    const h4s = [...html.matchAll(/<h4[^>]*>([^<]*)<\/h4>/g)].map((h) => h[1]);
+    expect(h4s).toEqual(["Facts", "Services (free text)", "Business hours", "Services &amp; prices"]);
+    expect((html.match(/<h3\b/g) ?? []).length).toBe(1);
+  });
+
+  it("Older, Newer and Back keep ?locale= (mutation: drop the query -> FAILS)", async () => {
+    const html = await render("3", { locale: "es" });
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/2?locale=es"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/4?locale=es"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice?locale=es"');
+  });
+
+  it("without ?locale= the links carry no query", async () => {
+    const html = await render("3");
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/2"');
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice"');
+    expect(html).not.toContain("?locale=");
   });
 });
 
@@ -167,13 +219,16 @@ describe("VoiceKnowledgePage — not found", () => {
 
   it("a malformed version segment is the not-found state WITHOUT reading the database (mutation: drop the format check → FAILS)", async () => {
     const html = await render("0");
-    expect(renderedText(html)).toContain("no version 0");
+    expect(renderedText(html)).toContain("This version doesn't exist.");
     expect(dbMocks.getKnowledgeSnapshot).not.toHaveBeenCalled();
   });
 
-  it("a non-numeric version segment is the not-found state (mutation: accept anything → FAILS)", async () => {
-    const html = await render("abc");
-    expect(renderedText(html)).toContain("no version abc");
+  it("a non-numeric or overlong segment reads the generic sentence and never echoes what was typed (design review; mutation: echo the segment → FAILS)", async () => {
+    for (const segment of ["abc", "9".repeat(40)]) {
+      const html = await render(segment);
+      expect(renderedText(html)).toContain("This version doesn't exist.");
+      expect(renderedText(html)).not.toContain(segment);
+    }
     expect(dbMocks.getKnowledgeSnapshot).not.toHaveBeenCalled();
   });
 });
