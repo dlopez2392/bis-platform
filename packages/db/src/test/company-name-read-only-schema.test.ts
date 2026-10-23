@@ -237,7 +237,7 @@ describe("0072: a value the sync never set is kept until something writes the co
 });
 
 describe("0072: the objects", () => {
-  it("the trigger fires before insert or update OF company_name only, and its function is a definer with an empty search_path executable by service_role only (mutation: bare `before insert or update` -> FAILS)", () =>
+  it("the trigger fires before insert or update OF company_name only, and its function is a definer with search_path pg_catalog, pg_temp (0096) executable by service_role only (mutation: bare `before insert or update` -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [t] } = await c.query<{ def: string | null }>(
         `select (select pg_get_triggerdef(oid) from pg_trigger
@@ -251,7 +251,7 @@ describe("0072: the objects", () => {
                 has_function_privilege('authenticated', p.oid, 'execute') as auth,
                 has_function_privilege('anon', p.oid, 'execute') as anon
            from pg_proc p where p.oid = to_regprocedure('app.company_name_derived()')`);
-      expect(rows).toEqual([{ definer: true, config: '{"search_path=\\"\\""}', svc: true, auth: false, anon: false }]);
+      expect(rows).toEqual([{ definer: true, config: '{"search_path=pg_catalog, pg_temp"}', svc: true, auth: false, anon: false }]);
     }));
 
   it("reconcile_business_groups is gone, and every helper it shared with the write functions is still there (mutation: recreate it from 0069 section 8 -> FAILS; mutation: drop app.promote_primary -> FAILS)", () =>

@@ -164,11 +164,11 @@ describe("record_language_signal (spec §6.2, C3)", () => {
     await expect(signal(c, s.acct, s.ana, "es", "staff", T1)).rejects.toMatchObject({ code: "22023" });
   }));
 
-  it("is security invoker with an empty search_path, and only service_role may execute it (mutation: grant execute to authenticated -> FAILS)", () =>
+  it("is security invoker with search_path pg_catalog, pg_temp (0096), and only service_role may execute it (mutation: grant execute to authenticated -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] }>(
         "select prosecdef, proconfig from pg_proc where oid = $1::regprocedure", [FN]);
-      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'] });
       const { rows: [p] } = await c.query(
         `select has_function_privilege('anon', $1, 'execute') as anon, has_function_privilege('authenticated', $1, 'execute') as auth,
                 has_function_privilege('service_role', $1, 'execute') as svc`, [FN]);

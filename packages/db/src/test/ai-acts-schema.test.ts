@@ -957,7 +957,8 @@ describe("0092: finishCall's own voice log row for her call is hers (final revie
       expect(rows.map((r) => `${r.who} ${r.priv} ${r.g}`)).toEqual(["authenticated EXECUTE false", "owner EXECUTE false", "service_role EXECUTE false"]);
       const { rows: [f] } = await c.query(
         "select prosecdef, proconfig, provolatile, prorettype::regtype::text as ret from pg_proc where oid = 'public.ai_contact_held_by(uuid, uuid)'::regprocedure");
-      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'], provolatile: "s", ret: "text[]" });
+      // 0092 kept the setting; 0096 then moved it from search_path '' to pg_catalog, pg_temp (pg_temp last).
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'], provolatile: "s", ret: "text[]" });
     }));
 });
 
@@ -1031,16 +1032,16 @@ describe("0091: function grants and settings (plan Task 1 case 11)", () => {
         "undo_ai_contact_created anon false", "undo_ai_contact_created authenticated false", "undo_ai_contact_created service_role true",
       ]);
     }));
-  it("all three are security invoker with search_path '' ; held_by is stable, the undos volatile (mutation: security definer on any -> FAILS)", () =>
+  it("all three are security invoker with search_path pg_catalog, pg_temp (0096); held_by is stable, the undos volatile (mutation: security definer on any -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select proname, prosecdef, proconfig, provolatile from pg_proc
           where pronamespace = 'public'::regnamespace and proname in ('undo_ai_booking_act', 'ai_contact_held_by', 'undo_ai_contact_created')
           order by proname`);
       expect(rows).toEqual([
-        { proname: "ai_contact_held_by", prosecdef: false, proconfig: ['search_path=""'], provolatile: "s" },
-        { proname: "undo_ai_booking_act", prosecdef: false, proconfig: ['search_path=""'], provolatile: "v" },
-        { proname: "undo_ai_contact_created", prosecdef: false, proconfig: ['search_path=""'], provolatile: "v" },
+        { proname: "ai_contact_held_by", prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'], provolatile: "s" },
+        { proname: "undo_ai_booking_act", prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'], provolatile: "v" },
+        { proname: "undo_ai_contact_created", prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'], provolatile: "v" },
       ]);
     }));
   it("PUBLIC holds execute on none of them (mutation: drop public from a revoke -> FAILS)", () =>

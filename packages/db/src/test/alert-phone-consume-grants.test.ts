@@ -57,7 +57,7 @@ describe("0060 consume_alert_phone_verification: the shape and the grants", () =
       ]);
     }));
 
-  it("takes (p_id uuid), returns boolean, runs as its CALLER with an empty search_path (0057's shape; mutation: security definer → prosecdef true, FAILS)", () =>
+  it("takes (p_id uuid), returns boolean, runs as its CALLER with search_path pg_catalog, pg_temp (0057's shape, 0096's path; mutation: security definer → prosecdef true, FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select pg_get_function_identity_arguments(p.oid) as args,
@@ -68,7 +68,7 @@ describe("0060 consume_alert_phone_verification: the shape and the grants", () =
       // table grants, so it bypasses nothing service_role could not already
       // do, and there is no definer-side guard standing in for RLS that a
       // NULL could silently open (bis-plpgsql-null-guard).
-      expect(rows).toEqual([{ args: "p_id uuid", result: "boolean", secdef: false, cfg: ['search_path=""'] }]);
+      expect(rows).toEqual([{ args: "p_id uuid", result: "boolean", secdef: false, cfg: ['search_path=pg_catalog, pg_temp'] }]);
     }));
 });
 

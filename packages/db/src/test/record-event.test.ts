@@ -30,14 +30,14 @@ async function refused(c: Client, sql: string, params: unknown[] = []) {
 }
 
 describe("0053 record_event: the shape", () => {
-  it("takes exactly (uuid, text, jsonb), is SECURITY DEFINER with an empty search_path (mutation: add a p_actor_id parameter -> FAILS)", () =>
+  it("takes exactly (uuid, text, jsonb), is SECURITY DEFINER with search_path pg_catalog, pg_temp (0096) (mutation: add a p_actor_id parameter -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select pg_get_function_identity_arguments(p.oid) as args, p.prosecdef as secdef, p.proconfig as cfg
            from pg_proc p join pg_namespace n on n.oid = p.pronamespace
           where n.nspname = 'public' and p.proname = 'record_event'`);
       expect(rows).toEqual([{
-        args: "p_account_id uuid, p_type text, p_payload jsonb", secdef: true, cfg: ["search_path=\"\""],
+        args: "p_account_id uuid, p_type text, p_payload jsonb", secdef: true, cfg: ["search_path=pg_catalog, pg_temp"],
       }]);
     }));
 

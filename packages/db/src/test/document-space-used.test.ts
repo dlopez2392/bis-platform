@@ -114,7 +114,7 @@ describe("document_space_used: the quota's own sum (spec 4.2 item 4, 3.5)", () =
       await expect(attempt(c, "select public.document_space_used(null::uuid)")).rejects.toMatchObject({ code: "22004" });
     }));
 
-  it("executable by authenticated only, SECURITY DEFINER, STABLE, search_path empty (mutation: grant execute to anon -> FAILS)", () =>
+  it("executable by authenticated only, SECURITY DEFINER, STABLE, search_path pg_catalog, pg_temp (0096) (mutation: grant execute to anon -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ r: string; ok: boolean }>(
         `select r, has_function_privilege(r, '${FN}', 'EXECUTE') as ok
@@ -122,7 +122,7 @@ describe("document_space_used: the quota's own sum (spec 4.2 item 4, 3.5)", () =
       expect(rows).toEqual([{ r: "anon", ok: false }, { r: "authenticated", ok: true }, { r: "service_role", ok: false }]);
       const { rows: [f] } = await c.query<{ prosecdef: boolean; provolatile: string; proconfig: string[] }>(
         `select prosecdef, provolatile, proconfig from pg_proc where oid = '${FN}'::regprocedure`);
-      expect(f).toEqual({ prosecdef: true, provolatile: "s", proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: true, provolatile: "s", proconfig: ['search_path=pg_catalog, pg_temp'] });
     }));
 });
 

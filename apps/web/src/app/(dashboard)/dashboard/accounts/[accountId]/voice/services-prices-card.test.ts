@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { VoiceServiceInput } from "@bis/db";
 import {
   ServicesPricesCard, ServiceRowEditor, ServiceRowView, newServiceRow, postableServices, serviceRowPreview,
-  renameDropsPrice, removeRow, settleAfterSave, moveFocusTarget, toRowState,
+  renameDropsPrice, removeRow, settleAfterSave, moveFocusTarget, toRowState, serviceAmountMatches,
   type ServiceRowState,
 } from "./services-prices-card";
 import { makeTr } from "@/lib/record/copy";
@@ -378,5 +378,112 @@ describe("ServiceRowEditor — the fix round's fields", () => {
   it("the kind Select's placeholder is neutral, not a second copy of its label (mutation: placeholder = the label -> FAILS)", () => {
     expect(renderedText(html)).toContain("Choose one");
     expect(renderedText(html).split(m["voice.services.kind"]).length - 1).toBe(1);
+  });
+});
+
+/**
+ * S-47c follow-up: an amount typed into a row's name or description is read to the caller as written
+ * (the HARD LIMITS line forbids any amount outside the price sentence, off insurance; on insurance
+ * names and descriptions go into the prompt as written, spec 5.4). `serviceAmountMatches` reuses
+ * facts-warnings.ts's own matcher and its false-positive guards.
+ */
+describe("serviceAmountMatches — amounts typed into a name or description", () => {
+  it("finds an amount in every one of the four fields, each tagged with the row's own name (mutation: skip descriptions -> FAILS)", () => {
+    const rows = [
+      { name_en: "Haircut $40", name_es: "", description_en: "", description_es: "" },
+      { name_en: "Trim", name_es: "Recorte $35", description_en: "", description_es: "" },
+      { name_en: "Wash", name_es: "", description_en: "Includes a $10 conditioner", description_es: "" },
+      { name_en: "Color", name_es: "", description_en: "", description_es: "Incluye un tinte de $50" },
+    ];
+    expect(serviceAmountMatches(rows)).toEqual([
+      { name: "Haircut $40", text: "$40" },
+      { name: "Trim", text: "$35" },
+      { name: "Wash", text: "$10 conditioner" },
+      { name: "Color", text: "$50" },
+    ]);
+  });
+
+  it("falls back to the Spanish name when the row has no English name", () => {
+    expect(serviceAmountMatches([{ name_en: "", name_es: "Banquete $40", description_en: "", description_es: "" }]))
+      .toEqual([{ name: "Banquete $40", text: "$40" }]);
+  });
+
+  it("is empty when nothing matches", () => {
+    expect(serviceAmountMatches([{ name_en: "Haircut", name_es: "", description_en: "A trim", description_es: "" }])).toEqual([]);
+  });
+
+  // Design review: none of these three carry a "$", "dollars" or "usd", so AMOUNT (facts-warnings.ts)
+  // never even reaches them — this is not a guard being exercised, only confirming that an ordinary
+  // phone number, ZIP or "24/7" was never going to be mistaken for a price in the first place.
+  it("a phone number, a ZIP and \"24/7\" carry no $, dollars or usd, so none of them ever match", () => {
+    const rows = [{
+      name_en: "Service", name_es: "",
+      description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: "",
+    }];
+    expect(serviceAmountMatches(rows)).toEqual([]);
+  });
+});
+
+describe("ServicesPricesCard — amounts typed into a name or description (S-47c follow-up)", () => {
+  const rowWithAmount: VoiceServiceInput = {
+    name_en: "Haircut $40", name_es: null, description_en: null, description_es: null,
+    price_kind: "fixed", amount_cents: 2500, amount_max_cents: null, unit_en: null, unit_es: null,
+  };
+
+  // rowWithAmount's amount is in its NAME only (no description) — the sibling test right below pins
+  // that a description is scanned too; this one pins the wording and that Save is never blocked.
+  it("off insurance: names the amount and the row it came from, and never blocks Save — its row has the amount in the name only", () => {
+    const html = render({ services: { ok: true, rows: [rowWithAmount] } });
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").replace("{amounts}", 'Haircut $40: "$40"'));
+    expect(html).toContain("<form");
+    expect(text).toContain(m["voice.services.save"]);
+  });
+
+  it("the row's description, not only its name, is scanned (mutation: scan name_en/name_es only -> FAILS)", () => {
+    const row: VoiceServiceInput = {
+      name_en: "Wash", name_es: null, description_en: "Includes a $10 conditioner", description_es: null,
+      price_kind: "free", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null,
+    };
+    const text = renderedText(render({ services: { ok: true, rows: [row] } }));
+    expect(text).toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").replace("{amounts}", 'Wash: "$10 conditioner"'));
+  });
+
+  it("on insurance: the insurance variant (mutation: always show the off-insurance wording -> FAILS)", () => {
+    const html = render({ insurance: true, services: { ok: true, rows: [rowWithAmount] } });
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.services.amountsNoticeInsurance"].replace("{persona}", "Sofía").replace("{amounts}", 'Haircut $40: "$40"'));
+    expect(text).not.toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").replace("{amounts}", 'Haircut $40: "$40"'));
+  });
+
+  it("no notice at all without an amount (mutation: render it unconditionally -> FAILS)", () => {
+    const html = render({ services: { ok: true, rows: [CATERING_ROW] } });
+    const text = renderedText(html);
+    expect(text).not.toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").split(":")[0]);
+  });
+
+  // Design review: a phone number, a ZIP and "24/7" carry no $, dollars or usd, so AMOUNT never
+  // matches them — this pins the card shows no notice for an ordinary description, not a guard.
+  it("a description with a phone number, a ZIP and \"24/7\" (none of them $/dollars/usd) shows no amounts notice", () => {
+    const row: VoiceServiceInput = {
+      name_en: "Service", name_es: null,
+      description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: null,
+      price_kind: "free", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null,
+    };
+    const text = renderedText(render({ services: { ok: true, rows: [row] } }));
+    expect(text).not.toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").split(":")[0]);
+  });
+
+  it("is a note with the foreground ink, never an alert (design review precedent; mutation: Notice's default role -> FAILS)", () => {
+    const html = render({ services: { ok: true, rows: [rowWithAmount] } });
+    const notice = /<div[^>]*data-slot="notice"[^>]*>/.exec(html)?.[0] ?? "";
+    expect(notice).toContain('role="note"');
+    expect(notice).toMatch(/class="[^"]*\btext-foreground\b/);
+  });
+
+  it("sets lang on the card when Spanish, and reads the Spanish copy (mutation: hardcode the English key -> FAILS)", () => {
+    const html = render({ locale: "es", services: { ok: true, rows: [rowWithAmount] } });
+    const text = renderedText(html);
+    expect(text).toContain(m["voice.services.amountsNotice.es"].replace("{persona}", "Sofía").replace("{amounts}", 'Haircut $40: "$40"'));
   });
 });
