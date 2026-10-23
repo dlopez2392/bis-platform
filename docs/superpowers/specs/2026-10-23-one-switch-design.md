@@ -2,8 +2,8 @@
 
 Status: owner decisions D1–D7 fixed in conversation 2026-10-23, and the design of sections 4 and 5 (the data,
 the status reader, the slot engine and the prompt) approved the same day. This draft fills in the rest. The
-choices it makes that the decisions did not dictate are listed as S1–S21 in section 2, and four questions are
-left for the owner (section 10). Part d of S-47 (parallel work, `docs/crm-features.md` §4.3, row "↳ F-084",
+choices it makes that the decisions did not dictate are listed as S1–S21 in section 2. The owner answered the
+first draft's four questions the same day (D8–D11); there are no open questions (section 10). Part d of S-47 (parallel work, `docs/crm-features.md` §4.3, row "↳ F-084",
 2 ew: "the switch, closures in the slot engine, the prompt line, the owner grant"). Parts a (F-034, #279), b
 (F-174 part, #280–#283) and c (F-037 part 1, #284) have shipped; e (identity checks, F-116 part) follows in
 its own spec.
@@ -37,7 +37,7 @@ English and Spanish strings written out").
 Fixed by the owner (2026-10-23):
 
 - **D1 Who flips it.** A client's Owners and the agency. Staff and Technicians see the status but cannot
-  change it. This settles decision 28 as the middle option for F-084: owners edit status and closures now;
+  change it (D8 later carves out Running late for Staff). This settles decision 28 as the middle option for F-084: owners edit status and closures now;
   facts stay agency-only until F-037 part 2; guardrails never.
 - **D2 Existing appointments inside a closure are kept.** Nothing is cancelled or sent automatically.
   Flipping to Closed today or Storm files ONE To-do, "Contact today's customers", listing each affected
@@ -66,18 +66,31 @@ Fixed by the owner (2026-10-23):
   hours the booking page uses; Owners and the agency edit it, Staff view it. All copy is in English and
   Spanish (usted) from the start.
 
+The owner's answers to the first draft's questions (2026-10-23):
+
+- **D8 Staff may set Running late** (Q1), and may go back to Open from Running late only. Closures (Closed
+  today, Storm, closed days) stay with Owners and the agency, and a Staff member cannot reopen from one.
+  Enforced twice: the update policy's Staff branch (4.1) and the action's guard (5.2), which match. Staff get
+  a two-item menu (5.6.1). Technicians still change nothing.
+- **D9 The Spanish topbar drafts are approved as written** (Q2, section 6). The plan pins them as literal
+  fixtures, as C18 did for the price sentences.
+- **D10 A storm does not stop the website chat's lead capture** (Q3). The chat keeps capturing leads in every
+  state; the TODAY line makes her say the business is closed.
+- **D11 "Over an hour" hides the next 2 hours of today's slots** (Q4): stored as `late_minutes` 120 (S2).
+
 Spec choices the decisions left open (made in this draft; each is pinned where it is specified):
 
 - **S1 "Closed today" ends at the first opening on a LATER day**, never later the same day (D3's "next
   opening" read literally would reopen a business closed at 7 AM at its own 8 AM). Computed when the switch
   is set and stored in `until` (D3); the reader then skips closed days when it states the reopening (5.1).
 - **S2 "Over an hour" is stored as 120 minutes**: it hides the next two hours of today's slots, and Sofía
-  says "more than an hour" (Q4 asks the owner to confirm the window).
+  says "more than an hour" (the window confirmed by the owner, D11).
 - **S3 A storm's back-on date** is tomorrow at the earliest and 92 days ahead at the latest.
 - **S4 A closed-day range** is at most 92 days long and must END within 12 months; it may not start in the
   past or overlap another range (the action refuses an overlap; the database does not).
 - **S5 The write path** follows the calendars precedent: the server creates the account's one
-  `business_status` row; a signed-in Owner or the agency UPDATEs three columns of it under RLS; `closed_days`
+  `business_status` row; a signed-in Owner or the agency (or Staff, within D8) UPDATEs three columns of it
+  under RLS; `closed_days`
   takes a signed-in INSERT of four columns and a DELETE. Who and when are stamped by triggers from the token,
   never sent by the browser (4.1).
 - **S6 `calls.business_status` is one code** from a closed set (`open`, `closed_today`, `running_late_15`,
@@ -106,8 +119,8 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
 - **S14 Upcoming closed days are a CLOSED DAYS block in the prompt** (from the snapshot payload, at most 20,
   soonest first), so she can answer "are you open on the 24th?".
 - **S15 The topbar.** Open: the indicator is unchanged (on-call pulse or the week's count) and, for Owners
-  and the agency, is the menu's trigger; an account with no enabled voice profile shows Owners and the agency
-  "● Open" as the trigger and shows everyone else nothing, as today. Not open: the status replaces the idle
+  and the agency, and for Staff (D8), is the menu's trigger; an account with no enabled voice profile shows
+  them "● Open" as the trigger and shows Technicians nothing, as today. Not open: the status replaces the idle
   count for everyone. After a change the topbar shows the action's answer at once; otherwise it refreshes on
   navigation, never by polling (the shell's rule, `components/shell-data.tsx`).
 - **S16 The dashboard card while open** is one compact line, plus the next closed day when one is within 14
@@ -137,24 +150,34 @@ the call-page line; copy keys in English and Spanish; unit, route, db and e2e te
 **Out (and where it goes):** special shorter hours on a date (later; see finding F3 in section 10's preamble
 and `crm-features.md` row 2, "F-084 owns the special-hours record"); cancelling or texting customers
 automatically (D2); Google profile hours (F-161, decision 32); per-staff calendars; owners editing facts
-(F-037 part 2); hiding the website chat's lead capture during a storm (Q3); any trade-module change (the
+(F-037 part 2); hiding the website chat's lead capture during a storm (not done, D10); any trade-module change (the
 modules are paused, S-47c C12).
 
 ## 4. Data (migration 0097, tier HIGH)
 
 **Numbering.** 0096 is taken by the concurrent follow-ups PR that hardens `SECURITY DEFINER` search paths.
 0097 must reach bis-ci AFTER 0096 (the CLI applies in order, and the e2e job's
-`ci-migrations-applied.sh` names any file missing from bis-ci's history), and production after 0096 too. 0097
-adds no `SECURITY DEFINER` function, so 0096's hardening has nothing to reach here; both its functions are
-plain `plpgsql` with `set search_path = ''`, 0095's convention. If 0096 re-creates `app.keep_task_links`, 0097
-starts from 0096's text (plan Task 0 reads it off main).
+`ci-migrations-applied.sh` names any file missing from bis-ci's history), and production after 0096 too.
+
+**Search paths (0096's rule, binding on this file).** 0096 (`fix/s47c-followups`, merging before 0097) sets
+`search_path = pg_catalog, pg_temp` on every function in `public` and `app` that has a search_path setting,
+because `''` still searches the session's `pg_temp` first; and it adds
+`packages/db/src/test/definer-search-path.test.ts`, which pins the 22 `SECURITY DEFINER` functions by name
+(`EXPECTED_DEFINERS`) and asserts that every function with a `search_path` lists `pg_temp` last. Therefore
+every function 0097 creates or re-creates (`app.business_status_stamp()`, `app.closed_days_stamp()` and the
+re-created `app.keep_task_links()`) writes `set search_path = pg_catalog, pg_temp`, NEVER `set search_path =
+''` (a `create or replace` replaces the whole SET clause, so copying 0084's text with `''` would undo 0096 for
+that function and fail the guard). Bodies schema-qualify every name, as they already must. `keep_task_links`
+is re-created from its definition as it stands after 0096 (plan Task 0 reads it off main once 0096 has
+merged), plus the two new lines per branch. 0097 adds no `SECURITY DEFINER` function, so `EXPECTED_DEFINERS`
+does not change; were the plan ever to add one, it would be added to that list by name in the same commit.
 
 ```
 business_status                       one row per account; absent = open
   account_id   uuid pk references accounts(id) on delete cascade
   state        text not null default 'open'
                check (state in ('open','closed_today','running_late','storm'))
-  late_minutes integer null  check (late_minutes in (15, 30, 60, 120))     120 = "over an hour" (S2)
+  late_minutes integer null  check (late_minutes in (15, 30, 60, 120))     120 = "over an hour" (D11, S2)
   until        timestamptz null
   set_by       text not null default 'system'   stamped by trigger: the token's sub, else 'system'
   set_at       timestamptz not null default now()   stamped by trigger
@@ -187,14 +210,16 @@ tasks.closure_on        date null
 bookings.closure_kept_at  timestamptz null   the owner kept this appointment through a closure (S9)
 ```
 
-- **Triggers.** `app.business_status_stamp()` BEFORE INSERT OR UPDATE on `business_status`: `set_at :=
+- **Triggers** (plain `plpgsql`, not definer, `set search_path = pg_catalog, pg_temp`).
+  `app.business_status_stamp()` BEFORE INSERT OR UPDATE on `business_status`: `set_at :=
   now()`, `set_by := coalesce(nullif(app.jwt() ->> 'sub', ''), 'system')`, whatever was sent.
   `app.closed_days_stamp()` BEFORE INSERT on `closed_days`: stamps `created_at` and `created_by` the same way,
   and refuses (errcode `23514`) a row with `starts_on < current_date - 1` or `ends_on > current_date + 367`
   (the 12-month window of S4, with a day of slack each way for the account's zone; the action enforces the
   exact window in the zone first, so the operator gets a sentence). The window is a trigger, not a CHECK,
   because a CHECK must not read the clock.
-- **`app.keep_task_links()`** re-created (0084's text plus two lines on each branch): a signed-in INSERT
+- **`app.keep_task_links()`** re-created (its post-0096 text, `search_path = pg_catalog, pg_temp`, plus two
+  lines on each branch): a signed-in INSERT
   stores NULL in `closure_kind` and `closure_on`, a signed-in UPDATE keeps them. Only server code links a
   To-do to a closure, as with every other To-do link (0064, 0080, 0084).
 - **No reach into the past.** `business_status` keeps only the current row; its history is the
@@ -206,7 +231,8 @@ bookings.closure_kept_at  timestamptz null   the owner kept this appointment thr
   `tasks` and `bookings` for the file's length), APPLY ORDER, LOAD-BEARING, SAFE UNDER THE RUNNING BUILD,
   ROLLBACK, and "ASCII only, no backslash anywhere".
 - **Rollback** (roll the app back first), in this order: re-create the previous `app.keep_task_links()`
-  exactly (FIRST: it names the two task columns); drop index `tasks_closure_once`; `alter table tasks drop
+  exactly as 0096 left it, `search_path = pg_catalog, pg_temp` included (FIRST: it names the two task
+  columns); drop index `tasks_closure_once`; `alter table tasks drop
   constraint tasks_closure_coherent, drop column closure_on, drop column closure_kind` (lost: each closure
   To-do's link; the To-dos stay as plain To-dos); `alter table bookings drop column closure_kept_at` (lost:
   which appointments were kept; their held messages then follow the closure alone); `alter table calls drop
@@ -225,10 +251,30 @@ same commit as the migration.
   as `getOrCreateCalendar` does for calendars and for the same reason: the client role holds no INSERT).
   RLS on. Policies: `business_status_member_read` for select to authenticated using `(app.is_agency() or
   account_id = app.current_account_id())` (0077's shape: every member, Technicians included, D7);
-  `business_status_owner_update` for update to authenticated, using and with check
-  `((select coalesce(app.is_agency(), false)) or (account_id = (select app.current_account_id()) and
-  (select app.is_account_owner(app.current_account_id()))))` (0066's shape, every helper coalesced, the
-  plpgsql-NULL lesson). Staff and Technicians: the update matches no row.
+  `business_status_update` for update to authenticated, with an Owner branch (0066's shape) and a Staff
+  branch (D8), every helper coalesced (the plpgsql-NULL lesson), each call in a scalar subquery (one call
+  per statement, 0066's measurement):
+  ```
+  using (
+    (select coalesce(app.is_agency(), false))
+    or (account_id = (select app.current_account_id())
+        and ((select app.is_account_owner(app.current_account_id()))
+             or ((select coalesce(app.account_role(app.current_account_id()) = 'staff', false))
+                 and (state in ('open', 'running_late')
+                      or (until is not null and until <= now()))))))
+  with check (
+    (select coalesce(app.is_agency(), false))
+    or (account_id = (select app.current_account_id())
+        and ((select app.is_account_owner(app.current_account_id()))
+             or ((select coalesce(app.account_role(app.current_account_id()) = 'staff', false))
+                 and state in ('open', 'running_late')))))
+  ```
+  `using` reads the row as it is (the OLD state), `with check` the row as written (the NEW state), so a Staff
+  member can move only between Open and Running late, never to a closure and never out of one. The one
+  widening on the old row is an EXPIRED closure (`until` passed; an open-ended storm has `until` null and never
+  qualifies): it already reads as Open everywhere (D3, expiry on read), so a Staff member can set Running late
+  the morning after a Closed today, when the stored row still says `closed_today`. Technicians: no branch,
+  the update matches no row.
 - `closed_days`: `revoke all …`; `grant select to authenticated, service_role`; `grant insert (account_id,
   starts_on, ends_on, reason), delete to authenticated`; `grant insert, delete to service_role` (fixtures and
   the local sweep, runbook section 9). RLS on. `closed_days_member_read` (select, the tenant expression);
@@ -343,8 +389,15 @@ menu component wherever it is mounted (the topbar and the dashboard card):
 
 - **`setBusinessStatusAction(accountId, change)`**, `change` one of `{ state: "open" }`, `{ state:
   "closed_today" }`, `{ state: "running_late", lateMinutes }`, `{ state: "storm", backOn: "YYYY-MM-DD" | null
-  }`. `requireAccountAccess`; refuses with "Only an Owner can change this." unless `canManage` (D1; the
-  document-requirements precedent, `settings/document-requirements-actions.ts`), and RLS refuses again. Reads
+  }`. `requireAccountAccess`, then the guard `mayChangeStatus({ isAgency, role }, current, change)`, a pure
+  function in `lib/business-status/` that is the policy of 4.1 written in TypeScript: `"all"` for the agency
+  and an Owner (D1); for Staff (D8), allowed only when the stored row reads Open or Running late, or is a
+  closure whose `until` has passed, AND the change is to Open or Running late; refused for a Technician and
+  for a client whose role is unsettled. Refusals, each a sentence: "Only an Owner can close the business or
+  reopen it." (Staff asking for a closure, or for anything while a closure is in force); "Only an Owner can
+  change this." (Technicians and an unsettled role). RLS refuses again on its own (the document-requirements
+  precedent, `settings/document-requirements-actions.ts`, then the policy). The same guard and the same
+  sentences serve the Undo below, so a Staff member's Undo works only within Open and Running late. Reads
   the zone, the hours chain and the closed days; validates (`backOn` from tomorrow to 92 days ahead in the
   zone, S3); `ensureBusinessStatusRow` (serviceDb); reads the current row; computes `until` (5.1); updates
   through `dbForRequest()` and reads back `set_at`; records `business_status.changed` (`{from, to,
@@ -476,6 +529,7 @@ Let `closure` be true when the effective state is Closed today, Storm or a close
 - **Web chat** (`api/concierge/[publicId]/turn/route.ts`): the status row is read on EVERY turn and
   `effectiveStatus` computed at the turn's time (S20); the closed days come from the stamped snapshot
   (`closed_days`), or, for an unstamped chat, from the live read. Nothing is stamped on the conversation.
+  `capture_lead` stays on the chat in every state, a storm included (D10): no state removes or rewords it.
 - **Browser voice demo** (`api/voice/web/session`): live reads, no stamp.
 
 #### 5.4.4 Byte identity
@@ -570,7 +624,10 @@ carries bilingual copy from its first day).
 - `ShellSnapshot` (`accounts/[accountId]/shell-actions.ts`) gains `businessStatus: ShellBusinessStatus |
   null`, its own fault-isolated leg (a failed read folds to null and logs, as the other three legs do), not
   folded into `presence`, which is null for an account with no enabled voice profile. It carries the
-  effective state, the reopening or end, the late minutes, and `canChange` (the agency or an Owner).
+  effective state, the reopening or end, the late minutes, and `canChange: "all" | "late_only" | null`
+  (`"all"` for the agency and an Owner; `"late_only"` for Staff while the state reads Open or Running late,
+  D8; `null` for Staff during a closure, for Technicians and for an unsettled role), computed on the server by
+  the same `mayChangeStatus` the action runs (5.2).
 - **Not open**, for everyone: the status replaces the idle count. Full form at `sm` and up, short form
   below, both in the DOM and CSS picking one (F-107's pattern): "● Closed today · opens 8 AM" (reopening the
   next day), "● Closed today · opens Mon 8 AM" (two to six days), "● Closed today · opens Dec 28" (later),
@@ -578,20 +635,23 @@ carries bilingual copy from its first day).
   about 30 min late" ("about an hour", "over an hour"); "● Closed for a storm" / "● Closed for a storm · opens
   Thu 8 AM". Short forms: "● Closed today", "● 30 min late" / "● 1 hr late" / "● 1+ hr late", "● Storm".
   During a call the on-call pulse stays and the status follows it at `sm` and up.
-- **Open**: unchanged (pulse or count). An account with no enabled voice profile shows Owners and the agency
-  "● Open" and everyone else nothing, as today.
-- **For Owners and the agency** the indicator is a button (`aria-haspopup="menu"`, the visible focus ring)
+- **Open**: unchanged (pulse or count). An account with no enabled voice profile shows "● Open" to whoever
+  has a `canChange` (as the menu's trigger) and nothing to anyone else, as today.
+- **With `canChange` "all"** (Owners and the agency) the indicator is a button (`aria-haspopup="menu"`, the visible focus ring)
   that opens the menu: a radio group with Open; Closed today; Running late ▸ (About 15 minutes, About 30
   minutes, About an hour, More than an hour); Storm ▸ (Until further notice; Back on a date…, which opens a
   small Dialog with one date field and one primary "Close until then"). The current state is checked. On a
   closed day, Open is replaced by "Change closed days" (a link to the Calendar card, S11). Esc closes; arrow
   keys move (Radix).
+- **With `canChange` "late_only"** (Staff, D8) the same button opens a two-item menu: Open; Running late ▸
+  (the same four delays). Nothing else is listed, not even disabled. During a closure Staff get no button
+  (`canChange` null), so a Staff member is never offered a change the policy would refuse.
 - **After a change** the indicator shows the action's answer at once (a local value that the next snapshot
   for the account replaces) and the page refreshes (`router.refresh()`), so the dashboard card agrees. The
   toast says what changed and what it means ("Closed for today. Sofía and your booking page now say so."),
   adds "A To-do lists today's 3 appointments." when one was filed, and carries Undo. A refused change: an error
   toast with the reason, the old status kept.
-- Staff and Technicians: the same words, no button. A stale tab shows the status as of its last navigation
+- Technicians, and Staff during a closure: the same words, no button. A stale tab shows the status as of its last navigation
   (never polled, S15); the expiry is evaluated on the server at each fetch.
 
 #### 5.6.2 The dashboard status card (`id="business-status"`)
@@ -601,14 +661,16 @@ dashboard (the page already refuses Technicians). Its own error boundary (a fail
 state, never the page's).
 
 - **Not open:** the state as dot + word, when it ends in words ("Opens again tomorrow at 8:00 AM", "Until you
-  reopen", "Ends at midnight"), the reason on a closed day, and the "Change" button for Owners and the agency
-  (the same menu). Then **Today's appointments**: each covered, booked appointment from now to the end of today,
+  reopen", "Ends at midnight"), the reason on a closed day, and the "Change" button for whoever has a
+  `canChange` (the same menu, two items for Staff during Running late; no button for Staff during a closure).
+  Then **Today's appointments**: each covered, booked appointment from now to the end of today,
   with its time, the customer's name linked to the record, "{n} messages waiting" when any are held, Keep
   (ghost; once kept, "Kept" with Undo in the toast) and "Cancel on the calendar" (a link). Under the list, when
   later appointments are covered too (a storm, a multi-day closed day): "Reminders are also on hold for {n}
   later appointments." linking to the Calendar page. Running late shows only the state, the end, and "Booking
   stays open; times in the next {N} minutes are hidden."
-- **Empty (open):** one compact line, "● Open today", with Change for Owners and the agency; plus "Next closed
+- **Empty (open):** one compact line, "● Open today", with Change for Owners, the agency and Staff (their
+  two-item menu, D8); plus "Next closed
   day: Thursday, December 24 (holiday)" when one is within 14 days (S16).
 - **No affected appointments:** "No appointments today are affected."
 - **Error:** "Couldn't load today's status." with a Retry link (a reload), and the rest of the dashboard
@@ -657,7 +719,8 @@ el 28 de dic.", "● Con unos 30 min de retraso", "● Con más de una hora de r
 tarde", "● Tormenta"); the toasts (each state, "A To-do lists today's {n} appointments." / "Una tarea en
 Pendientes lista las {n} citas de hoy.", the Undo confirmations, "Someone changed this since, so nothing was
 undone." / "Alguien lo cambió mientras tanto, así que no se deshizo nada.", "Only an Owner can change this."
-/ "Solo un propietario puede cambiar esto."); the dashboard card's states, list, counts and errors; the
+/ "Solo un propietario puede cambiar esto.", "Only an Owner can close the business or reopen it." / "Solo un
+propietario puede cerrar el negocio o volver a abrirlo." (D8)); the dashboard card's states, list, counts and errors; the
 Closed days card's labels, reasons (Holiday / Día festivo, Vacation / Vacaciones, Other / Otro), validation
 sentences, empty and error states; Keep / Mantener, Kept / Se mantiene, "Cancel on the calendar" / "Cancelar
 en el calendario"; the four hold reasons and the closed skip reason; the two To-do titles; the call-page
@@ -665,7 +728,8 @@ label and values; the knowledge page's Closed days heading. The booking page's n
 day." go in `lib/booking/public-strings.ts`. The TODAY sentences and the CLOSED DAYS lines are model input,
 not catalogue copy, and are pinned by tests instead (S-47c section 6's rule).
 
-The Spanish topbar forms are drafts for the owner's read (Q2).
+The Spanish topbar forms above are approved as written (D9); the plan pins every English and Spanish topbar
+form, full and short, as literal test fixtures.
 
 ## 7. Tests
 
@@ -700,21 +764,40 @@ The Spanish topbar forms are drafts for the owner's read (Q2).
 - **To-do:** filed on Closed today and Storm only with an affected appointment; once per account and day
   (23505 → "already filed"); its link (`workRowHref`) for both kinds; Undo deletes it only while open; a
   signed-in insert or update cannot set or change the closure columns (`keep_task_links`).
-- **Actions:** Staff and Technician refused with the sentence and by RLS (both, separately); Undo
-  compare-and-set refuses after a second change; `until` computed per 5.1; the bump called on every change;
-  closed-day validation sentences.
+- **Actions:** `mayChangeStatus` over every (role × stored state × change) cell, as a table: the agency and
+  an Owner may make every change; Staff may go Open → Running late, Running late → Running late (another
+  delay), Running late → Open, and an expired closure → Running late or Open, and nothing else; a Technician
+  and an unsettled role nothing. Staff refused, with "Only an Owner can close the business or reopen it.",
+  when they ask for Closed today or Storm (from Open and from Running late), and when they ask for Open or
+  Running late while Closed today, a dated Storm, an open-ended Storm or a closed day is in force; each of
+  those refusals checked twice, by the action and separately by RLS with the action's guard bypassed (the
+  update matches no row). Staff Undo works within Open and Running late and is refused for anything else. A
+  Technician refused with "Only an Owner can change this.", by both. Undo compare-and-set refuses after a
+  second change; `until` computed per 5.1; the bump called on every change; closed-day validation
+  sentences, and Staff refused on add and remove (D1, unchanged by D8).
 - **db (HIGH):** 0097's shape; each CHECK clause by a mutation probe (`business_status_shape_check` per
   state, `late_minutes` values, the `until` bounds, the range length, the reason list, `calls.business_status`
   codes, `tasks_closure_coherent`); the stamp triggers ignore a sent `set_by`, `set_at`, `created_by`; the
   `closed_days` window trigger; grants: an Owner updates `business_status` and inserts and deletes
-  `closed_days`, Staff and Technician update and insert nothing (zero rows / refused), every member reads,
+  `closed_days`; the Staff branch of `business_status_update` (D8), one probe per cell: Staff update Open →
+  Running late, Running late → Open and an expired `closed_today` → Running late (one row each), and update
+  zero rows for Open → Closed today, Open → Storm, Running late → Closed today, Running late → Storm, and
+  Closed today (in force) → Open, Storm (dated, in force) → Open, Storm (open-ended) → Open and → Running late
+  (mutation: drop the `with check` state clause → the "to a closure" probes FAIL; drop the `using` state
+  clause → the "out of a closure" probes FAIL; drop the expiry carve-out → the expired-closure probe FAILS);
+  Staff insert and delete no `closed_days`; a Technician updates and inserts nothing (zero rows / refused);
+  every member reads,
   anon nothing, a client cannot UPDATE `set_by` or `set_at` (column grant) nor INSERT into `business_status`;
-  account delete cascades; `EXPECTED_WRITES` and the digest at their new values (4.1).
+  account delete cascades; `EXPECTED_WRITES` and the digest at their new values (4.1); 0096's
+  `definer-search-path.test.ts` green with 0097 applied (its three functions end their search_path with
+  `pg_temp`; `EXPECTED_DEFINERS` unchanged).
 - **Routes:** the incoming route stamps the code `effectiveStatus` gave and builds the TODAY line from the
   same object; a failed status read leaves the call answered, unstamped, without the line; the chat reads
   the status on each turn and its closed days from the snapshot.
-- **UI (LOW):** the topbar forms per state and width, the button only for `canChange`; the card's states;
-  the Closed days card for an Owner and read-only for Staff; the booking page notices in both languages.
+- **UI (LOW):** the topbar forms per state and width, English and Spanish, as literal fixtures (D9); the
+  button only for a `canChange`; the full menu for "all", exactly the two items for "late_only", no button for
+  Staff during a closure; the card's states; the Closed days card for an Owner and read-only for Staff; the
+  booking page notices in both languages.
 - **e2e (LOW, the per-run fixture account only; never Test Client One):** an Owner sets Closed today from the
   topbar, sees "Closed today" on the topbar and the card, presses Undo, sees it open again; adds a closed day
   next week on the Calendar page, opens the booking page for that day and sees "Closed this day.", removes it.
@@ -722,7 +805,10 @@ The Spanish topbar forms are drafts for the owner's read (Q2).
 
 ## 8. Rollout
 
-1. 0096 on bis-ci first (its own PR). Then 0097 → bis-ci (`ci-project-setup.yml`, push-dry-run then push) →
+1. 0096 first: its PR (`fix/s47c-followups`) merged and 0096 on bis-ci and on production before 0097 goes
+   anywhere. Before 0097 is pushed, the plan checks that the file's three functions say `set search_path =
+   pg_catalog, pg_temp` (never `''`) and that `keep_task_links` was re-created from its post-0096 text, and
+   runs `definer-search-path.test.ts` locally with 0097 applied (section 4). Then 0097 → bis-ci (`ci-project-setup.yml`, push-dry-run then push) →
    green `verify` and `e2e` on the head SHA (read the check runs for that SHA) → production via MCP
    `apply_migration` once (name `one_switch`, the exact file text; after 0096 is on production) → md5 compare
    of the stored text → parity check (`docs/runbooks/ci-supabase-project.md`).
@@ -745,35 +831,25 @@ The Spanish topbar forms are drafts for the owner's read (Q2).
 
 ## 10. Open questions
 
-Code findings that bear on the approved design (each resolved above; listed so the owner can see them):
+No open questions. The first draft's Q1–Q4 were answered by the owner on 2026-10-23 and are decisions D8–D11
+(section 2): Staff may set Running late and reopen from it only (D8); the Spanish topbar drafts stand (D9); a
+storm does not stop the chat's lead capture (D10); "over an hour" hides two hours (D11).
 
-- **F1** A To-do has a title and one link and no body, so it cannot itself list several bookings with links
-  (D2). Resolved by S7: the To-do links to the dashboard card, which lists them.
-- **F2** The topbar indicator renders nothing for an account with no enabled voice profile, and the shell is
-  never polled. Resolved by S15: the status is its own snapshot field, and the action's answer updates the
+Code findings that bore on the approved design, all RESOLVED (kept so a reviewer can see why the spec reads as
+it does):
+
+- **F1 (resolved by S7)** A To-do has a title and one link and no body, so it cannot itself list several
+  bookings with links (D2). The To-do links to the dashboard card, which lists them.
+- **F2 (resolved by S15)** The topbar indicator renders nothing for an account with no enabled voice profile,
+  and the shell is never polled. The status is its own snapshot field, and the action's answer updates the
   topbar at once.
-- **F3** The plan says "F-084 owns the special-hours record" (`crm-features.md` row 2) and decision 32 has
-  F-161 read "special hours from F-084's record"; D5 puts shorter hours out of scope, so `closed_days` is the
-  first half of that record. A later shorter-hours slice adds open spans to it rather than a second table.
-- **F4** D3's "next opening" read literally can be later the same day; S1 makes it a later day.
-- **F5** `bumpHeldForAccount` exists with no caller (its quiet-hours save is gone); S10 reuses it as the
-  "next run" lever.
-- **F6** A held row records its cause only as reason text, so the card counts every held message of an
-  affected booking ("{n} messages waiting"), whatever held it.
-
-For the owner (do not reopen D1–D7):
-
-- **Q1 May Staff set "Running late"?** Recommendation: **yes, Running late and back to Open from it only.**
-  It is the one state a crew lead knows first, it cancels nothing, holds nothing and only hides the next
-  minutes of today's slots, while closures stay Owner-only (D1 for everything else). If yes: the update policy
-  gains a Staff branch `state in ('open','running_late')` on both the old row (`using`) and the new
-  (`with check`), the action's guard matches, and Staff see a menu with just those two items. As drafted the
-  spec follows D1 (Owners and the agency only).
-- **Q2 The Spanish topbar wording** (section 6's drafts, e.g. "● Cerrado hoy · abre a las 8 AM", "● Con unos 30
-  min de retraso", "● Cerrado por tormenta"). Recommendation: approve the drafts as written; the plan then pins
-  them as literal fixtures, as C18 did for the price sentences.
-- **Q3 Should a storm hide the website chat's lead capture?** Recommendation: **no.** A lead captured during a
-  storm is still a customer for next week; the TODAY line already makes her say the business is closed, and
-  the chat keeps capturing as it does after hours today.
-- **Q4 "Over an hour" hides the next two hours of today's slots** (S2). Recommendation: keep two hours; a
-  longer delay is better said by Closed today.
+- **F3 (resolved by scope)** The plan says "F-084 owns the special-hours record" (`crm-features.md` row 2) and
+  decision 32 has F-161 read "special hours from F-084's record"; D5 puts shorter hours out of scope, so
+  `closed_days` is the first half of that record. A later shorter-hours slice adds open spans to it rather
+  than a second table.
+- **F4 (resolved by S1)** D3's "next opening" read literally can be later the same day; S1 makes it a later
+  day.
+- **F5 (resolved by S10)** `bumpHeldForAccount` exists with no caller (its quiet-hours save is gone); S10
+  reuses it as the "next run" lever.
+- **F6 (resolved by 5.6.2)** A held row records its cause only as reason text, so the card counts every held
+  message of an affected booking ("{n} messages waiting"), whatever held it.
