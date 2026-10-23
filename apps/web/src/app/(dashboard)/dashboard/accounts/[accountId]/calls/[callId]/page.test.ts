@@ -865,3 +865,46 @@ describe("CallDetailPage — the trade rules line (S-47b)", () => {
     expect(tradeRulesText(html)).toBe("Events · v3");
   });
 });
+
+/**
+ * S-47c section 5.8: the "What Sofía knew" link, agency only and only when the call is stamped — the
+ * exact rule and markup the trade-rules item (above) carries, beside it in the same <dl>.
+ */
+describe("CallDetailPage — the Knowledge link (S-47c)", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true;
+    getVoiceProfileMock.mockReset().mockResolvedValue(null);
+  });
+
+  it("names the persona and version for the agency when the call is stamped (mutation: a constant version → FAILS below)", async () => {
+    const html = await render({ ...CALL, knowledge_version: 3 });
+    expect(html).toContain('<dd class="font-medium text-foreground" data-knowledge="">');
+    expect(renderedText(html)).toContain("What Sofía knew (#3)");
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/3"');
+  });
+
+  it("uses the account's own persona name, not a constant (mutation: hardcode Sofía → FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ persona_name: "Max" });
+    const html = await render({ ...CALL, knowledge_version: 3 });
+    expect(renderedText(html)).toContain("What Max knew (#3)");
+  });
+
+  it("reads the version off the call, not a constant (mutation: hardcode #3 → FAILS)", async () => {
+    const html = await render({ ...CALL, knowledge_version: 7 });
+    expect(renderedText(html)).toContain("What Sofía knew (#7)");
+    expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/7"');
+  });
+
+  it("renders no Knowledge line for a call with no stamp (mutation: render it unconditionally → FAILS)", async () => {
+    const html = await render(CALL);
+    expect(html).not.toContain("data-knowledge");
+    expect(renderedText(html)).not.toContain("Knowledge");
+  });
+
+  it("never shows a client the Knowledge link, even on a stamped call (mutation: drop isAgency && → FAILS)", async () => {
+    authFixture.isAgency = false;
+    const html = await render({ ...CALL, knowledge_version: 3 });
+    expect(html).not.toContain("data-knowledge");
+    expect(renderedText(html)).not.toContain("Knowledge");
+  });
+});

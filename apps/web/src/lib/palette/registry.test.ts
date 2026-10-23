@@ -171,6 +171,15 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  // S-47c (plan Task 9; spec 5.7): the Voice page's two new cards — Business hours, Services & prices.
+  it("finds the receptionist's hours and prices by the words an operator would type, in English and Spanish (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;
+    for (const word of ["hours", "prices", "services", "horario", "precios"]) {
+      expect(voice.keywords).toContain(word);
+    }
+  });
+
   // D-062: an operator typing any one of the five automation recipes by name
   // found nothing — only no-show/reminder/review words were registered.
   it("finds Automations by referral, reactivation, quote, confirmation and instant reply (mutation: drop any of these from NAV_KEYWORDS → FAILS)", () => {
