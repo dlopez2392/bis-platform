@@ -118,7 +118,8 @@ The owner's rulings on the implementation plan's questions (2026-10-23):
   offers to take their details, so no amount left in the prose can be quoted while the list is unknown. The
   line is pinned in the plan ("- Do not give, confirm or estimate any price, rate or amount right now, not
   even one written above. If asked, say the business will confirm pricing and offer to take their
-  details."). An empty list (the read succeeded, no rows) keeps today's line, byte for byte. An insurance
+  details. This overrides any rule below that allows a price from the facts."; its last sentence keeps the
+  events module's "word for word from the facts above" from reopening prices). An empty list (the read succeeded, no rows) keeps today's line, byte for byte. An insurance
   account keeps today's line on a failed read (its module forbids every quote and overrides that line).
   The browser voice demo reads its live list the same way and follows the same rule.
 

@@ -264,7 +264,7 @@ export function factsWarnings(facts: string, servicesText: string, o: { hasHours
 - The list's HARD LIMITS price line (replaces `system-prompt.ts:125` only when a list is given and the account is not insurance):
   `- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices "in the facts", it means this list.`
 - The CLOSED price line (C20; replaces `system-prompt.ts:125` when the price-list read FAILED and the account is not insurance; an empty list and insurance keep today's line):
-  `- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.`
+  `- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.`
 - Phone, "Follow business hours", closed now (`B` = booking mode full, `H` = `handoffAvailable`, `M` = a trade module's block is in the prompt):
   `AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above{B: ", and book a time that check_availability returns"}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.{H and M: " If they ask for a person, or it is urgent, you can still put them through."}{H and not M: " If they ask for a person, you can still put them through."}`
 - Web chat, closed now: `AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.`
@@ -984,7 +984,7 @@ describe("0095 ensure_knowledge_snapshot (spec 4.1, 5.6)", () => {
     await actAsOwner(c);
     return r!.v;
   };
-  it("appends version 1 as system, answers it again for an equal payload, and appends 2 for a different one (mutation: drop the equality -> FAILS)", () =>
+  it("appends version 1 as system, answers it again for an equal payload, and appends 2 for a different one (mutation: drop BOTH equality checks -> FAILS; the fast-path check alone is mutation 20)", () =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "ens");
       expect(await ensure(c, accountId, { a: 1 })).toBe(1);
@@ -1503,7 +1503,7 @@ describe("0095: knowledge writes serialise on the account row", () => {
     }
   });
 
-  it("two concurrent ensures of one new payload make exactly one row (mutation: drop the equality check -> B answers 2, FAILS)", async () => {
+  it("two concurrent ensures of one new payload make exactly one row (mutation: drop the re-read equality after the lock -> B answers 2, FAILS; the fast-path drop is mutation 20)", async () => {
     const seedC = conn(); const a = conn(); const b = conn();
     await Promise.all([seedC.connect(), a.connect(), b.connect()]);
     let acct: string | null = null;
@@ -2353,9 +2353,12 @@ export const LIST_PRICE_LINE =
   "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
 
 /** Owner decision C20 (2026-10-23): replaces the HARD LIMITS price line when the price-list READ FAILED on a non-insurance
- *  account, so no amount left in the prose can be quoted while the list is unknown. An EMPTY list keeps today's line. */
+ *  account, so no amount left in the prose can be quoted while the list is unknown. An EMPTY list keeps today's line.
+ *  Its last sentence settles the events module, which (unchanged, C12) allows prices "only by repeating what the facts
+ *  above say" (modules/events.ts:94): two rules that disagree lose to the more concrete one (system-prompt.ts:196-203),
+ *  so this line says outright that it wins (plan re-review, 2026-10-23). */
 export const CLOSED_PRICE_LINE =
-  "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.";
+  "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
 
 export const AFTER_HOURS_CLOSED_WEB =
   "AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
@@ -2429,7 +2432,7 @@ const NAMES_BLOCK = `\n\n${["SERVICES (what the business offers):", "- Haircut (
   "  About it, in English: Wash and cut.", "  About it, in Spanish: Lavado y corte."].join("\n")}`;
 const TODAY_PRICE = "- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.";
 const LIST_PRICE = "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
-const CLOSED_PRICE = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.";
+const CLOSED_PRICE = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
 const PUT_THROUGH = "offer to put them through to someone on the team";
 const TOOL_TODAY = "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
 const TOOL_CLOSED = "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
@@ -2440,6 +2443,7 @@ describe("buildSystemPrompt — S-47c digests", () => {
   it("null, empty and false new fields are byte-identical too, across all 5184 (mutations: treat [] as a list -> FAILS; treat {} as hours -> FAILS; close the price line when priceListUnavailable is false -> FAILS)", () => {
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: null, priceList: null }, now)))).toBe(PRE_S47C_DIGEST);
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: {}, priceList: [] }, now)))).toBe(PRE_S47C_DIGEST);
+    // C20's closed line (with its overriding sentence) appears only when priceListUnavailable is true: false and absent stay byte-identical.
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, priceListUnavailable: false }, now)))).toBe(PRE_S47C_DIGEST);
   });
 });
@@ -2585,6 +2589,13 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
   });
   it("C20: an EMPTY list is not a failure: today's line, byte for byte (mutation: treat [] as unavailable -> FAILS)", () => {
     expect(buildSystemPrompt(baseInput({ priceList: [], priceListUnavailable: false }), now)).toBe(buildSystemPrompt(baseInput(), now));
+  });
+  it("C20: an events account gets the closed line WITH its overriding sentence, and the module's own words are untouched (C12; mutation: drop the last sentence -> FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "events", priceListUnavailable: true }), now);
+    expect(p).toContain(CLOSED_PRICE);
+    expect(p.split("\n")).toContain(CLOSED_PRICE);
+    expect(p).not.toContain(TODAY_PRICE);
+    expect(p).toContain("- You may give prices, packages, deposits, payment plans and refund or cancellation terms only by repeating what the facts above say, word for word, with every number exactly as it is written there. For these, and only these, this overrides the TONE line about not reading the facts verbatim.");
   });
   it("C20: insurance keeps today's line on a failed read (the module already forbids every quote; mutation: close it on insurance -> FAILS)", () => {
     const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc", priceListUnavailable: true }), now);
@@ -2892,14 +2903,14 @@ describe("POST /api/voice/incoming — what Sofía knows (S-47c)", () => {
     expect("knowledgeVersion" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
     expect(acceptedInstructions()).toContain("BUSINESS HOURS (");
     expect(acceptedInstructions()).not.toContain("SERVICES AND PRICES");
-    expect(acceptedInstructions()).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
+    expect(acceptedInstructions()).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
     expect(fetchMock).toHaveBeenCalledOnce();
   });
   it("an EMPTY list read keeps today's price line (C20 is for a failed read only)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(acceptedInstructions()).toContain("- Never quote a price, rate, or estimate unless one is stated above.");
-    expect(acceptedInstructions()).not.toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
+    expect(acceptedInstructions()).not.toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
   });
   it("no hours and no list: no hours block and no list in the prompt, and the call is still stamped (spec 8.4; byte identity itself is system-prompt.test.ts's PRE_S47C_DIGEST)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
@@ -2949,7 +2960,7 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
     await firstTurn();
     expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
     expect("knowledgeVersion" in (dbFns.createConciergeConversation.mock.calls[0]![1] as object)).toBe(false);
-    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
   });
   it("a later turn builds from the STAMPED snapshot after the profile changed (C4; mutation: read the live profile -> FAILS)", async () => {
     dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, facts: "LIVE facts that changed." });
@@ -2975,7 +2986,7 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
     dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: null });
     dbFns.listVoiceServices.mockRejectedValue(new Error("boom"));
     await laterTurn();
-    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details.");
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
   });
   it("a stamped snapshot read that THROWS answers 503 and spends no turn (SD12)", async () => {
     dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
