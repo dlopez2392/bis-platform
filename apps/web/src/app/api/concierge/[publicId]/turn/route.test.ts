@@ -19,6 +19,11 @@ const dbFns = vi.hoisted(() => ({
   recordAutomationLog: vi.fn(async () => undefined),
   recordUsage: vi.fn(async () => "recorded"),
   syncWebchatTurns: vi.fn(),
+  // S-47c: the price list read, the snapshot RPC (turn 1) and the stamped snapshot read (turn 2+).
+  // Typed with a rest signature, so `mock.calls[0]![2]` (the payload) types; `vi.fn(async () => …)` types every call `[]`.
+  listVoiceServices: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
+  ensureKnowledgeSnapshot: vi.fn<(...a: unknown[]) => Promise<number>>(async () => 5),
+  getKnowledgeSnapshot: vi.fn(),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -142,6 +147,7 @@ const PROFILE = {
   // every assertion below blind to which one the route actually read.
   public_id: PUBLIC_ID, concierge_enabled: true, concierge_form_id: "form-now",
   trade_module: null,
+  business_hours: null,
 };
 
 const CONVERSATION = {
@@ -149,6 +155,7 @@ const CONVERSATION = {
   turn_count: 1, transcript: [], submission_id: null, locale: "en",
   attribution: {}, origin: null,
   trade_module: null, trade_module_version: null,
+  knowledge_version: null,
 };
 
 /** One exchange already on file: the conversation's first turn was answered. */
@@ -269,6 +276,9 @@ beforeEach(() => {
   dbFns.recordUsage.mockResolvedValue("recorded");
   // What a sync with nothing to copy answers (S-06 part 3).
   dbFns.syncWebchatTurns.mockResolvedValue({ outcome: "nothing_new" });
+  // S-47c: a successful empty list read and version 5, so every new chat is stamped.
+  dbFns.listVoiceServices.mockResolvedValue([]);
+  dbFns.ensureKnowledgeSnapshot.mockResolvedValue(5);
 });
 
 afterEach(() => {
@@ -1470,6 +1480,7 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     await firstTurn();
     expect(dbFns.createConciergeConversation).toHaveBeenCalledWith(expect.anything(), {
       accountId: "a1", formId: "form-now", ipHash: expect.any(String), locale: "en", attribution: {}, origin: null,
+      knowledgeVersion: 5,
     });
     expect(sentToModel().messages[0]!.content).not.toContain("TRADE RULES —");
   });
@@ -1479,7 +1490,7 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
     await firstTurn();
     expect(dbFns.createConciergeConversation).toHaveBeenCalledWith(expect.anything(), {
       accountId: "a1", formId: "form-now", ipHash: expect.any(String), locale: "en", attribution: {}, origin: null,
-      tradeModule: { module: "events", version: 7 },
+      tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5,
     });
     const system = sentToModel().messages[0]!.content;
     expect(system).toContain(EVT);
@@ -1505,5 +1516,101 @@ describe("POST /api/concierge/[publicId]/turn — trade rules (S-47b)", () => {
   it("the model is CONCIERGE_MODEL, gpt-4o-mini (SD6)", async () => {
     await firstTurn();
     expect(sentToModel().model).toBe("gpt-4o-mini");
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", () => {
+  const SNAP = {
+    schema: 1, facts: "Snapshot facts.", services_text: "Snapshot services", timezone: "America/Chicago",
+    business_hours: null, hours_lines: null, renderer_version: 1,
+    services: [{ position: 1, name_en: "Tables", name_es: null, description_en: null, description_es: null, price_kind: "fixed",
+      amount_cents: 9900, amount_max_cents: null, unit_en: null, unit_es: null,
+      sentence_en: "The price for Tables is $99.", sentence_es: "El precio de Tables es $99." }],
+  };
+  it("turn 1 stamps the conversation with the version the RPC returned and builds the first prompt from that payload, list included (mutation: build the prompt without priceList -> FAILS)", async () => {
+    dbFns.listVoiceServices.mockResolvedValue([{ id: "s1", account_id: "a1", position: 1, created_at: "x", name_en: "Benches", name_es: null,
+      description_en: null, description_es: null, price_kind: "from", amount_cents: 4500, amount_max_cents: null, unit_en: null, unit_es: null }]);
+    dbFns.ensureKnowledgeSnapshot.mockResolvedValue(7);
+    await firstTurn();
+    expect(dbFns.createConciergeConversation.mock.calls[0]![1]).toMatchObject({ knowledgeVersion: 7 });
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(PROFILE.facts);
+    expect(system).toContain(`- Benches — English: "The price for Benches starts at $45." Spanish: "El precio de Benches es desde $45."`);
+    const sent = dbFns.ensureKnowledgeSnapshot.mock.calls[0]![2] as { services: { sentence_en: string }[] };
+    expect(sent.services.map((x) => x.sentence_en)).toEqual(["The price for Benches starts at $45."]);
+  });
+  it("turn 1: the profile's hours reach the prompt and the payload (mutation: drop businessHours from the prompt -> FAILS)", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, business_hours: { tue: [["08:00", "18:00"]] } });
+    await firstTurn();
+    expect(sentToModel().messages[0]!.content).toContain("BUSINESS HOURS (");
+    expect((dbFns.ensureKnowledgeSnapshot.mock.calls[0]![2] as { business_hours: unknown }).business_hours).toEqual({ tue: [["08:00", "18:00"]] });
+  });
+  it("turn 1 with the services read failing: unstamped, and the C20 closed price line", async () => {
+    dbFns.listVoiceServices.mockRejectedValue(new Error("listVoiceServices failed: boom"));
+    await firstTurn();
+    expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
+    expect("knowledgeVersion" in (dbFns.createConciergeConversation.mock.calls[0]![1] as object)).toBe(false);
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
+  });
+  it("a later turn builds from the STAMPED snapshot after the profile changed (C4; mutation: read the live profile -> FAILS)", async () => {
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, facts: "LIVE facts that changed." });
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
+    dbFns.getKnowledgeSnapshot.mockResolvedValue({ id: "k", account_id: "a1", version: 3, payload: SNAP, created_at: "x", created_by: "system" });
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(dbFns.getKnowledgeSnapshot).toHaveBeenCalledWith(expect.anything(), "a1", 3);
+    expect(system).toContain("Snapshot facts.");
+    expect(system).not.toContain("LIVE facts that changed.");
+    expect(system).toContain(`- Tables — English: "The price for Tables is $99." Spanish: "El precio de Tables es $99."`);
+    expect(dbFns.listVoiceServices).not.toHaveBeenCalled();
+    expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
+  });
+  it("a later turn of a stamped chat tells the time in the SNAPSHOT's zone, not the account's current one (SD13; mutation: keep the account's timezone in the prompt -> FAILS)", async () => {
+    // The account row (accountRow above) says America/Chicago; the chat began when the account said Denver.
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
+    dbFns.getKnowledgeSnapshot.mockResolvedValue({ id: "k", account_id: "a1", version: 3, payload: { ...SNAP, timezone: "America/Denver" }, created_at: "x", created_by: "system" });
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(" (America/Denver).");
+    expect(system).not.toContain("America/Chicago");
+  });
+  it("an unstamped later turn reads the live profile and list, as today, and records nothing", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: null });
+    await laterTurn();
+    expect(dbFns.getKnowledgeSnapshot).not.toHaveBeenCalled();
+    expect(dbFns.listVoiceServices).toHaveBeenCalledTimes(1);
+    expect(dbFns.ensureKnowledgeSnapshot).not.toHaveBeenCalled();
+  });
+  it("an unstamped later turn whose services read fails gets the C20 closed price line", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: null });
+    dbFns.listVoiceServices.mockRejectedValue(new Error("boom"));
+    await laterTurn();
+    expect(sentToModel().messages[0]!.content).toContain("- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.");
+  });
+  it("a stamped snapshot read that THROWS answers 503 and spends no turn (SD12)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
+    dbFns.getKnowledgeSnapshot.mockRejectedValue(new Error("getKnowledgeSnapshot failed: boom"));
+    const res = await laterTurn();
+    expect(res.status).toBe(503);
+    expect(dbFns.claimConciergeTurn).not.toHaveBeenCalled();
+  });
+  it("a stamped snapshot that is missing or does not parse falls back to the live knowledge (SD12)", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
+    dbFns.getKnowledgeSnapshot.mockResolvedValue(null);
+    await laterTurn();
+    expect(sentToModel().messages[0]!.content).toContain(PROFILE.facts);
+    // Bad data, not a missing row: a payload no build could have written.
+    fetchMock.mockClear();
+    dbFns.getKnowledgeSnapshot.mockResolvedValue({ id: "k", account_id: "a1", version: 3, payload: { ...SNAP, schema: 2 }, created_at: "x", created_by: "system" });
+    await laterTurn();
+    const system = sentToModel().messages[0]!.content;
+    expect(system).toContain(PROFILE.facts);
+    expect(system).not.toContain("Snapshot facts.");
+  });
+  it("turn 1 with the RPC failing creates the conversation unstamped and still answers", async () => {
+    dbFns.ensureKnowledgeSnapshot.mockRejectedValue(new Error("boom"));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect("knowledgeVersion" in (dbFns.createConciergeConversation.mock.calls[0]![1] as object)).toBe(false);
   });
 });

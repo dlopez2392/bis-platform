@@ -414,6 +414,7 @@ describe("ConciergeCard — the render proof", () => {
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: null,
+    business_hours: null,
   };
 
   function renderCard(opts: {
@@ -622,6 +623,7 @@ describe("VoiceProfileForm's text-back segment counter — counts the disclosed 
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: null,
+    business_hours: null,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}, brandName = "Rio Roofing"): string {
@@ -731,6 +733,7 @@ describe("VoiceProfileForm's disclosure setting (S-47a)", () => {
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "trial",
     trade_module: null,
+    business_hours: null,
   };
 
   function render(): string {
@@ -800,6 +803,7 @@ describe("VoiceProfileForm's Trade rules group (S-47b)", () => {
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: "events",
+    business_hours: null,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}, trade = EN_TRADE_COPY): string {
@@ -858,6 +862,23 @@ describe("VoiceProfileForm's Trade rules group (S-47b)", () => {
     expect(html).toMatch(/<div[^>]*lang="es"[^>]*>\s*<fieldset/);
     expect(html).not.toMatch(/<fieldset[^>]*lang=/);
   });
+
+  // S-47c design review I6: on a STORED insurance module the Facts box promises no prices card, and its
+  // amounts flag reads the insurance sentence even with no price list.
+  it("on insurance the Facts hint promises no prices card and the amounts flag is the insurance one (mutation: ignore the stored module -> FAILS)", () => {
+    const text = renderedText(render({ trade_module: "insurance_pc", facts: "A $500 deposit to hold the date." }));
+    expect(text).toContain("Policies and anything else a caller might ask about. Hours go in their own card below. Prices are never given on insurance accounts.");
+    expect(text).not.toContain(m["voice.profile.factsHint"]);
+    expect(text).toContain("Sofía never gives prices on insurance accounts");
+  });
+
+  it("off insurance the Facts hint is the usual one, and with no price list there is no amounts flag", () => {
+    const text = renderedText(render({ trade_module: "events", facts: "A $500 deposit to hold the date." }));
+    expect(text).toContain(m["voice.profile.factsHint"]);
+    expect(text).not.toContain(m["voice.profile.factsHintInsurance"]);
+    // The flag's own words (the insurance radio's hint, on this same card, also says "never gives prices").
+    expect(text).not.toContain("so these amounts in the Facts or Services box will not be said");
+  });
 });
 
 // D-040: "Always take a message" now means no booking on calls at any hour,
@@ -872,6 +893,7 @@ describe("VoiceProfileForm's After hours choice says what Always take a message 
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: null,
+    business_hours: null,
   };
 
   it("renders the hint next to the After hours select", () => {
@@ -899,6 +921,7 @@ describe("VoiceProfileForm's Allow booking box under Always take a message (D-04
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: null,
+    business_hours: null,
   };
   const render = (over: Partial<VoiceProfileRow>) => renderToStaticMarkup(createElement(VoiceProfileForm, {
     profile: { ...BASE, ...over }, brandName: "Rio Roofing", action: async () => ({ ok: true as const }),
@@ -943,6 +966,7 @@ describe("VoiceProfileForm's text-back card — the Spanish box (Task 18)", () =
     textback_body_es: null, textback_body_es_basis: null,
     public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
     trade_module: null,
+    business_hours: null,
   };
 
   function render(over: Partial<VoiceProfileRow> = {}): string {

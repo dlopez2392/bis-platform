@@ -141,6 +141,7 @@ export { getAutomation, upsertAutomation, parseReviewRequestConfig,
          type NoShowNudgeChannel, type NoShowNudgeConfig, type DueNoShowNudge,
          type DueSmsReminder, type InstantReplyConfig } from "./automations";
 export * from "./voice";
+export * from "./voice-knowledge";
 export * from "./screened-calls";
 export * from "./forwarded-calls";
 export { getSiteForAccount, upsertSite, listSitesToSync, writeTrafficDay, stampSiteSynced,

@@ -5,6 +5,8 @@ import { toolSchemas } from "./tools/schemas";
 import { buildSystemPrompt } from "./system-prompt";
 import { bookingMode } from "./booking-mode";
 import type { TradeModuleId } from "./modules";
+import type { OpenHours } from "../booking/slots";
+import type { RenderedService } from "./knowledge/payload";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
@@ -52,6 +54,23 @@ export type VoicePromptInput = {
    * The phone route passes the value it STAMPS on the call row; the chat passes the conversation's stamp.
    */
   tradeModule?: TradeModuleId | null;
+  /**
+   * S-47c: the account's structured weekly hours (`voice_profiles.business_hours`, through the knowledge payload),
+   * or none. OPTIONAL; absent, null or an object with no open day gives NO lines, so every existing prompt is
+   * byte-identical (system-prompt.test.ts's PRE_S47C_DIGEST). The phone and the chat pass the payload's value.
+   */
+  businessHours?: OpenHours | null;
+  /**
+   * S-47c: the rendered price list (name, descriptions and the two fixed sentences), from the SAME payload the
+   * call or chat is stamped with. OPTIONAL; absent, null or [] gives no lines and keeps today's HARD LIMITS line.
+   */
+  priceList?: RenderedService[] | null;
+  /**
+   * S-47c, owner decision C20: true only when the price-list READ FAILED (knowledgeFromLive's listUnavailable). The
+   * HARD LIMITS price line is then the closed one (no price at all) unless the account is insurance. OPTIONAL;
+   * absent or false changes nothing, so every existing prompt is byte-identical.
+   */
+  priceListUnavailable?: boolean;
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

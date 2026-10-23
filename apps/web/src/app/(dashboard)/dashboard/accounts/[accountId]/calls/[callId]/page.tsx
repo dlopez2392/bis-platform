@@ -300,6 +300,22 @@ export default async function CallDetailPage({
                 })}</dd>
               </div>
             ) : null}
+
+            {/* S-47c section 5.8: "What Sofía knew" — AGENCY ONLY (this page is shared with clients) and
+                only when the call is stamped (knowledgeVersion). Same rule and markup as the trade-rules
+                item above, beside it in this <dl>. */}
+            {isAgency && call.knowledge_version !== null ? (
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
+                <dt className="whitespace-nowrap">{tr.text("calls.detail.knowledge")}</dt>
+                <dd className="font-medium text-foreground" data-knowledge="">
+                  {/* Underlined at rest (design review): in a row of plain values, a link that only shows
+                      itself on hover reads as one more value. */}
+                  <Link href={`${base}/voice/knowledge/${call.knowledge_version}`} className="underline decoration-[var(--line-strong)] underline-offset-2">
+                    {tr.text("calls.detail.knowledgeLink", { persona: personaName, version: call.knowledge_version })}
+                  </Link>
+                </dd>
+              </div>
+            ) : null}
           </dl>
         }
         actions={

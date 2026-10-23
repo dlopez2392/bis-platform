@@ -1,8 +1,9 @@
 import { Suspense } from "react";
 import { headers } from "next/headers";
 import {
-  serviceDb, getVoiceProfile, getBranding, getTransferPhone, listForms, type PhoneNumberRow,
-  type DisclosureSetting,
+  serviceDb, getVoiceProfile, getBranding, getTransferPhone, listForms,
+  readAccountTimezone, listVoiceServices, getCalendarForAccount,
+  type PhoneNumberRow, type DisclosureSetting, type VoiceServiceRow,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
@@ -14,12 +15,19 @@ import { makeTr } from "@/lib/record/copy";
 import { m, type MessageKey } from "@/lib/messages";
 import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
 import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
+import { hasOpenDay } from "@/lib/voice/knowledge/hours";
 import { VoiceSettings, type DisclosureCopy, type TradeRulesCopy } from "./voice-settings";
 import { DisclosureResultsCard, DisclosureResultsSkeleton } from "./disclosure-results-card";
+import type { CalendarRead } from "./business-hours-card";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
+  saveBusinessHoursAction, saveServicesAction,
 } from "./actions";
+
+/** The Services & prices card's own read (spec 5.7): a failed read is THAT card's ERROR state, never
+ *  the whole page's — so this never throws. */
+type ServicesRead = { ok: true; rows: VoiceServiceRow[] } | { ok: false };
 
 /** `voice.disclosure.<value>` / `voice.disclosure.<value>Hint` — the twin of `DISCLOSURE_VALUES`'s own
  *  order, read here rather than built with a template literal so a typo'd key is a type error. */
@@ -71,7 +79,10 @@ export default async function VoicePage({
   await requireAgencyOnlyAccountAccess(accountId);
 
   const db = serviceDb();
-  const [profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h, prefs] =
+  const [
+    profile, { data: numbersData, error: numbersError }, brandName, transferPhone, forms, h, prefs,
+    timezone, servicesRead, calendar,
+  ] =
     await Promise.all([
       getVoiceProfile(db, accountId),
       db.from("phone_numbers")
@@ -122,6 +133,29 @@ export default async function VoicePage({
       headers(),
       // getPersonPrefs() never rejects: a failed read means defaults (its own doc comment).
       getPersonPrefs(),
+      // S-47c (Task 8, spec 5.7): the Business hours card's "Times are in {zone}." line.
+      readAccountTimezone(db, accountId),
+      // The Services & prices card's own read: a failed read is THAT card's ERROR state (never
+      // this page's) — never thrown further, so `Promise.all` cannot reject on it.
+      (async (): Promise<ServicesRead> => {
+        try {
+          return { ok: true, rows: await listVoiceServices(db, accountId) };
+        } catch (e) {
+          console.error(`voice: services list failed for account ${accountId}: ${String(e)}`);
+          return { ok: false };
+        }
+      })(),
+      // Cosmetic only (the "Copy from calendar" ghost button's own source) — a failed read just
+      // disables that one button, the same precedent as the brand-name read above. Its OWN state, never
+      // folded into "no hours": the card must not tell the operator the calendar has none when it could
+      // not look (design review).
+      getCalendarForAccount(db, accountId).then(
+        (calendar): CalendarRead => ({ ok: true, hours: calendar?.open_hours ?? null }),
+        (e: unknown): CalendarRead => {
+          console.error(`voice: calendar lookup failed for account ${accountId}: ${String(e)}`);
+          return { ok: false };
+        },
+      ),
     ]);
   if (numbersError) throw new Error(`voice: phone number lookup failed: ${numbersError.message}`);
   const numbers = (numbersData ?? []) as PhoneNumberRow[];
@@ -142,8 +176,15 @@ export default async function VoicePage({
   // disclosure setting and its results card below read this; the rest of
   // the page stays English (decision 2).
   const locale = requestLocale({ account: null, isOperator: true, userLanguage: prefs.language }, { locale: localeParam });
-  const tr = makeTr(locale, requestPseudoMode({ locale: localeParam }));
+  const pseudo = requestPseudoMode({ locale: localeParam });
+  const tr = makeTr(locale, pseudo);
   const persona = profile?.persona_name?.trim() || "Sofía";
+  // S-47c (Task 8, spec 5.7): the Business hours / Services & prices cards and the Facts flags all
+  // read the SAME `locale`/`pseudo`/`persona` as the disclosure/trade-rules copy above — one voice
+  // for the whole page, even though the profile card's OWN strings stay English (decision 2).
+  const insurance = profile?.trade_module === "insurance_pc";
+  const hasHours = hasOpenDay(profile?.business_hours ?? null);
+  const hasPriceList = servicesRead.ok && servicesRead.rows.length > 0;
   const disclosureCopy: DisclosureCopy = {
     locale,
     legend: tr.text("voice.disclosure.legend", { persona }),
@@ -184,6 +225,8 @@ export default async function VoicePage({
   const boundEnableConcierge = enableConciergeAction.bind(null, accountId);
   const boundDisableConcierge = disableConciergeAction.bind(null, accountId);
   const boundSetForwardCalls = setForwardCallsAction.bind(null, accountId);
+  const boundSaveBusinessHours = saveBusinessHoursAction.bind(null, accountId);
+  const boundSaveServices = saveServicesAction.bind(null, accountId);
 
   return (
     <>
@@ -208,6 +251,18 @@ export default async function VoicePage({
           disclosureCopy={disclosureCopy}
           disclosureResults={disclosureResults}
           tradeRulesCopy={tradeRulesCopy}
+          persona={persona}
+          locale={locale}
+          pseudo={pseudo}
+          timezone={timezone}
+          storedHours={profile?.business_hours ?? null}
+          calendar={calendar}
+          insurance={insurance}
+          services={servicesRead}
+          hasHours={hasHours}
+          hasPriceList={hasPriceList}
+          saveBusinessHoursAction={boundSaveBusinessHours}
+          saveServicesAction={boundSaveServices}
         />
       </div>
     </>

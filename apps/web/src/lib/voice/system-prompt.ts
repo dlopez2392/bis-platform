@@ -9,6 +9,11 @@
 import type { VoicePromptInput } from "./session-config";
 import { bookingMode } from "./booking-mode";
 import { tradeModuleBlock } from "./modules";
+import {
+  businessHoursBlock, servicesBlock, LIST_PRICE_LINE, CLOSED_PRICE_LINE, AFTER_HOURS_CLOSED_WEB,
+  AFTER_HOURS_CLOSED_WEB_VOICE, afterHoursClosedPhoneLine, transferToolLineClosed,
+} from "./knowledge/prompt-blocks";
+import { hasOpenDay } from "./knowledge/hours";
 
 export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // `bookingMode` (booking-mode.ts) — the same answer the session's tool
@@ -30,6 +35,17 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // is not a second prompt. Declared before `wouldRatherTalkToAPerson` below,
   // which needs it.
   const onWeb = input.medium === "web";
+  // Declared here (S-47c moved it up from the after-hours code below, which explains it): `closedNow` needs it.
+  const onPhone = !input.medium || input.medium === "phone";
+
+  // S-47c (spec 5.2, 5.2.1, C5, C14): structured hours, only when at least one day is open (SD17). `closedNow`
+  // is the PHONE under "Follow business hours" with the hours saying closed right now (C19); while it holds, the
+  // offers of a person become "offer to take a message" and the TOOLS line says not to offer a transfer, while
+  // transfer_to_human stays on the session (toolSchemas is unchanged) for a caller who asks or an URGENT path.
+  const hoursBlock = hasOpenDay(input.businessHours) ? businessHoursBlock(input.businessHours, input.timezone, now) : null;
+  const closedNow = onPhone && hoursBlock !== null && !hoursBlock.open && input.afterHours === "hours_then_message";
+  const priceList = input.priceList && input.priceList.length > 0 ? input.priceList : null;
+  const insurance = input.tradeModule === "insurance_pc";
 
   // The word for who is on the other end. The phone line is BYTE-UNCHANGED
   // ("caller") — this fixes only the web copy, which was still saying
@@ -56,7 +72,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // take_message tool at all, so it never reaches that fallback either way.
   const wouldRatherTalkToAPerson = onWeb
     ? CAPTURE_LEAD_FOLLOWUP
-    : input.handoffAvailable
+    : input.handoffAvailable && !closedNow
       ? "offer to put them through to someone on the team"
       : "offer to take a message";
 
@@ -75,6 +91,16 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   const identityLine = input.disclosed
     ? `IDENTITY — You have already told the ${audienceWord} that you are ${persona}, an AI assistant. If they ask whether they are speaking with a person, a human, a bot, a robot, or an AI, confirm it plainly: you are an AI assistant. Then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human. Answer as ${input.businessName} and get straight to what the ${audienceWord} needs.`
     : `IDENTITY — Do not volunteer that you are automated and do not introduce yourself by name unless asked. Just answer as ${input.businessName} and get straight to what the ${audienceWord} needs. If a ${audienceWord} asks directly whether they are speaking with a person, a human, a bot, a robot, or an AI, answer honestly and briefly that you are an automated assistant, then ${wouldRatherTalkToAPerson} if they would rather talk to a person. Never claim to be human.`;
+
+  // S-47b's trade rules, computed here (S-47c hoisted it, arguments unchanged) so the TOOLS and AFTER HOURS lines
+  // below can ask whether a module is in the prompt. Placed in the HARD LIMITS block, where S-47b put it.
+  const tradeBlock = tradeModuleBlock(input.tradeModule, {
+    businessName: input.businessName,
+    medium: input.medium ?? "phone",
+    handoffAvailable: input.handoffAvailable === true,
+    canBook: booking && !onWeb,
+    languages: input.languages,
+  });
 
   const lines: string[] = [
     `You are ${input.personaName}, ${role}.`,
@@ -119,10 +145,21 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     `WHAT YOU KNOW ABOUT ${input.businessName.toUpperCase()} (answer from this and nothing else):`,
     input.facts,
     input.services ? `Services: ${input.services}` : "",
+    // S-47c (spec 5.2): the hours, then the list, inside WHAT YOU KNOW. Neither present: no lines at all.
+    ...(hoursBlock ? hoursBlock.lines : []),
+    ...servicesBlock(priceList ?? [], insurance),
     "",
     "HARD LIMITS:",
     `- Never invent facts about ${input.businessName} — no capabilities, client names, statistics, or timelines that are not stated above.`,
-    `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`,
+    // S-47c: a list swaps today's price line for the list's (spec 5.2); a FAILED list read closes it (owner
+    // decision C20); insurance keeps today's line either way (C13, spec 5.4); an empty list keeps it (C3).
+    insurance
+      ? `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`
+      : priceList
+        ? LIST_PRICE_LINE
+        : input.priceListUnavailable === true
+          ? CLOSED_PRICE_LINE
+          : `- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.`,
     onWeb
       ? "- If you do not know something, say so, and use capture_lead to get their name and a way to reach them so the team can follow up."
       : "- If you do not know something, say so and take a message rather than guessing.",
@@ -131,13 +168,7 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     // profile gives no lines at all, so every existing prompt is byte-identical (system-prompt.test.ts's
     // digest). `canBook` is the booking MODE, not the checkbox: "Always take a message" drops new booking
     // (D-040), and the web has no booking tool at all (SD2).
-    ...tradeModuleBlock(input.tradeModule, {
-      businessName: input.businessName,
-      medium: input.medium ?? "phone",
-      handoffAvailable: input.handoffAvailable === true,
-      canBook: booking && !onWeb,
-      languages: input.languages,
-    }),
+    ...tradeBlock,
     "",
     "TOOLS — you MUST use tools for anything that reads or changes real state. Never claim something is recorded or booked without a successful tool result:",
     // The WEB tool (CAPTURE_LEAD_TOOL, lib/concierge/prompt.ts) is FLAT —
@@ -181,9 +212,11 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // manners: the route speaks `handoffLine` for her the moment the tool
   // succeeds (`lib/voice/handoff.ts`), so a hold line of her own gets the
   // caller told twice.
+  // S-47c (spec 5.2.1 point 2): closed now, the tool stays but is not offered.
   if (input.handoffAvailable) {
-    lines.push(
-      "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.",
+    lines.push(closedNow
+      ? transferToolLineClosed(tradeBlock.length > 0)
+      : "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.",
     );
   }
 
@@ -255,8 +288,8 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // on the session, so the line never promises one that is not.
   //
   // Phone only (owner decision 2026-10-09): the website chat and the browser
-  // voice demo keep the conditional lines they always had, byte for byte.
-  const onPhone = !input.medium || input.medium === "phone";
+  // voice demo keep the conditional lines they always had, byte for byte
+  // (`onPhone` is declared at the top of this function).
   if (input.afterHours === "message_only") {
     const always = [
       "MESSAGES ONLY — Whatever the time, open or closed, never book a new appointment on this line. For anything new, take a message: their name, the best number to call them back on and what they need, and say the team will call them back. You may answer a quick question from what you know above first.",
@@ -265,14 +298,18 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
       ...(manageable && input.callerNumber ? ["If they already have an appointment, you can still look it up, move it or cancel it."] : []),
       ...(input.handoffAvailable ? ["If they ask for a person, or it cannot wait, you can still put them through to someone on the team."] : []),
     ].join(" ");
-    lines.push(
-      "",
-      onPhone
-        ? always
-        : onWeb
-          ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
-          : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.",
-    );
+    if (onPhone) lines.push("", always);
+    // Web chat and demo: today's conditional line when there are no structured hours; with hours, the definite
+    // line when closed and nothing when open (S-47c, spec 5.2).
+    else if (!hoursBlock) lines.push("", onWeb
+      ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
+      : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.");
+    else if (!hoursBlock.open) lines.push("", onWeb ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_VOICE);
+  } else if (hoursBlock && !hoursBlock.open) {
+    // S-47c: "Follow business hours, then take a message", closed now: the setting finally has hours to follow.
+    lines.push("", onPhone
+      ? afterHoursClosedPhoneLine({ canBook: booking, handoffAvailable: input.handoffAvailable === true, hasTradeRules: tradeBlock.length > 0 })
+      : onWeb ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_VOICE);
   }
 
   return lines.filter((l) => l !== null && l !== undefined).join("\n");

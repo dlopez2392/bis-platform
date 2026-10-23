@@ -40,7 +40,7 @@
 //     that's why `runCallLifecycle` delays it by `PHONE_GREETING_DELAY_MS`
 //     (default 900ms) rather than firing it the instant the socket opens.
 //
-//  3. Fail-open, deliberately, in exactly three places. This list is what a
+//  3. Fail-open, deliberately, in exactly five places. This list is what a
 //     future auditor checks the code against, so it is kept exhaustive on
 //     purpose — a site missing from it reads as a bug to be "hardened":
 //
@@ -55,6 +55,16 @@
 //         guard rather than leaving it armed, so the call degrades to
 //         exactly the pre-guard behaviour and runs to the cost cap. A bug in
 //         a cost optimisation must never cut off a paying customer.
+//       - The knowledge snapshot RPC, `ensureKnowledgeSnapshot` (S-47c,
+//         after step 9) — a failure answers the call UNSTAMPED, with the
+//         knowledge it read; the record of what she knew is not worth a
+//         caller.
+//       - The services read, `listVoiceServices` (S-47c, before step 9) —
+//         fails SOFT: the call is answered without the price list, with the
+//         free text and the hours, and is not stamped. Its price line fails
+//         CLOSED (owner ruling C20): with the list unknown, the HARD LIMITS
+//         price line forbids every amount, so nothing left in the prose can
+//         be quoted. Answering is the open half; quoting never is.
 //
 //     Signature verification and account resolution are NOT fail-open —
 //     those gate who gets to talk to a tenant's AI at all. Neither is the
@@ -75,7 +85,7 @@ import WebSocket from "ws";
 import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
   countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
-  getTransferPhone, listPhoneNumbersForAccount,
+  getTransferPhone, listPhoneNumbersForAccount, listVoiceServices, ensureKnowledgeSnapshot,
   type Branding,
 } from "@bis/db";
 import {
@@ -98,6 +108,7 @@ import { brandDisplayName } from "@/lib/email/templates/shell";
 import { openingGreeting } from "@/lib/voice/greeting";
 import { decideDisclosure } from "@/lib/voice/disclosure";
 import { tradeModuleStamp } from "@/lib/voice/modules";
+import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
 import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -1039,18 +1050,48 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true, declined: capsReason });
     }
 
+    // S-47c (spec 5.5; plan SD9, SD18): the price list, read beside the account and calendar reads below so it adds
+    // no wait of its own. Started HERE, below every gate (step 8), so a declined call reads nothing. Fail-soft: a
+    // failed read answers with the free text and the hours (both on the profile read at step 7), no list, and
+    // records nothing. Its rejection handler is attached on creation, so it can never reject unhandled.
+    const servicesP = listVoiceServices(db, accountId).then(
+      (rows) => rows,
+      (e: unknown) => {
+        log("knowledge: services read failed — answering without the price list", { callId, accountId, error: loggableError(e) });
+        return null;
+      },
+    );
+
     // --- Step 9: account/branding context + the tenant's booking calendar -
     const accountRow = await loadAccountContext(db, accountId);
     const calendar = await getOrCreateCalendar(db, accountId, "voice", "ai");
+
+    // ONE payload: it is what ensure_knowledge_snapshot records AND what builds the prompt below, so the call's
+    // stamp and its prompt cannot disagree (spec 5.5, C4). The snapshot RPC runs while step 9b's reads do (SD18);
+    // like servicesP, its handler is attached on creation and it never rejects.
+    const services = await servicesP;
+    const knowledge = knowledgeFromLive({ profile, timezone: accountRow.timezone, services });
+    if (services !== null && knowledge.listUnavailable) {
+      // The read succeeded but a stored row could not render: the same posture as a failed read (SD9, C20).
+      log("knowledge: a stored service could not be rendered — answering without the price list", { callId, accountId });
+    }
+    const versionP: Promise<number | null> = knowledge.recordable
+      ? ensureKnowledgeSnapshot(db, accountId, knowledge.payload).then(
+        (v) => v,
+        (e: unknown) => {
+          log("knowledge: snapshot failed — the call answers unstamped", { callId, accountId, error: loggableError(e) });
+          return null;
+        })
+      : Promise.resolve(null);
 
     // --- Step 9b: where a caller who asks for a person can be sent --------
     // Resolved HERE, above the accept, because the accept body carries the
     // tool list and the handoff tool is only advertised when there is
     // somewhere to send them (`toolSchemas`' third argument).
     //
-    // Its own try/catch, and it fails CLOSED rather than open: the two
-    // fail-open branches in this route (the caps, `startCallRow`) both
-    // protect the caller's ability to be ANSWERED. This one protects a
+    // Its own try/catch, and it fails CLOSED rather than open: the
+    // fail-open branches in this route (the caps, `startCallRow`, the two
+    // knowledge reads) all protect the caller's ability to be ANSWERED. This one protects a
     // promise — "let me put you through" — and a promise made off a failed
     // read is a caller told they are being transferred and then hung up on.
     // The call itself still happens; only the transfer option is missing.
@@ -1098,6 +1139,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // left unset rather than written empty, so "no token" and "a token that
     // is the empty string" cannot be confused.
     const handoffToken = extractHandoffToken(event.data);
+    // S-47c: never rejects (its handler was attached at creation); null = unstamped (a failed RPC or no record).
+    const knowledgeVersion = await versionP;
     let callRowId: string | null = null;
     try {
       const row = await startCallRow(db, accountId, {
@@ -1107,6 +1150,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           ? {}
           : { disclosure: { disclosed: disclosure.disclose, setting: disclosure.setting } }),
         ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
+        ...(knowledgeVersion === null ? {} : { knowledgeVersion }),
       });
       callRowId = row.id;
     } catch (e) {
@@ -1135,15 +1179,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // English greeting then the Spanish one.
     const opening = openingGreeting(profile, businessName, { disclose: disclosure.disclose, personaName: profile.persona_name });
 
+    // S-47c: the facts, the Services text, the hours and the list all come from the payload stamped above.
+    const pk = promptKnowledge(knowledge.payload);
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName,
-      facts: profile.facts, services: profile.services, languages: profile.languages,
+      facts: pk.facts, services: pk.services, languages: profile.languages,
       bookingEnabled: profile.booking_enabled, timezone: accountRow.timezone,
       slotDurationMinutes: calendar.slot_duration_minutes, afterHours: profile.after_hours,
       callerNumber, meetingType: calendar.meeting_type,
       handoffAvailable: handoffTarget.available,
       disclosed: disclosure.disclose,
       tradeModule: tradeStamp?.module ?? null,
+      businessHours: pk.businessHours, priceList: pk.priceList,
+      // C20: the list could not be read, so no amount may be quoted this call.
+      priceListUnavailable: knowledge.listUnavailable,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 

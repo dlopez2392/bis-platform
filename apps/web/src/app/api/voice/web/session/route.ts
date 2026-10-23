@@ -25,6 +25,7 @@ import {
   WEB_SESSION_ACCOUNT_WINDOW_MS, WEB_SESSION_MAX_PER_ACCOUNT_PER_DAY,
 } from "@/lib/voice/web-demo";
 import { clientIp, hashIp } from "@/lib/forms/guards";
+import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
 
 export const runtime = "nodejs";
 
@@ -100,7 +101,7 @@ export async function POST(req: Request) {
   // by brand-name-parity.test.ts, so this is the same rule either way.
   const {
     serviceDb, getPhoneNumberByE164, getVoiceProfile, getOrCreateCalendar, brandDisplayName,
-    recordWebSession, countWebSessionsByIp, countWebSessionsForAccount,
+    recordWebSession, countWebSessionsByIp, countWebSessionsForAccount, listVoiceServices,
   } = await import("@bis/db");
 
   let sessionConfig: ReturnType<typeof buildRealtimeSessionConfig>;
@@ -174,6 +175,18 @@ export async function POST(req: Request) {
     };
     const calendar = await getOrCreateCalendar(db, accountId, "voice", "ai");
 
+    // S-47c (spec 5.5): the demo reads the LIVE hours and price list and records nothing (no snapshot, no stamp).
+    // A failed list read is the phone's failed read (SD9): no list, and prices closed (C20).
+    const rows = await listVoiceServices(db, accountId).catch((e: unknown) => {
+      log("knowledge: services read failed — answering without the price list", { accountId, error: String(e) });
+      return null;
+    });
+    const live = knowledgeFromLive({ profile, timezone: acct.timezone, services: rows });
+    if (rows !== null && live.listUnavailable) {
+      log("knowledge: a stored service could not be rendered — answering without the price list", { accountId });
+    }
+    const pk = promptKnowledge(live.payload);
+
     // `replyToEmail: null` — this route sends no mail and never selects the
     // column; `brandDisplayName` reads `brandName` and nothing else.
     const businessName = brandDisplayName({
@@ -185,7 +198,7 @@ export async function POST(req: Request) {
 
     const promptInput: VoicePromptInput = {
       personaName: profile.persona_name, businessName,
-      facts: profile.facts, services: profile.services, languages: profile.languages,
+      facts: pk.facts, services: pk.services, languages: profile.languages,
       // FALSE regardless of the tenant's own setting: no tools reach this
       // session, so a prompt that promises booking would promise something
       // that cannot happen. The notice below tells her where to send them.
@@ -198,6 +211,8 @@ export async function POST(req: Request) {
       medium: "web_voice",
       // S-47b: the same trade rules as the phone line, in the demo's tool-less variant (SD1).
       tradeModule: profile.trade_module,
+      businessHours: pk.businessHours, priceList: pk.priceList,
+      priceListUnavailable: live.listUnavailable, // C20
     };
 
     const base = buildRealtimeSessionConfig(promptInput, new Date());

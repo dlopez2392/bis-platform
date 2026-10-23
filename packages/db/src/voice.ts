@@ -13,6 +13,8 @@ export type DisclosureSetting = "off" | "trial" | "on";
 /** 0094. The TypeScript twin of voice_profiles_trade_module_check (and calls' and concierge_conversations'
  *  module CHECKs): which trade rules Sofía follows (spec S-47b section 4). NULL = the general rules only. */
 export type TradeModuleSetting = "insurance_pc" | "events";
+/** 0095. The weekly hours shape (calendars.open_hours's, 0016): absent day = closed. */
+export type WeeklyHours = Partial<Record<"sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat", [string, string][]>>;
 export type VoiceProfileRow = {
   id: string; account_id: string; persona_name: string;
   greeting_en: string; greeting_es: string; facts: string; services: string;
@@ -34,6 +36,8 @@ export type VoiceProfileRow = {
   /** 0094. Which trade rules Sofía follows on calls and in the chat; null = general rules only.
    *  Agency-written through serviceDb() by saveVoiceProfileAction; authenticated has SELECT only. */
   trade_module: TradeModuleSetting | null;
+  /** 0095. The regular weekly hours; written only by save_voice_knowledge, so `upsertVoiceProfile` refuses it. */
+  business_hours: WeeklyHours | null;
 };
 /**
  * `forward_calls` is omitted on purpose (0058): `setForwardCalls` is its only
@@ -42,8 +46,12 @@ export type VoiceProfileRow = {
  * could carry it would change routing under a `voice_profile.updated` event
  * that does not say so. `upsertVoiceProfile` also refuses the key at run time,
  * for a caller whose patch is not an object literal.
+ *
+ * `business_hours` is omitted for a sibling reason (0095, S-47c): `save_voice_knowledge` is its only writer,
+ * because every change to Sofía's knowledge writes a numbered snapshot in the same transaction, and a plain
+ * profile update would change what she knows with no snapshot to say so. Refused at run time too.
  */
-export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id" | "forward_calls">>;
+export type VoiceProfilePatch = Partial<Omit<VoiceProfileRow, "id" | "account_id" | "forward_calls" | "business_hours">>;
 /**
  * The TypeScript twin of `calls_outcome_check` (0019, widened by 0037). The
  * two must hold the same six strings: a value this union admits and the CHECK
@@ -75,11 +83,15 @@ const PHONE_COLS = "id, account_id, e164, telnyx_id, status";
  * as present, with no type error and no failing test.
  */
 // trade_module (0094): LOAD-BEARING. Read on every call and every chat turn, so a project without 0094 fails every call.
+// business_hours (0095): LOAD-BEARING the same way, and wider (spec 4.3 and the plan's SD3): every reader of this
+// list fails on a project without 0095 -- getVoiceProfile (every call, the Voice page), getVoiceProfileByPublicId
+// and getVoiceProfileAnyStatusByPublicId (the website chat page and every chat turn), and upsertVoiceProfile's own
+// two selects (every profile save, the demo seed, every e2e spec that seeds a profile).
 export const PROFILE_COLS =
   "id, account_id, persona_name, greeting_en, greeting_es, facts, services, " +
   "languages, booking_enabled, after_hours, enabled, textback_enabled, textback_body, " +
   "textback_body_es, textback_body_es_basis, " +
-  "public_id, concierge_enabled, concierge_form_id, forward_calls, disclosure, trade_module";
+  "public_id, concierge_enabled, concierge_form_id, forward_calls, disclosure, trade_module, business_hours";
 
 export async function getPhoneNumberByE164(
   db: SupabaseClient, e164: string,
@@ -185,6 +197,9 @@ export async function upsertVoiceProfile(
   // not stripped: silently dropping it would hide the caller's bug.
   if (Object.prototype.hasOwnProperty.call(patch, "forward_calls")) {
     throw new Error("upsertVoiceProfile cannot write forward_calls; use setForwardCalls");
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "business_hours")) {
+    throw new Error("upsertVoiceProfile cannot write business_hours; use saveVoiceKnowledge");
   }
   const existing = await getVoiceProfile(db, accountId);
   if (!existing) {
@@ -314,6 +329,10 @@ export async function setForwardCalls(
  * `tradeModule` (0094, S-47b) writes `trade_module` and `trade_module_version` together, as one object, from
  * the same profile read that built the call's prompt; 0094's pair CHECK refuses a row that splits them. Named
  * only when given, for the same deployment-ordering reason as the token and the disclosure stamp.
+ *
+ * `knowledgeVersion` (0095, S-47c) is the snapshot this call's prompt was built from (`ensure_knowledge_snapshot`
+ * at call start). Named only when given, for the same deployment-ordering reason as the token, the disclosure and
+ * the trade-module stamps; 0095's composite key refuses a version this account does not hold.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
@@ -321,6 +340,7 @@ export async function startCallRow(
     phoneNumberId: string; callerE164: string | null; handoffToken?: string;
     disclosure?: { disclosed: boolean; setting: "trial" | "on" };
     tradeModule?: { module: TradeModuleSetting; version: number };
+    knowledgeVersion?: number;
   },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
@@ -333,6 +353,7 @@ export async function startCallRow(
       ...(input.tradeModule === undefined
         ? {}
         : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
+      ...(input.knowledgeVersion === undefined ? {} : { knowledge_version: input.knowledgeVersion }),
     })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);
@@ -990,14 +1011,17 @@ export type CallDetailRow = CallListRow & {
   turn_count: number; transcript: TranscriptEvent[];
   summary: string; booking_id: string | null;
   trade_module: TradeModuleSetting | null; trade_module_version: number | null;
+  /** 0095. The knowledge snapshot this call started under; null before 0095 or when it could not be recorded. */
+  knowledge_version: number | null;
 };
 
 const CALL_LIST_COLS =
   "id, started_at, ended_at, duration_secs, outcome, language, caller_e164, contact_id, " +
   "conversation_id, contact:contacts(first_name, last_name)";
 // trade_module, trade_module_version (0094): LOAD-BEARING, so 0094 must be on a project before this build reads it.
+// knowledge_version (0095): LOAD-BEARING the same way; the call page reads it for the "What Sofía knew" link.
 const CALL_DETAIL_COLS =
-  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version";
+  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version, knowledge_version";
 
 export async function listCalls(
   db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},

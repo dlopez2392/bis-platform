@@ -127,6 +127,10 @@ const getVoiceProfileMock = vi.hoisted(() => vi.fn());
 const startCallRowMock = vi.hoisted(() => vi.fn());
 const getTransferPhoneMock = vi.hoisted(() => vi.fn());
 const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
+// S-47c: the price list read and the snapshot RPC (step 9). Absent, both throw inside the route's
+// fail-open catches and every call here would run unstamped, a shape production is never in.
+const listVoiceServicesMock = vi.hoisted(() => vi.fn());
+const ensureKnowledgeSnapshotMock = vi.hoisted(() => vi.fn());
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: () => ({
@@ -171,6 +175,8 @@ vi.mock("@bis/db", () => ({
   // leaving every test here exercising a configuration production is never in.
   getTransferPhone: (...a: unknown[]) => getTransferPhoneMock(...a),
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
+  listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
+  ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
   markHandoffRequested: vi.fn().mockResolvedValue(undefined),
   getOrCreateCalendar: vi.fn().mockResolvedValue({
     id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
@@ -189,6 +195,7 @@ const PROFILE_ROW = {
   facts: "-", services: "-", languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
   trade_module: null,
+  business_hours: null,
 };
 
 /** `handoffToken` is the value our own TeXML route smuggles onto the SIP URI
@@ -276,6 +283,8 @@ beforeEach(() => {
   // that has turned the handoff on.
   getTransferPhoneMock.mockReset().mockResolvedValue("+19565551234");
   listPhoneNumbersForAccountMock.mockReset().mockResolvedValue([PHONE_ROW]);
+  listVoiceServicesMock.mockReset().mockResolvedValue([]);
+  ensureKnowledgeSnapshotMock.mockReset().mockResolvedValue(5);
   fetchMock.mockReset().mockResolvedValue({ ok: true, text: async () => "" });
   vi.stubGlobal("fetch", fetchMock);
   fakeSockets.instances.length = 0;
@@ -1787,7 +1796,7 @@ describe("runCallLifecycle — the handoff close", () => {
     await startLifecycle();
     expect(startCallRowMock).toHaveBeenCalledWith(
       expect.anything(), expect.any(String),
-      expect.objectContaining({ handoffToken: "tok_abc" }),
+      expect.objectContaining({ handoffToken: "tok_abc", knowledgeVersion: 5 }),
     );
   });
 

@@ -145,6 +145,8 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/tasks/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/team/actions.ts": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/actions.ts": "agency-only",
+  // "What Sofía knew" (S-47c, spec 5.8): a sub-page of this agency-only section, same guard.
+  "app/(dashboard)/dashboard/accounts/[accountId]/voice/knowledge/[version]/page.tsx": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/voice/page.tsx": "agency-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/website/actions.ts": "agency-only",
   // The drawer's Texts and Email rows: ledgerDb after getContact on the request client.

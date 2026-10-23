@@ -110,6 +110,27 @@ describe("upsertVoiceProfile cannot write forward_calls (setForwardCalls is the 
   });
 });
 
+describe("upsertVoiceProfile cannot write business_hours (save_voice_knowledge is the only writer, 0095)", () => {
+  it("upsertVoiceProfile refuses business_hours at run time, before any read (mutation: drop the check -> the fake client sees a read, FAILS; drop the Omit -> typecheck FAILS on the unused @ts-expect-error)", async () => {
+    const from = vi.fn();
+    const db = { from } as unknown as SupabaseClient;
+    // @ts-expect-error business_hours is not part of VoiceProfilePatch (0095: saveVoiceKnowledge only)
+    const patch: VoiceProfilePatch = { facts: "Open late", business_hours: { mon: [["08:00", "17:00"]] } };
+    await expect(upsertVoiceProfile(db, "acct_1", patch, "user_1"))
+      .rejects.toThrow("upsertVoiceProfile cannot write business_hours; use saveVoiceKnowledge");
+    expect(from).not.toHaveBeenCalled();
+  });
+
+  it("refuses the key even when its value is null: clearing the hours is a knowledge save too (mutation: guard only on a non-null value -> FAILS)", async () => {
+    const from = vi.fn();
+    const db = { from } as unknown as SupabaseClient;
+    const patch = { business_hours: null } as unknown as VoiceProfilePatch;
+    await expect(upsertVoiceProfile(db, "acct_1", patch, "user_1"))
+      .rejects.toThrow("upsertVoiceProfile cannot write business_hours; use saveVoiceKnowledge");
+    expect(from).not.toHaveBeenCalled();
+  });
+});
+
 describe("the read side carries forward_calls", () => {
   it("PROFILE_COLS selects forward_calls, so getVoiceProfile returns it (mutation: leave it out of PROFILE_COLS → FAILS; live pin: test/voice-schema.test.ts)", () => {
     expect(PROFILE_COLS.split(",").map((c) => c.trim())).toContain("forward_calls");

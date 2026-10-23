@@ -33,6 +33,7 @@ vi.mock("next/headers", () => ({
 const dbFixture = vi.hoisted(() => ({ brandName: null as string | null }));
 const serviceDbMock = vi.hoisted(() => ({
   getBranding: vi.fn(), getVoiceProfile: vi.fn(), getTransferPhone: vi.fn(), listForms: vi.fn(),
+  readAccountTimezone: vi.fn(), listVoiceServices: vi.fn(), getCalendarForAccount: vi.fn(),
 }));
 
 // One stable client, so the results card can be shown to receive THIS client rather than one of its own.
@@ -57,6 +58,10 @@ vi.mock("@bis/db", () => ({
   getBranding: (...a: unknown[]) => serviceDbMock.getBranding(...a),
   getTransferPhone: (...a: unknown[]) => serviceDbMock.getTransferPhone(...a),
   listForms: (...a: unknown[]) => serviceDbMock.listForms(...a),
+  // S-47c (Task 8): the Business hours/Services & prices cards' own reads.
+  readAccountTimezone: (...a: unknown[]) => serviceDbMock.readAccountTimezone(...a),
+  listVoiceServices: (...a: unknown[]) => serviceDbMock.listVoiceServices(...a),
+  getCalendarForAccount: (...a: unknown[]) => serviceDbMock.getCalendarForAccount(...a),
   // S-47a: never invoked in this test — `VoiceSettings` is stubbed below and
   // never renders the `disclosureResults` prop it is handed — but the Global
   // Constraints bare-`@bis/db`-factory grep requires every factory this file
@@ -82,6 +87,8 @@ vi.mock("./actions", () => ({
   enableConciergeAction: async () => ({ ok: true, publicId: "pub_x" }),
   disableConciergeAction: async () => ({ ok: true }),
   setForwardCallsAction: async () => ({ ok: true }),
+  saveBusinessHoursAction: async () => ({ ok: true }),
+  saveServicesAction: async () => ({ ok: true }),
 }));
 
 const captured = vi.hoisted(() => ({
@@ -91,6 +98,10 @@ const captured = vi.hoisted(() => ({
     disclosureCopy?: { locale: string; legend: string; options: { value: string }[] };
     disclosureResults?: unknown;
     tradeRulesCopy?: { locale: string; legend: string; nextCall?: string; options: { value: string }[] };
+    persona?: string; locale?: string; pseudo?: boolean;
+    timezone?: string | null; storedHours?: unknown; calendar?: { ok: true; hours: unknown } | { ok: false };
+    insurance?: boolean; services?: { ok: true; rows: unknown[] } | { ok: false };
+    hasHours?: boolean; hasPriceList?: boolean;
   } | null,
 }));
 vi.mock("./voice-settings", () => ({
@@ -110,6 +121,7 @@ const PROFILE: VoiceProfileRow = {
   textback_body_es: null, textback_body_es_basis: null,
   public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   trade_module: null,
+  business_hours: null,
 };
 
 async function render(searchParams: { from?: string; locale?: string } = {}) {
@@ -131,6 +143,9 @@ beforeEach(() => {
     brandCorners: null, brandType: null, brandMode: null, replyToEmail: null,
   }));
   serviceDbMock.listForms.mockReset().mockResolvedValue([]);
+  serviceDbMock.readAccountTimezone.mockReset().mockResolvedValue("America/Chicago");
+  serviceDbMock.listVoiceServices.mockReset().mockResolvedValue([]);
+  serviceDbMock.getCalendarForAccount.mockReset().mockResolvedValue(null);
   prefsFixture.language = null;
 });
 
@@ -285,5 +300,82 @@ describe("voice settings page — the Trade rules copy (S-47b)", () => {
     const props = await render();
     expect(props.tradeRulesCopy?.nextCall)
       .toBe("Changes apply from the next call or chat. Calls and chats already under way keep the rules they started with.");
+  });
+});
+
+/**
+ * S-47c (Task 8): the Business hours / Services & prices cards' own inputs — the account's zone, the
+ * calendar's raw hours (cosmetic: only "Copy from calendar" reads it, so a failed read degrades to
+ * null rather than failing the page), the services read (wrapped so a failed read is the Services
+ * card's OWN error state, never the page's) and whether the account is on the insurance trade module.
+ */
+describe("voice settings page — the Business hours / Services & prices cards' inputs (S-47c)", () => {
+  it("hands the cards the account's zone (mutation: drop the read -> FAILS)", async () => {
+    serviceDbMock.readAccountTimezone.mockResolvedValue("America/Denver");
+    const props = await render();
+    expect(props.timezone).toBe("America/Denver");
+  });
+
+  it("hands the Business hours card the calendar's raw open_hours, or null hours when there is no calendar (mutation: drop the read -> FAILS)", async () => {
+    serviceDbMock.getCalendarForAccount.mockResolvedValue({ open_hours: { mon: [["08:00", "18:00"]] } });
+    expect((await render()).calendar).toEqual({ ok: true, hours: { mon: [["08:00", "18:00"]] } });
+    serviceDbMock.getCalendarForAccount.mockResolvedValue(null);
+    expect((await render()).calendar).toEqual({ ok: true, hours: null });
+  });
+
+  it("a failing calendar read is its OWN state, not 'no hours', and the page still renders (mutation: fold the failure into null hours -> FAILS)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    serviceDbMock.getCalendarForAccount.mockRejectedValue(new Error("db down"));
+    const props = await render();
+    errSpy.mockRestore();
+    expect(props.calendar).toEqual({ ok: false });
+    expect(props.accountId).toBe("a1");
+  });
+
+  it("hands the Services card the list, wrapped ok (mutation: pass the bare array -> FAILS)", async () => {
+    const rows = [{ name_en: "Catering", name_es: null, description_en: null, description_es: null,
+      price_kind: "per_unit", amount_cents: 3500, amount_max_cents: null, unit_en: "guest", unit_es: "invitado" }];
+    serviceDbMock.listVoiceServices.mockResolvedValue(rows);
+    const props = await render();
+    expect(props.services).toEqual({ ok: true, rows });
+  });
+
+  it("a failing services read gives the Services card its OWN error state while the page still renders everything else (mutation: let it throw -> FAILS)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    serviceDbMock.listVoiceServices.mockRejectedValue(new Error("db down"));
+    const props = await render();
+    errSpy.mockRestore();
+    expect(props.services).toEqual({ ok: false });
+    // The rest of the page's props still resolved — nothing else was taken down with it.
+    expect(props.accountId).toBe("a1");
+    expect(props.disclosureCopy?.locale).toBe("en");
+  });
+
+  it("insurance is read from the stored profile's trade_module, never guessed (mutation: hard-code false -> FAILS)", async () => {
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, trade_module: "insurance_pc" });
+    expect((await render()).insurance).toBe(true);
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, trade_module: "events" });
+    expect((await render()).insurance).toBe(false);
+  });
+
+  it("storedHours is the profile's own business_hours column (mutation: hard-code null -> FAILS)", async () => {
+    const hours = { mon: [["09:00", "17:00"]] };
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, business_hours: hours });
+    expect((await render()).storedHours).toEqual(hours);
+  });
+
+  it("hasHours/hasPriceList are computed from the STORED state, not guessed (mutation: swap either for a hard-coded value -> FAILS)", async () => {
+    serviceDbMock.getVoiceProfile.mockResolvedValue({ ...PROFILE, business_hours: { mon: [["09:00", "17:00"]] } });
+    serviceDbMock.listVoiceServices.mockResolvedValue([{ name_en: "Catering", name_es: null, description_en: null,
+      description_es: null, price_kind: "free", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null }]);
+    const withBoth = await render();
+    expect(withBoth.hasHours).toBe(true);
+    expect(withBoth.hasPriceList).toBe(true);
+
+    serviceDbMock.getVoiceProfile.mockResolvedValue(PROFILE);
+    serviceDbMock.listVoiceServices.mockResolvedValue([]);
+    const withNeither = await render();
+    expect(withNeither.hasHours).toBe(false);
+    expect(withNeither.hasPriceList).toBe(false);
   });
 });

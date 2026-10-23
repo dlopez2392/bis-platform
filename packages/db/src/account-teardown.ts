@@ -99,6 +99,17 @@ export const ACCOUNT_OWNED_TABLES = [
  * FKs are NO ACTION toward all four (a file's record cannot vanish under it; `opportunity_id` is unused
  * in part 1 but already a plain FK), and deleting it cascades its `document_versions`. Postgres deletes
  * the ROWS only; the stored objects are removed by `deleteAccountCascade` itself, before any row, below.
+ *
+ * `voice_services` and `voice_knowledge_snapshots` (0095, S-47c) are off this list for `consent_events`'
+ * reason, not the derived-state one: `service_role` holds no DELETE on either (0095 grants it SELECT only;
+ * the two `save_voice_knowledge` / `ensure_knowledge_snapshot` functions are their only writers, and a
+ * snapshot is never edited or deleted, so the version a call or chat was stamped with always means what it
+ * meant). Listing either in the loop above would make `.delete().eq("account_id", accountId)` throw 42501 on
+ * EVERY account's teardown and every demo re-seed. Their rows still leave: both carry `account_id … on
+ * delete cascade`, so the `accounts` delete at the end of this function carries them away. The stamps that
+ * point at a snapshot (`calls.knowledge_version`, `concierge_conversations.knowledge_version`, a NO ACTION
+ * composite key) are gone by then, because `calls` and `concierge_conversations` are on the list.
+ * `voice-knowledge.test.ts` proves the teardown after a save, with a stamped call and chat, leaves nothing.
  */
 
 /**

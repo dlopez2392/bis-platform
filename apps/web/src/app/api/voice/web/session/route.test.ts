@@ -12,6 +12,11 @@ const getOrCreateCalendarMock = vi.hoisted(() => vi.fn());
 const recordWebSessionMock = vi.hoisted(() => vi.fn());
 const countWebSessionsByIpMock = vi.hoisted(() => vi.fn());
 const countWebSessionsForAccountMock = vi.hoisted(() => vi.fn());
+// S-47c: the live price list. Replaced, never the real one: the real read would hit the projection stub below,
+// fail, and every test here would silently run on the failed-read prompt. The RPC is a spy only, to prove the demo
+// records nothing.
+const listVoiceServicesMock = vi.hoisted(() => vi.fn());
+const ensureKnowledgeSnapshotMock = vi.hoisted(() => vi.fn());
 const dbQuerySpy = vi.hoisted(() => ({ fromCalls: [] as string[], eqCalls: [] as [string, unknown][] }));
 
 /** The agency's INTERNAL label deliberately differs from `brand_name` and
@@ -56,6 +61,8 @@ vi.mock("@bis/db", async (importOriginal) => {
     recordWebSession: (...a: unknown[]) => recordWebSessionMock(...a),
     countWebSessionsByIp: (...a: unknown[]) => countWebSessionsByIpMock(...a),
     countWebSessionsForAccount: (...a: unknown[]) => countWebSessionsForAccountMock(...a),
+    listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
+    ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
   };
 });
 
@@ -80,6 +87,7 @@ const PROFILE_ROW = {
   after_hours: "hours_then_message" as const, enabled: true,
   textback_enabled: false, textback_body: null,
   trade_module: null,
+  business_hours: null,
 };
 const CALENDAR_ROW = {
   id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,
@@ -124,6 +132,8 @@ beforeEach(() => {
   recordWebSessionMock.mockReset().mockResolvedValue(true);
   countWebSessionsByIpMock.mockReset().mockResolvedValue(0);
   countWebSessionsForAccountMock.mockReset().mockResolvedValue(0);
+  listVoiceServicesMock.mockReset().mockResolvedValue([]);
+  ensureKnowledgeSnapshotMock.mockReset().mockResolvedValue(5);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 });
@@ -262,5 +272,35 @@ describe("POST /api/voice/web/session — trade rules (S-47b)", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: null });
     await POST(req());
     expect(sentInstructions()).not.toContain("TRADE RULES —");
+  });
+});
+
+describe("POST /api/voice/web/session — what Sofía knows (S-47c)", () => {
+  const instructions = () => {
+    const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
+    return (JSON.parse(String(init.body)) as { session: { instructions: string } }).session.instructions;
+  };
+  const CLOSED = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
+
+  it("the demo's prompt carries the live list and hours, records nothing and stamps nothing (mutations: drop priceList or businessHours from promptInput -> FAILS)", async () => {
+    getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, business_hours: { tue: [["08:00", "18:00"]] } });
+    listVoiceServicesMock.mockResolvedValue([{ id: "s1", account_id: "acct1", position: 1, created_at: "x", name_en: "Roof check", name_es: null,
+      description_en: null, description_es: null, price_kind: "free", amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null }]);
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(listVoiceServicesMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+    expect(instructions()).toContain(`- Roof check — English: "There is no charge for Roof check." Spanish: "Roof check no tiene costo."`);
+    expect(instructions()).toContain("BUSINESS HOURS (");
+    expect(instructions()).not.toContain(CLOSED);
+    expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed services read still mints the session, without the list and with the C20 closed price line (SD9; mutation: drop priceListUnavailable from promptInput -> FAILS)", async () => {
+    listVoiceServicesMock.mockRejectedValue(new Error("listVoiceServices failed: boom"));
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(instructions()).not.toContain("SERVICES AND PRICES");
+    expect(instructions()).toContain(CLOSED);
+    expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
   });
 });

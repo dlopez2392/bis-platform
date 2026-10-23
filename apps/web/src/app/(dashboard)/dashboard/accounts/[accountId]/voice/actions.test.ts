@@ -16,6 +16,9 @@ const dbMocks = vi.hoisted(() => ({
   // (`defaultTextbackBody`'s own "a company name, never `accounts.name`"
   // rule) to compute our Spanish default.
   getBranding: vi.fn(),
+  // S-47c: the knowledge save path (saveKnowledgeParts) reads these and calls the snapshot RPC.
+  saveVoiceKnowledge: vi.fn(), listVoiceServices: vi.fn(),
+  getLatestKnowledgeVersion: vi.fn(), readAccountTimezone: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -57,7 +60,9 @@ import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import {
   saveVoiceProfileAction, assignNumberAction, setNumberStatusAction, moveNumberAction,
   setTransferPhoneAction, enableConciergeAction, disableConciergeAction, setForwardCallsAction,
+  saveBusinessHoursAction, saveServicesAction,
 } from "./actions";
+import { revalidatePath } from "next/cache";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -73,6 +78,12 @@ beforeEach(() => {
   // moveNumberAction test below exercises. Tests that care about an occupied
   // destination override this explicitly.
   dbMocks.listPhoneNumbersForAccount.mockResolvedValue([]);
+  // S-47c: the default profile's facts ("stuff") differ from what most cases submit, so every profile save
+  // takes the SD14 path into the snapshot save; these are its working defaults.
+  dbMocks.readAccountTimezone.mockResolvedValue("America/Chicago");
+  dbMocks.getLatestKnowledgeVersion.mockResolvedValue(0);
+  dbMocks.listVoiceServices.mockResolvedValue([]);
+  dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "ok", version: 1 });
   guardFixture.isAgency = true;
 });
 
@@ -771,5 +782,262 @@ describe("saveVoiceProfileAction — the trade_module field (S-47b)", () => {
     const r = await saveVoiceProfileAction("a1", fd({ persona_name: "Alex", languages: "both", trade_module: "events" }));
     expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
     expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+});
+
+// S-47c: the Business hours and Services & prices cards each save ONLY their own part, through the snapshot
+// RPC (spec 5.7, C9); a refused save says why in the language of the page that posted it.
+type KnowledgeCall = { actor: string; parts: Record<string, unknown>; payload: Record<string, unknown>; baseVersion: number };
+const knowledgeCall = (i = 0) => dbMocks.saveVoiceKnowledge.mock.calls[i]![2] as KnowledgeCall;
+const closedWeek = () => (["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const)
+  .map((day) => ({ day, open: false, spans: [] as { from: string; to: string }[] }));
+
+describe("saveBusinessHoursAction (S-47c)", () => {
+  beforeEach(() => vi.mocked(revalidatePath).mockClear());
+  const days = () => {
+    const w = closedWeek();
+    w[0] = { day: "mon", open: true, spans: [{ from: "08:00", to: "17:00" }] };
+    w[4] = { day: "fri", open: true, spans: [{ from: "18:00", to: "00:00" }] };
+    return w;
+  };
+
+  it("a non-agency caller is refused before any read or write", async () => {
+    guardFixture.isAgency = false;
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify(days()) }));
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+    expect(dbMocks.getVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("a valid week saves parts whose ONLY key is business_hours, the canonical object, with the caller as actor (mutation: send another card's part too -> FAILS)", async () => {
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify(days()) }));
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.saveVoiceKnowledge).toHaveBeenCalledTimes(1);
+    expect(dbMocks.saveVoiceKnowledge.mock.calls[0]![1]).toBe("a1");
+    expect(Object.keys(knowledgeCall().parts)).toEqual(["business_hours"]);
+    expect(knowledgeCall().parts.business_hours).toEqual({ mon: [["08:00", "17:00"]], fri: [["18:00", "24:00"]] });
+    expect(knowledgeCall().actor).toBe("user_1");
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/voice");
+  });
+
+  it("intent=clear saves parts exactly { business_hours: null }, whatever the days hold (mutation: validate the days on clear -> FAILS)", async () => {
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "clear", days: JSON.stringify(closedWeek()) }));
+    expect(r).toEqual({ ok: true });
+    expect(knowledgeCall().parts).toEqual({ business_hours: null });
+  });
+
+  it("an overlap is refused in Spanish when the page is Spanish, with no RPC (mutation: answer in English -> FAILS)", async () => {
+    const w = closedWeek();
+    w[1] = { day: "tue", open: true, spans: [{ from: "08:00", to: "13:00" }, { from: "12:00", to: "18:00" }] };
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "es", intent: "save", days: JSON.stringify(w) }));
+    const want = m["voice.hours.error.overlap.es"].replace("{day}", m["voice.hours.day.tue.es"]);
+    expect(want).toBe("Martes: estas horas se cruzan.");
+    expect(r).toEqual({ ok: false, error: want });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("no open day is refused with the noDay sentence, in English for any locale that is not es", async () => {
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "fr", intent: "save", days: JSON.stringify(closedWeek()) }));
+    expect(r).toEqual({ ok: false, error: m["voice.hours.error.noDay"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("stale twice: the stale sentence, after two attempts; in Spanish on a Spanish page (mutation: no retry -> the call count FAILS)", async () => {
+    dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "stale" });
+    expect(await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify(days()) })))
+      .toEqual({ ok: false, error: m["voice.knowledge.stale"] });
+    expect(dbMocks.saveVoiceKnowledge).toHaveBeenCalledTimes(2);
+    expect(await saveBusinessHoursAction("a1", fd({ locale: "es", intent: "save", days: JSON.stringify(days()) })))
+      .toEqual({ ok: false, error: m["voice.knowledge.stale.es"] });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("no_profile, invalid and a failure each read their own sentence", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.saveVoiceKnowledge.mockResolvedValueOnce({ status: "no_profile" });
+    expect(await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify(days()) })))
+      .toEqual({ ok: false, error: m["voice.knowledge.noProfile"] });
+    dbMocks.saveVoiceKnowledge.mockResolvedValueOnce({ status: "invalid" });
+    expect(await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify(days()) })))
+      .toEqual({ ok: false, error: m["voice.knowledge.invalid"] });
+    dbMocks.saveVoiceKnowledge.mockRejectedValueOnce(new Error("saveVoiceKnowledge failed: boom"));
+    expect(await saveBusinessHoursAction("a1", fd({ locale: "es", intent: "save", days: JSON.stringify(days()) })))
+      .toEqual({ ok: false, error: m["voice.hours.saveFailed.es"] });
+    errSpy.mockRestore();
+  });
+
+  it("a posted week that is not the card's shape is refused with no RPC", async () => {
+    const r = await saveBusinessHoursAction("a1", fd({ locale: "en", intent: "save", days: JSON.stringify({ mon: [] }) }));
+    expect(r).toEqual({ ok: false, error: m["voice.hours.saveFailed"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveServicesAction (S-47c)", () => {
+  beforeEach(() => vi.mocked(revalidatePath).mockClear());
+  const row = (o: Record<string, string> = {}) => ({
+    name_en: "Haircut", name_es: "", description_en: "", description_es: "",
+    price_kind: "fixed", amount: "25", amount_max: "", unit_en: "", unit_es: "", ...o,
+  });
+
+  it("a non-agency caller is refused before any read or write", async () => {
+    guardFixture.isAgency = false;
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row()]) }));
+    expect(r).toEqual({ ok: false, error: m["voice.agencyOnly"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+    expect(dbMocks.getVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("saves parts whose ONLY key is services, each row validated into its stored shape", async () => {
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row(), row({ name_en: "Shave", price_kind: "free" })]) }));
+    expect(r).toEqual({ ok: true });
+    expect(Object.keys(knowledgeCall().parts)).toEqual(["services"]);
+    expect(knowledgeCall().parts.services).toEqual([
+      { name_en: "Haircut", name_es: null, description_en: null, description_es: null, price_kind: "fixed",
+        amount_cents: 2500, amount_max_cents: null, unit_en: null, unit_es: null },
+      { name_en: "Shave", name_es: null, description_en: null, description_es: null, price_kind: "free",
+        amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null },
+    ]);
+    expect(revalidatePath).toHaveBeenCalledWith("/dashboard/accounts/a1/voice");
+  });
+
+  it("an empty list saves an empty list (removing every service is a save, not a refusal)", async () => {
+    expect(await saveServicesAction("a1", fd({ locale: "en", services: "[]" }))).toEqual({ ok: true });
+    expect(knowledgeCall().parts).toEqual({ services: [] });
+  });
+
+  it("the C16 row: a per_unit price with no Spanish unit names the row, with no RPC", async () => {
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([
+      row(), row({ name_en: "Catering", price_kind: "per_unit", amount: "18", unit_en: "guest", unit_es: "" }),
+    ]) }));
+    expect(r).toEqual({ ok: false, error: "Add the unit in English and in Spanish for Catering." });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("the same refusal reads Spanish on a Spanish page", async () => {
+    const r = await saveServicesAction("a1", fd({ locale: "es", services: JSON.stringify([
+      row({ name_en: "Catering", price_kind: "per_unit", amount: "18", unit_en: "guest", unit_es: "" }),
+    ]) }));
+    expect(r).toEqual({ ok: false, error: "Agregue la unidad en inglés y en español para Catering." });
+  });
+
+  it("on an insurance profile (C13) a new row arrives as after_visit and a stored row's price is sent back unchanged (mutation: read insurance as false -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "insurance_pc" });
+    // The row IS stored (the C13 guard only lets a price through that is already on the list).
+    dbMocks.listVoiceServices.mockResolvedValue([{ id: "r1", account_id: "a1", position: 1, created_at: "x",
+      name_en: "Catering", name_es: null, description_en: null, description_es: null, price_kind: "per_unit",
+      amount_cents: 1850, amount_max_cents: null, unit_en: "guest", unit_es: "invitado" }]);
+    const stored = row({ name_en: "Catering", price_kind: "per_unit", amount: "18.50", unit_en: "guest", unit_es: "invitado" });
+    const added = row({ name_en: "Auto policy review", price_kind: "", amount: "" });
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([stored, added]) }));
+    expect(r).toEqual({ ok: true });
+    expect(knowledgeCall().parts.services).toEqual([
+      { name_en: "Catering", name_es: null, description_en: null, description_es: null, price_kind: "per_unit",
+        amount_cents: 1850, amount_max_cents: null, unit_en: "guest", unit_es: "invitado" },
+      { name_en: "Auto policy review", name_es: null, description_en: null, description_es: null, price_kind: "after_visit",
+        amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null },
+    ]);
+  });
+
+  it("on insurance (C13, C21) a hand-built NEW priced row is saved as after_visit, its price dropped (mutation: drop the insurance rule -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "insurance_pc" });
+    dbMocks.listVoiceServices.mockResolvedValue([]);
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row({ name_en: "Crafted", amount: "999" })]) }));
+    expect(r).toEqual({ ok: true });
+    expect(knowledgeCall().parts.services).toEqual([
+      { name_en: "Crafted", name_es: null, description_en: null, description_es: null, price_kind: "after_visit",
+        amount_cents: null, amount_max_cents: null, unit_en: null, unit_es: null },
+    ]);
+  });
+
+  it("off insurance, a row with no kind is refused (the insurance rule is read from the profile, not the form)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "stuff", services: "", trade_module: "events" });
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row({ name_en: "Tent", price_kind: "" })]) }));
+    expect(r).toEqual({ ok: false, error: m["voice.services.error.amount"].replace("{name}", "Tent") });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("a failed profile read refuses with the card's own failure sentence and no RPC", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.getVoiceProfile.mockRejectedValue(new Error("db down"));
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row()]) }));
+    errSpy.mockRestore();
+    expect(r).toEqual({ ok: false, error: m["voice.services.saveFailed"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+
+  it("stale twice reads the stale sentence", async () => {
+    dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "stale" });
+    expect(await saveServicesAction("a1", fd({ locale: "en", services: JSON.stringify([row()]) })))
+      .toEqual({ ok: false, error: m["voice.knowledge.stale"] });
+  });
+
+  it("a posted list that is not the card's shape is refused with no RPC", async () => {
+    const r = await saveServicesAction("a1", fd({ locale: "en", services: "{}" }));
+    expect(r).toEqual({ ok: false, error: m["voice.services.saveFailed"] });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+  });
+});
+
+describe("saveVoiceProfileAction — Facts and Services go through the snapshot (S-47c)", () => {
+  beforeEach(() => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ greeting_en: "Hi", facts: "Old facts.", services: "Old services." });
+    dbMocks.upsertVoiceProfile.mockResolvedValue({});
+  });
+  const form = (o: Record<string, string> = {}) =>
+    fd({ persona_name: "Alex", languages: "both", facts: "New facts.", services: "Old services.", ...o });
+
+  it("changed Facts: the RPC gets parts exactly { facts, services_text } BEFORE the profile write, and the patch carries neither (mutation: RPC after upsert -> FAILS)", async () => {
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: true });
+    expect(knowledgeCall().parts).toEqual({ facts: "New facts.", services_text: "Old services." });
+    expect(knowledgeCall().actor).toBe("user_1");
+    expect(dbMocks.saveVoiceKnowledge.mock.invocationCallOrder[0]!)
+      .toBeLessThan(dbMocks.upsertVoiceProfile.mock.invocationCallOrder[0]!);
+    const patch = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as Record<string, unknown>;
+    expect("facts" in patch).toBe(false);
+    expect("services" in patch).toBe(false);
+    expect(patch).toMatchObject({ persona_name: "Alex" });
+  });
+
+  it("changed Services text alone also goes through the RPC", async () => {
+    expect(await saveVoiceProfileAction("a1", form({ facts: "Old facts.", services: "New services." }))).toEqual({ ok: true });
+    expect(knowledgeCall().parts).toEqual({ facts: "Old facts.", services_text: "New services." });
+  });
+
+  it("the RPC refusing: nothing else is written, and the refusal says why (mutation: write the profile first -> FAILS)", async () => {
+    dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "stale" });
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: false, error: m["voice.knowledge.stale"] });
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+    dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "invalid" });
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: false, error: m["voice.knowledge.invalid"] });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    dbMocks.saveVoiceKnowledge.mockRejectedValue(new Error("saveVoiceKnowledge failed: down"));
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    errSpy.mockRestore();
+    expect(dbMocks.upsertVoiceProfile).not.toHaveBeenCalled();
+  });
+
+  it("unchanged Facts and Services: no RPC at all (SD14), and the profile still saves (mutation: always call the RPC -> FAILS)", async () => {
+    expect(await saveVoiceProfileAction("a1", form({ facts: "Old facts.", services: "Old services." }))).toEqual({ ok: true });
+    expect(dbMocks.saveVoiceKnowledge).not.toHaveBeenCalled();
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it("no profile yet: the profile is created first, then the knowledge part records version 1 (mutation: skip the RPC on create -> FAILS)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValueOnce(null);
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: true });
+    expect(dbMocks.upsertVoiceProfile.mock.invocationCallOrder[0]!)
+      .toBeLessThan(dbMocks.saveVoiceKnowledge.mock.invocationCallOrder[0]!);
+    expect(knowledgeCall().parts).toEqual({ facts: "New facts.", services_text: "Old services." });
+    const patch = dbMocks.upsertVoiceProfile.mock.calls[0]![2] as Record<string, unknown>;
+    expect("facts" in patch).toBe(false);
+    expect("services" in patch).toBe(false);
+  });
+
+  it("no profile yet and the knowledge part fails: the profile save failure sentence (Save again takes the first path)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValueOnce(null);
+    dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "stale" });
+    expect(await saveVoiceProfileAction("a1", form())).toEqual({ ok: false, error: m["voice.profile.saveFailed"] });
+    expect(dbMocks.upsertVoiceProfile).toHaveBeenCalledTimes(1);
   });
 });

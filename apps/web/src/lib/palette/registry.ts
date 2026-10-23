@@ -70,7 +70,9 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   "/calendar": ["booking", "availability", "hours"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
-  "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble", "transfer", "forward", "person", "phones"],
+  // "hours"/"prices"/"services"/"horario"/"precios" added S-47c (spec 5.7): the Business hours and
+  // Services & prices cards.
+  "/voice": ["receptionist", "sofia", "ai", "website", "widget", "chat", "concierge", "bubble", "transfer", "forward", "person", "phones", "hours", "prices", "services", "horario", "precios"],
   "/automations": ["no-show", "no show", "text reminder", "reminder", "reviews", "review requests", "google review", "follow up", "text", "referral", "reactivation", "quote", "confirmation", "instant reply"],
   "/dashboard/accounts": ["companies", "clients"],
   "/dashboard/blueprints": ["templates"],

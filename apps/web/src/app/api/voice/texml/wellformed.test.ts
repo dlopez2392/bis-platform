@@ -256,6 +256,7 @@ const PROFILE = {
   languages: "en" as const, booking_enabled: true,
   after_hours: "hours_then_message" as const, enabled: true,
   trade_module: null,
+  business_hours: null,
 };
 const LIVE_TO = "+19565550999";
 const CALLER = "+19562921696";
