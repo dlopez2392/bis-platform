@@ -293,21 +293,26 @@ describe("VoiceKnowledgePage — every read is scoped to this route's own accoun
   });
 });
 
+/** A UUID-shaped id (`isUuid`'s pattern): `?call=` is only ever worth a read when it looks like one. */
+const CALL_ID = "11111111-1111-4111-8111-111111111111";
+const OTHER_CALL_ID = "22222222-2222-4222-8222-222222222222";
+
 /**
  * S-47c follow-up (spec 5.4, C13): on a call stamped under the insurance trade module, Sofía was given
  * only the service names and descriptions — never a price sentence — so this page must not overstate
  * what she knew there. The snapshot payload never records the module (it is the SAME either way, per
  * spec 5.4); it is this call's own `trade_module`/`knowledge_version` that gates the view, read with
- * THIS route's own accountId (the call page's own `getCall`, never a second getter).
+ * THIS route's own accountId, on the REQUEST client (`REQUEST`, design review: the same client the
+ * call page itself reads `getCall` through, never this page's own `serviceDb()`).
  */
 describe("VoiceKnowledgePage — the ?call= parameter (insurance gating, S-47c follow-up)", () => {
-  it("an insurance call hides every price sentence and any \"$\", and shows the insurance note (mutation: drop the module check → FAILS)", async () => {
-    const html = await render("3", { call: "call1" });
+  it("an insurance call hides every price sentence and any \"$\", and shows the insurance note (mutation: never hide the sentences → FAILS)", async () => {
+    const html = await render("3", { call: CALL_ID });
     const text = renderedText(html);
     expect(html).not.toContain("The price for Catering is $35 per guest.");
     expect(html).not.toContain("El precio de Banquete es $35 por invitado.");
     expect(html).not.toContain("$");
-    expect(text).toContain("On this call the insurance rules applied, so Sofía was given the service names only, never a price.");
+    expect(text).toContain("On this call the insurance rules applied, so Sofía was given the service names and descriptions, never a price.");
     // Names and descriptions still show — only the sentences and the amount are gone.
     expect(html).toContain("Catering");
     expect(html).toContain("Hot food served at your event.");
@@ -315,7 +320,7 @@ describe("VoiceKnowledgePage — the ?call= parameter (insurance gating, S-47c f
 
   it("an events call still shows both sentences, and no insurance note (mutation: gate on any module, not just insurance_pc → FAILS)", async () => {
     dbMocks.getCall.mockResolvedValue({ ...CALL, trade_module: "events" });
-    const html = await render("3", { call: "call1" });
+    const html = await render("3", { call: CALL_ID });
     const text = renderedText(html);
     expect(html).toContain("The price for Catering is $35 per guest.");
     expect(text).not.toContain("the insurance rules applied");
@@ -327,21 +332,22 @@ describe("VoiceKnowledgePage — the ?call= parameter (insurance gating, S-47c f
     expect(dbMocks.getCall).not.toHaveBeenCalled();
   });
 
-  it("getCall is read with THIS route's own accountId (mutation: read it with a different id → FAILS)", async () => {
-    await render("3", { call: "call1" });
-    expect(dbMocks.getCall).toHaveBeenCalledWith(SERVICE, "acct1", "call1");
+  it("getCall is read on the REQUEST client, with THIS route's own accountId (design review; mutation: read it with serviceDb() or a different id → FAILS)", async () => {
+    await render("3", { call: CALL_ID });
+    expect(dbMocks.getCall).toHaveBeenCalledWith(REQUEST, "acct1", CALL_ID);
+    expect(dbMocks.getCall).not.toHaveBeenCalledWith(SERVICE, expect.anything(), expect.anything());
   });
 
   it("a call of another account comes back null (getCall's own account filter) and is ignored: sentences still show (mutation: trust the call without checking it exists → FAILS)", async () => {
     dbMocks.getCall.mockResolvedValue(null);
-    const html = await render("3", { call: "call-elsewhere" });
-    expect(dbMocks.getCall).toHaveBeenCalledWith(SERVICE, "acct1", "call-elsewhere");
+    const html = await render("3", { call: OTHER_CALL_ID });
+    expect(dbMocks.getCall).toHaveBeenCalledWith(REQUEST, "acct1", OTHER_CALL_ID);
     expect(html).toContain("The price for Catering is $35 per guest.");
   });
 
   it("a call stamped with a different version is ignored on THIS version (mutation: compare only trade_module, never the version → FAILS)", async () => {
     dbMocks.getCall.mockResolvedValue({ ...CALL, knowledge_version: 9 });
-    const html = await render("3", { call: "call1" });
+    const html = await render("3", { call: CALL_ID });
     expect(html).toContain("The price for Catering is $35 per guest.");
   });
 
@@ -349,12 +355,36 @@ describe("VoiceKnowledgePage — the ?call= parameter (insurance gating, S-47c f
     vi.stubEnv("BIS_I18N_QA", "1");
     vi.stubEnv("VERCEL", "");
     try {
-      const html = await render("3", { call: "call1", locale: "es" });
+      const html = await render("3", { call: CALL_ID, locale: "es" });
       expect(renderedText(html)).toContain(
-        "En esta llamada se aplicaron las reglas de seguros, así que a Sofía solo se le dieron los nombres de los servicios, nunca un precio.",
+        "En esta llamada se aplicaron las reglas de seguros, así que a Sofía solo se le dieron los nombres y las descripciones de los servicios, nunca un precio.",
       );
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  // Design review (point 3): a malformed id, or a repeated ?call= (which Next hands the page as an
+  // array, never a string), must not reach getCall at all — a real UUID the database then errors on
+  // is this page's own ERROR state (below), but a param that could never have named a real call must
+  // be ignored instead, the same as no `call` at all.
+  it.each(["not-a-uuid", "", "11111111111141118111111111111111", "'; drop table calls;--"])(
+    "a malformed ?call= (%j) is ignored: getCall is never read, and the sentences show (mutation: drop the isUuid guard → FAILS)",
+    async (bad) => {
+      const html = await render("3", { call: bad });
+      expect(dbMocks.getCall).not.toHaveBeenCalled();
+      expect(html).toContain("The price for Catering is $35 per guest.");
+    },
+  );
+
+  it("a repeated ?call=a&call=b (an array, never a string) is ignored: getCall is never read (mutation: drop the isUuid guard → FAILS)", async () => {
+    const html = await VoiceKnowledgePage({
+      params: Promise.resolve({ accountId: "acct1", version: "3" }),
+      // Next hands a repeated query param to the page as a string[], never a string — exactly the
+      // shape isUuid (typeof v === "string" first) refuses.
+      searchParams: Promise.resolve({ call: [CALL_ID, OTHER_CALL_ID] as unknown as string }),
+    }).then(renderToStaticMarkup);
+    expect(dbMocks.getCall).not.toHaveBeenCalled();
+    expect(html).toContain("The price for Catering is $35 per guest.");
   });
 });

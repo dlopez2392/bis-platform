@@ -2246,11 +2246,15 @@ export const m = {
   "voice.facts.amountsNotice.es": "{persona} da precios solo de Servicios y precios, así que no dirá estos montos del cuadro de datos o de servicios: {amounts}. Agregue como su propia fila cada monto que {persona} deba decir (también un depósito o una cuota), o quítelo. Los términos de reembolso y cancelación sin monto pueden quedarse.",
   "voice.facts.amountsNoticeInsurance": "{persona} never gives prices on insurance accounts, so these amounts in the Facts or Services box will not be said: {amounts}. You can take them out.",
   "voice.facts.amountsNoticeInsurance.es": "{persona} nunca da precios en cuentas de seguros, así que no dirá estos montos del cuadro de datos o de servicios: {amounts}. Puede quitarlos.",
-  // S-47c follow-up: an amount typed into a row's OWN name or description (not its price fields) is
-  // read to the caller as written, which off insurance contradicts the HARD LIMITS line (any amount
-  // outside the price sentence is forbidden), and on insurance is said at all. Never blocks Save.
-  "voice.services.amountsNotice": "{persona} won't say amounts written in a name or description: {amounts}. Put the price in the price fields instead.",
-  "voice.services.amountsNotice.es": "{persona} no dirá los montos escritos en un nombre o descripción: {amounts}. Ponga el precio en los campos de precio en su lugar.",
+  // S-47c follow-up (design review): an amount typed into a row's OWN name or description (not its
+  // price fields) IS read to the caller, as written — LIST_PRICE_LINE makes her say the rendered price
+  // sentence word for word, and `priceSentence` (price-sentence.ts) builds that sentence from the name
+  // verbatim, so a name's amount travels straight into it; a description's amount is read as its own
+  // "About it" line (prompt-blocks.ts's servicesBlock), which the price rule never touches either. Off
+  // insurance this contradicts the HARD LIMITS line (no amount outside the price sentence); on
+  // insurance (the other key below) no price is ever given at all. Never blocks Save.
+  "voice.services.amountsNotice": "{persona} reads names and descriptions as written, so she would say these amounts: {amounts}. Put the price in the price fields instead.",
+  "voice.services.amountsNotice.es": "{persona} lee los nombres y las descripciones tal como están escritos, así que diría estos montos: {amounts}. Ponga el precio en los campos de precio.",
   "voice.services.amountsNoticeInsurance": "{persona} never gives prices on insurance accounts, so take these amounts out of the names and descriptions: {amounts}.",
   "voice.services.amountsNoticeInsurance.es": "{persona} nunca da precios en cuentas de seguros, así que quite estos montos de los nombres y las descripciones: {amounts}.",
   "calls.detail.knowledge": "Knowledge",
@@ -2291,8 +2295,8 @@ export const m = {
   "voice.knowledge.noPrices.es": "No había servicios en la lista.",
   // S-47c follow-up (spec 5.4, C13): the call this page was reached from ran under the insurance
   // module, which never gave a price sentence, so the sentences below are hidden and this says why.
-  "voice.knowledge.insuranceCallNote": "On this call the insurance rules applied, so {persona} was given the service names only, never a price.",
-  "voice.knowledge.insuranceCallNote.es": "En esta llamada se aplicaron las reglas de seguros, así que a {persona} solo se le dieron los nombres de los servicios, nunca un precio.",
+  "voice.knowledge.insuranceCallNote": "On this call the insurance rules applied, so {persona} was given the service names and descriptions, never a price.",
+  "voice.knowledge.insuranceCallNote.es": "En esta llamada se aplicaron las reglas de seguros, así que a {persona} solo se le dieron los nombres y las descripciones de los servicios, nunca un precio.",
   "voice.knowledge.older": "Older",
   "voice.knowledge.older.es": "Anterior",
   "voice.knowledge.newer": "Newer",

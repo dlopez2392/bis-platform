@@ -412,7 +412,10 @@ describe("serviceAmountMatches — amounts typed into a name or description", ()
     expect(serviceAmountMatches([{ name_en: "Haircut", name_es: "", description_en: "A trim", description_es: "" }])).toEqual([]);
   });
 
-  it("still ignores a phone number, a ZIP and 24/7 — the same guards as factsWarnings", () => {
+  // Design review: none of these three carry a "$", "dollars" or "usd", so AMOUNT (facts-warnings.ts)
+  // never even reaches them — this is not a guard being exercised, only confirming that an ordinary
+  // phone number, ZIP or "24/7" was never going to be mistaken for a price in the first place.
+  it("a phone number, a ZIP and \"24/7\" carry no $, dollars or usd, so none of them ever match", () => {
     const rows = [{
       name_en: "Service", name_es: "",
       description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: "",
@@ -427,7 +430,9 @@ describe("ServicesPricesCard — amounts typed into a name or description (S-47c
     price_kind: "fixed", amount_cents: 2500, amount_max_cents: null, unit_en: null, unit_es: null,
   };
 
-  it("off insurance: names the amount and the row it came from, and never blocks Save (mutation: skip descriptions -> FAILS)", () => {
+  // rowWithAmount's amount is in its NAME only (no description) — the sibling test right below pins
+  // that a description is scanned too; this one pins the wording and that Save is never blocked.
+  it("off insurance: names the amount and the row it came from, and never blocks Save — its row has the amount in the name only", () => {
     const html = render({ services: { ok: true, rows: [rowWithAmount] } });
     const text = renderedText(html);
     expect(text).toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").replace("{amounts}", 'Haircut $40: "$40"'));
@@ -457,7 +462,9 @@ describe("ServicesPricesCard — amounts typed into a name or description (S-47c
     expect(text).not.toContain(m["voice.services.amountsNotice"].replace("{persona}", "Sofía").split(":")[0]);
   });
 
-  it("the phone number, ZIP and 24/7 guards still hold here (mutation: drop a guard -> FAILS)", () => {
+  // Design review: a phone number, a ZIP and "24/7" carry no $, dollars or usd, so AMOUNT never
+  // matches them — this pins the card shows no notice for an ordinary description, not a guard.
+  it("a description with a phone number, a ZIP and \"24/7\" (none of them $/dollars/usd) shows no amounts notice", () => {
     const row: VoiceServiceInput = {
       name_en: "Service", name_es: null,
       description_en: "Call (956) 292-1696, open 24/7, McAllen TX 78501", description_es: null,

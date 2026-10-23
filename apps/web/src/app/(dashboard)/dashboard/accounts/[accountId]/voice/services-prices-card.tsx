@@ -86,10 +86,14 @@ export function postableServices(rows: readonly ServiceRowState[]): ServiceForm[
 export type ServiceAmountMatch = { name: string; text: string };
 
 /**
- * S-47c follow-up: an amount typed into a row's own NAME or DESCRIPTION — not its price fields — is
- * read to the caller as written, which off insurance contradicts the HARD LIMITS line (no amount
- * outside the price sentence) and on insurance is said at all (5.4: names and descriptions go into
- * the prompt as written there). Scans all four fields of every row passed in (the card calls this
+ * S-47c follow-up (design review): an amount typed into a row's own NAME or DESCRIPTION — not its
+ * price fields — IS read to the caller, as written. `LIST_PRICE_LINE` makes her say the rendered
+ * price sentence word for word, and `priceSentence` (price-sentence.ts) builds that sentence from the
+ * name verbatim, so a name's amount travels straight into it ("The price for Haircut $40 is $25.");
+ * a description's amount is read as its own "About it" line (prompt-blocks.ts's servicesBlock), which
+ * the price rule never touches either. Off insurance this contradicts the HARD LIMITS line (no amount
+ * outside the price sentence); on insurance no price is ever given at all (5.4), though the words are
+ * still in the prompt as written. Scans all four fields of every row passed in (the card calls this
  * with `postableServices(rows)`, so a row staged for removal is already excluded), reusing
  * facts-warnings.ts's own amount matcher and its false-positive guards. Each match is tagged with the
  * row's own English name, or its Spanish one when the English name is still blank.
