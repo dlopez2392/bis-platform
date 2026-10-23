@@ -3,6 +3,9 @@ import { createHash } from "node:crypto";
 import { buildSystemPrompt } from "./system-prompt";
 import type { VoicePromptInput } from "./session-config";
 import { TRADE_MODULES } from "./modules";
+import { buildRealtimeSessionConfig } from "./session-config";
+import type { OpenHours } from "../booking/slots";
+import type { RenderedService } from "./knowledge/payload";
 
 const base = {
   personaName: "Sofía", businessName: "Rio Roofing",
@@ -648,5 +651,199 @@ describe("buildSystemPrompt — no hours and no list is byte-identical to before
   });
   it("with neither new key, every combination is byte-identical to 044b1ab2 (mutation: push an unconditional \"\" after the Services line -> FAILS)", () => {
     expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47C_DIGEST);
+  }, 30_000); // 5184 prompts, ~1.2s idle: room so a loaded runner cannot time it out
+});
+
+// now = 2027-06-01T15:00:00Z = Tuesday 10:00 AM in America/Chicago (base.timezone).
+const OPEN_H: OpenHours = { tue: [["08:00", "18:00"]] };
+const CLOSED_H: OpenHours = { tue: [["13:00", "18:00"]], wed: [["08:00", "12:00"]] };
+const HEADING = "BUSINESS HOURS (the regular weekly hours; where hours written above differ, these are right, except a closure written above for a specific date):";
+const DAYS_OPEN = ["Monday: closed", "Tuesday: 8:00 AM to 6:00 PM", "Wednesday: closed", "Thursday: closed", "Friday: closed", "Saturday: closed", "Sunday: closed"];
+const DAYS_CLOSED = ["Monday: closed", "Tuesday: 1:00 PM to 6:00 PM", "Wednesday: 8:00 AM to 12:00 PM", "Thursday: closed", "Friday: closed", "Saturday: closed", "Sunday: closed"];
+const OPEN_BLOCK = `\n\n${[HEADING, ...DAYS_OPEN, "Right now: open until 6:00 PM."].join("\n")}`;
+const CLOSED_BLOCK = `\n\n${[HEADING, ...DAYS_CLOSED, "Right now: closed; opens today at 1:00 PM."].join("\n")}`;
+const LIST: RenderedService[] = [{
+  name_en: "Haircut", name_es: "Corte de cabello", description_en: "Wash and cut.", description_es: "Lavado y corte.",
+  sentence_en: "The price for Haircut is $25.", sentence_es: "El precio de Corte de cabello es $25.",
+}];
+const LIST_BLOCK = `\n\n${[
+  "SERVICES AND PRICES (the only prices you may give; for a price, say that service's sentence exactly as it is written here, in the language you are speaking):",
+  `- Haircut — English: "The price for Haircut is $25." Spanish: "El precio de Corte de cabello es $25."`,
+  "  About it, in English: Wash and cut.",
+  "  About it, in Spanish: Lavado y corte.",
+].join("\n")}`;
+const NAMES_BLOCK = `\n\n${["SERVICES (what the business offers):", "- Haircut (in Spanish: Corte de cabello)",
+  "  About it, in English: Wash and cut.", "  About it, in Spanish: Lavado y corte."].join("\n")}`;
+const TODAY_PRICE = "- Never quote a price, rate, or estimate unless one is stated above. If asked, say the business will confirm pricing and offer to take their details.";
+const LIST_PRICE = "- Give a price only by saying, word for word, that service's sentence from SERVICES AND PRICES above. Any other amount written above, in the facts or the services, is not a price you may give. Never multiply, add up, estimate or round a price, never work out a total, and never quote a service that is not on the list: say the business will confirm pricing and offer to take their details. Wherever a rule below speaks of prices \"in the facts\", it means this list.";
+const CLOSED_PRICE = "- Do not give, confirm or estimate any price, rate or amount right now, not even one written above. If asked, say the business will confirm pricing and offer to take their details. This overrides any rule below that allows a price from the facts.";
+const PUT_THROUGH = "offer to put them through to someone on the team";
+const TOOL_TODAY = "- transfer_to_human() — call this as soon as the caller asks to speak to a person, or accepts when you offer. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
+const TOOL_CLOSED = "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
+const TOOL_CLOSED_URGENT = "- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person, or when they accept the offer on the URGENT path in the trade rules above. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.";
+const lastLine = (p: string) => p.split("\n").at(-1);
+
+describe("buildSystemPrompt — S-47c digests", () => {
+  it("null, empty and false new fields are byte-identical too, across all 5184 (mutations: treat [] as a list -> FAILS; treat {} as hours -> FAILS; close the price line when priceListUnavailable is false -> FAILS)", () => {
+    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: null, priceList: null }, now)))).toBe(PRE_S47C_DIGEST);
+    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, businessHours: {}, priceList: [] }, now)))).toBe(PRE_S47C_DIGEST);
+    // C20's closed line (with its overriding sentence) appears only when priceListUnavailable is true: false and absent stay byte-identical.
+    expect(digestOf(everyS47cBaseInput().map((i) => buildSystemPrompt({ ...i, priceListUnavailable: false }, now)))).toBe(PRE_S47C_DIGEST);
+  }, 30_000); // 3 x 5184 prompts: ~3.3s idle; it timed out at the 5s default once under load (Task 4 mutation run)
+});
+
+describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
+  it("open now: exactly the BUSINESS HOURS block, after the Services line, and nothing else, on every surface (72 combinations; mutation: place it after HARD LIMITS -> FAILS)", () => {
+    let seen = 0;
+    for (const medium of ["phone", "web", "web_voice"] as const)
+      for (const handoffAvailable of [false, true])
+        for (const afterHours of ["hours_then_message", "message_only"] as const)
+          for (const bookingEnabled of [true, false])
+            for (const tradeModule of [null, "insurance_pc", "events"] as const) {
+              const input = baseInput({ medium, handoffAvailable, afterHours, bookingEnabled, tradeModule });
+              const withH = buildSystemPrompt({ ...input, businessHours: OPEN_H }, now);
+              expect(withH.indexOf("Services: ")).toBeLessThan(withH.indexOf(HEADING));
+              expect(withH.indexOf(HEADING)).toBeLessThan(withH.indexOf("HARD LIMITS:"));
+              const stripped = withH.replace(OPEN_BLOCK, "");
+              // message_only on web/demo drops today's conditional line when open (spec 5.2): put it back to compare.
+              const without = buildSystemPrompt(input, now);
+              if (medium !== "phone" && afterHours === "message_only") expect(stripped).toBe(without.split("\n").slice(0, -2).join("\n"));
+              else expect(stripped).toBe(without);
+              seen += 1;
+            }
+    expect(seen).toBe(72);
+  });
+  it("closed now, web chat: the block plus the definite AFTER HOURS line, under both settings (SD6)", () => {
+    for (const afterHours of ["hours_then_message", "message_only"] as const) {
+      const p = buildSystemPrompt(baseInput({ medium: "web", afterHours, businessHours: CLOSED_H }), now);
+      expect(p).toContain(CLOSED_BLOCK);
+      expect(lastLine(p)).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
+      expect(p.split("AFTER HOURS").length - 1).toBe(1);
+    }
+  });
+  it("closed now, voice demo: the definite demo line (SD6)", () => {
+    const p = buildSystemPrompt(baseInput({ medium: "web_voice", afterHours: "hours_then_message", businessHours: CLOSED_H }), now);
+    expect(lastLine(p)).toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
+  });
+  it("closed now, phone, Follow business hours: the closed line, with the booking clause when booking is on and the person clause per SD5 (mutation: drop the hasTradeRules branch -> FAILS)", () => {
+    expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: false, businessHours: CLOSED_H }), now))).toBe(
+      "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens.");
+    expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: false, handoffAvailable: true, businessHours: CLOSED_H }), now))).toBe(
+      "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, you can still put them through.");
+    expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: true, tradeModule: "events", businessHours: CLOSED_H }), now))).toBe(
+      "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, or it is urgent, you can still put them through.");
+  });
+  it("phone, Always take a message: the MESSAGES ONLY line unchanged, open or closed (spec 5.2.1 point 5)", () => {
+    for (const businessHours of [OPEN_H, CLOSED_H]) {
+      const input = baseInput({ afterHours: "message_only", handoffAvailable: true });
+      expect(lastLine(buildSystemPrompt({ ...input, businessHours }, now))).toBe(lastLine(buildSystemPrompt(input, now)));
+    }
+  });
+});
+
+describe("buildSystemPrompt — closed now and the offer of a person (C14, spec 5.2.1)", () => {
+  // callerNumber null and booking on, so all four offer sites are in the prompt.
+  const PHONE = baseInput({ handoffAvailable: true, callerNumber: null, bookingEnabled: true, afterHours: "hours_then_message" });
+  const SITES = [
+    "then offer to take a message if they would rather talk to a person. Never claim to be human.",
+    "if they ask, offer to take a message instead.",
+    "If either refuses, apologize and offer to take a message.",
+    "and offer to take a message, or suggest they call back from that phone.",
+  ];
+  it("all four offer sites read 'offer to take a message' and none offers a transfer (mutation: ignore closedNow in the offer -> FAILS)", () => {
+    for (const disclosed of [false, true]) {
+      const p = buildSystemPrompt({ ...PHONE, disclosed, businessHours: CLOSED_H }, now);
+      for (const s of SITES.slice(disclosed ? 1 : 0)) expect(p, s).toContain(s);
+      if (disclosed) expect(p).toContain("Then offer to take a message if they would rather talk to a person.");
+      expect(p).not.toContain(PUT_THROUGH);
+    }
+  });
+  it("the TOOLS line is the closed one; with a trade module it names the URGENT path; transfer_to_human stays on the session (mutation: drop the tool when closed -> FAILS)", () => {
+    const none = buildSystemPrompt({ ...PHONE, businessHours: CLOSED_H }, now);
+    const evt = buildSystemPrompt({ ...PHONE, tradeModule: "events", businessHours: CLOSED_H }, now);
+    expect(none).toContain(TOOL_CLOSED);
+    expect(none).not.toContain(TOOL_TODAY);
+    expect(evt).toContain(TOOL_CLOSED_URGENT);
+    const tools = buildRealtimeSessionConfig({ ...PHONE, businessHours: CLOSED_H }, now).tools as Array<{ name: string }>;
+    expect(tools.map((t) => t.name)).toContain("transfer_to_human");
+  });
+  it("the trade module block is byte-identical closed and open (C12: the module still gets handoffAvailable; mutation: pass !closedNow -> FAILS)", () => {
+    for (const tradeModule of ["insurance_pc", "events"] as const) {
+      const block = (p: string) => p.slice(p.indexOf("TRADE RULES —"), p.indexOf("\n\nTOOLS"));
+      const closed = buildSystemPrompt({ ...PHONE, tradeModule, businessHours: CLOSED_H }, now);
+      const open = buildSystemPrompt({ ...PHONE, tradeModule, businessHours: OPEN_H }, now);
+      expect(block(closed).length).toBeGreaterThan(100);
+      expect(block(closed)).toBe(block(open));
+    }
+  });
+  it("open now: the no-hours prompt plus the block, nothing else (the offer and TOOLS lines are today's)", () => {
+    expect(buildSystemPrompt({ ...PHONE, businessHours: OPEN_H }, now).replace(OPEN_BLOCK, "")).toBe(buildSystemPrompt(PHONE, now));
+  });
+  it("web chat and voice demo, closed: no C14 line at all, even with handoffAvailable", () => {
+    for (const medium of ["web", "web_voice"] as const) {
+      const p = buildSystemPrompt({ ...PHONE, medium, businessHours: CLOSED_H }, now);
+      expect(p).not.toContain("the business is closed right now, so do not offer this");
+    }
+    const demo = buildSystemPrompt({ ...PHONE, medium: "web_voice", businessHours: CLOSED_H }, now);
+    expect(demo).toContain(PUT_THROUGH); // today's demo wording, untouched
+  });
+  // C19 (owner, 2026-10-23; asked as OQ1 in the first draft): under Always take a message nothing about transfers changes with the hours.
+  it("C19: Always take a message, closed: the offers and the TOOLS line are today's (mutation: drop the afterHours term from closedNow -> FAILS)", () => {
+    const p = buildSystemPrompt({ ...PHONE, afterHours: "message_only", businessHours: CLOSED_H }, now);
+    expect(p).toContain(PUT_THROUGH);
+    expect(p).toContain(TOOL_TODAY);
+  });
+});
+
+describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
+  it("a list alone adds the list after the Services line and swaps exactly the one HARD LIMITS line (mutation: keep today's line too -> FAILS)", () => {
+    for (const medium of ["phone", "web", "web_voice"] as const)
+      for (const tradeModule of [null, "events"] as const) {
+        const input = baseInput({ medium, tradeModule });
+        const withL = buildSystemPrompt({ ...input, priceList: LIST }, now);
+        expect(withL).toContain(LIST_BLOCK);
+        expect(withL.split(LIST_PRICE).length - 1).toBe(1);
+        expect(withL).not.toContain(TODAY_PRICE);
+        expect(withL.replace(LIST_BLOCK, "").replace(LIST_PRICE, TODAY_PRICE)).toBe(buildSystemPrompt(input, now));
+      }
+  });
+  it("hours and a list together: hours first, then the list, both before HARD LIMITS", () => {
+    const p = buildSystemPrompt(baseInput({ businessHours: OPEN_H, priceList: LIST }), now);
+    expect(p).toContain(`${OPEN_BLOCK}${LIST_BLOCK}\n\nHARD LIMITS:`);
+  });
+  it("insurance: names and descriptions only, no sentence, no amount, today's HARD LIMITS line (C13; mutation: print the sentences on insurance -> FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc", priceList: LIST }), now);
+    expect(p).toContain(NAMES_BLOCK);
+    expect(p).toContain(TODAY_PRICE);
+    for (const s of ["The price for Haircut", "El precio de", "$25", "SERVICES AND PRICES", LIST_PRICE]) expect(p).not.toContain(s);
+  });
+  it("events: the module's own words are untouched and the list sits above them (C12)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "events", priceList: LIST }), now);
+    expect(p.indexOf("SERVICES AND PRICES")).toBeLessThan(p.indexOf("TRADE RULES — EVENTS AND VENUES:"));
+    expect(p).toContain("- You may give prices, packages, deposits, payment plans and refund or cancellation terms only by repeating what the facts above say, word for word, with every number exactly as it is written there. For these, and only these, this overrides the TONE line about not reading the facts verbatim.");
+  });
+  it("C20: a FAILED list read closes the price line, on every surface, and changes nothing else (mutation: ignore priceListUnavailable -> FAILS)", () => {
+    for (const medium of ["phone", "web", "web_voice"] as const) {
+      const input = baseInput({ medium });
+      const closed = buildSystemPrompt({ ...input, priceList: null, priceListUnavailable: true }, now);
+      expect(closed).toContain(CLOSED_PRICE);
+      expect(closed).not.toContain(TODAY_PRICE);
+      expect(closed.replace(CLOSED_PRICE, TODAY_PRICE)).toBe(buildSystemPrompt(input, now));
+    }
+  });
+  it("C20: an EMPTY list is not a failure: today's line, byte for byte (mutation: treat [] as unavailable -> FAILS)", () => {
+    expect(buildSystemPrompt(baseInput({ priceList: [], priceListUnavailable: false }), now)).toBe(buildSystemPrompt(baseInput(), now));
+  });
+  it("C20: an events account gets the closed line WITH its overriding sentence, and the module's own words are untouched (C12; mutation: drop the last sentence -> FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "events", priceListUnavailable: true }), now);
+    expect(p).toContain(CLOSED_PRICE);
+    expect(p.split("\n")).toContain(CLOSED_PRICE);
+    expect(p).not.toContain(TODAY_PRICE);
+    expect(p).toContain("- You may give prices, packages, deposits, payment plans and refund or cancellation terms only by repeating what the facts above say, word for word, with every number exactly as it is written there. For these, and only these, this overrides the TONE line about not reading the facts verbatim.");
+  });
+  it("C20: insurance keeps today's line on a failed read (the module already forbids every quote; mutation: close it on insurance -> FAILS)", () => {
+    const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc", priceListUnavailable: true }), now);
+    expect(p).toContain(TODAY_PRICE);
+    expect(p).not.toContain(CLOSED_PRICE);
   });
 });
