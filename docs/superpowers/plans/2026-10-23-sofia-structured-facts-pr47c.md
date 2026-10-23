@@ -1612,6 +1612,11 @@ describe("0095: knowledge writes serialise on the account row", () => {
   19. Drop `for no key update` from `save_voice_knowledge` → the lock test's "save_voice_knowledge waits on the account row" FAILS (it answers stale instead of timing out).
   20. In `ensure_knowledge_snapshot`, move the account-row lock above the first read (no unlocked fast path) → the lock test's "an equal payload answers without the lock" FAILS.
   21. Drop `set lock_timeout = '2s'` from `ensure_knowledge_snapshot`'s header → the lock test's "a held row fails open" FAILS (the statement_timeout fires instead: 57014, not 55P03).
+  Added after the Task 1 review (2026-10-23); each left the first committed test file green (123/123), and each is red on the fixed one:
+  - o08. In `save_voice_knowledge`, read the latest snapshot `order by s.version asc` → "latest means the HIGHEST version: after saves 1 and 2, base 1 is stale …" FAILS (base 1 answers `ok, 1` instead of `stale`).
+  - o09. In `save_voice_knowledge`, compare `v_latest <> p_base_version` (no `coalesce`) → "stale with no snapshot at all" FAILS (base 5 with no snapshot answers `ok, 1`).
+  - o10. Move `delete from public.voice_services …` out of the rollback block, guarded by `if p_parts ? 'services'` → the four row-level "invalid: …, the stored list included" cases (per_unit without `unit_es`, 51 services, `"12.5"`, no English name) and the A4 case FAIL (a refused save leaves 0 rows of the seeded list).
+  - o13. In `ensure_knowledge_snapshot`, read both latest snapshots `order by s.version asc` → its "latest means the HIGHEST version: 1, 2, 3, again 3, then … 4" FAILS (23505 on the third payload).
 
 - [ ] **Step 8: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the ROLLBACK lines in order; then `select count(*) from pg_constraint where conname like '%knowledge_version%' or conname like 'voice_services%' or conname like 'voice_knowledge%'` → `0`, `select to_regproc('public.save_voice_knowledge')` → NULL. Drop `rb`.
@@ -1632,7 +1637,7 @@ git commit -m "db: business hours on the voice profile, a price list with six pr
 Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- packages/db/supabase/migrations/0095_structured_facts.sql packages/db/src/test/structured-facts-schema.test.ts packages/db/src/test/structured-facts-lock.test.ts
 ```
 
-**Acceptance:** every case green on `post` and red on `pre` (except the three noted). Every mutation fails by name. The digest is unchanged, the rollback leaves nothing, the bytes pass, and the md5 is in the report.
+**Acceptance:** every case green on `post` and red on `pre` (except the three noted). Every mutation fails by name. The digest is unchanged, the rollback leaves nothing, the bytes pass, and the md5 is in the report. `voice-schema.test.ts:37` (the PROFILE_COLS pin) stays red on verify until Task 5 adds `business_hours` to PROFILE_COLS.
 
 **Review (HIGH):** opus bis-reviewer in its own detached worktree, with its own kit on 55434.
 - Applies 0095 to a fresh `pre` copy through `psql -1` only; reads every def itself.
@@ -3237,6 +3242,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
   - Post: the same reads as step 1, and `select md5(array_to_string(statements, '')) from supabase_migrations.schema_migrations where name = 'structured_facts'` equals the file's md5 (the file has no backslash, so memory "MCP SQL escapes" does not bite).
   - Ledger: `0095 APPLIED to production … NEVER RE-APPLY`.
 - [ ] **5. Parity.** Runbook §5 (`docs/runbooks/ci-supabase-project.md:184-207`): `-f step=fingerprint` on bis-ci and `packages/db/supabase/parity/fingerprint.sql` on production; equal on every 0095 object (columns, constraints, policies, the trigger, the four functions, grants).
+  - Also read, read-only, on both projects (Task 1 review, 2026-10-23): `select p.oid::regprocedure, pg_get_userbyid(p.proowner), p.proconfig from pg_proc p where p.oid in ('public.save_voice_knowledge(uuid, text, jsonb, jsonb, integer)'::regprocedure, 'public.ensure_knowledge_snapshot(uuid, jsonb)'::regprocedure, 'app.voice_business_hours_valid(jsonb)'::regprocedure) order by 1::text;` and `select c.oid::regclass, pg_get_userbyid(c.relowner) from pg_class c where c.oid in ('public.voice_services'::regclass, 'public.voice_knowledge_snapshots'::regclass) order by 1::text;`. Expect owner `postgres` for all five (the definer functions write tables no role is granted, so their owner is what writes them), and `proconfig` `{"search_path=\"\""}` for the validator and `save_voice_knowledge` and `{"search_path=\"\"",lock_timeout=2s}` for `ensure_knowledge_snapshot` (as read off the Task 1 PG18 replica).
 - [ ] **6. PR and merge.**
   - `gh pr create`. The body names: C1–C20 (owner-approved) and SD1–SD23 with their resolutions; both apply lines; the tiers; "LOAD-BEARING: PROFILE_COLS (every profile read: calls, chat turns, the chat page, the Voice page, every profile save), CALL_DETAIL_COLS, CONVO_COLS (chat turns, the web chat sync), the startCallRow and createConciergeConversation stamps, listVoiceServices, getKnowledgeSnapshot, and the two RPCs (call and chat start; every Voice page knowledge save, the profile card's Facts and Services included)"; "No env var changes; nothing added to Preview"; "Merging changes no prompt by itself: an account's prompt changes only once the agency saves hours or a list for it. From the first call after deploy every call carries a knowledge version (spec 5.6, C15)".
   - Only after step 4: `gh pr merge <n> --auto --squash --match-head-commit <sha>`, with the head SHA's `verify` and `e2e` green.

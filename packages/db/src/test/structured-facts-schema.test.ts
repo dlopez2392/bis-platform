@@ -321,13 +321,14 @@ describe("0095 every new constraint, as defined", () => {
 });
 
 describe("0095 grants: the client role reads, nobody writes but the two functions", () => {
-  it("table privileges on both new tables (mutations: grant insert to service_role -> FAILS; grant update to authenticated -> FAILS)", () =>
+  it("table privileges on both new tables (mutations: grant insert to service_role -> FAILS; grant update to authenticated -> FAILS; grant maintain to service_role -> FAILS)", () =>
     withRollback(async (c) => {
+      // MAINTAIN exists from PostgreSQL 17 (CI's stack and the PG18 replica both have it; review 2026-10-23).
       const { rows } = await c.query<{ k: string }>(
         `select r || ' ' || t || ' ' || p as k
            from (values ('public.voice_services'), ('public.voice_knowledge_snapshots')) tt(t)
           cross join (values ('anon'), ('authenticated'), ('service_role')) rr(r)
-          cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER')) pp(p)
+          cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE'), ('TRUNCATE'), ('REFERENCES'), ('TRIGGER'), ('MAINTAIN')) pp(p)
           where has_table_privilege(r, t, p) order by 1`);
       expect(rows.map((r) => r.k)).toEqual([
         "authenticated public.voice_knowledge_snapshots SELECT", "authenticated public.voice_services SELECT",
@@ -508,6 +509,19 @@ describe("0095 save_voice_knowledge (spec 4.1)", () => {
             (select count(*)::int from public.events e where e.account_id = vp.account_id and e.type = 'voice_profile.updated') as events,
             (select coalesce(json_agg(v.name_en order by v.position), '[]'::json) from public.voice_services v where v.account_id = vp.account_id) as names
        from public.voice_profiles vp where vp.account_id = $1`, [accountId])).rows[0];
+  const svc = (name_en: string) => ({ name_en, name_es: null, description_en: null, description_es: null, ...VALID.free! });
+  /**
+   * The state every "nothing is written" case starts from: facts, hours AND a one-row list, saved through the RPC
+   * as snapshot 1 (review 2026-10-23: with no list seeded, a refused save that deleted the whole list outside the
+   * rollback block left every such case green).
+   */
+  const seedKnowledge = async (c: Client, accountId: string) => {
+    expect(await call(c, accountId, { facts: "Old", business_hours: H, services: [svc("Keep")] }, { v: 1 }, 0))
+      .toEqual({ status: "ok", version: 1 });
+    const s = await state(c, accountId);
+    expect(s).toMatchObject({ facts: "Old", business_hours: H, names: ["Keep"], snaps: 1, events: 1 });
+    return s;
+  };
 
   it("ok: writes the named parts, one event naming them, and snapshot 1 with the payload as sent, by the actor", () =>
     withRollback(async (c) => {
@@ -548,6 +562,24 @@ describe("0095 save_voice_knowledge (spec 4.1)", () => {
       expect(await call(c, accountId, { facts: "B" }, { v: 2 }, 0)).toEqual({ status: "stale" });
       expect(await state(c, accountId)).toEqual(before);
     }));
+  it("latest means the HIGHEST version: after saves 1 and 2, base 1 is stale, and base 2 appends 3 even for a payload equal to an older one (review mutation o08: read the latest ascending -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { accountId } = await seed(c, "save_latest");
+      expect(await call(c, accountId, { facts: "A" }, { v: "A" }, 0)).toEqual({ status: "ok", version: 1 });
+      expect(await call(c, accountId, { facts: "B" }, { v: "B" }, 1)).toEqual({ status: "ok", version: 2 });
+      expect(await call(c, accountId, { facts: "A" }, { v: "A" }, 1)).toEqual({ status: "stale" });
+      expect(await call(c, accountId, { facts: "A" }, { v: "A" }, 2)).toEqual({ status: "ok", version: 3 });
+      const { rows } = await c.query("select version, payload from public.voice_knowledge_snapshots where account_id = $1 order by version", [accountId]);
+      expect(rows).toEqual([{ version: 1, payload: { v: "A" } }, { version: 2, payload: { v: "B" } }, { version: 3, payload: { v: "A" } }]);
+    }));
+  it("stale with no snapshot at all: a base other than 0 writes nothing (review mutation o09: compare without coalesce -> FAILS)", () =>
+    withRollback(async (c) => {
+      const { accountId } = await seed(c, "save_stale_none");
+      const before = await state(c, accountId);
+      expect(before).toMatchObject({ snaps: 0, events: 0 });
+      expect(await call(c, accountId, { facts: "B" }, { v: 2 }, 5)).toEqual({ status: "stale" });
+      expect(await state(c, accountId)).toEqual(before);
+    }));
   it("no_profile: an account with no voice profile, and an account that does not exist", () =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "save_noprof", { profile: false });
@@ -557,7 +589,6 @@ describe("0095 save_voice_knowledge (spec 4.1)", () => {
   it("the services are replaced in order, positions 1..n (mutation: insert without the delete -> FAILS on the unique key)", () =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "save_svc");
-      const svc = (name_en: string) => ({ name_en, name_es: null, description_en: null, description_es: null, ...VALID.free! });
       await call(c, accountId, { services: [svc("A"), svc("B")] }, { v: 1 }, 0);
       await call(c, accountId, { services: [svc("C"), svc("A"), svc("D")] }, { v: 2 }, 1);
       expect((await state(c, accountId))!.names).toEqual(["C", "A", "D"]);
@@ -575,20 +606,20 @@ describe("0095 save_voice_knowledge (spec 4.1)", () => {
     ["services as an object", { services: {} }],
     ["an unknown part", { facts: "A", notes: "x" }],
     ["no part at all", {}],
-  ] as const)("invalid: %s, and nothing is written (mutations: drop the exception block -> the four row cases FAIL, the RPC raises; drop the earlier check that refuses one of the other six -> that case FAILS)", (_n, parts) =>
+  ] as const)("invalid: %s, and nothing is written, the stored list included (mutations: drop the exception block -> the four row cases FAIL, the RPC raises; delete the list outside the block (review o10) -> the four row cases FAIL; drop the earlier check that refuses one of the other six -> that case FAILS)", (_n, parts) =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "save_inv");
-      const before = await state(c, accountId);
-      expect(await call(c, accountId, parts, { v: 9 }, 0)).toEqual({ status: "invalid" });
+      const before = await seedKnowledge(c, accountId);
+      expect(await call(c, accountId, parts, { v: 9 }, 1)).toEqual({ status: "invalid" });
       expect(await state(c, accountId)).toEqual(before);
     }));
-  it("a bad list sent WITH a facts change leaves the facts unchanged (A4: the block rolls back the update it already made; mutation: run the profile update before the block -> FAILS)", () =>
+  it("a bad list sent WITH a facts change leaves the facts, the hours and the stored list unchanged (A4: the block rolls back what it already wrote; mutations: run the profile update before the block -> FAILS; delete the list outside the block (review o10) -> FAILS)", () =>
     withRollback(async (c) => {
       const { accountId } = await seed(c, "save_atomic");
-      await call(c, accountId, { facts: "Old" }, { v: 1 }, 0);
+      await seedKnowledge(c, accountId);
       expect(await call(c, accountId, { facts: "New", services: [{ name_en: "X", ...VALID.per_unit!, unit_es: null }] }, { v: 2 }, 1))
         .toEqual({ status: "invalid" });
-      expect(await state(c, accountId)).toMatchObject({ facts: "Old", snaps: 1, events: 1 });
+      expect(await state(c, accountId)).toMatchObject({ facts: "Old", business_hours: H, names: ["Keep"], snaps: 1, events: 1 });
     }));
   it("clears the hours with JSON null", () =>
     withRollback(async (c) => {
@@ -625,6 +656,15 @@ describe("0095 ensure_knowledge_snapshot (spec 4.1, 5.6)", () => {
       expect(await ensure(c, accountId, { a: 2 })).toBe(2);
       const { rows } = await c.query("select version, created_by from public.voice_knowledge_snapshots where account_id = $1 order by version", [accountId]);
       expect(rows).toEqual([{ version: 1, created_by: "system" }, { version: 2, created_by: "system" }]);
+    }));
+  it("latest means the HIGHEST version: 1, 2, 3, again 3, then a payload equal to version 1 appends 4 (review mutation o13: read the latest ascending -> FAILS, 23505 on the third)", () =>
+    withRollback(async (c) => {
+      const { accountId } = await seed(c, "ens_latest");
+      const got: number[] = [];
+      for (const p of [{ a: 1 }, { a: 2 }, { a: 3 }, { a: 3 }, { a: 1 }]) got.push(await ensure(c, accountId, p));
+      expect(got).toEqual([1, 2, 3, 3, 4]);
+      const { rows } = await c.query("select version, payload from public.voice_knowledge_snapshots where account_id = $1 order by version", [accountId]);
+      expect(rows).toEqual([{ version: 1, payload: { a: 1 } }, { version: 2, payload: { a: 2 } }, { version: 3, payload: { a: 3 } }, { version: 4, payload: { a: 1 } }]);
     }));
   it("an account that does not exist raises P0002", () =>
     withRollback(async (c) => {
