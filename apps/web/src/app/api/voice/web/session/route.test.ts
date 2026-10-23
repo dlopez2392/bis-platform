@@ -80,6 +80,7 @@ const PROFILE_ROW = {
   after_hours: "hours_then_message" as const, enabled: true,
   textback_enabled: false, textback_body: null,
   trade_module: null,
+  business_hours: null,
 };
 const CALENDAR_ROW = {
   id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,

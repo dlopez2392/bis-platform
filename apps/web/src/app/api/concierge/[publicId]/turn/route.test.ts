@@ -142,6 +142,7 @@ const PROFILE = {
   // every assertion below blind to which one the route actually read.
   public_id: PUBLIC_ID, concierge_enabled: true, concierge_form_id: "form-now",
   trade_module: null,
+  business_hours: null,
 };
 
 const CONVERSATION = {
@@ -149,6 +150,7 @@ const CONVERSATION = {
   turn_count: 1, transcript: [], submission_id: null, locale: "en",
   attribution: {}, origin: null,
   trade_module: null, trade_module_version: null,
+  knowledge_version: null,
 };
 
 /** One exchange already on file: the conversation's first turn was answered. */

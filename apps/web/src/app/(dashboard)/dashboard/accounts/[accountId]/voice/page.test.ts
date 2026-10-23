@@ -110,6 +110,7 @@ const PROFILE: VoiceProfileRow = {
   textback_body_es: null, textback_body_es_basis: null,
   public_id: null, concierge_enabled: false, concierge_form_id: null, forward_calls: false, disclosure: "off",
   trade_module: null,
+  business_hours: null,
 };
 
 async function render(searchParams: { from?: string; locale?: string } = {}) {

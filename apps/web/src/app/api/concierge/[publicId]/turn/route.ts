@@ -396,6 +396,7 @@ export async function POST(
         turn_count: 0, transcript: [], submission_id: null,
         locale, attribution, origin,
         trade_module: tradeStamp?.module ?? null, trade_module_version: tradeStamp?.version ?? null,
+        knowledge_version: null,
       };
     } else {
       // ── TURN 2+ ─────────────────────────────────────────────────────────

@@ -154,6 +154,7 @@ const CALL: CallDetailRow = {
   booking_id: "bk1",
   trade_module: null,
   trade_module_version: null,
+  knowledge_version: null,
 };
 
 const FAILED_TEXTBACK = {

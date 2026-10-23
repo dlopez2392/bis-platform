@@ -12,6 +12,7 @@ import {
   countConciergeConversationsByIp, countConciergeConversationsForAccount,
   hasConciergeSiteConversation,
 } from "../concierge";
+import { ensureKnowledgeSnapshot } from "../voice-knowledge";
 
 // Per-process suffix, same hazard and same fix as concierge-grants.test.ts:12-13:
 // this suite runs against the ONE Supabase project shared with production, and
@@ -394,6 +395,19 @@ describe("concierge accessors", () => {
       const b = await getConciergeConversation(db, plain.id);
       expect([a?.trade_module, a?.trade_module_version]).toEqual(["events", 4]);
       expect([b?.trade_module, b?.trade_module_version]).toEqual([null, null]);
+    }));
+
+  it("createConciergeConversation stamps knowledge_version when given and getConciergeConversation reads it; omitted leaves it null; a version the account does not hold is refused by the key (S-47c; mutations: drop knowledge_version from CONVO_COLS -> FAILS; write it regardless -> the plain read FAILS)", () =>
+    withTestAccount(async (db, accountId) => {
+      const form = await createForm(db, accountId, { name: "Leads" }, accountId);
+      const v = await ensureKnowledgeSnapshot(db, accountId, { facts: "x" });
+      const base = { accountId, formId: form.id, locale: "en", attribution: {}, origin: null };
+      const stamped = await createConciergeConversation(db, { ...base, ipHash: `kv1-${RUN}`, knowledgeVersion: v });
+      const plain = await createConciergeConversation(db, { ...base, ipHash: `kv2-${RUN}` });
+      expect((await getConciergeConversation(db, stamped.id))?.knowledge_version).toBe(v);
+      expect((await getConciergeConversation(db, plain.id))?.knowledge_version).toBeNull();
+      await expect(createConciergeConversation(db, { ...base, ipHash: `kv3-${RUN}`, knowledgeVersion: v + 1 }))
+        .rejects.toThrow(/createConciergeConversation failed/);
     }));
 
   it("two concurrent claims at the boundary yield exactly one success", () =>

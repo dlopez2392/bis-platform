@@ -21,6 +21,7 @@ import {
   setCallCard, getCallCard, listCallReasons, ensureCallbackTask,
   type CallOutcome,
 } from "../voice";
+import { ensureKnowledgeSnapshot } from "../voice-knowledge";
 
 /**
  * Every `e164` in this file comes from `testPhoneNumber()`, never from a
@@ -718,6 +719,20 @@ describe("call handoff accessors", () => {
       expect(await read(ins.id)).toEqual(["insurance_pc", 1]);
       expect(await read(ev.id)).toEqual(["events", 3]);
       expect(await read(none.id)).toEqual([null, null]);
+    });
+  });
+
+  it("startCallRow stamps knowledge_version when given and getCall reads it; omitted leaves it null; a version the account does not hold is refused by the key (S-47c; mutations: drop knowledge_version from CALL_DETAIL_COLS -> FAILS; name it as null always -> the omitted insert still works but the stamped read FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await upsertVoiceProfile(db, accountId, {}, "user_test");
+      const v = await ensureKnowledgeSnapshot(db, accountId, { facts: "x" });
+      const num = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+      const stamped = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, knowledgeVersion: v });
+      const plain = await startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null });
+      expect((await getCall(db, accountId, stamped.id))?.knowledge_version).toBe(v);
+      expect((await getCall(db, accountId, plain.id))?.knowledge_version).toBeNull();
+      await expect(startCallRow(db, accountId, { phoneNumberId: num.id, callerE164: null, knowledgeVersion: v + 1 }))
+        .rejects.toThrow(/startCallRow failed/);
     });
   });
 

@@ -3,9 +3,10 @@
 // changing one means bumping KNOWLEDGE_RENDERER_VERSION in ./payload.ts (spec 4.2), and price-sentence.test.ts
 // pins every one as a literal. Pure; relative imports only (the corpus runner loads this under tsx).
 
-/** The twin of voice_services_price_kind_check (0095). Task 5 re-points this to a type-only import of the db
- *  package's PriceKind. */
-export type PriceKind = "fixed" | "from" | "range" | "per_unit" | "free" | "after_visit";
+/** The twin of voice_services_price_kind_check (0095), owned by the db package. A TYPE-only import: erased at
+ *  run time, so the corpus runner's tsx graph never loads @bis/db. */
+import type { PriceKind } from "@bis/db";
+export type { PriceKind };
 /** In the order the Voice page's Select lists them. */
 export const PRICE_KINDS = ["fixed", "from", "range", "per_unit", "free", "after_visit"] as const satisfies readonly PriceKind[];
 

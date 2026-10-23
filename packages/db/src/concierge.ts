@@ -213,23 +213,29 @@ export type ConciergeConversationRow = {
   turn_count: number; transcript: ConciergeTurn[]; submission_id: string | null;
   locale: string; attribution: Record<string, string>; origin: string | null;
   trade_module: TradeModuleSetting | null; trade_module_version: number | null;
+  /** 0095. The knowledge snapshot this chat runs under (every later turn reads it); null before 0095 or unstamped. */
+  knowledge_version: number | null;
 };
 
 // trade_module, trade_module_version (0094): LOAD-BEARING. Read on every later chat turn, so a project without 0094 fails every chat past its first message.
+// knowledge_version (0095): LOAD-BEARING the same way, and webchat.ts's sync reads this list too (SD3).
 const CONVO_COLS =
   "id, account_id, form_id, ip_hash, turn_count, transcript, submission_id, " +
-  "locale, attribution, origin, trade_module, trade_module_version";
+  "locale, attribution, origin, trade_module, trade_module_version, knowledge_version";
 
 export async function createConciergeConversation(
   db: SupabaseClient,
   input: { accountId: string; formId: string; ipHash: string; locale: string;
            attribution: Record<string, string>; origin: string | null;
-           tradeModule?: { module: TradeModuleSetting; version: number } },
+           tradeModule?: { module: TradeModuleSetting; version: number };
+           knowledgeVersion?: number },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("concierge_conversations").insert({
     account_id: input.accountId, form_id: input.formId, ip_hash: input.ipHash,
     locale: input.locale, attribution: input.attribution, origin: input.origin,
     ...(input.tradeModule === undefined ? {} : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
+    // 0095: named only when given, the deployment-ordering reason startCallRow's doc comment gives.
+    ...(input.knowledgeVersion === undefined ? {} : { knowledge_version: input.knowledgeVersion }),
   }).select("id").single();
   // The fallback covers `!data && !error` -- an insert that reports success
   // with no row and no error would otherwise render as "failed: undefined".
