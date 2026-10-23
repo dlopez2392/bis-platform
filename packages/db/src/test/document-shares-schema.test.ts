@@ -171,7 +171,7 @@ describe("0085: who reads a share (spec 4.4, 6: exactly who reads its document)"
 });
 
 describe("0085: the client role writes nothing (spec 4.4)", () => {
-  it("no INSERT, UPDATE or DELETE on either table for anon or authenticated, no SELECT on downloads, no EXECUTE on the claim; service_role holds them; the claim is SECURITY DEFINER with an empty search_path (mutations: grant insert on document_shares to authenticated; grant execute to authenticated; grant execute to anon; security invoker; drop the set search_path -> FAILS)", () =>
+  it("no INSERT, UPDATE or DELETE on either table for anon or authenticated, no SELECT on downloads, no EXECUTE on the claim; service_role holds them; the claim is SECURITY DEFINER with search_path pg_catalog, pg_temp (0096) (mutations: grant insert on document_shares to authenticated; grant execute to authenticated; grant execute to anon; security invoker; drop the set search_path -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ x: string }>(`
         select r || ' ' || t || ' ' || p || ' ' || has_table_privilege(r, 'public.' || t, p)::text as x
@@ -186,11 +186,11 @@ describe("0085: the client role writes nothing (spec 4.4)", () => {
         `select r, has_function_privilege(r, '${CLAIM}', 'execute') as ok
            from (values ('anon'), ('authenticated'), ('service_role')) v(r) order by 1`);
       expect(fx).toEqual([{ r: "anon", ok: false }, { r: "authenticated", ok: false }, { r: "service_role", ok: true }]);
-      // Definer (it reads and writes past the caller's RLS for the service role) with search_path pinned empty,
-      // as document-space-used.test.ts pins 0078's function.
+      // Definer (it reads and writes past the caller's RLS for the service role) with search_path pinned to
+      // pg_catalog, pg_temp (0085 set '', 0096 put pg_temp last), as document-space-used.test.ts pins 0078's function.
       const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] | null }>(
         `select prosecdef, proconfig from pg_proc where oid = '${CLAIM}'::regprocedure`);
-      expect(f).toEqual({ prosecdef: true, proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: true, proconfig: ['search_path=pg_catalog, pg_temp'] });
     }));
 
   // Two layers deep: no INSERT grant AND no insert policy, both answering 42501. A grant alone leaves RLS

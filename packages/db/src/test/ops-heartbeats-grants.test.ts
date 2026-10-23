@@ -63,11 +63,11 @@ describe("0057 ops_heartbeats: grants", () => {
       ]);
     }));
 
-  it("record_heartbeat runs as its CALLER with an empty search_path (0055's shape; mutation: security definer → prosecdef true, FAILS)", () =>
+  it("record_heartbeat runs as its CALLER with search_path pg_catalog, pg_temp (0055's shape, 0096's path; mutation: security definer → prosecdef true, FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] | null }>(
         `select prosecdef, proconfig from pg_proc where oid = '${FN}'::regprocedure`);
-      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'] });
     }));
 });
 

@@ -136,7 +136,8 @@ describe("0087: who reads (spec 4.5, 8.3; G10)", () => {
       const ex = async (r: string) => (await c.query<{ h: boolean }>("select has_function_privilege($1, $2, 'execute') as h", [r, CLAIM])).rows[0]!.h;
       expect([await ex("anon"), await ex("authenticated"), await ex("service_role")]).toEqual([false, false, true]);
       const { rows: [f] } = await c.query<{ d: boolean; cfg: string[] }>("select prosecdef as d, proconfig as cfg from pg_proc where proname = 'claim_record_summary'");
-      expect(f).toEqual({ d: true, cfg: ['search_path=""'] });
+      // A definer with search_path pg_catalog, pg_temp: 0087 set '', 0096 put pg_temp last.
+      expect(f).toEqual({ d: true, cfg: ['search_path=pg_catalog, pg_temp'] });
     }));
 });
 

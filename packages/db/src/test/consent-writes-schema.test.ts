@@ -74,11 +74,11 @@ describe("0055 append_consent_event: who may call it", () => {
       expect(rows).toEqual([{ r: "anon", x: false }, { r: "authenticated", x: false }, { r: "service_role", x: true }]);
     }));
 
-  it("runs as its CALLER (security invoker) with an empty search_path, so it writes with service_role's own grants (mutation: security definer → prosecdef true, FAILS)", () =>
+  it("runs as its CALLER (security invoker) with search_path pg_catalog, pg_temp (0096), so it writes with service_role's own grants (mutation: security definer → prosecdef true, FAILS)", () =>
     withRollback(async (c) => {
       const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] | null }>(
         "select prosecdef, proconfig from pg_proc where oid = 'public.append_consent_event'::regproc");
-      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'] });
     }));
 });
 

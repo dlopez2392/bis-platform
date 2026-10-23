@@ -14,6 +14,11 @@ import { withRollback, actAsOwner } from "./db";
  * below is that path (save_voice_knowledge -> app.voice_business_hours_valid), and it stays red if 0096 hardens the
  * definers alone.
  *
+ * RULE FOR EVERY LATER MIGRATION (also in 0096's header): a new function in public or app that sets a search_path
+ * writes `set search_path = pg_catalog, pg_temp`, never `set search_path = ''`. A create or replace replaces the
+ * whole SET clause, so copying an old definition with '' undoes 0096 for that function, and the cases below fail.
+ * A new SECURITY DEFINER function is also added by name to EXPECTED_DEFINERS.
+ *
  * RED BEFORE APPLY: every case except the armed controls inside the probes. GREEN AFTER APPLY: all of them.
  */
 

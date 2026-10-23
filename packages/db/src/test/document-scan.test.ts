@@ -187,7 +187,7 @@ describe("record_document_scan: a compare-and-set from pending (spec 3.2 bullet 
       expect((await state(c, v)).scan_attempts).toBe(0);
     }));
 
-  it("executable by service_role only, SECURITY INVOKER, search_path empty (mutation: grant execute to authenticated -> FAILS)", () =>
+  it("executable by service_role only, SECURITY INVOKER, search_path pg_catalog, pg_temp (0096) (mutation: grant execute to authenticated -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{ r: string; ok: boolean }>(
         `select r, has_function_privilege(r, '${FN}', 'EXECUTE') as ok
@@ -195,7 +195,7 @@ describe("record_document_scan: a compare-and-set from pending (spec 3.2 bullet 
       expect(rows).toEqual([{ r: "anon", ok: false }, { r: "authenticated", ok: false }, { r: "service_role", ok: true }]);
       const { rows: [f] } = await c.query<{ prosecdef: boolean; proconfig: string[] }>(
         `select prosecdef, proconfig from pg_proc where oid = '${FN}'::regprocedure`);
-      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=""'] });
+      expect(f).toEqual({ prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'] });
     }));
 });
 

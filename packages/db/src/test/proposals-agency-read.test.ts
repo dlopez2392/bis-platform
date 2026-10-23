@@ -178,7 +178,7 @@ describe("0089: list_pending_proposals_for_agency (spec 5.2)", () => {
       expect(await refused(c, `select * from ${FN}(50)`)).toEqual(FN_REFUSED);
     }));
 
-  it("it is security invoker with an empty search_path, stable plpgsql, returning setof proposals (mutation: security definer FAILS)", () =>
+  it("it is security invoker with search_path pg_catalog, pg_temp (0096), stable plpgsql, returning setof proposals (mutation: security definer FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query<{
         prosecdef: boolean; proconfig: string[] | null; provolatile: string; lang: string; proretset: boolean; ret: string;
@@ -187,7 +187,7 @@ describe("0089: list_pending_proposals_for_agency (spec 5.2)", () => {
            from pg_proc p join pg_language l on l.oid = p.prolang
           where p.oid = '${FN}(integer)'::regprocedure`);
       expect(rows).toEqual([
-        { prosecdef: false, proconfig: ['search_path=""'], provolatile: "s", lang: "plpgsql", proretset: true, ret: "proposals" },
+        { prosecdef: false, proconfig: ['search_path=pg_catalog, pg_temp'], provolatile: "s", lang: "plpgsql", proretset: true, ret: "proposals" },
       ]);
     }));
 });

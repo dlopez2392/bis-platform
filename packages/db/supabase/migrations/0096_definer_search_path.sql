@@ -32,9 +32,15 @@
 -- it as postgres, inside app.voice_business_hours_valid (an invoker, 0095) during its variable
 -- initialisation. Functions with no search_path setting (app.jwt, app.is_agency, the concierge and unread
 -- helpers, the btree_gist functions) inherit the caller's path, which inside a definer is now safe, so
--- they need nothing. FROM THIS FILE ON the house shape for a new function is set search_path = pg_catalog,
--- pg_temp; a create or replace that brings back search_path = '' undoes this for that function, and
--- definer-search-path.test.ts fails on it.
+-- they need nothing.
+--
+-- RULE FOR EVERY LATER MIGRATION. A new function in public or app that sets a search_path writes
+--   set search_path = pg_catalog, pg_temp
+-- and never set search_path = '' (which searches pg_temp FIRST). The same holds for a create or replace
+-- of an existing function: its SET clause replaces the whole setting, so copying an old definition with
+-- search_path = '' quietly undoes this file for that function. A new SECURITY DEFINER function must also
+-- be added by name to EXPECTED_DEFINERS in packages/db/src/test/definer-search-path.test.ts. That test
+-- fails CI on any function in public or app whose search_path does not end with pg_temp.
 --
 -- SAFE UNDER THE RUNNING BUILD: yes. Every body names its tables and functions schema-qualified, and every
 -- name a body resolves is found in pg_catalog (or public, for current_account_id) exactly as before: the

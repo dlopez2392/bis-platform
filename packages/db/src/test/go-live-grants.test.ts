@@ -103,7 +103,7 @@ describe("0063 go_live: the shape and the grants", () => {
       ]);
     }));
 
-  it("takes (uuid, uuid, text), returns void, plpgsql, runs as its CALLER with an empty search_path (mutation: security definer -> FAILS)", () =>
+  it("takes (uuid, uuid, text), returns void, plpgsql, runs as its CALLER with search_path pg_catalog, pg_temp (0096) (mutation: security definer -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
         `select pg_get_function_identity_arguments(p.oid) as args, pg_get_function_result(p.oid) as result,
@@ -114,7 +114,7 @@ describe("0063 go_live: the shape and the grants", () => {
       // is no definer-side guard standing in for RLS that a NULL could open.
       expect(rows).toEqual([{
         args: "p_account_id uuid, p_phone_number_id uuid, p_actor_id text",
-        result: "void", lang: "plpgsql", secdef: false, cfg: ['search_path=""'],
+        result: "void", lang: "plpgsql", secdef: false, cfg: ['search_path=pg_catalog, pg_temp'],
       }]);
     }));
 

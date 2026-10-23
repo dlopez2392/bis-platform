@@ -186,7 +186,7 @@ describe("0086: who reads, who writes (spec 3.3, G6)", () => {
         .rejects.toMatchObject({ code: "42501", message: "permission denied for table ai_ledger" });
     }));
 
-  it("both functions are service_role only, security definer, with an empty search path (plan deviation 1; mutations: grant execute to authenticated; set search_path = public -> FAILS)", () =>
+  it("both functions are service_role only, security definer, with search_path pg_catalog, pg_temp (0096; plan deviation 1; mutations: grant execute to authenticated; set search_path = public -> FAILS)", () =>
     withRollback(async (c) => {
       const sigs = ["public.ai_gate_check(uuid, text, text)", "public.ai_ledger_record(uuid, text, text, integer, integer, bigint, text, integer, text, text)"];
       for (const s of sigs) {
@@ -196,10 +196,10 @@ describe("0086: who reads, who writes (spec 3.3, G6)", () => {
       }
       const { rows } = await c.query<{ proname: string; prosecdef: boolean; proconfig: string[] | null }>(
         "select proname, prosecdef, proconfig from pg_proc where proname in ('ai_gate_check', 'ai_ledger_record') order by proname");
-      // Assumption A2: PG renders `set search_path = ''` as search_path="". If it differs, paste the real value.
+      // 0086 set search_path = ''; 0096 moved it to pg_catalog, pg_temp (pg_temp last), stored exactly as below.
       expect(rows).toEqual([
-        { proname: "ai_gate_check", prosecdef: true, proconfig: ['search_path=""'] },
-        { proname: "ai_ledger_record", prosecdef: true, proconfig: ['search_path=""'] },
+        { proname: "ai_gate_check", prosecdef: true, proconfig: ['search_path=pg_catalog, pg_temp'] },
+        { proname: "ai_ledger_record", prosecdef: true, proconfig: ['search_path=pg_catalog, pg_temp'] },
       ]);
     }));
 });
