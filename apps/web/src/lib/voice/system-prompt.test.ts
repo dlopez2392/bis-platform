@@ -730,8 +730,14 @@ describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
       "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens.");
     expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: false, handoffAvailable: true, businessHours: CLOSED_H }), now))).toBe(
       "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, you can still put them through.");
-    expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: true, tradeModule: "events", businessHours: CLOSED_H }), now))).toBe(
-      "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, or it is urgent, you can still put them through.");
+    // Both modules, not only events (Task 4 review: `hasTradeRules: input.tradeModule === "events"` survived).
+    let seen = 0;
+    for (const tradeModule of ["insurance_pc", "events"] as const) {
+      expect(lastLine(buildSystemPrompt(baseInput({ bookingEnabled: true, handoffAvailable: true, tradeModule, businessHours: CLOSED_H }), now)), tradeModule).toBe(
+        "AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, or it is urgent, you can still put them through.");
+      seen += 1;
+    }
+    expect(seen).toBe(2);
   });
   it("phone, Always take a message: the MESSAGES ONLY line unchanged, open or closed (spec 5.2.1 point 5)", () => {
     for (const businessHours of [OPEN_H, CLOSED_H]) {
@@ -760,12 +766,26 @@ describe("buildSystemPrompt — closed now and the offer of a person (C14, spec 
   });
   it("the TOOLS line is the closed one; with a trade module it names the URGENT path; transfer_to_human stays on the session (mutation: drop the tool when closed -> FAILS)", () => {
     const none = buildSystemPrompt({ ...PHONE, businessHours: CLOSED_H }, now);
-    const evt = buildSystemPrompt({ ...PHONE, tradeModule: "events", businessHours: CLOSED_H }, now);
     expect(none).toContain(TOOL_CLOSED);
     expect(none).not.toContain(TOOL_TODAY);
-    expect(evt).toContain(TOOL_CLOSED_URGENT);
+    // Both modules, not only events (Task 4 review: `hasTradeRules: input.tradeModule === "events"` survived).
+    let seen = 0;
+    for (const tradeModule of ["insurance_pc", "events"] as const) {
+      const withModule = buildSystemPrompt({ ...PHONE, tradeModule, businessHours: CLOSED_H }, now);
+      expect(withModule, tradeModule).toContain(TOOL_CLOSED_URGENT);
+      expect(withModule, tradeModule).not.toContain(TOOL_TODAY);
+      seen += 1;
+    }
+    expect(seen).toBe(2);
     const tools = buildRealtimeSessionConfig({ ...PHONE, businessHours: CLOSED_H }, now).tools as Array<{ name: string }>;
     expect(tools.map((t) => t.name)).toContain("transfer_to_human");
+  });
+  it("an explicit medium: \"phone\" is the phone too: closed, it offers a message and the TOOLS line is the closed one (Task 4 review; mutation: closedNow keyed on !input.medium -> FAILS)", () => {
+    const p = buildSystemPrompt({ ...PHONE, medium: "phone", businessHours: CLOSED_H }, now);
+    expect(p).toContain(TOOL_CLOSED);
+    expect(p).not.toContain(TOOL_TODAY);
+    expect(p).not.toContain(PUT_THROUGH);
+    expect(p).toContain("If either refuses, apologize and offer to take a message.");
   });
   it("the trade module block is byte-identical closed and open (C12: the module still gets handoffAvailable; mutation: pass !closedNow -> FAILS)", () => {
     for (const tradeModule of ["insurance_pc", "events"] as const) {
