@@ -27,6 +27,11 @@ import { withOptOut } from "@/lib/sms/opt-out";
 import { defaultTextbackBody } from "@/lib/voice/textback-body";
 import { NUMBER_STATUS_LABEL } from "@/lib/voice/number-status";
 import type { ActionResult, EnableConciergeResult } from "./actions";
+import { BusinessHoursCard } from "./business-hours-card";
+import { ServicesPricesCard } from "./services-prices-card";
+import { FactsFlags } from "./facts-flags";
+import type { VoiceServiceInput } from "@bis/db";
+import type { OpenHours } from "@/lib/booking/slots";
 
 // The DB-side defaults (0019_voice_core.sql) — used whenever no row exists
 // yet, which is the common case for an account that has never been touched:
@@ -77,12 +82,27 @@ export type TradeRulesCopy = {
 // just to reach this card's own preview state.
 export function VoiceProfileForm({
   profile, brandName, action, disclosureCopy, tradeRulesCopy,
+  // S-47c (Task 8): additive and optional, so every pre-existing call site in
+  // this file's own test suite (built before the Facts flags existed) keeps
+  // compiling unchanged. Defaults match what an untouched profile card showed
+  // before this task: English, no persona override, nothing stored yet —
+  // `FactsFlags` renders nothing for any of those fixtures' plain Facts text.
+  persona = "Sofía", locale = "en", pseudo = false, hasHours = false, hasPriceList = false,
 }: {
   profile: VoiceProfileRow | null;
   brandName: string;
   action: (formData: FormData) => Promise<ActionResult>;
   disclosureCopy: DisclosureCopy;
   tradeRulesCopy: TradeRulesCopy;
+  /** The Facts flags' own locale/pseudo/persona (spec 5.3) — this card's OWN copy stays English
+   *  (page.tsx's long-standing decision 2); only the flags under the Facts box read these. */
+  persona?: string;
+  locale?: "en" | "es";
+  pseudo?: boolean;
+  /** STORED state (page.tsx): whether the account already has structured Business hours / a
+   *  Services & prices list — the two things `FactsFlags` warns about duplicating in free text. */
+  hasHours?: boolean;
+  hasPriceList?: boolean;
 }) {
   const p = profile ?? DEFAULT_PROFILE;
   // Controlled, not the uncontrolled `defaultValue` every other field in this
@@ -97,6 +117,11 @@ export function VoiceProfileForm({
   // the live default as its `placeholder` instead: greyed, not a real value,
   // so typing replaces it rather than appending to it.
   const [textbackBody, setTextbackBody] = useState(p.textback_body);
+  // S-47c (Task 8, spec 5.3): controlled so `FactsFlags` below can recompute live, on every
+  // keystroke, from `factsWarnings` — the form still posts `name="facts"`/`name="services"`
+  // unchanged, so this touches nothing about what Save writes.
+  const [factsText, setFactsText] = useState(p.facts);
+  const [servicesText, setServicesText] = useState(p.services);
   // Which language the default previews in. `detectSpokenLanguage` decides
   // this per call at send time, and for a Spanish-only line it can only ever
   // answer "es" — so previewing English there would show the operator a
@@ -211,16 +236,24 @@ export function VoiceProfileForm({
           <div className="space-y-1.5">
             <Label htmlFor="facts">{m["voice.profile.facts"]}</Label>
             <textarea
-              id="facts" name="facts" rows={5} defaultValue={p.facts}
+              id="facts" name="facts" rows={5} value={factsText}
+              onChange={(e) => setFactsText(e.target.value)}
               className={nativeFieldClass}
             />
             <p className="text-xs text-muted-foreground">{m["voice.profile.factsHint"]}</p>
+            {/* S-47c (Task 8, spec 5.3): recomputed live from both textareas' own values; never
+                blocks Save — this reads nothing the form's onSubmit above reads. */}
+            <FactsFlags
+              facts={factsText} servicesText={servicesText} hasHours={hasHours} hasPriceList={hasPriceList}
+              locale={locale} pseudo={pseudo} persona={persona}
+            />
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="services">{m["voice.profile.services"]}</Label>
             <textarea
-              id="services" name="services" rows={3} defaultValue={p.services}
+              id="services" name="services" rows={3} value={servicesText}
+              onChange={(e) => setServicesText(e.target.value)}
               className={nativeFieldClass}
             />
           </div>
@@ -1080,6 +1113,8 @@ export function VoiceSettings({
   saveProfileAction, assignNumberAction, setStatusAction, setTransferPhoneAction,
   enableConciergeAction, disableConciergeAction, setForwardCallsAction,
   disclosureCopy, disclosureResults, tradeRulesCopy,
+  persona, locale, pseudo, timezone, storedHours, calendarHours, insurance, services,
+  hasHours, hasPriceList, saveBusinessHoursAction, saveServicesAction,
 }: {
   accountId: string;
   profile: VoiceProfileRow | null;
@@ -1114,12 +1149,41 @@ export function VoiceSettings({
   disclosureResults: ReactNode;
   /** S-47b section 5.6: the Trade rules group's copy, built server-side (page.tsx). */
   tradeRulesCopy: TradeRulesCopy;
+  /** S-47c (Task 8): the two new cards' shared copy inputs (page.tsx; spec 5.7) — the SAME
+   *  `persona`/`locale`/`pseudo` the Facts flags above read, so the whole page agrees on one voice. */
+  persona: string;
+  locale: "en" | "es";
+  pseudo: boolean;
+  /** `readAccountTimezone`'s own return — null only for an account whose zone was never set. */
+  timezone: string | null;
+  storedHours: OpenHours | null;
+  /** The calendar's raw `open_hours`, or null when its read failed or the account has none. */
+  calendarHours: unknown;
+  insurance: boolean;
+  /** `listVoiceServices`'s result, wrapped by page.tsx so a failed read is the Services card's own
+   *  ERROR state (spec 5.7), never the whole page's. */
+  services: { ok: true; rows: VoiceServiceInput[] } | { ok: false };
+  /** STORED state (page.tsx, `hasOpenDay`/the services read) — what `FactsFlags` warns about
+   *  duplicating in free text. */
+  hasHours: boolean;
+  hasPriceList: boolean;
+  saveBusinessHoursAction: (formData: FormData) => Promise<ActionResult>;
+  saveServicesAction: (formData: FormData) => Promise<ActionResult>;
 }) {
   return (
     <div className="space-y-6">
       <VoiceProfileForm
         profile={profile} brandName={brandName} action={saveProfileAction} disclosureCopy={disclosureCopy}
-        tradeRulesCopy={tradeRulesCopy}
+        tradeRulesCopy={tradeRulesCopy} persona={persona} locale={locale} pseudo={pseudo}
+        hasHours={hasHours} hasPriceList={hasPriceList}
+      />
+      <BusinessHoursCard
+        locale={locale} pseudo={pseudo} persona={persona} timezone={timezone}
+        storedHours={storedHours} calendarHours={calendarHours} action={saveBusinessHoursAction}
+      />
+      <ServicesPricesCard
+        locale={locale} pseudo={pseudo} persona={persona} insurance={insurance} services={services}
+        action={saveServicesAction}
       />
       {disclosureResults}
       <ConciergeCard
