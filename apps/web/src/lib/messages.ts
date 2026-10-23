@@ -2253,7 +2253,7 @@ export const m = {
   // "About it" line (prompt-blocks.ts's servicesBlock), which the price rule never touches either. Off
   // insurance this contradicts the HARD LIMITS line (no amount outside the price sentence); on
   // insurance (the other key below) no price is ever given at all. Never blocks Save.
-  "voice.services.amountsNotice": "{persona} reads names and descriptions as written, so she would say these amounts: {amounts}. Put the price in the price fields instead.",
+  "voice.services.amountsNotice": "{persona} reads names and descriptions as written, so these amounts would be said aloud: {amounts}. Put the price in the price fields instead.",
   "voice.services.amountsNotice.es": "{persona} lee los nombres y las descripciones tal como están escritos, así que diría estos montos: {amounts}. Ponga el precio en los campos de precio.",
   "voice.services.amountsNoticeInsurance": "{persona} never gives prices on insurance accounts, so take these amounts out of the names and descriptions: {amounts}.",
   "voice.services.amountsNoticeInsurance.es": "{persona} nunca da precios en cuentas de seguros, así que quite estos montos de los nombres y las descripciones: {amounts}.",
