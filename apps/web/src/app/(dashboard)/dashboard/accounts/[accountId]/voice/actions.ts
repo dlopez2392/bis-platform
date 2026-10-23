@@ -29,7 +29,7 @@ import {
   serviceDb, upsertVoiceProfile, assignPhoneNumber, setPhoneNumberStatus, getVoiceProfile,
   reassignPhoneNumber, listPhoneNumbersForAccount, setTransferPhone, getTransferPhone,
   enableConcierge, disableConcierge, setForwardCalls, getBranding, nextSpanishBox,
-  type PhoneNumberStatus, type VoiceProfilePatch,
+  type PhoneNumberStatus, type VoiceProfilePatch, type VoiceProfileRow, type WeeklyHours,
 } from "@bis/db";
 import { requireAccountAccess } from "@/lib/auth";
 import { e164Of } from "@/lib/voice/phone-number";
@@ -39,7 +39,12 @@ import { DISCLOSURE_VALUES } from "@/lib/voice/disclosure";
 import { TRADE_MODULE_IDS, type TradeModuleId } from "@/lib/voice/modules";
 import { brandDisplayName } from "@/lib/email/templates/shell";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
-import { m } from "@/lib/messages";
+import { m, type MessageKey } from "@/lib/messages";
+import { makeTr } from "@/lib/record/copy";
+import { saveKnowledgeParts, type SaveOutcome } from "@/lib/voice/knowledge/save";
+import {
+  hoursFromForm, hoursErrorKey, parseHoursFormJson, servicesFromForm, serviceErrorKey, parseServicesFormJson,
+} from "@/lib/voice/knowledge/validate";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -115,7 +120,7 @@ export async function saveVoiceProfileAction(
   // fails the save outright, as every other read-before-write in this file
   // does — this is a save, and the operator can press it again.
   let brandName: string;
-  let current: { textback_body_es: string | null; textback_body_es_basis: string | null } | null;
+  let current: Pick<VoiceProfileRow, "facts" | "services" | "textback_body_es" | "textback_body_es_basis"> | null;
   try {
     const db = serviceDb();
     const [branding, profile] = await Promise.all([getBranding(db, accountId), getVoiceProfile(db, accountId)]);
@@ -135,12 +140,15 @@ export async function saveVoiceProfileAction(
     stored: { bodyEs: current?.textback_body_es ?? null, basis: current?.textback_body_es_basis ?? null },
   });
 
+  // S-47c (spec 5.7, C9, SD14): Facts and the Services text are Sofía's knowledge, so they are written only
+  // through the snapshot RPC, never in the profile patch below.
+  const facts = String(formData.get("facts") ?? "");
+  const servicesText = String(formData.get("services") ?? "");
+
   const patch: VoiceProfilePatch = {
     persona_name: personaName || "Sofía",
     greeting_en: String(formData.get("greeting_en") ?? ""),
     greeting_es: String(formData.get("greeting_es") ?? ""),
-    facts: String(formData.get("facts") ?? ""),
-    services: String(formData.get("services") ?? ""),
     languages,
     booking_enabled: formData.get("booking_enabled") === "on",
     after_hours: afterHours,
@@ -153,6 +161,15 @@ export async function saveVoiceProfileAction(
     ...(tradeModule === undefined ? {} : { trade_module: tradeModule }),
   };
 
+  // An existing profile: the knowledge part FIRST, and only when it changed (SD14), so a refused snapshot saves
+  // nothing at all. No profile yet: the profile is created first (the RPC needs one), then its knowledge part
+  // records version 1; a failure there leaves a profile, and pressing Save again takes the first path.
+  const knowledge = { facts, services_text: servicesText };
+  if (current && (facts !== current.facts || servicesText !== current.services)) {
+    const saved = await saveKnowledgeParts(serviceDb(), accountId, userId, knowledge);
+    if (!saved.ok) return { ok: false, error: profileKnowledgeError(saved) };
+  }
+
   try {
     await upsertVoiceProfile(serviceDb(), accountId, patch, userId);
   } catch (e) {
@@ -160,6 +177,92 @@ export async function saveVoiceProfileAction(
     return { ok: false, error: m["voice.profile.saveFailed"] };
   }
 
+  if (!current) {
+    const saved = await saveKnowledgeParts(serviceDb(), accountId, userId, knowledge);
+    if (!saved.ok) return { ok: false, error: m["voice.profile.saveFailed"] };
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+
+/** The profile card is English (page.tsx); its stale and invalid refusals read the knowledge sentences. */
+function profileKnowledgeError(r: Extract<SaveOutcome, { ok: false }>): string {
+  if (r.reason === "stale") return m["voice.knowledge.stale"];
+  if (r.reason === "invalid") return m["voice.knowledge.invalid"];
+  return m["voice.profile.saveFailed"];
+}
+
+/** The posting page's language: `es`, or English for anything else. */
+function formLocale(formData: FormData): "en" | "es" {
+  return formData.get("locale") === "es" ? "es" : "en";
+}
+
+/** A refused knowledge save, in the card's words (spec 5.7). */
+function knowledgeErrorKey(r: Extract<SaveOutcome, { ok: false }>, saveFailed: MessageKey): MessageKey {
+  switch (r.reason) {
+    case "stale": return "voice.knowledge.stale";
+    case "no_profile": return "voice.knowledge.noProfile";
+    case "invalid": return "voice.knowledge.invalid";
+    case "failed": return saveFailed;
+  }
+}
+
+/**
+ * The Business hours card (S-47c, spec 5.7). Writes ONLY `business_hours`, through the snapshot RPC, so the
+ * hours and the record of what Sofía knows change in one transaction. `intent=clear` saves NULL (back to no
+ * structured hours); the card's Undo re-saves the week it held (SD15).
+ */
+export async function saveBusinessHoursAction(accountId: string, formData: FormData): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+  const tr = makeTr(formLocale(formData));
+
+  let hours: WeeklyHours | null = null;
+  if (formData.get("intent") !== "clear") {
+    const days = parseHoursFormJson(formData.get("days"));
+    if (!days) return { ok: false, error: tr.text("voice.hours.saveFailed") };
+    const r = hoursFromForm(days);
+    if (!r.ok) {
+      const e = r.error;
+      return { ok: false, error: tr.text(hoursErrorKey(e), e.code === "noDay" ? {} : { day: tr.text(`voice.hours.day.${e.day}` as const) }) };
+    }
+    hours = r.hours;
+  }
+
+  const saved = await saveKnowledgeParts(serviceDb(), accountId, userId, { business_hours: hours });
+  if (!saved.ok) return { ok: false, error: tr.text(knowledgeErrorKey(saved, "voice.hours.saveFailed")) };
+  revalidatePath(`/dashboard/accounts/${accountId}/voice`);
+  return { ok: true };
+}
+
+/**
+ * The Services & prices card (S-47c, spec 5.7). Writes ONLY the list, through the snapshot RPC. On an
+ * `insurance_pc` account (C13) a row added there has no kind and is saved as `after_visit`; whether the account
+ * is insurance is read from the stored profile, never taken from the form.
+ */
+export async function saveServicesAction(accountId: string, formData: FormData): Promise<ActionResult> {
+  const { userId, isAgency } = await requireAccountAccess(accountId);
+  if (!isAgency) return { ok: false, error: m["voice.agencyOnly"] };
+  const tr = makeTr(formLocale(formData));
+
+  const rows = parseServicesFormJson(formData.get("services"));
+  if (!rows) return { ok: false, error: tr.text("voice.services.saveFailed") };
+
+  let insurance: boolean;
+  try {
+    const profile = await getVoiceProfile(serviceDb(), accountId);
+    insurance = profile?.trade_module === "insurance_pc";
+  } catch (e) {
+    console.error(`saveServicesAction: profile read failed for account ${accountId}: ${e instanceof Error ? e.message.split(":")[0]!.slice(0, 60) : "unknown"}`);
+    return { ok: false, error: tr.text("voice.services.saveFailed") };
+  }
+
+  const r = servicesFromForm(rows, { insurance });
+  if (!r.ok) return { ok: false, error: tr.text(serviceErrorKey(r.error), { name: r.error.name }) };
+
+  const saved = await saveKnowledgeParts(serviceDb(), accountId, userId, { services: r.services });
+  if (!saved.ok) return { ok: false, error: tr.text(knowledgeErrorKey(saved, "voice.services.saveFailed")) };
   revalidatePath(`/dashboard/accounts/${accountId}/voice`);
   return { ok: true };
 }
