@@ -4,36 +4,14 @@
 //
 // Time, weekday and month words are fixed tables (never Intl), the same reason `range-format.ts` (Task 12)
 // and `hours.ts` (S-47c) give for their own: the card and topbar's words must never depend on the server's
-// locale data. The two tables below are this surface's OWN words, not a reuse of `range-format.ts`'s
-// (that file's English months carry no period and its Spanish "sep" has none either; the topbar forms spec
-// pins periods throughout, including "sept." for September) — two surfaces, two specs, deliberately not
-// shared.
+// locale data. Fix round D1: the tables are `date-words.ts`'s, the ONE set the Closed days card's ranges
+// use too, so a Spanish month reads "dic." on every S-47d surface.
 import { partsInZone } from "../booking/slots";
 import { dayKey, type EffectiveStatus } from "./status";
+import { MONTH_LONG, WEEKDAY_LONG, WEEKDAY_SHORT as WEEKDAY, shortDate } from "./date-words";
 import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
-
-const WEEKDAY: Record<Locale, readonly string[]> = {
-  en: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
-  es: ["dom.", "lun.", "mar.", "mié.", "jue.", "vie.", "sáb."],
-};
-const MONTH: Record<Locale, readonly string[]> = {
-  en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
-  es: ["ene.", "feb.", "mar.", "abr.", "may.", "jun.", "jul.", "ago.", "sept.", "oct.", "nov.", "dic."],
-};
-// The dashboard card's own long form (spec §5.6.2: "Next closed day: Thursday, December 24
-// (holiday)") — full names, never the topbar's abbreviated tables above. A separate table, not a
-// second source for the same fact: `range-format.ts` (Task 12, the Closed days card) carries its OWN
-// identical-looking pair for a different surface, deliberately not shared (two specs, two owners).
-const WEEKDAY_LONG: Record<Locale, readonly string[]> = {
-  en: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"],
-  es: ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"],
-};
-const MONTH_LONG: Record<Locale, readonly string[]> = {
-  en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
-  es: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"],
-};
 // partsInZone's own weekday field (slots.ts) is 3-letter lowercase English, Sunday-first — the same
 // order this file's own WEEKDAY tables use, so no second day-of-week calculation is needed.
 const WD_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
@@ -50,8 +28,20 @@ function formatTime(at: Date, timezone: string): string {
 /** English "{Mon} {d}", Spanish "{d} de {mes}" (plan "The topbar forms"). */
 function formatDate(at: Date, timezone: string, locale: Locale): string {
   const p = partsInZone(at, timezone);
-  const mon = MONTH[locale][p.m - 1]!;
-  return locale === "es" ? `${p.d} de ${mon}` : `${mon} ${p.d}`;
+  return shortDate(p.m - 1, p.d, locale);
+}
+
+/**
+ * An affected appointment's date and time, "Jun 8, 2:14 PM" / "8 de jun., 2:14 PM" (fix round C4): in
+ * the ACCOUNT's zone, from the shared word tables, never Intl with the runtime's zone or locale — the
+ * Closed days card renders it on the server and again in the browser, and the two must agree. Two-digit
+ * minutes always, the Calendar page's own bookings-list time form, since the row sits beside that list.
+ */
+export function appointmentWhen(startsAt: string, timezone: string, locale: Locale): string {
+  const p = partsInZone(new Date(startsAt), timezone);
+  const period = p.hh < 12 ? "AM" : "PM";
+  const h12 = p.hh % 12 === 0 ? 12 : p.hh % 12;
+  return `${shortDate(p.m - 1, p.d, locale)}, ${h12}:${String(p.mi).padStart(2, "0")} ${period}`;
 }
 
 function weekdayLabel(at: Date, timezone: string, locale: Locale): string {

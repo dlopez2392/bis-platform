@@ -291,6 +291,35 @@ test("an Owner closes for the day from the topbar, and Undo reopens it", async (
   await expect.poll(readEffectiveState, { timeout: 10_000 }).toBe("open");
 });
 
+// Fix round D4: "Back on a date…" lets the menu close and opens the dialog after it, so the two modal
+// layers never stack. Esc must hand focus back to the topbar trigger and must not leave `pointer-events:
+// none` on <body> (the stacked-modal failure: every click on the page then silently does nothing). Writes
+// nothing: the dialog is dismissed before its one primary button is pressed.
+test("the storm date dialog opens after the menu closes, and Esc returns focus to the trigger with the page still clickable", async ({ page }) => {
+  test.skip(skipReason !== null, skipReason ?? "");
+
+  await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
+  const trigger = page.locator("header").getByRole("button", { name: m["business.menu.trigger"] });
+  await trigger.click();
+  await page.getByRole("menuitem", { name: m["business.menu.storm"] }).click();
+  await page.getByRole("menuitemradio", { name: m["business.menu.stormBackOn"] }).click();
+
+  const dialog = page.getByRole("dialog", { name: m["business.storm.title"] });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(m["business.storm.description"]);
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).pointerEvents)).not.toBe("none");
+  // The page is really clickable again: the same trigger opens its menu on a plain click.
+  await trigger.click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect.poll(readEffectiveState, { timeout: 5_000 }).toBe("open");
+});
+
 test("a closed day planned on the Calendar page closes the public booking page for that one date", async ({ page }) => {
   test.skip(skipReason !== null, skipReason ?? "");
 

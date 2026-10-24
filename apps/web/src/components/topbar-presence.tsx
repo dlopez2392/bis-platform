@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactElement } from "react";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { useLocale } from "@/components/locale-provider";
@@ -39,14 +40,13 @@ export function onCallText(personaName: string | null | undefined, locale: Local
   return t(m, "shell.presence.onCall", locale).replace("{name}", () => personaName?.trim() || "Sofía");
 }
 
-/** A static dot in `color` — rule 3's dot+word, decorative only (the word beside it already carries
- *  the meaning), so every call site shares one element shape. */
-function StatusDot({ color, pulse = false }: { color: string; pulse?: boolean }) {
+/** The on-call pulse — rule 3's dot+word, decorative only (the word beside it already carries the
+ *  meaning). The idle and not-open shapes draw their own static dot. */
+function PulseDot() {
   return (
     <span
       aria-hidden
-      className={pulse ? "size-2 shrink-0 rounded-full bg-primary animate-pulse shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]" : "size-2 shrink-0 rounded-full"}
-      style={pulse ? undefined : { backgroundColor: color }}
+      className="size-2 shrink-0 rounded-full bg-primary animate-pulse shadow-[0_0_0_4px_color-mix(in_srgb,var(--good)_22%,transparent)]"
     />
   );
 }
@@ -82,15 +82,17 @@ function idleWords(presence: ShellPresence & { showCount: true }, locale: Locale
 }
 
 /** The "not open" / "● Open" shape (spec §5.6.1) — a real dot at BOTH widths (rule 3), unlike idle's
- *  own shape above. */
-function closedWords(dotClass: string, short: string, full: string) {
+ *  own shape above. Fix round C1 (design review I1): the full form runs to 325px in Spanish (a dated
+ *  storm) and 402px in the pseudo-locale, and fits beside the 300px search, the theme toggle, the
+ *  agency's org switcher and the user button only from `xl`, so the short form holds until then. */
+export function closedWords(dotClass: string, short: string, full: string) {
   return (
     <>
-      <span className="flex items-center gap-1.5 text-sm text-foreground sm:hidden">
+      <span className="flex items-center gap-1.5 text-sm text-foreground xl:hidden">
         <span aria-hidden className={`size-2 shrink-0 rounded-full ${dotClass}`} />
         {short}
       </span>
-      <span className="hidden items-center gap-1.5 text-sm text-foreground sm:flex">
+      <span className="hidden items-center gap-1.5 text-sm text-foreground xl:flex">
         <span aria-hidden className={`size-2 shrink-0 rounded-full ${dotClass}`} />
         {full}
       </span>
@@ -108,10 +110,13 @@ function closedWords(dotClass: string, short: string, full: string) {
  * S-47d Task 11 (spec §5.6.1, S15): not open, the switch's own words
  * replace the idle count FOR EVERYONE (Technicians included — spec: "the
  * same words, no button"), because the business being closed is a fact
- * about the business, not about who is asking. Open with no enabled voice
- * profile shows nothing UNLESS the viewer has `canChange`, in which case
- * "● Open" becomes the menu's own trigger — the one case `presence` being
- * null does NOT mean "render nothing" any more.
+ * about the business, not about who is asking. For whoever has
+ * `canChange`, the indicator is the switch's own menu trigger WHATEVER it
+ * shows, Open included — the on-call pulse, the week's count or the status
+ * (fix round B1, spec S15/D7). With no count to show (no enabled voice
+ * profile, or a profile whose count this viewer may not see) it shows
+ * "● Open" as that trigger to those people only, and nothing to anyone
+ * else.
  */
 export function TopbarPresence() {
   const shell = useShellData();
@@ -123,6 +128,11 @@ export function TopbarPresence() {
   // null for Open (topbarLabels' own contract) or when the leg itself could not be read.
   const labels = effective ? topbarLabels(effective, businessStatus!.timezone, new Date(businessStatus!.now), locale) : null;
 
+  /** The indicator as the switch's own menu button, for whoever may change it (fix round B1). */
+  const asSwitch = (indicator: ReactElement) => (businessStatus?.canChange
+    ? <BusinessStatusMenu accountId={shell!.accountId} status={businessStatus} locale={locale} trigger={indicator} />
+    : indicator);
+
   // F-107 r4 review (item 1): below `sm` the full phrase does not fit next
   // to the icon-only search trigger, ThemeToggle, OrganizationSwitcher and
   // UserButton — two renders per state (one `sm:hidden`, one `hidden
@@ -130,8 +140,7 @@ export function TopbarPresence() {
   // pattern this rider uses throughout, rather than a JS viewport check
   // that would risk a hydration flash.
   if (presence?.onCall) {
-    const dot = <StatusDot color="var(--good)" pulse />;
-    return (
+    return asSwitch(
       // `data-testid` on the OUTER wrapper, not the Fragment it replaces
       // (F-107 r4 review, item 2 follow-on): the e2e sweep's own wait
       // needs ONE unambiguous target — `getByText(/this week/)` matched
@@ -143,27 +152,34 @@ export function TopbarPresence() {
       // rendered, regardless of which that is.
       <span data-testid="topbar-presence" lang={locale}>
         <span className="flex items-center gap-1.5 text-sm text-foreground sm:hidden">
-          {dot}
+          <PulseDot />
           {t(m, "shell.presence.onCallShort", locale)}
         </span>
         <span className="hidden items-center gap-1.5 text-sm text-foreground sm:flex">
-          {dot}
+          <PulseDot />
           {onCallText(presence.personaName, locale)}
-          {/* Spec §5.6.1: "the on-call pulse stays and the status follows it at sm and up" —
-              never below sm, where there is no room for a second phrase. */}
-          {labels ? ` · ${labels.full}` : null}
+          {/* Spec §5.6.1: "the on-call pulse stays and the status follows it at sm and up" — never
+              below sm, where there is no room for a second phrase. The short status until xl and the
+              full one from there (fix round C1: the same measured widths as `closedWords`). */}
+          {labels ? (
+            <>
+              <span className="xl:hidden">{` · ${labels.short}`}</span>
+              <span className="hidden xl:inline">{` · ${labels.full}`}</span>
+            </>
+          ) : null}
         </span>
-      </span>
+      </span>,
     );
   }
 
   // The shell's SECOND slot, when not on a call — "not open" words for everyone (spec §5.6.1,
-  // Technicians included: "the same words, no button"), "● Open" for whoever may change the switch
-  // with no enabled profile, the idle count (F-085 part 1, spec §7.2; unchanged markup), or nothing.
-  // Exactly one of the three ever applies, and this file's own test pins exactly two data-testid
+  // Technicians included: "the same words, no button"), the idle count (F-085 part 1, spec §7.2;
+  // unchanged markup), "● Open" for whoever may change the switch when there is no count to show, or
+  // nothing. Exactly one of the three ever applies, and this file's own test pins exactly two data-testid
   // attributes total (the string, not spelled out here on purpose) across the whole component — one
   // above, for on-a-call, one below — so the three share that ONE wrapper (`idleWords`/`closedWords`)
   // rather than each returning its own.
+  const isIdle = !labels && !!presence && presence.showCount;
   let closedDotClass: string | null = null;
   let closedShort: string | null = null;
   let closedFull: string | null = null;
@@ -171,23 +187,18 @@ export function TopbarPresence() {
     closedDotClass = effective!.state === "running_late" ? "bg-[var(--warn)]" : "bg-[var(--crit)]";
     closedShort = labels.short;
     closedFull = labels.full;
-  } else if (!presence && businessStatus?.canChange) {
+  } else if (!isIdle && businessStatus?.canChange) {
     const openText = t(m, "business.topbar.open", locale);
     closedDotClass = "bg-[var(--good)]";
     closedShort = openText;
     closedFull = openText;
   }
-  const isIdle = closedDotClass === null && !!presence && presence.showCount;
   if (closedDotClass === null && !isIdle) return null;
 
-  const second = (
+  return asSwitch(
     <span data-testid="topbar-presence" lang={locale}>
       {isIdle ? idleWords(presence as ShellPresence & { showCount: true }, locale)
         : closedWords(closedDotClass!, closedShort!, closedFull!)}
-    </span>
+    </span>,
   );
-
-  return !isIdle && businessStatus?.canChange ? (
-    <BusinessStatusMenu accountId={shell!.accountId} status={businessStatus!} locale={locale} trigger={second} />
-  ) : second;
 }

@@ -2,7 +2,7 @@
 // never built by the function under test (Global constraints). Run under TZ unset AND TZ=Asia/Tokyo:
 // every helper takes its own timezone through partsInZone/dayKey and never reads the server's zone.
 import { describe, expect, it } from "vitest";
-import { cardEndLine, cardLongDate, opensPhrase, topbarLabels } from "./labels";
+import { appointmentWhen, cardEndLine, cardLongDate, opensPhrase, topbarLabels } from "./labels";
 import type { EffectiveStatus } from "./status";
 
 const TZ = "America/Chicago";
@@ -169,9 +169,9 @@ describe("opensPhrase (used directly by topbarLabels; THU fixture uses a separat
 });
 
 describe("cardEndLine (dashboard card's end-of-closure line)", () => {
-  it("running_late: always 'Ends at midnight' / 'Termina a la medianoche'", () => {
+  it("running_late: always 'Ends at midnight' / 'Termina a medianoche'", () => {
     expect(cardEndLine(runningLate(30), TZ, MON, "en")).toBe("Ends at midnight");
-    expect(cardEndLine(runningLate(30), TZ, MON, "es")).toBe("Termina a la medianoche");
+    expect(cardEndLine(runningLate(30), TZ, MON, "es")).toBe("Termina a medianoche");
   });
 
   it("storm, no date: 'Until you reopen' / 'Hasta que vuelva a abrir'", () => {
@@ -226,5 +226,33 @@ describe("cardLongDate (the dashboard card's own long-date form, spec §5.6.2)",
 
   it("a different month/weekday (mutation: swap MONTH_LONG for the abbreviated table -> FAILS)", () => {
     expect(cardLongDate(d("2027-06-07T15:00:00.000Z"), TZ, "en")).toBe("Monday, June 7");
+  });
+});
+
+/**
+ * Fix round C4 (design review I5): an affected appointment's date and time. The Closed days card is a
+ * client component, and its old `Intl` call named no timeZone, so the browser's zone decided the hour and
+ * the server render disagreed with hydration; both cards also formatted "en-US" inside a Spanish card.
+ * The account's own zone, the shared word tables, two-digit minutes (the bookings list's own time form).
+ */
+describe("appointmentWhen (fix round C4)", () => {
+  const AT = d("2027-06-08T19:14:00.000Z"); // 2:14 PM in Chicago, 12:14 PM in Los Angeles
+
+  it("English, in the account's zone", () => {
+    expect(appointmentWhen(AT.toISOString(), TZ, "en")).toBe("Jun 8, 2:14 PM");
+  });
+
+  it("Spanish, from the shared tables (mutation: format \"en-US\" regardless of locale -> FAILS)", () => {
+    expect(appointmentWhen(AT.toISOString(), TZ, "es")).toBe("8 de jun., 2:14 PM");
+  });
+
+  it("the zone is the account's, never the runtime's (mutation: drop the timezone -> FAILS under TZ=Asia/Tokyo and for this zone)", () => {
+    expect(appointmentWhen(AT.toISOString(), "America/Los_Angeles", "en")).toBe("Jun 8, 12:14 PM");
+  });
+
+  it("on the hour keeps its two-digit minutes; midnight and noon read 12", () => {
+    expect(appointmentWhen("2027-06-08T14:00:00.000Z", TZ, "en")).toBe("Jun 8, 9:00 AM");
+    expect(appointmentWhen("2027-06-08T05:00:00.000Z", TZ, "en")).toBe("Jun 8, 12:00 AM");
+    expect(appointmentWhen("2027-06-08T17:00:00.000Z", TZ, "es")).toBe("8 de jun., 12:00 PM");
   });
 });

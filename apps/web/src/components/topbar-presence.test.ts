@@ -222,11 +222,81 @@ describe("TopbarPresence — not open, for everyone (spec §5.6.1)", () => {
   });
 });
 
+describe("TopbarPresence — during a call (fix round B1, spec S15)", () => {
+  const ON_CALL = { onCall: true, weekCount: 3, personaName: "Max", showCount: true };
+
+  it("canChange set, Open: the pulse and \"Max · on a call\" ARE the menu's trigger (mutation: render the on-call pulse bare -> FAILS)", () => {
+    const html = renderWith(ON_CALL, bstatus(OPEN, "all"));
+    expect(html).toMatch(/<i data-testid="bsm-wrapped"><span data-testid="topbar-presence"/);
+    expect(html).toContain("animate-pulse");
+    expect(html).toContain("Max · on a call");
+  });
+
+  it("canChange set, closed: the pulse plus the status, both inside the trigger", () => {
+    const html = renderWith(ON_CALL, bstatus(CLOSED_TODAY, "all"));
+    expect(html).toContain("bsm-wrapped");
+    expect(html).toContain("Max · on a call");
+    expect(html).toContain("Closed today");
+  });
+
+  it("no canChange (a Technician on a call): the pulse and the words, never a button", () => {
+    const html = renderWith({ onCall: true, personaName: "Max", showCount: false }, bstatus(CLOSED_TODAY, null));
+    expect(html).not.toContain("bsm-wrapped");
+    expect(html).toContain("animate-pulse");
+  });
+});
+
+/**
+ * Fix round C1 (design review I1): the full closed-state form is up to 325px in Spanish (a dated storm)
+ * and 402px in the pseudo-locale, and only ~170px is left for it at `lg` beside the 300px search, the
+ * theme toggle, the agency's org switcher and the user button. The SHORT form therefore holds up to `xl`
+ * (1280px, ~430px left), in both the not-open words and the status that follows the on-call pulse.
+ */
+describe("TopbarPresence — the full status form only from xl (fix round C1)", () => {
+  it("the closed words: the short form below xl, the full form at xl and up (mutation: switch back at sm -> FAILS)", () => {
+    const html = renderWith(null, bstatus(CLOSED_TODAY, null));
+    expect(html).toMatch(/<span class="flex items-center gap-1\.5 text-sm text-foreground xl:hidden"><span aria-hidden="true" class="size-2 shrink-0 rounded-full bg-\[var\(--crit\)\]"><\/span>Closed today<\/span>/);
+    expect(html).toMatch(/<span class="hidden items-center gap-1\.5 text-sm text-foreground xl:flex"><span aria-hidden="true" class="size-2 shrink-0 rounded-full bg-\[var\(--crit\)\]"><\/span>Closed today · opens 8 AM<\/span>/);
+  });
+
+  it("on a call: the short status follows the pulse from sm, the full status only from xl", () => {
+    const html = renderWith({ onCall: true, personaName: "Max", showCount: false }, bstatus(CLOSED_TODAY, null));
+    expect(html).toMatch(/<span class="hidden xl:inline"> · Closed today · opens 8 AM<\/span>/);
+    expect(html).toMatch(/<span class="xl:hidden"> · Closed today<\/span>/);
+  });
+});
+
 describe("TopbarPresence — Open (spec §5.6.1)", () => {
-  it("with an enabled voice profile, Open is UNCHANGED — the idle count renders even when canChange is \"all\" (mutation: wrap the idle count in the menu too -> FAILS)", () => {
+  // Fix round B1 (spec S15/D7, plan Task 11): the indicator is the menu's trigger WHENEVER canChange is
+  // set, Open included. This case used to pin the opposite (the idle count bypassing the menu), which left
+  // every account with an enabled voice profile — 3 of 3 on production — with no topbar switch at all.
+  it("with an enabled voice profile and canChange \"all\", the idle count IS the menu's trigger, its words unchanged (mutation: render the idle count bare -> FAILS)", () => {
     const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, bstatus(OPEN, "all"));
+    expect(html).toContain("bsm-wrapped");
+    expect(html).toContain("this week");
+    expect(html).toMatch(/<i data-testid="bsm-wrapped"><span data-testid="topbar-presence"/);
+  });
+
+  it("Staff (canChange \"late_only\") while Open: the idle count is the trigger of their two-item menu", () => {
+    const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, bstatus(OPEN, "late_only"));
+    expect(html).toContain("bsm-wrapped");
+  });
+
+  it("the idle count with NO canChange (a Technician never has showCount, but the read failing does): plain words, no menu", () => {
+    const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, null);
     expect(html).not.toContain("bsm-wrapped");
     expect(html).toContain("this week");
+  });
+
+  it("a profile with no count (showCount false) and canChange set: \"● Open\" as the trigger, never nothing (mutation: return null when presence has no count -> FAILS)", () => {
+    const html = renderWith({ onCall: false, personaName: "Sofía", showCount: false }, bstatus(OPEN, "all"));
+    expect(html).toContain("bsm-wrapped");
+    expect(html).toContain(">Open<");
+    expect(html).not.toContain("this week");
+  });
+
+  it("a profile with no count and no canChange: nothing, as before", () => {
+    expect(renderWith({ onCall: false, personaName: "Sofía", showCount: false }, bstatus(OPEN, null))).toBe("");
   });
 
   it("no enabled profile (presence null) and canChange set: \"● Open\" as the menu's own trigger (mutation: render nothing -> FAILS)", () => {

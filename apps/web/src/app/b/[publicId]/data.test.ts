@@ -63,7 +63,7 @@ describe("loadClosureView", () => {
     const en = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "en");
     expect(en.notice).toBe("Closed today. Please pick another day.");
     const es = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "es");
-    expect(es.notice).toBe("Cerrado hoy. Por favor, elija otro día.");
+    expect(es.notice).toBe("Cerrado hoy. Elige otro día.");
   });
 
   it("a planned closed day covering today reads the SAME notice as closed_today (en/es)", async () => {
@@ -74,7 +74,7 @@ describe("loadClosureView", () => {
     const en = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "en");
     expect(en.notice).toBe("Closed today. Please pick another day.");
     const es = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "es");
-    expect(es.notice).toBe("Cerrado hoy. Por favor, elija otro día.");
+    expect(es.notice).toBe("Cerrado hoy. Elige otro día.");
   });
 
   it("storm with no back-on date (en/es): the literal stormNotice", async () => {
@@ -85,7 +85,7 @@ describe("loadClosureView", () => {
     const en = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "en");
     expect(en.notice).toBe("We're closed for now. Please check back soon.");
     const es = await loadClosureView("acct1", TZ, new Date("2026-06-01T12:00:00.000Z"), 30, "es");
-    expect(es.notice).toBe("Estamos cerrados por ahora. Por favor, vuelva a consultar pronto.");
+    expect(es.notice).toBe("Por ahora estamos cerrados. Vuelve a consultar pronto.");
   });
 
   // Dec 24 2026 is a Thursday (pinned in the plan's own fixture); `until` is
@@ -103,7 +103,7 @@ describe("loadClosureView", () => {
     const en = await loadClosureView("acct1", TZ, now, 30, "en");
     expect(en.notice).toBe("Closed until Thursday, December 24. Please pick a day from then on.");
     const es = await loadClosureView("acct1", TZ, now, 30, "es");
-    expect(es.notice).toBe("Cerrado hasta el jueves, 24 de diciembre. Por favor, elija un día a partir de esa fecha.");
+    expect(es.notice).toBe("Cerrado hasta el jueves, 24 de diciembre. Elige un día a partir de esa fecha.");
   });
 
   // MUTATION: drop the running_late/open distinction (e.g. a `default` that

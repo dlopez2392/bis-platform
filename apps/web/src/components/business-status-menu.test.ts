@@ -8,7 +8,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ShellBusinessStatus } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import { m } from "@/lib/messages";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
@@ -18,9 +22,10 @@ vi.mock("@/app/(dashboard)/dashboard/accounts/[accountId]/business-status-action
   undoBusinessStatusAction: vi.fn(),
 }));
 
-const { BusinessStatusMenu, buildChangeToast, planMenu } = await import("./business-status-menu");
+const { BusinessStatusMenu, buildChangeToast, planMenu, radioValue } = await import("./business-status-menu");
 
 const TZ = "America/Chicago";
+const menuSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "business-status-menu.tsx"), "utf8");
 const OPEN_WIRE: ShellBusinessStatus["effective"] = { state: "open", nextClosedDay: null };
 const CLOSED_TODAY_WIRE: ShellBusinessStatus["effective"] = {
   state: "closed_today", reopensAt: "2027-06-08T13:00:00.000Z", reopensTimeKnown: true,
@@ -87,7 +92,7 @@ describe("buildChangeToast (spec §5.6.1, SD19)", () => {
 
   it("Spanish, persona and To-do together", () => {
     expect(buildChangeToast({ state: "open" }, 2, "Max", "es")).toBe(
-      "Abierto de nuevo. Su página de citas recibe citas como siempre. "
+      "Abierto de nuevo. Su página de citas acepta reservas como siempre. "
       + "Max también lo dice. Una tarea en Pendientes lista las 2 citas afectadas.",
     );
   });
@@ -117,12 +122,37 @@ describe("BusinessStatusMenu — the closed (default) render: what renderToStati
     expect(html).not.toContain("<button");
   });
 
-  it("\"all\": a ghost button, aria-haspopup=\"menu\", the accessible trigger name, and the caller's own visible content", () => {
-    const html = render({ canChange: "all" });
+  // Fix round C2 (design review I2): an aria-label REPLACED the status words, so a screen reader heard
+  // "Change today's status" and never "Closed today". The name is now the visible words followed by the
+  // trigger phrase, an sr-only suffix.
+  it("\"all\": a ghost button, aria-haspopup=\"menu\", NO aria-label, and the visible words followed by an sr-only trigger phrase (mutation: restore the aria-label -> FAILS)", () => {
+    const html = render({ canChange: "all" }, "Closed today");
     expect(html).toContain("<button");
     expect(html).toContain('aria-haspopup="menu"');
+    expect(html).not.toContain("aria-label=");
+    expect(html).toMatch(/>Closed today<span class="sr-only">, Change today&#x27;s status<\/span><\/button>/);
+  });
+
+  it("the card's \"action\" trigger (its own word, \"Change\") keeps the phrase as its name, the visible word inside it", () => {
+    const html = renderToStaticMarkup(createElement(BusinessStatusMenu, {
+      accountId: "a1", status: status({ canChange: "all" }), locale: "en", pseudo: false, trigger: "Change", triggerKind: "action",
+    }));
     expect(html).toContain("aria-label=\"Change today&#x27;s status\"");
+    expect(html).not.toContain("sr-only");
     expect(html).toContain(">Change<");
+  });
+
+  it("Spanish: the sr-only phrase is the catalogue's Spanish twin", () => {
+    const html = renderToStaticMarkup(createElement(BusinessStatusMenu, {
+      accountId: "a1", status: status({ canChange: "all" }), locale: "es", pseudo: false, trigger: "Cerrado hoy",
+    }));
+    expect(html).toContain('<span class="sr-only">, Cambiar el estado de hoy</span>');
+  });
+
+  it("the trigger is px-2 below sm and keeps its 44px tap target (fix round C1; mutation: drop px-2 -> FAILS)", () => {
+    const html = render({ canChange: "all" });
+    expect(html).toMatch(/class="[^"]*\bpx-2\b[^"]*\bsm:px-4\b/);
+    expect(html).toMatch(/class="[^"]*\bmin-h-11\b/);
   });
 
   it("\"late_only\": the SAME trigger shape — canChange, not the menu's own content, decides whether a button renders", () => {
@@ -139,5 +169,70 @@ describe("BusinessStatusMenu — the closed (default) render: what renderToStati
   it("the Storm date dialog is closed by default (no [role=dialog] content in the static markup)", () => {
     const html = render({ canChange: "all" });
     expect(html).not.toContain("role=\"dialog\"");
+  });
+});
+
+/**
+ * Fix round B5 (final M-4 = design I3): the radio group's value must be one of the items' own values, or
+ * nothing is checked. "running_late" matched no item (they are running_late_15/30/60/120), and a dated
+ * storm checked "Until further notice", which is the opposite of what is set.
+ */
+describe("radioValue — the checked item is the one that describes what is set", () => {
+  it("running late checks its own delay (mutation: return \"running_late\" -> FAILS)", () => {
+    expect(radioValue({ state: "running_late", lateMinutes: 30, endsAt: new Date("2027-06-08T05:00:00Z") })).toBe("running_late_30");
+    expect(radioValue({ state: "running_late", lateMinutes: 120, endsAt: new Date("2027-06-08T05:00:00Z") })).toBe("running_late_120");
+  });
+
+  it("an open-ended storm checks \"Until further notice\"; a dated storm checks \"Back on a date…\", its own value (mutation: return \"storm\" for both -> FAILS)", () => {
+    expect(radioValue({ state: "storm", reopensAt: null, reopensTimeKnown: false })).toBe("storm");
+    expect(radioValue({ state: "storm", reopensAt: new Date("2027-06-10T13:00:00Z"), reopensTimeKnown: true })).toBe("storm_dated");
+  });
+
+  it("a closed day checks Closed today (spec: a closed day reads the same); open and closed today check themselves", () => {
+    expect(radioValue({
+      state: "closed_day", reason: null, startsOn: "2027-06-07", endsOn: "2027-06-07",
+      reopensAt: new Date("2027-06-08T13:00:00Z"), reopensTimeKnown: true,
+    })).toBe("closed_today");
+    expect(radioValue({ state: "open", nextClosedDay: null })).toBe("open");
+    expect(radioValue({ state: "closed_today", reopensAt: new Date("2027-06-08T13:00:00Z"), reopensTimeKnown: true })).toBe("closed_today");
+  });
+
+  it("every value radioValue can return is an item the menu renders (source pin: the late items' and the dated storm's own values)", () => {
+    expect(menuSrc).toContain("value={`running_late_${opt.value}`}");
+    expect(menuSrc).toMatch(/<DropdownMenuRadioItem\s+value="storm_dated"/);
+    expect(menuSrc).toMatch(/<DropdownMenuRadioItem value="storm" /);
+    expect(menuSrc).toMatch(/<DropdownMenuRadioItem value="closed_today" /);
+    expect(menuSrc).toMatch(/<DropdownMenuRadioItem value="open" /);
+  });
+});
+
+/** Fix round C3 (design review I4): every portaled overlay sets its own `lang`, since a portal leaves the
+ *  `lang` of the wrapper that mounted it. D4: the storm dialog opens only after the menu has closed and
+ *  hands focus back to the trigger. D10: one Undo window, imported. Source pins: Radix mounts none of
+ *  these in a closed static render. */
+describe("BusinessStatusMenu — overlays, the storm dialog and the Undo window (source pins)", () => {
+  it("DropdownMenuContent, both DropdownMenuSubContent and DialogContent carry lang={locale} (mutation: drop any -> FAILS)", () => {
+    expect(menuSrc.match(/<DropdownMenuContent\b[^>]*\blang=\{locale\}/g)?.length).toBe(1);
+    expect(menuSrc.match(/<DropdownMenuSubContent lang=\{locale\}>/g)?.length).toBe(2);
+    expect(menuSrc.match(/<DialogContent\b[^>]*\blang=\{locale\}/g)?.length).toBe(1);
+  });
+
+  it("the dated storm item lets the menu close and the dialog opens from onCloseAutoFocus; the dialog returns focus to the trigger (mutation: e.preventDefault() on the item's own onSelect -> FAILS)", () => {
+    expect(menuSrc).not.toMatch(/onSelect=\{\(e\) => \{ e\.preventDefault\(\); setStormOpen\(true\); \}\}/);
+    expect(menuSrc).toMatch(/onCloseAutoFocus=\{\(e\) => \{\s*if \(stormRequested\.current\)/);
+    expect(menuSrc).toMatch(/<DialogContent[^>]*onCloseAutoFocus=\{\(e\) => \{ e\.preventDefault\(\); triggerRef\.current\?\.focus\(\); \}\}/);
+  });
+
+  it("the dialog is titled \"Closed for a storm\" with the description \"When do you reopen?\" (D4)", () => {
+    expect(menuSrc).toContain('<DialogDescription>{tr.text("business.storm.description")}</DialogDescription>');
+    expect(m["business.storm.title"]).toBe("Closed for a storm");
+    expect(m["business.storm.title.es"]).toBe("Cerrado por tormenta");
+    expect(m["business.storm.description"]).toBe("When do you reopen?");
+    expect(m["business.storm.description.es"]).toBe("¿Cuándo vuelve a abrir?");
+  });
+
+  it("UNDO_WINDOW_MS is imported from calendar/undo-window.ts, never declared again here (D10; mutation: a local 10_000 -> FAILS)", () => {
+    expect(menuSrc).toMatch(/import \{ UNDO_WINDOW_MS \} from "@\/app\/\(dashboard\)\/dashboard\/accounts\/\[accountId\]\/calendar\/undo-window";/);
+    expect(menuSrc).not.toMatch(/const UNDO_WINDOW_MS/);
   });
 });

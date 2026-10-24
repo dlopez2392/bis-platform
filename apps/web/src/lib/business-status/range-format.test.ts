@@ -18,7 +18,7 @@ describe("formatClosedDayRange", () => {
   });
 
   it("a range within one month, Spanish (mutation: drop the month-equality check -> FAILS)", () => {
-    expect(formatClosedDayRange("2026-12-10", "2026-12-14", "es")).toBe("10 – 14 dic");
+    expect(formatClosedDayRange("2026-12-10", "2026-12-14", "es")).toBe("10 – 14 de dic.");
   });
 
   it("across months in the same year, English (mutation: reuse the same-month template -> FAILS)", () => {
@@ -26,7 +26,7 @@ describe("formatClosedDayRange", () => {
   });
 
   it("across months in the same year, Spanish (mutation: reuse the same-month template -> FAILS)", () => {
-    expect(formatClosedDayRange("2026-11-28", "2026-12-02", "es")).toBe("28 nov – 2 dic");
+    expect(formatClosedDayRange("2026-11-28", "2026-12-02", "es")).toBe("28 de nov. – 2 de dic.");
   });
 
   // The brief's own pinned example (2026-10-24 brief, §5.6.3): a range that crosses a YEAR boundary,
@@ -37,6 +37,23 @@ describe("formatClosedDayRange", () => {
   });
 
   it("across a year boundary, Spanish", () => {
-    expect(formatClosedDayRange("2026-12-28", "2027-01-01", "es")).toBe("28 dic – 1 ene");
+    expect(formatClosedDayRange("2026-12-28", "2027-01-01", "es")).toBe("28 de dic. – 1 de ene.");
+  });
+});
+
+// Fix round D1 (design review M1): ONE Spanish month-abbreviation table for the topbar (labels.ts) and
+// this card, with periods ("sept.", "dic."), and "de" before the month, as the topbar's own date form.
+describe("formatClosedDayRange — the shared Spanish abbreviations (fix round D1)", () => {
+  it("September is \"sept.\", the topbar's own form (mutation: keep this file's own \"sep\" table -> FAILS)", () => {
+    expect(formatClosedDayRange("2026-09-01", "2026-09-03", "es")).toBe("1 – 3 de sept.");
+  });
+
+  it("the plan's two literal forms", () => {
+    expect(formatClosedDayRange("2026-12-24", "2026-12-26", "es")).toBe("24 – 26 de dic.");
+    expect(formatClosedDayRange("2026-12-28", "2027-01-01", "es")).toBe("28 de dic. – 1 de ene.");
+  });
+
+  it("English is unchanged", () => {
+    expect(formatClosedDayRange("2026-09-01", "2026-09-03", "en")).toBe("Sep 1 – 3");
   });
 });

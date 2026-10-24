@@ -144,9 +144,11 @@ const STRINGS = {
   es: {
     noSlots: "No hay horarios disponibles este día.",
     noSlotsHint: "Prueba con otro día de arriba.",
-    closedTodayNotice: "Cerrado hoy. Por favor, elija otro día.",
-    stormNotice: "Estamos cerrados por ahora. Por favor, vuelva a consultar pronto.",
-    stormUntilNotice: "Cerrado hasta el {date}. Por favor, elija un día a partir de esa fecha.",
+    // Fix round C6: the booking page speaks tú, like the rest of this table (booking, chat and email
+    // follow their own register; the app is usted).
+    closedTodayNotice: "Cerrado hoy. Elige otro día.",
+    stormNotice: "Por ahora estamos cerrados. Vuelve a consultar pronto.",
+    stormUntilNotice: "Cerrado hasta el {date}. Elige un día a partir de esa fecha.",
     closedDay: "Cerrado este día.",
     today: "Hoy",
     morning: "Mañana",
