@@ -76,6 +76,8 @@ function subjectFor(r: DueSmsReminder): SmsHoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone, source: "sms_reminder", channel: "sms", smsKind: "automation.sms_reminder",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline: new Date(r.startsAt),
+    // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+    appointmentAt: new Date(r.startsAt), kept: r.closureKeptAt !== null,
   };
 }
 

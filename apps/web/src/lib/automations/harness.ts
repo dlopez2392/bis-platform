@@ -2,6 +2,7 @@ import { recordHeartbeat, type SupabaseClient } from "@bis/db";
 import { smsSenderFor } from "@/lib/consent/gate";
 import { emailSenderFor } from "@/lib/consent/email-gate";
 import type { Pass, PassContext, PassCounters } from "./context";
+import { closureLoader } from "./closures";
 
 /**
  * Builds a tick's context. No automations module imports a provider factory
@@ -14,7 +15,10 @@ import type { Pass, PassContext, PassCounters } from "./context";
 export function buildPassContext(
   input: { db: SupabaseClient; now: Date; origin: string },
 ): PassContext {
-  return { ...input, email: emailSenderFor(input.db), sms: smsSenderFor(input.db) };
+  return {
+    ...input, email: emailSenderFor(input.db), sms: smsSenderFor(input.db),
+    closures: closureLoader(input.db, input.now),
+  };
 }
 
 /**

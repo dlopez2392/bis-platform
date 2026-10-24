@@ -59,6 +59,8 @@ function subjectFor(r: DueReminder, deadline: Date): HoldSubject {
   return {
     accountId: r.accountId, accountTimezone: r.accountTimezone, source: "reminders", channel: "email",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId, deadline,
+    // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+    appointmentAt: new Date(r.startsAt), kept: r.closureKeptAt !== null,
   };
 }
 

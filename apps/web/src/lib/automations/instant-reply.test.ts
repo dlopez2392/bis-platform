@@ -28,6 +28,7 @@ import {
 import { sendInstantReply, releaseInstantReply, parseInstantReplyPayload, type InstantReplyInput } from "./instant-reply";
 import type { AutomationLogRow } from "@bis/db";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
+import { NO_CLOSURES } from "./closures";
 
 const NOW = new Date("2026-09-10T15:00:00Z");
 const smsSend = vi.fn();
@@ -351,7 +352,7 @@ describe("releaseInstantReply — from the held row's payload", () => {
     subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-22T13:00:00.000Z", payload, occurred_at: "2026-09-22T04:00:00.000Z",
   });
   const PAYLOAD = { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false };
-  const ctx = { db: {} as never, now: new Date("2026-09-22T13:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+  const ctx = { db: {} as never, now: new Date("2026-09-22T13:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(), closures: NO_CLOSURES };
 
   it("re-runs every check and sends: the text goes, the submission is stamped, the row flips to sent (mutation: skip the stamp on release → FAILS)", async () => {
     expect(await releaseInstantReply(ctx, heldRow(PAYLOAD))).toBe("sent");
@@ -454,7 +455,7 @@ describe("releaseInstantReply — the re-hold age cap", () => {
     id: "log_i", account_id: "acct_1", source: "instant_reply", channel: "sms", contact_id: "ct_1",
     subject_key: "submission:sub_1", status: "held", reason: "x", held_until: "2026-09-23T04:15:00.000Z", payload, occurred_at: "2026-09-23T04:00:00.000Z",
   });
-  const ctx = (now: string) => ({ db: {} as never, now: new Date(now), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() });
+  const ctx = (now: string) => ({ db: {} as never, now: new Date(now), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(), closures: NO_CLOSURES });
 
   it("more than 24 h after they wrote in: skipped 'Not sent: too long after they wrote in', nothing sent (mutation: drop the cap → sent, FAILS)", async () => {
     expect(await releaseInstantReply(ctx("2026-09-23T15:00:00.001Z"), heldRow(PAYLOAD))).toBe("skipped");
@@ -495,7 +496,7 @@ describe("releaseInstantReply — the gate refuses at release", () => {
       payload: { contactId: "ct_1", conversationId: "convo_1", phoneE164: "+19565550101", locale: "en", consentWithheld: false },
       occurred_at: "2026-09-22T04:00:00.000Z",
     };
-    const ctx = { db: {} as never, now: new Date("2026-09-22T15:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate() };
+    const ctx = { db: {} as never, now: new Date("2026-09-22T15:00:00Z"), origin: "", email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(), closures: NO_CLOSURES };
     expect(await releaseInstantReply(ctx, held)).toBe("skipped");
     expect(smsSend).not.toHaveBeenCalled();
     expect(dbMocks.stampInstantReplySent).not.toHaveBeenCalled();

@@ -31,6 +31,7 @@ import type { serviceDb, AutomationLogRow } from "@bis/db";
 import { segmentsFor } from "@/lib/sms/segments";
 import { m } from "@/lib/messages";
 import type { PassContext } from "@/lib/automations/context";
+import { NO_CLOSURES } from "@/lib/automations/closures";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import { prepareTextback, deliverTextback, releaseTextback, type TextbackRequest } from "./textback";
 import { defaultTextbackBody } from "./textback-body";
@@ -278,7 +279,7 @@ describe("releaseTextback — the 08:00 send of a call missed overnight", () => 
     payload: PAYLOAD, occurred_at: TEN_PM.toISOString(), ...over,
   });
   const ctx = (now: Date): PassContext => ({
-    db: DB as never, now, origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
+    db: DB as never, now, origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(), closures: NO_CLOSURES,
   });
 
   beforeEach(() => {
@@ -358,7 +359,7 @@ describe("releaseTextback — the caller may have been served since", () => {
     payload: PAYLOAD, occurred_at: new Date(TEN_PM.getTime() + 3600_000).toISOString(),
   });
   const ctx = (): PassContext => ({
-    db: DB as never, now: new Date(EIGHT_AM), origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
+    db: DB as never, now: new Date(EIGHT_AM), origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(), closures: NO_CLOSURES,
   });
   beforeEach(() => {
     dbMocks.getVoiceProfile.mockResolvedValue({ textback_enabled: true, textback_body: "" });
@@ -407,7 +408,7 @@ describe("releaseTextback — the re-hold age cap", () => {
     held_until: EIGHT_AM, payload, occurred_at: new Date(TEN_PM.getTime() + 23 * 3600_000).toISOString(),
   });
   const ctx = (now: Date): PassContext => ({
-    db: DB as never, now, origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(),
+    db: DB as never, now, origin: "", email: { isFake: true, send: vi.fn() }, sms: fakeSmsGate(), closures: NO_CLOSURES,
   });
   beforeEach(() => {
     dbMocks.getVoiceProfile.mockResolvedValue({ textback_enabled: true, textback_body: "" });

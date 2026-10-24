@@ -52,6 +52,8 @@ export async function processFollowups(
     const subject: HoldSubject = {
       accountId: followup.accountId, accountTimezone: followup.accountTimezone, source: "followups",
       channel: "email", subjectKey: `booking:${followup.bookingId}`, contactId: followup.contactId,
+      // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+      appointmentAt: new Date(followup.startsAt), kept: followup.closureKeptAt !== null,
     };
 
     // RULE 0, before the gate itself: an account whose `accounts.timezone`

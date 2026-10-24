@@ -13,6 +13,7 @@ const emailFactory = vi.hoisted(() => ({ getEmailProvider: vi.fn() }));
 vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<object>()), ...emailFactory }));
 
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader } from "../closures";
 import { followupsPass, releaseFollowup } from "./followups";
 import { EmailNotSent, emailSenderFor } from "@/lib/consent/email-gate";
 
@@ -43,6 +44,7 @@ function ctx(now: Date): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: async () => { throw new Error("follow-ups never text"); },
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoEmail: 0, waitingForMorning: 0, unresolvableTimezone: 0 };
@@ -170,6 +172,7 @@ describe("the REAL email gate, end to end, for a stopped customer (item 3, follo
       db: {} as never, now, origin: "https://app.example.com",
       email: emailSenderFor({} as never),
       sms: async () => { throw new Error("follow-ups never text"); },
+      closures: NO_CLOSURES,
     };
   }
 
@@ -187,5 +190,35 @@ describe("the REAL email gate, end to end, for a stopped customer (item 3, follo
     expect(providerSend).not.toHaveBeenCalled();
     expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
     expect(result).toEqual({ ...EMPTY, blocked: 1 });
+  });
+});
+
+/** S-47d: the loader a tick builds, without a database: an open-ended storm on acct_1 since 2026-09-20T00:00:00.000Z, every other
+ *  account open. Never NO_CLOSURES, which reads open for everyone and so could not show a hold. */
+const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-20T00:00:00.000Z" } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+});
+
+describe("the closure hold (S-47d, spec 5.5.2)", () => {
+  it("a covered appointment is held with the closure reason (S-47d), for a day under an open-ended storm: not sent, not stamped", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    expect(await followupsPass.run({ ...ctx(MORNING), closures: stormOnAcct1() })).toEqual({ ...EMPTY, held: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({
+      source: "followups", subjectKey: "booking:bk_f1", status: "held",
+      heldUntil: "2026-09-23T14:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("a kept appointment sends", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({ closureKeptAt: "2026-09-21T12:00:00.000Z" })]);
+    expect(await followupsPass.run({ ...ctx(MORNING), closures: stormOnAcct1() })).toEqual({ ...EMPTY, sent: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
   });
 });

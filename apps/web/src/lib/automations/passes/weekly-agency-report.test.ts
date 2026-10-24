@@ -12,6 +12,7 @@ vi.mock("@/lib/reports/weekly-metrics", () => ({ weeklyMetrics: (...a: unknown[]
 import { lastWeekMonday, weekWindow } from "@/lib/reports/weekly-window";
 import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { weeklyAgencyReportPass } from "./weekly-agency-report";
 
 const AGENCY_ZONE = "America/Chicago";
@@ -48,6 +49,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: ORIGIN,
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: async () => { throw new Error("not used by this pass"); },
+    closures: NO_CLOSURES,
   };
 }
 

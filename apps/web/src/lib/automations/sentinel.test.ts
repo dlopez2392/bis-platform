@@ -68,6 +68,7 @@ import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "./context";
+import { NO_CLOSURES } from "./closures";
 import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
 const INTERNAL_LABEL = "Rio Roofing — trial";
@@ -253,7 +254,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     const smsSend = vi.fn(async () => ({ providerMessageId: "s" }));
     const ctx: PassContext = {
       db: {} as never, now: TICK, origin: "https://app.example.com",
-      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }),
+      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }), closures: NO_CLOSURES,
     };
 
     const results = await runPasses(PASSES, ctx);

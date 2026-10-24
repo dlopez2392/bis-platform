@@ -15,6 +15,7 @@ import { formatWhen } from "@/lib/booking/time";
 import { AUTOMATION_TICK_CAP } from "../caps";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader } from "../closures";
 import type { AutomationLogRow } from "@bis/db";
 import { smsReminderPass, releaseSmsReminder } from "./sms-reminder";
 import { m } from "@/lib/messages";
@@ -46,6 +47,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = { sent: 0, failed: 0, unstamped: 0, held: 0, blocked: 0, skippedNoAddress: 0, skippedSmsGate: 0 };
@@ -283,5 +285,35 @@ describe("S-09 PR 2: the text reminder in the customer's language", () => {
     expect(body.startsWith("Reminder: your appointment")).toBe(true);
     expect(body).toContain("Call us to move it.");
     expect(body.endsWith(m["sms.optOut.en"])).toBe(true);   // "Reply STOP to opt out." (messages.ts:1806)
+  });
+});
+
+/** S-47d: the loader a tick builds, without a database: an open-ended storm on acct_1 since 2026-09-09T12:00:00.000Z, every other
+ *  account open. Never NO_CLOSURES, which reads open for everyone and so could not show a hold. */
+const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-09T12:00:00.000Z" } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+});
+
+describe("the closure hold (S-47d, spec 5.5.2)", () => {
+  it("a covered appointment is held with the closure reason (S-47d), until the appointment: not texted, not stamped", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row()]);
+    expect(await smsReminderPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, held: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampSmsReminderSent).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => c[1])).toEqual([expect.objectContaining({
+      source: "sms_reminder", subjectKey: "booking:bk_s1", status: "held",
+      heldUntil: STARTS, reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("a kept appointment sends", async () => {
+    dbMocks.listDueSmsReminders.mockResolvedValue([row({ closureKeptAt: "2026-09-09T13:00:00.000Z" })]);
+    expect(await smsReminderPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, sent: 1 });
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampSmsReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_s1");
   });
 });

@@ -4,6 +4,8 @@ const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
 vi.mock("@/lib/consent/gate", () => gate);
 const emailGate = vi.hoisted(() => ({ emailSenderFor: vi.fn() }));
 vi.mock("@/lib/consent/email-gate", () => emailGate);
+const dbMocks = vi.hoisted(() => ({ loadClosureSnapshot: vi.fn() }));
+vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { buildPassContext, runPasses } from "./harness";
 import type { Pass, PassContext } from "./context";
@@ -58,6 +60,20 @@ describe("buildPassContext — texts go through the send gate, bound to the tick
     const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
     expect(gate.smsSenderFor).toHaveBeenCalledWith(db);
     expect(c.sms).toBe(bound);
+  });
+});
+
+describe("buildPassContext — the closures loader, bound to the tick (S-47d, spec 5.5.2)", () => {
+  it("ctx.closures reads loadClosureSnapshot on THIS tick's client, for the account asked, from yesterday's UTC date (mutation: drop it from buildPassContext → FAILS)", async () => {
+    dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({
+      timezone: "America/Chicago", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null },
+    });
+    const db = { tag: "tick-db" } as never;
+    const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
+    expect(await c.closures("acct_1")).toEqual({
+      ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" },
+    });
+    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_1", { date: "2026-09-08" });
   });
 });
 

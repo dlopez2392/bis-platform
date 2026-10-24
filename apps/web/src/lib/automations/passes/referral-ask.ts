@@ -100,6 +100,8 @@ export async function processReferralAsks(
     const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "referral_ask",
       channel: config.channel, smsKind: "automation.referral_ask", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+      // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+      appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {

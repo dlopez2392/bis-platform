@@ -122,10 +122,10 @@ export async function listReleasableHolds(
 }
 
 /**
- * Called by the quiet-hours SAVE: every held row of the account becomes due
- * for another look on the next tick, where holdOrSend re-evaluates it under
- * the NEW window (re-holding it if still quiet). Without this, turning
- * quiet hours off would leave tonight's texts waiting until the old 08:00.
+ * Called by the switch, Keep and closed-day removal (S-47d) so held rows are
+ * re-checked on the next tick; holdOrSend re-holds what is still covered.
+ * Every held row of the account becomes due now, whatever held it (a closure
+ * or the sending hours), so "the next run" is at most one 15-minute tick.
  * Returns how many rows were bumped (the action logs it).
  */
 export async function bumpHeldForAccount(db: SupabaseClient, accountId: string): Promise<number> {

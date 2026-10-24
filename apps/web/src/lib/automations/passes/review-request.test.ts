@@ -17,6 +17,7 @@ import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader } from "../closures";
 import { reviewRequestPass, releaseReviewRequest } from "./review-request";
 import { remindersPass } from "./reminders";
 import { EmailNotSent } from "@/lib/consent/email-gate";
@@ -57,6 +58,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = {
@@ -587,5 +589,35 @@ describe("consent PR-3: the email goes through the gate", () => {
     emailSend.mockRejectedValueOnce(new EmailNotSent({ kind: "blocked", reason: "stopped" }));
     expect(await reviewRequestPass.run(ctx())).toEqual({ ...EMPTY, blocked: 1 });
     expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+  });
+});
+
+/** S-47d: the loader a tick builds, without a database: an open-ended storm on acct_1 since 2026-09-07T00:00:00.000Z, every other
+ *  account open. Never NO_CLOSURES, which reads open for everyone and so could not show a hold. */
+const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-07T00:00:00.000Z" } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+});
+
+describe("the closure hold (S-47d, spec 5.5.2)", () => {
+  it("a covered appointment is held with the closure reason (S-47d), for a day under an open-ended storm: not sent, not stamped", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row()]);
+    expect(await reviewRequestPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, held: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReviewRequested).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => c[1])).toEqual([expect.objectContaining({
+      source: "review_request", subjectKey: "booking:bk_r1", status: "held",
+      heldUntil: "2026-09-10T14:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("a kept appointment sends", async () => {
+    dbMocks.listDueReviewRequests.mockResolvedValue([row({ closureKeptAt: "2026-09-08T12:00:00.000Z" })]);
+    expect(await reviewRequestPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, sent: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReviewRequested).toHaveBeenCalledWith(expect.anything(), "bk_r1");
   });
 });

@@ -20,6 +20,7 @@ import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import { EmailNotSent } from "@/lib/consent/email-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader } from "../closures";
 import { referralAskPass, releaseReferralAsk } from "./referral-ask";
 
 const TICK = new Date("2027-09-24T14:00:00.000Z");      // 09:00 CDT, inside the band
@@ -75,6 +76,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = {
@@ -589,5 +591,35 @@ describe("referralAskPass: a hold gives back its tick slot, never its daily coun
     dbMocks.listDueReferralAsks.mockResolvedValue(Array.from({ length: 2 }, (_, i) => row({ bookingId: `bk_${i}`, contactId: `ct_${i}` })));
     const result = await referralAskPass.run({ ...ctx(), sms: holdFirst(1) });
     expect(result).toEqual({ ...EMPTY, held: 1, skippedCap: 1 });
+  });
+});
+
+/** S-47d: the loader a tick builds, without a database: an open-ended storm on acct_1 since 2027-09-20T00:00:00.000Z, every other
+ *  account open. Never NO_CLOSURES, which reads open for everyone and so could not show a hold. */
+const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2027-09-20T00:00:00.000Z" } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+});
+
+describe("the closure hold (S-47d, spec 5.5.2)", () => {
+  it("a covered appointment is held with the closure reason (S-47d), for a day under an open-ended storm: not texted, not stamped", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
+    expect(await referralAskPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, held: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog.mock.calls.map((c) => c[1])).toEqual([expect.objectContaining({
+      source: "referral_ask", subjectKey: "booking:bk_r1", status: "held",
+      heldUntil: "2027-09-25T14:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("a kept appointment sends (mutation: drop kept from the subject FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({ closureKeptAt: "2027-09-21T12:00:00.000Z" })]);
+    expect(await referralAskPass.run({ ...ctx(), closures: stormOnAcct1() })).toEqual({ ...EMPTY, sent: 1 });
+    expect(smsSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
   });
 });

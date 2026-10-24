@@ -7,6 +7,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 
 import { SMS_RETRY_COOLDOWN_MS } from "./caps";
 import type { PassContext } from "./context";
+import { NO_CLOSURES } from "./closures";
 import {
   sendAutomationSms, markAutomationSmsSent, smsCooldownActive, SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationSmsInput,
 } from "./send-sms";
@@ -45,6 +46,7 @@ function ctx(over: Partial<PassContext> = {}): PassContext {
     db: {} as never, now: NOW, origin: "https://app.example.com",
     email: { isFake: true, send: async () => ({ providerMessageId: "e" }) },
     sms: fakeSmsGate({ send: gateSend }),
+    closures: NO_CLOSURES,
     ...over,
   };
 }
