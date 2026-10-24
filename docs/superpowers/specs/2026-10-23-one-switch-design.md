@@ -2,8 +2,12 @@
 
 Status: owner decisions D1–D7 fixed in conversation 2026-10-23, and the design of sections 4 and 5 (the data,
 the status reader, the slot engine and the prompt) approved the same day. This draft fills in the rest. The
-choices it makes that the decisions did not dictate are listed as S1–S21 in section 2. The owner answered the
-first draft's four questions the same day (D8–D11); there are no open questions (section 10). Part d of S-47 (parallel work, `docs/crm-features.md` §4.3, row "↳ F-084",
+choices it makes that the decisions did not dictate are listed as S1–S22 in section 2. The owner answered the
+first draft's four questions the same day (D8–D11); there are no open questions (section 10). The plan review
+(2026-10-23) added owner ruling D12 (Closed today's window ends at midnight), the orchestrator's S22 (the
+dashboard card lists every covered appointment up to 14 days), and four fixes folded in below: the Staff
+26-hour bound (4.1), the two-day trigger slack (4), Keep read per subject (5.5.2) and the plain-insert
+cross-account probe (7). Part d of S-47 (parallel work, `docs/crm-features.md` §4.3, row "↳ F-084",
 2 ew: "the switch, closures in the slot engine, the prompt line, the owner grant"). Parts a (F-034, #279), b
 (F-174 part, #280–#283) and c (F-037 part 1, #284) have shipped; e (identity checks, F-116 part) follows in
 its own spec.
@@ -48,6 +52,7 @@ Fixed by the owner (2026-10-23):
   account's zone. Running late ends at the end of today, or when someone taps Open. Storm lasts until someone
   taps Open; an optional "back on" date reopens it that morning, at the first opening of that date. Expiry
   is computed on read: `until` is stored and compared with now. No cron is needed for the state itself.
+  (Closed today's end is amended by D12: its window ends at midnight; the next opening is what is said.)
 - **D4 Running late.** The owner picks about 15, 30 or 60 minutes, or "over an hour". Sofía (phone and chat)
   tells callers asking about today's visits "running about N minutes behind". Booking stays open, but
   today's slots that start within the delay are hidden. No texts go out on their own.
@@ -77,12 +82,21 @@ The owner's answers to the first draft's questions (2026-10-23):
 - **D10 A storm does not stop the website chat's lead capture** (Q3). The chat keeps capturing leads in every
   state; the TODAY line makes her say the business is closed.
 - **D11 "Over an hour" hides the next 2 hours of today's slots** (Q4): stored as `late_minutes` 120 (S2).
+- **D12 "Closed today" blocks bookings and holds reminders only until midnight tonight** (owner ruling on the
+  plan review, 2026-10-23), in the account's zone. The closure WINDOW that the slot engine and the hold use is
+  `[set_at, end of today)`, and `until` stores that midnight. The status line, the topbar and Sofía's TODAY line
+  still say when the business next opens: the reopening phrase from the hours chain (S1, computed on read from
+  `until`). This closes the gap where two hours sources disagree (business hours Monday to Friday, the calendar
+  open on Saturday): a Saturday customer is never silently held or refused because a Friday closure was
+  computed from the other hours. A closed day's window is the closed dates themselves, the same principle.
 
 Spec choices the decisions left open (made in this draft; each is pinned where it is specified):
 
-- **S1 "Closed today" ends at the first opening on a LATER day**, never later the same day (D3's "next
-  opening" read literally would reopen a business closed at 7 AM at its own 8 AM). Computed when the switch
-  is set and stored in `until` (D3); the reader then skips closed days when it states the reopening (5.1).
+- **S1 "Closed today" says it reopens at the first opening on a LATER day**, never later the same day (D3's
+  "next opening" read literally would reopen a business closed at 7 AM at its own 8 AM). Amended by D12: the
+  switch stores `until` = midnight at the end of today, which is where the closure WINDOW ends; the reopening
+  that is said and shown is computed on read as the first opening at or after that midnight, skipping closed
+  days (5.1). After midnight the row has expired and reads as open (D3: expiry on read).
 - **S2 "Over an hour" is stored as 120 minutes**: it hides the next two hours of today's slots, and Sofía
   says "more than an hour" (the window confirmed by the owner, D11).
 - **S3 A storm's back-on date** is tomorrow at the earliest and 92 days ahead at the latest.
@@ -102,12 +116,14 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   booking is affected, at most once per account per day, and Undo of the flip removes it while it is open.
 - **S8 Adding a closed day that covers booked appointments files one To-do too** ("Contact customers booked
   on {dates}"), linking to the Closed days card, where that range's appointments are listed (5.5.1).
-- **S9 Keep is a per-booking mark** (`bookings.closure_kept_at`), set from the dashboard card or the
-  Calendar's bookings list by whoever may cancel a booking there today (Owners, Staff, the agency; not
-  Technicians), with Undo.
+- **S9 Keep is a per-booking mark** (`bookings.closure_kept_at`), set from the dashboard card's list of
+  covered appointments (S22) or the Closed days card's per-range list on the Calendar page, by whoever may
+  cancel a booking there today (Owners, Staff, the agency; not Technicians), with Undo. The main Calendar
+  bookings list gains only each row's `booking-{id}` anchor, which "Cancel on the calendar" links to.
 - **S10 The hold** covers every recipe whose subject is a booking (reminders, the text reminder, the
   confirmation ask, the follow-up, the no-show nudge, the review request, the referral ask). It holds until
-  the reopening or the subject's own deadline, whichever is first; every switch change, Keep and closed-day
+  the end of the closure window (D12: midnight for Closed today; the end of the last closed date; a storm's
+  `until`) or the subject's own deadline, whichever is first; every switch change, Keep and closed-day
   removal makes the account's held rows due on the next tick (`bumpHeldForAccount`, which exists and has no
   caller today); a failed closure read holds for 15 minutes rather than sending (5.5.2).
 - **S11 Precedence:** Storm, then a closed day, then Closed today, then Running late, then Open. On a closed
@@ -138,6 +154,11 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
 - **S21 Events.** `business_status.changed`, `closed_day.added`, `closed_day.removed` and
   `booking.closure_kept`, each through `record_event` on the signed-in client (0053), so the actor is the
   token's.
+- **S22 The dashboard card lists every covered appointment** (orchestrator ruling on the plan review,
+  2026-10-23, implementing D2): each booked appointment the closure in force covers, from now through the
+  closure window's end but at most 14 days ahead (a dated storm, a multi-day closed-day range; an open-ended
+  storm shows 14 days), each with its own Keep. When the cover runs past those 14 days, one line says more
+  appointments after that date are on the calendar. The To-do still links to this card (S7).
 
 ## 3. Scope
 
@@ -214,9 +235,11 @@ bookings.closure_kept_at  timestamptz null   the owner kept this appointment thr
   `app.business_status_stamp()` BEFORE INSERT OR UPDATE on `business_status`: `set_at :=
   now()`, `set_by := coalesce(nullif(app.jwt() ->> 'sub', ''), 'system')`, whatever was sent.
   `app.closed_days_stamp()` BEFORE INSERT on `closed_days`: stamps `created_at` and `created_by` the same way,
-  and refuses (errcode `23514`) a row with `starts_on < current_date - 1` or `ends_on > current_date + 367`
-  (the 12-month window of S4, with a day of slack each way for the account's zone; the action enforces the
-  exact window in the zone first, so the operator gets a sentence). The window is a trigger, not a CHECK,
+  and refuses (errcode `23514`) a row with `starts_on < current_date - 2` or `ends_on > current_date + 367`
+  (the 12-month window of S4, with slack for the account's zone; the action enforces the exact window in the
+  zone first, so the operator gets a sentence). The slack is two days at the start because `current_date` is
+  the UTC date: at 7:30 PM in Chicago it is already tomorrow in UTC, and an Undo that re-adds a range which
+  started yesterday locally must still pass (plan review, 2026-10-23). The window is a trigger, not a CHECK,
   because a CHECK must not read the clock.
 - **`app.keep_task_links()`** re-created (its post-0096 text, `search_path = pg_catalog, pg_temp`, plus two
   lines on each branch): a signed-in INSERT
@@ -267,8 +290,13 @@ same commit as the migration.
     or (account_id = (select app.current_account_id())
         and ((select app.is_account_owner(app.current_account_id()))
              or ((select coalesce(app.account_role(app.current_account_id()) = 'staff', false))
-                 and state in ('open', 'running_late')))))
+                 and state in ('open', 'running_late')
+                 and (state = 'open' or until <= now() + interval '26 hours')))))
   ```
+  The last clause bounds a Staff Running late to the end of today (the app always writes the next midnight in
+  the zone, at most 25 hours away on a fall-back day): without it a Staff member could store `running_late`
+  with an `until` up to the 100-day CHECK and keep the business "late" for months (plan review, proven on a
+  replica, 2026-10-23).
   `using` reads the row as it is (the OLD state), `with check` the row as written (the NEW state), so a Staff
   member can move only between Open and Running late, never to a closure and never out of one. The one
   widening on the old row is an EXPIRED closure (`until` passed; an open-ended storm has `until` null and never
@@ -364,22 +392,28 @@ zone's, never the server's.
   `[starts_on, ends_on]`. When both apply, the precedence is S11's.
 - **`reopeningFrom(from, hours, timezone, closedDays)`**: the first opening at or after `from` that is not on a
   closed day: the first span start at or after `from` on its own day, else the first span of each following
-  day, skipping days with no hours and closed days, up to 400 days; with `hours` null, the start (00:00) of
-  the first day after `from`'s day that is not closed. `reopensTimeKnown` is false in the midnight case (the
-  sentences then say the day only). A wall time inside a DST gap resolves to the first minute after the gap.
-  For Closed today and a dated Storm the reader passes `row.until` as `from`, so a closed day straight after
-  the closure is skipped in what is said; for a closed day it passes the day after `ends_on` at 00:00.
-- **`untilFor(change, hours, timezone, closedDays, now)`**, used only when the switch is SET (5.2): Closed
-  today → `reopeningFrom(start of tomorrow, hours, timezone, [])`, the first opening on a LATER day (S1),
-  closed days ignored (precedence handles them and the reader skips them in speech); Running late → the
-  start of tomorrow (the end of today); Storm with a back-on date `D` → `reopeningFrom(start of D, …, [])`;
-  Storm without → null; Open → null.
+  day, skipping days with no hours and closed days, up to 400 days; with `hours` null, the first start of a
+  day (00:00) at or after `from` whose day is not closed (plan SD3: "at or after", so a `from` that IS a
+  midnight counts). `reopensTimeKnown` is false in the midnight case (the sentences then say the day only). A
+  wall time inside a DST gap resolves to the first minute after the gap; in a zone whose midnight is the
+  gap (Havana, Santiago, Beirut), the start of the day is 01:00 local.
+  For Closed today and a dated Storm the reader passes `row.until` as `from` (for Closed today that is the
+  midnight ending the closure window, D12, so the reopening said is the first opening on a later day, S1), so
+  a closed day straight after the closure is skipped in what is said; for a closed day it passes the day after
+  `ends_on` at 00:00.
+- **`untilFor(change, hours, timezone, now)`**, used only when the switch is SET (5.2): Closed today → the
+  start of tomorrow in the zone (D12: the window ends at midnight); Running late → the start of tomorrow (the
+  end of today); Storm with a back-on date `D` → `reopeningFrom(start of D, hours, timezone, [])`; Storm
+  without → null; Open → null. (No `closedDays` parameter: none of the changes reads them, plan SD13.)
 - **`slotClosures(input)`**, for the slot engine: `{ closedDayKeys, blockedBefore, blockAll, lateBefore }`
-  from the row in force and the ranges (5.3).
-- **`coversAppointment(input, startsAt)`**, for the hold gate: true when `startsAt` falls on a closed day, or
-  the row in force is Closed today or Storm and `startsAt` is in `[row.set_at, row.until)` (`until` null =
-  no end). Running late covers nothing (D4: booking stays open, nothing is held). Returns the instant the
-  cover ends (`reopensAt`, or null for an open-ended storm).
+  from the row in force and the ranges (5.3). For Closed today `blockedBefore` is the stored `until`, so only
+  the rest of today's times are refused (D12).
+- **`coversAppointment(input, startsAt)`**, for the hold gate, against each closure's WINDOW (D12): Closed today
+  or a dated Storm in force, `startsAt` in `[row.set_at, row.until)`; an open-ended Storm, `startsAt >=
+  row.set_at`; a closed day, `startsAt` on one of its dates. Running late covers nothing (D4: booking stays
+  open, nothing is held). Returns the instant the window ends: `row.until` (Closed today's midnight; a dated
+  storm's first opening), the start of the day after the range's last date, or null for an open-ended storm.
+  A cover whose window has already ended at `now` holds nothing (plan SD6).
 - **`statusCode(effective)`**: S6's code for `calls.business_status`.
 
 ### 5.2 Setting the status (server actions, tier MEDIUM)
@@ -424,7 +458,9 @@ menu component wherever it is mounted (the topbar and the dashboard card):
   dropped) and `bookableRange` (null), so `computeMoveSlots` and `movableRange` inherit it and the
   "every offered slot passes the submit check" invariant (`slots.test.ts`) still holds:
   - a closed day: the start's account-zone date key is in `closedDayKeys`;
-  - Closed today, or a Storm with a date: `start < blockedBefore` (the row's `until`);
+  - Closed today, or a Storm with a date: `start < blockedBefore` (the row's `until`: for Closed today the
+    midnight that ends today, D12, so tomorrow's first slot is offered whatever hours source a reopening
+    would be computed from; a Saturday the calendar opens stays bookable after a Friday closure);
   - a Storm with no date: `blockAll`, every slot;
   - Running late: `start < lateBefore`, where `lateBefore = min(now + late_minutes, until)`, so only TODAY's
     slots within the delay go (D4); at 11 PM with 120 minutes, tomorrow's 00:30 stays.
@@ -562,7 +598,8 @@ with the new fields absent, null, `[]`, and `businessStatus: { state: "open", ne
   dashboard with `#business-status`, and for `closed_day`, the Calendar page with `?closedDay={on}#closed-days`
   (the card opens that range's appointment list). A contact-less To-do with a closure link is a link, not the
   plain row.
-- **The list it points to** (5.6.2, 5.6.3): each affected appointment with its time, the customer's name
+- **The list it points to** (5.6.2, 5.6.3; S22): each appointment the closure covers, through the
+  closure window's end but at most 14 days ahead, with its time, the customer's name
   linked to their record, the number of messages waiting for it, and two actions: Keep (S9) and "Cancel on the
   calendar", a link to that booking on the Calendar page (`#booking-{id}`; `bookings-list.tsx` rows gain the
   id), where the existing cancel and its notice run (D2).
@@ -580,21 +617,26 @@ sending-hours check:
 - `HoldSubject` gains `appointmentAt?: Date`. The seven booking recipes set it from the due row's
   `starts_at` (their subject key is already `booking:{id}`): `reminders`, `sms_reminder`,
   `appointment_confirm`, `followups`, `no_show_nudge`, `review_request`, `referral_ask`. No other recipe sets
-  it, so nothing else changes.
+  it, so nothing else changes. `HoldSubject` also gains `kept?: boolean`, set by the same seven from the due
+  row's own `closure_kept_at` (each of the seven due-row selects, and the by-id re-reads the releasers use,
+  gain `closure_kept_at`). Keep therefore holds however old the appointment is: the review request runs up to
+  61 hours after the appointment ends and the referral ask up to 85 (`REVIEW_REQUEST_MAX_AGE_MS`,
+  `REFERRAL_ASK_MAX_AGE_MS`, `packages/db/src/automations.ts`), longer than any window a loader could guess
+  (plan review, 2026-10-23).
 - `PassContext` gains `closures(accountId)`, a per-tick memoised loader (built in `buildPassContext`,
-  serviceDb): the status row, the closed days ending on or after yesterday, the hours chain, the zone, and the
-  ids of the account's bookings with `closure_kept_at` set and `starts_at` within the last two days or later.
-  One read per account per tick, whatever the number of subjects.
-- **The check.** With `appointmentAt` set, the booking not kept, and `coversAppointment` true:
+  serviceDb): the status row, the closed days ending on or after yesterday, the hours chain and the zone of
+  THAT account (the subject's own `accountId`). One read per account per tick, whatever the number of subjects.
+- **The check.** With `appointmentAt` set, the booking not kept, and `coversAppointment` true with a window
+  that has not ended at `now`:
   - if the subject's `deadline` has passed: skipped, "Not sent: the business was closed for this
     appointment" (the reminder after the appointment is worse than none, choice 21's reasoning);
-  - otherwise held, `held_until` = the earlier of the cover's end (the reopening) and the subject's
+  - otherwise held, `held_until` = the earlier of the closure window's end (D12) and the subject's
     `deadline`; for an open-ended storm with no deadline, now + 24 hours (a daily second look, so the row
     never sits with a past `held_until` and starves the queue, the reason `REASONS.smsCooldown` exists).
     Reasons (client-readable on the Activity page, catalogue keys with Spanish twins, stored in English as
     the others are): "Held: the business is closed today", "Held: closed for a storm", "Held: the business
     is closed that day".
-- **Release.** Naturally, at the first tick after the reopening (or the deadline, which then skips). Early,
+- **Release.** Naturally, at the first tick after the window ends (or the deadline, which then skips). Early,
   on the next tick, whenever the switch changes, an appointment is kept, or a closed day is removed: each of
   those actions calls `bumpHeldForAccount` (serviceDb), which sets every held row of the account due now;
   `holdOrSend` re-holds what is still covered or still inside sending hours. "The next run" (D6) is therefore
@@ -648,8 +690,10 @@ carries bilingual copy from its first day).
   (`canChange` null), so a Staff member is never offered a change the policy would refuse.
 - **After a change** the indicator shows the action's answer at once (a local value that the next snapshot
   for the account replaces) and the page refreshes (`router.refresh()`), so the dashboard card agrees. The
-  toast says what changed and what it means ("Closed for today. Sofía and your booking page now say so."),
-  adds "A To-do lists today's 3 appointments." when one was filed, and carries Undo. A refused change: an error
+  toast says what changed and what it means ("Closed for today. Your booking page now says so."), adds
+  "Sofía says so too." when the account has a voice profile (an account without one still has the switch, so
+  the persona is never assumed; plan SD19), adds "A To-do lists today's 3 appointments." when one was filed,
+  and carries Undo. A refused change: an error
   toast with the reason, the old status kept.
 - Technicians, and Staff during a closure: the same words, no button. A stale tab shows the status as of its last navigation
   (never polled, S15); the expiry is evaluated on the server at each fetch.
@@ -663,16 +707,17 @@ state, never the page's).
 - **Not open:** the state as dot + word, when it ends in words ("Opens again tomorrow at 8:00 AM", "Until you
   reopen", "Ends at midnight"), the reason on a closed day, and the "Change" button for whoever has a
   `canChange` (the same menu, two items for Staff during Running late; no button for Staff during a closure).
-  Then **Today's appointments**: each covered, booked appointment from now to the end of today,
-  with its time, the customer's name linked to the record, "{n} messages waiting" when any are held, Keep
-  (ghost; once kept, "Kept" with Undo in the toast) and "Cancel on the calendar" (a link). Under the list, when
-  later appointments are covered too (a storm, a multi-day closed day): "Reminders are also on hold for {n}
-  later appointments." linking to the Calendar page. Running late shows only the state, the end, and "Booking
-  stays open; times in the next {N} minutes are hidden."
+  Then **Affected appointments** (S22): each booked appointment the closure covers, from now through the
+  closure window's end but at most 14 days ahead (today only for Closed today, D12; a dated storm to its
+  `until`; a multi-day closed day to its last date; an open-ended storm 14 days), with its date and time, the
+  customer's name linked to the record, "{n} messages waiting" when any are held, Keep (ghost; once kept,
+  "Kept" with Undo in the toast) and "Cancel on the calendar" (a link). When the cover runs past those 14 days:
+  "More appointments after {date} are on the calendar." linking to the Calendar page. Running late shows only
+  the state, the end, and "Booking stays open; times in the next {N} minutes are hidden."
 - **Empty (open):** one compact line, "● Open today", with Change for Owners, the agency and Staff (their
   two-item menu, D8); plus "Next closed
   day: Thursday, December 24 (holiday)" when one is within 14 days (S16).
-- **No affected appointments:** "No appointments today are affected."
+- **No affected appointments:** "No appointments are affected."
 - **Error:** "Couldn't load today's status." with a Retry link (a reload), and the rest of the dashboard
   renders.
 - **Loading:** a skeleton shaped like the compact line (rule 7).
@@ -734,11 +779,17 @@ form, full and short, as literal test fixtures.
 ## 7. Tests
 
 - **Status reader:** every state in force and expired (`until` passed reads open); precedence (S11) for each
-  pair; Closed today set at 7 AM before an 8 AM opening reopens TOMORROW (S1); `reopeningFrom` with business
-  hours, with only calendar hours, with none (midnight, `reopensTimeKnown` false), across a weekend, skipping
-  a closed range; the Saturdays before spring-forward and fall-back in `America/Chicago` (the stored `until`
-  is 8:00 AM wall time on the Sunday or Monday); Running late at 11 PM with 120 minutes leaves tomorrow's
-  00:30; `coversAppointment` for each state, the `[set_at, until)` edges, Running late covering nothing.
+  pair; Closed today set at 7 AM before an 8 AM opening stores `until` = tonight's midnight and SAYS it
+  reopens TOMORROW (S1, D12); `reopeningFrom` with business hours, with only calendar hours, with none
+  (midnight, `reopensTimeKnown` false), across a weekend, skipping a closed range; the Saturdays before
+  spring-forward and fall-back in `America/Chicago` (the stored `until` is midnight starting the Sunday; the
+  reopening said is 8:00 AM wall time on the Sunday or Monday); zones whose MIDNIGHT is the DST gap (Havana
+  2027-03-14, Santiago 2026-09-06, Beirut 2027-03-28: the start of the day is 01:00 local) and Santiago's
+  fall-back day (2027-04-04), each through the start of a day, Running late's `until`, Closed today's window
+  end and the no-hours reopening; D12's two-hours-sources case (business hours Monday to Friday, the calendar
+  open Saturday: a Friday Closed today blocks no Saturday slot and holds no Saturday reminder); Running late at
+  11 PM with 120 minutes leaves tomorrow's 00:30; `coversAppointment` for each state, the `[set_at, until)`
+  edges, Running late covering nothing.
 - **Slot engine:** each closure drops exactly its slots and `bookableRange` refuses exactly those starts
   (mutation: apply the rule in `computeSlots` only → the "every offered slot is bookable" test still passes
   but the submit test FAILS); `closures` absent leaves every existing test's output unchanged; the move flow
@@ -756,8 +807,11 @@ form, full and short, as literal test fixtures.
 - **Payload:** schema 2 build and round-trip; schema-1 snapshots still parse (closed days `[]`); a failed
   closed-days read is not recordable; `renderer_version` 2; deterministic order.
 - **The hold (HIGH):** for each of the seven recipes, a covered appointment is held with the closure reason
-  and `held_until` = min(reopening, deadline); a kept one sends; a past deadline skips with the closed
-  reason; an open-ended storm holds 24 h; a failed loader holds 15 min; a recipe without `appointmentAt`
+  and `held_until` = min(window end, deadline); a kept one sends, including an appointment that ended 3 days
+  ago under a multi-day closure (Keep read from the subject's own row, not a loader window); a past deadline
+  skips with the closed reason; an open-ended storm holds 24 h; a failed loader holds 15 min; a subject of
+  account B sends while only account A is closed (the loader is asked for the subject's own account; mutation:
+  a hard-coded or other account id → FAILS); a recipe without `appointmentAt`
   (instant reply, text-back, reactivation, quote follow-up, document request) is untouched; release: the
   switch to Open plus one tick sends what is due; Keep plus one tick sends; removing a closed day plus one
   tick sends; the loader reads once per account per tick (mutation: no memo → the read count FAILS).
@@ -778,12 +832,17 @@ form, full and short, as literal test fixtures.
 - **db (HIGH):** 0097's shape; each CHECK clause by a mutation probe (`business_status_shape_check` per
   state, `late_minutes` values, the `until` bounds, the range length, the reason list, `calls.business_status`
   codes, `tasks_closure_coherent`); the stamp triggers ignore a sent `set_by`, `set_at`, `created_by`; the
-  `closed_days` window trigger; grants: an Owner updates `business_status` and inserts and deletes
-  `closed_days`; the Staff branch of `business_status_update` (D8), one probe per cell: Staff update Open →
-  Running late, Running late → Open and an expired `closed_today` → Running late (one row each), and update
-  zero rows for Open → Closed today, Open → Storm, Running late → Closed today, Running late → Storm, and
-  Closed today (in force) → Open, Storm (dated, in force) → Open, Storm (open-ended) → Open and → Running late
-  (mutation: drop the `with check` state clause → the "to a closure" probes FAIL; drop the `using` state
+  `closed_days` window trigger (two days before the UTC date accepted, three refused); grants: an Owner
+  updates `business_status` and inserts and deletes `closed_days`; an Owner of ANOTHER account cannot insert
+  into this one, probed as a plain insert with no `returning` (a `returning` insert is refused by the READ
+  policy whatever the insert policy says; mutation: drop the `account_id` clause from
+  `closed_days_owner_insert` → that case FAILS); the Staff branch of `business_status_update` (D8), one probe
+  per cell: Staff update Open → Running late, Running late → Open and an expired `closed_today` → Running late
+  (one row each); Staff Open → Running late with an `until` 99 days out is refused (the 26-hour bound,
+  mutation: drop it → FAILS); Open → Closed today, Open → Storm, Running late → Closed today and Running late
+  → Storm are refused with 42501 (WITH CHECK raises; plan SD1), and Closed today (in force) → Open, Storm
+  (dated, in force) → Open, Storm (open-ended) → Open and → Running late update zero rows (USING matches no
+  row) (mutation: drop the `with check` state clause → the "to a closure" probes FAIL; drop the `using` state
   clause → the "out of a closure" probes FAIL; drop the expiry carve-out → the expired-closure probe FAILS);
   Staff insert and delete no `closed_days`; a Technician updates and inserts nothing (zero rows / refused);
   every member reads,
@@ -796,7 +855,9 @@ form, full and short, as literal test fixtures.
   the status on each turn and its closed days from the snapshot.
 - **UI (LOW):** the topbar forms per state and width, English and Spanish, as literal fixtures (D9); the
   button only for a `canChange`; the full menu for "all", exactly the two items for "late_only", no button for
-  Staff during a closure; the card's states; the Closed days card for an Owner and read-only for Staff; the
+  Staff during a closure; the card's states, and its list running to the closure window's end but at most 14
+  days (a three-day dated storm lists all three days' appointments, each with Keep; S22); the Closed days card
+  for an Owner and read-only for Staff; the
   booking page notices in both languages.
 - **e2e (LOW, the per-run fixture account only; never Test Client One):** an Owner sets Closed today from the
   topbar, sees "Closed today" on the topbar and the card, presses Undo, sees it open again; adds a closed day
@@ -853,3 +914,9 @@ it does):
   reuses it as the "next run" lever.
 - **F6 (resolved by 5.6.2)** A held row records its cause only as reason text, so the card counts every held
   message of an affected booking ("{n} messages waiting"), whatever held it.
+- **F7 (resolved by D12)** Closed today's end was computed from the hours chain, which prefers business hours
+  over the calendar's: with business hours Monday to Friday and a calendar open on Saturday, a Friday closure
+  silently refused Saturday's slots and held Saturday's reminders until Monday. D12 ends the window at midnight
+  and keeps the hours chain only for what is said.
+- **F8 (resolved in 5.5.2)** A loader that read kept bookings starting within the last two days missed the
+  review request (61 hours after the end) and the referral ask (85 hours): Keep is now read from each due row.

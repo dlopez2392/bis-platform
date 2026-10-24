@@ -27,8 +27,13 @@
 
 **Tech stack:** Next.js App Router (server components, server actions), Supabase Postgres + PostgREST, plpgsql, vitest, Playwright, `pg`, Radix (shadcn) `DropdownMenu`/`Dialog`, `sonner`.
 
-**Spec:** `docs/superpowers/specs/2026-10-23-one-switch-design.md` at `d280b847`.
-- D1–D11 are the owner's and are not reopened. S1–S21 are binding except where "Spec deviations" below records code evidence against one.
+**Spec:** `docs/superpowers/specs/2026-10-23-one-switch-design.md`, as amended in this plan's fix-round commit.
+- D1–D12 are the owner's and are not reopened. S1–S22 are binding except where "Spec deviations" below records code evidence against one.
+- **Fix round (2026-10-23, after the opus plan review):**
+  - Owner ruling **D12**: Closed today's window ends at midnight; the reopening said and shown is still the hours chain's.
+  - The orchestrator's **S22**: the dashboard card lists every covered appointment, up to 14 days.
+  - Nine findings applied: the `security definer` byte rule; the cross-account insert probe; Keep per subject; the Staff 26-hour bound; S22; the hold's own-account case; the midnight-DST fixtures; the two-day trigger slack; SD19 and the teardown doc comment.
+  - The spec carries all of it in the same commit.
 - Every file:line below was read at `d280b847` (= `origin/main` `5e9c07a7` + the spec; `git diff 5e9c07a7 d280b847 --stat` touches only the spec file).
 - **Task 0 rebases the branch onto main after 0096 merges.** Every cite into a file that the 0096 PR changes must then be re-read. That PR changes:
   - the call page, the knowledge page and the Services card (with their tests);
@@ -54,11 +59,23 @@ Path abbreviations:
 
 ---
 
-## Plan-writer check (done 2026-10-23, before this plan was committed)
+## Plan-writer check (done 2026-10-23, before this plan was committed; re-run in the fix round)
 
 The SQL in Task 1 Step 4 was applied, exactly as printed there, to the plan writer's own PG18 replica on port 55470:
-- `pre` = every migration through 0095, plus 0096 taken from `origin/fix/s47c-followups` (`git show origin/fix/s47c-followups:packages/db/supabase/migrations/0096_definer_search_path.sql`; its NOTICE read "77 functions now list pg_temp last").
+- `pre` = every migration through 0095, plus 0096. The fix-round run took 0096 from `origin/main` `964a46bd` (#285); `git diff 88edf276 origin/main -- …0096_definer_search_path.sql …definer-search-path.test.ts` prints nothing, so it is the same file the first run used. Its NOTICE read "77 functions now list pg_temp last".
 - `post` = `pre` + 0097.
+
+**Fix-round re-run** (the revised SQL: items 1, 4 and 8 and D12's comments):
+- **Digest:** still `52|b66203ca5d355155540b520af510d120`; none of the changes adds a table-level grant.
+- **Tests on `post`:** `definer-search-path.test.ts` (from main) is GREEN. Across `schema-grants-guard`, `proposals-drop` and the seven schema suites below, 10 files ran and 259 of 261 tests passed. The only two failures are the `EXPECTED_WRITES` and digest literals Task 1 updates.
+- **Rollback:** exact, as below.
+- **New probes:**
+  - Staff `running_late` with `until = now() + 99 days` → 42501. The same with `+ 25 hours` → 1 row. An Owner with `+ 99 days` → 1 row (the bound is Staff only).
+  - The window: `current_date - 2` is accepted; `current_date - 3` is refused with the new sentence.
+  - Account B's Owner inserting into account A is refused 42501, with and without `returning`.
+  - With `closed_days_owner_insert` stripped of its `account_id` clause, the `returning` insert is STILL refused (by the read policy), but the plain insert goes through (`rows_in_a` = 1). That proves finding 2: only the plain form tests the insert policy.
+- **Bytes:** `grep -ci "security definer"` now prints `0`.
+- **md5:** `0c6ed6130fbdd3fd18d92a7429512a35`.
 
 Read off it:
 - **Client-write digest:** `pre` = `51|0dd3e2d7e19f3f3649a893cfd9967d94` (the literal at `packages/db/src/test/proposals-drop.test.ts:98`). `post` = **`52|b66203ca5d355155540b520af510d120`**, exactly the value spec §4.1 computed.
@@ -81,7 +98,7 @@ Read off it:
   - A client updating `set_by`, or inserting into `business_status`: `permission denied`.
   - A client sending `created_by`: `permission denied`.
   - Staff inserting `closed_days`: RLS error. Staff deleting: 0 rows. Owner deleting: 1.
-  - The window trigger refuses a start 2 days ago with the trigger's sentence (23514).
+  - The window trigger refused a start 2 days ago (23514). The fix round moved the bound to 3 days (item 8, above).
   - A server insert stamps `created_by` = `system`.
   - A past `until` is refused by `business_status_until_check`.
   - A signed-in `tasks` insert stores `closure_kind` NULL.
@@ -94,7 +111,7 @@ Read off it:
   - `cascade` only in the two `on delete cascade` lines;
   - no `''` at all;
   - no apostrophe in any `--` line or comment string.
-- **md5 of the plan writer's file:** `d8655ef30010e7e82c76236c63515d3e`. The implementer's file must match it if copied byte for byte.
+- **md5 of the plan writer's file (fix round):** `0c6ed6130fbdd3fd18d92a7429512a35`. The implementer's file must match it if copied byte for byte. The first run's `d8655ef3…` is superseded.
 - The replica was stopped afterwards.
 
 ---
@@ -111,7 +128,7 @@ Read off it:
 - **SD2. A client cannot send `set_by`, `set_at` or `created_by` at all.** These are column grants, so the request is refused before any trigger runs (probe: `permission denied`). Spec §7's "the stamp triggers ignore a sent `set_by`, `set_at`, `created_by`" is therefore proven as the table owner and as `service_role` (who may write those columns), and the client case is its own "permission denied" test.
 - **SD3. `reopeningFrom` with no hours.**
   - Spec §5.1 says: "the start (00:00) of the first day after `from`'s day that is not closed".
-  - For Closed today with no hours, `untilFor` passes the start of tomorrow, so that rule ends it at the start of the DAY AFTER tomorrow. D3 says "else midnight".
+  - Closed today stores `until` = the start of tomorrow (D12), and the reader passes that midnight as `from`. Read literally, the spec's rule would then say the business reopens at the start of the DAY AFTER tomorrow. D3 says "else midnight".
   - **Resolution:** with `hours` null, the reopening is the first 00:00 **at or after** `from` whose day is not a closed day. A `from` that is exactly 00:00 counts. `reopensTimeKnown` is `hours !== null`.
 - **SD4. Every surface reads the same hours chain, the website chat included.**
   - Spec §5.4.3 gives the chat the status row and the snapshot's closed days, but not the calendar's `open_hours`. The chain (D3) is business hours, else the calendar's hours, and the reader needs it to state a reopening.
@@ -123,7 +140,7 @@ Read off it:
     - Task 3 adds `starts_at` to those three selects and `startsAt: string` to the three Due types and their mappers.
     - `starts_at` exists since 0016, so nothing becomes load-bearing.
     - The other four already carry it: `REMINDER_SELECT` `booking.ts:1348`, `SMS_REMINDER_SELECT` `automations.ts:591`, `APPOINTMENT_CONFIRM_SELECT` `:735`, `FOLLOWUP_SELECT` `booking.ts:1483`.
-- **SD6. The hold applies only while the cover has not ended at the tick's `now`.**
+- **SD6. The hold applies only while the cover's WINDOW has not ended at the tick's `now`** (folded into spec §5.1 and §5.5.2 in the fix round; with D12 the window ends at Closed today's midnight, at the start of the day after a closed range, or at a dated storm's `until`).
   - Spec §5.1's `coversAppointment` is true for an appointment on ANY listed closed day. So a review request due today for an appointment on yesterday's closed day would be "held until the reopening" — an instant already in the past.
   - The row would then come back every tick with a past `held_until`. That is the starvation `REASONS.smsCooldown` exists to prevent (`hold-or-send.ts:122-131`).
   - **Resolution:** the closure check holds only when `cover.endsAt === null || cover.endsAt > now`. Otherwise the send goes on. This matches D6 ("they go out on the next run if the closure ends").
@@ -137,7 +154,7 @@ Read off it:
   - Evidence: `activity-table.tsx:53-55` renders `row.reason` verbatim, and no map from stored reason to key exists. `REASONS.ledgerRetry` is `m["automations.reason.ledgerRetry"]`, the English value (`hold-or-send.ts:92`).
   - **Resolution:** the five new reasons are catalogue keys with `.es` twins (the ratchet requires twins for a new key), referenced through `m[...]` exactly as `ledgerRetry` is. The Activity page keeps showing the stored English, as it does for every reason today.
   - Translating stored reasons is out of scope; it is noted for the owner.
-- **SD9. Keep lives in the two lists of affected appointments, not in the main Calendar bookings list.**
+- **SD9. Keep lives in the two lists of affected appointments, not in the main Calendar bookings list.** The fix round narrows it further. Per S22, the dashboard card's list covers every appointment the closure covers, through its window's end and at most 14 days ahead, each with Keep. The Closed days card's per-range list keeps its own Keep. The spec's S9 now says so.
   - S9 says Keep is "set from the dashboard card or the Calendar's bookings list".
   - The main list (`[acct]/calendar/bookings-list.tsx:206-287`) shows every booking, and most of them no closure covers.
   - **Resolution:**
@@ -183,6 +200,17 @@ Read off it:
     - `releaseSmsReminder` does the same (`sms-reminder.ts:177-180`).
   - So a reminder held by a closure until its deadline (= the start) is skipped with that reason, not with "Not sent: the business was closed for this appointment".
   - **Resolution:** accepted. The send is still skipped, which is the point. The closed reason is pinned at the `holdOrSend` level, where the first pass meets a passed deadline.
+- **SD19. The toasts do not say "Sofía and your booking page now say so."** Spec §5.6.1's example names the persona, but an account with no voice profile still has the switch (spec S15).
+  - **Resolution:** each toast says what changed on the booking page (`business.toast.*`, Task 2). `business.toast.persona` ("{persona} says so too.") is appended only when a persona name is known.
+  - The spec's §5.6.1 example is updated to match in the fix round. The design reviewer reads it at 7 AM.
+- **SD20. Keep is read from each due row, not from the loader** (fix-round finding 3).
+  - Evidence: the first draft's loader read kept bookings with `starts_at >= now - 2 days`. But the review request runs until `REVIEW_REQUEST_MAX_AGE_MS` (61 h) after the appointment ENDS (`packages/db/src/automations.ts:176`), and the referral ask until `REFERRAL_ASK_MAX_AGE_MS` (85 h, `:997`). So a kept appointment three days old under a multi-day closed day or storm was held anyway.
+  - **Resolution:**
+    - Each of the seven due-row selects gains `closure_kept_at`; the by-id re-reads use the same selects, so a release sees a fresh Keep. The seven are `REMINDER_SELECT` `booking.ts:1348`, `FOLLOWUP_SELECT` `booking.ts:1483`, `REVIEW_REQUEST_SELECT` `automations.ts:263`, `NO_SHOW_NUDGE_SELECT` `:441`, `SMS_REMINDER_SELECT` `:591`, `APPOINTMENT_CONFIRM_SELECT` `:735` and `REFERRAL_ASK_SELECT` `:1037-1038`.
+    - Each Due type gains `closureKeptAt: string | null`.
+    - `HoldSubject` gains `kept?: boolean`.
+    - The loader no longer reads kept ids.
+  - The spec's §5.5.2 is updated to match.
 - **Confirmed, not deviations:**
   - The only callers of the four `availability.ts` functions are the three named in spec §5.3:
     - `…/b/actions.ts:151` and `:277`;
@@ -281,7 +309,9 @@ Read off it:
 | `packages/db/src/business-status.ts` (new), `packages/db/src/index.ts:144` (one `export *` after it) | 3 | rows, reads, writers |
 | `packages/db/src/voice.ts:322-361` (`startCallRow`), `:1010-1024` (`CallDetailRow`, `CALL_DETAIL_COLS`) | 3 | the call stamp |
 | `packages/db/src/work-queue.ts:10-34` (`WorkRow`), `:56` (select), the mapper below it | 3 | `closureFocus` |
-| `packages/db/src/automations.ts:191-219`/`:263`, `:412-434`/`:441`, `:999-1029`/`:1037-1038` (types/selects) and their mappers | 3 | `startsAt` (SD5) |
+| `packages/db/src/automations.ts:191-219`/`:263`, `:412-434`/`:441`, `:999-1029`/`:1037-1038` (types/selects) and their mappers | 3 | `startsAt` (SD5) and `closureKeptAt` (SD20) |
+| `packages/db/src/booking.ts:1348` (`REMINDER_SELECT`), `:1483` (`FOLLOWUP_SELECT`); `packages/db/src/automations.ts:591` (`SMS_REMINDER_SELECT`), `:735` (`APPOINTMENT_CONFIRM_SELECT`); their Due types and mappers | 3 | `closureKeptAt` (SD20) |
+| `packages/db/src/account-teardown.ts` (the doc block at `:40-113` that explains each account-owned table left off `ACCOUNT_OWNED_TABLES`, the S-47c paragraph on `voice_services` and `voice_knowledge_snapshots` among them) | 3 | doc comment only: add `business_status` and `closed_days` (fix-round item 9) |
 | `packages/db/src/automation-log.ts:124-130` | 9 | doc comment only |
 | `packages/db/src/test/business-status.test.ts` (new) | 3 | PostgREST |
 | `…/bstatus/status.ts` (+ `status.test.ts`) | 4 | new, pure, relative imports only |
@@ -321,10 +351,10 @@ Read off it:
 | `calls.business_status` | text, nullable, no default. `calls_business_status_check`: the eight codes of S6. |
 | `tasks.closure_kind` / `tasks.closure_on` | text (`tasks_closure_kind_check`: status, closed_day) / date. `tasks_closure_coherent`. Unique `tasks_closure_once (account_id, closure_kind, closure_on) where closure_kind is not null`. |
 | `bookings.closure_kept_at` | timestamptz, nullable, no default. |
-| Triggers | `business_status_stamp` BEFORE INSERT OR UPDATE → `app.business_status_stamp()`. `closed_days_stamp` BEFORE INSERT → `app.closed_days_stamp()`, which also refuses (23514) `starts_on < current_date - 1` or `ends_on > current_date + 367`. Both are plain plpgsql, not definer, `set search_path = pg_catalog, pg_temp`. |
+| Triggers | `business_status_stamp` BEFORE INSERT OR UPDATE → `app.business_status_stamp()`. `closed_days_stamp` BEFORE INSERT → `app.closed_days_stamp()`, which also refuses (23514) `starts_on < current_date - 2` or `ends_on > current_date + 367`. That is two days of slack because `current_date` is the UTC date (fix-round item 8). Both are plain plpgsql, not definer, `set search_path = pg_catalog, pg_temp`. |
 | `app.keep_task_links()` | 0084's body plus `closure_kind`/`closure_on` on both branches, `set search_path = pg_catalog, pg_temp`. |
 | Grants | `business_status`: SELECT → authenticated, service_role; UPDATE (state, late_minutes, until) → authenticated; INSERT → service_role. `closed_days`: SELECT → authenticated, service_role; INSERT (account_id, starts_on, ends_on, reason) and DELETE → authenticated; INSERT and DELETE → service_role. Everything else is revoked from public, anon, authenticated and service_role. |
-| Policies | `business_status_member_read` (select). `business_status_update` (update; Owner branch + Staff branch, USING = old row, WITH CHECK = new row). `closed_days_member_read` (select). `closed_days_owner_insert` (insert, WITH CHECK). `closed_days_owner_delete` (delete, USING). The deparsed text is pinned in Task 1. |
+| Policies | `business_status_member_read` (select). `business_status_update` (update; Owner branch + Staff branch, USING = old row, WITH CHECK = new row). The Staff WITH CHECK also requires `state = 'open' or until <= now() + interval '26 hours'` (fix-round item 4). `closed_days_member_read` (select). `closed_days_owner_insert` (insert, WITH CHECK). `closed_days_owner_delete` (delete, USING). The deparsed text is pinned in Task 1. |
 | Events (app side, `emit` on the signed-in client → `record_event`) | `business_status.changed` `{ from, to, late_minutes, until }`; `closed_day.added` `{ id, starts_on, ends_on, reason }`; `closed_day.removed` (same shape); `booking.closure_kept` `{ booking_id, kept }`. |
 
 ### `@bis/db` (Task 3) — `packages/db/src/business-status.ts`
@@ -352,7 +382,7 @@ export type ClosureAppointment = {
 export type HoursChainRaw = { businessHours: unknown; calendarHours: unknown };
 export type ClosureSnapshot = {
   timezone: string | null; row: BusinessStatusRow | null; closedDays: ClosedDayRow[];
-  hours: HoursChainRaw; keptIds: string[];
+  hours: HoursChainRaw;                 // no kept ids: Keep is read from each due row (SD20)
 };
 
 export const BUSINESS_STATUS_COLS = "account_id, state, late_minutes, until, set_by, set_at";
@@ -391,12 +421,11 @@ export async function ensureClosureTask(db: SupabaseClient, accountId: string,
   input: { kind: ClosureKind; on: string; title: string; createdBy: string }): Promise<{ id: string; created: boolean }>;
 /** service_role. Deletes the task only while it is open (completed_at null) and still a closure To-do. */
 export async function deleteOpenClosureTask(db: SupabaseClient, accountId: string, taskId: string): Promise<boolean>;
-/** The cron loader's one read per account per tick (Task 9): accounts.timezone, the row, closed days
- *  ending on or after `sinceDate`, the hours chain, and the ids of bookings with closure_kept_at set and
- *  starts_at >= sinceIso. Throws when any of the first three or the kept read fails (the hours chain
- *  never throws). */
+/** The cron loader's one read per account per tick (Task 9): accounts.timezone, the row, the closed days
+ *  ending on or after `sinceDate`, and the hours chain, all for THIS accountId. Throws when any of the
+ *  first three fails (the hours chain never throws). */
 export async function loadClosureSnapshot(db: SupabaseClient, accountId: string,
-  since: { date: string; iso: string }): Promise<ClosureSnapshot>;
+  since: { date: string }): Promise<ClosureSnapshot>;
 ```
 
 Other `@bis/db` changes (Task 3):
@@ -411,6 +440,9 @@ Other `@bis/db` changes (Task 3):
 // packages/db/src/automations.ts (SD5)
 // NO_SHOW_NUDGE_SELECT, REVIEW_REQUEST_SELECT, REFERRAL_ASK_SELECT gain "starts_at"; DueNoShowNudge,
 // DueReviewRequest, DueReferralAsk gain startsAt: string (mapped from starts_at)
+// The seven booking-subject selects (SD20): REMINDER_SELECT and FOLLOWUP_SELECT (booking.ts), SMS_REMINDER_SELECT,
+// APPOINTMENT_CONFIRM_SELECT, REVIEW_REQUEST_SELECT, NO_SHOW_NUDGE_SELECT, REFERRAL_ASK_SELECT (automations.ts)
+// gain "closure_kept_at"; each Due type gains closureKeptAt: string | null (mapped from closure_kept_at)
 ```
 
 ### The reader (Task 4) — `…/bstatus/status.ts` (pure; imports only `../booking/slots`)
@@ -463,27 +495,27 @@ Rules (spec §5.1 plus SD3 and SD6):
   - With `hours` null, return the first `startOfDay(k)` that is `>= from` on a non-closed day `k`, with `timeKnown: false`.
   - If 400 days pass with no result, return the null-hours answer.
 - **`effectiveStatus`:**
-  - `closed_today` and `storm` with `until`: `reopeningFrom(new Date(until), …, closedDays)`.
+  - `closed_today` and `storm` with `until`: `reopeningFrom(new Date(until), …, closedDays)`. For Closed today `until` is the midnight ending today (D12), so this is the first opening on a later day (S1), computed on read from whatever hours chain is current.
   - `storm` with `until` null: `reopensAt` is null and `reopensTimeKnown` is false.
   - `closed_day`: `reopeningFrom(startOfDay(addDays(ends_on, 1)), …, closedDays)`.
   - `running_late`: `endsAt = new Date(until)`.
   - `open`: `nextClosedDay` is the range with the earliest `starts_on` in `[addDays(today, 1), addDays(today, 14)]`, else null.
 - **`untilFor`:**
   - `open` → null.
-  - `closed_today` → `reopeningFrom(startOfDay(addDays(today, 1)), hours, tz, []).at` (S1).
+  - `closed_today` → `startOfDay(addDays(today, 1))`. D12: the closure window ends at midnight; the reopening that is said is the reader's, above.
   - `running_late` → `startOfDay(addDays(today, 1))`.
   - `storm` with `backOn` → `reopeningFrom(startOfDay(backOn), hours, tz, []).at`.
   - `storm` with `backOn` null → null.
 - **`slotClosures`:**
   - `closedDayKeys` is every date key of every range given.
-  - Row in force, `closed_today`, or `storm` with `until`: `blockedBefore = new Date(until)`.
+  - Row in force, `closed_today`, or `storm` with `until`: `blockedBefore = new Date(until)`. For Closed today that is tonight's midnight (D12), so tomorrow's slots stay bookable whichever hours source would have said when it reopens.
   - `storm` with `until` null: `blockAll = true`.
   - `running_late`: `lateBefore = min(now + late_minutes·60 000 ms, until)`.
   - Every other field is null or false.
-- **`coversAppointment(input, startsAt)`:** checked in precedence order.
-  - Storm in force with `startsAt` in `[set_at, until)` (`until` null = no end) → `{ kind: "storm", endsAt }`, where `endsAt` is the effective `reopensAt`, or null.
-  - Else a closed day holds `dayKey(startsAt)` → `{ kind: "closed_day", endsAt: reopeningFrom(startOfDay(addDays(range.ends_on, 1)), …).at }`.
-  - Else Closed today in force with `startsAt` in `[set_at, until)` → `{ kind: "closed_today", endsAt }`.
+- **`coversAppointment(input, startsAt)`:** checked in precedence order. Each `endsAt` is the end of the closure's WINDOW (D12), never a reopening computed from hours.
+  - Storm in force with `startsAt` in `[set_at, until)` (`until` null = no end) → `{ kind: "storm", endsAt: until ? new Date(until) : null }`.
+  - Else a closed day holds `dayKey(startsAt)` → `{ kind: "closed_day", endsAt: startOfDay(addDays(range.ends_on, 1)) }`.
+  - Else Closed today in force with `startsAt` in `[set_at, until)` → `{ kind: "closed_today", endsAt: new Date(until) }`, tonight's midnight.
   - Running late covers nothing.
 - **`statusCode`:** `open` → `"open"`; `running_late` → `` `running_late_${lateMinutes}` ``; every other state maps to its own name.
 
@@ -517,20 +549,21 @@ export function mayChangeStatus(actor: Actor, effective: EffectiveStatus, change
 
 ```ts
 export type ClosureState =
-  | { ok: true; input: Omit<StatusInput, "now">; keptIds: ReadonlySet<string> }
+  | { ok: true; input: Omit<StatusInput, "now"> }
   | { ok: false };
 export type ClosureLoader = (accountId: string) => Promise<ClosureState>;
-/** One loadClosureSnapshot per account per tick: memoises the PROMISE per accountId; a failed read is
- *  memoised as { ok: false } for the tick. since = { date: dayKey(now - 1 day, "UTC"), iso: now - 2 days }. */
+/** One loadClosureSnapshot per account per tick, always for the accountId it is called with (holdOrSend
+ *  passes the SUBJECT's own s.accountId): memoises the PROMISE per accountId; a failed read is memoised as
+ *  { ok: false } for the tick. since = { date: dayKey(now - 1 day, "UTC") }. */
 export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader;
-/** For tests: every account reads open, no closed days, nothing kept. */
+/** For tests: every account reads open, no closed days. */
 export const NO_CLOSURES: ClosureLoader;
 export type ClosureVerdict = { kind: "send" } | { kind: "held"; until: Date; reason: string } | { kind: "skipped"; reason: string };
-export function closureVerdict(state: ClosureState, s: { appointmentAt: Date; bookingId: string; deadline?: Date | null }, now: Date): ClosureVerdict;
+export function closureVerdict(state: ClosureState, s: { appointmentAt: Date; kept: boolean; deadline?: Date | null }, now: Date): ClosureVerdict;
 ```
 **`closureVerdict`:**
 - `ok: false` → held until `now + LEDGER_RETRY_MS` with `REASONS.heldClosureUnknown`.
-- A kept booking → send.
+- `s.kept` (the subject's own `closure_kept_at`, SD20) → send. A kept booking sends however old the appointment is.
 - `cover = coversAppointment({ ...input, now }, appointmentAt)`.
   - Not covered → send.
   - Covered, with `endsAt !== null && endsAt <= now` (SD6) → send.
@@ -672,13 +705,13 @@ CLOSED DAYS (the business is closed all day on these dates, and no time on them 
 
 ## Assumptions (each labelled, each with its check)
 
-- **A1** 0096 merges before this branch is rebased, and reaches bis-ci and production before 0097 goes anywhere.
+- **A1 — SATISFIED 2026-10-23.** #285 merged as `964a46bd`, and 0096 is on main and on both projects (production version `20261023224205`, as the orchestrator reported). The rest of this item is history. Original wording: 0096 merges before this branch is rebased, and reaches bis-ci and production before 0097 goes anywhere.
   - Check (Task 0): `git -C <WT> log --oneline origin/main -- packages/db/supabase/migrations/0096_definer_search_path.sql` prints the squash commit.
   - Check (Task 0): MCP `list_migrations` (or `select version, name from supabase_migrations.schema_migrations order by version desc limit 2`) shows 0096 on both projects.
 - **A2** No other lane has claimed 0097.
   - Check (Task 0): `git -C <WT> log --all --oneline -- 'packages/db/supabase/migrations/0097*'` prints nothing (read 2026-10-23: nothing).
   - Check (Task 0): after the rebase, `ls packages/db/supabase/migrations | tail -1` is `0096_definer_search_path.sql`.
-- **A3** The 0096 that merges is byte-identical to the one the plan writer applied (`git show origin/fix/s47c-followups:…`, 142 lines).
+- **A3 — VERIFIED 2026-10-23 (fix round):** `git diff 88edf276 origin/main -- packages/db/supabase/migrations/0096_definer_search_path.sql packages/db/src/test/definer-search-path.test.ts` prints nothing at `964a46bd`. Original wording: the 0096 that merges is byte-identical to the one the plan writer applied (`git show origin/fix/s47c-followups:…`, 142 lines).
   - Check (Task 0): `git -C <WT> diff 88edf276 origin/main -- packages/db/supabase/migrations/0096_definer_search_path.sql packages/db/src/test/definer-search-path.test.ts` prints nothing.
   - If it does print something, Task 1 re-reads it before writing 0097.
 - **A4** bis-ci's digest after 0096 is still `51|0dd3e2d7e19f3f3649a893cfd9967d94`. 0096 says "The client-write digest is unchanged", and the replica's `pre` read it. Check: the Task 0 MCP read.
@@ -831,7 +864,13 @@ CLOSED DAYS (the business is closed all day on these dates, and no time on them 
 
 ## Task 0: The 0096 gate, the rebase, pre-reads (orchestrator)
 
-- [ ] **Gate 1: 0096 has merged and is on both projects.** STOP until all three hold:
+- [x] **Gate 1: 0096 has merged and is on both projects — SATISFIED 2026-10-23.**
+  - #285 merged as `964a46bd`, and 0096 is on main and on bis-ci and production (production version `20261023224205`, reported by the orchestrator).
+  - The plan writer confirmed `origin/main` at `964a46bd`, and that its 0096 equals the file the replica used (A3).
+  - The three reads below stay as the record of what "satisfied" means. The orchestrator may re-run them, but they are not a fresh gate.
+  - **The rebase step and the cite re-read below remain the orchestrator's.**
+
+  The three reads:
   1. `git -C <WT> fetch origin`, then `git -C <WT> log --oneline origin/main -3 -- packages/db/supabase/migrations/0096_definer_search_path.sql` prints the 0096 squash commit (`fix/s47c-followups`'s PR).
   2. Read-only MCP `execute_sql` on `odnobiodsftffphuuosz` (bis-ci): `select version, name from supabase_migrations.schema_migrations order by version desc limit 2;` → the top row is 0096. Then `select pg_catalog.array_to_string(proconfig, ',') from pg_proc where oid = 'app.keep_task_links()'::regprocedure;` → `search_path=pg_catalog, pg_temp`.
   3. The same two reads on `tlbkbmlrfafquucsmsmm` (production) → the newest row's `name` is `definer_search_path`, and `keep_task_links` reads the same.
@@ -843,7 +882,7 @@ CLOSED DAYS (the business is closed all day on these dates, and no time on them 
   5. `git -C <WT> diff --stat origin/main HEAD` again touches only those two docs.
   6. `ls <WT>/packages/db/supabase/migrations | tail -2` → `0095_structured_facts.sql`, `0096_definer_search_path.sql`.
   7. If the branch was ever pushed, the orchestrator pushes with `git push --force-with-lease origin feat/s47d-switch`. Never `--force`, never `main`.
-- [ ] **A3 (0096 unchanged since the plan's check):** `git -C <WT> diff 88edf276 HEAD -- packages/db/supabase/migrations/0096_definer_search_path.sql packages/db/src/test/definer-search-path.test.ts` prints nothing. If it prints anything, put the diff in Task 1's brief.
+- [x] **A3 (0096 unchanged since the plan's check): verified against `origin/main` `964a46bd` in the fix round.** Re-run it after the rebase as a one-line confirmation: `git -C <WT> diff 88edf276 HEAD -- packages/db/supabase/migrations/0096_definer_search_path.sql packages/db/src/test/definer-search-path.test.ts` prints nothing. If it prints anything, put the diff in Task 1's brief.
 - [ ] **A2:** `git -C <WT> log --all --oneline -- 'packages/db/supabase/migrations/0097*'` prints nothing.
 - [ ] **Re-derive the moved cites.**
   - Run `git -C <WT> diff --stat 5e9c07a7 HEAD -- apps packages`. It lists 0096's PR files.
@@ -1125,16 +1164,18 @@ describe("0097 closed_days CHECKs and the window trigger", () => {
       const s = await seed(c, "cd_chk");
       await expect(ins(c, s.accountId, from, to, reason)).rejects.toMatchObject({ code: "23514", constraint });
     }));
-  it("the window: yesterday and today+367 are accepted; two days ago and today+368 raise 23514 (mutation: current_date - 3 -> FAILS)", () =>
+  // current_date is the UTC date: at 7:30 PM in Chicago it is already tomorrow in UTC, so "yesterday" in the
+  // account's zone can be current_date - 2 (an Undo re-adding a range that started yesterday locally).
+  it("the window: two UTC days ago and today+367 are accepted; three days ago and today+368 raise 23514 (mutation: current_date - 3 in the trigger -> FAILS; current_date - 1 -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await seed(c, "cd_win");
-      await ins(c, s.accountId, "current_date - 1", "current_date - 1");
+      await ins(c, s.accountId, "current_date - 2", "current_date - 2");
       await ins(c, s.accountId, "current_date + 300", "current_date + 367");
       await c.query("savepoint p");
-      await expect(ins(c, s.accountId, "current_date - 2", "current_date")).rejects.toMatchObject({ code: "23514" });
+      await expect(ins(c, s.accountId, "current_date - 3", "current_date - 3")).rejects.toMatchObject({ code: "23514" });
       await c.query("rollback to savepoint p");
       await expect(ins(c, s.accountId, "current_date + 300", "current_date + 368"))
-        .rejects.toThrow("closed_days: a closed day must start no earlier than yesterday and end within a year");
+        .rejects.toThrow("closed_days: a closed day must not start in the past or end more than a year ahead");
     }));
 });
 
@@ -1283,6 +1324,10 @@ describe("0097 RLS: the switch (D1, D8; SD1)", () => {
     ["Staff: Running late -> Open", "staff", late(30), () => OPEN, "1"],
     ["Staff: an expired Closed today -> Running late (mutation: drop the expiry carve-out -> FAILS)", "staff", expired(), () => late(15), "1"],
     ["Staff: an expired Closed today -> Open", "staff", expired(), () => OPEN, "1"],
+    ["Staff: Open -> Running late ending 25 hours out (the fall-back day's end of today)", "staff", null,
+      () => ({ state: "running_late", late: 30, until: at(25) }), "1"],
+    ["Staff: Open -> Running late ending 99 days out (mutation: drop the 26-hour bound from the Staff WITH CHECK -> FAILS)", "staff", null,
+      () => ({ state: "running_late", late: 30, until: at(24 * 99) }), "42501"],
     ["Staff: Open -> Closed today (mutation: drop the WITH CHECK state clause -> FAILS)", "staff", null, closedToday, "42501"],
     ["Staff: Open -> Storm", "staff", null, () => STORM_OPEN, "42501"],
     ["Staff: Running late -> Closed today", "staff", late(30), closedToday, "42501"],
@@ -1298,7 +1343,7 @@ describe("0097 RLS: the switch (D1, D8; SD1)", () => {
     ["Owner: Closed today in force -> Open", "owner", closedToday(), () => OPEN, "1"],
     ["Owner: an open-ended Storm -> Open", "owner", STORM_OPEN, () => OPEN, "1"],
   ];
-  it("the matrix has 19 cells (guards the loop from vacuity)", () => { expect(CELLS.length).toBe(19); });
+  it("the matrix has 21 cells (guards the loop from vacuity)", () => { expect(CELLS.length).toBe(21); });
   it.each(CELLS)("%s", (_label, role, stored, change, want) =>
     withRollback(async (c) => {
       const s = await seed(c, `cell_${role}`);
@@ -1338,11 +1383,19 @@ describe("0097 RLS: closed days are the Owner's (D1, unchanged by D8)", () => {
       await actAsMember(c, s.accountId, s.orgId, role);
       await expect(add(c, s.accountId)).rejects.toMatchObject({ code: "42501" });
     }));
-  it("an Owner of ANOTHER account cannot add one to this account (42501)", () =>
+  // A PLAIN insert, no `returning`: with `returning` the READ policy refuses the row whatever the insert policy
+  // says, so the case would stay green with the insert policy's account clause gone (plan review, 2026-10-23,
+  // proven on the replica: the stripped policy let B's Owner insert into A, rows_in_a = 1).
+  it("an Owner of ANOTHER account cannot add one to this account (42501; mutation: drop account_id = current_account_id() from closed_days_owner_insert -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seed(c, "cd_xa"); const b = await seed(c, "cd_xb");
       await actAsMember(c, b.accountId, b.orgId, "owner");
-      await expect(add(c, a.accountId)).rejects.toMatchObject({ code: "42501" });
+      await expect(c.query(
+        "insert into public.closed_days (account_id, starts_on, ends_on) values ($1, current_date + 3, current_date + 3)",
+        [a.accountId])).rejects.toMatchObject({ code: "42501" });
+      await actAsOwner(c);
+      expect((await c.query("select count(*)::int as n from public.closed_days where account_id = $1", [a.accountId])).rows)
+        .toEqual([{ n: 0 }]);
     }));
   it("Staff and Technicians delete nothing; the Owner deletes it (mutation: owner_delete using (true) -> FAILS)", () =>
     withRollback(async (c) => {
@@ -1372,7 +1425,7 @@ describe("0097 RLS: closed days are the Owner's (D1, unchanged by D8)", () => {
       const MEMBER = "(app.is_agency() OR (account_id = app.current_account_id()))";
       const OWNER = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND ( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner)))`;
       const UPD_USING = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND (( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner) OR (( SELECT COALESCE((app.account_role(app.current_account_id()) = 'staff'::text), false) AS "coalesce") AND ((state = ANY (ARRAY['open'::text, 'running_late'::text])) OR ((until IS NOT NULL) AND (until <= now())))))))`;
-      const UPD_CHECK = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND (( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner) OR (( SELECT COALESCE((app.account_role(app.current_account_id()) = 'staff'::text), false) AS "coalesce") AND (state = ANY (ARRAY['open'::text, 'running_late'::text]))))))`;
+      const UPD_CHECK = `(( SELECT COALESCE(app.is_agency(), false) AS "coalesce") OR ((account_id = ( SELECT app.current_account_id() AS current_account_id)) AND (( SELECT app.is_account_owner(app.current_account_id()) AS is_account_owner) OR (( SELECT COALESCE((app.account_role(app.current_account_id()) = 'staff'::text), false) AS "coalesce") AND (state = ANY (ARRAY['open'::text, 'running_late'::text])) AND ((state = 'open'::text) OR (until <= (now() + '26:00:00'::interval)))))))`;
       expect(rows).toEqual([
         { polname: "business_status_member_read", polcmd: "r", polpermissive: true, q: MEMBER, wc: null },
         { polname: "business_status_update", polcmd: "w", polpermissive: true, q: UPD_USING, wc: UPD_CHECK },
@@ -1437,7 +1490,7 @@ describe("0097 functions, comments, teardown", () => {
   - Expected: every case FAILS except two, the teardown-list case and the 19-cell guard.
   - Record the counts.
 
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0097_one_switch.sql`. Copy this text byte for byte; the plan writer's copy has md5 `d8655ef30010e7e82c76236c63515d3e`:
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0097_one_switch.sql`. Copy this text byte for byte; the plan writer's copy has md5 `0c6ed6130fbdd3fd18d92a7429512a35`:
 
 ```sql
 -- 0097_one_switch.sql - the one switch (open, closed today, running late, storm) and planned closed days
@@ -1454,13 +1507,16 @@ describe("0097 functions, comments, teardown", () => {
 -- WHAT THIS FILE ADDS:
 --   public.business_status  one row per account, absent = open. state is open, closed_today,
 --     running_late or storm; late_minutes (15, 30, 60, or 120 for over an hour) only while running late;
---     until is when the state ends by itself (expiry is computed on read, no cron), NULL only for open
---     and for a storm until further notice. set_by and set_at are stamped by a trigger from the token,
---     never taken from the request.
+--     until is when the state ends by itself (expiry is computed on read, no cron): midnight in the account
+--     zone for closed today (owner decision D12) and running late, the first opening of the back-on date
+--     for a dated storm, NULL for open and for a storm until further notice. The reopening said to
+--     callers is computed on read from the hours. set_by and set_at are stamped by a trigger from the
+--     token, never taken from the request.
 --   public.closed_days  planned whole-day closures: a date or a range of at most 92 days, with an
 --     optional reason from a fixed list (holiday, vacation, other; never free text, because it reaches
 --     the receptionist prompt). created_by and created_at are stamped by a trigger, which also refuses a
---     range that starts in the past or ends more than about a year out (a CHECK may not read the clock).
+--     range that starts more than two days before the UTC date or ends more than 367 days after it (a
+--     CHECK may not read the clock; the action enforces the exact window in the account zone).
 --   public.calls.business_status  the status each call started under, one code from a closed set; NULL
 --     for every call before this file and for one whose status could not be read.
 --   public.tasks.closure_kind and public.tasks.closure_on  the link of the one To-do a closure files per
@@ -1474,8 +1530,9 @@ describe("0097 functions, comments, teardown", () => {
 -- WHO WRITES. business_status: the server creates the one row of an account (ensureBusinessStatusRow,
 -- service_role, insert on conflict do nothing, as getOrCreateCalendar does for calendars); a signed-in
 -- Owner or the agency then UPDATEs its three columns under RLS, and a Staff member may move only between
--- open and running late (D8; an expired closure counts as open). closed_days: a signed-in Owner or the
--- agency INSERTs four columns and DELETEs rows; nobody updates one (a change is a remove and an add).
+-- open and running late (D8; an expired closure counts as open), with an end no more than 26 hours out.
+-- closed_days: a signed-in Owner or the agency INSERTs four columns and DELETEs rows; nobody updates one
+-- (a change is a remove and an add).
 -- calls.business_status: startCallRow, server only. The two task columns: server code only, through
 -- service_role (keep_task_links below). bookings.closure_kept_at: keepAppointmentAction, service_role.
 --
@@ -1498,8 +1555,8 @@ describe("0097 functions, comments, teardown", () => {
 -- table is rewritten.
 --
 -- SEARCH PATHS (0096 rule). Every function this file creates or re-creates writes
--- set search_path = pg_catalog, pg_temp, so pg_temp is searched last. No SECURITY DEFINER function is
--- added, so EXPECTED_DEFINERS in definer-search-path.test.ts does not change.
+-- set search_path = pg_catalog, pg_temp, so pg_temp is searched last. No definer function is added, so
+-- EXPECTED_DEFINERS in definer-search-path.test.ts does not change.
 --
 -- APPLY ORDER: after 0096 everywhere. CI project (ci-project-setup.yml: push-dry-run, then push), then
 -- production (MCP apply_migration, once), then the parity check, then merge.
@@ -1588,8 +1645,8 @@ language plpgsql set search_path = pg_catalog, pg_temp as $$
 declare
   v_sub text := app.jwt() ->> 'sub';
 begin
-  if new.starts_on < current_date - 1 or new.ends_on > current_date + 367 then
-    raise exception 'closed_days: a closed day must start no earlier than yesterday and end within a year'
+  if new.starts_on < current_date - 2 or new.ends_on > current_date + 367 then
+    raise exception 'closed_days: a closed day must not start in the past or end more than a year ahead'
       using errcode = '23514';
   end if;
   new.created_at := pg_catalog.now();
@@ -1669,7 +1726,8 @@ create policy business_status_member_read on public.business_status for select t
 
 -- USING reads the row as it is (the old state), WITH CHECK the row as written (the new state). Staff may
 -- move only between open and running late, never to a closure and never out of one in force; an expired
--- closure (until passed; an open-ended storm never qualifies) already reads as open everywhere.
+-- closure (until passed; an open-ended storm never qualifies) already reads as open everywhere. A Staff
+-- running late may end no more than 26 hours out (the app always writes the end of today).
 create policy business_status_update on public.business_status for update to authenticated
   using (
     (select coalesce(app.is_agency(), false))
@@ -1683,7 +1741,8 @@ create policy business_status_update on public.business_status for update to aut
     or (account_id = (select app.current_account_id())
         and ((select app.is_account_owner(app.current_account_id()))
              or ((select coalesce(app.account_role(app.current_account_id()) = 'staff', false))
-                 and state in ('open', 'running_late')))));
+                 and state in ('open', 'running_late')
+                 and (state = 'open' or until <= now() + interval '26 hours')))));
 
 create policy closed_days_member_read on public.closed_days for select to authenticated
   using (app.is_agency() or account_id = app.current_account_id());
@@ -1704,7 +1763,7 @@ comment on table public.business_status is
 comment on column public.business_status.account_id is 'The account this switch belongs to. Written once, by ensureBusinessStatusRow (service_role).';
 comment on column public.business_status.state is 'open, closed_today, running_late or storm. Written by setBusinessStatusAction and its Undo through the signed-in client.';
 comment on column public.business_status.late_minutes is 'How far behind while running late: 15, 30, 60, or 120 for over an hour (D11). NULL in every other state.';
-comment on column public.business_status.until is 'When the state ends by itself, computed by the server when the switch is set: the next opening on a later day for closed_today, the end of the day for running_late, the first opening of the back-on date for a dated storm. NULL for open and for a storm until further notice.';
+comment on column public.business_status.until is 'When the state ends by itself, computed by the server when the switch is set: midnight at the end of the day in the account zone for closed_today (owner decision D12) and for running_late, the first opening of the back-on date for a dated storm. NULL for open and for a storm until further notice. The reopening said to callers is computed on read from the hours.';
 comment on column public.business_status.set_by is 'The Clerk user id from the token of whoever set it, or system for a server write. Stamped by app.business_status_stamp; anything sent is ignored.';
 comment on column public.business_status.set_at is 'When it was last set. Stamped by app.business_status_stamp; the Undo compares it (compare-and-set).';
 comment on table public.closed_days is
@@ -1753,12 +1812,13 @@ comment on column public.bookings.closure_kept_at is
   4. In `business_status_update`'s WITH CHECK, drop `and state in ('open', 'running_late')` from the Staff branch → the four 42501 cells FAIL.
   5. In its USING, drop the `(state in (…) or (until … <= now()))` clause → the four "→ 0" Staff cells (out of a closure) FAIL.
   6. In its USING, drop `or (until is not null and until <= now())` → the two "expired Closed today" cells FAIL.
-  7. `closed_days_owner_insert` with `with check (true)` → "a staff cannot add one", "a technician cannot add one" and "an Owner of ANOTHER account cannot add one" FAIL.
+  7. `closed_days_owner_insert` with `with check (true)` → "a staff cannot add one", "a technician cannot add one", the cross-account plain insert ("an Owner of ANOTHER account cannot add one") and the policy pin FAIL. In the first draft the cross-account case used `returning` and stayed green; fix-round finding 2 changed it to a plain insert.
+  7b. In `closed_days_owner_insert`, drop `account_id = (select app.current_account_id()) and` (keep the owner check) → ONLY "an Owner of ANOTHER account cannot add one" and the policy pin FAIL. Proven on the plan writer's replica: the stripped policy let B's Owner insert into A.
   8. `closed_days_owner_delete` with `using (true)` → "Staff and Technicians delete nothing" FAILS.
   9. `grant update on public.business_status to authenticated;` (table-wide) → "table privileges", "column privileges" and "a client cannot UPDATE set_by …" FAIL.
   10. `grant insert on public.business_status to authenticated;` → "table privileges" and "a client cannot … INSERT into business_status" FAIL.
   11. Drop `new.set_by := …` from `app.business_status_stamp` → both stamp cases FAIL.
-  12. `current_date - 3` in `app.closed_days_stamp` → "the window" FAILS.
+  12. `current_date - 3` in `app.closed_days_stamp` → "the window" FAILS (three days ago is then accepted). Likewise `current_date - 1` → "the window" FAILS (two UTC days ago is then refused; that is fix-round item 8's bug).
   13. Drop `new.closure_kind := null;` from `keep_task_links` → "keep_task_links: a signed-in insert" FAILS.
   14. Write `set search_path = ''` on `keep_task_links` → "the three functions are invokers …" FAILS, and so does `definer-search-path.test.ts`'s invoker case ("every OTHER function … ends it with pg_temp").
   15. Drop `tasks_closure_once` → "one closure To-do per account, kind and date" FAILS.
@@ -1766,6 +1826,7 @@ comment on column public.bookings.closure_kept_at is
   17. Delete `comment on column public.bookings.closure_kept_at` → the comments case FAILS.
   18. `business_status_member_read` with `using (true)` → "an Owner of ANOTHER account reads neither" and the policy pin FAIL.
   19. Drop `new.closure_on := old.closure_on;` → "a signed-in update cannot change or clear them" FAILS.
+  20. In `business_status_update`'s WITH CHECK, drop `and (state = 'open' or until <= now() + interval '26 hours')` → "Staff: Open -> Running late ending 99 days out" and the policy pin FAIL. Fix-round finding 4: without the bound, Staff could store a 99-day Running late, proven on the replica.
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the ROLLBACK lines in order. They are this exact SQL, which the plan writer ran successfully:
@@ -1814,7 +1875,7 @@ comment on column public.bookings.closure_kept_at is
     - `grep -c "''" f` → `0`;
     - `grep -ci "security definer" f` → `0`;
     - `grep -n "search_path" f` → the two header comment lines plus exactly three `language plpgsql set search_path = pg_catalog, pg_temp as` lines.
-  - Record `md5sum` of the file. It equals `d8655ef30010e7e82c76236c63515d3e` if nothing changed. If it differs, say what changed and why.
+  - Record `md5sum` of the file. It equals `0c6ed6130fbdd3fd18d92a7429512a35` if nothing changed. If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green).
 
@@ -1834,7 +1895,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree, with its own kit on 55472.
 - It applies 0097 to a fresh `pre` copy through `psql -1` only, and reads every def and policy itself.
-- It re-runs mutations 4, 5, 6, 13 and 14, plus three of its own:
+- It re-runs mutations 4, 5, 6, 7b, 13, 14 and 20, plus three of its own:
   - `grant select on public.closed_days to anon` (the table-privilege case must catch it);
   - swap `'storm'` for `'storms'` in `business_status_state_check` (only the defs pin and the "accepts the valid row" cases can catch it; say which);
   - in the stamp, `new.set_by := coalesce(new.set_by, v_sub)` (the stamp case must catch it).
@@ -1851,7 +1912,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 - Add every key below to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key.
   - Place them after the S-47c block's last key (`"voice.knowledge.loading.es"`, `messages.ts:2298` at `d280b847`; re-read after the rebase), under one comment line: `// S-47d: the one switch, closed days, the closure To-do and hold reasons, the call-page status line. Usted.`
 - Append ONE `describe("S-47d: the one switch copy, English and Spanish (plan Task 2)")` to `apps/web/src/lib/messages.test.ts`, in the shape of the S-47c describe (`messages.test.ts:1444-1568`). It contains:
-  - a literal `EXPECTED_PARAMS` map over every new key, with its length asserted as **121** (the 109 rows of the table below plus the 12 of the call-page table, counted off this file with `awk` on 2026-10-23; recount it yourself before you trust it);
+  - a literal `EXPECTED_PARAMS` map over every new key, with its length asserted as **120** (the 108 rows of the table below plus the 12 of the call-page table; the fix round replaced `todayAppointments`, `laterHeld` and `laterHeldOne` with `affectedAppointments` and `moreLater`, S22, counted off this file with `awk` on 2026-10-23; recount it yourself before you trust it);
   - every key and twin present and different;
   - params identical across the twin;
   - every sentence pinned as a typed literal pair;
@@ -1931,16 +1992,15 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 | `business.card.endsMidnight` | Ends at midnight | Termina a la medianoche |
 | `business.card.lateHidden` | Booking stays open; times in the next {minutes} minutes are hidden. | Las citas siguen abiertas; se ocultan los horarios de los próximos {minutes} minutos. |
 | `business.card.lateHidden120` | Booking stays open; times in the next 2 hours are hidden. | Las citas siguen abiertas; se ocultan los horarios de las próximas 2 horas. |
-| `business.card.todayAppointments` | Today's appointments | Citas de hoy |
+| `business.card.affectedAppointments` | Affected appointments | Citas afectadas |
 | `business.card.waiting` | {n} messages waiting | {n} mensajes en espera |
 | `business.card.waitingOne` | 1 message waiting | 1 mensaje en espera |
 | `business.card.keep` | Keep | Mantener |
 | `business.card.kept` | Kept | Se mantiene |
 | `business.card.keptToast` | Kept. Its reminders go out as usual. | Se mantiene. Sus recordatorios salen como siempre. |
 | `business.card.cancelOnCalendar` | Cancel on the calendar | Cancelar en el calendario |
-| `business.card.laterHeld` | Reminders are also on hold for {n} later appointments. | Los recordatorios también están en pausa para {n} citas posteriores. |
-| `business.card.laterHeldOne` | Reminders are also on hold for 1 later appointment. | Los recordatorios también están en pausa para 1 cita posterior. |
-| `business.card.noneAffected` | No appointments today are affected. | Ninguna cita de hoy se ve afectada. |
+| `business.card.moreLater` | More appointments after {date} are on the calendar. | Hay más citas después del {date} en el calendario. |
+| `business.card.noneAffected` | No appointments are affected. | Ninguna cita se ve afectada. |
 | `business.card.error` | Couldn't load today's status. | No se pudo cargar el estado de hoy. |
 | `business.card.retry` | Retry | Reintentar |
 | `business.reason.holiday` | Holiday | Día festivo |
@@ -1975,7 +2035,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 | `automations.reason.heldClosureUnknown` | Held: couldn't check whether the business is open | En espera: no se pudo comprobar si el negocio está abierto |
 | `automations.reason.skippedClosed` | Not sent: the business was closed for this appointment | No se envió: el negocio estaba cerrado para esta cita |
 
-**Call-page and knowledge-page keys** (part of the same describe; counted in the 121):
+**Call-page and knowledge-page keys** (part of the same describe; counted in the 120):
 
 | Key | English | Spanish |
 |---|---|---|
@@ -1998,7 +2058,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - the To-do toast pair;
   - the menu pairs;
   - the reason pairs.
-- The toasts drop the spec's example "Sofía and your booking page now say so." (persona may be absent: an account with no voice profile still has the switch). They say what changed on the booking page and append `business.toast.persona` when a persona name is known. The design reviewer reads this at 7 AM.
+- SD19: the toasts drop the spec's first-draft example "Sofía and your booking page now say so." (persona may be absent: an account with no voice profile still has the switch; the spec's §5.6.1 now matches). They say what changed on the booking page and append `business.toast.persona` when a persona name is known. The design reviewer reads this at 7 AM.
 - `{dates}` format (SD16), built by `closureTodoDates` (Task 7):
   - one day: `December 24` / `24 de diciembre`;
   - a range in one month: `December 24 – 26` / `24 al 26 de diciembre`;
@@ -2021,10 +2081,19 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
     - `NO_SHOW_NUDGE_SELECT` (`:441`) and the type at `:412-434`;
     - `REFERRAL_ASK_SELECT` (`:1037-1038`) and the type at `:999-1029`;
     - each one's row mapper, which sets `startsAt: row.starts_at`.
-  - The typed literals that the new required fields break (the typecheck lists them; fix each with `business_status: null` / `startsAt: "<the fixture's starts_at>"`, never by loosening a type):
+  - **SD20, Keep per subject:** all seven booking-subject selects gain `closure_kept_at`, and each Due type gains `closureKeptAt: string | null` (its mapper sets `closureKeptAt: row.closure_kept_at`):
+    - `REMINDER_SELECT` (`packages/db/src/booking.ts:1348-1349`);
+    - `FOLLOWUP_SELECT` (`booking.ts:1483`);
+    - `SMS_REMINDER_SELECT` (`automations.ts:591`);
+    - `APPOINTMENT_CONFIRM_SELECT` (`:735`);
+    - and the three above.
+
+    The by-id reads use the same selects (`getDueReminderById` `booking.ts:1411-1422`, `getDueFollowupById` `:1530-1544`, and the `automations.ts` by-id reads at `:322`, `:497`, `:638`, `:784`, `:1127`), so a release re-reads a fresh Keep.
+  - `packages/db/src/account-teardown.ts`, the doc block at `:40-113` (fix-round item 9). Add one paragraph in the shape of the S-47c one on `voice_services` and `voice_knowledge_snapshots`: "`business_status` and `closed_days` (0097, S-47d) are off this list: service_role holds no DELETE on `business_status`, and both carry `account_id … on delete cascade`, so the account row delete carries them away (`one-switch-schema.test.ts` proves it)."
+  - The typed literals that the new required fields break (the typecheck lists them; fix each with `business_status: null` / `startsAt: "<the fixture's starts_at>"` / `closureKeptAt: null`, never by loosening a type):
     - `[acct]/calls/[callId]/page.test.ts` (its `CallDetailRow` literal);
     - `packages/db/src/test/voice.test.ts`;
-    - the three passes' test fixtures (`…/passes/{no-show-nudge,review-request,referral-ask}.test.ts`).
+    - the seven passes' test fixtures (`…/passes/{reminders,followups,sms-reminder,appointment-confirm,no-show-nudge,review-request,referral-ask}.test.ts`).
 
 **Interfaces:** every signature in "The model, `@bis/db`". Task 3 is the only writer of `packages/db/src/**` except Task 1's tests and Task 9's one doc comment.
 
@@ -2041,8 +2110,9 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - Emits `task.created` on a real insert through `emit(db, accountId, "task.created", createdBy, { task_id }, "user")`. Copy `ensureDocumentExpiryTask`'s exact emit call (`packages/db/src/document-expiry.ts:62-81`).
 - **`countHeldByBooking`:** `.from("automation_log").select("subject_key").eq("account_id", …).eq("status", "held").in("subject_key", ids.map((i) => \`booking:${i}\`))`, counted in code. It returns an empty Map for `[]` without a request.
 - **`loadClosureSnapshot`:**
-  - Runs `Promise.all` of five reads: `readAccountTimezone` (`automation-settings.ts:13-17`), `getBusinessStatusRow`, `listClosedDaysFrom(…, since.date)`, `readHoursChain`, and the kept ids (`.from("bookings").select("id").eq("account_id", …).not("closure_kept_at", "is", null).gte("starts_at", since.iso)`).
-  - It throws if any of the four (not the hours chain) throws.
+  - Runs `Promise.all` of four reads for the given `accountId`: `readAccountTimezone` (`automation-settings.ts:13-17`), `getBusinessStatusRow`, `listClosedDaysFrom(…, since.date)`, `readHoursChain`.
+  - It no longer reads kept bookings (SD20).
+  - It throws if any of the first three throws; the hours chain never throws.
 
 **Tests** (`business-status.test.ts`, PostgREST; seed only through the writers):
 - **`ensureBusinessStatusRow`:**
@@ -2085,7 +2155,8 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - a plain To-do with no closure link → false;
   - another account → false.
 - **`countHeldByBooking`:** seed `automation_log` rows through `recordAutomationLog` (held/sent, two bookings, two accounts) → only this account's held ones are counted.
-- **`loadClosureSnapshot`:** returns each part; a second account's kept ids are absent.
+- **`loadClosureSnapshot`:** returns each part for the given account. A second account's status row and closed days are absent (seed a storm and a closed day on account B; load A → `row` null, `closedDays` `[]`).
+- **The seven due-row readers** carry `closureKeptAt`: null before Keep, the stamp after `setBookingClosureKept(…, true)`. Include one appointment that ENDED three days ago, read through the referral-ask reader (`REFERRAL_ASK_MAX_AGE_MS` is 85 h, `automations.ts:997`), so the kept flag is proven readable outside any two-day window (SD20).
 - **`startCallRow` with `businessStatus: "storm"`** → `getCall` reads `business_status: "storm"`. Without it → null.
 - **`listAccountWork`** (via `ensureClosureTask`) → the row's `closureFocus` is `{ kind: "status", on: <date> }`, and a plain task has none.
 - **The three recipe readers** (`listDueReviewRequests` etc.; read their names at the cited lines) carry `startsAt` equal to the booking's `starts_at`.
@@ -2134,7 +2205,13 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - closed day + Running late → closed_day;
   - Closed today + nothing → closed_today;
   - Running late alone → running_late.
-- **S1:** Closed today set Tuesday 2027-06-01 07:00 CDT (12:00Z) with `H` → `untilFor` = Wednesday 08:00 CDT = `2027-06-02T13:00:00.000Z`. Not Tuesday 08:00.
+- **S1 with D12:** Closed today set Tuesday 2027-06-01 07:00 CDT (12:00Z) with `H` → `untilFor` = tonight's midnight, `2027-06-02T05:00:00.000Z`. `effectiveStatus` at 07:00 has `reopensAt` = Wednesday 08:00 CDT = `2027-06-02T13:00:00.000Z`, `reopensTimeKnown: true` (not Tuesday 08:00, S1). At `2027-06-02T05:00:00.000Z` the same row reads `{ state: "open", … }` (expired).
+  - Mutation (the pre-D12 rule): `untilFor` closed_today = the reopening → FAILS.
+- **D12, the two-hours-sources case** (F7): business hours `H` (Mon–Fri) and calendar hours `CAL` (Sat 09:00–13:00), so `hoursChain(H, CAL)` = `H`. Closed today set Friday 2027-06-04 10:00 CDT (`2027-06-04T15:00:00.000Z`):
+  - `untilFor` → `2027-06-05T05:00:00.000Z` (Saturday 00:00 CDT);
+  - `slotClosures(...).blockedBefore` → the same instant, so `closedOut` of the Saturday 09:00 slot (`2027-06-05T14:00:00.000Z`) is false;
+  - `coversAppointment` of a Saturday 09:00 appointment → `{ covered: false }`;
+  - and the reopening said is `reopensAt` = Monday 08:00 CDT, `2027-06-07T13:00:00.000Z`. The words still follow the hours chain; only the window changed.
 - **`untilFor` Running late at 2027-06-01 15:00Z** → `2027-06-02T05:00:00.000Z`.
 - **`untilFor` Storm `backOn: "2027-06-07"` (a Monday)** → `2027-06-07T13:00:00.000Z`. `backOn` null → null.
 - **`reopeningFrom`:**
@@ -2143,10 +2220,26 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - with none: `from` = 2027-06-02 05:00Z, exactly 00:00 CDT → returns `from` itself, `timeKnown: false` (SD3; mutation: "the first day AFTER from's day" → FAILS);
   - across a weekend (Friday 18:00 → Monday 08:00);
   - skipping a closed range (Monday a closed day → Tuesday 08:00).
-- **DST (spec §7):**
-  - Saturday 2027-03-13 10:00 CST, Closed today: with `SUN_H` → `2027-03-14T13:00:00.000Z` (Sunday 08:00 CDT); with `H` → `2027-03-15T13:00:00.000Z` (Monday 08:00 CDT).
-  - Saturday 2026-10-31 10:00 CDT: with `SUN_H` → `2026-11-01T14:00:00.000Z` (Sunday 08:00 CST); with `H` → `2026-11-02T14:00:00.000Z`.
+- **DST in Chicago (spec §7):**
+  - Saturday 2027-03-13 10:00 CST, Closed today → `until` = `2027-03-14T06:00:00.000Z` (Sunday 00:00 CST). The reopening said: with `SUN_H` → `2027-03-14T13:00:00.000Z` (Sunday 08:00 CDT); with `H` → `2027-03-15T13:00:00.000Z` (Monday 08:00 CDT).
+  - Saturday 2026-10-31 10:00 CDT → `until` = `2026-11-01T05:00:00.000Z` (Sunday 00:00 CDT). The reopening said: with `SUN_H` → `2026-11-01T14:00:00.000Z` (Sunday 08:00 CST); with `H` → `2026-11-02T14:00:00.000Z`.
   - A span starting 02:30 on 2027-03-14 → 03:00 CDT (`2027-03-14T08:00:00.000Z`).
+- **Zones whose MIDNIGHT is the DST gap, plus Santiago's fall-back** (fix-round item 7). The values were checked by the reviewer's run of this `wallTime`, and independently by the plan writer with a brute-force minute search over Node's ICU time-zone data. The start of the day is 01:00 local in the three gap zones. For each zone, with "the day before" at 15:00 local as `now`, four cases:
+  - `startOfDay(day)`;
+  - `untilFor({ state: "running_late", lateMinutes: 30 }, …)`;
+  - `untilFor({ state: "closed_today" }, …)`, the D12 window end;
+  - `reopeningFrom(startOfDay(day), null, tz, [])` → `{ at: startOfDay(day), timeKnown: false }`.
+
+  Every one equals the "start of day" value below:
+
+  | zone | the day before, 15:00 local (`now`) | day | start of day |
+  |---|---|---|---|
+  | `America/Havana` | `2027-03-13T20:00:00.000Z` | 2027-03-14 | `2027-03-14T05:00:00.000Z` |
+  | `America/Santiago` | `2026-09-05T19:00:00.000Z` | 2026-09-06 | `2026-09-06T04:00:00.000Z` |
+  | `Asia/Beirut` | `2027-03-27T13:00:00.000Z` | 2027-03-28 | `2027-03-27T22:00:00.000Z` |
+  | `America/Santiago` (fall-back) | `2027-04-03T18:00:00.000Z` | 2027-04-04 | `2027-04-04T04:00:00.000Z` |
+
+  Mutation: `wallTime` returning null in the gap → the three gap rows FAIL (not just Chicago's 02:30 case). Mutation: `startOfDay` built as `Date.UTC(…) - offset at noon` → the three gap rows FAIL (noon already carries the post-gap offset).
 - **Running late at 11 PM with 120:** now `2027-06-02T04:00:00.000Z` (23:00 CDT), until `2027-06-02T05:00:00.000Z` → `slotClosures(...).lateBefore` = `2027-06-02T05:00:00.000Z`. A 00:30 slot (`05:30Z`) is not before it.
 - **`slotClosures` for each state:**
   - `closedDayKeys` of a 3-day range holds exactly those 3 keys;
@@ -2156,7 +2249,8 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - each state;
   - the `[set_at, until)` edges (at `set_at` → covered; at `until` → not; one ms before `until` → covered);
   - Running late → `{ covered: false }`;
-  - a closed day → `kind: "closed_day"` with `endsAt` = the reopening after the range;
+  - Closed today → `endsAt` = `until` (tonight's midnight, D12), never the reopening;
+  - a closed day → `kind: "closed_day"` with `endsAt` = the start of the day after the range's last date (its window, D12);
   - an open-ended storm → `endsAt: null`.
 - **`statusCode`** for every state and all four delays (8 literals).
 - **`effectiveStatus` open with a range starting in 14 days** → `nextClosedDay` set; in 15 days → null.
@@ -2167,9 +2261,11 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 - `now <= until` for in-force;
 - the null-hours rule (SD3);
 - a fixed `-5` offset in place of `partsInZone`;
-- `wallTime` returning null in the gap;
+- `wallTime` returning null in the gap (now caught by the three midnight-gap zones too);
 - `lateBefore` without the `min`;
-- `coversAppointment` covering Running late.
+- `coversAppointment` covering Running late;
+- `untilFor` closed_today = the reopening (the pre-D12 rule) → the S1-with-D12 and two-hours-sources cases FAIL;
+- `coversAppointment`'s closed-day `endsAt` = the reopening after the range → its case FAILS.
 
 **Verify:**
 - `pnpm --filter web exec vitest run src/lib/business-status/status.test.ts src/lib/booking/slots.test.ts`.
@@ -2216,7 +2312,8 @@ export async function readSlotClosures(db: ReturnType<typeof serviceDb>, account
 
 **Tests:**
 - **`slots.test.ts`, new `describe("closures (S-47d)")`:**
-  - Each closure drops exactly its slots: a closed day drops that day only; Closed today drops everything before `until`; an open-ended storm drops all; Running late 30 drops only today's slots starting within 30 minutes.
+  - Each closure drops exactly its slots: a closed day drops that day only; Closed today drops the rest of today and nothing after midnight (D12); an open-ended storm drops all; Running late 30 drops only today's slots starting within 30 minutes.
+  - **D12's Saturday case:** a calendar open Saturday 09:00–13:00, the account's business hours Monday to Friday, Closed today set Friday at 10:00 → Saturday's 09:00 slot is offered AND `bookableRange` accepts it. Mutation: `blockedBefore` = the reopening (Monday 08:00) → FAILS.
   - For each, `bookableRange` returns null for exactly those starts and the original range for the others.
   - **The invariant case:** for each closure fixture, every slot `computeSlots` offers passes `bookableRange`, and a dropped slot does not.
   - **Mutation (spec §7):** apply the rule in `computeSlots` only. The invariant still passes, but the "bookableRange refuses a dropped start" case FAILS. Paste it.
@@ -2608,11 +2705,11 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
   - `apps/web/src/lib/automations/harness.ts:14-18`: `buildPassContext` adds `closures: closureLoader(input.db, input.now)`.
   - `apps/web/src/lib/automations/hold-or-send.ts`:
     - `:52` (`HoldContext`, SD7);
-    - `:68-77` (`HoldSubject` gains `appointmentAt?: Date`, with a doc comment);
+    - `:68-77` (`HoldSubject` gains `appointmentAt?: Date` and `kept?: boolean`, each with a doc comment; SD20);
     - `REASONS` (`:86-199`) gains five entries that reference `m[...]` as `ledgerRetry` does (`:92`);
     - the check goes inside `holdOrSend` between `const zone = …` (`:298`) and `const opening = …` (`:299`).
-  - The seven recipes set `appointmentAt`:
-    - `…/passes/reminders.ts:58-63` (`subjectFor`): `appointmentAt: new Date(r.startsAt)`;
+  - The seven recipes set `appointmentAt` and `kept: r.closureKeptAt !== null` (the due row's own Keep, Task 3, SD20):
+    - `…/passes/reminders.ts:58-63` (`subjectFor`): `appointmentAt: new Date(r.startsAt), kept: r.closureKeptAt !== null`;
     - `sms-reminder.ts:75-80`;
     - `appointment-confirm.ts:74-81`;
     - `followups.ts:52-55` (`DueFollowup.startsAt`, `packages/db/src/booking.ts:104`);
@@ -2621,16 +2718,17 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
   - Tests:
     - `hold-or-send.test.ts`, `release-held.test.ts`, `harness.test.ts`, and the seven pass tests;
     - every test file that builds a `PassContext` by hand: 21 files, from `grep -rln "PassContext" apps/web/src --include=*.test.ts`, read 2026-10-23. The typecheck lists the ones that need `closures: NO_CLOSURES`;
-    - `apps/web/src/app/api/cron/reminders/route.test.ts:15-202`: add `loadClosureSnapshot: async () => ({ timezone: "UTC", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null }, keptIds: [] })` to its export list.
+    - `apps/web/src/app/api/cron/reminders/route.test.ts:15-202`: add `loadClosureSnapshot: async () => ({ timezone: "UTC", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null } })` to its export list.
 
 **Interfaces:** "The model, The hold". The check inside `holdOrSend`:
 ```ts
   const zone = hoursZone(s.accountTimezone);
   if (s.appointmentAt) {
     // S-47d (spec 5.5.2): a closure that covers this appointment holds it, before the sending-hours check.
+    // The SUBJECT's own account, never another: the loader is per account (fix-round item 6).
     const state: ClosureState = ctx.closures ? await ctx.closures(s.accountId) : { ok: false };
     const v = closureVerdict(state, {
-      appointmentAt: s.appointmentAt, bookingId: s.subjectKey.replace(/^booking:/, ""), deadline: s.deadline,
+      appointmentAt: s.appointmentAt, kept: s.kept === true, deadline: s.deadline,
     }, ctx.now);
     if (v.kind === "skipped") { await logSkipped(ctx, s, v.reason); return "skipped"; }
     if (v.kind === "held") { await writeHeld(ctx, s, v.until, zone, v.reason); return "held"; }
@@ -2639,8 +2737,9 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
 ```
 
 **`closureLoader(db, now)`:**
-- A `Map<string, Promise<ClosureState>>`. The first call for an account starts `loadClosureSnapshot(db, accountId, { date: dayKey(new Date(now.getTime() - 86_400_000), "UTC"), iso: new Date(now.getTime() - 2 * 86_400_000).toISOString() })`.
-- It maps the result to `{ ok: true, input: { row, closedDays, hours: hoursChain(snapshot.hours.businessHours, snapshot.hours.calendarHours), timezone: snapshot.timezone ?? "UTC" }, keptIds: new Set(snapshot.keptIds) }`.
+- A `Map<string, Promise<ClosureState>>`. The first call for an account starts `loadClosureSnapshot(db, accountId, { date: dayKey(new Date(now.getTime() - 86_400_000), "UTC") })`.
+- It maps the result to `{ ok: true, input: { row, closedDays, hours: hoursChain(snapshot.hours.businessHours, snapshot.hours.calendarHours), timezone: snapshot.timezone ?? "UTC" } }`. Keep is not here: it comes from the subject (SD20).
+- **The window `closedDays` covers.** Ranges ending on or after yesterday (UTC) are kept. A follow-up, review request or referral ask for an appointment on an OLDER closed day finds no cover and sends. That is right: under D12 that day's window ended long ago (SD6).
 - A rejection logs one line (the account id only) and becomes `{ ok: false }`, memoised for the tick.
 
 **Tests:**
@@ -2650,6 +2749,8 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
     - `until` = min(cover end, deadline).
   - **The other verdicts:**
     - kept → send;
+    - kept, the appointment ENDED three days ago, under a closed-day range that started four days ago and ends tomorrow (a multi-day closure still covering it) → send. Unkept, the same appointment → held. Mutation: read Keep from a loader window of two days → the kept case FAILS (SD20, fix-round item 3);
+    - Closed today: an appointment at 23:30 tonight → held until midnight at the latest; an appointment at 09:00 tomorrow → not covered, so it sends (D12);
     - not covered → send;
     - a cover that ended at or before `now` → send (SD6; mutation: drop that branch → FAILS);
     - deadline passed → skipped `"Not sent: the business was closed for this appointment"`;
@@ -2667,6 +2768,8 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
   - No loader on the context → held 15 min with the unknown reason (SD7).
   - A subject WITHOUT `appointmentAt` and a storm loader → the loader is never called, and the existing path runs (assert the mock's call count is 0). This is the instant reply, text-back, reactivation, quote follow-up and document request case.
   - The closure check runs before the sending-hours check: inside quiet hours, a covered appointment is held with the CLOSURE reason.
+  - **The subject's own account** (fix-round item 6): a loader that returns a storm for account A and open for every other account. A subject of account B with `appointmentAt` → `"sent"`, and the loader was called with B's id exactly. A subject of account A → `"held"`. Mutation: `ctx.closures(<a hard-coded id>)` or another subject's account id → FAILS.
+  - **A kept subject:** `kept: true` under A's storm → `"sent"`. Mutation: `kept` ignored → FAILS.
 - **Each of the seven pass tests:**
   - one case "a covered appointment is held with the closure reason (S-47d)";
   - one "a kept appointment sends".
@@ -2675,13 +2778,14 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
 - **`release-held.test.ts`, the release path:**
   - A held reminder plus a loader that now reads open, plus one release → `"sent"`.
   - "The switch to Open plus one tick sends" is this case with the row's `held_until` set to now (what `bumpHeldForAccount` writes).
-  - The same for Keep (the booking id in `keptIds`) and for a removed closed day (the loader's closed days now `[]`).
+  - The same for Keep (the re-read due row now carries `closureKeptAt`) and for a removed closed day (the loader's closed days now `[]`).
 - **`harness.test.ts`:** `buildPassContext` returns a `closures` that calls `loadClosureSnapshot` with the context's `db`.
 
 **Mutations** (paste each, revert by `cp` + `cmp`):
 1. the check placed after `opening`;
 2. `appointmentAt` dropped from `reminders.ts`'s `subjectFor`;
-3. kept ids ignored;
+3. the subject's `kept` ignored (and, separately, `kept` dropped from `referral-ask.ts`'s subject → its "a kept appointment sends" case FAILS);
+3b. `ctx.closures` called with a fixed account id instead of `s.accountId` → the own-account case FAILS;
 4. SD6's "ended" branch dropped;
 5. `min` → `max` for `until`;
 6. the unknown-state verdict → send;
@@ -2695,7 +2799,7 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
 - Commit `automations: a reminder, confirmation or follow-up for an appointment a closure covers waits until the business reopens or the owner keeps it; a past deadline skips; an unreadable status holds (S-47d)`.
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree.
-- It re-runs mutations 1, 3, 4 and 7, plus two of its own:
+- It re-runs mutations 1, 3, 3b, 4 and 7, plus two of its own:
   - `writeHeld` called with the default reason (the quiet-hours sentence) instead of `v.reason`;
   - `held_until` = the cover's end even when a deadline is earlier.
 - **It reads every `holdOrSend` caller** (`grep -rn "holdOrSend(" apps/web/src --include=*.ts | grep -v test`) and confirms that only the seven booking recipes set `appointmentAt`.
@@ -2834,7 +2938,14 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
 
 **The dashboard card** (`[acct]/dashboard/business-status-card.tsx`, `id="business-status"`, rendered between `PageHeader` (`page.tsx:350-353`) and `ZoneNote` (`:364`)):
 - A server component wrapped in `RecordCardBoundary` (`components/record/record-card-boundary.tsx:35-46`), with a skeleton shaped like the compact line and an error fallback (`business.card.error` + `business.card.retry` as a reload link).
-- **Its reads** (on the page's `dbForRequest()`): zone, row, closed days, hours chain; when not open, `listClosureAppointments(today → end of today)` and `countHeldByBooking`. When the cover runs past today (a storm, a multi-day closed day), also count the later covered appointments: `listClosureAppointments(end of today → cover end, or +14 days for an open-ended storm)`.
+- **Its reads** (on the page's `dbForRequest()`): zone, row, closed days, hours chain. When not open (S22, the orchestrator's ruling on finding 5):
+  - `listClosureAppointments(now → min(windowEnd, now + 14 days))`, where `windowEnd` is the closure's window end:
+    - Closed today → `until`, tonight's midnight (D12);
+    - a dated storm → its `until`;
+    - a closed day → the start of the day after its last date;
+    - an open-ended storm → none, so the 14-day cap applies;
+  - each row is kept only when `coversAppointment` covers it (so one open day between two closed ranges is excluded);
+  - `countHeldByBooking` for the listed ids.
 - **States** (spec §5.6.2):
   - **Open:** one line, "● Open today", plus Change for whoever has a `canChange`, plus the next closed day within 14 days.
   - **Not open:**
@@ -2842,8 +2953,13 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
     - the end line (`cardEndLine`);
     - the reason on a closed day;
     - Change;
-    - "Today's appointments": each covered, not-kept, booked appointment from now to the end of today, with its time in the zone, the customer's name linked to `/dashboard/accounts/${accountId}/contacts/${contact_id}`, "{n} messages waiting" when held rows exist, Keep (ghost; `keepAppointmentAction`; toast `business.card.keptToast` with Undo calling it with `false`), and "Cancel on the calendar" (a link to `` `/dashboard/accounts/${accountId}/calendar#booking-${id}` ``);
-    - `business.card.laterHeld` with a Calendar link when later covered appointments exist;
+    - `business.card.affectedAppointments`: each covered, booked appointment in that window, kept or not, soonest first. Each row shows:
+      - its date and time in the zone;
+      - the customer's name linked to `/dashboard/accounts/${accountId}/contacts/${contact_id}`;
+      - "{n} messages waiting" when held rows exist;
+      - Keep (ghost; `keepAppointmentAction`; toast `business.card.keptToast` with Undo calling it with `false`). A kept row shows `business.card.kept` in place of the button;
+      - "Cancel on the calendar" (a link to `` `/dashboard/accounts/${accountId}/calendar#booking-${id}` ``).
+    - `business.card.moreLater` with `{date}` = the 14th day and a Calendar link, only when the window runs past `now + 14 days`;
     - `business.card.noneAffected` when the list is empty.
   - **Running late:** state, end, and `lateHidden`/`lateHidden120` only.
 - `lang` on the root.
@@ -2864,7 +2980,13 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
   - each state;
   - the error fallback;
   - Keep calls the action with the booking id;
-  - every read gets the route's `accountId`.
+  - every read gets the route's `accountId`;
+  - **S22:**
+    - a three-day dated storm lists the appointments of all three days, each with Keep, and `listClosureAppointments` is called with the storm's `until` as its end;
+    - Closed today lists today's only, ending at midnight (D12);
+    - an open-ended storm queries exactly 14 days and shows `moreLater`;
+    - a kept appointment shows "Kept".
+    - Mutation: the pre-S22 end-of-today window → the storm case FAILS.
 - **`shell-actions.test.ts`:**
   - a failing status leg → `businessStatus: null` while the other three legs still answer;
   - `canChange` for an Owner, for Staff during Running late, and for Staff during a closure.
@@ -3005,7 +3127,7 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
 ## Task 16: Final review, design review, one fix agent (checkpoint)
 
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with replica 55479/55480/55481.
-  - Read spec §§2 and 4–9 (D1–D11, S1–S21) and this plan (SD1–SD18).
+  - Read spec §§2 and 4–9 (D1–D12, S1–S22) and this plan (SD1–SD20).
   - Run every touched test file by path and both typechecks. On `post`, run: `one-switch-schema`, `business-status`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `voice`, `work-queue`, `voice-schema`, `server-only-writes-grants`.
   - Re-check 0097's md5 against Task 1's.
   - Three probes of its own:
@@ -3016,6 +3138,9 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
     - a Staff path that closes or reopens from a closure (UI, action or policy);
     - a slot offered during a closure;
     - a reminder sent for a covered, not-kept appointment;
+    - a closure window that runs past midnight for Closed today (D12), or a reopening said that is the window end instead of the hours chain's next opening;
+    - Keep read from anywhere but the subject's own due row (SD20), or a loader asked for another account than the subject's;
+    - a Staff `until` more than 26 hours out that any path can store;
     - a held row with a past `held_until`;
     - a loader read per subject instead of per account;
     - a To-do filed twice, or filed with no affected appointment;
@@ -3048,7 +3173,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 
 - [ ] **1. bis-ci 0097** (after Task 1's review approves; 0096 is already there, Task 0).
   - Before pushing, confirm in the file:
-    - `grep -c "set search_path = pg_catalog, pg_temp" packages/db/supabase/migrations/0097_one_switch.sql` → `5` (three functions + two header comment lines, `0097:59` and `:76` in the plan writer's file);
+    - `grep -c "set search_path = pg_catalog, pg_temp" packages/db/supabase/migrations/0097_one_switch.sql` → `5` (three functions + two header comment lines, `0097:63` and `:80` in the plan writer's fix-round file);
     - `grep -c "''" …` → `0`;
     - `keep_task_links` matches 0084's body plus the four lines (spec §8 step 1).
   - `gh workflow run ci-project-setup.yml --ref feat/s47d-switch -f step=push-dry-run`. Its log lists exactly `0097_one_switch.sql`. Then `-f step=push`.
@@ -3082,7 +3207,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
   - `select p.oid::regprocedure, pg_get_userbyid(p.proowner), p.prosecdef, p.proconfig from pg_proc p where p.oid in ('app.business_status_stamp()'::regprocedure, 'app.closed_days_stamp()'::regprocedure, 'app.keep_task_links()'::regprocedure) order by 1::text;` → owner `postgres`, `prosecdef` false, `{"search_path=pg_catalog, pg_temp"}` for all three.
 - [ ] **6. PR and merge.**
   - `gh pr create`. The body names:
-    - D1–D11 (owner) and SD1–SD18 with their resolutions;
+    - D1–D12 (owner), S22 (orchestrator) and SD1–SD20 with their resolutions;
     - Q1's drafts;
     - both apply lines;
     - the tiers;
@@ -3112,6 +3237,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 - **A Staff member's Running late on a closed day is refused by the app only** (SD11). The policy cannot see closed days. Nothing customers see would change anyway: the closed day outranks it.
 - **The Activity page shows hold reasons in English** for every account, as it does for every reason today (SD8). The new reasons have Spanish twins ready for when that page translates stored reasons.
 - **A reminder held until the appointment starts is skipped as "Appointment already started"**, not with the closed-day sentence (SD18). It is still not sent.
+- **D12 as built:** Closed today refuses bookings and holds reminders only until midnight tonight; Sofía, the topbar and the card still say when the business next opens, from the hours. After midnight the switch reads Open by itself.
+- **S22 as built:** the dashboard card lists every appointment a closure covers, up to 14 days ahead, each with Keep; a longer closure points to the calendar for the rest.
 - **Q1:** eight topbar forms the spec did not draft are pinned as the plan's drafts. Change any by answering Q1. The fix round applies it.
 
 ## Spec coverage
@@ -3130,7 +3257,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | §2 D9 Spanish topbar drafts as fixtures | "The model, The topbar forms"; Task 11 `labels.test.ts`; Q1 |
 | §2 D10 storm keeps capture_lead | Task 6 (prompt case), Task 10 (tools array case) |
 | §2 D11 over an hour = 120 | Task 1 (CHECK), Task 4 (`lateBefore`), Task 6 (the 120 line) |
-| S1 Closed today ends on a later day | Task 4 (S1 case) |
+| §2 D12 Closed today's window ends at midnight; the reopening is still said | Task 4 (`untilFor`, the S1-with-D12 and two-hours-sources cases, the midnight-DST table), Task 5 (the Saturday slot case), Task 9 (the 23:30 / 09:00 cases), Task 1 (the `until` column comment) |
+| S1 Closed today says it reopens on a later day | Task 4 (S1-with-D12 case) |
 | S2 120 minutes | Task 1, Task 6 |
 | S3 back-on date window | Task 8 (validation), Task 11 (dialog min/max) |
 | S4 closed-day range rules | Task 1 (CHECK, trigger), Task 8 (exact window in the zone) |
@@ -3151,6 +3279,7 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | S19 call-page line for everyone | Task 14 |
 | S20 chat reads status every turn | Task 10 (SD4) |
 | S21 events | Task 8 (four events through `emit` → `record_event`) |
+| S22 the dashboard card lists every covered appointment, up to 14 days | Task 11 (the card's window and its S22 cases), Task 2 (`affectedAppointments`, `moreLater`) |
 | §4 data, comments, rollback, search paths | Task 1 (Plan-writer check) |
 | §4.1 grants, policies, digest | Task 1 (SD1, SD2), Task 17 step 1 |
 | §4.2 payload schema 2 | Task 6, Task 10 (saves) |
