@@ -224,7 +224,7 @@ describe("0097 closed_days CHECKs and the window trigger", () => {
       const s = await seed(c, "cd_chk");
       await expect(ins(c, s.accountId, from, to, reason)).rejects.toMatchObject({ code: "23514", constraint });
     }));
-  // current_date is the UTC date: at 7:30 PM in Chicago it is already tomorrow in UTC, so "yesterday" in the
+  // current_date is the session date (UTC on Supabase): at 7:30 PM in Chicago it is already tomorrow in UTC, so "yesterday" in the
   // account's zone can be current_date - 2 (an Undo re-adding a range that started yesterday locally).
   it("the window: two UTC days ago and today+367 are accepted; three days ago and today+368 raise 23514 (mutation: current_date - 3 in the trigger -> FAILS; current_date - 1 -> FAILS)", () =>
     withRollback(async (c) => {
@@ -336,7 +336,9 @@ describe("0097 grants", () => {
         "insert into public.closed_days (account_id, starts_on, ends_on, created_by) values ($1, current_date + 3, current_date + 3, 'x')",
       ]) {
         await c.query("savepoint p");
-        await expect(c.query(sql, [s.accountId]), sql).rejects.toMatchObject({ code: "42501" });
+        // The message too: an RLS refusal is also 42501, so the code alone stays green with a table-wide
+        // INSERT granted (mutation 10 -> FAILS here, not only in the privileges pin).
+        await expect(c.query(sql, [s.accountId]), sql).rejects.toMatchObject({ code: "42501", message: expect.stringMatching(/permission denied for table/) });
         await c.query("rollback to savepoint p");
       }
     }));
@@ -422,12 +424,21 @@ describe("0097 RLS: the switch (D1, D8; SD1)", () => {
       const r = await c.query("update public.business_status set state = 'storm' where account_id = $1", [s.accountId]);
       expect(r.rowCount).toBe(1);
     }));
-  it("an Owner of ANOTHER account updates no row", () =>
+  // UNQUALIFIED on purpose: a WHERE that reads account_id also applies the member-read policy, which hides
+  // A's row before the update policy is asked, so a `where account_id = A` case stays green with the update
+  // policy's account clause gone (Task 1 review, P8). With no WHERE only business_status_update decides.
+  it("an Owner of ANOTHER account changes no row but its own (mutation P8: drop the account clause from both halves of business_status_update -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seed(c, "upd_xa"); const b = await seed(c, "upd_xb");
       await actAsMember(c, b.accountId, b.orgId, "owner");
-      const r = await c.query("update public.business_status set state = 'storm' where account_id = $1", [a.accountId]);
-      expect(r.rowCount).toBe(0);
+      const r = await c.query("update public.business_status set state = 'storm'");
+      expect(r.rowCount).toBe(1); // B's own row: the update ran
+      await actAsOwner(c);
+      expect((await c.query("select account_id, state from public.business_status where account_id in ($1, $2) order by state",
+        [a.accountId, b.accountId])).rows).toEqual([
+        { account_id: a.accountId, state: "open" },
+        { account_id: b.accountId, state: "storm" },
+      ]);
     }));
 });
 
@@ -476,6 +487,20 @@ describe("0097 RLS: closed days are the Owner's (D1, unchanged by D8)", () => {
       await actAsOwner(c);
       await actAsMember(c, s.accountId, s.orgId, "owner");
       expect((await c.query("delete from public.closed_days where account_id = $1", [s.accountId])).rowCount).toBe(1);
+    }));
+  // UNQUALIFIED for the same reason as the business_status case: a WHERE on account_id lets the member-read
+  // policy hide A's row before closed_days_owner_delete is asked (Task 1 review, P5b).
+  it("an Owner of ANOTHER account deletes only its own (mutation P5b: drop the account clause from closed_days_owner_delete -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seed(c, "del_xa"); const b = await seed(c, "del_xb");
+      for (const id of [a.accountId, b.accountId])
+        await c.query("insert into public.closed_days (account_id, starts_on, ends_on) values ($1, current_date + 3, current_date + 3)", [id]);
+      await actAsMember(c, b.accountId, b.orgId, "owner");
+      expect((await c.query("delete from public.closed_days")).rowCount).toBe(1); // B's own range: the delete ran
+      await actAsOwner(c);
+      expect((await c.query(`select (select count(*)::int from public.closed_days where account_id = $1) as a,
+        (select count(*)::int from public.closed_days where account_id = $2) as b`, [a.accountId, b.accountId])).rows)
+        .toEqual([{ a: 1, b: 0 }]);
     }));
   it("nobody may UPDATE a closed day (no grant: 42501)", () =>
     withRollback(async (c) => {

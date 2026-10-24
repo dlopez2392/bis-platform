@@ -1506,9 +1506,10 @@ describe("0097 functions, comments, teardown", () => {
   - Every other refusal is the case's last statement.
   - Keep it that way in any case you add.
 - The comments case uses `''` in a TEST file. That is fine: the zero-`''` rule binds the migration only.
+- **The committed `one-switch-schema.test.ts` supersedes the copy above** (Task 1 implementation and review, 2026-10-23). It differs in four places: the two `stormSoon` cells (the matrix has 23 cells, mutation 4); the cross-account update and delete cases are UNQUALIFIED statements followed by a table-owner re-read (P8, P5b); the client-columns loop also matches `message: /permission denied for table/` (mutation 10); and the window comment reads "the session date (UTC on Supabase)".
 
 - [ ] **Step 3: Run on `pre` to verify it fails.** `export SUPABASE_DB_URL=postgres://postgres@localhost:55471/pre; node node_modules/vitest/vitest.mjs run src/test/one-switch-schema.test.ts`.
-  - Expected: every case FAILS except two, the teardown-list case and the 19-cell guard.
+  - Expected: every case FAILS except two, the teardown-list case and the 23-cell guard.
   - Record the counts.
 
 - [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0097_one_switch.sql`. Copy this text byte for byte; the plan writer's copy has md5 `cec0b2aa566df2ab6b87ca26dea08831`:
@@ -1830,7 +1831,7 @@ comment on column public.bookings.closure_kept_at is
   1. Drop `business_status_shape_check` → the eight "refuses …" shape cases FAIL.
   2. `late_minutes in (15, 30, 45, 60, 120)` → "refuses a 45-minute delay" FAILS.
   3. `interval '200 days'` in `business_status_until_check` → "refuses an end … more than 100 days" FAILS.
-  4. In `business_status_update`'s WITH CHECK, drop `and state in ('open', 'running_late')` from the Staff branch → the four 42501 cells FAIL.
+  4. In `business_status_update`'s WITH CHECK, drop `and state in ('open', 'running_late')` from the Staff branch → "Staff: Open -> Closed today", "Staff: Running late -> Closed today" and the two `stormSoon` cells ("Staff: Open -> a Storm back on tomorrow", "Staff: Running late -> a Storm back on tomorrow") FAIL, with the policy pin. The two older Storm cells (`STORM_OPEN`, `stormDated()` at 30 hours) stay green: the 26-hour bound refuses them too (until NULL, or past 26 hours), which is why the `stormSoon` cells (until 20 hours out) were added (Task 1 implementer, proven on the replica).
   5. In its USING, drop the `(state in (…) or (until … <= now()))` clause → the four "→ 0" Staff cells (out of a closure) FAIL.
   6. In its USING, drop `or (until is not null and until <= now())` → the two "expired Closed today" cells FAIL.
   7. `closed_days_owner_insert` with `with check (true)` → "a staff cannot add one", "a technician cannot add one", the cross-account plain insert ("an Owner of ANOTHER account cannot add one") and the policy pin FAIL. In the first draft the cross-account case used `returning` and stayed green; fix-round finding 2 changed it to a plain insert.
@@ -1848,6 +1849,9 @@ comment on column public.bookings.closure_kept_at is
   18. `business_status_member_read` with `using (true)` → "an Owner of ANOTHER account reads neither" and the policy pin FAIL.
   19. Drop `new.closure_on := old.closure_on;` → "a signed-in update cannot change or clear them" FAILS.
   20. In `business_status_update`'s WITH CHECK, drop `and (state = 'open' or until <= now() + interval '26 hours')` → "Staff: Open -> Running late ending 99 days out" and the policy pin FAIL. Fix-round finding 4: without the bound, Staff could store a 99-day Running late, proven on the replica.
+  21. **P8.** In `business_status_update`, drop `account_id = (select app.current_account_id()) and` from BOTH the USING and the WITH CHECK (keep the owner and Staff checks) → "an Owner of ANOTHER account changes no row but its own" FAILS (`expected 2 to be 1`: B's Owner also changed A's row), with the policy pin. The first draft's `where account_id = A` case stayed green under P8: a WHERE that reads `account_id` applies the member-read policy, which hides A's row before the update policy is asked (Task 1 review). The case is therefore an UNQUALIFIED update, then A's row re-read as the table owner.
+  22. **P5b.** In `closed_days_owner_delete`, drop `account_id = (select app.current_account_id()) and` → "an Owner of ANOTHER account deletes only its own" FAILS (`expected 2 to be 1`), with the policy pin. Same reason, same shape: an UNQUALIFIED delete as B's Owner, then A's count re-read as the table owner.
+  - Mutation 10 also reddens "a client cannot UPDATE set_by or set_at, INSERT into business_status, or send created_by": that loop matches `message: /permission denied for table/` as well as `42501`, because with a table-wide INSERT granted the refusal is RLS's ("new row violates row-level security policy"), also 42501.
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the ROLLBACK lines in order. They are this exact SQL, which the plan writer ran successfully:
