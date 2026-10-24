@@ -828,6 +828,18 @@ describe("CallDetailPage — the business status line (S-47d)", () => {
     expect(businessStatusText(html)).toBe("Closed for a storm");
   });
 
+  // Fix round C7 (design review I8): an sr-only label with an uppercase badge read as a present-tense fact
+  // ("CLOSED FOR A STORM") on a page about a past call. The label is visible, the trade-rules shape.
+  it("the label is VISIBLE, the trade-rules item's own shape, and the value is no 4px badge (mutation: restore the sr-only dt or the badge -> FAILS)", async () => {
+    const html = await render({ ...CALL, business_status: "storm" });
+    const item = /<div[^>]*>(<dt[^>]*>[^<]*<\/dt><dd[^>]*data-business-status=""[^>]*>[^<]*<\/dd>)<\/div>/.exec(html);
+    expect(item).not.toBeNull();
+    expect(item![0]).toMatch(/^<div class="flex flex-wrap items-baseline gap-x-1\.5 gap-y-0\.5"/);
+    expect(item![1]).toMatch(/^<dt class="whitespace-nowrap">/);
+    expect(item![1]).not.toMatch(/sr-only|uppercase|\brounded\b/);
+    expect(item![1]).toMatch(/<dd class="font-medium text-foreground" data-business-status="">/);
+  });
+
   it("renders no business-status item for an unstamped call", async () => {
     const html = await render(CALL);
     expect(html).not.toContain("data-business-status");

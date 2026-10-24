@@ -365,7 +365,7 @@ export async function keepAppointmentAction(
   accountId: string, bookingId: string, kept: boolean, locale: "en" | "es",
 ): Promise<ActionResult> {
   const access = await requireAccountAccess(accountId);
-  if (!seesWholeAccount(access)) return { ok: false, error: t(m, "business.refuse.role", locale) };
+  if (!seesWholeAccount(access)) return { ok: false, error: t(m, "business.refuse.keep", locale) };
   const refused = await proveBooking("keepAppointmentAction", accountId, bookingId);
   if (refused) return refused;
 
@@ -374,9 +374,9 @@ export async function keepAppointmentAction(
     changed = await setBookingClosureKept(serviceDb(), accountId, bookingId, kept);
   } catch (e) {
     console.error(`keepAppointmentAction: write failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
-    return { ok: false, error: t(m, "business.toast.failed", locale) };
+    return { ok: false, error: t(m, "business.card.keepFailed", locale) };
   }
-  if (!changed) return { ok: false, error: t(m, "business.toast.failed", locale) };
+  if (!changed) return { ok: false, error: t(m, "business.card.keepFailed", locale) };
 
   try {
     const db = await dbForRequest();

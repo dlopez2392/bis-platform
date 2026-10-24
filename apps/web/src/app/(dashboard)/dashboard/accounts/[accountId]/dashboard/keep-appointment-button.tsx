@@ -13,17 +13,16 @@ import { makeTr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
 
 export function KeepAppointmentButton({
-  accountId, bookingId, kept, locale, pseudo,
+  accountId, bookingId, locale, pseudo,
 }: {
-  accountId: string; bookingId: string; kept: boolean; locale: Locale; pseudo: boolean;
+  accountId: string; bookingId: string; locale: Locale; pseudo: boolean;
 }) {
   const [pending, startTransition] = useTransition();
   const router = useRouter();
   const tr = makeTr(locale, pseudo);
 
-  // Once kept, the row shows the fact rather than a button that would just repeat the same write
-  // (spec: "A kept row shows business.card.kept in place of the button").
-  if (kept) return <span className="text-sm text-muted-foreground">{tr.text("business.card.kept")}</span>;
+  // Once kept, the row itself shows "Kept" as text (affected-appointment-row.tsx, fix round C8) and never
+  // mounts this button, so it has no kept branch of its own.
 
   function onKeep() {
     startTransition(async () => {
@@ -32,7 +31,7 @@ export function KeepAppointmentButton({
         toast,
         {
           keptToast: tr.text("business.card.keptToast"), undo: tr.text("common.undo"),
-          failed: tr.text("business.toast.failed"),
+          failed: tr.text("business.card.keepFailed"),
         },
         () => router.refresh(),
       );

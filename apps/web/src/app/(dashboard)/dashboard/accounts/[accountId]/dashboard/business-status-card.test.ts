@@ -11,8 +11,8 @@ import type { ClosedDayRow, ClosureAppointment } from "@bis/db";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/components/business-status-menu", () => ({
-  BusinessStatusMenu: (props: { trigger: React.ReactNode }) =>
-    createElement("i", { "data-testid": "bsm" }, props.trigger),
+  BusinessStatusMenu: (props: { trigger: React.ReactNode; triggerKind?: string }) =>
+    createElement("i", { "data-testid": "bsm", "data-trigger-kind": props.triggerKind ?? "status" }, props.trigger),
 }));
 
 const dbFixture = vi.hoisted(() => ({ tag: "request" }));
@@ -85,7 +85,8 @@ describe("BusinessStatusCard — each state (spec §5.6.2)", () => {
     try {
       const html = await render();
       expect(html).toContain("Next closed day:");
-      expect(html).toContain("Holiday");
+      // Fix round D8: the reason mid-sentence is lowercase, the spec's own "(holiday)".
+      expect(html).toContain("Next closed day: Thursday, June 10 (holiday)");
     } finally { vi.useRealTimers(); }
   });
 
@@ -246,6 +247,61 @@ describe("BusinessStatusCard — S22 (orchestrator ruling, finding 5)", () => {
       expect(dbMocks.listClosureAppointments.mock.calls[0]![3]).toBe(new Date(NOW.getTime() + 14 * 86_400_000).toISOString());
       expect(html).toContain("More appointments after");
       expect(html).toContain("are on the calendar.");
+    } finally { vi.useRealTimers(); }
+  });
+});
+
+describe("BusinessStatusCard — fix round (C2, C4, C8, D8)", () => {
+  const CLOSED = row({ state: "closed_today", until: "2027-06-08T05:00:00.000Z", set_at: "2027-06-07T14:00:00.000Z" });
+  const words = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+
+  it("C8/C4: each row is the shared AffectedAppointmentRow, \"when · name\" in the account's zone (mutation: keep the card's own en-US row -> FAILS)", async () => {
+    mockDefaults();
+    dbMocks.getBusinessStatusRow.mockResolvedValue(CLOSED);
+    dbMocks.listClosureAppointments.mockResolvedValue([appt({})]);
+    try {
+      const html = await render();
+      expect(html).toContain('data-affected-appointment="bk_1"');
+      expect(words(html)).toContain("Jun 7, 3:00 PM · Ana Cruz");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("C4: a Spanish card formats the time from the Spanish tables, never en-US", async () => {
+    mockDefaults();
+    dbMocks.getBusinessStatusRow.mockResolvedValue(CLOSED);
+    dbMocks.listClosureAppointments.mockResolvedValue([appt({})]);
+    try {
+      expect(words(await render({ locale: "es" }))).toContain("7 de jun., 3:00 PM · Ana Cruz");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("C8: a nameless contact reads the fallback, not an empty link", async () => {
+    mockDefaults();
+    dbMocks.getBusinessStatusRow.mockResolvedValue(CLOSED);
+    dbMocks.listClosureAppointments.mockResolvedValue([appt({ first_name: null, last_name: null })]);
+    try {
+      expect(words(await render())).toContain("Jun 7, 3:00 PM · (no name)");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("C2: the card's Change button is the menu's \"action\" trigger (its name is the trigger phrase)", async () => {
+    mockDefaults();
+    dbMocks.getBusinessStatusRow.mockResolvedValue(CLOSED);
+    try {
+      expect(await render()).toContain('data-trigger-kind="action"');
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("D8: on a closed day the reason mid-sentence is lowercase, \"Closed today (holiday)\" (mutation: the catalogue's capitalised label -> FAILS)", async () => {
+    mockDefaults();
+    dbMocks.listClosedDaysFrom.mockResolvedValue([{
+      id: "cd1", account_id: ACCOUNT, starts_on: "2027-06-07", ends_on: "2027-06-07",
+      reason: "holiday", created_by: "user_1", created_at: "2027-06-01T00:00:00.000Z",
+    }]);
+    try {
+      const html = await render();
+      expect(words(html)).toContain("Closed today (holiday)");
+      expect(words(await render({ locale: "es" }))).toContain("Cerrado hoy (día festivo)");
     } finally { vi.useRealTimers(); }
   });
 });

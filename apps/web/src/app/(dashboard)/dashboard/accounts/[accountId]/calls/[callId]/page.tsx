@@ -300,15 +300,13 @@ export default async function CallDetailPage({
             {/* S-47d (plan Task 14): the status the call started under, to EVERYONE who can see the call
                 (S19) — unlike the trade-rules and Knowledge items that follow, this is NOT isAgency-gated:
                 a client is entitled to know their own business was closed, late or storm-shut when
-                {persona} answered. Same markup classes as the language item above (a small uppercase
-                badge, not the visible-label shape the trade-rules item below uses). */}
+                {persona} answered. Fix round C7 (design review I8): the visible-label shape the
+                trade-rules item below uses — "Status at the start: Closed for a storm" — never a hidden label
+                over an uppercase badge, which read as a present-tense fact on a page about a past call. */}
             {call.business_status !== null ? (
-              <div className="flex items-center gap-1.5" lang={tr.locale}>
-                <dt className="sr-only">{tr.text("calls.detail.businessStatus")}</dt>
-                <dd
-                  className="rounded border border-border px-1.5 py-0.5 text-[10px] font-medium tracking-widest uppercase"
-                  data-business-status=""
-                >
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
+                <dt className="whitespace-nowrap">{tr.text("calls.detail.businessStatus")}</dt>
+                <dd className="font-medium text-foreground" data-business-status="">
                   {tr.text(BUSINESS_STATUS_KEY[call.business_status])}
                 </dd>
               </div>

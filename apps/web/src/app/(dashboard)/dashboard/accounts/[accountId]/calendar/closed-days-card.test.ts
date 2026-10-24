@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 import { UNDO_WINDOW_MS } from "./undo-window";
@@ -130,14 +133,15 @@ const RANGE_NO_APPTS: ClosedDaysRangeView = {
   id: "cd_1", startsOn: "2026-12-10", endsOn: "2026-12-14", reason: null, appointments: [],
 };
 const APPT = {
-  id: "bk_1", contactId: "c_1", contactName: "Ana Reyes", startsAt: "2026-12-11T15:00:00.000Z", kept: false,
+  id: "bk_1", contactId: "c_1", contactName: "Ana Reyes", startsAt: "2026-12-11T15:00:00.000Z", kept: false, held: 0,
 };
 const RANGE_WITH_APPTS: ClosedDaysRangeView = {
   id: "cd_2", startsOn: "2026-12-28", endsOn: "2027-01-01", reason: "vacation", appointments: [APPT],
 };
 
 const BASE = {
-  accountId: "a1", locale: "en" as const, canManage: true, persona: "Sofía", today: "2026-12-01",
+  accountId: "a1", locale: "en" as const, canManage: true, canAct: true, persona: "Sofía" as string | null,
+  today: "2026-12-01", timezone: "America/Chicago",
   initialOpenClosedDay: null as string | null,
   addAction: async () => ({ ok: true as const, id: "cd_new", appointments: 0, todoFiled: false }),
   removeAction: async () => ({ ok: true as const, removed: { from: "a", to: "a", reason: null } }),
@@ -229,5 +233,155 @@ describe("ClosedDaysCard — error", () => {
     const text = renderedText(html);
     expect(text).toContain(m["closedDays.error"]);
     expect(text).not.toContain(m["closedDays.add"]);
+  });
+});
+
+// ── Fix round (S-47d final review) ───────────────────────────────────────
+
+const flush = () => new Promise((r) => setTimeout(r, 0));
+const cardSrc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "closed-days-card.tsx"), "utf8");
+const words = (html: string) => renderedText(html).replace(/\s+/g, " ");
+
+/** C5 (design I6 + final M-3): every Undo re-reads the page and drops the card's local overrides, or a
+ *  removed-then-restored range stays hidden and an un-kept appointment keeps reading "Kept". */
+describe("the Undo of every action refreshes the card (fix round C5)", () => {
+  it("Undo of Remove: onUndone runs once the re-add succeeds (mutation: drop the onUndone call -> FAILS)", async () => {
+    const { toast, clickUndo } = fakeToast();
+    const onUndone = vi.fn();
+    await runRemoveClosedDay(
+      async () => ({ ok: true, removed: { from: "2027-06-10", to: "2027-06-12", reason: null } }),
+      async () => ({ ok: true as const, id: "new", appointments: 0, todoFiled: false }),
+      toast, "en", { onUndone },
+    );
+    expect(onUndone).not.toHaveBeenCalled();
+    clickUndo();
+    await flush();
+    expect(onUndone).toHaveBeenCalledTimes(1);
+  });
+
+  it("Undo of Remove that is refused: no refresh, the error toasted", async () => {
+    const { toast, clickUndo } = fakeToast();
+    const onUndone = vi.fn();
+    await runRemoveClosedDay(
+      async () => ({ ok: true, removed: { from: "2027-06-10", to: "2027-06-12", reason: null } }),
+      async () => ({ ok: false as const, error: "nope" }),
+      toast, "en", { onUndone },
+    );
+    clickUndo();
+    await flush();
+    expect(onUndone).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("nope");
+  });
+
+  it("Undo of Add: onUndone runs once the remove succeeds (mutation: drop the onUndone call -> FAILS)", async () => {
+    const { toast, clickUndo } = fakeToast();
+    const onUndone = vi.fn();
+    await runAddClosedDay(
+      async () => ({ ok: true, id: "cd_1", appointments: 0, todoFiled: false }),
+      async () => ({ ok: true, removed: { from: "a", to: "a", reason: null } }),
+      toast, "en", { onUndone },
+    );
+    clickUndo();
+    await flush();
+    expect(onUndone).toHaveBeenCalledTimes(1);
+  });
+
+  it("Undo of Keep: onUndone runs once the un-keep succeeds (mutation: drop the onUndone call -> FAILS)", async () => {
+    const { toast, clickUndo } = fakeToast();
+    const onUndone = vi.fn();
+    await runKeepAppointment(async () => ({ ok: true }), toast, "en", { onUndone });
+    clickUndo();
+    await flush();
+    expect(onUndone).toHaveBeenCalledTimes(1);
+  });
+
+  it("the card wires onUndone to clear BOTH local overrides and refresh (source pin)", () => {
+    expect(cardSrc).toMatch(/const onUndone = \(\) => \{\s*setHiddenIds\(\{\}\);\s*setKeptOverride\(\{\}\);\s*router\.refresh\(\);\s*\};/);
+    expect(cardSrc.match(/\{ pseudo, onUndone \}/g)?.length).toBe(3);
+  });
+});
+
+describe("toasts (fix round D2, D5, D6)", () => {
+  it("one affected appointment reads the singular (D2; mutation: always the plural -> FAILS)", async () => {
+    const { toast } = fakeToast();
+    await runAddClosedDay(
+      async () => ({ ok: true, id: "cd_1", appointments: 1, todoFiled: true }),
+      async () => ({ ok: true, removed: { from: "a", to: "a", reason: null } }), toast, "en",
+    );
+    expect(toast.success.mock.calls[0]![0]).toBe(`${m["closedDays.added"]} ${m["closedDays.addedTodoOne"]}`);
+  });
+
+  it("a Keep that throws says Keep failed, never the status sentence (D5)", async () => {
+    const { toast } = fakeToast();
+    const ok = await runKeepAppointment(async () => { throw new Error("network"); }, toast, "es");
+    expect(ok).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith(m["business.card.keepFailed.es"]);
+  });
+
+  it("the pseudo-locale wraps every toast (D6)", async () => {
+    const { toast } = fakeToast();
+    await runRemoveClosedDay(
+      async () => ({ ok: true, removed: { from: "a", to: "a", reason: null } }),
+      async () => ({ ok: true as const, id: "new", appointments: 0, todoFiled: false }), toast, "en", { pseudo: true },
+    );
+    const [msg, opts] = toast.success.mock.calls[0]! as unknown as [string, { action: { label: string } }];
+    expect(msg).not.toBe(m["closedDays.removed"]);
+    expect(msg.length).toBeGreaterThan(m["closedDays.removed"].length);
+    expect(opts.action.label).not.toBe(m["common.undo"]);
+  });
+});
+
+describe("ClosedDaysCard — the affected rows (fix round C4, C5, C8, D9)", () => {
+  const OPEN = { initialOpenClosedDay: "2026-12-28" };
+
+  it("rows are the shared AffectedAppointmentRow: \"when · name\", in the ACCOUNT's zone and the card's language (C4; mutation: format en-US in the runtime zone -> FAILS)", () => {
+    expect(words(render({ ...OPEN, ranges: [RANGE_WITH_APPTS] }))).toContain("Dec 11, 9:00 AM · Ana Reyes");
+    expect(words(render({ ...OPEN, locale: "es", ranges: [RANGE_WITH_APPTS] }))).toContain("11 de dic., 9:00 AM · Ana Reyes");
+    expect(words(render({ ...OPEN, timezone: "America/Los_Angeles", ranges: [RANGE_WITH_APPTS] }))).toContain("Dec 11, 7:00 AM · Ana Reyes");
+  });
+
+  it("\"{n} messages waiting\" shows on the Calendar too (C8)", () => {
+    const withHeld = { ...RANGE_WITH_APPTS, appointments: [{ ...APPT, held: 2 }] };
+    expect(words(render({ ...OPEN, ranges: [withHeld] }))).toContain("2 messages waiting");
+  });
+
+  it("a kept appointment reads \"Kept\" as text, never a button (C5; mutation: render the Keep button with a Kept label -> FAILS)", () => {
+    const kept = { ...RANGE_WITH_APPTS, appointments: [{ ...APPT, kept: true }] };
+    const html = render({ ...OPEN, ranges: [kept] });
+    expect(html).not.toMatch(new RegExp(`<button[^>]*>${m["business.card.kept"]}</button>`));
+    expect(html).toMatch(new RegExp(`<span[^>]*>${m["business.card.kept"]}</span>`));
+  });
+
+  it("a Technician (canAct false) sees the rows with neither Keep nor \"Cancel on the calendar\" (C5; mutation: ignore canAct -> FAILS)", () => {
+    const text = words(render({ ...OPEN, canManage: false, canAct: false, ranges: [RANGE_WITH_APPTS] }));
+    expect(text).toContain("Ana Reyes");
+    expect(text).not.toContain(m["business.card.keep"]);
+    expect(text).not.toContain(m["business.card.cancelOnCalendar"]);
+  });
+
+  it("the count toggle names its list: aria-expanded and aria-controls (D9; mutation: drop either -> FAILS)", () => {
+    const closed = render({ ranges: [RANGE_WITH_APPTS] });
+    expect(closed).toMatch(/<button[^>]*aria-expanded="false"[^>]*aria-controls="closed-day-cd_2-appointments"/);
+    const open = render({ ...OPEN, ranges: [RANGE_WITH_APPTS] });
+    expect(open).toMatch(/<button[^>]*aria-expanded="true"[^>]*aria-controls="closed-day-cd_2-appointments"/);
+    expect(open).toContain('id="closed-day-cd_2-appointments"');
+  });
+});
+
+describe("ClosedDaysCard — no persona to name, the pseudo-locale, and the Select's lang (fix round D3, D6, C3)", () => {
+  it("no voice profile (persona null): the sentence names no one (D3, SD19; mutation: default to a typed persona -> FAILS)", () => {
+    const text = words(render({ ranges: [], persona: null }));
+    expect(text).toContain(m["closedDays.emptyNoPersona"]);
+    expect(text).not.toMatch(/Sofía|Sofia/);
+  });
+
+  it("the pseudo-locale wraps the card's own words (D6; mutation: ignore pseudo -> FAILS)", () => {
+    const text = words(render({ ranges: [RANGE_NO_APPTS], pseudo: true }));
+    expect(text).not.toContain(m["closedDays.title"]);
+    expect(text).not.toContain(m["closedDays.add"]);
+  });
+
+  it("the Reason Select's portaled content carries lang={locale} (C3; source pin: Radix mounts it only while open)", () => {
+    expect(cardSrc).toMatch(/<SelectContent lang=\{locale\}>/);
   });
 });

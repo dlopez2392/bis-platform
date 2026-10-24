@@ -25,16 +25,18 @@ import { BusinessStatusCardError } from "./business-status-card-error";
 import type { Locale } from "@/lib/i18n/locale";
 
 export function BusinessStatusCardBoundary({
-  locale, skeleton, children,
+  locale, pseudo = false, skeleton, children,
 }: {
   locale: Locale;
+  /** The QA pseudo-locale (fix round D6), a boolean: serialisable across the boundary. */
+  pseudo?: boolean;
   skeleton: ReactNode;
   children?: ReactNode;
 }) {
   return (
     <RecordCardBoundary
       skeleton={skeleton}
-      fallback={(reset) => <BusinessStatusCardError locale={locale} onRetry={reset} />}
+      fallback={(reset) => <BusinessStatusCardError locale={locale} pseudo={pseudo} onRetry={reset} />}
     >
       {children}
     </RecordCardBoundary>

@@ -369,7 +369,7 @@ export default async function AccountDashboardPage({
             extended to the card), which is why this card alone among the
             dashboard's cards does its own `dbForRequest()` read rather than
             joining the Promise.all below. */}
-        <BusinessStatusCardBoundary locale={locale} skeleton={<BusinessStatusCardSkeleton />}>
+        <BusinessStatusCardBoundary locale={locale} pseudo={pseudo} skeleton={<BusinessStatusCardSkeleton />}>
           <BusinessStatusCard
             accountId={accountId} timezone={timezone} locale={locale} pseudo={pseudo}
             isAgency={isAgency} role={role} personaName={voiceProfile?.persona_name ?? null}

@@ -776,17 +776,18 @@ describe("keepAppointmentAction — S-47d Task 8", () => {
     dbMocks.emit.mockReset().mockResolvedValue(undefined);
   });
 
-  it("a Technician is refused with the role sentence, and nothing is written (mutation: check isAgency alone, ignoring role → FAILS)", async () => {
+  it("a Technician is refused with the Keep sentence, which names who MAY keep (fix round C5: Staff may, so \"Only an Owner\" was wrong), and nothing is written (mutation: check isAgency alone, ignoring role → FAILS)", async () => {
     access.value = { userId: "user_1", isAgency: false, role: "technician" };
     const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
-    expect(r).toEqual({ ok: false, error: t(m, "business.refuse.role", "en") });
+    expect(r).toEqual({ ok: false, error: t(m, "business.refuse.keep", "en") });
+    expect(t(m, "business.refuse.keep", "en")).toBe("Only an Owner or Staff can keep an appointment.");
     expect(dbMocks.setBookingClosureKept).not.toHaveBeenCalled();
   });
 
   it("the Spanish sentence", async () => {
     access.value = { userId: "user_1", isAgency: false, role: "technician" };
     const r = await keepAppointmentAction("acct_1", "bk_1", true, "es");
-    expect(r).toEqual({ ok: false, error: "Solo un propietario puede cambiar esto." });
+    expect(r).toEqual({ ok: false, error: "Solo un propietario o un empleado puede mantener una cita." });
   });
 
   it("Staff may Keep (sees the whole account, same as cancel)", async () => {
@@ -809,10 +810,11 @@ describe("keepAppointmentAction — S-47d Task 8", () => {
     expect(dbMocks.setBookingClosureKept).toHaveBeenCalledWith({}, "acct_1", "bk_1", kept);
   });
 
-  it("a write that changes nothing (false) answers the generic failure (mutation: ignore the false → FAILS)", async () => {
+  it("a write that changes nothing (false) answers the Keep failure, never \"Couldn't change today's status\" (fix round D5; mutation: ignore the false → FAILS)", async () => {
     dbMocks.setBookingClosureKept.mockResolvedValue(false);
     const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
-    expect(r).toEqual({ ok: false, error: t(m, "business.toast.failed", "en") });
+    expect(r).toEqual({ ok: false, error: t(m, "business.card.keepFailed", "en") });
+    expect(t(m, "business.card.keepFailed", "en")).toBe("Couldn't keep this appointment. Try again.");
   });
 
   it("the bump runs on every success (mutation: drop the bump call → FAILS)", async () => {

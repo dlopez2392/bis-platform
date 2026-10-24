@@ -15,10 +15,13 @@ import type { Locale } from "@/lib/i18n/locale";
 
 /** Spec §5.6.2: "Couldn't load today's status." with a Retry link (a reload) — the rest of the
  *  dashboard renders regardless (this card's own RecordCardBoundary, never the page's). */
-export function BusinessStatusCardError({ locale, onRetry }: { locale: Locale; onRetry?: () => void }) {
-  const tr = makeTr(locale);
+export function BusinessStatusCardError({
+  locale, pseudo = false, onRetry, id = "business-status",
+}: { locale: Locale; pseudo?: boolean; onRetry?: () => void; /** Only the styleguide names its own. */ id?: string }) {
+  // Fix round D6: the QA pseudo-locale, as the card it stands in for.
+  const tr = makeTr(locale, pseudo);
   return (
-    <Card id="business-status" lang={locale}>
+    <Card id={id} lang={locale}>
       <CardContent className="pt-6">
         <RecordCardError text={tr.text("business.card.error")} retryLabel={tr.text("business.card.retry")} onRetry={onRetry} />
       </CardContent>
