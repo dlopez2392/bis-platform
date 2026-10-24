@@ -130,13 +130,13 @@ describe("runKeepAppointment — keepAppointmentAction minus React", () => {
 // ── The card itself ──────────────────────────────────────────────────────
 
 const RANGE_NO_APPTS: ClosedDaysRangeView = {
-  id: "cd_1", startsOn: "2026-12-10", endsOn: "2026-12-14", reason: null, appointments: [],
+  id: "cd_1", startsOn: "2026-12-10", endsOn: "2026-12-14", reason: null, appointments: [], capped: false,
 };
 const APPT = {
   id: "bk_1", contactId: "c_1", contactName: "Ana Reyes", startsAt: "2026-12-11T15:00:00.000Z", kept: false, held: 0,
 };
 const RANGE_WITH_APPTS: ClosedDaysRangeView = {
-  id: "cd_2", startsOn: "2026-12-28", endsOn: "2027-01-01", reason: "vacation", appointments: [APPT],
+  id: "cd_2", startsOn: "2026-12-28", endsOn: "2027-01-01", reason: "vacation", appointments: [APPT], capped: false,
 };
 
 const BASE = {
@@ -173,7 +173,7 @@ describe("ClosedDaysCard — loaded", () => {
   });
 
   it("formats a one-day range as the pinned literal, with its reason after ' · ' (English)", () => {
-    const oneDay: ClosedDaysRangeView = { id: "cd_3", startsOn: "2026-12-24", endsOn: "2026-12-24", reason: "holiday", appointments: [] };
+    const oneDay: ClosedDaysRangeView = { id: "cd_3", startsOn: "2026-12-24", endsOn: "2026-12-24", reason: "holiday", appointments: [], capped: false };
     const html = render({ ranges: [oneDay] });
     expect(renderedText(html)).toContain(`Thursday, December 24 · ${m["business.reason.holiday"]}`);
   });
@@ -188,6 +188,19 @@ describe("ClosedDaysCard — loaded", () => {
     const text = renderedText(html);
     expect(text).toContain("Dec 10 – 14");
     expect(text).not.toContain("Dec 10 – 14 ·");
+  });
+
+  // Fix round (sonnet review): the dashboard status card's own "more later" caveat, for this card.
+  it("a capped range shows the moreAppointments caveat; an uncapped one does not (mutation: drop the range.capped check → FAILS)", () => {
+    const cappedHtml = render({ ranges: [{ ...RANGE_WITH_APPTS, capped: true }] });
+    expect(renderedText(cappedHtml)).toContain(m["closedDays.moreAppointments"]);
+    const uncappedHtml = render({ ranges: [RANGE_WITH_APPTS] });
+    expect(renderedText(uncappedHtml)).not.toContain(m["closedDays.moreAppointments"]);
+  });
+
+  it("every listed range shows the caveat when capped, not only the open one (mutation: gate it on isOpen too → FAILS)", () => {
+    const html = render({ ranges: [{ ...RANGE_NO_APPTS, capped: true }, { ...RANGE_WITH_APPTS, capped: true }] });
+    expect(html.split(m["closedDays.moreAppointments"]).length - 1).toBe(2);
   });
 
   it("a range with no appointments shows no count toggle (mutation: always show it → FAILS)", () => {

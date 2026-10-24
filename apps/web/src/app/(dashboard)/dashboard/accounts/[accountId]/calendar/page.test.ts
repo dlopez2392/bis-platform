@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { CLOSURE_APPOINTMENTS_LIMIT } from "@bis/db";
 
 // Task 7 (staff and roles): CalendarSettings and BookingsList are "use
 // client" components (useState/useTransition), unreachable under
@@ -57,7 +58,9 @@ const dbMocks = vi.hoisted(() => ({
   serviceDb: vi.fn(() => ({})),
   // S-47d Task 12: the Closed days card's own two new reads.
   listClosedDaysFrom: vi.fn(),
-  listClosureAppointments: vi.fn(),
+  // Fix round (sonnet review): one query scoped to the ranges themselves, replacing the enclosing-span
+  // read that spent the shared cap on ordinary bookings in the gaps between far-apart ranges.
+  listClosureAppointmentsForRanges: vi.fn(),
   // Fix round: the persona read is mocked now (D3: no profile, a profile, a failed read each decide the
   // empty sentence), and the held-message counts per listed booking (C8).
   getVoiceProfile: vi.fn(),
@@ -69,7 +72,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   listCalendarBookings: (...a: unknown[]) => dbMocks.listCalendarBookings(...a),
   serviceDb: () => dbMocks.serviceDb(),
   listClosedDaysFrom: (...a: unknown[]) => dbMocks.listClosedDaysFrom(...a),
-  listClosureAppointments: (...a: unknown[]) => dbMocks.listClosureAppointments(...a),
+  listClosureAppointmentsForRanges: (...a: unknown[]) => dbMocks.listClosureAppointmentsForRanges(...a),
   getVoiceProfile: (...a: unknown[]) => dbMocks.getVoiceProfile(...a),
   countHeldByBooking: (...a: unknown[]) => dbMocks.countHeldByBooking(...a),
 }));
@@ -111,7 +114,7 @@ describe("CalendarPage — settings are Owner-only (staff and roles)", () => {
     dbMocks.getOrCreateCalendar.mockReset().mockResolvedValue(CALENDAR);
     dbMocks.listCalendarBookings.mockReset().mockResolvedValue([]);
     dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
-    dbMocks.listClosureAppointments.mockReset().mockResolvedValue([]);
+    dbMocks.listClosureAppointmentsForRanges.mockReset().mockResolvedValue([]);
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
     dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
     calendarSettingsMock.mockClear();
@@ -142,7 +145,7 @@ describe("CalendarPage — the Closed days card's props (S-47d Task 12)", () => 
     dbMocks.getOrCreateCalendar.mockReset().mockResolvedValue(CALENDAR);
     dbMocks.listCalendarBookings.mockReset().mockResolvedValue([]);
     dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
-    dbMocks.listClosureAppointments.mockReset().mockResolvedValue([]);
+    dbMocks.listClosureAppointmentsForRanges.mockReset().mockResolvedValue([]);
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
     dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
     calendarSettingsMock.mockClear();
@@ -162,18 +165,18 @@ describe("CalendarPage — the Closed days card's props (S-47d Task 12)", () => 
     expect(closedDaysCardMock).toHaveBeenCalledTimes(1);
   });
 
-  it("maps listClosedDaysFrom + per-range listClosureAppointments into the card's ranges prop (mutation: drop the per-range read → appointments stays [] → FAILS)", async () => {
+  it("maps listClosedDaysFrom + the ranges-scoped read into the card.s ranges prop (mutation: drop the read → appointments stays [] → FAILS)", async () => {
     dbMocks.listClosedDaysFrom.mockResolvedValue([
       { id: "cd_1", account_id: "a1", starts_on: "2026-12-28", ends_on: "2027-01-01", reason: "vacation", created_by: "owner", created_at: "2026-12-01T00:00:00.000Z" },
     ]);
-    dbMocks.listClosureAppointments.mockResolvedValue([
+    dbMocks.listClosureAppointmentsForRanges.mockResolvedValue([
       { id: "bk_1", contact_id: "c_1", starts_at: "2026-12-29T15:00:00.000Z", ends_at: "2026-12-29T15:30:00.000Z", closure_kept_at: null, first_name: "Ana", last_name: "Reyes" },
     ]);
     await render();
     const props = closedDaysCardMock.mock.calls[0]![0] as { ranges: unknown };
     expect(props.ranges).toEqual([
       {
-        id: "cd_1", startsOn: "2026-12-28", endsOn: "2027-01-01", reason: "vacation",
+        id: "cd_1", startsOn: "2026-12-28", endsOn: "2027-01-01", reason: "vacation", capped: false,
         appointments: [{ id: "bk_1", contactId: "c_1", contactName: "Ana Reyes", startsAt: "2026-12-29T15:00:00.000Z", kept: false, held: 0 }],
       },
     ]);
@@ -183,7 +186,7 @@ describe("CalendarPage — the Closed days card's props (S-47d Task 12)", () => 
     dbMocks.listClosedDaysFrom.mockResolvedValue([
       { id: "cd_1", account_id: "a1", starts_on: "2026-12-10", ends_on: "2026-12-10", reason: null, created_by: "owner", created_at: "2026-12-01T00:00:00.000Z" },
     ]);
-    dbMocks.listClosureAppointments.mockResolvedValue([
+    dbMocks.listClosureAppointmentsForRanges.mockResolvedValue([
       { id: "bk_1", contact_id: "c_1", starts_at: "2026-12-10T15:00:00.000Z", ends_at: "2026-12-10T15:30:00.000Z", closure_kept_at: "2026-12-05T00:00:00.000Z", first_name: "Ana", last_name: "Reyes" },
     ]);
     await render();
@@ -226,7 +229,7 @@ describe("CalendarPage — the Closed days card's fix-round props", () => {
     dbMocks.getOrCreateCalendar.mockReset().mockResolvedValue(CALENDAR);
     dbMocks.listCalendarBookings.mockReset().mockResolvedValue([]);
     dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
-    dbMocks.listClosureAppointments.mockReset().mockResolvedValue([]);
+    dbMocks.listClosureAppointmentsForRanges.mockReset().mockResolvedValue([]);
     dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
     dbMocks.countHeldByBooking.mockReset().mockResolvedValue(new Map());
     closedDaysCardMock.mockClear();
@@ -264,18 +267,23 @@ describe("CalendarPage — the Closed days card's fix-round props", () => {
   it("C8: the held-message counts are read ONCE for every listed booking, on the page's db, scoped to the account, and mapped onto each row (mutation: drop the read -> held stays 0 -> FAILS)", async () => {
     const RANGE2 = { ...RANGE, id: "cd_2", starts_on: "2027-01-10", ends_on: "2027-01-10" };
     dbMocks.listClosedDaysFrom.mockResolvedValue([RANGE, RANGE2]);
-    // minors-1b item 5: ONE union-window read now, not one per range — bk_3 lands in RANGE2's own
-    // window (Jan 10), distinct from bk_1/bk_2's Dec 29 (RANGE's own window).
-    dbMocks.listClosureAppointments.mockResolvedValue([
+    // minors-1b item 5 fix round (sonnet review): ONE read, scoped to the ranges' OWN windows (never
+    // the enclosing span) — bk_3 lands in RANGE2's own window (Jan 10), distinct from bk_1/bk_2's Dec 29
+    // (RANGE's own window).
+    dbMocks.listClosureAppointmentsForRanges.mockResolvedValue([
       APPT("bk_1"), APPT("bk_2"),
       { ...APPT("bk_3"), starts_at: "2027-01-10T15:00:00.000Z", ends_at: "2027-01-10T15:30:00.000Z" },
     ]);
     dbMocks.countHeldByBooking.mockResolvedValue(new Map([["bk_2", 3]]));
     await render();
-    expect(dbMocks.listClosureAppointments).toHaveBeenCalledTimes(1);
-    // The union of both ranges' own windows: RANGE's start (Dec 28) to RANGE2's end + 1 day (Jan 11).
-    expect(dbMocks.listClosureAppointments).toHaveBeenCalledWith(
-      expect.anything(), "a1", "2026-12-28T06:00:00.000Z", "2027-01-11T06:00:00.000Z",
+    expect(dbMocks.listClosureAppointmentsForRanges).toHaveBeenCalledTimes(1);
+    // Each range's OWN window, never one span covering both (fix round: that was the bug).
+    expect(dbMocks.listClosureAppointmentsForRanges).toHaveBeenCalledWith(
+      expect.anything(), "a1",
+      [
+        { fromIso: "2026-12-28T06:00:00.000Z", toIso: "2027-01-02T06:00:00.000Z" },
+        { fromIso: "2027-01-10T06:00:00.000Z", toIso: "2027-01-11T06:00:00.000Z" },
+      ],
     );
     expect(dbMocks.countHeldByBooking).toHaveBeenCalledTimes(1);
     const [dbArg, accountArg, ids] = dbMocks.countHeldByBooking.mock.calls[0]! as [{ from: unknown }, string, string[]];
@@ -293,24 +301,71 @@ describe("CalendarPage — the Closed days card's fix-round props", () => {
     expect(dbMocks.countHeldByBooking).not.toHaveBeenCalled();
   });
 
-  // minors-1b item 5: the union window is per-ACCOUNT (never a second account's bookings), and no range
-  // means no read at all — both proved against a stub that fails the test by throwing if ever called
-  // with the wrong account.
-  it("the union read, when there are ranges to union, carries the route's OWN accountId (second-account test; mutation: hardcode \"a1\" -> FAILS)", async () => {
+  // minors-1b item 5's second-account test: the ranges-scoped read is per-ACCOUNT (never a second
+  // account's bookings), and no range means no read at all — both proved against a stub that fails the
+  // test by throwing if ever called with the wrong account.
+  it("the ranges-scoped read, when there are ranges, carries the route's OWN accountId (second-account test; mutation: hardcode \"a1\" -> FAILS)", async () => {
     dbMocks.listClosedDaysFrom.mockResolvedValue([RANGE]);
-    dbMocks.listClosureAppointments.mockImplementation(async (_db: unknown, acct: string) => {
+    dbMocks.listClosureAppointmentsForRanges.mockImplementation(async (_db: unknown, acct: string) => {
       if (acct !== "a2") throw new Error(`expected account "a2", got "${acct}"`);
       return [];
     });
     await renderForAccount("a2");
-    expect(dbMocks.listClosureAppointments).toHaveBeenCalledTimes(1);
-    expect(dbMocks.listClosureAppointments.mock.calls[0]![1]).toBe("a2");
+    expect(dbMocks.listClosureAppointmentsForRanges).toHaveBeenCalledTimes(1);
+    expect(dbMocks.listClosureAppointmentsForRanges.mock.calls[0]![1]).toBe("a2");
   });
 
-  it("no closed days at all: listClosureAppointments is never called (mutation: always read the union -> FAILS)", async () => {
+  it("no closed days at all: listClosureAppointmentsForRanges is never called (mutation: always read -> FAILS)", async () => {
     dbMocks.listClosedDaysFrom.mockResolvedValue([]);
     await render();
-    expect(dbMocks.listClosureAppointments).not.toHaveBeenCalled();
+    expect(dbMocks.listClosureAppointmentsForRanges).not.toHaveBeenCalled();
+  });
+
+  // Fix round (sonnet review, CHANGES REQUESTED): the first cut of the "one query" fix spanned
+  // [earliest start, latest end + 1 day) — a booking in the GAP between two far-apart ranges (never
+  // touched by either closure) was fetched anyway and spent a slot of the shared row cap. Asserted here
+  // as the query SHAPE itself (the coordinator's own "(assert the query shape)" instruction), because a
+  // booking in the gap is excluded from the DISPLAY either way (the per-range split downstream filters
+  // by each range's own window regardless of what was fetched) — the bug is the WASTED cap slot on the
+  // fetch, not a wrong display, so the fetch's own arguments are what must be checked. Two ranges months
+  // apart (Dec 28 - Jan 1, and March 1): if page.tsx ever goes back to asking for one range spanning the
+  // whole union, the gap month (January-February) would be IN that one range's window, and this
+  // assertion — the exact two narrow windows, never one wide one — fails.
+  it("a booking in the gap between two ranges is never asked for: the query shape is the two ranges' own windows, never the enclosing span (mutation: go back to the enclosing span -> FAILS)", async () => {
+    const RANGE2 = { ...RANGE, id: "cd_2", starts_on: "2027-03-01", ends_on: "2027-03-01" }; // months later
+    dbMocks.listClosedDaysFrom.mockResolvedValue([RANGE, RANGE2]);
+    await render();
+    expect(dbMocks.listClosureAppointmentsForRanges).toHaveBeenCalledTimes(1);
+    const [, , rangesArg] = dbMocks.listClosureAppointmentsForRanges.mock.calls[0]! as [
+      unknown, string, { fromIso: string; toIso: string }[],
+    ];
+    expect(rangesArg).toEqual([
+      { fromIso: "2026-12-28T06:00:00.000Z", toIso: "2027-01-02T06:00:00.000Z" },
+      { fromIso: "2027-03-01T06:00:00.000Z", toIso: "2027-03-02T06:00:00.000Z" },
+    ]);
+    // Never a single range whose own span would have covered the January/February gap between them.
+    expect(rangesArg).toHaveLength(2);
+  });
+
+  // The "more later" caveat: page.tsx computes it from the READ's own total length hitting
+  // CLOSURE_APPOINTMENTS_LIMIT, shared across every listed range (the read is one query).
+  it("hitting CLOSURE_APPOINTMENTS_LIMIT marks every listed range capped (mutation: compute capped from one range's own count -> FAILS)", async () => {
+    const RANGE2 = { ...RANGE, id: "cd_2", starts_on: "2027-01-10", ends_on: "2027-01-10" };
+    dbMocks.listClosedDaysFrom.mockResolvedValue([RANGE, RANGE2]);
+    dbMocks.listClosureAppointmentsForRanges.mockResolvedValue(
+      Array.from({ length: CLOSURE_APPOINTMENTS_LIMIT }, (_, i) => APPT(`bk_${i}`)),
+    );
+    await render();
+    const ranges = props().ranges as { capped: boolean }[];
+    expect(ranges.map((r) => r.capped)).toEqual([true, true]);
+  });
+
+  it("under the cap, no range is marked capped", async () => {
+    dbMocks.listClosedDaysFrom.mockResolvedValue([RANGE]);
+    dbMocks.listClosureAppointmentsForRanges.mockResolvedValue([APPT("bk_1")]);
+    await render();
+    const ranges = props().ranges as { capped: boolean }[];
+    expect(ranges.map((r) => r.capped)).toEqual([false]);
   });
 
   it("C5: canAct is seesWholeAccount — true for the agency, an Owner and Staff, false for a Technician (mutation: pass canManage -> the Staff case FAILS)", async () => {

@@ -2499,6 +2499,11 @@ export const m = {
   "closedDays.count.es": "{n} citas",
   "closedDays.countOne": "1 appointment",
   "closedDays.countOne.es": "1 cita",
+  // Fix round (sonnet review): the dashboard status card's own "more later" caveat
+  // (business.card.moreLater), worded for this card instead — the shared read cap orders across every
+  // listed range, so there is no one range's own date to name the way that key does.
+  "closedDays.moreAppointments": "There may be more appointments than shown.",
+  "closedDays.moreAppointments.es": "Puede haber más citas de las que se muestran.",
   "closedDays.added": "Closed days added.",
   "closedDays.added.es": "Días cerrados agregados.",
   "closedDays.addedTodo": "{n} appointments are on these days. A To-do lists them.",

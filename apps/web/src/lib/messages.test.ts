@@ -1814,6 +1814,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
     "closedDays.remove": [],
     "closedDays.count": ["n"],
     "closedDays.countOne": [],
+    "closedDays.moreAppointments": [],
     "closedDays.added": [],
     "closedDays.addedTodo": ["n"],
     "closedDays.addedTodoOne": [],
@@ -1852,8 +1853,8 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
   // The SET of names: a sentence may name one twice, and t() replaces every occurrence.
   const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
 
-  it("the key list itself is the 125 rows: the table's 108, the call-page table's 12, and the fix round's 5 (business.storm.description, business.refuse.keep, business.card.keepFailed, closedDays.addedTodoOne, closedDays.emptyNoPersona) (guards the loops below from vacuity)", () => {
-    expect(KEYS.length).toBe(125);
+  it("the key list itself is the 126 rows: the table's 108, the call-page table's 12, the fix round's 5 (business.storm.description, business.refuse.keep, business.card.keepFailed, closedDays.addedTodoOne, closedDays.emptyNoPersona), and the Calendar-page undercount fix round's 1 (closedDays.moreAppointments) (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(126);
   });
 
   it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
@@ -1963,6 +1964,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
       ["closedDays.remove", "Remove", "Quitar"],
       ["closedDays.count", "{n} appointments", "{n} citas"],
       ["closedDays.countOne", "1 appointment", "1 cita"],
+      ["closedDays.moreAppointments", "There may be more appointments than shown.", "Puede haber más citas de las que se muestran."],
       ["closedDays.added", "Closed days added.", "Días cerrados agregados."],
       ["closedDays.addedTodo", "{n} appointments are on these days. A To-do lists them.", "Hay {n} citas en estos días. Una tarea en Pendientes las lista."],
       ["closedDays.addedTodoOne", "1 appointment is on these days. A To-do lists it.", "Hay 1 cita en estos días. Una tarea en Pendientes la lista."],
