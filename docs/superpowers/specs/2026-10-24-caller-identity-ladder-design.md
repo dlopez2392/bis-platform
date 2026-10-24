@@ -1,11 +1,12 @@
-# S-47 part e: caller identity checks scaled to each pack's risk (F-116 part, the no-text version; no migration)
+# S-47 part e: caller identity checks scaled to each pack's risk (F-116 part, the no-text version; migration 0098)
 
 Status: owner decisions E1–E5 fixed in conversation 2026-10-24, and the design of sections 5.1–5.4 (the
 rungs, the action requirements, the one module, the confirm flow) approved the same day. This draft fills in
 the rest against the tree at main `449d5bf6`. The choices it makes that the decisions did not dictate are
-S1–S25 in section 2. The owner answered the first draft's question and its three findings the same day (E6,
-E7), and the orchestrator ruled on its "needs" and on findings F4 and F5 (O1–O3); one new owner question,
-raised by E7, is open (Q2, section 11). Part e of S-47 (parallel work,
+S1–S29 in section 2. The owner answered the first draft's question and its three findings the same day (E6,
+E7), and the orchestrator ruled on its "needs" and on findings F4 and F5 (O1–O3). The owner answered the
+question E7 raised (Q2) the same day as E8, the one shared holding record, which is what brings migration 0098
+into this part (4.1). There are no open questions (section 11). Part e of S-47 (parallel work,
 `docs/crm-features.md` §4.3 row "↳ F-116 (part) | the verification ladder by pack risk | (in S-47) 1",
 line 1344). Parts a (F-034, #279), b (F-174 part, #280–#283), c (F-037 part 1, #284) and d (F-084, #286) have
 shipped. F-116's later part, one-time codes by text, waits for A2P and decision 19 (`crm-features.md` l.1576).
@@ -65,6 +66,9 @@ The owner's answers to the first draft (2026-10-24):
   asks the name first. It covers a new booking (including one without an email: today's phone-match-first
   dedupe, `packages/db/src/contacts.ts:276-277`), decision 19's blank-fill, and `finishCall`'s message
   thread. The new-booking contact choice and the blank-fill are writes to customer records: tier HIGH.
+- **E8 One shared "Caller" holding record per shared number (Q2, option (c)).** The missed-call text and any
+  reply live there; staff can move the thread to the right person; and no booking, lead, name or customer
+  detail is ever written onto it. Specified in 5.12, with migration 0098 (4.1).
 
 The orchestrator's rulings (2026-10-24):
 
@@ -159,9 +163,20 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   `today`, and is then the latest booking's contact.
 - **S24 The corpus stub follows the real ladder** (O2): it runs `decideIdentity` and the 5.4.4 result
   builders over a fixture's contacts, with per-item state, rather than refusing (5.11).
-- **S25 The missed-call text-back on an unconfirmed shared number** waits on Q2 (section 11). Until it is
-  answered the PR writes nothing there: no contact, so no text (Q2's option (a)), at every site, including
-  `contactForCallerId`'s own phone pick (5.10.4).
+- **S25 The missed-call text-back on an unconfirmed shared number** goes to the holding record (E8,
+  5.10.4, 5.12), at every site, `contactForCallerId`'s own phone pick included.
+- **S26 The mark is a new server-only column,** `contacts.holds_shared_number`, because no existing column
+  can carry it: `source` is a free-text note staff edit inline (`contacts/source-field.tsx:9-19`; its UPDATE
+  grant, `schema-grants-guard.test.ts:86-89`), and `custom`, tags and `first_name` are staff-editable too.
+  A record that is "Caller" by name alone is not enough either: today's ordinary "Caller" contacts for an
+  unknown number have the same shape and must keep being filled (S20).
+- **S27 Every inbound text from a shared number files on the holding record,** not only replies to the
+  missed-call text: a text carries no name, so E7 allows no other choice. Staff move it (5.12.5).
+- **S28 Moving a thread moves its messages,** because a conversation is one per contact
+  (`conversations_account_contact_unique`, 0005), into the person's own conversation, with the calls that
+  pointed at it, in one transaction, with Undo (DESIGN.md rule 6).
+- **S29 The holding record is not a customer:** off the contact list, its total, the export and every
+  contact picker; shown in the inbox and search as its thread, labelled "Shared number {number}" (5.12.4).
 
 ## 3. Scope
 
@@ -170,21 +185,25 @@ the per-call identity state helpers, the tool-result sentences); the new tool `c
 changes to `find_my_booking`, `reschedule_appointment` and `cancel_appointment`; two reads in
 `packages/db/src/voice.ts` and the removal of one; the To-do in `finishCall`; the SIP attestation log line;
 E7's one record rule on a shared number (the new-booking contact, the blank-fill at both sites, the message
-thread, `take_message`'s name, `createContact`'s `matchBy`, and the text-back: no ambiguous write now, Q2's answer later); the
-`emailKey` barrel line, `workRowHref`'s call link and the runbook's Step 8 (O1); the corpus stub (O2); the
-copy keys; unit, db and route tests.
+thread, `take_message`'s name, `createContact`'s `matchBy`); E8's holding record (migration 0098, its
+read and write in `voice.ts`, the text-back and inbound-text filing, every dedupe skipping it, its place in
+lists and search, and Move with Undo); the `emailKey` barrel line, `workRowHref`'s call link and the
+runbook's Step 8 (O1); the corpus stub (O2); the copy keys; unit, db and route tests.
 
 **Out (and where it goes):** one-time codes (F-116's later part: A2P, decision 19, E1); acting on the
 attestation (observation first; a later part may use it once a real call's log shows what arrives); "habla
 por", a delegate speaking for someone on another number (F-003's part, l.1476, hypothesis H5); the
 phone-first dedupe for every NON-voice writer (the booking page, forms, the web chat, the CSV import keep
-`createContact`'s default; E7 is Sofía's rule); any system prompt change (5.5); any trade-module
+`createContact`'s default, E7 being Sofía's rule, except that no dedupe ever returns a holding record, E8);
+moving a thread to a person who is not yet a contact (staff add the contact first); any system prompt
+change (5.5); any trade-module
 wording, `VERSION` or pin change (the modules are paused; `modules/pin.ts` is untouched); the web chat and
 the browser voice demo (they stay at rung 0, 5.8); a corpus run.
 
-## 4. Data (no migration)
+## 4. Data (migration 0098, tier HIGH)
 
-Nothing is added to the schema. Every column used exists on production:
+E1–E7 need no schema change; E8 needs one, migration 0098 (4.1): a mark, its shape, one record per number,
+and the Move. Everything else uses columns already on production:
 
 - **Candidates:** `contacts.phone_key` and `contacts.email_key`, generated columns (0033:21-41, 0034:39-45),
   each with an `(account_id, key)` index.
@@ -196,7 +215,8 @@ Two reads are added to `packages/db/src/voice.ts` (exported by the barrel's `exp
 
 ```
 listContactsOnNumber(db, accountId, e164)
-  -> { rows: { id, first_name, last_name, phone, email_key }[], truncated: boolean }
+  -> { rows: { id, first_name, last_name, phone, email_key, holds_shared_number }[], truncated: boolean }
+  holding records come back flagged; the identity check and the picker treat them as nobody (5.12.3)
   where account_id = accountId and phone_key in (keys of e164), limit 21
   keys: phoneDigits(e164) (contacts.ts:177-180), plus the ten national digits of a +52 or +521
         number (spokenPhone's own forms, phone-number.ts:46-49), so a Mexican number typed without its code
@@ -230,6 +250,206 @@ One option is added to `createContact` (`packages/db/src/contacts.ts`, tier HIGH
 it). With it, `findDuplicate` (`contacts.ts:261-354`) runs the email lookup (266-272) and skips the whole
 phone branch (274-351): no phone match, no legacy-key read, no country twin. Absent, every caller behaves
 exactly as today.
+
+### 4.1 Migration 0098, the holding record (E8, tier HIGH)
+
+**Numbering.** main's latest is 0097 (`449d5bf6`); no branch holds a 0098 at the time of writing
+(`fix/s47d-followups` and `fix/s47c-followups` end at 0097 and 0096). The plan re-checks before pushing to
+bis-ci and renumbers if one has landed.
+
+**What it adds, and why each piece is the smallest that works (S26):**
+
+1. `contacts.holds_shared_number boolean not null default false`: the mark. No existing column can carry it
+   (S26).
+2. `contacts_holding_shape`: a holding record is exactly first name "Caller", no last name, no email, a phone.
+   This is what makes "no name or customer detail is ever written onto it" hold for every writer, staff
+   included, without touching any writer's code: an inline edit of its name or email fails the CHECK.
+3. `contacts_one_holding_per_number`: one holding record per account and number, so two missed calls
+   finishing together cannot make two (the writer retries the read on 23505, 5.12.2).
+4. `app.contacts_holding_server_only()`: only server code sets or clears the mark. A signed-in client holds
+   table-level INSERT on contacts and column-level UPDATE on the columns `schema-grants-guard.test.ts:86-89`
+   lists, which do not include the new column; the trigger is the belt for INSERT, as
+   `app.contacts_language_server_only` (0076) and `app.contacts_author_guard` (0091) are for theirs.
+5. `public.move_holding_thread(...)`: the Move and its Undo in one transaction (S28, 5.12.5), the repo's
+   pattern for an all-or-nothing write (`save_voice_knowledge`, 0095; `reserve_document_version`, 0077).
+
+```sql
+-- 0098_shared_number_holding.sql - one "Caller" holding record per shared number (S-47e, owner decision E8)
+--
+-- WHY. A phone several customers share carries no name, so a missed-call text-back and the replies to it
+-- cannot be filed on any one of them (S-47e E7). E8: they live on ONE holding record per number, which no
+-- booking, lead, name or customer detail ever reaches, and staff move the thread to the right person.
+--
+-- WHAT.
+--   public.contacts.holds_shared_number boolean not null default false: the mark. Set only by server code
+--     (ensureHoldingContact, service_role); a signed-in insert stores false; no client UPDATE grant names it.
+--   contacts_holding_shape: a holding record is first_name 'Caller', no last_name, no email, a phone.
+--   contacts_one_holding_per_number: unique (account_id, phone_key) where holds_shared_number.
+--   app.contacts_holding_server_only(): the insert/update belt for the mark (plain, not definer).
+--   public.move_holding_thread(...): moves a holding thread's messages and calls to a person's conversation,
+--     or back (Undo); SECURITY DEFINER, executed by service_role only, behind the app's role check.
+--
+-- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
+-- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and schema-grants-guard.test.ts's
+-- EXPECTED_WRITES for contacts is unchanged (no column grant names holds_shared_number). The new definer is
+-- added to definer-search-path.test.ts's EXPECTED_DEFINERS (22 -> 23).
+--
+-- SEARCH PATHS. Both functions say set search_path = pg_catalog, pg_temp (0096's rule), never ''.
+--
+-- LOCKS AND COST. ADD COLUMN with a constant default is catalogue-only. The CHECK is added NOT VALID and then
+-- validated (the scan holds SHARE UPDATE EXCLUSIVE, not ACCESS EXCLUSIVE); every existing row is false and
+-- passes. The partial unique index is built non-concurrently (SHARE on contacts for the build; it indexes
+-- no existing row). CREATE TRIGGER takes SHARE ROW EXCLUSIVE briefly.
+--
+-- LOAD-BEARING. The build after this file names holds_shared_number in every contact dedupe, the contact
+-- list and count, the CSV import's match index and the voice reads (spec 4.2), so it merges only after this
+-- file is on production.
+--
+-- ROLLBACK (roll the app back first):
+--   drop function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]);
+--   drop trigger contacts_holding_server_only on public.contacts;
+--   drop function app.contacts_holding_server_only();
+--   drop index public.contacts_one_holding_per_number;
+--   alter table public.contacts drop constraint contacts_holding_shape;
+--   alter table public.contacts drop column holds_shared_number;
+--     (holding records then read as ordinary "Caller" contacts, threads and all)
+--
+-- ASCII only, no backslash anywhere (the MCP apply rule).
+
+set local lock_timeout = '5s';
+
+-- 1. The mark.
+alter table public.contacts
+  add column holds_shared_number boolean not null default false;
+
+-- 2. Its shape.
+alter table public.contacts
+  add constraint contacts_holding_shape check (
+    not holds_shared_number
+    or (first_name = 'Caller' and last_name is null and email is null and phone is not null)
+  ) not valid;
+alter table public.contacts validate constraint contacts_holding_shape;
+
+-- 3. One per account and number.
+create unique index contacts_one_holding_per_number
+  on public.contacts (account_id, phone_key) where holds_shared_number;
+
+-- 4. Only server code sets or clears it.
+create function app.contacts_holding_server_only() returns trigger
+language plpgsql set search_path = pg_catalog, pg_temp as $$
+begin
+  if coalesce(current_user = 'authenticated', false) then
+    if tg_op = 'INSERT' then
+      new.holds_shared_number := false;
+    else
+      new.holds_shared_number := old.holds_shared_number;
+    end if;
+  end if;
+  return new;
+end $$;
+create trigger contacts_holding_server_only before insert or update on public.contacts
+  for each row execute function app.contacts_holding_server_only();
+
+-- 5. Move a holding thread to a person, or back (Undo, which names the ids it moved).
+create function public.move_holding_thread(
+  p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text,
+  p_message_ids uuid[] default null, p_call_ids uuid[] default null)
+returns jsonb
+language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
+declare
+  v_from_contact uuid;
+  v_to_contact uuid;
+  v_from_unread integer;
+  v_from_holding boolean;
+  v_to_holding boolean;
+  v_messages uuid[];
+  v_calls uuid[];
+begin
+  if p_from_conversation = p_to_conversation then
+    return pg_catalog.jsonb_build_object('status', 'invalid');
+  end if;
+
+  -- Both conversations on this account, locked in a fixed order so two moves cannot deadlock.
+  perform 1 from public.conversations c
+   where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation)
+   order by c.id for update;
+  select c.contact_id, c.unread_count into v_from_contact, v_from_unread
+    from public.conversations c where c.account_id = p_account_id and c.id = p_from_conversation;
+  select c.contact_id into v_to_contact
+    from public.conversations c where c.account_id = p_account_id and c.id = p_to_conversation;
+  if v_from_contact is null or v_to_contact is null then
+    return pg_catalog.jsonb_build_object('status', 'not_found');
+  end if;
+
+  select coalesce(k.holds_shared_number, false) into v_from_holding
+    from public.contacts k where k.account_id = p_account_id and k.id = v_from_contact;
+  select coalesce(k.holds_shared_number, false) into v_to_holding
+    from public.contacts k where k.account_id = p_account_id and k.id = v_to_contact;
+  -- Exactly one side is the holding record; toward it only as an Undo, which names its messages.
+  if v_from_holding is null or v_to_holding is null
+     or v_from_holding = v_to_holding or (v_to_holding and p_message_ids is null) then
+    return pg_catalog.jsonb_build_object('status', 'invalid');
+  end if;
+
+  with moved as (
+    update public.messages m
+       set conversation_id = p_to_conversation, updated_at = pg_catalog.now()
+     where m.account_id = p_account_id and m.conversation_id = p_from_conversation
+       and (p_message_ids is null or m.id = any (p_message_ids))
+    returning m.id)
+  select coalesce(pg_catalog.array_agg(id), '{}') into v_messages from moved;
+
+  with repointed as (
+    update public.calls k
+       set conversation_id = p_to_conversation,
+           contact_id = case when v_to_holding then null else v_to_contact end
+     where k.account_id = p_account_id and k.conversation_id = p_from_conversation
+       and (p_call_ids is null or k.id = any (p_call_ids))
+       and (k.contact_id is null or k.contact_id = v_from_contact)
+    returning k.id)
+  select coalesce(pg_catalog.array_agg(id), '{}') into v_calls from repointed;
+
+  -- A whole move carries the unread count with it; an Undo leaves both counts as they are.
+  update public.conversations c
+     set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
+                             where m.account_id = p_account_id and m.conversation_id = c.id),
+         unread_count = case
+           when p_message_ids is not null then c.unread_count
+           when c.id = p_to_conversation then c.unread_count + v_from_unread
+           else 0 end,
+         updated_at = pg_catalog.now()
+   where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation);
+
+  insert into public.events (account_id, type, actor_type, actor_id, payload)
+  values (p_account_id, 'conversation.moved', 'user', p_actor,
+          pg_catalog.jsonb_build_object(
+            'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
+            'fromContactId', v_from_contact, 'toContactId', v_to_contact,
+            'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
+            'undo', p_message_ids is not null));
+
+  return pg_catalog.jsonb_build_object('status', 'ok',
+    'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls));
+end $$;
+
+revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[])
+  from public, anon, authenticated, service_role;
+grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) to service_role;
+
+-- 6. Comments: each names its one writer.
+comment on column public.contacts.holds_shared_number is
+  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
+comment on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) is
+  'Moves a holding thread (contacts.holds_shared_number) to a person''s conversation with the calls that pointed at it, or back as an Undo naming its message and call ids. service_role only, behind the app''s Owner, Staff or agency check (0098).';
+```
+
+### 4.2 LOAD-BEARING on 0098 being on production
+
+PostgREST refuses a request naming a column or function it does not know, so the merge waits for 0098 on
+production. The sites: `findDuplicate`'s phone branch (every `createContact`: the booking page, forms, the
+web chat, inbound texts, the import, Sofía); `listContacts` and `countContacts` (the contact list, its total,
+the export, search and every picker); `buildMatchIndex` (the CSV import); `listContactsOnNumber` and
+`ensureHoldingContact` (every call); the Move.
 
 ## 5. Behaviour
 
@@ -648,7 +868,8 @@ in this order:
 ```
 
 - `onNumber` is `listContactsOnNumber` (4) for the number the write would store (S20), filtered by
-  `isCallerIdNumber`. "Real" leaves out a holding record, if Q2 creates them (5.10.4).
+  `isCallerIdNumber`. "Real" leaves out the holding record (`holds_shared_number`, 5.12): it is never
+  counted, confirmed, picked or filled.
 - `confirmed` is `state.identity.confirmed`, and counts only when the number being stored IS the caller ID:
   a confirmation is about the caller ID's people, never about a number the caller recited.
 - The name and email rules are 5.3's, word for word. The picker never fuzzes and never returns a contact
@@ -712,21 +933,26 @@ The new order:
    call row's `contact_id` stays null; the call card, the staff alert and the To-do are unaffected. The
    message is on the call, in no customer's thread.
 
-#### 5.10.4 The text-back (waits on Q2)
+#### 5.10.4 The text-back (E8)
 
 `prepareTextback` takes its contact from `finishCall`'s resolver (`finish-call.ts:634-639`), from
 `handoff-result` (`app/api/voice/texml/handoff-result/route.ts:352-362`, the call row's contact) or, when
-neither gives one, from `contactForCallerId` (`textback.ts:237-238`, the phone-first dedupe). After 5.10.3 a
-shared, unconfirmed, unnamed call resolves to null and the text-back is not sent ("no_contact",
-`textback.ts:242`), while `contactForCallerId` would still pick a household member by phone. A conversation
-must have a contact (`conversations.contact_id not null`, 0005:14), so the text has to live on SOME record or
-not go. Q2 (section 11) asks which. Until it is answered, `contactForCallerId` (`textback.ts:159-184`) reads
-`listContactsOnNumber` first and returns null on a shared number, so no path writes anything ambiguous
-meanwhile (S25). The recommendation, (c): one holding contact per shared number, first
-name "Caller", no last name, found or created by `contactForCallerId` when the number is shared. It is never
-"real" in the picker (5.10.0) and can never be confirmed (5.3 rule 1: one word), so no appointment, fill or
-lead ever lands on it; it carries the missed-call texts and the replies to them, which is what today's
-"Caller" contact is for an unknown number.
+neither gives one, from `contactForCallerId` (`textback.ts:237-238`, the phone-first dedupe). A conversation
+must have a contact (`conversations.contact_id not null`, 0005:14), so the text has to live on some record.
+E8 decides which:
+
+- `finishCall`'s resolver (5.10.3) on a shared, unconfirmed, unnamed call returns the HOLDING record for
+  the text-back's use only: `resolveContactId` gains a `forTextback` mode (passed at `finish-call.ts:639`)
+  whose null case is `ensureHoldingContact(callerNumber)` (5.12.2) on a shared caller-ID number. The lead
+  leg's own call keeps null, so the thread of 5.10.3 point 5 is still no customer's.
+- `contactForCallerId` (`textback.ts:159-184`) reads `listContactsOnNumber` first: shared →
+  `ensureHoldingContact`; one contact or none → today's code. Its phone-only fill (175-180) never runs on a
+  holding record.
+- `finishCall` adopts the text-back's contact as the call's (`finish-call.ts:654`) only when it is NOT a
+  holding record: `prepareTextback`'s result gains `holding: boolean`. On a holding record the call row keeps
+  `contact_id` null and records the holding `conversation_id`, so the call page links to the thread and the
+  proposals leg (`finish-call.ts:950-975`) gets no contact: no `contact_field` suggestion and no stage move
+  can be proposed for it.
 
 #### 5.10.5 `take_message` asks for a name (S22)
 
@@ -763,6 +989,97 @@ mirror, so a corpus item could "find" and "cancel" an appointment with no check 
 - A parity test feeds one fixture to the stub and to `runTool` (its DB reads mocked from the same contacts)
   and requires deep-equal results for each of the five tools. No corpus run is part of this spec.
 
+### 5.12 The holding record (E8, tier HIGH)
+
+#### 5.12.1 How it is marked
+
+`contacts.holds_shared_number = true`, on a row whose shape the database fixes: first name "Caller", no last
+name, no email, the shared number as its phone (`contacts_holding_shape`), one per account and number
+(`contacts_one_holding_per_number`), set only by server code (`app.contacts_holding_server_only`) (4.1).
+It is made by Sofía, so its author mark is hers (`contactAuthor("ai", …)` → `ai`,
+`packages/db/src/provenance.ts:47-48`). No `contact_created` act is recorded for it: an act is an undoable
+write onto a customer's record (`ai-act-rules.ts:21-25`), and this is nobody's record; its Undo would delete
+the thread.
+
+#### 5.12.2 Who makes it: `ensureHoldingContact` (`packages/db/src/voice.ts`)
+
+```
+ensureHoldingContact(db, accountId, e164): Promise<{ id: string; created: boolean }>
+  1. read contacts where account_id = accountId and phone_key in (keys of e164, as listContactsOnNumber)
+     and holds_shared_number; keep the row whose phone reads as e164 (normalisePhone)
+  2. none: insert { account_id, first_name: 'Caller', ...phoneFields(e164), source: 'voice',
+     holds_shared_number: true, author_kind: 'ai', author_id: null } as service_role
+     a 23505 on contacts_one_holding_per_number (two calls at once): step 1 again, once
+  3. created: emit contact.created { contactId, holding: true }, actor voice / ai
+  throws on any other error (each caller already has a net)
+```
+
+Never through `createContact`, whose phone match would return a household member. Two callers only: the
+text-back (5.10.4) and inbound texts (5.12.6). It is called only when the number is shared (two or more
+real contacts, 5.10.0).
+
+#### 5.12.3 Every writer and every dedupe skip it
+
+| Path | Where | What it does with a holding record |
+|---|---|---|
+| `createContact`'s dedupe, every caller (booking page, forms, web chat, inbound email, import creates, Sofía's `today` path) | `findDuplicate`, `contacts.ts:274-279` and the legacy read `341-343` | adds `.eq("holds_shared_number", false)`, so it is never a phone match and never a country twin. The email branch needs nothing: the CHECK keeps its email null, so its `email_key` is null |
+| The post-write duplicate check | `contacts.ts:403-415` (phone twin) | skips it: no duplicate flag ever pairs a household member with it |
+| A Technician's hidden-match flags | `flagMatchesOf`, `contacts.ts:502-515` | skips it |
+| The CSV import's match index | `buildMatchIndex`, `contact-import.ts:38-53` | selects the flag and leaves those rows out of `byPhone`, so an imported row never updates it |
+| Sofía's picker and identity check | 5.10.0, 5.2 | never "real": not counted, confirmed, picked or filled |
+| A new booking | `registry.ts:442-476`, booking page `app/b/[publicId]/actions.ts` | cannot reach it: the picker never returns it and the dedupe skips it. These are the only two callers of `createBooking` |
+| Decision 19's fill and the phone-only fills | `registry.ts:463-475`, `finish-call.ts:335-347`, `364-372`, `textback.ts:175-180` | never run on it (5.10.2); the CHECK refuses a name or email if anything tried |
+| `finishCall`'s thread and the call row | `finish-call.ts:307-379`, `654` | never its contact (5.10.3, 5.10.4); the call row keeps the holding conversation only |
+| Post-call suggestions | `finish-call.ts:950-975` | no contact, so no `contact_field` or stage suggestion for it |
+| Staff inline edits, an approved `contact_field` suggestion | `contacts/actions.ts`, `lib/proposals/kinds/contact-field.ts` | the record page never opens for it (5.12.4); a name or email edit that got there anyway fails the CHECK |
+| Reactivation, review and referral automations | `automations.ts` | cannot reach it: each needs a past booking, and it never has one |
+
+#### 5.12.4 How it shows in lists and search (S29)
+
+- **Not a customer.** `listContacts` (`contacts.ts:883-891`) and `countContacts` (`contacts.ts:993-997`) add
+  `.eq("holds_shared_number", false)`. That keeps it off the contact list and its total, the CSV export
+  (`contacts/export/route.ts:128`), the relationship picker (`contacts/relationship-actions.ts:237`), the
+  pipeline's contact picker (`pipeline/page.tsx:26`) and the palette's contact results
+  (`api/accounts/[accountId]/search/route.ts:94`).
+- **Its thread is in the inbox** (`conversations/page.tsx`, `conversation-list.tsx`), named by one label
+  wherever a contact's name would show: "Shared number {number}" / "Número compartido {number}"
+  (`contact.holding.label`), never "Caller". `ConversationSummary` gains `holdsSharedNumber`; the thread
+  header (`message-thread.tsx`) shows the Notice and the Move control (5.12.5). The palette's conversation
+  results (`searchConversations`, `messaging.ts:888`) show the same label.
+- **The call page** shows no contact for such a call and links "Open the texts" to `conversations?c={id}`
+  (the holding conversation on the call row).
+- **Its record page** (`contacts/[contactId]/page.tsx`) redirects to its thread, so no card, field, document,
+  relationship or deal can be added to it from there.
+- **The duplicates queue** never lists it (5.12.3).
+
+#### 5.12.5 How staff move the thread (S28)
+
+- **Who:** Owners, Staff and the agency, the people who may reply in the inbox; not Technicians.
+- **Where:** the holding thread's header. A Notice: "These texts came from {number}, a phone more than one
+  customer uses, so they aren't filed under anyone yet. Move them to the right person." and a ghost button
+  "Move to…" (the thread's one primary stays Send, DESIGN.md rule 8). Its menu lists the real contacts on
+  the number by name (`listContactsOnNumber`), then "Find another customer", the existing contact search. A
+  person who is not a contact yet is added on Contacts first (section 3).
+- **The action** (`conversations/actions.ts`, `moveHoldingThreadAction(accountId, conversationId,
+  toContactId)`): checks the role, `ensureConversation` for the person on `serviceDb()`, then
+  `move_holding_thread(account, holdingConversation, personConversation, actor)`. `ok` → toast "Moved to
+  {name}." with Undo, and the inbox opens the person's thread. Undo calls the same function the other way,
+  naming the `messageIds` and `callIds` the move returned → "Moved back." `not_found` or `invalid` → "That
+  conversation couldn't be moved. Try again." Nothing is retried on its own.
+- **What moves:** every message of the holding thread, and every call whose `conversation_id` was the
+  holding thread, which gains the person as its `contact_id`. The person's unread count gains the holding
+  thread's. The holding record stays, empty, for the number's next missed call or text.
+- **What does not move:** the consent ledger and the send gate are keyed by the phone address, not the
+  contact, so a stop sent from that number keeps applying to every contact on it, as it does today.
+
+#### 5.12.6 Inbound texts (S27; `app/api/sms/inbound/route.ts:193-205`)
+
+Before its `createContact({ phone })` (202-204), the route reads `listContactsOnNumber(fromNumber)`. Two or
+more real contacts → `ensureHoldingContact(fromNumber)` and the text files on the holding thread; one or
+none → `createContact` as today. A failure of either read on the first filing is `FilingFailed` (503, so
+Telnyx retries), the route's existing rule (`route.ts:186-198`). A staff reply from the holding thread goes
+to its phone, through the same send gate as any other.
+
 ## 6. Copy
 
 Catalogue keys (`apps/web/src/lib/messages.ts`, the `voice.` namespace, `.es` twins; the i18n baseline
@@ -775,7 +1092,24 @@ regenerated):
   cambiar o cancelar una cita, {persona} pide el nombre completo y el correo electrónico registrado."
   (`messages.ts:2056-2057`; the Voice page is agency-only.)
 
-Both pass the 7 AM read and carry no milestone code (the `INTERNAL_MILESTONE` guard). Sofía's sentences
+The holding record's keys (E8, 5.12), staff-facing, usted:
+
+- `contact.holding.label`: "Shared number {number}" / `.es`: "Número compartido {number}"
+- `conversation.holding.notice`: "These texts came from {number}, a phone more than one customer uses, so
+  they aren't filed under anyone yet. Move them to the right person." / `.es`: "Estos mensajes llegaron del
+  {number}, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a
+  la persona correcta."
+- `conversation.holding.move`: "Move to…" / `.es`: "Mover a…"
+- `conversation.holding.moveOther`: "Find another customer" / `.es`: "Buscar otro cliente"
+- `conversation.holding.moved`: "Moved to {name}." / `.es`: "Se movió a {name}."
+- `conversation.holding.movedBack`: "Moved back." / `.es`: "Se regresó."
+- `conversation.holding.moveFailed`: "That conversation couldn't be moved. Try again." / `.es`: "No se pudo
+  mover la conversación. Inténtelo de nuevo."
+- `call.holding.openTexts`: "Open the texts" / `.es`: "Abrir los mensajes"
+
+They pass the pseudo-locale's +35% in the thread header (the Notice wraps; the button label is short).
+
+All pass the 7 AM read and carry no milestone code (the `INTERNAL_MILESTONE` guard). Sofía's sentences
 (5.4.4) are model input, not catalogue copy, and are pinned by tests (S14). Spanish register: usted, the
 phone line's register in the modules (`modules/events.ts:62`, `98`); the staff-facing To-do in the closure
 To-do's plain register (`messages.ts:2531-2534`).
@@ -860,11 +1194,43 @@ Unit, route and db; no e2e (phone calls are tested by real calls, section 8).
   refuses once with the literal sentence and records nothing; with `name` or `nameDeclined` it records the
   message with them; a single-contact number records it as today, with no refusal; a confirmed caller is
   never asked (no read); a read failure records the message.
-- **The text-back:** now, on a shared unconfirmed number `contactForCallerId` returns null, makes no
-  `createContact` call, and `prepareTextback` answers "no_contact" (mutation: today's phone pick → FAILS); a
-  number with one contact or none is today's path. After Q2, per the answer; with (c), a shared unconfirmed call threads its text on the
-  one "Caller" holding record, created once and reused on the second call (mutation: create every time →
-  FAILS), and that record is never offered by the picker or matched by a name.
+- **The text-back (E8):** on a shared unconfirmed number, from `finishCall` and from `contactForCallerId`
+  both, the text threads on the holding record, never a household member (red first: today's phone pick
+  lands on one); the second missed call reuses it (mutation: create every time → FAILS); the call row gets
+  the holding `conversation_id` and a null `contact_id`, and `generateProposals` receives no contact
+  (mutation: adopt every text-back contact at `finish-call.ts:654` → FAILS); one contact or none is today's
+  path.
+- **The holding record, db (HIGH, `packages/db/src/test/voice.test.ts` and `contacts.test.ts`):** 0098's
+  shape; `contacts_holding_shape` refuses a holding row with a last name, an email, another first name or no
+  phone, one probe each, and admits the exact shape; a second holding row on the same account and number is
+  23505, while the SAME number on account B gets its own (second account; mutation: index on `phone_key`
+  alone → the B case FAILS); a signed-in client's insert with `holds_shared_number: true` stores false and a
+  signed-in update cannot set or clear it (mutation: drop the trigger → FAILS); `ensureHoldingContact` makes
+  one, reuses it, survives two concurrent calls with one row, and never returns account B's holding record
+  for account A (mutation: drop the `account_id` filter → FAILS); `findDuplicate` never returns it as a
+  phone match or a country twin, from `createContact` with and without `matchBy` (mutation: drop the
+  filter at either phone read → FAILS); `buildMatchIndex` leaves it out; the post-write check and
+  `flagMatchesOf` file no pair with it; `listContacts` and `countContacts` leave it out (mutation: drop the
+  filter → the count FAILS); every existing contacts test passes unedited.
+- **`move_holding_thread` (HIGH, db):** a full move takes every message and every call of the holding thread
+  to the person's conversation, sets those calls' contact, adds the unread count and zeroes the holding one,
+  and records `conversation.moved`; Undo with the returned ids puts exactly those back (a message the person
+  sent after the move stays with them; mutation: Undo without ids → FAILS); `invalid` for two holding
+  threads, two person threads, the same thread twice, and a move toward the holding thread without ids;
+  `not_found` for a conversation of ANOTHER account, on either side (second account; mutation: drop the
+  `account_id` filter → FAILS); anon and authenticated cannot execute it; `definer-search-path.test.ts`
+  lists it (23) with `search_path=pg_catalog, pg_temp`; the client-write digest stays
+  `52|b66203ca5d355155540b520af510d120` and EXPECTED_WRITES is unchanged (mutation: `grant update
+  (holds_shared_number)` to authenticated → the guard FAILS).
+- **Move, the action and the UI (MEDIUM/LOW):** a Technician is refused; an Owner's move toasts "Moved to
+  {name}." with Undo and opens the person's thread; the menu lists the real contacts on the number and never
+  the holding record; the thread header shows the Notice in English and Spanish; the label "Shared number
+  {number}" appears in the inbox list, the thread header and the palette's conversation results, never
+  "Caller"; the record page of a holding contact redirects to its thread.
+- **Inbound texts (HIGH, `app/api/sms/inbound` route tests):** a text from a shared number files on the
+  holding thread (red first: today it lands on the phone match); from a number with one contact, on that
+  contact as today; a failed read on the first filing is a 503 `FilingFailed`; a stop word is still recorded
+  against the address.
 - **The corpus stub (O2, `corpus-lib.test.ts`):** the parity test of 5.11 for each of the five tools over
   one fixture with two contacts on the number; with no `contactsOnNumber`, find answers `{ found: false }`;
   a cancel before any confirmation is refused (mutation: today's `{ ok: true }` → FAILS); every existing
@@ -876,18 +1242,25 @@ summary block); `pnpm --filter web typecheck`.
 
 ## 8. Rollout
 
-1. No migration, so nothing goes to bis-ci or production first. One PR; merge only on green `verify` and
-   `e2e` for the head SHA (read the check runs for that SHA).
-2. Deploy READY. Merging changes phone calls in two ways only: on a number several contacts share, Sofía
-   asks whose appointment it is, and every booking, lead, message thread and fill lands on the person the
-   name or the confirmation picks, or on nobody (E7). Every pack is off (E4), so rung 2 applies nowhere until
-   an account's module is set to `insurance_pc`.
+1. Migration 0098 first: re-check that no branch on main has taken 0098 (renumber if one has); run
+   `definer-search-path.test.ts`, `schema-grants-guard.test.ts` and the client-write digest locally with 0098
+   applied (the PG18 replica, before the append-only bis-ci push); then 0098 → bis-ci
+   (`ci-project-setup.yml`, push-dry-run then push) → green `verify` and `e2e` on the head SHA (read the check
+   runs for that SHA) → production via MCP `apply_migration` once (name `shared_number_holding`, the exact
+   file text) → md5 compare of the stored text → parity check (`docs/runbooks/ci-supabase-project.md`).
+2. PR; merge only after 0098 is on production (4.2). Deploy READY. Merging changes phone calls and texts in
+   three ways only: on a number several contacts share, Sofía asks whose appointment it is; every booking,
+   lead, message thread and fill lands on the person the name or the confirmation picks, or on nobody (E7);
+   and that number's missed-call texts and incoming texts file on its one holding record until staff move
+   them (E8). Every pack is off (E4), so rung 2 applies nowhere until an account's module is set to
+   `insurance_pc`. No holding record exists until a shared number first gets a missed-call text or sends a
+   text; nothing is backfilled.
 3. **Real test calls (the exit gate).** The runbook's new Step 8, landed in this PR (O1) in
    `docs/runbooks/voice-setup.md` after "Step 7 — Booking leg", exactly as below. danlo places the calls; the
    orchestrator does every dashboard step and records the times (E6).
-4. Tracker: F-116 part done once Step 8 passes, with the ledger entry of its step 8.6.
+4. Tracker: F-116 part done once Step 8 passes, with the ledger entry of its step 8.7.
 
-The text of Step 8 (the plan pins it; Q2's answer adds 8.5's last line):
+The text of Step 8 (the plan pins it):
 
 ```
 ## Step 8 — Identity checks (shared numbers and the insurance check)
@@ -928,27 +1301,43 @@ does every dashboard step and writes each time in the ledger. No client account 
        Logs: confirmed rung 2 by name-email, then miss 1.
     d. Orchestrator, straight after the call: Trade rules: None, Save. Write the time. Every call between
        the two times ran under the insurance rules.
-    [Q2's answer: the missed-call text on a shared number, and how to check it.]
 
-8.6 The carrier's caller-ID attestation (folds in the "While you are in the logs" check of the press-1
+8.6 Call 5, the shared number's missed-call text (owner decision E8).
+    a. danlo: call, say "hello?" once after the greeting, and hang up (a caller who spoke and was not
+       served is a missed call; total silence reads as spam and gets no text).
+    b. Check (orchestrator): Conversations shows a thread named "Shared number" and danlo's number, holding
+       the missed-call text. Contacts does not list it. Dan Lopez, Ana Prueba and Beto Prueba got nothing.
+       If BIS's text-back is off, or its texts are held, the held text is what sits in that thread: the
+       check is WHERE it was filed.
+    c. danlo: reply "test" to the text. Check: the reply joins the same thread.
+    d. Orchestrator: in that thread, Move to... Beto Prueba. The toast says "Moved to Beto Prueba." and
+       Beto's thread holds both texts and the call. Press Undo: "Moved back." Move to Beto again.
+    Logs: no "contact dedupe" error; one contact.created with holding true.
+
+8.7 The carrier's caller-ID attestation (folds in the "While you are in the logs" check of the press-1
     section). For each call above, copy into the ledger:
     - the [voice/incoming] "incoming call" line's attestation field, and
     - the "texml form fields:" line's attestation: part.
     "none" on every call is a result too: write it down.
 
-8.7 Clean up (orchestrator). Cancel the two test bookings on the Calendar page, delete Ana Prueba and Beto
-    Prueba, and mark the test To-dos done.
+8.8 Clean up (orchestrator). Cancel the two test bookings on the Calendar page, delete Ana Prueba and Beto
+    Prueba through Contacts, and mark the test To-dos done. The empty holding record stays: it is not
+    listed, and the number's next missed call reuses it.
 
-If it fails: a booking or a time for the wrong person, a name said by Sofía before the caller said one, or
-a To-do missing after 8.4 is a failed release. Roll back by reverting the release; nothing it stored needs
-undoing.
+If it fails: a booking or a time for the wrong person, a name said by Sofía before the caller said one, a
+To-do missing after 8.4, or a text filed on Dan Lopez, Ana or Beto in 8.6 is a failed release. Roll back
+by reverting the release (the app only; migration 0098 stays). A holding record then reads to the old build
+as an ordinary "Caller" contact on that number, with its thread.
 ```
 
 The press-1 section's own "While you are in the logs" line (`voice-setup.md:795-796`) gains one sentence:
-"Since the identity-checks release, record the result in Step 8.6."
+"Since the identity-checks release, record the result in Step 8.7."
 
-**Rollback:** revert the PR. Nothing is stored that the old build cannot read; a To-do it filed stays an
-ordinary To-do.
+**Rollback:** revert the PR; 0098 stays (additive: the old build never names its column or function). A
+To-do it filed stays an ordinary To-do; a holding record reads to the old build as an ordinary "Caller"
+contact, which its phone dedupe may then match, as it matches any contact today. Dropping 0098 itself
+(4.1's rollback lines) only after the app is reverted, and only on an owner decision, because it turns every
+holding thread into an ordinary contact's.
 
 ## 9. Tiers (per task, binding rule 2026-10-19)
 
@@ -956,13 +1345,16 @@ ordinary To-do.
   (`checkCallerOwnsBooking`); the two reads and the removal in `packages/db/src/voice.ts`, with their db
   tests (a bug here reads or cancels another customer's appointment, silently); E7's writes to customer
   records: the picker, the new-booking contact choice (5.10.1), the blank-fill at both sites (5.10.2), the
-  message thread (5.10.3), `createContact`'s `matchBy` (4), and the text-back's null on a shared number now,
-  Q2's answer later (5.10.4).
+  message thread (5.10.3), `createContact`'s `matchBy` (4); E8: migration 0098 and its db tests (4.1),
+  `ensureHoldingContact`, every dedupe's skip (5.12.3), the text-back's holding record (5.10.4), inbound
+  texts (5.12.6) and `move_holding_thread` with its Undo (5.12.5).
 - **MEDIUM:** the identity module (ladder, matching, decision, state); `confirm_identity` and its schema;
-  `take_message`'s name (5.10.5); the To-do in `finishCall`.
+  `take_message`'s name (5.10.5); the To-do in `finishCall`; the Move action and its role check;
+  `listContacts` and `countContacts` leaving the holding record out (5.12.4).
 - **LOW:** the attestation line and the shared rule's extraction; copy keys and baseline; the insurance
   hint; `workRowHref`'s call link and the `emailKey` barrel line (O1); the corpus stub (5.11; no live path
-  runs it); the runbook's Step 8.
+  runs it); the holding thread's label, Notice and Move menu, the call page's link and the record page's
+  redirect (5.12.4–5); the runbook's Step 8.
 - One end-of-PR review (final + design), then one fix round. No corpus run.
 
 ## 10. What was checked, needs, and findings
@@ -996,7 +1388,11 @@ ordinary To-do.
 - `docs/runbooks/voice-setup.md`: Step 8, verbatim in section 8, and one sentence in the press-1 section.
 
 The new-booking choice reaches `packages/db/src/contacts.ts`, a CRM file, for one option that no other caller
-passes (4); its owner should see the `matchBy` diff in review.
+passes (4); its owner should see the `matchBy` diff in review. E8 reaches further into other owners' files,
+each for a skip or a label only, and each owner should see its diff: `contacts.ts` (`findDuplicate`, the
+post-write check, `flagMatchesOf`, `listContacts`, `countContacts`), `contact-import.ts`
+(`buildMatchIndex`), `app/api/sms/inbound/route.ts` (5.12.6), the conversations page, list, thread and
+actions (5.12.4–5), the contact record page's redirect, and the schema (0098, bis-db-schema).
 
 **The first draft's findings, and where each went:**
 
@@ -1007,7 +1403,7 @@ passes (4); its owner should see the `matchBy` diff in review.
 - **F3** (`finishCall`'s message thread, `finish-call.ts:307-379`): fixed by E7, 5.10.3. Following it showed
   the text-back depends on the same resolver: 5.10.4 and Q2.
 - **F4** (the corpus stub's `{ ok: true }`, `corpus-lib.ts:176-205`): O2, 5.11.
-- **F5** (the TeXML attestation field never recorded, `voice-setup.md:795-796`): O3, Step 8.6.
+- **F5** (the TeXML attestation field never recorded, `voice-setup.md:795-796`): O3, Step 8.7.
 
 **Consistency check after the E6/E7 edits (2026-10-24):** every file:line cited by the new text was re-read
 at `449d5bf6` (`contacts.ts:33-42, 128, 261-354, 439-472`; `finish-call.ts:307-379, 457-472, 634-639`;
@@ -1016,21 +1412,26 @@ at `449d5bf6` (`contacts.ts:33-42, 128, 261-354, 439-472`; `finish-call.ts:307-3
 every call of Step 8 (which is how S20's exception and S23's every-booking rule were found); and the S, E,
 O, Q and SD references were checked to resolve.
 
+**Consistency check after E8 (2026-10-24):** re-read at `449d5bf6`: `contacts.ts:274-279, 341-343, 403-415,
+502-515, 883-891, 993-997`; `contact-import.ts:38-53`; `provenance.ts:47-48`; `source-field.tsx:9-19`;
+`schema-grants-guard.test.ts:86-89`; `proposals-drop.test.ts:84-100` (the digest counts table-level
+privileges only, so a column, an index, a trigger and a function leave it at `52|b66203ca…`);
+`definer-search-path.test.ts:25-50` (22 definers); 0001:58-66 (events), 0005 (conversations, one per
+contact), 0019:49 (`calls.conversation_id`), 0053 (conversations and messages are server-written), 0063:120
+(the events insert shape); `finish-call.ts:648-686, 950-975`; `app/api/sms/inbound/route.ts:186-205`;
+`conversations/page.tsx:97-100, 255` (`?c=` is a conversation id). `origin/main` and every local branch were
+listed for a 0098 (none). The 0098 SQL block was checked to be ASCII only, with no `pg_catalog.` prefix on
+`coalesce` (a construct, not a function). The step references of Step 8 (8.1–8.8) and their mentions in
+sections 8 and 10 were renumbered together.
+
 ## 11. Owner questions
 
 - **Q1 (answered: E6).** One rung-2 test call on BIS's own account, switched by the orchestrator just
   before and back straight after, both times recorded (Step 8.5).
-- **Q2 On a shared number where nobody is confirmed and no name was given, where does the missed-call
-  text-back live?** E7 says nothing ambiguous is written, and a text must sit in a contact's conversation
-  (0005:14). (a) Do not send it: households lose the missed-call text, which is what an unconfirmed
-  household call gets after 5.10.3 as written. (b) Put it on one household member's thread: a guess, which E7
-  rules out. (c) One holding contact per shared number, "Caller", created once and reused, which no booking,
-  lead, fill or name can ever reach (5.10.4). **Recommendation: (c)**: the caller still gets the text, its
-  reply has a home, and no real person's record is written. Until answered, the PR ships (a) at every site,
-  so nothing ambiguous is written meanwhile: `finishCall`'s resolver returns null (5.10.3) and
-  `contactForCallerId` returns null on a shared number instead of picking by phone (`textback.ts:166-168`),
-  which `prepareTextback` already treats as "no_contact" (`textback.ts:242`). (c), if chosen, replaces that
-  null with the holding record.
+- **Q2 (answered: E8).** Where the missed-call text lives on an unconfirmed shared number: option (c), one
+  shared "Caller" holding record per number (5.12, migration 0098).
+
+No open questions.
 
 ## 12. Spec deviations (code that contradicts the brief, with evidence)
 
@@ -1091,3 +1492,23 @@ Found while specifying E7 (2026-10-24):
   "Ana Prueba" onto a sole "Dan Lopez" because their phone matches (`contacts.ts:274-279`). E7's "nothing
   ambiguous" is applied there too: S20's exception makes a new contact when a full name contradicts a sole
   contact's full name, and keeps today's fill for a sole "Caller".
+
+Found while specifying E8 (2026-10-24):
+
+- **SD19 "Prefer existing columns" cannot hold for the mark.** The only free-text column a server could set,
+  `contacts.source`, is a note staff edit inline (`source-field.tsx:9-19`; in the client's UPDATE grant,
+  `schema-grants-guard.test.ts:86-89`), and every other candidate (`custom`, tags, the name) is
+  staff-editable too; a name-only definition ("a 'Caller' on a shared number") would collide with today's
+  ordinary "Caller" contacts, which must keep being filled (S20). Hence 0098's column (S26).
+- **SD20 Nothing could move a thread.** No code changes a conversation's contact (every `conversations`
+  update in `packages/db/src` sets counters or tokens), a conversation is one per contact (0005), and
+  conversations and messages are server-written since 0053. Moving therefore moves messages between two
+  conversations, atomically, in 0098's one definer (S28).
+- **SD21 The text-back's contact becomes the call's.** `finishCall` adopts whatever contact the text-back
+  filed on (`finish-call.ts:654-655`) for the call row and the post-call suggestions (`finish-call.ts:950-975`),
+  so a holding record would have been offered `contact_field` and stage suggestions. 5.10.4 adopts only a
+  real contact.
+- **SD22 Inbound texts pick by phone too.** The SMS route files every text through `createContact({ phone })`
+  (`app/api/sms/inbound/route.ts:193-205`), the same phone-first dedupe, so "any reply lives there" needs the
+  route to choose the holding record itself on a shared number (S27, 5.12.6).
+- **SD23 The title said "no migration".** It now names 0098; E1–E7 alone still need none (4).
