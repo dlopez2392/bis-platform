@@ -417,6 +417,10 @@ describe("setBusinessStatusAction — every @bis/db call carries the route's own
     expect(dbMocks.listClosedDaysFrom.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.getBusinessStatusRow.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.updateBusinessStatus.mock.calls[0]![1]).toBe("acct_2");
+    // CHANGE_CLOSED_TODAY reaches fileIfAffected, which always calls listClosureAppointments
+    // regardless of whether any row comes back — this is the call the review found unchecked.
+    expect(dbMocks.listClosureAppointments).toHaveBeenCalled();
+    expect(dbMocks.listClosureAppointments.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.bumpHeldForAccount.mock.calls[0]![1]).toBe("acct_2");
   });
 });

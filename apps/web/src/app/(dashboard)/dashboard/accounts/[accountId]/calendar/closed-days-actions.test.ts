@@ -239,6 +239,10 @@ describe("addClosedDayAction — every @bis/db call carries the route's own acco
     expect(dbMocks.readAccountTimezone.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.listClosedDaysFrom.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.insertClosedDay.mock.calls[0]![1]).toBe("acct_2");
+    // addClosedDayAction always calls listClosureAppointments (not gated on any prior count) — this
+    // is the call the review found unchecked.
+    expect(dbMocks.listClosureAppointments).toHaveBeenCalled();
+    expect(dbMocks.listClosureAppointments.mock.calls[0]![1]).toBe("acct_2");
     expect(dbMocks.bumpHeldForAccount.mock.calls[0]![1]).toBe("acct_2");
   });
 });
