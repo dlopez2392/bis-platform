@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   computeSlots, computeMoveSlots, movableRange, zonedTimeToUtc, partsInZone,
-  type SlotConfig, type Range,
+  type SlotConfig, type Range, type SlotClosures,
 } from "./slots";
+import { slotClosures } from "../business-status/status";
 
 /**
  * F-048: a customer MOVES their own booking. The booking being moved is still
@@ -147,5 +148,36 @@ describe("movableRange — the submit-time check for a move", () => {
       expect(offered.length).toBeGreaterThan(0);
       for (const s of offered) expect(movableRange(cfg, others, mine, now, s.startsAt)).toEqual(s);
     }
+  });
+});
+
+/**
+ * S-47d: a closed day binds a move exactly as it binds a booking: the predicate lives in `computeSlots` and
+ * `bookableRange`, which the move engine wraps. The closures come from the real writer (`slotClosures`).
+ */
+describe("closures and a move (S-47d)", () => {
+  const MT: SlotConfig = { ...CFG, openHours: { mon: [["09:00", "17:00"]], tue: [["09:00", "17:00"]] } };
+  const closedOn = (key: string): SlotClosures => slotClosures({
+    row: null, closedDays: [{ starts_on: key, ends_on: key, reason: "vacation" }], hours: null, timezone: CHI, now: NOW,
+  });
+
+  it("a move cannot land on a closed day: none offered there, and movableRange refuses it (mutation: ignore closures → Tuesday offered, FAILS)", () => {
+    const own = range(at(10), at(11)); // Monday 10:00
+    const c = { ...MT, closures: closedOn("2026-09-08") };
+    expect(wall(computeMoveSlots(MT, [], own, NOW), 8)).toHaveLength(8); // the control: Tuesday is open without it
+    expect(wall(computeMoveSlots(c, [], own, NOW), 8)).toEqual([]);
+    expect(wall(computeMoveSlots(c, [], own, NOW), 7)).toEqual(["9:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"]);
+    expect(movableRange(MT, [], own, NOW, at(10, 0, 8))).toEqual(range(at(10, 0, 8), at(11, 0, 8)));
+    expect(movableRange(c, [], own, NOW, at(10, 0, 8))).toBeNull();
+  });
+
+  it("a booking ON a closed day can move out of it to an open day", () => {
+    const own = range(at(10), at(11)); // Monday 10:00, and Monday is now closed
+    const c = { ...MT, closures: closedOn("2026-09-07") };
+    expect(wall(computeMoveSlots(c, [], own, NOW), 7)).toEqual([]);
+    expect(wall(computeMoveSlots(c, [], own, NOW), 8))
+      .toEqual(["9:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"]);
+    expect(movableRange(c, [], own, NOW, at(10, 0, 8))).toEqual(range(at(10, 0, 8), at(11, 0, 8)));
+    expect(movableRange(c, [], own, NOW, at(12))).toBeNull();
   });
 });

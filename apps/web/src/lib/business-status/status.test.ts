@@ -2,7 +2,7 @@
 // America/Chicago unless a row names another. Run under TZ unset AND TZ=Asia/Tokyo: nothing here may read the
 // server's zone.
 import { describe, expect, it } from "vitest";
-import type { OpenHours } from "../booking/slots";
+import { closedOut, type OpenHours } from "../booking/slots";
 import {
   addDays, closedDayOn, closureListWindow, coversAppointment, dayKey, effectiveStatus, fromWire, hoursChain,
   reopeningFrom, rowInForce, slotClosures, startOfDay, statusCode, toWire, untilFor, wallTime,
@@ -186,6 +186,8 @@ describe("D12, two hours sources: business Mon-Fri, calendar Saturday", () => {
     expect(c.blockedBefore?.toISOString()).toBe("2027-06-05T05:00:00.000Z");
     expect(c.blockedBefore!.getTime() <= sat9.getTime()).toBe(true);
     expect([c.blockAll, c.lateBefore, [...c.closedDayKeys]]).toEqual([false, null, []]);
+    expect(closedOut(sat9, c, TZ)).toBe(false);
+    expect(closedOut(d("2027-06-04T21:00:00.000Z"), c, TZ)).toBe(true); // Friday 16:00, the control
   });
   it("a Saturday 09:00 appointment is not covered", () => {
     expect(coversAppointment(input({ row, hours, now }), sat9)).toEqual({ covered: false });
@@ -236,6 +238,8 @@ describe("a storm back on a Saturday the hours chain has closed (orchestrator ru
     expect(c.blockedBefore?.toISOString()).toBe("2027-06-05T05:00:00.000Z");
     expect(c.blockedBefore!.getTime() <= sat9.getTime()).toBe(true);
     expect(c.blockAll).toBe(false);
+    expect(closedOut(sat9, c, TZ)).toBe(false);
+    expect(closedOut(d("2027-06-04T21:00:00.000Z"), c, TZ)).toBe(true); // Friday 16:00, the control
   });
   it("on Wednesday, a Saturday 09:00 appointment is not covered", () => {
     expect(coversAppointment(input({ row: { ...row, until: until!.toISOString() }, hours, now }), sat9)).toEqual({ covered: false });
