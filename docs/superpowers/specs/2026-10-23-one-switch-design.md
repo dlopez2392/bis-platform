@@ -963,3 +963,20 @@ each corrects this spec's own words against what the build actually does.
 - **Owner D13a/D13b** (follow-up only, not written up here): the switch's own change history is read
   only from server-written `'system'` `business_status.changed` events, never a `'user'` one a client
   could forge (`listBusinessStatusChanges`, `packages/db/src/business-status.ts`).
+- **Owner-accepted, tracked gap (minors-1b follow-up, item 1):** at 320px the agency's status trigger
+  now wraps its short form to two lines (ruling (b)), cutting the measured overflow from 33px to 6px —
+  not to zero. The 6px is chrome the ruling's two options never named (the status button's own floor is
+  the longest word, "Cerrado", which rule 3's "dot + word" forbids splitting further; the other four
+  header children — the search icon, the theme toggle, the avatar-only org switcher and the user button
+  — are fixed width). Accepted as a tracked gap rather than closed by a third, unruled change (the
+  header's own `gap-2`/`px-3` below `sm`, which would touch every phone-width screen).
+- **The Calendar page's "one query" fix undercounted (fix round, sonnet review):** the first cut spanned
+  [earliest closed-day start, latest end + 1 day) in one read — every ORDINARY booking in the gap
+  between two far-apart ranges (a holiday next week, a vacation next spring) spent a slot of the shared
+  `CLOSURE_APPOINTMENTS_LIMIT` cap, which no closure ever touched. Fixed with
+  `listClosureAppointmentsForRanges` (`packages/db/src/business-status.ts`): one `.or()` of each range's
+  own `and(gte, lt)` predicate, so a booking outside every listed range's own window is never fetched at
+  all. The Closed days card also gained the dashboard status card's own "more later" caveat
+  (`closedDays.moreAppointments`), threaded per range from the read's own total length hitting the cap —
+  the shared cap orders across every listed range, so there is no single range to blame, and every range
+  in the view carries the same `capped` value.
