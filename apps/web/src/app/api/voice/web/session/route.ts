@@ -26,7 +26,7 @@ import {
 } from "@/lib/voice/web-demo";
 import { clientIp, hashIp } from "@/lib/forms/guards";
 import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
-import { effectiveStatus, hoursChain, dayKey } from "@/lib/business-status/status";
+import { effectiveStatusOrUnknown, hoursChain, dayKey } from "@/lib/business-status/status";
 
 export const runtime = "nodejs";
 
@@ -206,11 +206,14 @@ export async function POST(req: Request) {
     const pk = promptKnowledge(live.payload);
     // The calendar is already read above (`calendar`, step before this block) — no second read here, unlike
     // the chat's conditional one (SD4): the demo always has it.
-    const effective = effectiveStatus({
+    // S17 extended (Task 10 review): a failed closed-days read is passed through — a storm or Closed today
+    // still stands (the row alone decides those), but "open"/"running_late" this demo could not actually
+    // confirm reads unknown, never a guessed "open".
+    const effective = effectiveStatusOrUnknown({
       row: statusRow, closedDays: closedDaysRows ?? [],
       hours: hoursChain(profile.business_hours, calendar.open_hours),
       timezone: acct.timezone, now,
-    });
+    }, closedDaysRows === null);
 
     // `replyToEmail: null` — this route sends no mail and never selects the
     // column; `brandDisplayName` reads `brandName` and nothing else.

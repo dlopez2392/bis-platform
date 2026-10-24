@@ -110,7 +110,7 @@ import { openingGreeting } from "@/lib/voice/greeting";
 import { decideDisclosure } from "@/lib/voice/disclosure";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
-import { effectiveStatus, hoursChain, statusCode, dayKey } from "@/lib/business-status/status";
+import { effectiveStatusOrUnknown, hoursChain, statusCode, dayKey } from "@/lib/business-status/status";
 import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -1111,11 +1111,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // S-47d (spec 5.4.3, S17): computed ONCE, used for both the stamp below and the prompt's TODAY line, so the
     // two can never disagree. A failed status read (FAILED, never a guessed "open") is the one branch that
     // answers with no stamp and no TODAY line at all.
-    const effective = status === FAILED ? null : effectiveStatus({
+    // S17 extended (Task 10 review): a failed CLOSED-DAYS read (`closed === FAILED`) is passed through too —
+    // a storm or Closed today still stands (the row alone decides those), but "open"/"running_late" this
+    // call could not actually confirm reads unknown, never a guessed "open".
+    const effective = status === FAILED ? null : effectiveStatusOrUnknown({
       row: status, closedDays: closed === FAILED ? [] : closed,
       hours: hoursChain(profile.business_hours, calendar.open_hours),
       timezone: accountRow.timezone, now,
-    });
+    }, closed === FAILED);
     const versionP: Promise<number | null> = knowledge.recordable
       ? ensureKnowledgeSnapshot(db, accountId, knowledge.payload).then(
         (v) => v,

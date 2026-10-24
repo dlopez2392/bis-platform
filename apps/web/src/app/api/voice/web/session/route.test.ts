@@ -348,4 +348,43 @@ describe("POST /api/voice/web/session — today's status and the closed days (S-
     expect(res.status).toBe(200);
     expect(instructions()).not.toContain("TODAY:");
   });
+
+  // Task 10 review (orchestrator ruling, S17 extended): the status row read can succeed (open) while the
+  // closed-days read fails — [] is not "none planned", it is "unknown", and a day actually inside an unseen
+  // closed range must never read as open.
+  describe("a closed-days read that fails while the status reads open (S17 extended)", () => {
+    it("is unknown, never a guessed open: no TODAY line, the session still mints", async () => {
+      // getBusinessStatusRowMock's default (beforeEach) is a successful `null` row — open.
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(instructions()).not.toContain("TODAY:");
+    });
+
+    // "open" has no TODAY line either way (guessed or unknown), so a running_late row is what actually
+    // proves this in the prompt text: its own TODAY line is a real string, and it does not depend on
+    // closedDays at all for its STATE — exactly why it must still become unknown (a closed day this demo
+    // could not see would have outranked it, S11), unlike closed_today/storm below.
+    it("the same is true of a running_late row: no TODAY line (mutation: drop the unknown branch -> FAILS)", async () => {
+      getBusinessStatusRowMock.mockResolvedValue({
+        account_id: "acct1", state: "running_late" as const, late_minutes: 15,
+        until: "2099-01-01T00:00:00.000000Z", set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+      });
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(instructions()).not.toContain("TODAY:");
+    });
+
+    it("a storm status stands on its own: the TODAY line survives a failed closed-days read", async () => {
+      getBusinessStatusRowMock.mockResolvedValue({
+        account_id: "acct1", state: "storm" as const, late_minutes: null, until: null,
+        set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+      });
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      expect(instructions()).toContain("TODAY: The business is closed because of a storm, until further notice.");
+    });
+  });
 });

@@ -58,7 +58,7 @@ import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
   knowledgeFromLive, parseKnowledgePayload, promptKnowledge, type KnowledgePayload,
 } from "@/lib/voice/knowledge/payload";
-import { effectiveStatus, hoursChain, dayKey } from "@/lib/business-status/status";
+import { effectiveStatusOrUnknown, hoursChain, dayKey } from "@/lib/business-status/status";
 import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
@@ -278,6 +278,10 @@ export async function POST(
     // failed (C20). Set on every path below, before the claim.
     let knowledge: KnowledgePayload;
     let listUnavailable = false;
+    // S-47d (Task 10 review): whether the closed-days LIVE read failed on this turn. A stamped chat (the
+    // `parsed` branch below) never sets this — its snapshot's closed_days were already known good when it
+    // was recorded, so there is no read on this turn to fail.
+    let closedDaysUnavailable = false;
     let businessName: string;
     let timezone: string;
     let apiKey: string;
@@ -411,6 +415,7 @@ export async function POST(
         : null;
       knowledge = live.payload;
       listUnavailable = live.listUnavailable; // C20
+      closedDaysUnavailable = live.closedDaysUnavailable;
 
       const created = await createConciergeConversation(db, {
         accountId: profile.account_id, formId: profile.concierge_form_id,
@@ -496,6 +501,7 @@ export async function POST(
         });
         knowledge = liveNow.payload;
         listUnavailable = liveNow.listUnavailable; // C20; a stamped snapshot always had its list
+        closedDaysUnavailable = liveNow.closedDaysUnavailable;
       }
     }
 
@@ -537,11 +543,14 @@ export async function POST(
     // line are both computed from, and the two must never be confused for each other.
     const turnNow = new Date();
     // SD13: `knowledge.timezone`, the SAME zone the prompt's date line and Right now line read below.
-    const effective = effectiveStatus({
+    // S17 extended (Task 10 review): `closedDaysUnavailable` is passed through so a storm/closed_today the
+    // row alone decides still stands, but an "open"/"running_late" this turn could not actually confirm
+    // (a closed day it could not see would have outranked either) reads unknown, never a guessed "open".
+    const effective = effectiveStatusOrUnknown({
       row: statusRow, closedDays: knowledge.closed_days,
       hours: hoursChain(knowledge.business_hours, calendarRow?.open_hours ?? null),
       timezone: knowledge.timezone, now: turnNow,
-    });
+    }, closedDaysUnavailable);
     const system = buildSystemPrompt({
       personaName: profile.persona_name, businessName,
       facts: pk.facts, services: pk.services,

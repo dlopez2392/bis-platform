@@ -223,6 +223,29 @@ export function effectiveStatus(input: StatusInput): EffectiveStatus {
   }
 }
 
+/**
+ * S17 extended (Task 10 review, an orchestrator ruling): never claim a state the reader could not actually
+ * read. `input.closedDays` is already `[]` here — the caller computed that because the closed-days READ
+ * FAILED, not because none are planned; `closedDaysUnavailable` is how this function is told which case it
+ * is.
+ *
+ * A closure that comes from the stored row alone (`closed_today`, `storm`) never reads `closedDays` to
+ * decide its STATE (S11: storm already outranks a closed day, and `closed_today`/`storm`'s own `state` only
+ * depends on `row` and `now` — `closedDays` only shapes the reopening WORDING inside those branches). Those
+ * two are therefore correct even with an empty `closedDays`, and are kept.
+ *
+ * `open` and `running_late`, on the other hand, might be WRONG: a closed day this function could not see
+ * would have outranked either one (S11), and a `closed_day` state can never come back from this call at all
+ * (precedence can only choose it by finding `today` inside a range in `closedDays`, which is empty here) — so
+ * the real answer might be "closed_day" and this function has no way to tell. Unknown, never a guessed
+ * "open": the caller treats `null` exactly as a failed status-row read (S17) — no stamp, no TODAY line.
+ */
+export function effectiveStatusOrUnknown(input: StatusInput, closedDaysUnavailable: boolean): EffectiveStatus | null {
+  const e = effectiveStatus(input);
+  if (!closedDaysUnavailable) return e;
+  return e.state === "closed_today" || e.state === "storm" ? e : null;
+}
+
 /** The `until` to store when the switch is SET (SD13: no closed days). Every window ends at a local midnight
  *  (D12, S3); the reopening said is effectiveStatus's, computed on read. `hours` is unused since D12 and kept
  *  in the signature the plan fixes. A malformed back-on date stores no end: an open-ended storm blocks more,

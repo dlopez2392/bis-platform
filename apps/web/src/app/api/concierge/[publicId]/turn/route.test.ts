@@ -1691,4 +1691,39 @@ describe("POST /api/concierge/[publicId]/turn — today's status and the closed 
     expect(res.status).toBe(200);
     expect(sentToModel().messages[0]!.content).not.toContain("TODAY:");
   });
+
+  // Task 10 review (orchestrator ruling, S17 extended): the status row read can succeed (open) while the
+  // closed-days read fails — [] is not "none planned", it is "unknown", and a day actually inside an unseen
+  // closed range must never read as open.
+  describe("a closed-days read that fails while the status reads open (S17 extended)", () => {
+    it("is unknown, never a guessed open: no TODAY line, the turn is still answered", async () => {
+      // dbFns.getBusinessStatusRow's default (beforeEach) is a successful `null` row — open.
+      dbFns.listClosedDaysFrom.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      const res = await firstTurn();
+      expect(res.status).toBe(200);
+      expect(sentToModel().messages[0]!.content).not.toContain("TODAY:");
+    });
+
+    // "open" has no TODAY line either way (guessed or unknown), so a running_late row is what actually
+    // proves this in the prompt text: its own TODAY line is a real string, and it does not depend on
+    // closedDays at all for its STATE — exactly why it must still become unknown (a closed day this turn
+    // could not see would have outranked it, S11), unlike closed_today/storm below.
+    it("the same is true of a running_late row: no TODAY line (mutation: drop the unknown branch -> FAILS)", async () => {
+      dbFns.getBusinessStatusRow.mockResolvedValue({
+        account_id: "a1", state: "running_late" as const, late_minutes: 15,
+        until: "2099-01-01T00:00:00.000000Z", set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+      });
+      dbFns.listClosedDaysFrom.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      const res = await firstTurn();
+      expect(res.status).toBe(200);
+      expect(sentToModel().messages[0]!.content).not.toContain("TODAY:");
+    });
+
+    it("a storm status stands on its own: the TODAY line survives a failed closed-days read", async () => {
+      dbFns.getBusinessStatusRow.mockResolvedValue(STORM_ROW);
+      dbFns.listClosedDaysFrom.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      await firstTurn();
+      expect(sentToModel().messages[0]!.content).toContain("TODAY: The business is closed because of a storm, until further notice.");
+    });
+  });
 });
