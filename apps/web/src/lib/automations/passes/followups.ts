@@ -54,8 +54,9 @@ export async function processFollowups(
       channel: "email", subjectKey: `booking:${followup.bookingId}`, contactId: followup.contactId,
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(followup.startsAt), kept: followup.closureKeptAt !== null,
-      // Owner ruling D13: written after the appointment, so a closure that covered it, once ended, skips it.
-      afterAppointment: true,
+      // Owner rulings D13a/D13b: the automatic follow-up, the one message no staff mark stands behind, is
+      // skipped for an appointment a closure covered once that closure has ended, however it ended.
+      skipIfWasClosed: true,
     };
 
     // RULE 0, before the gate itself: an account whose `accounts.timezone`

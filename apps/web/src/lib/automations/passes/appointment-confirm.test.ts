@@ -344,6 +344,7 @@ const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
     row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2027-04-12T12:00:00.000Z" } : null,
     closedDays: [], hours: null, timezone: "America/Chicago",
   },
+  windows: accountId === "acct_1" ? [{ start: new Date("2027-04-12T12:00:00.000Z"), end: null }] : [],
 });
 
 describe("the closure hold (S-47d, spec 5.5.2)", () => {

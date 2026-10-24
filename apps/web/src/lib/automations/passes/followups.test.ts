@@ -201,6 +201,7 @@ const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
     row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-20T00:00:00.000Z" } : null,
     closedDays: [], hours: null, timezone: "America/Chicago",
   },
+  windows: accountId === "acct_1" ? [{ start: new Date("2026-09-20T00:00:00.000Z"), end: null }] : [],
 });
 
 describe("the closure hold (S-47d, spec 5.5.2)", () => {
@@ -230,11 +231,12 @@ const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timez
     row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
     hours: null, timezone,
   },
+  windows: [],
 });
 const CLOSED_REASON = "Not sent: the business was closed for this appointment";
 
 describe("owner ruling D13: an appointment the business was closed for gets no follow-up unless kept", () => {
-  it("closed day yesterday, follow-up due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+  it("closed day yesterday, follow-up due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop skipIfWasClosed FAILS)", async () => {
     dbMocks.listDueFollowups.mockResolvedValue([row()]);
     const c = { ...ctx(MORNING), closures: closedDaysOnAcct1([{ starts_on: "2026-09-21", ends_on: "2026-09-21" }], "America/Chicago") };
     expect(await followupsPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
@@ -262,5 +264,39 @@ describe("owner ruling D13: an appointment the business was closed for gets no f
     expect(await releaseFollowup({ ...ctx(NOON), closures: closedDaysOnAcct1([], "America/Chicago") }, heldRow())).toBe("sent");
     expect(emailSend).toHaveBeenCalledTimes(1);
     expect(logCalls()).toEqual([expect.objectContaining({ status: "sent" })]);
+  });
+});
+
+describe("owner ruling D13b: a closure ended early by the switch still counts for the follow-up", () => {
+  // A storm set Mon 08:00 CDT and switched to Open at Mon 18:00: the history the loader rebuilds from the
+  // switch's change log (closures.ts closureWindows). The stored row is open now.
+  const stormEndedByOpen = (): ClosureLoader => async (accountId) => ({
+    ok: true,
+    input: {
+      row: accountId === "acct_1" ? { state: "open", late_minutes: null, until: null, set_at: "2026-09-21T23:00:00.000Z" } : null,
+      closedDays: [], hours: null, timezone: "America/Chicago",
+    },
+    windows: accountId === "acct_1" ? [{ start: new Date("2026-09-21T13:00:00.050Z"), end: new Date("2026-09-21T23:00:00.050Z") }] : [],
+  });
+
+  it("storm set Mon 08:00, appointment Mon 14:00, Open at Mon 18:00, follow-up due Tue morning: skipped (mutation: ignore the windows FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    expect(await followupsPass.run({ ...ctx(MORNING), closures: stormEndedByOpen() })).toEqual({ ...EMPTY, blocked: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "skipped", reason: CLOSED_REASON })]);
+  });
+
+  it("the same, kept: sent", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({ closureKeptAt: "2026-09-21T12:00:00.000Z" })]);
+    expect(await followupsPass.run({ ...ctx(MORNING), closures: stormEndedByOpen() })).toEqual({ ...EMPTY, sent: 1 });
+  });
+
+  it("the closed day is the appointment's START day: 23:30 on the closed day to 00:30 the next is skipped (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({
+      startsAt: "2026-09-21T04:30:00.000Z",     // Sun 23:30 CDT, on the closed day
+      endsAt: "2026-09-21T05:30:00.000Z",       // Mon 00:30 CDT, the day after
+    })]);
+    const c = { ...ctx(MORNING), closures: closedDaysOnAcct1([{ starts_on: "2026-09-20", ends_on: "2026-09-20" }], "America/Chicago") };
+    expect(await followupsPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
   });
 });

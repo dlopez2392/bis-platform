@@ -602,6 +602,7 @@ const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
     row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2027-09-20T00:00:00.000Z" } : null,
     closedDays: [], hours: null, timezone: "America/Chicago",
   },
+  windows: accountId === "acct_1" ? [{ start: new Date("2027-09-20T00:00:00.000Z"), end: null }] : [],
 });
 
 describe("the closure hold (S-47d, spec 5.5.2)", () => {
@@ -631,27 +632,35 @@ const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timez
     row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
     hours: null, timezone,
   },
+  windows: [],
 });
-const CLOSED_REASON = "Not sent: the business was closed for this appointment";
 
-describe("owner ruling D13: an appointment the business was closed for gets no referral ask unless kept", () => {
-  it("closed day on the appointment, ask due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+/** S-47d review M2: a storm thrown DURING the appointment, open-ended and still in force. It covers the
+ *  appointment's end but not its start, so only a pass that reads starts_at sends. */
+const stormThrownAt = (setAt: string): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: setAt } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+  windows: [],
+});
+
+describe("owner ruling D13a: the referral ask follows the staff's mark, not the closure history", () => {
+  it("closed day on the appointment, ask due this morning: SENT, the completed mark is proof of what happened (mutation: set skipIfWasClosed on this recipe FAILS)", async () => {
     dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
     const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2027-09-21", ends_on: "2027-09-21" }], "America/Chicago") };
-    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
-    expect(smsSend).not.toHaveBeenCalled();
-    expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
-    expect(skippedReasons()).toEqual([CLOSED_REASON]);
+    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, sent: 1 });
+    expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
   });
 
-  it("the closed day is the appointment's START day: one that starts at 23:30 and ends after midnight is still skipped (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
+  it("the appointment's START is what a closure is judged on: a storm thrown at 23:45, during a 23:30-00:30 appointment, does not hold its ask (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
     dbMocks.listDueReferralAsks.mockResolvedValue([row({
-      startsAt: "2027-09-22T04:30:00.000Z",     // Tue 23:30 CDT, on the closed day
-      endsAt: "2027-09-22T05:30:00.000Z",       // Wed 00:30 CDT, the day after
+      startsAt: "2027-09-22T04:30:00.000Z",     // Tue 23:30 CDT
+      endsAt: "2027-09-22T05:30:00.000Z",       // Wed 00:30 CDT
       completedAt: "2027-09-22T06:00:00.000Z",
     })]);
-    const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2027-09-21", ends_on: "2027-09-21" }], "America/Chicago") };
-    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
-    expect(smsSend).not.toHaveBeenCalled();
+    const c = { ...ctx(), closures: stormThrownAt("2027-09-22T04:45:00.000Z") };
+    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, sent: 1 });
   });
 });

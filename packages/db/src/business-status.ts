@@ -227,3 +227,28 @@ export async function loadClosureSnapshot(db: SupabaseClient, accountId: string,
   ]);
   return { timezone, row, closedDays, hours };
 }
+
+/** One `business_status.changed` event as the switch's set and undo actions write it
+ *  (apps/web business-status-actions.ts, through `emit`): `to` is the state set (null when the payload names
+ *  none we know), `until` the stored until, `from` the EFFECTIVE state it replaced, `at` the event's own time. */
+export type BusinessStatusChange = { at: string; from: string | null; to: BusinessState | null; until: string | null };
+
+const STATES: readonly string[] = ["open", "closed_today", "running_late", "storm"];
+const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
+
+/** S-47d D13b: the switch's own change log for THIS account, the closure history the reminder hold reads:
+ *  `business_status.changed` events created at or after `sinceIso`, oldest first; when there are more than
+ *  `limit`, the newest `limit`. One range read on `events_account_created (account_id, created_at desc)` with
+ *  the type as a filter. A payload it cannot read maps to nulls, never a throw. Throws on a read error. */
+export async function listBusinessStatusChanges(db: SupabaseClient, accountId: string, sinceIso: string,
+  limit = 500): Promise<BusinessStatusChange[]> {
+  const { data, error } = await db.from("events").select("payload, created_at")
+    .eq("account_id", accountId).eq("type", "business_status.changed").gte("created_at", sinceIso)
+    .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
+  if (error) throw new Error(`listBusinessStatusChanges failed: ${error.message}`);
+  return ((data ?? []) as { payload: unknown; created_at: string }[]).reverse().map((r) => {
+    const p = (r.payload !== null && typeof r.payload === "object" ? r.payload : {}) as Record<string, unknown>;
+    const to = str(p.to);
+    return { at: r.created_at, from: str(p.from), to: to !== null && STATES.includes(to) ? (to as BusinessState) : null, until: str(p.until) };
+  });
+}

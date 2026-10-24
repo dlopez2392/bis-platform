@@ -87,11 +87,13 @@ export type HoldSubject = LogSubject & {
   /** S-47d (SD20): the due row's own Keep (`closure_kept_at` is not null): the owner said this appointment
    *  is happening, so no closure holds it, however old it is. Read only with `appointmentAt`. */
   kept?: boolean;
-  /** S-47d, owner ruling D13 (2026-10-24): set by the four recipes that write AFTER the appointment (follow-up,
-   *  no-show nudge, review request, referral ask). Once a closure that covered the appointment has ended, such
-   *  a send is skipped rather than sent, unless the appointment was kept. The three before-appointment recipes
-   *  leave it unset: an ended closure lets them send (SD6). Read only with `appointmentAt`. */
-  afterAppointment?: true;
+  /** S-47d, owner rulings D13a and D13b (2026-10-24): set by the AUTOMATIC follow-up alone. Once a closure
+   *  that covered the appointment has ended, on its own or by a switch to Open or Running late (the history
+   *  closures.ts rebuilds from the switch's change log), the send is skipped rather than sent, unless the
+   *  appointment was kept. Every other recipe leaves it unset: the review request, referral ask and no-show
+   *  nudge follow a staff mark that is proof of what happened, and an ended closure lets them send (SD6), as it
+   *  does the before-appointment recipes. Read only with `appointmentAt`. */
+  skipIfWasClosed?: true;
 };
 
 /** A subject that texts. Its `smsKind` is the ONE literal that decides both
@@ -324,7 +326,7 @@ export async function holdOrSend(
     const state: ClosureState = ctx.closures ? await ctx.closures(s.accountId) : { ok: false };
     const v = closureVerdict(state, {
       appointmentAt: s.appointmentAt, kept: s.kept === true, deadline: s.deadline,
-      afterAppointment: s.afterAppointment === true,
+      skipIfWasClosed: s.skipIfWasClosed === true,
     }, ctx.now);
     if (v.kind === "skipped") { await logSkipped(ctx, s, v.reason); return "skipped"; }
     if (v.kind === "held") { await writeHeld(ctx, s, v.until, zone, v.reason); return "held"; }

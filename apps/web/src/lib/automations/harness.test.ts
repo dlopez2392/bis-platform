@@ -4,7 +4,7 @@ const gate = vi.hoisted(() => ({ smsSenderFor: vi.fn() }));
 vi.mock("@/lib/consent/gate", () => gate);
 const emailGate = vi.hoisted(() => ({ emailSenderFor: vi.fn() }));
 vi.mock("@/lib/consent/email-gate", () => emailGate);
-const dbMocks = vi.hoisted(() => ({ loadClosureSnapshot: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({ loadClosureSnapshot: vi.fn(), listBusinessStatusChanges: vi.fn() }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 
 import { buildPassContext, runPasses } from "./harness";
@@ -68,12 +68,14 @@ describe("buildPassContext — the closures loader, bound to the tick (S-47d, sp
     dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({
       timezone: "America/Chicago", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null },
     });
+    dbMocks.listBusinessStatusChanges.mockReset().mockResolvedValue([]);
     const db = { tag: "tick-db" } as never;
     const c = buildPassContext({ db, now: new Date("2026-09-09T14:00:00Z"), origin: "https://app.example.com" });
     expect(await c.closures("acct_1")).toEqual({
-      ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" },
+      ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" }, windows: [],
     });
     expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_1", { date: "2026-08-26" });
+    expect(dbMocks.listBusinessStatusChanges).toHaveBeenCalledWith(db, "acct_1", "2026-08-26T14:00:00.000Z");
   });
 });
 

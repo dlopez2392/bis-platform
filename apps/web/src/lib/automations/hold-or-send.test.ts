@@ -277,8 +277,9 @@ describe("closures (S-47d, spec 5.5.2)", () => {
       row: { state: "storm", late_minutes: null, until: null, set_at: "2026-09-21T13:00:00.000Z" },
       closedDays: [], hours: null, timezone: "America/Chicago",
     },
+    windows: [{ start: new Date("2026-09-21T13:00:00.000Z"), end: null }],
   };
-  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" } };
+  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" }, windows: [] };
   const stormForA = () => vi.fn<ClosureLoader>(async (accountId) => (accountId === "acct_A" ? STORM_A : OPEN));
   const APPT = new Date("2026-09-22T20:00:00.000Z");   // 15:00 CDT Tue, inside the storm's open window
   const booking = (over: Partial<HoldSubject> = {}) => subject({ accountId: "acct_A", appointmentAt: APPT, deadline: APPT, ...over });
@@ -353,13 +354,14 @@ describe("closures (S-47d, spec 5.5.2)", () => {
     expect(logWrites()).toEqual([expect.objectContaining({ status: "sent" })]);
   });
 
-  it("D13: the subject's afterAppointment reaches the verdict: an ended closed day skips an after-appointment send and lets a before-appointment one go (mutation: drop the pass-through FAILS)", async () => {
+  it("D13a: the subject's skipIfWasClosed reaches the verdict: an ended closed day skips the follow-up and lets any other send go (mutation: drop the pass-through FAILS)", async () => {
     const yesterday = new Date("2026-09-20T17:00:00.000Z");     // Sun 12:00 CDT; NOON is Mon
     const endedDay = vi.fn<ClosureLoader>(async () => ({
       ok: true, input: { row: null, closedDays: [{ starts_on: "2026-09-20", ends_on: "2026-09-20", reason: null }], hours: null, timezone: "America/Chicago" },
+      windows: [],
     }));
     const send = vi.fn(async () => {});
-    const after = booking({ source: "followups", channel: "email", smsKind: undefined, appointmentAt: yesterday, deadline: undefined, afterAppointment: true });
+    const after = booking({ source: "followups", channel: "email", smsKind: undefined, appointmentAt: yesterday, deadline: undefined, skipIfWasClosed: true });
     expect(await holdOrSend(withLoader(NOON, endedDay), after, send)).toBe("skipped");
     expect(send).not.toHaveBeenCalled();
     expect(logWrites()).toEqual([expect.objectContaining({

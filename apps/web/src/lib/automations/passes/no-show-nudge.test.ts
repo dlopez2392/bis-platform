@@ -511,6 +511,7 @@ const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
     row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-07T00:00:00.000Z" } : null,
     closedDays: [], hours: null, timezone: "America/Chicago",
   },
+  windows: accountId === "acct_1" ? [{ start: new Date("2026-09-07T00:00:00.000Z"), end: null }] : [],
 });
 
 describe("the closure hold (S-47d, spec 5.5.2)", () => {
@@ -540,27 +541,35 @@ const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timez
     row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
     hours: null, timezone,
   },
+  windows: [],
 });
-const CLOSED_REASON = "Not sent: the business was closed for this appointment";
 
-describe("owner ruling D13: an appointment the business was closed for gets no no-show nudge unless kept", () => {
-  it("closed day yesterday, nudge due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+/** S-47d review M2: a storm thrown DURING the appointment, open-ended and still in force. It covers the
+ *  appointment's end but not its start, so only a pass that reads starts_at sends. */
+const stormThrownAt = (setAt: string): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: setAt } : null,
+    closedDays: [], hours: null, timezone: "America/New_York",
+  },
+  windows: [],
+});
+
+describe("owner ruling D13a: the no-show nudge follows the staff's mark, not the closure history", () => {
+  it("closed day yesterday, nudge due this morning: SENT, the no-show mark is proof of what happened (mutation: set skipIfWasClosed on this recipe FAILS)", async () => {
     dbMocks.listDueNoShowNudges.mockResolvedValue([row()]);
     const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2026-09-08", ends_on: "2026-09-08" }], "America/New_York") };
-    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
-    expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
-    expect(dbMocks.recordAutomationLog.mock.calls.map((x) => x[1])).toEqual([expect.objectContaining({ status: "skipped", reason: CLOSED_REASON })]);
+    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, sent: 1 });
+    expect(dbMocks.stampNoShowNudged).toHaveBeenCalledWith(expect.anything(), "bk_n1");
   });
 
-  it("the closed day is the appointment's START day: one that starts at 23:30 and ends after midnight is still skipped (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
+  it("the appointment's START is what a closure is judged on: a storm thrown at 23:45, during a 23:30-00:30 appointment, does not hold its nudge (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
     dbMocks.listDueNoShowNudges.mockResolvedValue([row({
-      startsAt: "2026-09-09T03:30:00.000Z",     // Tue 23:30 NY, on the closed day
-      endsAt: "2026-09-09T04:30:00.000Z",       // Wed 00:30 NY, the day after
+      startsAt: "2026-09-09T03:30:00.000Z",     // Tue 23:30 NY
+      endsAt: "2026-09-09T04:30:00.000Z",       // Wed 00:30 NY
       noShowAt: "2026-09-09T04:45:00.000Z",
     })]);
-    const c = { ...ctx(new Date("2026-09-10T14:00:00Z")), closures: closedDaysOnAcct1([{ starts_on: "2026-09-08", ends_on: "2026-09-08" }], "America/New_York") };
-    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
-    expect(emailSend).not.toHaveBeenCalled();
+    const c = { ...ctx(new Date("2026-09-10T14:00:00Z")), closures: stormThrownAt("2026-09-09T03:45:00.000Z") };
+    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, sent: 1 });
   });
 });

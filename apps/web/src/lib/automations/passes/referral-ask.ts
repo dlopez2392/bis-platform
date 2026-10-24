@@ -102,8 +102,6 @@ export async function processReferralAsks(
       channel: config.channel, smsKind: "automation.referral_ask", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
       // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
       appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
-      // Owner ruling D13: written after the appointment, so a closure that covered it, once ended, skips it.
-      afterAppointment: true,
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {

@@ -176,11 +176,13 @@ describe("releaseHeldPass — a closure hold is re-checked on release (S-47d, sp
       row: { state: "storm", late_minutes: null, until: null, set_at: "2026-09-21T13:00:00.000Z" },
       closedDays: [], hours: null, timezone: "America/Chicago",
     },
+    windows: [{ start: new Date("2026-09-21T13:00:00.000Z"), end: null }],
   };
   const CLOSED_DAY: ClosureState = {
     ok: true, input: { row: null, closedDays: [{ starts_on: "2026-09-22", ends_on: "2026-09-22", reason: "holiday" }], hours: null, timezone: "America/Chicago" },
+    windows: [],
   };
-  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" } };
+  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" }, windows: [] };
   const loaderOf = (st: ClosureState) => vi.fn<ClosureLoader>(async () => st);
   const due = (over: Partial<DueReminder> = {}): DueReminder => ({
     bookingId: "bk_1", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-22T20:00:00.000Z",
