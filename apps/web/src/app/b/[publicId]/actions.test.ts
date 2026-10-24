@@ -15,6 +15,9 @@ const setAttributionMock = vi.fn();
 const getMeetingProviderMock = vi.fn();
 const createMeetingRoomMock = vi.fn();
 const recordLanguageSignalMock = vi.fn();
+// S-47d: the slot engine reads the account's closures (lib/booking/availability.ts readSlotClosures).
+const getBusinessStatusRowMock = vi.fn();
+const listClosedDaysFromMock = vi.fn();
 
 const sendMock = vi.fn();
 // `emailProviderThrowsRef` lets one test simulate `getEmailProvider()`
@@ -126,6 +129,8 @@ vi.mock("@bis/db", () => ({
   isAccountOutboundSuppressed: async () => false,
   getCalendarByPublicId: (...a: unknown[]) => getCalendarByPublicIdMock(...a),
   listBookedRanges: (...a: unknown[]) => listBookedRangesMock(...a),
+  getBusinessStatusRow: (...a: unknown[]) => getBusinessStatusRowMock(...a),
+  listClosedDaysFrom: (...a: unknown[]) => listClosedDaysFromMock(...a),
   countRecentBookings: (...a: unknown[]) => countRecentBookingsMock(...a),
   createContact: (...a: unknown[]) => createContactMock(...a),
   fillContactBlanks: (...a: unknown[]) => fillContactBlanksMock(...a),
@@ -271,6 +276,8 @@ beforeEach(() => {
   slot = pickSlot();
   getCalendarByPublicIdMock.mockReset().mockResolvedValue(calendarRow());
   listBookedRangesMock.mockReset().mockResolvedValue([]);
+  getBusinessStatusRowMock.mockReset().mockResolvedValue(null); // an open account
+  listClosedDaysFromMock.mockReset().mockResolvedValue([]);
   countRecentBookingsMock.mockReset().mockResolvedValue(0);
   createContactMock.mockReset().mockResolvedValue({ id: "contact_1", existing: false });
   fillContactBlanksMock.mockReset().mockResolvedValue([]);
@@ -1049,6 +1056,29 @@ describe("getSlotsAction", () => {
       expect(result.slots.length).toBeGreaterThan(0);
       expect(result.slots).toContain(slot.startsAt.toISOString());
     }
+  });
+
+  it("S-47d: a closed day offers no slots that day, reading this calendar's own account (mutation: drop closures from computeAllSlots → FAILS)", async () => {
+    const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: accountRow.timezone }).format(slot.startsAt);
+    listClosedDaysFromMock.mockResolvedValue([{
+      id: "cd1", account_id: ACCOUNT_ID, starts_on: dayKey, ends_on: dayKey, reason: "holiday",
+      created_by: "user_1", created_at: "2026-01-01T00:00:00Z",
+    }]);
+
+    const result = await getSlotsAction(PUBLIC_ID, "en", dayKey);
+
+    expect(result).toEqual({ slots: [] });
+    expect(getBusinessStatusRowMock.mock.calls.map((c) => c[1])).toEqual([ACCOUNT_ID]);
+    expect(listClosedDaysFromMock.mock.calls.map((c) => c[1])).toEqual([ACCOUNT_ID]);
+  });
+
+  it("S-47d: a failed status read is the generic error, never the open day (S17)", async () => {
+    const dayKey = new Intl.DateTimeFormat("en-CA", { timeZone: accountRow.timezone }).format(slot.startsAt);
+    getBusinessStatusRowMock.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
+
+    const result = await getSlotsAction(PUBLIC_ID, "en", dayKey);
+
+    expect(result).toEqual({ error: bookingStrings("en").genericError });
   });
 
   it("errors for a disabled calendar", async () => {

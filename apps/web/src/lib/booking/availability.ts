@@ -1,10 +1,38 @@
 // Extracted verbatim from b/[publicId]/actions.ts so the voice tools and the
 // public booking page compute availability from ONE implementation. Any
 // drift between the two would let the AI offer times the page would refuse.
-import { listBookedRanges, serviceDb, type CalendarRow } from "@bis/db";
+import { getBusinessStatusRow, listBookedRanges, listClosedDaysFrom, serviceDb, type CalendarRow } from "@bis/db";
 import {
-  computeSlots, bookableRange, computeMoveSlots, movableRange, partsInZone, type Range, type SlotConfig,
+  computeSlots, bookableRange, computeMoveSlots, movableRange, partsInZone, type Range, type SlotClosures, type SlotConfig,
 } from "@/lib/booking/slots";
+import { addDays, dayKey, slotClosures } from "@/lib/business-status/status";
+
+/** S-47d spec §5.3: the account's closures, as the slot engine takes them. The business_status row and the
+ *  closed days ending on or after yesterday (in the account's zone, one day of slack), read in parallel,
+ *  both for THIS accountId. Hours do not matter here: a closure's window is the stored until. A failed read
+ *  THROWS, exactly as a failed listBookedRanges does, so every caller's existing error path answers (S17):
+ *  never a slot offered during a closure nobody could read. */
+export async function readSlotClosures(
+  db: ReturnType<typeof serviceDb>, accountId: string, timezone: string, now: Date,
+): Promise<SlotClosures> {
+  const [row, closedDays] = await Promise.all([
+    getBusinessStatusRow(db, accountId),
+    listClosedDaysFrom(db, accountId, addDays(dayKey(now, timezone), -1)),
+  ]);
+  return slotClosures({ row, closedDays, hours: null, timezone, now });
+}
+
+/** The two reads every function below judges against, started TOGETHER: the booked ranges and the
+ *  account's closures. Both reject on failure. */
+async function readsFor(
+  db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, excludeBookingId?: string,
+): Promise<{ booked: Range[]; config: SlotConfig }> {
+  const [booked, closures] = await Promise.all([
+    bookedInHorizon(db, calendar, now, excludeBookingId),
+    readSlotClosures(db, calendar.account_id, timezone, now),
+  ]);
+  return { booked, config: { ...slotConfigFrom(calendar, timezone), closures } };
+}
 
 function slotConfigFrom(calendar: CalendarRow, timezone: string): SlotConfig {
   return {
@@ -30,7 +58,8 @@ export async function computeAllSlots(
   // +2 days of headroom past the horizon end so a booking near the last
   // in-horizon instant is never excluded by an off-by-one on the query window
   // itself — computeSlots is what actually enforces the horizon boundary.
-  return computeSlots(slotConfigFrom(calendar, timezone), await bookedInHorizon(db, calendar, now), now);
+  const { booked, config } = await readsFor(db, calendar, timezone, now);
+  return computeSlots(config, booked, now);
 }
 
 /** The booked ranges both functions here judge against — ONE read, so the
@@ -55,7 +84,8 @@ async function bookedInHorizon(
 export async function bookableSlot(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, startsAt: Date,
 ): Promise<Range | null> {
-  return bookableRange(slotConfigFrom(calendar, timezone), await bookedInHorizon(db, calendar, now), now, startsAt);
+  const { booked, config } = await readsFor(db, calendar, timezone, now);
+  return bookableRange(config, booked, now, startsAt);
 }
 
 /** F-048: the booking a customer is moving — its id (left out of the busy
@@ -68,8 +98,8 @@ export type MovingBooking = { id: string; startsAt: Date; endsAt: Date };
 export async function moveSlots(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date, moving: MovingBooking,
 ): Promise<Range[]> {
-  const others = await bookedInHorizon(db, calendar, now, moving.id);
-  return computeMoveSlots(slotConfigFrom(calendar, timezone), others, moving, now);
+  const { booked: others, config } = await readsFor(db, calendar, timezone, now, moving.id);
+  return computeMoveSlots(config, others, moving, now);
 }
 
 /** F-048: the move's submit-time check, the twin of `bookableSlot`
@@ -79,8 +109,8 @@ export async function movableSlot(
   db: ReturnType<typeof serviceDb>, calendar: CalendarRow, timezone: string, now: Date,
   moving: MovingBooking, startsAt: Date,
 ): Promise<Range | null> {
-  const others = await bookedInHorizon(db, calendar, now, moving.id);
-  return movableRange(slotConfigFrom(calendar, timezone), others, moving, now, startsAt);
+  const { booked: others, config } = await readsFor(db, calendar, timezone, now, moving.id);
+  return movableRange(config, others, moving, now, startsAt);
 }
 
 /** `YYYY-MM-DD` as seen in `timezone` — the day-picker's own key format, and
