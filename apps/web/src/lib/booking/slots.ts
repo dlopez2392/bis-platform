@@ -12,6 +12,7 @@ export type SlotConfig = {
   timezone: string; slotDurationMinutes: number; bufferMinutes: number;
   minNoticeHours: number; maxAdvanceDays: number; openHours: OpenHours;
 };
+export type SlotClosures = { closedDayKeys: ReadonlySet<string>; blockedBefore: Date | null; blockAll: boolean; lateBefore: Date | null };
 /** Both `startsAt`/`endsAt` are real `Date`s here, but the accessors that
  *  produce a `Range` from a DB row hand back ISO STRINGS — converting a row
  *  into a `Range` (`new Date(row.starts_at)` etc.) is the CALLER's job, not
