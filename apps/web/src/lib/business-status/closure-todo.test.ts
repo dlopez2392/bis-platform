@@ -54,6 +54,7 @@ describe("fileClosureTodo", () => {
   it("getAccountLanguage null reads as English (mutation: default to es -> FAILS)", async () => {
     getAccountLanguage.mockResolvedValue(null);
     await fileClosureTodo(undefined as never, { accountId: "acct-1", kind: "status", on: "2026-12-24", createdBy: "user:u1" });
+    expect(getAccountLanguage).toHaveBeenCalledWith(undefined, "acct-1");
     expect(ensureClosureTask.mock.calls[0]![2]).toMatchObject({ title: m["business.todo.status"] });
   });
 
