@@ -136,6 +136,19 @@ export async function readHoursChain(db: SupabaseClient, accountId: string): Pro
  *  ever book — a caller at the cap should treat its count as "at least this many", never as exact. */
 export const CLOSURE_APPOINTMENTS_LIMIT = 200;
 
+type ClosureAppointmentRow = {
+  id: string; contact_id: string; starts_at: string; ends_at: string; closure_kept_at: string | null;
+  contacts: { first_name: string | null; last_name: string | null } | null;
+};
+
+function mapClosureAppointmentRows(rows: readonly ClosureAppointmentRow[]): ClosureAppointment[] {
+  return rows.map((r) => ({
+    id: r.id, contact_id: r.contact_id, starts_at: r.starts_at, ends_at: r.ends_at,
+    closure_kept_at: r.closure_kept_at ?? null,
+    first_name: r.contacts?.first_name ?? null, last_name: r.contacts?.last_name ?? null,
+  }));
+}
+
 /** status = 'booked', starts_at in [fromIso, toIso), order starts_at, with the contact's first/last name
  *  (embed `contacts(first_name, last_name)`), capped at `CLOSURE_APPOINTMENTS_LIMIT`. Throws on error. */
 export async function listClosureAppointments(
@@ -148,15 +161,32 @@ export async function listClosureAppointments(
     .order("starts_at", { ascending: true })
     .limit(CLOSURE_APPOINTMENTS_LIMIT);
   if (error) throw new Error(`listClosureAppointments failed: ${error.message}`);
-  const rows = (data ?? []) as unknown as {
-    id: string; contact_id: string; starts_at: string; ends_at: string; closure_kept_at: string | null;
-    contacts: { first_name: string | null; last_name: string | null } | null;
-  }[];
-  return rows.map((r) => ({
-    id: r.id, contact_id: r.contact_id, starts_at: r.starts_at, ends_at: r.ends_at,
-    closure_kept_at: r.closure_kept_at ?? null,
-    first_name: r.contacts?.first_name ?? null, last_name: r.contacts?.last_name ?? null,
-  }));
+  return mapClosureAppointmentRows((data ?? []) as unknown as ClosureAppointmentRow[]);
+}
+
+export type ClosureAppointmentRange = { fromIso: string; toIso: string };
+
+/** Fix round (Calendar page undercount): the Calendar page's own closed-day ranges can be far apart
+ *  (a holiday next week, a vacation next spring) — one `.gte`/`.lt` spanning the whole union, as the
+ *  first cut of the Calendar page's "one query, not N" fix did, pulled in every ORDINARY booking in the
+ *  gap between them too, each spending a slot of the shared `CLOSURE_APPOINTMENTS_LIMIT` cap on a
+ *  booking that was never affected by any closure at all. `.or()` of one `and(gte, lt)` per range is the
+ *  single query that is actually scoped to the ranges themselves: never a range, never counted. status
+ *  = 'booked' only, same embed, same cap, same order. Throws on error; `[]` for no ranges (never a
+ *  query — `.or("")` is not a valid PostgREST filter). */
+export async function listClosureAppointmentsForRanges(
+  db: SupabaseClient, accountId: string, ranges: readonly ClosureAppointmentRange[],
+): Promise<ClosureAppointment[]> {
+  if (ranges.length === 0) return [];
+  const or = ranges.map((r) => `and(starts_at.gte.${r.fromIso},starts_at.lt.${r.toIso})`).join(",");
+  const { data, error } = await db.from("bookings")
+    .select("id, contact_id, starts_at, ends_at, closure_kept_at, contacts(first_name, last_name)")
+    .eq("account_id", accountId).eq("status", "booked")
+    .or(or)
+    .order("starts_at", { ascending: true })
+    .limit(CLOSURE_APPOINTMENTS_LIMIT);
+  if (error) throw new Error(`listClosureAppointmentsForRanges failed: ${error.message}`);
+  return mapClosureAppointmentRows((data ?? []) as unknown as ClosureAppointmentRow[]);
 }
 
 /** Held automation_log rows per booking: Map<bookingId, count> from subject_key 'booking:<id>'. */
