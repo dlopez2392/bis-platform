@@ -110,6 +110,10 @@ export const ACCOUNT_OWNED_TABLES = [
  * point at a snapshot (`calls.knowledge_version`, `concierge_conversations.knowledge_version`, a NO ACTION
  * composite key) are gone by then, because `calls` and `concierge_conversations` are on the list.
  * `voice-knowledge.test.ts` proves the teardown after a save, with a stamped call and chat, leaves nothing.
+ *
+ * `business_status` and `closed_days` (0097, S-47d) are off this list: service_role holds no DELETE on
+ * `business_status`, and both carry `account_id … on delete cascade`, so the account row delete carries them
+ * away (`one-switch-schema.test.ts` proves it).
  */
 
 /**

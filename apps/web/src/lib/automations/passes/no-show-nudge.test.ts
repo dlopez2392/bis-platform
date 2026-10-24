@@ -29,6 +29,7 @@ const URL = `${ORIGIN}/b/cal_pub_1`;
 function row(overrides: Partial<DueNoShowNudge> = {}): DueNoShowNudge {
   return {
     bookingId: "bk_n1", accountId: "acct_1",
+    startsAt: "2026-09-08T19:00:00.000Z", closureKeptAt: null,   // the hour before endsAt
     endsAt: "2026-09-08T20:00:00.000Z",           // NY Tue 16:00 — the previous local day
     noShowAt: "2026-09-08T20:30:00.000Z",         // NY Tue 16:30
     smsFailedAt: null,

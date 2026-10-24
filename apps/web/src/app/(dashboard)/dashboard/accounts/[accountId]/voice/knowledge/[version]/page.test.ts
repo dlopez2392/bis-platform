@@ -86,7 +86,7 @@ const CALL: CallDetailRow = {
   id: "call1", started_at: "2026-10-20T15:00:00.000Z", ended_at: null, duration_secs: 60,
   outcome: "lead", language: "en", caller_e164: null, contact_id: null, conversation_id: null, contact: null,
   turn_count: 2, transcript: [], summary: "", booking_id: null,
-  trade_module: "insurance_pc", trade_module_version: 1, knowledge_version: 3,
+  trade_module: "insurance_pc", trade_module_version: 1, knowledge_version: 3, business_status: null,
 };
 
 function render(version: string, searchParams: { locale?: string; call?: string } = {}) {

@@ -190,6 +190,11 @@ export const REVIEW_REQUEST_MAX_AGE_MS = 61 * 60 * 60 * 1000;
  */
 export type DueReviewRequest = {
   bookingId: string; accountId: string;
+  /** `starts_at` (SD5): the appointment the closure hold checks. */
+  startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   /** `ends_at`. The pass runs the clock from laterOf(endsAt, completedAt). */
   endsAt: string;
   /** THE COMPLETION CLOCK (0026): when the operator pressed "Mark completed".
@@ -260,13 +265,15 @@ export function ownAccountContactOnly<T>(rows: T[], fn: string, what: "booking" 
  * anchor".
  */
 const REVIEW_REQUEST_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_request_sms_failed_at, closure_kept_at, contacts(account_id, email, phone, language)";
 
 function toDueReviewRequest(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueReviewRequest {
   return {
     bookingId: r.id,
     accountId: r.account_id,
     endsAt: r.ends_at,
+    startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     completedAt: r.completed_at ?? null,
     followupSentAt: r.followup_sent_at ?? null,
     smsFailedAt: r.review_request_sms_failed_at ?? null,
@@ -411,6 +418,11 @@ export const NO_SHOW_NUDGE_MAX_AGE_MS = 37 * 60 * 60 * 1000;
 
 export type DueNoShowNudge = {
   bookingId: string; accountId: string;
+  /** `starts_at` (SD5): the appointment the closure hold checks. */
+  startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   endsAt: string;
   /** THE NO-SHOW CLOCK (0026): when the operator pressed "Mark no-show".
    *  Null on rows flipped before the migration. */
@@ -438,13 +450,15 @@ export type DueNoShowNudge = {
  *  `calendars(account_id, ...)` because the rebook link is built from the
  *  calendar: both embeds go through `ownAccountEmbedsOnly`. */
 const NO_SHOW_NUDGE_SELECT =
-  "id, account_id, contact_id, ends_at, no_show_at, no_show_nudge_sms_failed_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, no_show_at, no_show_nudge_sms_failed_at, closure_kept_at, calendars(account_id, public_id, enabled), contacts(account_id, email, phone, language)";
 
 function toDueNoShowNudge(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueNoShowNudge {
   return {
     bookingId: r.id,
     accountId: r.account_id,
     endsAt: r.ends_at,
+    startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     noShowAt: r.no_show_at ?? null,
     smsFailedAt: r.no_show_nudge_sms_failed_at ?? null,
     contactId: r.contact_id,
@@ -571,6 +585,9 @@ export const SMS_REMINDER_WINDOW_END_MS = 135 * 60 * 1000;
 export type DueSmsReminder = {
   bookingId: string; accountId: string;
   startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   /** The booker's own zone, captured at booking, for the time in the text —
    *  `safeZone(bookerTimezone, accountTimezone)` as the email reminder does. */
   bookerTimezone: string | null;
@@ -588,13 +605,14 @@ export type DueSmsReminder = {
 /** No gate follows this list: a text reminder is tied to the appointment,
  *  not to a morning, so the window IS the moment. */
 const SMS_REMINDER_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, contacts(account_id, phone, language)";
+  "id, account_id, contact_id, starts_at, booker_timezone, sms_reminder_failed_at, closure_kept_at, contacts(account_id, phone, language)";
 
 function toDueSmsReminder(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueSmsReminder {
   return {
     bookingId: r.id,
     accountId: r.account_id,
     startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     bookerTimezone: r.booker_timezone ?? null,
     smsFailedAt: r.sms_reminder_failed_at ?? null,
     contactId: r.contact_id,
@@ -716,6 +734,9 @@ export const APPOINTMENT_CONFIRM_MIN_LEAD_MS = (24 * 60 + 15) * 60 * 1000;
 export type DueAppointmentConfirm = {
   bookingId: string; accountId: string;
   startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   /** The booker's own zone, captured at booking, for the time in the text —
    *  safeZone(bookerTimezone, accountTimezone), the email reminder's rule. */
   bookerTimezone: string | null;
@@ -732,13 +753,14 @@ export type DueAppointmentConfirm = {
 };
 
 const APPOINTMENT_CONFIRM_SELECT =
-  "id, account_id, contact_id, starts_at, booker_timezone, contacts(account_id, phone, language)";
+  "id, account_id, contact_id, starts_at, booker_timezone, closure_kept_at, contacts(account_id, phone, language)";
 
 function toDueAppointmentConfirm(r: any, info: AccountBrandInfo, auto: EnabledRecipe): DueAppointmentConfirm {
   return {
     bookingId: r.id,
     accountId: r.account_id,
     startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     bookerTimezone: r.booker_timezone ?? null,
     contactId: r.contact_id,
     contactPhone: r.contacts?.phone ?? null,
@@ -998,6 +1020,11 @@ export const REFERRAL_ASK_MAX_AGE_MS = REVIEW_REQUEST_MAX_AGE_MS + 24 * 60 * 60 
 
 export type DueReferralAsk = {
   bookingId: string; accountId: string;
+  /** `starts_at` (SD5): the appointment the closure hold checks. */
+  startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   endsAt: string;
   /** The completion clock (0026); the pass runs from laterOf(endsAt, completedAt). */
   completedAt: string | null;
@@ -1035,7 +1062,7 @@ export type DueReferralAsk = {
 // then fails `tsc` with "neither type sufficiently overlaps". Every other
 // *_SELECT in this file is one literal for the same reason.
 const REFERRAL_ASK_SELECT =
-  "id, account_id, contact_id, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, contacts(account_id, email, phone, language)";
+  "id, account_id, contact_id, starts_at, ends_at, completed_at, followup_sent_at, review_requested_at, referral_ask_sms_failed_at, closure_kept_at, contacts(account_id, email, phone, language)";
 
 function toDueReferralAsk(
   r: any, info: AccountBrandInfo, auto: EnabledRecipe, reviewRequestEnabled: boolean,
@@ -1044,6 +1071,8 @@ function toDueReferralAsk(
     bookingId: r.id,
     accountId: r.account_id,
     endsAt: r.ends_at,
+    startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     completedAt: r.completed_at ?? null,
     followupSentAt: r.followup_sent_at ?? null,
     reviewRequestedAt: r.review_requested_at ?? null,

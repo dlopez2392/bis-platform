@@ -32,6 +32,7 @@ const URL = "https://g.page/r/x/review";
 function row(overrides: Partial<DueReviewRequest> = {}): DueReviewRequest {
   return {
     bookingId: "bk_r1", accountId: "acct_1",
+    startsAt: "2026-09-08T21:00:00.000Z", closureKeptAt: null,   // the hour before endsAt
     endsAt: "2026-09-08T22:00:00.000Z",           // NY Tue 18:00 — the previous local day
     followupSentAt: null, completedAt: null, smsFailedAt: null,
     contactId: "ct_1", contactEmail: "booker@example.com", contactPhone: "(956) 555-0101",

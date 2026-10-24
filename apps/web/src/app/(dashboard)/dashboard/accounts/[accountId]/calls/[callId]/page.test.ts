@@ -155,6 +155,7 @@ const CALL: CallDetailRow = {
   trade_module: null,
   trade_module_version: null,
   knowledge_version: null,
+  business_status: null,
 };
 
 const FAILED_TEXTBACK = {

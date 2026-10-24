@@ -30,6 +30,7 @@ const TICK = new Date("2027-09-24T14:00:00.000Z");      // 09:00 CDT, inside the
 function row(over: Partial<DueReferralAsk> = {}): DueReferralAsk {
   return {
     bookingId: "bk_r1", accountId: "acct_1",
+    startsAt: "2027-09-21T19:00:00.000Z", closureKeptAt: null,   // the hour before endsAt
     endsAt: "2027-09-21T20:00:00.000Z", completedAt: "2027-09-21T21:00:00.000Z",
     followupSentAt: "2027-09-22T14:00:00.000Z",
     reviewRequestedAt: "2027-09-23T14:05:00.000Z",     // NOT equal to followupSentAt

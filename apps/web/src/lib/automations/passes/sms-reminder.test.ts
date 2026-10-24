@@ -34,7 +34,7 @@ function row(overrides: Partial<DueSmsReminder> = {}): DueSmsReminder {
     contactId: "ct_1", contactPhone: "(956) 555-0101",
     brandName: "Rio Roofing", accountTimezone: "America/New_York",
     body: "",
-    language: "en", bodyEs: null,
+    language: "en", bodyEs: null, closureKeptAt: null,
     ...overrides,
   };
 }
