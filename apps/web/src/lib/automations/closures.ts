@@ -1,6 +1,6 @@
 import { loadClosureSnapshot, type SupabaseClient } from "@bis/db";
 import { resolveAccountZone } from "@/lib/booking/followup-timing";
-import { coversAppointment, dayKey, hoursChain, type StatusInput } from "@/lib/business-status/status";
+import { coversAppointment, dayKey, hoursChain, type StatusInput, type StatusRowInput } from "@/lib/business-status/status";
 import { m } from "@/lib/messages";
 import { LEDGER_RETRY_MS } from "./send-sms";
 
@@ -10,11 +10,14 @@ import { LEDGER_RETRY_MS } from "./send-sms";
  * passed, and holds for LEDGER_RETRY_MS when the status cannot be read: never a send while a closure might
  * be in force (the consent ledger's precedent).
  *
- * The five reasons are read from the catalogue here, the same keys `REASONS` (hold-or-send.ts) carries, and
- * not through `REASONS` itself: hold-or-send.ts imports this module, so reading back from it would be an
- * import cycle.
+ * Owner ruling D13 (2026-10-24): the four AFTER-appointment recipes (follow-up, no-show nudge, review request,
+ * referral ask) never send for an appointment a closure covered unless the owner kept it. They hold while the
+ * closure is in force, as the reminders do, and are skipped once it has ended.
+ *
+ * The five reasons are written once, here, and spread into `REASONS` (hold-or-send.ts), which imports this
+ * module; reading them back from there would be an import cycle.
  */
-const CLOSURE_REASONS = {
+export const CLOSURE_REASONS = {
   heldClosedToday: m["automations.reason.heldClosedToday"],
   heldStorm: m["automations.reason.heldStorm"],
   heldClosedDay: m["automations.reason.heldClosedDay"],
@@ -23,6 +26,11 @@ const CLOSURE_REASONS = {
 } as const;
 
 const DAY_MS = 86_400_000;
+/** D13: how far back the loader reads closed days. An after-appointment message is anchored at the later of
+ *  the appointment's end and the operator's status stamp (anchor.ts): the referral ask runs up to 85 hours
+ *  after it, and a week of jobs marked completed on Friday anchors Monday's at Friday. Fourteen days covers
+ *  both with room to spare; a closed day older than that is not seen, so its message sends. */
+export const CLOSED_DAY_LOOKBACK_DAYS = 14;
 
 export type ClosureState =
   | { ok: true; input: Omit<StatusInput, "now"> }
@@ -34,19 +42,21 @@ export type ClosureLoader = (accountId: string) => Promise<ClosureState>;
 /**
  * One loadClosureSnapshot per account per tick, always for the accountId it is called with. Memoises the
  * PROMISE per accountId, so concurrent callers share one read; a failed read is memoised as { ok: false }
- * for the tick and logged once (the account id only). The closed days kept are the ranges ending on or after
- * yesterday in UTC: an older closed day's window ended long ago (D12), so a late follow-up for it sends (SD6).
- * Keep is not read here: it comes from each due row (SD20).
+ * for the tick and logged once (the account id only), including a snapshot the mapper below cannot read.
+ * The closed days kept are the ranges ending on or after the UTC date CLOSED_DAY_LOOKBACK_DAYS back, so an
+ * after-appointment message can still see the closed day its appointment fell on (D13). Keep is not read here:
+ * it comes from each due row (SD20).
  */
 export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader {
-  const since = { date: dayKey(new Date(now.getTime() - DAY_MS), "UTC") };
+  const since = { date: dayKey(new Date(now.getTime() - CLOSED_DAY_LOOKBACK_DAYS * DAY_MS), "UTC") };
   const memo = new Map<string, Promise<ClosureState>>();
   return (accountId) => {
     let read = memo.get(accountId);
     if (!read) {
-      // Inside an async thunk, so even a throw before any promise exists becomes the { ok: false } below.
-      read = (async () => loadClosureSnapshot(db, accountId, since))().then(
-        (snap): ClosureState => ({
+      // Inside an async thunk, so even a throw before any promise exists becomes the { ok: false } below; the
+      // catch comes AFTER the mapper, so a snapshot it cannot read is { ok: false } too (review M1).
+      read = (async () => loadClosureSnapshot(db, accountId, since))()
+        .then((snap): ClosureState => ({
           ok: true,
           input: {
             row: snap.row,
@@ -56,12 +66,11 @@ export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader {
             // otherwise throw inside every booking send of the account.
             timezone: resolveAccountZone(snap.timezone) ?? "UTC",
           },
-        }),
-        (): ClosureState => {
+        }))
+        .catch((): ClosureState => {
           console.error(`closures: the business status could not be read for account ${accountId}; its booking sends hold`);
           return { ok: false };
-        },
-      );
+        });
       memo.set(accountId, read);
     }
     return read;
@@ -85,24 +94,44 @@ const HELD_REASON = {
 } as const;
 
 /**
+ * D13: the stored Closed today or storm whose window has ENDED (its until is at or before now) and held
+ * `startsAt`. coversAppointment cannot say so: it reads a stored closure only while it is in force. The row
+ * keeps that window until the switch is changed again; switching to Open (or anything else) replaces it, and
+ * that is the owner's release.
+ */
+function endedStatusWindow(row: StatusRowInput | null, startsAt: Date, now: Date): boolean {
+  if (!row || (row.state !== "storm" && row.state !== "closed_today") || row.until === null) return false;
+  const t = startsAt.getTime();
+  const until = Date.parse(row.until);
+  return until <= now.getTime() && t >= Date.parse(row.set_at) && t < until;
+}
+
+/**
  * What a closure says about one send for an appointment at `appointmentAt`:
  * - an unreadable status: held until now + LEDGER_RETRY_MS;
  * - kept (the due row's own closure_kept_at): send, however old the appointment;
- * - not covered, or covered by a window that ended at or before now (SD6): send;
+ * - a closure covered the appointment and has ENDED (SD6, or a stored closure whose until has passed): an
+ *   after-appointment send is skipped (D13); a before-appointment send goes;
+ * - not covered: send;
  * - a deadline at or before now: skipped;
  * - else held until the earlier of the window's end and the deadline, or now + 24 hours when neither
  *   exists (an open-ended storm), so a held row never carries a past held_until.
  */
 export function closureVerdict(
-  state: ClosureState, s: { appointmentAt: Date; kept: boolean; deadline?: Date | null }, now: Date,
+  state: ClosureState,
+  s: { appointmentAt: Date; kept: boolean; deadline?: Date | null; afterAppointment?: boolean },
+  now: Date,
 ): ClosureVerdict {
   if (!state.ok) {
     return { kind: "held", until: new Date(now.getTime() + LEDGER_RETRY_MS), reason: CLOSURE_REASONS.heldClosureUnknown };
   }
   if (s.kept) return { kind: "send" };
   const cover = coversAppointment({ ...state.input, now }, s.appointmentAt);
-  if (!cover.covered) return { kind: "send" };
-  if (cover.endsAt !== null && cover.endsAt.getTime() <= now.getTime()) return { kind: "send" };
+  const ended = cover.covered
+    ? cover.endsAt !== null && cover.endsAt.getTime() <= now.getTime()
+    : endedStatusWindow(state.input.row, s.appointmentAt, now);
+  if (ended && s.afterAppointment) return { kind: "skipped", reason: CLOSURE_REASONS.skippedClosed };
+  if (!cover.covered || ended) return { kind: "send" };
   const deadline = s.deadline ?? null;
   if (deadline !== null && deadline.getTime() <= now.getTime()) {
     return { kind: "skipped", reason: CLOSURE_REASONS.skippedClosed };

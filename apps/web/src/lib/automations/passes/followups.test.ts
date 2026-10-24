@@ -222,3 +222,45 @@ describe("the closure hold (S-47d, spec 5.5.2)", () => {
     expect(dbMocks.stampFollowupSent).toHaveBeenCalledWith(expect.anything(), "bk_f1");
   });
 });
+
+/** S-47d D13: the loader with these closed days for acct_1, in the account's own zone; no status row. */
+const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timezone: string): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
+    hours: null, timezone,
+  },
+});
+const CLOSED_REASON = "Not sent: the business was closed for this appointment";
+
+describe("owner ruling D13: an appointment the business was closed for gets no follow-up unless kept", () => {
+  it("closed day yesterday, follow-up due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    const c = { ...ctx(MORNING), closures: closedDaysOnAcct1([{ starts_on: "2026-09-21", ends_on: "2026-09-21" }], "America/Chicago") };
+    expect(await followupsPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampFollowupSent).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({ subjectKey: "booking:bk_f1", status: "skipped", reason: CLOSED_REASON })]);
+  });
+
+  it("the same, kept: sent", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row({ closureKeptAt: "2026-09-21T12:00:00.000Z" })]);
+    const c = { ...ctx(MORNING), closures: closedDaysOnAcct1([{ starts_on: "2026-09-21", ends_on: "2026-09-21" }], "America/Chicago") };
+    expect(await followupsPass.run(c)).toEqual({ ...EMPTY, sent: 1 });
+  });
+
+  it("a follow-up held under a closed day still in force (a vacation through tomorrow) is sent on release once the day is removed, never skipped", async () => {
+    dbMocks.listDueFollowups.mockResolvedValue([row()]);
+    const vacation = closedDaysOnAcct1([{ starts_on: "2026-09-21", ends_on: "2026-09-23" }], "America/Chicago");
+    expect(await followupsPass.run({ ...ctx(MORNING), closures: vacation })).toEqual({ ...EMPTY, held: 1 });
+    expect(logCalls()).toEqual([expect.objectContaining({
+      status: "held", heldUntil: "2026-09-24T05:00:00.000Z", reason: "Held: the business is closed that day",
+    })]);
+    // The range is removed (bumpHeldForAccount makes the row due now); the next tick releases it.
+    dbMocks.recordAutomationLog.mockClear();
+    dbMocks.getDueFollowupById.mockResolvedValue({ due: row() });
+    expect(await releaseFollowup({ ...ctx(NOON), closures: closedDaysOnAcct1([], "America/Chicago") }, heldRow())).toBe("sent");
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(logCalls()).toEqual([expect.objectContaining({ status: "sent" })]);
+  });
+});

@@ -64,7 +64,7 @@ describe("buildPassContext — texts go through the send gate, bound to the tick
 });
 
 describe("buildPassContext — the closures loader, bound to the tick (S-47d, spec 5.5.2)", () => {
-  it("ctx.closures reads loadClosureSnapshot on THIS tick's client, for the account asked, from yesterday's UTC date (mutation: drop it from buildPassContext → FAILS)", async () => {
+  it("ctx.closures reads loadClosureSnapshot on THIS tick's client, for the account asked, from the UTC date 14 days back (mutation: drop it from buildPassContext → FAILS)", async () => {
     dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({
       timezone: "America/Chicago", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null },
     });
@@ -73,7 +73,7 @@ describe("buildPassContext — the closures loader, bound to the tick (S-47d, sp
     expect(await c.closures("acct_1")).toEqual({
       ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" },
     });
-    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_1", { date: "2026-09-08" });
+    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_1", { date: "2026-08-26" });
   });
 });
 

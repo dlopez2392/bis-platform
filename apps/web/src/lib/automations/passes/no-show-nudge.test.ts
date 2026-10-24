@@ -532,3 +532,35 @@ describe("the closure hold (S-47d, spec 5.5.2)", () => {
     expect(dbMocks.stampNoShowNudged).toHaveBeenCalledWith(expect.anything(), "bk_n1");
   });
 });
+
+/** S-47d D13: the loader with these closed days for acct_1, in the account's own zone; no status row. */
+const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timezone: string): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
+    hours: null, timezone,
+  },
+});
+const CLOSED_REASON = "Not sent: the business was closed for this appointment";
+
+describe("owner ruling D13: an appointment the business was closed for gets no no-show nudge unless kept", () => {
+  it("closed day yesterday, nudge due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row()]);
+    const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2026-09-08", ends_on: "2026-09-08" }], "America/New_York") };
+    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampNoShowNudged).not.toHaveBeenCalled();
+    expect(dbMocks.recordAutomationLog.mock.calls.map((x) => x[1])).toEqual([expect.objectContaining({ status: "skipped", reason: CLOSED_REASON })]);
+  });
+
+  it("the closed day is the appointment's START day: one that starts at 23:30 and ends after midnight is still skipped (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
+    dbMocks.listDueNoShowNudges.mockResolvedValue([row({
+      startsAt: "2026-09-09T03:30:00.000Z",     // Tue 23:30 NY, on the closed day
+      endsAt: "2026-09-09T04:30:00.000Z",       // Wed 00:30 NY, the day after
+      noShowAt: "2026-09-09T04:45:00.000Z",
+    })]);
+    const c = { ...ctx(new Date("2026-09-10T14:00:00Z")), closures: closedDaysOnAcct1([{ starts_on: "2026-09-08", ends_on: "2026-09-08" }], "America/New_York") };
+    expect(await noShowNudgePass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+  });
+});

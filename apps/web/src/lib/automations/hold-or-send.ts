@@ -9,7 +9,7 @@ import { formatInstantClock } from "./quiet-hours";
 import { SmsDeferred, SmsBlocked, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
 import { EmailNotSent, type EmailBlockReason } from "@/lib/consent/email-gate";
 import type { PassContext } from "./context";
-import { closureVerdict, type ClosureState } from "./closures";
+import { closureVerdict, CLOSURE_REASONS, type ClosureState } from "./closures";
 import { m } from "@/lib/messages";
 
 /**
@@ -87,6 +87,11 @@ export type HoldSubject = LogSubject & {
   /** S-47d (SD20): the due row's own Keep (`closure_kept_at` is not null): the owner said this appointment
    *  is happening, so no closure holds it, however old it is. Read only with `appointmentAt`. */
   kept?: boolean;
+  /** S-47d, owner ruling D13 (2026-10-24): set by the four recipes that write AFTER the appointment (follow-up,
+   *  no-show nudge, review request, referral ask). Once a closure that covered the appointment has ended, such
+   *  a send is skipped rather than sent, unless the appointment was kept. The three before-appointment recipes
+   *  leave it unset: an ended closure lets them send (SD6). Read only with `appointmentAt`. */
+  afterAppointment?: true;
 };
 
 /** A subject that texts. Its `smsKind` is the ONE literal that decides both
@@ -103,15 +108,10 @@ export const REASONS = {
   /** Review R2-I4: the consent state could not be read, so the send waits
    *  LEDGER_RETRY_MS and the release pass tries again. */
   ledgerRetry: m["automations.reason.ledgerRetry"],
-  /** S-47d (spec 5.5.2): a closure covers the appointment. Held until the closure's window ends (or the
-   *  deadline, if earlier); closures.ts reads the same five keys for its verdict. */
-  heldClosedToday: m["automations.reason.heldClosedToday"],
-  heldStorm: m["automations.reason.heldStorm"],
-  heldClosedDay: m["automations.reason.heldClosedDay"],
-  /** The status could not be read: LEDGER_RETRY_MS, never a send while a closure might be in force. */
-  heldClosureUnknown: m["automations.reason.heldClosureUnknown"],
-  /** A covered appointment whose deadline has passed. */
-  skippedClosed: m["automations.reason.skippedClosed"],
+  /** S-47d (spec 5.5.2): heldClosedToday, heldStorm, heldClosedDay (a closure covers the appointment),
+   *  heldClosureUnknown (the status could not be read) and skippedClosed (the deadline passed, or, D13, an
+   *  after-appointment send for a closure that has ended). Written once, in closures.ts (review M3). */
+  ...CLOSURE_REASONS,
   /** The email gate's two outages (consent PR-3): each a LEDGER_RETRY_MS
    *  re-hold, never a skip, so the email goes once the outage ends. */
   emailLedgerRetry: m["automations.reason.emailLedgerRetry"],
@@ -324,6 +324,7 @@ export async function holdOrSend(
     const state: ClosureState = ctx.closures ? await ctx.closures(s.accountId) : { ok: false };
     const v = closureVerdict(state, {
       appointmentAt: s.appointmentAt, kept: s.kept === true, deadline: s.deadline,
+      afterAppointment: s.afterAppointment === true,
     }, ctx.now);
     if (v.kind === "skipped") { await logSkipped(ctx, s, v.reason); return "skipped"; }
     if (v.kind === "held") { await writeHeld(ctx, s, v.until, zone, v.reason); return "held"; }

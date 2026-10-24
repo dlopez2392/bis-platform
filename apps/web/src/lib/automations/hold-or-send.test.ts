@@ -16,7 +16,7 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
 import { SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
 import { EmailNotSent, sendEmailOrThrow } from "@/lib/consent/email-gate";
-import type { ClosureLoader, ClosureState } from "./closures";
+import { CLOSURE_REASONS, type ClosureLoader, type ClosureState } from "./closures";
 import { m } from "@/lib/messages";
 
 const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Mon Sept 21
@@ -351,6 +351,29 @@ describe("closures (S-47d, spec 5.5.2)", () => {
     expect(await holdOrSend(withLoader(NOON, stormForA()), booking({ kept: true }), send)).toBe("sent");
     expect(send).toHaveBeenCalledTimes(1);
     expect(logWrites()).toEqual([expect.objectContaining({ status: "sent" })]);
+  });
+
+  it("D13: the subject's afterAppointment reaches the verdict: an ended closed day skips an after-appointment send and lets a before-appointment one go (mutation: drop the pass-through FAILS)", async () => {
+    const yesterday = new Date("2026-09-20T17:00:00.000Z");     // Sun 12:00 CDT; NOON is Mon
+    const endedDay = vi.fn<ClosureLoader>(async () => ({
+      ok: true, input: { row: null, closedDays: [{ starts_on: "2026-09-20", ends_on: "2026-09-20", reason: null }], hours: null, timezone: "America/Chicago" },
+    }));
+    const send = vi.fn(async () => {});
+    const after = booking({ source: "followups", channel: "email", smsKind: undefined, appointmentAt: yesterday, deadline: undefined, afterAppointment: true });
+    expect(await holdOrSend(withLoader(NOON, endedDay), after, send)).toBe("skipped");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "followups", status: "skipped", reason: "Not sent: the business was closed for this appointment",
+    })]);
+    expect(await holdOrSend(withLoader(NOON, endedDay), booking({ appointmentAt: yesterday, deadline: undefined }), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("REASONS carries the five closure reasons written once in closures.ts (review M3)", () => {
+    expect({
+      heldClosedToday: REASONS.heldClosedToday, heldStorm: REASONS.heldStorm, heldClosedDay: REASONS.heldClosedDay,
+      heldClosureUnknown: REASONS.heldClosureUnknown, skippedClosed: REASONS.skippedClosed,
+    }).toEqual(CLOSURE_REASONS);
   });
 
   it("the five closure reasons are the catalogue's, each with its Spanish twin", () => {

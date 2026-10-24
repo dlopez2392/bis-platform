@@ -166,13 +166,13 @@ describe("closureLoader: one read per account per tick", () => {
     vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
   });
 
-  it("two calls for one account read ONCE, for that account, from yesterday's UTC date (mutation: no memo FAILS on the count)", async () => {
+  it("two calls for one account read ONCE, for that account, from the UTC date 14 days back (mutation: no memo FAILS on the count)", async () => {
     const db = { tag: "tick-db" } as never;
     const load = closureLoader(db, d("2026-10-22T02:00:00.000Z"));   // Oct 21 21:00 CDT, Oct 22 UTC
     const a = await load("acct_A");
     const b = await load("acct_A");
     expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledTimes(1);
-    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_A", { date: "2026-10-21" });
+    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledWith(db, "acct_A", { date: "2026-10-08" });
     expect(b).toEqual(a);
   });
 
@@ -220,5 +220,77 @@ describe("closureLoader: one read per account per tick", () => {
     const line = String(vi.mocked(console.error).mock.calls[0]?.[0]);
     expect(line).toContain("acct_A");
     expect(line).not.toContain("postgrest");
+  });
+});
+
+describe("D13 (owner, 2026-10-24): an after-appointment message for an appointment a closure covered never sends unless kept", () => {
+  // A closed day on Mon 2026-10-19 only; its window ended at Tue 00:00 CDT, before NOW (Wed 10:00).
+  const ENDED_DAY = state({ closedDays: [range("2026-10-19", "2026-10-19")] });
+  const MONDAY = d("2026-10-19T15:00:00.000Z");
+  const SKIPPED = { kind: "skipped", reason: "Not sent: the business was closed for this appointment" };
+
+  it("an ENDED closed-day cover: an after-appointment send is skipped; a before-appointment send still sends (SD6) (mutation: drop the afterAppointment branch FAILS)", () => {
+    expect(closureVerdict(ENDED_DAY, { appointmentAt: MONDAY, kept: false, afterAppointment: true }, NOW)).toEqual(SKIPPED);
+    expect(closureVerdict(ENDED_DAY, { appointmentAt: MONDAY, kept: false, afterAppointment: false }, NOW)).toEqual({ kind: "send" });
+    expect(closureVerdict(ENDED_DAY, { appointmentAt: MONDAY, kept: false }, NOW)).toEqual({ kind: "send" });
+  });
+
+  it("kept wins over D13: an after-appointment send for a kept appointment under an ended cover sends", () => {
+    expect(closureVerdict(ENDED_DAY, { appointmentAt: MONDAY, kept: true, afterAppointment: true }, NOW)).toEqual({ kind: "send" });
+  });
+
+  it("while the closure is still in force, an after-appointment send holds exactly as before", () => {
+    const s = state({ closedDays: [range("2026-10-19", "2026-10-22")] });
+    expect(closureVerdict(s, { appointmentAt: MONDAY, kept: false, afterAppointment: true }, NOW))
+      .toEqual({ kind: "held", until: d("2026-10-23T05:00:00.000Z"), reason: "Held: the business is closed that day" });
+  });
+
+  it("a storm that EXPIRED on its own (until passed) covered the appointment: an after-appointment send is skipped, a before one sends (mutation: no expired-window check FAILS)", () => {
+    // Thrown Mon 09:00 CDT, back on Tue: the stored row stays a storm with a past until.
+    const expired: StatusRowInput = { state: "storm", late_minutes: null, set_at: "2026-10-19T14:00:00.000Z", until: "2026-10-20T05:00:00.000Z" };
+    const at = d("2026-10-19T20:00:00.000Z");        // Mon 15:00 CDT, inside the window
+    expect(closureVerdict(state({ row: expired }), { appointmentAt: at, kept: false, afterAppointment: true }, NOW)).toEqual(SKIPPED);
+    expect(closureVerdict(state({ row: expired }), { appointmentAt: at, kept: false }, NOW)).toEqual({ kind: "send" });
+    // An appointment before the switch was thrown was never covered: it sends.
+    expect(closureVerdict(state({ row: expired }), { appointmentAt: d("2026-10-19T13:00:00.000Z"), kept: false, afterAppointment: true }, NOW))
+      .toEqual({ kind: "send" });
+  });
+
+  it("an expired Closed today covered the appointment the same way: skipped after, sent before", () => {
+    const expired: StatusRowInput = { state: "closed_today", late_minutes: null, set_at: "2026-10-20T14:00:00.000Z", until: "2026-10-21T05:00:00.000Z" };
+    const at = d("2026-10-20T20:00:00.000Z");
+    expect(closureVerdict(state({ row: expired }), { appointmentAt: at, kept: false, afterAppointment: true }, NOW)).toEqual(SKIPPED);
+    expect(closureVerdict(state({ row: expired }), { appointmentAt: at, kept: false }, NOW)).toEqual({ kind: "send" });
+  });
+
+  it("switching to Open, or removing the closed day, leaves no cover: the after-appointment send goes (the owner's release)", () => {
+    const opened: StatusRowInput = { state: "open", late_minutes: null, set_at: "2026-10-20T14:00:00.000Z", until: null };
+    expect(closureVerdict(state({ row: opened }), { appointmentAt: d("2026-10-19T20:00:00.000Z"), kept: false, afterAppointment: true }, NOW))
+      .toEqual({ kind: "send" });
+    expect(closureVerdict(state({ closedDays: [] }), { appointmentAt: MONDAY, kept: false, afterAppointment: true }, NOW)).toEqual({ kind: "send" });
+  });
+
+  it("through the REAL loader, a referral ask 4 days after a closed day still sees that day and is skipped (mutation: the old yesterday-only lookback FAILS)", async () => {
+    // The mock answers as the database does: only ranges ending on or after `since.date`.
+    const day: ClosedDay & { id: string; account_id: string; created_by: string; created_at: string } = {
+      id: "cd1", account_id: "acct_A", starts_on: "2026-10-17", ends_on: "2026-10-17", reason: null, created_by: "u1", created_at: SET_AT,
+    };
+    dbMocks.loadClosureSnapshot.mockReset().mockImplementation(async (_db: unknown, _id: string, since: { date: string }) => ({
+      timezone: TZ, row: null, closedDays: [day].filter((r) => r.ends_on >= since.date),
+      hours: { businessHours: null, calendarHours: null },
+    }));
+    const s = await closureLoader({} as never, NOW)("acct_A");
+    expect(closureVerdict(s, { appointmentAt: d("2026-10-17T15:00:00.000Z"), kept: false, afterAppointment: true }, NOW)).toEqual(SKIPPED);
+  });
+});
+
+describe("closureLoader: a mapper that throws (review M1)", () => {
+  it("a snapshot the mapper cannot read is { ok: false }, never a rejected promise memoised for the tick", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
+    dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({ timezone: TZ, row: null, closedDays: [] });   // no `hours`
+    const load = closureLoader({} as never, NOW);
+    await expect(load("acct_A")).resolves.toEqual({ ok: false });
+    await expect(load("acct_A")).resolves.toEqual({ ok: false });
+    expect(dbMocks.loadClosureSnapshot).toHaveBeenCalledTimes(1);
   });
 });

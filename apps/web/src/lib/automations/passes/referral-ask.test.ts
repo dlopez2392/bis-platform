@@ -623,3 +623,35 @@ describe("the closure hold (S-47d, spec 5.5.2)", () => {
     expect(dbMocks.stampReferralAsked).toHaveBeenCalledWith(expect.anything(), "bk_r1");
   });
 });
+
+/** S-47d D13: the loader with these closed days for acct_1, in the account's own zone; no status row. */
+const closedDaysOnAcct1 = (days: { starts_on: string; ends_on: string }[], timezone: string): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: null, closedDays: accountId === "acct_1" ? days.map((r) => ({ ...r, reason: null })) : [],
+    hours: null, timezone,
+  },
+});
+const CLOSED_REASON = "Not sent: the business was closed for this appointment";
+
+describe("owner ruling D13: an appointment the business was closed for gets no referral ask unless kept", () => {
+  it("closed day on the appointment, ask due this morning: skipped with the closed reason, not sent, not stamped (mutation: drop afterAppointment FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row()]);
+    const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2027-09-21", ends_on: "2027-09-21" }], "America/Chicago") };
+    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReferralAsked).not.toHaveBeenCalled();
+    expect(skippedReasons()).toEqual([CLOSED_REASON]);
+  });
+
+  it("the closed day is the appointment's START day: one that starts at 23:30 and ends after midnight is still skipped (review M2; mutation: appointmentAt from endsAt FAILS)", async () => {
+    dbMocks.listDueReferralAsks.mockResolvedValue([row({
+      startsAt: "2027-09-22T04:30:00.000Z",     // Tue 23:30 CDT, on the closed day
+      endsAt: "2027-09-22T05:30:00.000Z",       // Wed 00:30 CDT, the day after
+      completedAt: "2027-09-22T06:00:00.000Z",
+    })]);
+    const c = { ...ctx(), closures: closedDaysOnAcct1([{ starts_on: "2027-09-21", ends_on: "2027-09-21" }], "America/Chicago") };
+    expect(await referralAskPass.run(c)).toEqual({ ...EMPTY, blocked: 1 });
+    expect(smsSend).not.toHaveBeenCalled();
+  });
+});
