@@ -938,3 +938,28 @@ it does):
   and keeps the hours chain only for what is said.
 - **F8 (resolved in 5.5.2)** A loader that read kept bookings starting within the last two days missed the
   review request (61 hours after the end) and the referral ask (85 hours): Keep is now read from each due row.
+
+## 11. Corrections after build (2026-10-24)
+
+Found during the S-47d follow-up pass (branch `fix/s47d-followups`). None change shipped behaviour —
+each corrects this spec's own words against what the build actually does.
+
+- **4.3's "safe under the running build"** is about the deploy, not about every read against these two
+  tables forever: §5.5.2's "a failed closures read holds 15 min" (and the "Fail held" bullet it
+  restates) describes a TRANSIENT read failure once 0097 is live. Before 0097 exists at all, PostgREST
+  refuses the query outright (an unknown table/column, 4.3's own point) — the booking passes fail, they
+  do not quietly fall into the 15-minute hold.
+- **S15** undersold its own shape: the idle count's words and the on-call pulse's trailing status are
+  both WRAPPED INSIDE the menu trigger (`topbar-presence.tsx`'s `asSwitch`), not drawn beside it — for
+  whoever may change the switch, the whole dot-and-words indicator IS the button that opens the menu.
+- **Undo of a range already under way** (fix round B4) is clamped to yesterday, not to the range's
+  original start date: `addClosedDayAction`'s own `restore` path re-adds only what is left of a range
+  that started before the trigger's `current_date - 2` floor, from yesterday on.
+- **A malformed `backOn`** on a storm change never refuses the change outright: `untilFor` treats
+  anything that is not a real, in-range calendar date key as "no end" and stores an open-ended storm.
+- **`ensureClosureTask`'s `task.created` event** carries `{ taskId, contactId: null }` — a closure To-do
+  is never about one customer, so the payload names none, the same shape `ensureDocumentExpiryTask`
+  already uses.
+- **Owner D13a/D13b** (follow-up only, not written up here): the switch's own change history is read
+  only from server-written `'system'` `business_status.changed` events, never a `'user'` one a client
+  could forge (`listBusinessStatusChanges`, `packages/db/src/business-status.ts`).
