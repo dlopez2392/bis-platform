@@ -152,10 +152,14 @@ export async function setBusinessStatusAction(
   if (updated === null) return { ok: false, error: t(m, "business.refuse.role", locale) };
 
   try {
-    await emit(db, accountId, "business_status.changed", access.userId, {
+    // The change log is the reminder hold's closure history (automations/closures.ts, S-47d D13b), so it is
+    // written by the server as 'system': record_event (0053) lets any signed-in member append a 'user'
+    // event for their own account, and the history reads only 'system' rows, which a client cannot forge.
+    // The person is kept, in actor_id and in payload.by (Task 9 review I1).
+    await emit(serviceDb(), accountId, "business_status.changed", access.userId, {
       from: effectiveBefore.state, to: change.state, late_minutes: lateMinutes,
-      until: until ? until.toISOString() : null,
-    }, "user");
+      until: until ? until.toISOString() : null, by: access.userId,
+    }, "system");
   } catch (e) {
     console.error(`setBusinessStatusAction: event emit failed for account ${accountId}: ${String(e)}`);
   }
@@ -244,9 +248,11 @@ export async function undoBusinessStatusAction(
   }
 
   try {
-    await emit(db, accountId, "business_status.changed", access.userId, {
+    // Server-written as 'system' with the person kept, exactly as the set above (Task 9 review I1).
+    await emit(serviceDb(), accountId, "business_status.changed", access.userId, {
       from: effectiveNow.state, to: restoreTo.state, late_minutes: restoreTo.late_minutes, until: restoreTo.until,
-    }, "user");
+      by: access.userId,
+    }, "system");
   } catch (e) {
     console.error(`undoBusinessStatusAction: event emit failed for account ${accountId}: ${String(e)}`);
   }

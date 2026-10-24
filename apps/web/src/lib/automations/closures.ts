@@ -40,8 +40,10 @@ export const CLOSURE_LOOKBACK_DAYS = 14;
  *  until, whichever came first. `end` null: no next change and no until (still open-ended). */
 export type ClosureWindow = { start: Date; end: Date | null };
 
+/** `windows` null: the change log could not be read (review m1). Only the follow-up needs it, so only the
+ *  follow-up holds; every other send decides on the snapshot, as before the history existed. */
 export type ClosureState =
-  | { ok: true; input: Omit<StatusInput, "now">; windows: readonly ClosureWindow[] }
+  | { ok: true; input: Omit<StatusInput, "now">; windows: readonly ClosureWindow[] | null }
   | { ok: false };
 
 /** The SUBJECT's own account, always: holdOrSend passes `s.accountId`. */
@@ -51,7 +53,9 @@ const CLOSING: readonly string[] = ["closed_today", "storm"];
 
 /**
  * D13b: the closure history, rebuilt from the switch's own change log (`business_status.changed`, which the
- * set and undo actions emit after every successful change). ONE mechanism, the change list, fed by:
+ * set and undo actions emit after every successful change, through the server as 'system', the only rows
+ * listBusinessStatusChanges reads, so a client cannot forge one: Task 9 review I1). ONE mechanism, the change
+ * list, fed by:
  * - the logged changes in the lookback, oldest first;
  * - the stored row, as the newest change, when its own event is missing (a failed emit, or a row older than
  *   the log read); an event is logged a moment AFTER its update, so a logged row is never counted twice;
@@ -62,8 +66,17 @@ const CLOSING: readonly string[] = ["closed_today", "storm"];
  * comes first. An Undo is a change: set then undo leaves a window seconds long, which still counts but only
  * for an appointment that started inside it.
  *
- * FAILS OPEN where the log is silent: a change whose event was not written (emit failures are logged, never
- * shown) and that the stored row no longer carries leaves no window, and the follow-up for it sends.
+ * WHERE THE LOG IS SILENT. Every event is written by the server right after a successful row update, so a
+ * missing one means that insert failed (emit failures are logged, never shown). What happens depends on which
+ * change it was (each case is pinned in closures.test.ts):
+ * - the NEWEST change: the stored row stands in for it, nothing is lost;
+ * - an END (a change away from closed_today or storm) in the middle of the log: the window runs on to the
+ *   next logged change (P4). Fails CLOSED: a follow-up for an appointment after the real reopening is skipped;
+ * - a SET that would have been the first change in the lookback: the next change's `from` opens the window
+ *   from `lookbackStart` (P5). Fails CLOSED: a follow-up for an appointment before the real closure is skipped;
+ * - a SET in the middle of the log that the row no longer carries: no window at all. Fails OPEN: that
+ *   closure's follow-ups send. Only the first change's `from` is read; reading every `from` would close this
+ *   gap, which is a redesign, not made.
  */
 export function closureWindows(
   changes: readonly BusinessStatusChange[], row: StatusRowInput | null, lookbackStart: Date,
@@ -100,10 +113,13 @@ export function closureWindows(
 
 /**
  * One read per account per tick, always for the accountId it is called with: loadClosureSnapshot and the
- * change log (listBusinessStatusChanges), in parallel, memoised together as one PROMISE per accountId. Either
- * read failing, or a snapshot the mapper cannot read (review M1), is { ok: false } for the tick, logged once
- * (the account id only): a failed history read holds exactly as a failed snapshot does, never a silent send.
- * Both reach back CLOSURE_LOOKBACK_DAYS. Keep is not read here: it comes from each due row (SD20).
+ * change log (listBusinessStatusChanges), in parallel, memoised together as one PROMISE per accountId.
+ * - A failed SNAPSHOT read, or a snapshot the mapper cannot read (review M1), is { ok: false } for the tick:
+ *   every booking send of the account holds LEDGER_RETRY_MS.
+ * - A failed CHANGE-LOG read is `windows: null` (review m1): only the follow-up, which alone reads the
+ *   history, holds LEDGER_RETRY_MS; never a silent send.
+ * Each failure logs one line, the account id only. Both reach back CLOSURE_LOOKBACK_DAYS. Keep is not read
+ * here: it comes from each due row (SD20).
  */
 export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader {
   const lookbackStart = new Date(now.getTime() - CLOSURE_LOOKBACK_DAYS * DAY_MS);
@@ -114,10 +130,12 @@ export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader {
     if (!read) {
       // Inside an async thunk, so even a throw before any promise exists becomes the { ok: false } below; the
       // catch comes AFTER the mapper, so a snapshot it cannot read is { ok: false } too (review M1).
-      read = (async () => Promise.all([
-        loadClosureSnapshot(db, accountId, since),
-        listBusinessStatusChanges(db, accountId, lookbackStart.toISOString()),
-      ]))()
+      const history = (async () => listBusinessStatusChanges(db, accountId, lookbackStart.toISOString()))()
+        .catch((): null => {
+          console.error(`closures: the closure history could not be read for account ${accountId}; its follow-ups hold`);
+          return null;
+        });
+      read = (async () => Promise.all([loadClosureSnapshot(db, accountId, since), history]))()
         .then(([snap, changes]): ClosureState => ({
           ok: true,
           input: {
@@ -128,7 +146,7 @@ export function closureLoader(db: SupabaseClient, now: Date): ClosureLoader {
             // otherwise throw inside every booking send of the account.
             timezone: resolveAccountZone(snap.timezone) ?? "UTC",
           },
-          windows: closureWindows(changes, snap.row, lookbackStart),
+          windows: changes === null ? null : closureWindows(changes, snap.row, lookbackStart),
         }))
         .catch((): ClosureState => {
           console.error(`closures: the business status could not be read for account ${accountId}; its booking sends hold`);
@@ -164,7 +182,8 @@ const HELD_REASON = {
  *   window's end and the deadline, or now + 24 hours when neither exists (an open-ended storm), so a held row
  *   never carries a past held_until;
  * - otherwise the closure, if any, has ended: a closed day whose window has passed (SD6), or a stored closure
- *   in the history (D13b). The follow-up (`skipIfWasClosed`) is skipped (D13a); every other send goes.
+ *   in the history (D13b). The follow-up (`skipIfWasClosed`) is skipped (D13a), or held LEDGER_RETRY_MS when
+ *   the history could not be read (review m1); every other send goes.
  */
 export function closureVerdict(
   state: ClosureState,
@@ -179,9 +198,12 @@ export function closureVerdict(
   const inForce = cover.covered && (cover.endsAt === null || cover.endsAt.getTime() > now.getTime());
   if (!inForce) {
     if (s.skipIfWasClosed) {
+      if (cover.covered) return { kind: "skipped", reason: CLOSURE_REASONS.skippedClosed };
+      if (state.windows === null) {
+        return { kind: "held", until: new Date(now.getTime() + LEDGER_RETRY_MS), reason: CLOSURE_REASONS.heldClosureUnknown };
+      }
       const t = s.appointmentAt.getTime();
-      const wasClosed = cover.covered
-        || state.windows.some((w) => t >= w.start.getTime() && (w.end === null || t < w.end.getTime()));
+      const wasClosed = state.windows.some((w) => t >= w.start.getTime() && (w.end === null || t < w.end.getTime()));
       if (wasClosed) return { kind: "skipped", reason: CLOSURE_REASONS.skippedClosed };
     }
     return { kind: "send" };

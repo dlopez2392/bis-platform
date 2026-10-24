@@ -237,13 +237,18 @@ const STATES: readonly string[] = ["open", "closed_today", "running_late", "stor
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
 
 /** S-47d D13b: the switch's own change log for THIS account, the closure history the reminder hold reads:
- *  `business_status.changed` events created at or after `sinceIso`, oldest first; when there are more than
+ *  `business_status.changed` events WRITTEN BY THE SERVER (actor_type 'system'), created at or after
+ *  `sinceIso`, oldest first. 'system' is the whole guard: record_event (0053) lets any signed-in member of
+ *  the account append any event, but always as 'user', so a client cannot forge a closure into the
+ *  history or cut a real one short (Task 9 review I1). The switch's actions emit through the service
+ *  client as 'system' and keep the person in actor_id and payload.by. When there are more than
  *  `limit`, the newest `limit`. One range read on `events_account_created (account_id, created_at desc)` with
  *  the type as a filter. A payload it cannot read maps to nulls, never a throw. Throws on a read error. */
 export async function listBusinessStatusChanges(db: SupabaseClient, accountId: string, sinceIso: string,
   limit = 500): Promise<BusinessStatusChange[]> {
   const { data, error } = await db.from("events").select("payload, created_at")
-    .eq("account_id", accountId).eq("type", "business_status.changed").gte("created_at", sinceIso)
+    .eq("account_id", accountId).eq("type", "business_status.changed").eq("actor_type", "system")
+    .gte("created_at", sinceIso)
     .order("created_at", { ascending: false }).order("id", { ascending: false }).limit(limit);
   if (error) throw new Error(`listBusinessStatusChanges failed: ${error.message}`);
   return ((data ?? []) as { payload: unknown; created_at: string }[]).reverse().map((r) => {

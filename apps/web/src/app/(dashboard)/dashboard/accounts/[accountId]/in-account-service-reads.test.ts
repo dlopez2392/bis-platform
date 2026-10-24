@@ -68,7 +68,9 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/branding/page.tsx": "configuration",
   // S-47d Task 8: one business_status row per account (ensure/update/the To-do/the hold bump), guarded
   // by requireAccountAccess + mayChangeStatus; serviceDb only for the row's own creation, the closure
-  // To-do and the bump, never the client-role update itself (dbForRequest).
+  // To-do, the bump and the business_status.changed change log (written as 'system' so a client cannot
+  // forge the closure history the reminder hold reads; Task 9 review I1), never the client-role update itself
+  // (dbForRequest).
   "app/(dashboard)/dashboard/accounts/[accountId]/business-status-actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",

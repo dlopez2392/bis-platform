@@ -18,13 +18,23 @@ const STORM = { from: "open", to: "storm", late_minutes: null, until: "2026-10-2
 const OPENED = { from: "storm", to: "open", late_minutes: null, until: null };
 
 describe("listBusinessStatusChanges", () => {
+  it("reads only SERVER-written changes: a 'user' row, the only kind record_event (0053) lets a signed-in member write, is never read, so a client cannot open or cut short a closure (Task 9 review I1; mutation: drop .eq(actor_type) -> FAILS)", async () => {
+    await withTestAccount(async (db, a) => {
+      const since = new Date(Date.now() - 60_000).toISOString();
+      await emit(db, a, "business_status.changed", "user_test", STORM, "system");
+      // The forgery: an Open that would cut the real storm short, written as record_event writes it.
+      await emit(db, a, "business_status.changed", "user_forger", { from: "storm", to: "open", late_minutes: null, until: null }, "user");
+      expect((await listBusinessStatusChanges(db, a, since)).map((c) => c.to)).toEqual(["storm"]);
+    });
+  });
+
   it("this account's business_status.changed events, oldest first, mapped; never a second account's, never another type (mutations: drop .eq(account_id) or .eq(type) -> FAILS)", async () => {
     await twoAccounts(async (db, a, b) => {
       const since = new Date(Date.now() - 60_000).toISOString();
-      await emit(db, a, "business_status.changed", "user_test", STORM);
+      await emit(db, a, "business_status.changed", "user_test", STORM, "system");
       await emit(db, a, "booking.created", "user_test", { bookingId: "x" });
-      await emit(db, b, "business_status.changed", "user_test", { from: "open", to: "closed_today", late_minutes: null, until: null });
-      await emit(db, a, "business_status.changed", "user_test", OPENED);
+      await emit(db, b, "business_status.changed", "user_test", { from: "open", to: "closed_today", late_minutes: null, until: null }, "system");
+      await emit(db, a, "business_status.changed", "user_test", OPENED, "system");
 
       const changes = await listBusinessStatusChanges(db, a, since);
       expect(changes.map(({ from, to, until }) => ({ from, to, until }))).toEqual([
@@ -42,9 +52,9 @@ describe("listBusinessStatusChanges", () => {
   it("filters on created_at >= since, and over the limit keeps the NEWEST, still oldest first", async () => {
     await withTestAccount(async (db, a) => {
       const since = new Date(Date.now() - 60_000).toISOString();
-      await emit(db, a, "business_status.changed", "user_test", { ...STORM, to: "closed_today" });
-      await emit(db, a, "business_status.changed", "user_test", STORM);
-      await emit(db, a, "business_status.changed", "user_test", OPENED);
+      await emit(db, a, "business_status.changed", "user_test", { ...STORM, to: "closed_today" }, "system");
+      await emit(db, a, "business_status.changed", "user_test", STORM, "system");
+      await emit(db, a, "business_status.changed", "user_test", OPENED, "system");
       expect((await listBusinessStatusChanges(db, a, since, 2)).map((c) => c.to)).toEqual(["storm", "open"]);
       expect(await listBusinessStatusChanges(db, a, new Date(Date.now() + 60_000).toISOString())).toEqual([]);
     });
@@ -53,7 +63,7 @@ describe("listBusinessStatusChanges", () => {
   it("a payload it cannot read maps to nulls, never a throw: an unknown state, a non-string until or from", async () => {
     await withTestAccount(async (db, a) => {
       const since = new Date(Date.now() - 60_000).toISOString();
-      await emit(db, a, "business_status.changed", "user_test", { from: 7, to: "hurricane", until: 12 });
+      await emit(db, a, "business_status.changed", "user_test", { from: 7, to: "hurricane", until: 12 }, "system");
       const [c] = await listBusinessStatusChanges(db, a, since);
       expect({ from: c!.from, to: c!.to, until: c!.until }).toEqual({ from: null, to: null, until: null });
     });

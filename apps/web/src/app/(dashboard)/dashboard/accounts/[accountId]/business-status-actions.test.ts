@@ -479,3 +479,33 @@ describe("undoBusinessStatusAction", () => {
     expect(dbMocks.bumpHeldForAccount.mock.calls[0]![1]).toBe("acct_2");
   });
 });
+
+describe("the change log the closure history reads (S-47d D13b; Task 9 review I1: a client cannot forge it)", () => {
+  // record_event (0053) lets any signed-in member append any event for their own account, always as
+  // actor_type 'user'. The hold's history reads only 'system' rows, so the switch writes its change through
+  // the SERVICE client as 'system', and keeps the person: actor_id and payload.by are their userId.
+  it("a set writes business_status.changed through the service client as 'system', the person in actor_id and by (mutation: the request client, or 'user', FAILS)", async () => {
+    const r = await setBusinessStatusAction(ACCOUNT, CHANGE_STORM_DATED, "en");
+    expect(r.ok).toBe(true);
+    expect(dbMocks.emit.mock.calls).toEqual([[
+      { tag: "service" }, ACCOUNT, "business_status.changed", "user_1",
+      { from: "open", to: "storm", late_minutes: null, until: "2027-06-10T05:00:00.000Z", by: "user_1" }, "system",
+    ]]);
+  });
+
+  it("an undo writes its change the same way", async () => {
+    dbMocks.getBusinessStatusRow.mockResolvedValue(STORM_DATED_ROW);
+    const r = await undoBusinessStatusAction(ACCOUNT, { expectedSetAt: "2027-06-07T14:00:00.000000+00:00", before: { state: "open", late_minutes: null, until: null }, todoId: null }, "en");
+    expect(r.ok).toBe(true);
+    expect(dbMocks.emit.mock.calls).toEqual([[
+      { tag: "service" }, ACCOUNT, "business_status.changed", "user_1",
+      { from: "storm", to: "open", late_minutes: null, until: null, by: "user_1" }, "system",
+    ]]);
+  });
+
+  it("both are written for the route's own account, never another", async () => {
+    await setBusinessStatusAction("acct_2", CHANGE_CLOSED_TODAY, "en");
+    await undoBusinessStatusAction("acct_2", { expectedSetAt: "2027-06-07T14:00:00.000000+00:00", before: { state: "open", late_minutes: null, until: null }, todoId: null }, "en");
+    expect(dbMocks.emit.mock.calls.map((c) => c[1])).toEqual(["acct_2", "acct_2"]);
+  });
+});

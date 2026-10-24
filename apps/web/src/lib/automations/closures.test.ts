@@ -345,15 +345,73 @@ describe("owner rulings D13a and D13b (2026-10-24): only the follow-up skips, an
     expect(closureVerdict(await loaded({ closedDays: [day] }, wed), followUp(d("2026-10-19T23:00:00.000Z")), wed)).toEqual(SKIPPED);
   });
 
-  it("a failed change-log read is { ok: false }, the same as a failed snapshot: every booking send holds 15 minutes (mutation: read it as no changes FAILS)", async () => {
+  it("m1: a failed change-log read holds ONLY the follow-up, for 15 minutes; a reminder decides on the snapshot alone (mutation: hold everything, or read it as no changes, FAILS)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
-    dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({ timezone: TZ, row: null, closedDays: [], hours: { businessHours: null, calendarHours: null } });
+    const stormNow = row("storm", "2026-10-19T13:00:00.000Z");
+    dbMocks.loadClosureSnapshot.mockReset().mockResolvedValue({ timezone: TZ, row: stormNow, closedDays: [], hours: { businessHours: null, calendarHours: null } });
     dbMocks.listBusinessStatusChanges.mockReset().mockRejectedValue(new Error("events down"));
     const s = await closureLoader({} as never, TUE_0900)("acct_A");
-    expect(s).toEqual({ ok: false });
-    expect(closureVerdict(s, followUp(MON_1000), TUE_0900))
+    expect(s).toMatchObject({ ok: true, windows: null });
+    // The follow-up for an appointment the storm no longer covers (before it was thrown): the history is
+    // what would decide it, and it is unknown.
+    expect(closureVerdict(s, followUp(d("2026-10-19T12:00:00.000Z")), TUE_0900))
       .toEqual({ kind: "held", until: d("2026-10-20T14:15:00.000Z"), reason: "Held: couldn't check whether the business is open" });
+    // A reminder for Wednesday, under the storm in force: held on the snapshot, with the storm's own reason.
+    expect(closureVerdict(s, { appointmentAt: d("2026-10-21T15:00:00.000Z"), kept: false }, TUE_0900))
+      .toEqual({ kind: "held", until: d("2026-10-21T14:00:00.000Z"), reason: "Held: closed for a storm" });
+    // A reminder for an appointment before the storm was thrown: the snapshot says it is not covered, so it sends.
+    expect(closureVerdict(s, { appointmentAt: d("2026-10-19T12:00:00.000Z"), kept: false }, TUE_0900)).toEqual({ kind: "send" });
     expect(console.error).toHaveBeenCalledTimes(1);
+    expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).not.toContain("events down");
+  });
+
+  it("a failed SNAPSHOT read still holds every booking send, as before", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {}).mockClear();
+    dbMocks.loadClosureSnapshot.mockReset().mockRejectedValue(new Error("db down"));
+    dbMocks.listBusinessStatusChanges.mockReset().mockResolvedValue([]);
+    const s = await closureLoader({} as never, TUE_0900)("acct_A");
+    expect(s).toEqual({ ok: false });
+    expect(closureVerdict(s, { appointmentAt: d("2026-10-21T15:00:00.000Z"), kept: false }, TUE_0900))
+      .toEqual({ kind: "held", until: d("2026-10-20T14:15:00.000Z"), reason: "Held: couldn't check whether the business is open" });
+  });
+
+  it("I1: what a forged change would do if it were read: an Open slipped in at Mon 09:00 cuts the storm short and the Mon 10:00 follow-up would SEND; the server-only history skips it (the read's actor_type filter, packages/db business-status-changes.test.ts)", async () => {
+    const forged = { ...STORM_THEN_OPEN, changes: [STORM_THEN_OPEN.changes[0]!, change("2026-10-19T14:00:00.000Z", "storm", "open"), STORM_THEN_OPEN.changes[1]!] };
+    expect(closureVerdict(await loaded(forged, TUE_0900), followUp(MON_1000), TUE_0900)).toEqual({ kind: "send" });
+    expect(closureVerdict(await loaded(STORM_THEN_OPEN, TUE_0900), followUp(MON_1000), TUE_0900)).toEqual(SKIPPED);
+  });
+
+  it("I2: an appointment on the SUNDAY before a storm set Mon 08:00 and ended by Open Mon 18:00 was never covered: its follow-up is sent (mutations: open the lookback window whatever `from` is, or sort the changes newest first, FAIL)", async () => {
+    const s = await loaded(STORM_THEN_OPEN, TUE_0900);
+    const sunday = d("2026-10-18T15:00:00.000Z");     // Sun 10:00 CDT
+    // The follow-up is due Monday morning; read at Tue 09:00 here only so the same history is in the log.
+    expect(closureVerdict(s, followUp(sunday), TUE_0900)).toEqual({ kind: "send" });
+  });
+
+  it("m2, P4: a missing END event in the middle of the log stretches the window to the next logged change, so it fails CLOSED", async () => {
+    // Storm Mon 08:00 (logged); Open Mon 18:00 (its event was NOT written); Running late Tue 08:00 (logged).
+    const s = await loaded({
+      row: row("running_late", "2026-10-20T13:00:00.000Z", "2026-10-21T05:00:00.000Z"),
+      changes: [change("2026-10-19T13:00:00.050Z", "open", "storm"), change("2026-10-20T13:00:00.050Z", "open", "running_late")],
+    }, TUE_0900);
+    // Mon 20:00, after the real reopening: skipped all the same.
+    expect(closureVerdict(s, followUp(d("2026-10-20T01:00:00.000Z")), TUE_0900)).toEqual(SKIPPED);
+  });
+
+  it("m2, P5: a missing SET event that would have been the first in the 14 days opens the window from the lookback start, so it fails CLOSED", async () => {
+    // Storm Mon 08:00 (its event was NOT written); Open Mon 18:00 (logged, from: storm).
+    const s = await loaded({ row: row("open", "2026-10-19T23:00:00.000Z"), changes: [change("2026-10-19T23:00:00.050Z", "storm", "open")] }, TUE_0900);
+    // Sunday, before the real storm: skipped all the same.
+    expect(closureVerdict(s, followUp(d("2026-10-18T15:00:00.000Z")), TUE_0900)).toEqual(SKIPPED);
+  });
+
+  it("m2: the one case that fails OPEN: a missing SET event in the middle of the log, no longer the stored row, leaves no window and the follow-up sends", async () => {
+    // Open Sun (logged); storm Mon 08:00 (NOT written); Open Mon 18:00 (logged; its `from` is not read, only the first change's is).
+    const s = await loaded({
+      row: row("open", "2026-10-19T23:00:00.000Z"),
+      changes: [change("2026-10-18T13:00:00.050Z", "running_late", "open"), change("2026-10-19T23:00:00.050Z", "storm", "open")],
+    }, TUE_0900);
+    expect(closureVerdict(s, followUp(MON_1000), TUE_0900)).toEqual({ kind: "send" });
   });
 });
 
