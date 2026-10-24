@@ -202,10 +202,11 @@ describe("VoiceKnowledgePage — the fix round", () => {
     expect(html).toMatch(/<dd lang="es">El precio de Banquete es \$35 por invitado\.<\/dd>/);
   });
 
-  it("the four sections are h4s under the card's h3, and the services section reads 'Services & prices' (mutation: h3 sections -> FAILS)", async () => {
+  it("the five sections are h4s under the card's h3, and the services section reads 'Services & prices' (mutation: h3 sections -> FAILS)", async () => {
     const html = await render("3");
     const h4s = [...html.matchAll(/<h4[^>]*>([^<]*)<\/h4>/g)].map((h) => h[1]);
-    expect(h4s).toEqual(["Facts", "Services (free text)", "Business hours", "Services &amp; prices"]);
+    // S-47d (plan Task 14): "Closed days" joins the four S-47c sections, last.
+    expect(h4s).toEqual(["Facts", "Services (free text)", "Business hours", "Services &amp; prices", "Closed days"]);
     expect((html.match(/<h3\b/g) ?? []).length).toBe(1);
   });
 
@@ -221,6 +222,49 @@ describe("VoiceKnowledgePage — the fix round", () => {
     expect(html).toContain('href="/dashboard/accounts/acct1/voice/knowledge/2"');
     expect(html).toContain('href="/dashboard/accounts/acct1/voice"');
     expect(html).not.toContain("?locale=");
+  });
+});
+
+/**
+ * S-47d (plan Task 14): the Closed days section, after the prices section. Three states: a real
+ * stored line list (schema 2, the model-input line marked `lang="en"` per Global Constraints), an
+ * empty list on a schema-2 snapshot (none were planned when it was saved), and a schema-1 snapshot
+ * (stored before S-47d, which never recorded closed days at all) — the last two read DIFFERENT copy,
+ * so the section must read `payload.schema`, never collapse both into "the array is empty".
+ */
+describe("VoiceKnowledgePage — the Closed days section (S-47d)", () => {
+  it("lists each stored line, each its own model-input element in English (mutation: drop lang=\"en\" -> FAILS)", async () => {
+    const payload = buildKnowledgePayload({
+      facts: "Licensed and insured.", servicesText: "", timezone: "America/Chicago",
+      businessHours: null, services: [],
+      closedDays: [{ starts_on: "2026-12-25", ends_on: "2026-12-25", reason: "holiday" }],
+      today: "2026-12-01",
+    });
+    dbMocks.getKnowledgeSnapshot.mockResolvedValue({ ...SNAPSHOT, payload });
+    const html = await render("3");
+    expect(renderedText(html)).toContain("Closed days");
+    expect(html).toMatch(/<li lang="en">- Friday, December 25, 2026 \(holiday\)<\/li>/);
+  });
+
+  it("a schema-2 snapshot with none planned reads 'No closed days were planned.' (mutation: always read noClosedDaysRecorded -> FAILS)", async () => {
+    // The default SNAPSHOT fixture: schema 2, closed_days: [] (built via buildKnowledgePayload with
+    // closedDays: [] above).
+    const html = await render("3");
+    expect(renderedText(html)).toContain("No closed days were planned.");
+    expect(renderedText(html)).not.toContain("No closed days were recorded in this version.");
+  });
+
+  it("a schema-1 snapshot (stored before S-47d, which never recorded closed days) reads 'No closed days were recorded in this version.' (mutation: collapse schema 1 into the empty-array case -> FAILS)", async () => {
+    // A real pre-S-47d payload never carries a closed_days key at all (parseKnowledgePayload's own
+    // rule); hand-shaped here because no current writer produces schema 1 any more — the same reason
+    // "VoiceKnowledgePage — error"'s own payload fixture above is hand-shaped.
+    const schema1: Record<string, unknown> = JSON.parse(JSON.stringify(PAYLOAD));
+    delete schema1.closed_days;
+    schema1.schema = 1;
+    dbMocks.getKnowledgeSnapshot.mockResolvedValue({ ...SNAPSHOT, payload: schema1 });
+    const html = await render("3");
+    expect(renderedText(html)).toContain("No closed days were recorded in this version.");
+    expect(renderedText(html)).not.toContain("No closed days were planned.");
   });
 });
 

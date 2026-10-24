@@ -800,6 +800,60 @@ describe("CallDetailPage — the call card", () => {
 });
 
 /**
+ * S-47d (spec; plan Task 14): the status the call started under, shown to EVERYONE who can see the
+ * call (S19) — unlike the trade-rules and Knowledge items beside it in this same <dl>, this one is NOT
+ * agency-only, because a client is entitled to know their own business was closed, late or storm-shut
+ * when Sofía answered. Same bound-shape helpers as the trade-rules describe below.
+ */
+describe("CallDetailPage — the business status line (S-47d)", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true;
+  });
+
+  /** The <dd>'s own text, decoded the way `renderedText` decodes any other copy assertion in this file. */
+  const businessStatusText = (html: string): string | null => {
+    const match = /<dd[^>]*data-business-status=""[^>]*>([^<]*)<\/dd>/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+  /** The <dt> immediately before the business-status <dd>, same bound shape as tradeRulesLabel below. */
+  const businessStatusLabel = (html: string): string | null => {
+    const match = /<dt[^>]*>([^<]*)<\/dt><dd[^>]*data-business-status=""/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+
+  it("shows a CLIENT the status the call started under (S19; mutation: gate it on isAgency -> FAILS)", async () => {
+    authFixture.isAgency = false;
+    const html = await render({ ...CALL, business_status: "storm" });
+    expect(businessStatusLabel(html)).toBe("Status at the start");
+    expect(businessStatusText(html)).toBe("Closed for a storm");
+  });
+
+  it("renders no business-status item for an unstamped call", async () => {
+    const html = await render(CALL);
+    expect(html).not.toContain("data-business-status");
+    expect(renderedText(html)).not.toContain("Status at the start");
+  });
+
+  it("reads in Spanish under the QA override (mutation: hardcode the English key -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      getCallMock.mockResolvedValue({ ...CALL, business_status: "storm" });
+      listFailedOutboundSmsMock.mockResolvedValue([]);
+      listProposalsForCallMock.mockResolvedValue([]);
+      const html = await CallDetailPage({
+        params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+        searchParams: Promise.resolve({ locale: "es" }),
+      }).then(renderToStaticMarkup);
+      expect(businessStatusLabel(html)).toBe("Estado al empezar");
+      expect(businessStatusText(html)).toBe("Cerrado por tormenta");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+/**
  * S-47b section 5.7: which trade rules this call ran under. AGENCY ONLY (spec section 3; SD3) — this page
  * is shared with clients, and the module is not theirs to see. Absent when the call carries none.
  */
