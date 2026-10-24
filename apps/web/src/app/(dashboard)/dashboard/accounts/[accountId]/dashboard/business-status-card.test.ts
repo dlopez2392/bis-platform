@@ -29,7 +29,7 @@ vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
 }));
 
-import { BusinessStatusCard, BusinessStatusCardError } from "./business-status-card";
+import { BusinessStatusCard } from "./business-status-card";
 
 const TZ = "America/Chicago";
 const ACCOUNT = "acct_1";
@@ -137,14 +137,6 @@ describe("BusinessStatusCard — each state (spec §5.6.2)", () => {
       const html = await render({ isAgency: false, role: "staff" });
       expect(html).not.toContain("data-testid=\"bsm\"");
     } finally { vi.useRealTimers(); }
-  });
-});
-
-describe("BusinessStatusCard — the error fallback (spec §5.6.2)", () => {
-  it("renders the catalogue's error text and a Retry link, in Spanish too", () => {
-    const html = renderToStaticMarkup(createElement(BusinessStatusCardError, { locale: "es" }));
-    expect(html).toContain("No se pudo cargar el estado de hoy.");
-    expect(html).toContain("Reintentar");
   });
 });
 

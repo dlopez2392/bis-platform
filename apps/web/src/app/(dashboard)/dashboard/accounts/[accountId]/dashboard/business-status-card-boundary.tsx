@@ -13,9 +13,15 @@
 // trees, which DO cross the boundary fine — React serializes a Server Component's rendered output as
 // RSC payload, never a function) — the same shape `record-section.tsx` already uses for the identical
 // reason.
+//
+// `BusinessStatusCardError` comes from its OWN module (`./business-status-card-error`), never from
+// `./business-status-card` (Task 15, second finding): that file also holds the async SERVER component
+// and its `@bis/db`/Clerk imports (transitively `server-only`), and Turbopack refuses to bundle a
+// module that imports `server-only` into a Client Component's graph the instant ANYTHING is imported
+// from it here, whether or not this file touches the server-only exports.
 import type { ReactNode } from "react";
 import { RecordCardBoundary } from "@/components/record/record-card-boundary";
-import { BusinessStatusCardError } from "./business-status-card";
+import { BusinessStatusCardError } from "./business-status-card-error";
 import type { Locale } from "@/lib/i18n/locale";
 
 export function BusinessStatusCardBoundary({

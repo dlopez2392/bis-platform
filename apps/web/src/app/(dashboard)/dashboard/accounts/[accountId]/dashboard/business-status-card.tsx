@@ -17,7 +17,6 @@ import {
 import { dbForRequest } from "@/lib/db";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { RecordCardError } from "@/components/record/record-card";
 import { BusinessStatusMenu } from "@/components/business-status-menu";
 import { KeepAppointmentButton } from "./keep-appointment-button";
 import { makeTr, type Tr } from "@/lib/record/copy";
@@ -151,19 +150,6 @@ export function BusinessStatusCardSkeleton() {
     <Card id="business-status" aria-hidden>
       <CardHeader><CardTitle className="text-sm"><Skeleton className="h-4 w-12 rounded-[var(--radius-ctl)]" /></CardTitle></CardHeader>
       <CardContent><Skeleton className="h-4 w-56 rounded-[var(--radius-ctl)]" /></CardContent>
-    </Card>
-  );
-}
-
-/** Spec §5.6.2: "Couldn't load today's status." with a Retry link (a reload) — the rest of the
- *  dashboard renders regardless (this card's own RecordCardBoundary, never the page's). */
-export function BusinessStatusCardError({ locale, onRetry }: { locale: Locale; onRetry?: () => void }) {
-  const tr = makeTr(locale);
-  return (
-    <Card id="business-status" lang={locale}>
-      <CardContent className="pt-6">
-        <RecordCardError text={tr.text("business.card.error")} retryLabel={tr.text("business.card.retry")} onRetry={onRetry} />
-      </CardContent>
     </Card>
   );
 }

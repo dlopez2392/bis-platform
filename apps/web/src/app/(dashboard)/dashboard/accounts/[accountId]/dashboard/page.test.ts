@@ -921,6 +921,7 @@ describe("AccountDashboardPage — the business-status card's wiring (S-47d Task
 describe("AccountDashboardPage — the business-status card's boundary never gets a function prop across the Server→Client boundary (S-47d Task 15 finding)", () => {
   const pageSrc = readFileSync(path.join(here, "page.tsx"), "utf8");
   const boundarySrc = readFileSync(path.join(here, "business-status-card-boundary.tsx"), "utf8");
+  const errorSrc = readFileSync(path.join(here, "business-status-card-error.tsx"), "utf8");
 
   it("page.tsx never imports RecordCardBoundary directly — the fallback closure lives in the client wrapper instead (mutation: re-inline `import { RecordCardBoundary } from \"@/components/record/record-card-boundary\"` -> FAILS)", () => {
     expect(pageSrc).not.toContain("@/components/record/record-card-boundary");
@@ -929,5 +930,24 @@ describe("AccountDashboardPage — the business-status card's boundary never get
 
   it("business-status-card-boundary.tsx is a client module, so its fallback closure (built from `locale`, never a prop) runs entirely on the client (mutation: drop the \"use client\" directive -> FAILS)", () => {
     expect(boundarySrc.trimStart().startsWith('"use client"')).toBe(true);
+  });
+
+  /**
+   * Second Task 15 finding: `business-status-card-boundary.tsx` imported `BusinessStatusCardError`
+   * from `./business-status-card`, which also holds the async SERVER component and its `@bis/db`
+   * (transitively `server-only`) imports — Turbopack bundles the WHOLE module into the client graph
+   * the instant anything is imported from it there, regardless of whether the importer touches the
+   * server-only exports, and refuses ("'server-only' cannot be imported from a Client Component
+   * module"). The error component now lives in its own module with no server imports at all.
+   */
+  it("the client boundary imports BusinessStatusCardError from its OWN module, never from ./business-status-card (mutation: import it from \"./business-status-card\" again -> FAILS)", () => {
+    expect(boundarySrc).toContain('from "./business-status-card-error"');
+    expect(boundarySrc).not.toMatch(/BusinessStatusCardError.*from\s+"\.\/business-status-card"/);
+  });
+
+  it("business-status-card-error.tsx carries no @bis/db or server-only import, so it is safe in a client bundle (mutation: re-add `import … from \"@bis/db\"` -> FAILS)", () => {
+    expect(errorSrc).not.toContain("@bis/db");
+    expect(errorSrc).not.toContain('"server-only"');
+    expect(errorSrc).not.toContain("dbForRequest");
   });
 });
