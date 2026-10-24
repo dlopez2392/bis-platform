@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
 import { renderedText } from "@/lib/rendered-text";
 import { CHECKLIST_CATALOGUE } from "@/lib/checklist-catalogue";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * The regression this file exists to guard: the dashboard used to render the
@@ -206,10 +211,12 @@ vi.mock("./work-row", () => ({
 
 // S-47d Task 11: the business-status card's own reads/markup are business-status-card.test.ts's job
 // (same idiom as CallsChartCard/ActivityCard above) — captured rather than rendered, so this file
-// asserts exactly what page.tsx computed and handed it. `RecordCardBoundary` is mocked too: it is a
-// real "use client" component that calls `useRouter()` unconditionally, which throws outside a
-// mounted Next.js router (`invariant expected app router to be mounted`) — a passthrough here keeps
-// this file's own concern (page-level wiring) from needing Next's router context at all.
+// asserts exactly what page.tsx computed and handed it. `./business-status-card-boundary` is mocked
+// too, as a passthrough: it owns the REAL `RecordCardBoundary` (Task 15 finding — a Server Component
+// cannot pass a function prop like `fallback` into that "use client" component, so this wrapper builds
+// the fallback closure on the client instead), and `RecordCardBoundary` itself calls `useRouter()`
+// unconditionally, which throws outside a mounted Next.js router (`invariant expected app router to be
+// mounted`) — this file's own concern is page-level wiring, not that boundary's rendering.
 const businessStatusCardProps = vi.hoisted(() => ({
   current: null as { accountId: string; timezone: string; isAgency: boolean; role: string | null; personaName: string | null } | null,
 }));
@@ -221,8 +228,8 @@ vi.mock("./business-status-card", () => ({
   BusinessStatusCardSkeleton: () => null,
   BusinessStatusCardError: () => null,
 }));
-vi.mock("@/components/record/record-card-boundary", () => ({
-  RecordCardBoundary: (props: { children?: ReactNode }) => props.children ?? null,
+vi.mock("./business-status-card-boundary", () => ({
+  BusinessStatusCardBoundary: (props: { children?: ReactNode }) => props.children ?? null,
 }));
 
 const { default: AccountDashboardPage } = await import("./page");
@@ -899,5 +906,28 @@ describe("AccountDashboardPage — the business-status card's wiring (S-47d Task
     renderToStaticMarkup(await AccountDashboardPage(route()));
 
     expect(businessStatusCardProps.current).toMatchObject({ personaName: null });
+  });
+});
+
+/**
+ * S-47d Task 15 finding: `fallback={(reset) => <BusinessStatusCardError … />}` was passed straight
+ * from this Server Component into `RecordCardBoundary` ("use client"); a function cannot cross that
+ * boundary (React: "Functions cannot be passed directly to Client Components"), which crashed the
+ * real Next.js build the moment `router.refresh()` re-rendered the dashboard after a status change.
+ * Neither `renderToStaticMarkup` nor this file's own `RecordCardBoundary`/business-status-card mocks
+ * can see that crash (both bypass the real serialization check), so this is a SOURCE-text pin, not a
+ * render assertion — it is the cheapest check that can still fail if the fix is reverted.
+ */
+describe("AccountDashboardPage — the business-status card's boundary never gets a function prop across the Server→Client boundary (S-47d Task 15 finding)", () => {
+  const pageSrc = readFileSync(path.join(here, "page.tsx"), "utf8");
+  const boundarySrc = readFileSync(path.join(here, "business-status-card-boundary.tsx"), "utf8");
+
+  it("page.tsx never imports RecordCardBoundary directly — the fallback closure lives in the client wrapper instead (mutation: re-inline `import { RecordCardBoundary } from \"@/components/record/record-card-boundary\"` -> FAILS)", () => {
+    expect(pageSrc).not.toContain("@/components/record/record-card-boundary");
+    expect(pageSrc).toContain("./business-status-card-boundary");
+  });
+
+  it("business-status-card-boundary.tsx is a client module, so its fallback closure (built from `locale`, never a prop) runs entirely on the client (mutation: drop the \"use client\" directive -> FAILS)", () => {
+    expect(boundarySrc.trimStart().startsWith('"use client"')).toBe(true);
   });
 });

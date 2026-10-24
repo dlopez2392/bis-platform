@@ -35,9 +35,11 @@ import { CallsChartCard } from "./calls-chart-card";
 import { ActivityCard } from "./activity-card";
 import { ChecklistRow } from "./checklist-row";
 import { WorkRowCard } from "./work-row";
-// S-47d Task 11 (spec §5.6.2): the one switch's status, in its own boundary.
-import { RecordCardBoundary } from "@/components/record/record-card-boundary";
-import { BusinessStatusCard, BusinessStatusCardError, BusinessStatusCardSkeleton } from "./business-status-card";
+// S-47d Task 11 (spec §5.6.2): the one switch's status, in its own boundary. The boundary itself is
+// `BusinessStatusCardBoundary` (Task 15 finding), not `RecordCardBoundary` directly — its `fallback`
+// prop is a function, which cannot cross the Server→Client boundary from this Server Component.
+import { BusinessStatusCard, BusinessStatusCardSkeleton } from "./business-status-card";
+import { BusinessStatusCardBoundary } from "./business-status-card-boundary";
 
 // The activity card curates a small set of known event types out of a much
 // noisier raw ledger (CRM housekeeping, setup plumbing, …) — see
@@ -367,15 +369,12 @@ export default async function AccountDashboardPage({
             extended to the card), which is why this card alone among the
             dashboard's cards does its own `dbForRequest()` read rather than
             joining the Promise.all below. */}
-        <RecordCardBoundary
-          skeleton={<BusinessStatusCardSkeleton />}
-          fallback={(reset) => <BusinessStatusCardError locale={locale} onRetry={reset} />}
-        >
+        <BusinessStatusCardBoundary locale={locale} skeleton={<BusinessStatusCardSkeleton />}>
           <BusinessStatusCard
             accountId={accountId} timezone={timezone} locale={locale} pseudo={pseudo}
             isAgency={isAgency} role={role} personaName={voiceProfile?.persona_name ?? null}
           />
-        </RecordCardBoundary>
+        </BusinessStatusCardBoundary>
         {/* Above the KPI tiles, because it qualifies BOTH the row caption
             right below it ("Last 7 days" is seven of WHOSE days) and the
             work row that follows, which `bucketWork` measures against those
