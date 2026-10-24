@@ -67,7 +67,9 @@ const NAV_KEYWORDS: Record<string, string[]> = {
   // card, but the old word should still find this page.
   "/activity": ["history", "activity", "what went out", "sent", "waiting", "held", "skipped", "quiet hours", "usage", "log"],
   "/forms": ["lead form", "intake"],
-  "/calendar": ["booking", "availability", "hours"],
+  // "closed days"/"holiday"/"vacation"/"días cerrados"/"feriado"/"vacaciones" added S-47d (spec 5.6.3):
+  // the Closed days card.
+  "/calendar": ["booking", "availability", "hours", "closed days", "holiday", "vacation", "días cerrados", "feriado", "vacaciones"],
   "/tasks": ["task", "tasks", "to-do", "todo"],
   "/branding": ["logo", "colors", "theme"],
   // "hours"/"prices"/"services"/"horario"/"precios" added S-47c (spec 5.7): the Business hours and

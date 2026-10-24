@@ -210,7 +210,9 @@ export function BookingsList({
                 </p>
                 <ul className="divide-y divide-border">
                   {group.items.map((b) => (
-                    <li key={b.id} className="space-y-1.5 py-2.5">
+                    // S-47d (spec 5.5.1, 5.6.2, 5.6.3): the target "Cancel on the calendar" links to,
+                    // from the business-status card's and the Closed days card's per-range lists.
+                    <li key={b.id} id={`booking-${b.id}`} className="space-y-1.5 py-2.5">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm text-card-foreground">
                           {timeRange(b.starts_at, b.ends_at, timezone)}

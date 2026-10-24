@@ -161,6 +161,16 @@ describe("buildPaletteEntries", () => {
     }
   });
 
+  // S-47d Task 12 (spec 5.6.3): the Closed days card. All six words, in both languages
+  // (mutation: drop one → FAILS).
+  it("finds Calendar by closed days, holiday and vacation, in English and Spanish (mutation: drop one of the six → FAILS)", () => {
+    const entries = buildPaletteEntries(BASE, true, false);
+    const calendar = entries.find((e) => e.id === `nav:${BASE}/calendar`)!;
+    for (const word of ["closed days", "holiday", "vacation", "días cerrados", "feriado", "vacaciones"]) {
+      expect(calendar.keywords).toContain(word);
+    }
+  });
+
   it("finds the website assistant by the words an operator would type", () => {
     const entries = buildPaletteEntries(BASE, true, false);
     const voice = entries.find((e) => e.id === `nav:${BASE}/voice`)!;

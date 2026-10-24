@@ -12,8 +12,9 @@ import { requireAccountAccess } from "@/lib/auth";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
-import { fileClosureTodo, closureTodoDates } from "@/lib/business-status/closure-todo";
+import { fileClosureTodo } from "@/lib/business-status/closure-todo";
 import { addDays, dayKey, startOfDay } from "@/lib/business-status/status";
+import { formatClosedDayRange } from "@/lib/business-status/range-format";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -64,7 +65,9 @@ export async function addClosedDayAction(
   const existing = await listClosedDaysFrom(db, accountId, today);
   const overlap = existing.find((r) => r.starts_on <= to && r.ends_on >= from);
   if (overlap) {
-    const range = closureTodoDates(overlap.starts_on, overlap.ends_on, locale);
+    // Task 12 (orchestrator ruling, 2026-10-23): the ONE formatter the card itself uses for a range —
+    // never closureTodoDates's full-month form, so the sentence names the dates exactly as listed.
+    const range = formatClosedDayRange(overlap.starts_on, overlap.ends_on, locale);
     return { ok: false, error: t(m, "closedDays.error.overlap", locale, { range }) };
   }
 

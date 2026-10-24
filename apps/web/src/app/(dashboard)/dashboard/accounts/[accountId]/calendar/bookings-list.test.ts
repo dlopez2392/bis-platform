@@ -331,3 +331,13 @@ describe("the row's Cancel button goes through runCancelButton (F-048 I-1)", () 
     expect(leftover).not.toMatch(/setDialogOpen/);
   });
 });
+
+// S-47d Task 12 (spec 5.5.1, 5.6.2, 5.6.3): "Cancel on the calendar" links here with `#booking-{id}`
+// from the business-status card and the Closed days card — the row must carry that id to be a landing
+// target at all (mutation: drop the id -> FAILS).
+describe("BookingsList — the row's own anchor (S-47d)", () => {
+  it('each row carries id="booking-<id>" (mutation: drop the id -> FAILS)', () => {
+    const html = render({ ...BASE, id: "bk_42" });
+    expect(html).toContain('id="booking-bk_42"');
+  });
+});

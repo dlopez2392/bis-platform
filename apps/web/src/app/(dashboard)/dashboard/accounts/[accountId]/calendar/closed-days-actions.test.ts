@@ -109,11 +109,14 @@ describe("addClosedDayAction — each validation sentence", () => {
     expect(dbMocks.insertClosedDay).not.toHaveBeenCalled();
   });
 
-  it("overlap with an already-listed range, formatted as the card formats a range", async () => {
+  // Task 12 (orchestrator ruling, 2026-10-23): the overlap error's {range} is the ONE formatter the
+  // Closed days card itself uses (range-format.ts's formatClosedDayRange), not closureTodoDates's
+  // full-month form — so this sentence reads the dates exactly as the card lists them.
+  it("overlap with an already-listed range, formatted as the card formats a range (mutation: use closureTodoDates's full-month form → FAILS)", async () => {
     dbMocks.listClosedDaysFrom.mockResolvedValue([closedDayRow({ starts_on: "2027-06-12", ends_on: "2027-06-14" })]);
     const r = await addClosedDayAction(ACCOUNT, { from: "2027-06-13", to: "2027-06-20", reason: null }, "en");
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toBe(t(m, "closedDays.error.overlap", "en", { range: "June 12 – 14" }));
+    if (!r.ok) expect(r.error).toBe(t(m, "closedDays.error.overlap", "en", { range: "Jun 12 – 14" }));
     expect(dbMocks.insertClosedDay).not.toHaveBeenCalled();
   });
 
