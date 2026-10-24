@@ -131,8 +131,13 @@ export async function readHoursChain(db: SupabaseClient, accountId: string): Pro
   return { businessHours, calendarHours };
 }
 
+/** minors-1b item 5: the cap `listClosureAppointments` had none of. 200 is well past what any one
+ *  account's closure window (at most 14 days ahead, S7/S22, or one closed-day range at a time) should
+ *  ever book — a caller at the cap should treat its count as "at least this many", never as exact. */
+export const CLOSURE_APPOINTMENTS_LIMIT = 200;
+
 /** status = 'booked', starts_at in [fromIso, toIso), order starts_at, with the contact's first/last name
- *  (embed `contacts(first_name, last_name)`). Throws on error. */
+ *  (embed `contacts(first_name, last_name)`), capped at `CLOSURE_APPOINTMENTS_LIMIT`. Throws on error. */
 export async function listClosureAppointments(
   db: SupabaseClient, accountId: string, fromIso: string, toIso: string,
 ): Promise<ClosureAppointment[]> {
@@ -140,7 +145,8 @@ export async function listClosureAppointments(
     .select("id, contact_id, starts_at, ends_at, closure_kept_at, contacts(first_name, last_name)")
     .eq("account_id", accountId).eq("status", "booked")
     .gte("starts_at", fromIso).lt("starts_at", toIso)
-    .order("starts_at", { ascending: true });
+    .order("starts_at", { ascending: true })
+    .limit(CLOSURE_APPOINTMENTS_LIMIT);
   if (error) throw new Error(`listClosureAppointments failed: ${error.message}`);
   const rows = (data ?? []) as unknown as {
     id: string; contact_id: string; starts_at: string; ends_at: string; closure_kept_at: string | null;
