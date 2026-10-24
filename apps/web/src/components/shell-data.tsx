@@ -8,11 +8,26 @@ import { ACCOUNT_ROUTE_RE } from "@/lib/account-route";
 // shell-actions.ts's own doc comment for why this one read has to live in
 // the [accountId] segment rather than dashboard/layout.tsx, which is where
 // this provider itself mounts.
-import { getShellSnapshot, type ShellSnapshot } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
+import {
+  getShellSnapshot, type ShellBusinessStatus, type ShellSnapshot,
+} from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
 
 type ShellDataState = { accountId: string; snapshot: ShellSnapshot } | null;
 
-const ShellDataContext = createContext<ShellDataState>(null);
+type ShellDataContextValue = {
+  state: ShellDataState;
+  // S-47d Task 11: the switch's own menu applies a change locally, at once — the dashboard card and
+  // the topbar must agree the instant it does, without waiting for a background re-fetch. Lives beside
+  // `state`, not folded into it: the override outlives whichever snapshot was on screen when it was
+  // set, and is cleared the moment a FRESH snapshot for the active account lands (never a timer, never
+  // polling — DESIGN.md: "the shell is never polled").
+  override: ShellBusinessStatus | null;
+  setBusinessStatus: (s: ShellBusinessStatus) => void;
+};
+
+const ShellDataContext = createContext<ShellDataContextValue>({
+  state: null, override: null, setBusinessStatus: () => {},
+});
 
 /**
  * The shell's one background fetch per in-account navigation — replaces the
@@ -47,6 +62,7 @@ const ShellDataContext = createContext<ShellDataState>(null);
 export function ShellDataProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [state, setState] = useState<ShellDataState>(null);
+  const [override, setOverride] = useState<ShellBusinessStatus | null>(null);
 
   useEffect(() => {
     const accountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
@@ -54,7 +70,12 @@ export function ShellDataProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     getShellSnapshot(accountId)
       .then((snapshot) => {
-        if (!cancelled) setState({ accountId, snapshot });
+        if (!cancelled) {
+          setState({ accountId, snapshot });
+          // The fresh read REPLACES the local override outright, same navigation that fetched it —
+          // never reconciled against it, never kept around once a real snapshot answers again.
+          setOverride(null);
+        }
       })
       .catch(() => {
         // Client-leg failure (offline, the action route itself erroring)
@@ -66,7 +87,8 @@ export function ShellDataProvider({ children }: { children: ReactNode }) {
     };
   }, [pathname]);
 
-  return <ShellDataContext.Provider value={state}>{children}</ShellDataContext.Provider>;
+  const value: ShellDataContextValue = { state, override, setBusinessStatus: setOverride };
+  return <ShellDataContext.Provider value={value}>{children}</ShellDataContext.Provider>;
 }
 
 /**
@@ -79,10 +101,25 @@ export function ShellDataProvider({ children }: { children: ReactNode }) {
  * hidden value (`unreadTotal ?? 0`, `setup ?? { done: 0, total: 0 }`) — this
  * hook only ever answers "is there a snapshot for the account on screen
  * right now", never a partial one.
+ *
+ * `businessStatus` on the returned object is the local override when one is
+ * set, else the snapshot's own — the one field a caller never reads straight
+ * off `state.snapshot`. `setBusinessStatus` (S-47d Task 11) is the switch's
+ * own menu's write: it is ALWAYS the stable `setOverride` function, even
+ * before the first fetch resolves, so a menu mounted the instant the shell
+ * loads never calls `undefined`. `accountId` (S-47d Task 11) is this same
+ * already-matched id — the switch's menu needs it (every action it calls is
+ * scoped to an account), and it would otherwise have to re-derive it from
+ * `usePathname()` with its own copy of `ACCOUNT_ROUTE_RE`.
  */
-export function useShellData(): ShellSnapshot | null {
+export function useShellData():
+  (ShellSnapshot & { accountId: string; setBusinessStatus: (s: ShellBusinessStatus) => void }) | null {
   const pathname = usePathname();
-  const state = useContext(ShellDataContext);
+  const { state, override, setBusinessStatus } = useContext(ShellDataContext);
   const activeAccountId = pathname.match(ACCOUNT_ROUTE_RE)?.[1];
-  return state && state.accountId === activeAccountId ? state.snapshot : null;
+  if (!state || state.accountId !== activeAccountId) return null;
+  return {
+    ...state.snapshot, accountId: state.accountId,
+    businessStatus: override ?? state.snapshot.businessStatus, setBusinessStatus,
+  };
 }

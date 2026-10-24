@@ -1,16 +1,29 @@
 // apps/web/src/components/topbar-presence.test.ts
 import { describe, it, expect, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { onCallText, TopbarPresence } from "./topbar-presence";
+import { LocaleProvider } from "./locale-provider";
+import type { ShellBusinessStatus } from "@/app/(dashboard)/dashboard/accounts/[accountId]/shell-actions";
 
 // F-085 part 1 (spec §7.2): the snapshot TopbarPresence reads, set per test.
 // Mocked at the hook so no server action module is loaded.
 const shell = vi.hoisted(() => ({ snapshot: null as unknown }));
 vi.mock("@/components/shell-data", () => ({ useShellData: () => shell.snapshot }));
+
+// S-47d Task 11: TopbarPresence's OWN code decides whether to wrap the words in the menu at all
+// (`!isIdle && businessStatus?.canChange`) — it never calls BusinessStatusMenu when canChange is null.
+// Mocked here so this file tests ONLY that decision, not the menu's own rendering (business-status-
+// menu.test.ts's job): the mock just proves IT WAS CALLED, with the trigger content, via a marker
+// element a real `<button>` from the real component would also satisfy visually but this test can tell
+// apart unambiguously.
+vi.mock("@/components/business-status-menu", () => ({
+  BusinessStatusMenu: (props: { trigger: ReactNode }) =>
+    createElement("i", { "data-testid": "bsm-wrapped" }, props.trigger),
+}));
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(here, "topbar-presence.tsx"), "utf8");
@@ -137,5 +150,96 @@ describe("TopbarPresence and showCount", () => {
 
   it("idle with showCount true still says the week's count", () => {
     expect(render({ onCall: false, weekCount: 12, personaName: "Sofía", showCount: true })).toContain("12");
+  });
+});
+
+/**
+ * S-47d Task 11 (plan "The topbar forms", spec §5.6.1, S15): the one switch's own words replace the
+ * idle count when the business is not open, for everyone — and the indicator becomes the switch's own
+ * menu trigger only when `canChange` is set.
+ */
+function bstatus(
+  effective: ShellBusinessStatus["effective"], canChange: ShellBusinessStatus["canChange"],
+): ShellBusinessStatus {
+  return { effective, canChange, timezone: "America/Chicago", personaName: null, now: "2027-06-07T15:00:00.000Z" };
+}
+
+const CLOSED_TODAY: ShellBusinessStatus["effective"] = {
+  state: "closed_today", reopensAt: "2027-06-08T13:00:00.000Z", reopensTimeKnown: true,
+};
+const RUNNING_LATE_30: ShellBusinessStatus["effective"] = {
+  state: "running_late", lateMinutes: 30, endsAt: "2027-06-08T05:00:00.000Z",
+};
+const STORM_NO_DATE: ShellBusinessStatus["effective"] = { state: "storm", reopensAt: null, reopensTimeKnown: false };
+const OPEN: ShellBusinessStatus["effective"] = { state: "open", nextClosedDay: null };
+
+function renderWith(presence: object | null, businessStatus: ShellBusinessStatus | null, locale: "en" | "es" = "en") {
+  shell.snapshot = { unreadTotal: 0, setup: null, presence, businessStatus, accountId: "a1" };
+  const tree = createElement(TopbarPresence);
+  return renderToStaticMarkup(locale === "es" ? createElement(LocaleProvider, { locale: "es" } as never, tree) : tree);
+}
+
+describe("TopbarPresence — not open, for everyone (spec §5.6.1)", () => {
+  it("Closed today, English: full form carries the opens phrase, short form does not (no profile, no canChange: no button)", () => {
+    const html = renderWith(null, bstatus(CLOSED_TODAY, null));
+    expect(html).toContain("Closed today · opens 8 AM");
+    expect(html).toContain(">Closed today<");
+    expect(html).not.toContain("bsm-wrapped");
+  });
+
+  it("Closed today, Spanish: both forms through the catalogue's Spanish twin", () => {
+    const html = renderWith(null, bstatus(CLOSED_TODAY, null), "es");
+    expect(html).toContain("Cerrado hoy · abre a las 8 AM");
+    expect(html).toContain(">Cerrado hoy<");
+  });
+
+  it("Running about 30 min late, English and Spanish", () => {
+    expect(renderWith(null, bstatus(RUNNING_LATE_30, null))).toContain("Running about 30 min late");
+    expect(renderWith(null, bstatus(RUNNING_LATE_30, null), "es")).toContain("Con unos 30 min de retraso");
+  });
+
+  it("Closed for a storm (no date), short and full forms identical", () => {
+    const html = renderWith(null, bstatus(STORM_NO_DATE, null));
+    expect(html).toContain(">Closed for a storm<");
+  });
+
+  it("a Technician (canChange null) still sees the words, never a button — the policy decides who may act, never who may SEE (mutation: gate on canChange before rendering the words at all -> FAILS)", () => {
+    const html = renderWith(null, bstatus(CLOSED_TODAY, null));
+    expect(html).toContain("Closed today");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("bsm-wrapped");
+  });
+
+  it("an Owner or the agency (canChange \"all\") gets the switch's menu as the indicator's own trigger (mutation: always render plain words -> FAILS)", () => {
+    const html = renderWith(null, bstatus(CLOSED_TODAY, "all"));
+    expect(html).toContain("bsm-wrapped");
+    expect(html).toContain("Closed today");
+  });
+
+  it("Staff (canChange \"late_only\") ALSO gets the menu while running late", () => {
+    const html = renderWith(null, bstatus(RUNNING_LATE_30, "late_only"));
+    expect(html).toContain("bsm-wrapped");
+  });
+});
+
+describe("TopbarPresence — Open (spec §5.6.1)", () => {
+  it("with an enabled voice profile, Open is UNCHANGED — the idle count renders even when canChange is \"all\" (mutation: wrap the idle count in the menu too -> FAILS)", () => {
+    const html = renderWith({ onCall: false, weekCount: 3, personaName: "Sofía", showCount: true }, bstatus(OPEN, "all"));
+    expect(html).not.toContain("bsm-wrapped");
+    expect(html).toContain("this week");
+  });
+
+  it("no enabled profile (presence null) and canChange set: \"● Open\" as the menu's own trigger (mutation: render nothing -> FAILS)", () => {
+    const html = renderWith(null, bstatus(OPEN, "all"));
+    expect(html).toContain("bsm-wrapped");
+    expect(html).toContain(">Open<");
+  });
+
+  it("no enabled profile and no canChange (a Technician): nothing at all, as before this task", () => {
+    expect(renderWith(null, bstatus(OPEN, null))).toBe("");
+  });
+
+  it("no business-status read at all (the leg failed): degrades to today's behaviour exactly (nothing, no profile)", () => {
+    expect(renderWith(null, null)).toBe("");
   });
 });

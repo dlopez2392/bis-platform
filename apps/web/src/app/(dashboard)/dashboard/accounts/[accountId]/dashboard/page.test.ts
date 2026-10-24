@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { WorkRow } from "@bis/db";
 import { m } from "@/lib/messages";
@@ -21,11 +22,13 @@ import { CHECKLIST_CATALOGUE } from "@/lib/checklist-catalogue";
  * file only needs them to not throw.
  */
 
-const authFixture = vi.hoisted(() => ({ isAgency: true }));
+// `role` (S-47d Task 11): defaults to `null` so every pre-existing test (none of which set it) keeps
+// resolving exactly as before — only the business-status card reads it at all.
+const authFixture = vi.hoisted(() => ({ isAgency: true, role: null as "owner" | "staff" | "technician" | null }));
 // Mis preferencias: no stored choice, so the page keeps its existing locale.
 vi.mock("@/lib/preferences/person-prefs", () => ({ getPersonPrefs: async () => ({ language: null, theme: null }) }));
 vi.mock("@/lib/auth", () => ({
-  requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency }),
+  requireNotTechnician: async () => ({ userId: "user_1", isAgency: authFixture.isAgency, role: authFixture.role }),
 }));
 
 const dbFixture = vi.hoisted(() => ({
@@ -101,6 +104,15 @@ const dbMocks = vi.hoisted(() => ({
   // actually CALL this (not merely coincide with it) — see the "calls
   // brandDisplayName" test below.
   brandDisplayName: vi.fn((b: { brandName: string | null }) => b.brandName?.trim() || ""),
+  // S-47d Task 11: `./business-status-card` is mocked out below (same idiom as CallsChartCard/
+  // ActivityCard — its own wiring, not its markup, is this file's concern), but it still imports
+  // these five at module scope; this bare factory has no `importOriginal`, so each name must be
+  // listed or the import resolves to `undefined`.
+  getBusinessStatusRow: vi.fn(),
+  listClosedDaysFrom: vi.fn(),
+  readHoursChain: vi.fn(),
+  listClosureAppointments: vi.fn(),
+  countHeldByBooking: vi.fn(),
 }));
 // mergeChecklist (@/lib/checklist-catalogue) is NOT mocked — the real
 // CHECKLIST_CATALOGUE (its length read below, never hard-coded here) is
@@ -129,6 +141,11 @@ vi.mock("@bis/db", () => ({
   listAccountWork: (...a: unknown[]) => dbMocks.listAccountWork(...a),
   sumOpenOpportunities: (...a: unknown[]) => dbMocks.sumOpenOpportunities(...a),
   brandDisplayName: (...a: Parameters<typeof dbMocks.brandDisplayName>) => dbMocks.brandDisplayName(...a),
+  getBusinessStatusRow: (...a: unknown[]) => dbMocks.getBusinessStatusRow(...a),
+  listClosedDaysFrom: (...a: unknown[]) => dbMocks.listClosedDaysFrom(...a),
+  readHoursChain: (...a: unknown[]) => dbMocks.readHoursChain(...a),
+  listClosureAppointments: (...a: unknown[]) => dbMocks.listClosureAppointments(...a),
+  countHeldByBooking: (...a: unknown[]) => dbMocks.countHeldByBooking(...a),
 }));
 
 // Review fix: this used to mock the card down to `() => null`, so nothing
@@ -185,6 +202,27 @@ vi.mock("./work-row", () => ({
     workRowProps.current = props;
     return null;
   },
+}));
+
+// S-47d Task 11: the business-status card's own reads/markup are business-status-card.test.ts's job
+// (same idiom as CallsChartCard/ActivityCard above) — captured rather than rendered, so this file
+// asserts exactly what page.tsx computed and handed it. `RecordCardBoundary` is mocked too: it is a
+// real "use client" component that calls `useRouter()` unconditionally, which throws outside a
+// mounted Next.js router (`invariant expected app router to be mounted`) — a passthrough here keeps
+// this file's own concern (page-level wiring) from needing Next's router context at all.
+const businessStatusCardProps = vi.hoisted(() => ({
+  current: null as { accountId: string; timezone: string; isAgency: boolean; role: string | null; personaName: string | null } | null,
+}));
+vi.mock("./business-status-card", () => ({
+  BusinessStatusCard: (props: typeof businessStatusCardProps.current) => {
+    businessStatusCardProps.current = props;
+    return null;
+  },
+  BusinessStatusCardSkeleton: () => null,
+  BusinessStatusCardError: () => null,
+}));
+vi.mock("@/components/record/record-card-boundary", () => ({
+  RecordCardBoundary: (props: { children?: ReactNode }) => props.children ?? null,
 }));
 
 const { default: AccountDashboardPage } = await import("./page");
@@ -824,5 +862,42 @@ describe("AccountDashboardPage — the greeting never names the agency's private
     await AccountDashboardPage(route());
 
     expect(dbMocks.brandDisplayName).toHaveBeenCalledWith(expect.objectContaining({ brandName: "Rio Roofing" }));
+  });
+});
+
+/**
+ * S-47d Task 11 (plan "The dashboard card", spec §5.6.2): page.tsx hands the business-status card
+ * the account's own id, its already-resolved zone (never a second read), the agency/role the guard
+ * needs, and the SAME persona name the calls/activity cards already get — never a sixth @bis/db call.
+ * Captured rather than rendered (businessStatusCardProps, above), the same idiom as workRowProps/
+ * checklistRowProps: the card's own reads and markup are business-status-card.test.ts's job.
+ */
+describe("AccountDashboardPage — the business-status card's wiring (S-47d Task 11)", () => {
+  it("hands the card this account's id, zone and persona (mutation: pass a hard-coded accountId or drop personaName -> FAILS)", async () => {
+    dbFixture.timezone = "America/Chicago";
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, persona_name: "Max" });
+
+    renderToStaticMarkup(await AccountDashboardPage(route("acct9")));
+
+    expect(businessStatusCardProps.current).toMatchObject({
+      accountId: "acct9", timezone: "America/Chicago", personaName: "Max",
+    });
+  });
+
+  it("hands the card isAgency and role from the SAME auth read the rest of the page uses (mutation: destructure only isAgency, drop role -> FAILS)", async () => {
+    authFixture.isAgency = false;
+    authFixture.role = "staff";
+
+    renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(businessStatusCardProps.current).toMatchObject({ isAgency: false, role: "staff" });
+  });
+
+  it("personaName is null with no enabled voice profile, never assumed", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+
+    renderToStaticMarkup(await AccountDashboardPage(route()));
+
+    expect(businessStatusCardProps.current).toMatchObject({ personaName: null });
   });
 });

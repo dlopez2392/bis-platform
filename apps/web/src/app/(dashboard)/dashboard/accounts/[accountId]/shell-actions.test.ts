@@ -17,7 +17,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * providably unchanged by either read.
  */
 
-const dbMocks = vi.hoisted(() => ({ sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn(), hasActiveCallSince: vi.fn() }));
+// S-47d Task 11: the shell's fourth leg (readBusinessStatus) reads these three directly, beside the
+// zone lookup (readPresence's own "accounts" table, shared below) and its OWN getVoiceProfile call
+// (never the one readPresence already made — each leg is fault-isolated on its own read, same reasoning
+// shell-actions.ts's own doc comment gives for not sharing the setup leg's profile read with presence's).
+const dbMocks = vi.hoisted(() => ({
+  sumUnreadCount: vi.fn(), getVoiceProfile: vi.fn(), hasActiveCallSince: vi.fn(),
+  getBusinessStatusRow: vi.fn(), listClosedDaysFrom: vi.fn(), readHoursChain: vi.fn(),
+}));
 // D-075 review follow-up: `serviceDb()` used to return the fixed
 // `{ __serviceDb: true }` placeholder, which has no `.from` — every test in
 // this file reached `readPresence` through a `getVoiceProfile` that resolved
@@ -71,6 +78,15 @@ vi.mock("@/lib/voice/presence", () => ({
 }));
 
 import { getShellSnapshot } from "./shell-actions";
+
+// Clean defaults for the three new reads on EVERY test in this file (not just the ones below that
+// exercise them), so a describe written before this task (readSetupProgress has no beforeEach of its
+// own) never logs a spurious "business status read failed" from an unset mock resolving to undefined.
+beforeEach(() => {
+  dbMocks.getBusinessStatusRow.mockReset().mockResolvedValue(null);
+  dbMocks.listClosedDaysFrom.mockReset().mockResolvedValue([]);
+  dbMocks.readHoursChain.mockReset().mockResolvedValue({ businessHours: null, calendarHours: null });
+});
 
 const NO_FAILURES = {
   account: false, calendar: false, profile: false,
@@ -182,7 +198,114 @@ describe("readPresence (via getShellSnapshot) — the account's own zone reaches
     const snapshot = await getShellSnapshot("a1");
 
     expect(snapshot.presence).toMatchObject({ personaName: "Max" });
-    expect(dbMocks.getVoiceProfile).toHaveBeenCalledTimes(1);
+    // S-47d Task 11: readBusinessStatus (the shell's fourth leg) makes its OWN getVoiceProfile call —
+    // never this leg's — so the count moved from 1 to 2 the moment that leg was added. Each leg reads
+    // its own persona for the same fault-isolation reason the setup leg's own profile read is never
+    // shared with this one.
+    expect(dbMocks.getVoiceProfile).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * S-47d Task 11 (plan "The shell leg", spec §5.6.1): `readBusinessStatus`, the shell's fourth
+ * fault-isolated leg — the topbar's and the dashboard card's one source for "is the account open right
+ * now, and who may change that". `authFixture` is reset here because the describe above left it on
+ * whatever its last test set.
+ */
+describe("readBusinessStatus (via getShellSnapshot) — S-47d Task 11", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true; authFixture.role = null;
+    mockGathered();
+    dbMocks.sumUnreadCount.mockReset().mockResolvedValue(0);
+    dbMocks.getVoiceProfile.mockReset().mockResolvedValue(null);
+    dbMocks.hasActiveCallSince.mockReset().mockResolvedValue(false);
+    voicePresenceMock.mockReset().mockResolvedValue({ onCall: false, weekCount: 0 });
+    dbForRequestMock.mockClear();
+    dbFixture.accountRow = { timezone: "America/Chicago" };
+    dbFixture.accountError = null;
+  });
+
+  it("an Owner reads canChange \"all\" while the business is open", async () => {
+    authFixture.isAgency = false; authFixture.role = "owner";
+
+    const snapshot = await getShellSnapshot("a1");
+
+    expect(snapshot.businessStatus).not.toBeNull();
+    expect(snapshot.businessStatus!.canChange).toBe("all");
+    expect(snapshot.businessStatus!.effective).toMatchObject({ state: "open" });
+  });
+
+  it("the agency also reads canChange \"all\"", async () => {
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.businessStatus!.canChange).toBe("all");
+  });
+
+  it("Staff read canChange \"late_only\" while the business is running late (mutation: drop the role branch -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "staff";
+    dbMocks.getBusinessStatusRow.mockResolvedValue({
+      account_id: "a1", state: "running_late", late_minutes: 30,
+      until: "2099-01-01T00:00:00.000000+00:00", set_by: "user_1", set_at: "2026-01-01T00:00:00.000000+00:00",
+    });
+
+    const snapshot = await getShellSnapshot("a1");
+
+    expect(snapshot.businessStatus!.canChange).toBe("late_only");
+    expect(snapshot.businessStatus!.effective).toMatchObject({ state: "running_late", lateMinutes: 30 });
+  });
+
+  it("Staff read canChange null during a closure (mutation: return \"late_only\" unconditionally -> FAILS)", async () => {
+    authFixture.isAgency = false; authFixture.role = "staff";
+    dbMocks.getBusinessStatusRow.mockResolvedValue({
+      account_id: "a1", state: "closed_today", late_minutes: null,
+      until: "2099-01-01T00:00:00.000000+00:00", set_by: "user_1", set_at: "2026-01-01T00:00:00.000000+00:00",
+    });
+
+    const snapshot = await getShellSnapshot("a1");
+
+    expect(snapshot.businessStatus!.canChange).toBeNull();
+    expect(snapshot.businessStatus!.effective).toMatchObject({ state: "closed_today" });
+  });
+
+  it("a Technician reads canChange null (refused the role reason)", async () => {
+    authFixture.isAgency = false; authFixture.role = "technician";
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.businessStatus!.canChange).toBeNull();
+  });
+
+  it("carries the account's persona name independently of whether the voice profile is ENABLED (SD19: an account with no voice profile still has the switch, but one WITH a disabled profile still names it)", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: false, persona_name: "Rio" });
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.businessStatus!.personaName).toBe("Rio");
+    // Presence itself stays null for a disabled profile (readPresence's own gate, unchanged).
+    expect(snapshot.presence).toBeNull();
+  });
+
+  it("personaName is null when the account has no voice profile at all", async () => {
+    dbMocks.getVoiceProfile.mockResolvedValue(null);
+    const snapshot = await getShellSnapshot("a1");
+    expect(snapshot.businessStatus!.personaName).toBeNull();
+  });
+
+  it("every read is scoped to the route's own accountId (second-account case)", async () => {
+    await getShellSnapshot("acct_two");
+    expect(dbMocks.getBusinessStatusRow.mock.calls[0]![1]).toBe("acct_two");
+    expect(dbMocks.listClosedDaysFrom.mock.calls[0]![1]).toBe("acct_two");
+    expect(dbMocks.readHoursChain.mock.calls[0]![1]).toBe("acct_two");
+  });
+
+  it("a failing status leg answers businessStatus: null while the other three legs still answer (mutation: let the throw escape the leg's own try/catch -> the whole snapshot promise rejects instead)", async () => {
+    dbMocks.getBusinessStatusRow.mockRejectedValue(new Error("business_status read failed"));
+    dbMocks.getVoiceProfile.mockResolvedValue({ enabled: true, persona_name: "Rio" });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const snapshot = await getShellSnapshot("a1");
+
+    expect(snapshot.businessStatus).toBeNull();
+    expect(snapshot.setup).not.toBeNull();
+    expect(snapshot.presence).not.toBeNull();
+    expect(typeof snapshot.unreadTotal).toBe("number");
+    expect(errSpy.mock.calls.flat().map(String).join(" ")).toContain("a1");
+    errSpy.mockRestore();
   });
 });
 
