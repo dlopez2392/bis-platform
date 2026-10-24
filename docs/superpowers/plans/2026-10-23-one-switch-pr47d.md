@@ -75,7 +75,7 @@ The SQL in Task 1 Step 4 was applied, exactly as printed there, to the plan writ
   - Account B's Owner inserting into account A is refused 42501, with and without `returning`.
   - With `closed_days_owner_insert` stripped of its `account_id` clause, the `returning` insert is STILL refused (by the read policy), but the plain insert goes through (`rows_in_a` = 1). That proves finding 2: only the plain form tests the insert policy.
 - **Bytes:** `grep -ci "security definer"` now prints `0`.
-- **md5:** `0c6ed6130fbdd3fd18d92a7429512a35`.
+- **md5:** `cec0b2aa566df2ab6b87ca26dea08831`.
 
 Read off it:
 - **Client-write digest:** `pre` = `51|0dd3e2d7e19f3f3649a893cfd9967d94` (the literal at `packages/db/src/test/proposals-drop.test.ts:98`). `post` = **`52|b66203ca5d355155540b520af510d120`**, exactly the value spec §4.1 computed.
@@ -111,7 +111,7 @@ Read off it:
   - `cascade` only in the two `on delete cascade` lines;
   - no `''` at all;
   - no apostrophe in any `--` line or comment string.
-- **md5 of the plan writer's file (fix round):** `0c6ed6130fbdd3fd18d92a7429512a35`. The implementer's file must match it if copied byte for byte. The first run's `d8655ef3…` is superseded.
+- **md5 of the plan writer's file (fix round):** `cec0b2aa566df2ab6b87ca26dea08831`. The implementer's file must match it if copied byte for byte. The first run's `d8655ef3…` and the first fix round's `0c6ed613…` are superseded (the second fix round changed two comments only: a dated storm's `until` is the back-on date's midnight).
 - The replica was stopped afterwards.
 
 ---
@@ -507,7 +507,7 @@ Rules (spec §5.1 plus SD3 and SD6):
   - `open` → null.
   - `closed_today` → `startOfDay(addDays(today, 1))`. D12: the closure window ends at midnight; the reopening that is said is the reader's, above.
   - `running_late` → `startOfDay(addDays(today, 1))`.
-  - `storm` with `backOn` → `reopeningFrom(startOfDay(backOn), hours, tz, []).at`.
+  - `storm` with `backOn` → `startOfDay(backOn)`. The window ends at local midnight starting the back-on date (orchestrator ruling, 2026-10-23, under D3 and D12; spec S3). The reopening said is `effectiveStatus`'s `reopeningFrom(until, …)`.
   - `storm` with `backOn` null → null.
 - **`slotClosures`:**
   - `closedDayKeys` is every date key of every range given.
@@ -1399,9 +1399,12 @@ describe("0097 RLS: closed days are the Owner's (D1, unchanged by D8)", () => {
     withRollback(async (c) => {
       const a = await seed(c, "cd_xa"); const b = await seed(c, "cd_xb");
       await actAsMember(c, b.accountId, b.orgId, "owner");
+      // A refused statement aborts the transaction (25P02 on the next one): the savepoint keeps it usable.
+      await c.query("savepoint p");
       await expect(c.query(
         "insert into public.closed_days (account_id, starts_on, ends_on) values ($1, current_date + 3, current_date + 3)",
         [a.accountId])).rejects.toMatchObject({ code: "42501" });
+      await c.query("rollback to savepoint p");
       await actAsOwner(c);
       expect((await c.query("select count(*)::int as n from public.closed_days where account_id = $1", [a.accountId])).rows)
         .toEqual([{ n: 0 }]);
@@ -1493,13 +1496,22 @@ describe("0097 functions, comments, teardown", () => {
 ```
 
 - If a role case reads `0` where a row is expected, check the seed is `client_access_enabled = true` (`app.current_account_id()` is NULL otherwise, `0066_staff_and_roles.sql:82-83`) before touching the policy.
+- **One refused statement per transaction, unless a savepoint guards it** (plan re-review, 2026-10-23). A refused statement aborts the transaction, so any later statement raises 25P02 "current transaction is aborted", even `actAsOwner`'s `reset role` (`db.ts:45`). The audit:
+  - Every case that runs anything after an expected refusal wraps the refusal in `savepoint p` … `rollback to savepoint p`:
+    - the `until` bounds;
+    - the window;
+    - the coherent/kind pair;
+    - the client-columns loop;
+    - the cross-account plain insert, fixed in this round.
+  - Every other refusal is the case's last statement.
+  - Keep it that way in any case you add.
 - The comments case uses `''` in a TEST file. That is fine: the zero-`''` rule binds the migration only.
 
 - [ ] **Step 3: Run on `pre` to verify it fails.** `export SUPABASE_DB_URL=postgres://postgres@localhost:55471/pre; node node_modules/vitest/vitest.mjs run src/test/one-switch-schema.test.ts`.
   - Expected: every case FAILS except two, the teardown-list case and the 19-cell guard.
   - Record the counts.
 
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0097_one_switch.sql`. Copy this text byte for byte; the plan writer's copy has md5 `0c6ed6130fbdd3fd18d92a7429512a35`:
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0097_one_switch.sql`. Copy this text byte for byte; the plan writer's copy has md5 `cec0b2aa566df2ab6b87ca26dea08831`:
 
 ```sql
 -- 0097_one_switch.sql - the one switch (open, closed today, running late, storm) and planned closed days
@@ -1517,8 +1529,8 @@ describe("0097 functions, comments, teardown", () => {
 --   public.business_status  one row per account, absent = open. state is open, closed_today,
 --     running_late or storm; late_minutes (15, 30, 60, or 120 for over an hour) only while running late;
 --     until is when the state ends by itself (expiry is computed on read, no cron): midnight in the account
---     zone for closed today (owner decision D12) and running late, the first opening of the back-on date
---     for a dated storm, NULL for open and for a storm until further notice. The reopening said to
+--     zone for closed today (owner decision D12) and running late, midnight starting the back-on date for
+--     a dated storm, NULL for open and for a storm until further notice. The reopening said to
 --     callers is computed on read from the hours. set_by and set_at are stamped by a trigger from the
 --     token, never taken from the request.
 --   public.closed_days  planned whole-day closures: a date or a range of at most 92 days, with an
@@ -1772,7 +1784,7 @@ comment on table public.business_status is
 comment on column public.business_status.account_id is 'The account this switch belongs to. Written once, by ensureBusinessStatusRow (service_role).';
 comment on column public.business_status.state is 'open, closed_today, running_late or storm. Written by setBusinessStatusAction and its Undo through the signed-in client.';
 comment on column public.business_status.late_minutes is 'How far behind while running late: 15, 30, 60, or 120 for over an hour (D11). NULL in every other state.';
-comment on column public.business_status.until is 'When the state ends by itself, computed by the server when the switch is set: midnight at the end of the day in the account zone for closed_today (owner decision D12) and for running_late, the first opening of the back-on date for a dated storm. NULL for open and for a storm until further notice. The reopening said to callers is computed on read from the hours.';
+comment on column public.business_status.until is 'When the state ends by itself, computed by the server when the switch is set: midnight at the end of the day in the account zone for closed_today (owner decision D12) and for running_late, midnight starting the back-on date in the account zone for a dated storm. NULL for open and for a storm until further notice. The reopening said to callers is computed on read from the hours.';
 comment on column public.business_status.set_by is 'The Clerk user id from the token of whoever set it, or system for a server write. Stamped by app.business_status_stamp; anything sent is ignored.';
 comment on column public.business_status.set_at is 'When it was last set. Stamped by app.business_status_stamp; the Undo compares it (compare-and-set).';
 comment on table public.closed_days is
@@ -1884,7 +1896,7 @@ comment on column public.bookings.closure_kept_at is
     - `grep -c "''" f` → `0`;
     - `grep -ci "security definer" f` → `0`;
     - `grep -n "search_path" f` → the two header comment lines plus exactly three `language plpgsql set search_path = pg_catalog, pg_temp as` lines.
-  - Record `md5sum` of the file. It equals `0c6ed6130fbdd3fd18d92a7429512a35` if nothing changed. If it differs, say what changed and why.
+  - Record `md5sum` of the file. It equals `cec0b2aa566df2ab6b87ca26dea08831` if nothing changed. If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green).
 
@@ -2222,7 +2234,15 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - `coversAppointment` of a Saturday 09:00 appointment → `{ covered: false }`;
   - and the reopening said is `reopensAt` = Monday 08:00 CDT, `2027-06-07T13:00:00.000Z`. The words still follow the hours chain; only the window changed.
 - **`untilFor` Running late at 2027-06-01 15:00Z** → `2027-06-02T05:00:00.000Z`.
-- **`untilFor` Storm `backOn: "2027-06-07"` (a Monday)** → `2027-06-07T13:00:00.000Z`. `backOn` null → null.
+- **`untilFor` Storm `backOn: "2027-06-07"` (a Monday)** → `2027-06-07T05:00:00.000Z` (Monday 00:00 CDT, the window's end). The `effectiveStatus` of that row has `reopensAt` = Monday 08:00 CDT, `2027-06-07T13:00:00.000Z` (what is said). `backOn` null → null.
+- **A storm back on a day the hours chain has closed** (orchestrator ruling, 2026-10-23):
+  - Setup: business hours `H` (Mon–Fri), calendar `CAL` (Sat 09:00–13:00), Storm set Wednesday 2027-06-02 10:00 CDT with `backOn: "2027-06-05"` (a Saturday).
+  - `untilFor` → `2027-06-05T05:00:00.000Z` (Saturday 00:00 CDT).
+  - At Saturday 08:00 CDT the row has expired and reads open.
+  - `slotClosures` at Wednesday → `blockedBefore` = that midnight, so `closedOut` of Saturday 09:00 (`2027-06-05T14:00:00.000Z`) is false.
+  - `coversAppointment` of a Saturday 09:00 appointment → `{ covered: false }`.
+  - The reopening said on Wednesday is Saturday's first opening in the chain, which is `H`'s: Monday 08:00, `2027-06-07T13:00:00.000Z`.
+  - Mutation: the old `reopeningFrom(startOfDay(backOn), hours, …)` `until` (Monday 08:00) → the slot and cover assertions FAIL.
 - **`reopeningFrom`:**
   - with business hours;
   - with only calendar hours (`hoursChain(null, CAL)`);
@@ -2263,7 +2283,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - an open-ended storm → `endsAt: null`.
 - **`closureListWindow`** (S7, S22):
   - Closed today at 10:00 → `to` = tonight's midnight, `capped: false`;
-  - a Storm set Monday 2027-06-07 10:00 CDT with `backOn` Thursday 2027-06-10 → `to` = Thursday's first opening with `H`, `2027-06-10T13:00:00.000Z`, `capped: false`;
+  - a Storm set Monday 2027-06-07 10:00 CDT with `backOn` Thursday 2027-06-10 → `to` = Thursday 00:00 CDT, `2027-06-10T05:00:00.000Z` (the back-on midnight), `capped: false`;
   - an open-ended storm → `to` = `now + 14 days` exactly, `capped: true`;
   - a closed day today ending in 20 days → `to` = `now + 14 days`, `capped: true`;
   - open and Running late → null.
@@ -2328,6 +2348,7 @@ export async function readSlotClosures(db: ReturnType<typeof serviceDb>, account
 **Tests:**
 - **`slots.test.ts`, new `describe("closures (S-47d)")`:**
   - Each closure drops exactly its slots: a closed day drops that day only; Closed today drops the rest of today and nothing after midnight (D12); an open-ended storm drops all; Running late 30 drops only today's slots starting within 30 minutes.
+  - **A storm back on Saturday** (orchestrator ruling, 2026-10-23): the same Mon–Fri business hours, calendar open Saturday, a Storm set Wednesday with `backOn` Saturday → Saturday's 09:00 slot is offered and `bookableRange` accepts it. Mutation: the reopening-based `until` → FAILS.
   - **D12's Saturday case:** a calendar open Saturday 09:00–13:00, the account's business hours Monday to Friday, Closed today set Friday at 10:00 → Saturday's 09:00 slot is offered AND `bookableRange` accepts it. Mutation: `blockedBefore` = the reopening (Monday 08:00) → FAILS.
   - For each, `bookableRange` returns null for exactly those starts and the original range for the others.
   - **The invariant case:** for each closure fixture, every slot `computeSlots` offers passes `bookableRange`, and a dropped slot does not.
@@ -2773,6 +2794,7 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
     - kept → send;
     - kept, the appointment ENDED three days ago, under a closed-day range that started four days ago and ends tomorrow (a multi-day closure still covering it) → send. Unkept, the same appointment → held. Mutation: read Keep from a loader window of two days → the kept case FAILS (SD20, fix-round item 3);
     - Closed today: an appointment at 23:30 tonight → held until midnight at the latest; an appointment at 09:00 tomorrow → not covered, so it sends (D12);
+    - a Storm back on Saturday, with business hours Mon–Fri and the calendar open Saturday: a Saturday 09:00 appointment's reminder is not held (not covered: the window ends at Saturday 00:00). Mutation: the reopening-based `until` → FAILS;
     - not covered → send;
     - a cover that ended at or before `now` → send (SD6; mutation: drop that branch → FAILS);
     - deadline passed → skipped `"Not sent: the business was closed for this appointment"`;
@@ -2963,7 +2985,7 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
 - **Its reads** (on the page's `dbForRequest()`): zone, row, closed days, hours chain. When not open (S22, the orchestrator's ruling on finding 5):
   - `listClosureAppointments(w.from, w.to)`, with `w = closureListWindow(...)` (Task 4). It is the same function the To-do filer uses (Task 8), so the card and the To-do agree. `windowEnd` is the closure's window end:
     - Closed today → `until`, tonight's midnight (D12);
-    - a dated storm → its `until`;
+    - a dated storm → its `until` (the back-on date's midnight);
     - a closed day → the start of the day after its last date;
     - an open-ended storm → none, so the 14-day cap applies;
   - each row is kept only when `coversAppointment` covers it (so one open day between two closed ranges is excluded);

@@ -53,7 +53,9 @@ Fixed by the owner (2026-10-23):
   account's zone. Running late ends at the end of today, or when someone taps Open. Storm lasts until someone
   taps Open; an optional "back on" date reopens it that morning, at the first opening of that date. Expiry
   is computed on read: `until` is stored and compared with now. No cron is needed for the state itself.
-  (Closed today's end is amended by D12: its window ends at midnight; the next opening is what is said.)
+  (Closed today's end is amended by D12: its window ends at midnight; the next opening is what is said. A
+  storm's back-on window ends likewise at local midnight starting the back-on date, the orchestrator ruling of
+  2026-10-23 under D3 and D12; the first opening of that date is what is said, S3.)
 - **D4 Running late.** The owner picks about 15, 30 or 60 minutes, or "over an hour". Sofía (phone and chat)
   tells callers asking about today's visits "running about N minutes behind". Booking stays open, but
   today's slots that start within the delay are hidden. No texts go out on their own.
@@ -100,7 +102,11 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   days (5.1). After midnight the row has expired and reads as open (D3: expiry on read).
 - **S2 "Over an hour" is stored as 120 minutes**: it hides the next two hours of today's slots, and Sofía
   says "more than an hour" (the window confirmed by the owner, D11).
-- **S3 A storm's back-on date** is tomorrow at the earliest and 92 days ahead at the latest.
+- **S3 A storm's back-on date** is tomorrow at the earliest and 92 days ahead at the latest. Its WINDOW ends at
+  local midnight starting that date (`until`; orchestrator ruling, 2026-10-23, under D3 and D12), so a back-on
+  date that is no open day in the hours chain (business hours Monday to Friday, the calendar open Saturday,
+  back on Saturday) never extends the block past it: Saturday's slots are offered and its reminders are not
+  held. What is said and shown is the reopening computed on read from `until` through the hours chain.
 - **S4 A closed-day range** is at most 92 days long and must END within 12 months; it may not start in the
   past or overlap another range (the action refuses an overlap; the database does not).
 - **S5 The write path** follows the calendars precedent: the server creates the account's one
@@ -411,8 +417,8 @@ zone's, never the server's.
   `ends_on` at 00:00.
 - **`untilFor(change, hours, timezone, now)`**, used only when the switch is SET (5.2): Closed today → the
   start of tomorrow in the zone (D12: the window ends at midnight); Running late → the start of tomorrow (the
-  end of today); Storm with a back-on date `D` → `reopeningFrom(start of D, hours, timezone, [])`; Storm
-  without → null; Open → null. (No `closedDays` parameter: none of the changes reads them, plan SD13.)
+  end of today); Storm with a back-on date `D` → the start of `D` in the zone (S3: the window ends at that
+  midnight; the reopening said is the reader's, from `until`); Storm without → null; Open → null. (No `closedDays` parameter: none of the changes reads them, plan SD13.)
 - **`slotClosures(input)`**, for the slot engine: `{ closedDayKeys, blockedBefore, blockAll, lateBefore }`
   from the row in force and the ranges (5.3). For Closed today `blockedBefore` is the stored `until`, so only
   the rest of today's times are refused (D12).
@@ -420,7 +426,7 @@ zone's, never the server's.
   or a dated Storm in force, `startsAt` in `[row.set_at, row.until)`; an open-ended Storm, `startsAt >=
   row.set_at`; a closed day, `startsAt` on one of its dates. Running late covers nothing (D4: booking stays
   open, nothing is held). Returns the instant the window ends: `row.until` (Closed today's midnight; a dated
-  storm's first opening), the start of the day after the range's last date, or null for an open-ended storm.
+  storm's back-on midnight, S3), the start of the day after the range's last date, or null for an open-ended storm.
   A cover whose window has already ended at `now` holds nothing (plan SD6).
 - **`statusCode(effective)`**: S6's code for `calls.business_status`.
 
