@@ -129,6 +129,14 @@ vi.mock("@/lib/voice/modules/events", async (importOriginal) => ({
   VERSION: 7,
 }));
 
+// minors-1b item 6: a passthrough spy (dashboard/layout.test.ts's own precedent on requestLocale) — the
+// real effectiveStatusOrUnknown still runs, so every other test's prompt text is unchanged; this one
+// alone asks whether it was called at ALL on a failed status read.
+vi.mock("@/lib/business-status/status", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/business-status/status")>();
+  return { ...actual, effectiveStatusOrUnknown: vi.fn(actual.effectiveStatusOrUnknown) };
+});
+
 import { POST } from "./route";
 import { signRenderToken, RENDER_TOKEN_FIELD, HONEYPOT_FIELD } from "@/lib/forms/guards";
 import {
@@ -136,6 +144,7 @@ import {
   CONCIERGE_MAX_TURNS, CONCIERGE_MAX_MESSAGE_CHARS, CONCIERGE_MAX_REPLY_TOKENS,
 } from "@/lib/concierge/guards";
 import { conciergeStrings } from "@/lib/concierge/strings";
+import { effectiveStatusOrUnknown } from "@/lib/business-status/status";
 
 const PUBLIC_ID = "abc123abc123";
 const PROFILE = {
@@ -1690,6 +1699,19 @@ describe("POST /api/concierge/[publicId]/turn — today's status and the closed 
     const res = await firstTurn();
     expect(res.status).toBe(200);
     expect(sentToModel().messages[0]!.content).not.toContain("TODAY:");
+  });
+
+  // minors-1b item 6: today's prompt text is unaffected either way (effectiveStatusOrUnknown({row:
+  // null, ...}) already reads "open", and todayLine("open") is already null) — but a failed read must
+  // never be folded into "no row" and handed to effectiveStatusOrUnknown as if it were one; it must
+  // short-circuit to effective=null directly, the same FAILED-marker shape api/voice/incoming/route.ts
+  // already uses. This is the one check that tells the two shapes apart.
+  it("a status read that throws skips effectiveStatusOrUnknown entirely — never folded into row: null (mutation: .catch(() => null) -> FAILS)", async () => {
+    dbFns.getBusinessStatusRow.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
+    vi.mocked(effectiveStatusOrUnknown).mockClear();
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(effectiveStatusOrUnknown).not.toHaveBeenCalled();
   });
 
   // Task 10 review (orchestrator ruling, S17 extended): the status row read can succeed (open) while the

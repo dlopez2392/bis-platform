@@ -40,7 +40,7 @@
 import { NextResponse, after } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy imports in the handler below).
-import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow } from "@bis/db";
+import type { serviceDb as serviceDbType, Branding, ConciergeConversationRow, BusinessStatusRow } from "@bis/db";
 import { plainText } from "@/lib/concierge/plain-text";
 import { buildSystemPrompt } from "@/lib/voice/system-prompt";
 import { originFrom } from "@/lib/email/origin";
@@ -86,6 +86,10 @@ const FOLLOWUP_MIN_MS = 2_000;
 /** Everything this handler does must finish inside `maxDuration` (30s);
  *  three seconds are left for the reads and writes after the model. */
 const TURN_BUDGET_MS = 27_000;
+// minors-1b item 6: the phone route's own shape (api/voice/incoming/route.ts) for telling "the read
+// failed" apart from "there is no row" — a failed read must answer effective=null directly, never fold
+// into row: null and hand it to effectiveStatusOrUnknown as if nothing had gone wrong.
+const FAILED = Symbol("failed");
 
 type ModelMessage = {
   content?: string | null;
@@ -527,10 +531,13 @@ export async function POST(
     // here is ever stamped on the conversation. The calendar read runs alongside it, ONLY when this turn's
     // payload carries no business hours (SD4): the chain needs an hours source to name a reopening, and a
     // payload that already has hours costs this turn no extra round trip.
-    const statusP = getBusinessStatusRow(db, profile.account_id).catch((e: unknown) => {
-      log("business-status read failed — this turn answers without today's status", { conversationId, accountId: profile.account_id, error: String(e) });
-      return null;
-    });
+    const statusP = getBusinessStatusRow(db, profile.account_id).then<BusinessStatusRow | null, typeof FAILED>(
+      (row) => row,
+      (e: unknown) => {
+        log("business-status read failed — this turn answers without today's status", { conversationId, accountId: profile.account_id, error: String(e) });
+        return FAILED;
+      },
+    );
     const calendarP = knowledge.business_hours === null
       ? getCalendarForAccount(db, profile.account_id).catch((e: unknown) => {
         log("calendar read failed — today's status answers with no known hours", { conversationId, accountId: profile.account_id, error: String(e) });
@@ -546,7 +553,7 @@ export async function POST(
     // S17 extended (Task 10 review): `closedDaysUnavailable` is passed through so a storm/closed_today the
     // row alone decides still stands, but an "open"/"running_late" this turn could not actually confirm
     // (a closed day it could not see would have outranked either) reads unknown, never a guessed "open".
-    const effective = effectiveStatusOrUnknown({
+    const effective = statusRow === FAILED ? null : effectiveStatusOrUnknown({
       row: statusRow, closedDays: knowledge.closed_days,
       hours: hoursChain(knowledge.business_hours, calendarRow?.open_hours ?? null),
       timezone: knowledge.timezone, now: turnNow,
