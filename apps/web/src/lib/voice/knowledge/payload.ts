@@ -4,18 +4,38 @@
 import { normalizeOpenHours, type OpenHours } from "../../booking/slots";
 import { priceSentence, PRICE_KINDS, type PriceKind, type PricedService } from "./price-sentence";
 import { hasOpenDay, hoursLines } from "./hours";
+import { closedDayLine, type ClosedDayLine } from "./closure-lines";
+import type { ClosedDay } from "../../business-status/status";
 
 /** Bump with ANY change to a template here, in ./price-sentence.ts or in ./hours.ts's lines: the next call then
  *  records a new snapshot (spec 4.2, 5.6). */
-export const KNOWLEDGE_RENDERER_VERSION = 1;
+export const KNOWLEDGE_RENDERER_VERSION = 2; // 2: S-47d's closed-day line (./closure-lines.ts)
 
 export type ServiceInput = PricedService & { description_en: string | null; description_es: string | null };
 export type KnowledgeService = ServiceInput & { position: number; sentence_en: string; sentence_es: string };
+/** schema 1 = S-47c (stored before S-47d; read with closed_days []); schema 2 = S-47d, the only one built now. */
 export type KnowledgePayload = {
-  schema: 1; facts: string; services_text: string; timezone: string;
+  schema: 1 | 2; facts: string; services_text: string; timezone: string;
   business_hours: OpenHours | null; hours_lines: string[] | null;
-  services: KnowledgeService[]; renderer_version: number;
+  services: KnowledgeService[]; closed_days: ClosedDayLine[]; renderer_version: number;
 };
+/** At most this many upcoming closed ranges enter a payload (spec 4.2). */
+export const MAX_PAYLOAD_CLOSED_DAYS = 20;
+const CLOSED_DAY_REASONS: readonly unknown[] = ["holiday", "vacation", "other"];
+/** Both or neither (S-47d): a caller that has read the closed days passes them with the account's today. A caller
+ *  that passes neither builds an empty list (the pre-S-47d callers, until plan Task 10 wires the reads). */
+type ClosedDaysInput = { closedDays: readonly ClosedDay[]; today: string } | { closedDays?: undefined; today?: undefined };
+
+/** Ranges ending on or after `today`, soonest first (starts_on, then ends_on), at most 20, each by its fields with
+ *  the line she reads: never a row's id, account or author. */
+function upcomingClosedDays(closedDays: readonly ClosedDay[], today: string): ClosedDayLine[] {
+  return closedDays
+    .filter((d) => d.ends_on >= today)
+    .map((d) => ({ starts_on: d.starts_on, ends_on: d.ends_on, reason: d.reason }))
+    .sort((a, b) => (a.starts_on < b.starts_on ? -1 : a.starts_on > b.starts_on ? 1 : a.ends_on < b.ends_on ? -1 : a.ends_on > b.ends_on ? 1 : 0))
+    .slice(0, MAX_PAYLOAD_CLOSED_DAYS)
+    .map((d) => ({ ...d, line: closedDayLine(d) }));
+}
 export type RenderedService = Pick<KnowledgeService,
   "name_en" | "name_es" | "description_en" | "description_es" | "sentence_en" | "sentence_es">;
 
@@ -36,10 +56,10 @@ export function usableHours(raw: unknown): OpenHours | null {
 
 export function buildKnowledgePayload(input: {
   facts: string; servicesText: string; timezone: string; businessHours: unknown; services: readonly ServiceInput[];
-}): KnowledgePayload {
+} & ClosedDaysInput): KnowledgePayload {
   const hours = usableHours(input.businessHours);
   return {
-    schema: 1,
+    schema: 2,
     facts: input.facts,
     services_text: input.servicesText,
     timezone: input.timezone,
@@ -54,6 +74,7 @@ export function buildKnowledgePayload(input: {
       unit_en: s.unit_en, unit_es: s.unit_es,
       sentence_en: priceSentence(s, "en"), sentence_es: priceSentence(s, "es"),
     })),
+    closed_days: input.closedDays === undefined ? [] : upcomingClosedDays(input.closedDays, input.today),
     renderer_version: KNOWLEDGE_RENDERER_VERSION,
   };
 }
@@ -98,11 +119,21 @@ function parseService(raw: unknown, position: number): KnowledgeService | null {
   return s;
 }
 
+/** A stored schema-2 range, or null when it is not one build could have written. The line is NOT re-rendered. */
+function parseClosedDay(raw: unknown): ClosedDayLine | null {
+  if (!isObj(raw)) return null;
+  if (typeof raw.starts_on !== "string" || typeof raw.ends_on !== "string" || typeof raw.line !== "string") return null;
+  if (raw.reason !== null && !CLOSED_DAY_REASONS.includes(raw.reason)) return null;
+  return { starts_on: raw.starts_on, ends_on: raw.ends_on, reason: raw.reason as ClosedDay["reason"], line: raw.line };
+}
+
 /** A stored snapshot (a jsonb read) back into the payload, or null when it is not one buildKnowledgePayload could
  *  have built. Returns a NEW object in build's key order, so it round-trips with toStrictEqual. Never re-renders. */
 export function parseKnowledgePayload(raw: unknown): KnowledgePayload | null {
   if (!isObj(raw)) return null;
-  if (raw.schema !== 1) return null;
+  // Schema 1 (S-47c) has no closed_days key and reads as []; schema 2 must carry the array.
+  if (raw.schema !== 1 && raw.schema !== 2) return null;
+  if (raw.schema === 1 ? "closed_days" in raw : !Array.isArray(raw.closed_days)) return null;
   if (typeof raw.facts !== "string" || typeof raw.services_text !== "string" || typeof raw.timezone !== "string") return null;
   if (!Number.isInteger(raw.renderer_version) || (raw.renderer_version as number) < 1) return null;
 
@@ -128,14 +159,24 @@ export function parseKnowledgePayload(raw: unknown): KnowledgePayload | null {
     services.push(s);
   }
 
+  const closed_days: ClosedDayLine[] = [];
+  if (raw.schema === 2) {
+    for (const d of raw.closed_days as unknown[]) {
+      const c = parseClosedDay(d);
+      if (!c) return null;
+      closed_days.push(c);
+    }
+  }
+
   return {
-    schema: 1,
+    schema: raw.schema,
     facts: raw.facts,
     services_text: raw.services_text,
     timezone: raw.timezone,
     business_hours,
     hours_lines,
     services,
+    closed_days,
     renderer_version: raw.renderer_version as number,
   };
 }
@@ -148,15 +189,22 @@ export function knowledgeFromLive(input: {
   profile: { facts: string; services: string; business_hours?: unknown };
   timezone: string;
   services: readonly ServiceInput[] | null;
-}): { payload: KnowledgePayload; recordable: boolean; listUnavailable: boolean } {
+} & ({ closedDays: readonly ClosedDay[] | null; today: string } | { closedDays?: undefined; today?: undefined })): {
+  payload: KnowledgePayload; recordable: boolean; listUnavailable: boolean; closedDaysUnavailable: boolean;
+} {
+  // S-47d (spec 4.2): closedDays null is a FAILED read, C20's rule applied to the closed days: no CLOSED DAYS block
+  // and not recordable, so a snapshot never claims "no closed days" when they were unknown.
+  const closedDaysUnavailable = input.closedDays === null;
+  const days: ClosedDaysInput = input.closedDays === undefined || input.closedDays === null
+    ? {} : { closedDays: input.closedDays, today: input.today };
   const base = {
     facts: input.profile.facts, servicesText: input.profile.services,
-    timezone: input.timezone, businessHours: input.profile.business_hours,
+    timezone: input.timezone, businessHours: input.profile.business_hours, ...days,
   };
-  const failed = () => ({ payload: buildKnowledgePayload({ ...base, services: [] }), recordable: false, listUnavailable: true });
+  const failed = () => ({ payload: buildKnowledgePayload({ ...base, services: [] }), recordable: false, listUnavailable: true, closedDaysUnavailable });
   if (input.services === null) return failed();
   try {
-    return { payload: buildKnowledgePayload({ ...base, services: input.services }), recordable: true, listUnavailable: false };
+    return { payload: buildKnowledgePayload({ ...base, services: input.services }), recordable: !closedDaysUnavailable, listUnavailable: false, closedDaysUnavailable };
   } catch {
     return failed();
   }
@@ -166,6 +214,7 @@ export function knowledgeFromLive(input: {
  *  to today's (C3). */
 export function promptKnowledge(p: KnowledgePayload): {
   facts: string; services: string; businessHours: OpenHours | null; priceList: RenderedService[] | null;
+  closedDays: ClosedDayLine[] | null;
 } {
   return {
     facts: p.facts,
@@ -174,5 +223,7 @@ export function promptKnowledge(p: KnowledgePayload): {
     priceList: p.services.length === 0 ? null
       : p.services.map(({ name_en, name_es, description_en, description_es, sentence_en, sentence_es }) =>
         ({ name_en, name_es, description_en, description_es, sentence_en, sentence_es })),
+    // S-47d: none (or a failed read, which stores none) gives no CLOSED DAYS block.
+    closedDays: p.closed_days.length === 0 ? null : p.closed_days.map((d) => ({ ...d })),
   };
 }

@@ -7,6 +7,8 @@ import { bookingMode } from "./booking-mode";
 import type { TradeModuleId } from "./modules";
 import type { OpenHours } from "../booking/slots";
 import type { RenderedService } from "./knowledge/payload";
+import type { ClosedDayLine } from "./knowledge/closure-lines";
+import type { EffectiveStatus } from "../business-status/status";
 
 export const REALTIME_MODEL = process.env.REALTIME_MODEL || "gpt-realtime";
 
@@ -71,6 +73,18 @@ export type VoicePromptInput = {
    * absent or false changes nothing, so every existing prompt is byte-identical.
    */
   priceListUnavailable?: boolean;
+  /**
+   * S-47d (spec 5.4): today's effective status from the one switch, read LIVE at call start, at each chat turn and
+   * at demo start. OPTIONAL; absent, null or an open status adds nothing, so every existing prompt is
+   * byte-identical (system-prompt.test.ts's PRE_S47D_DIGEST). A closure adds the TODAY line and closes the phone
+   * under "Follow business hours" (spec 5.4.2); Running late adds only the TODAY line.
+   */
+  businessStatus?: EffectiveStatus | null;
+  /**
+   * S-47d (spec 5.4, 4.2): the upcoming closed days with the lines she reads, from the SAME payload the call or
+   * chat is stamped with (promptKnowledge's closedDays). OPTIONAL; absent, null or [] gives no CLOSED DAYS block.
+   */
+  closedDays?: ClosedDayLine[] | null;
 };
 
 export function buildRealtimeSessionConfig(input: VoicePromptInput, now: Date) {

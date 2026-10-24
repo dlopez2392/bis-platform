@@ -58,3 +58,53 @@ describe("openNow (spec 5.1; all arithmetic in the zone; SD16)", () => {
     expect(openNow(H, TZ, at("2027-06-01T22:30:00Z")).line).toBe("Right now: open until 6:00 PM.");
   });
 });
+
+// S-47d (spec 5.4.2, S12; plan Task 6 Step 3): the fourth argument. Absent, every case above is unchanged.
+describe("openNow with closures (S-47d)", () => {
+  const OPEN_STATUS = { state: "open", nextClosedDay: null } as const;
+  // Tuesday, December 22, 2026, 10:00 AM CST: H says open until 12:00 PM.
+  const TUE = at("2026-12-22T16:00:00Z");
+  it.each([
+    ["Closed today while the hours say open", { state: "closed_today", reopensAt: at("2026-12-23T14:00:00Z"), reopensTimeKnown: true }, TUE,
+      "Right now: closed; opens tomorrow at 8:00 AM."],
+    ["2 to 6 days: the bare weekday", { state: "storm", reopensAt: at("2026-12-24T14:00:00Z"), reopensTimeKnown: true }, TUE,
+      "Right now: closed; opens Thursday at 8:00 AM."],
+    ["exactly 7 days: S-47c's next {Weekday} (SD15)", { state: "closed_today", reopensAt: at("2027-01-04T14:00:00Z"), reopensTimeKnown: true },
+      at("2026-12-28T16:00:00Z"), "Right now: closed; opens next Monday at 8:00 AM."],
+    ["beyond 7 days: the dated form (S12)", { state: "closed_day", reason: "vacation", startsOn: "2026-12-24", endsOn: "2027-01-01",
+      reopensAt: at("2027-01-04T14:00:00Z"), reopensTimeKnown: true }, at("2026-12-27T16:00:00Z"), "Right now: closed; opens on Monday, January 4 at 8:00 AM."],
+    ["an open-ended storm", { state: "storm", reopensAt: null, reopensTimeKnown: false }, TUE, "Right now: closed."],
+    ["a reopening with no known time (pinned so a stray state never throws)", { state: "closed_today", reopensAt: at("2026-12-23T06:00:00Z"), reopensTimeKnown: false },
+      TUE, "Right now: closed; opens tomorrow."],
+  ] as const)("%s", (_n, status, now, line) => {
+    expect(openNow(H, TZ, now, { status: status as never, closedDays: [] })).toEqual({ open: false, line });
+  });
+  it("running late leaves the hours' answer alone (mutation: treat running late as a closure -> FAILS)", () => {
+    const status = { state: "running_late", lateMinutes: 30, endsAt: at("2026-12-23T06:00:00Z") } as const;
+    expect(openNow(H, TZ, TUE, { status, closedDays: [] })).toEqual({ open: true, line: "Right now: open until 12:00 PM." });
+  });
+  it("an open status skips a closed day when it names the next opening (closed Thu, Fri a closed day, Sat 9:00)", () => {
+    const hours: OpenHours = { fri: [["08:00", "18:00"]], sat: [["09:00", "13:00"]] };
+    const thu = at("2027-06-03T15:00:00Z"); // Thursday, June 3, 2027, 10:00 AM CDT
+    const fri = { starts_on: "2027-06-04", ends_on: "2027-06-04", reason: null };
+    expect(openNow(hours, TZ, thu)).toEqual({ open: false, line: "Right now: closed; opens tomorrow at 8:00 AM." });
+    for (const status of [OPEN_STATUS, null])
+      expect(openNow(hours, TZ, thu, { status, closedDays: [fri] })).toEqual({ open: false, line: "Right now: closed; opens Saturday at 9:00 AM." });
+  });
+  it("a closed range past a week gives the dated form on the open path too", () => {
+    const hours: OpenHours = { fri: [["08:00", "18:00"]] };
+    const range = { starts_on: "2027-06-04", ends_on: "2027-06-11", reason: "vacation" as const };
+    expect(openNow(hours, TZ, at("2027-06-03T15:00:00Z"), { status: OPEN_STATUS, closedDays: [range] }))
+      .toEqual({ open: false, line: "Right now: closed; opens on Friday, June 18 at 8:00 AM." });
+  });
+  it("an open status with no closed days reads exactly as without closures, on every S-47c case", () => {
+    const cases: Array<[OpenHours, string]> = [
+      [H, "2027-06-01T15:00:00Z"], [H, "2027-06-01T17:30:00Z"], [H, "2027-06-01T23:30:00Z"], [H, "2027-06-06T15:00:00Z"],
+      [H, "2027-06-05T23:30:00Z"], [{ fri: [["18:00", "24:00"]], sat: [["00:00", "02:00"]] }, "2027-06-05T04:30:00Z"],
+      [{ mon: [["08:00", "12:00"]] }, "2027-06-07T18:00:00Z"], [{ sun: [["03:00", "04:00"]] }, "2027-03-14T08:30:00Z"],
+    ];
+    for (const [hours, iso] of cases)
+      expect(openNow(hours, TZ, at(iso), { status: OPEN_STATUS, closedDays: [] }), iso).toEqual(openNow(hours, TZ, at(iso)));
+    expect(cases.length).toBe(8);
+  });
+});

@@ -2,7 +2,7 @@
 // catalogue copy (spec 6): every string here is pinned word for word by system-prompt.test.ts and
 // prompt-blocks.test.ts. Pure; relative imports only (scripts/sofia-corpus.ts loads system-prompt.ts under tsx).
 import type { OpenHours } from "../../booking/slots";
-import { hoursLines, openNow } from "./hours";
+import { hoursLines, openNow, type OpenNowClosures } from "./hours";
 import type { RenderedService } from "./payload";
 
 export const BUSINESS_HOURS_HEADING =
@@ -30,13 +30,20 @@ export const AFTER_HOURS_CLOSED_WEB =
 export const AFTER_HOURS_CLOSED_WEB_VOICE =
   "AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.";
 
-/** Phone, "Follow business hours, then take a message", closed now (spec 5.2; SD5). */
-export function afterHoursClosedPhoneLine(o: { canBook: boolean; handoffAvailable: boolean; hasTradeRules: boolean }): string {
+/** S-47d (spec 5.4.2; SD16): the same two lines when a closure holds and there is no hours block to point at. */
+export const AFTER_HOURS_CLOSED_WEB_TODAY =
+  "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
+export const AFTER_HOURS_CLOSED_WEB_VOICE_TODAY =
+  "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.";
+
+/** Phone, "Follow business hours, then take a message", closed now (spec 5.2; SD5). `see` (S-47d, spec 5.4.2) names
+ *  the line it points at: "TODAY" when a closure holds with no hours block; absent is "Right now", byte for byte. */
+export function afterHoursClosedPhoneLine(o: { canBook: boolean; handoffAvailable: boolean; hasTradeRules: boolean; see?: "Right now" | "TODAY" }): string {
   const book = o.canBook ? ", and book a time that check_availability returns" : "";
   const person = !o.handoffAvailable ? ""
     : o.hasTradeRules ? " If they ask for a person, or it is urgent, you can still put them through."
       : " If they ask for a person, you can still put them through.";
-  return `AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above${book}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.${person}`;
+  return `AFTER HOURS — The business is closed right now (see ${o.see ?? "Right now"} above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above${book}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.${person}`;
 }
 
 /** The TOOLS line for transfer_to_human when the phone is closed now and a transfer number exists (spec 5.2.1 point 2). */
@@ -44,9 +51,10 @@ export function transferToolLineClosed(hasTradeRules: boolean): string {
   return `- transfer_to_human() — the business is closed right now, so do not offer this. Call it only when the caller asks to speak to a person${hasTradeRules ? ", or when they accept the offer on the URGENT path in the trade rules above" : ""}. Do not ask them to hold first; that line is spoken for you the moment the transfer starts. If the tool comes back with an error, apologize and take a message instead.`;
 }
 
-/** ["", heading, seven day lines, the Right now line], and whether it is open now. */
-export function businessHoursBlock(hours: OpenHours, timeZone: string, now: Date): { lines: string[]; open: boolean } {
-  const state = openNow(hours, timeZone, now);
+/** ["", heading, seven day lines, the Right now line], and whether it is open now. `closures` (S-47d) reaches
+ *  openNow unchanged; absent, the block is S-47c's. */
+export function businessHoursBlock(hours: OpenHours, timeZone: string, now: Date, closures?: OpenNowClosures): { lines: string[]; open: boolean } {
+  const state = openNow(hours, timeZone, now, closures);
   return { lines: ["", BUSINESS_HOURS_HEADING, ...hoursLines(hours), state.line], open: state.open };
 }
 
