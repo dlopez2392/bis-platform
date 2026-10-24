@@ -142,6 +142,27 @@ describe("addClosedDayAction — restore relaxes the past check to yesterday (th
     const r = await addClosedDayAction(ACCOUNT, { from: "2027-06-05", to: null, reason: null, restore: true }, "en");
     expect(r).toEqual({ ok: false, error: t(m, "closedDays.error.past", "en") });
   });
+
+  // Fix round B4 (rule 6): Undo of Remove on a range already under way, which started 2 or more days
+  // ago, must not be refused — the trigger refuses a start before current_date - 2, so the restore
+  // re-adds what is left of the range from yesterday (the earliest the action allows) to its end.
+  it("Undo of Remove on a range under way since Dec 20 re-adds it from yesterday to its end (mutation: drop the restore clamp → FAILS)", async () => {
+    vi.setSystemTime(new Date("2027-12-26T18:00:00.000Z")); // noon CST; today = 2027-12-26
+    const r = await addClosedDayAction(
+      ACCOUNT, { from: "2027-12-20", to: "2028-01-03", reason: "vacation", restore: true }, "en",
+    );
+    expect(r.ok).toBe(true);
+    expect(dbMocks.insertClosedDay).toHaveBeenCalledWith(
+      { tag: "request" }, ACCOUNT, { starts_on: "2027-12-25", ends_on: "2028-01-03", reason: "vacation" },
+    );
+  });
+
+  it("without restore, a range starting Dec 20 is still refused as past on Dec 26 (the clamp is restore-only)", async () => {
+    vi.setSystemTime(new Date("2027-12-26T18:00:00.000Z"));
+    const r = await addClosedDayAction(ACCOUNT, { from: "2027-12-20", to: "2028-01-03", reason: null }, "en");
+    expect(r).toEqual({ ok: false, error: t(m, "closedDays.error.past", "en") });
+    expect(dbMocks.insertClosedDay).not.toHaveBeenCalled();
+  });
 });
 
 describe("addClosedDayAction — the write and its failures", () => {

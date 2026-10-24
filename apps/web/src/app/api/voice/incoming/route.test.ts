@@ -1143,6 +1143,36 @@ describe("POST /api/voice/incoming — today's status and the closed days (S-47d
     expect(acceptedInstructions()).toContain("TODAY: The business is closed today. It opens again tomorrow.");
   });
 
+  it("the clock moving DURING the reads cannot split the stamp from the prompt: a second `new Date()` after the reads reads the row as expired (fix round B3; mutation: recompute effective for the prompt with now: new Date() -> FAILS)", async () => {
+    // The test above freezes time, so a second clock read in the route returns the SAME instant and a
+    // recompute with `now: new Date()` would stay green there. Here each mocked read moves the clock one
+    // hour on as it answers, the way a slow read does in production: any `new Date()` the route takes AFTER
+    // the reads is 19:00, when this row (until 18:30) has expired. Only the one `now` read before them
+    // still sees it in force, so the stamp and the TODAY line both say closed today only if both use it.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-24T18:00:00.000Z"));
+    const later = new Date("2026-10-24T19:00:00.000Z");
+    getBusinessStatusRowMock.mockImplementation(async () => {
+      vi.setSystemTime(later);
+      return {
+        account_id: "acct1", state: "closed_today" as const, late_minutes: null,
+        until: "2026-10-24T18:30:00.000Z", set_by: "owner_1", set_at: "2026-10-24T12:00:00.000000Z",
+      };
+    });
+    listClosedDaysFromMock.mockImplementation(async () => {
+      vi.setSystemTime(later);
+      return [];
+    });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    try {
+      await POST(req());
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ businessStatus: "closed_today" });
+    expect(acceptedInstructions()).toContain("TODAY: The business is closed today. It opens again tomorrow.");
+  });
+
   it("a status read that throws leaves startCallRow with no businessStatus and the prompt with no TODAY line — the call is still answered (S17)", async () => {
     getBusinessStatusRowMock.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
     unwrapMock.mockResolvedValue(callIncomingEvent());

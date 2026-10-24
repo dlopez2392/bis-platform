@@ -45,9 +45,9 @@ export async function addClosedDayAction(
   const access = await requireAccountAccess(accountId);
   if (!access.canManage) return { ok: false, error: t(m, "closedDays.role", locale) };
 
-  const from = input.from;
+  const requestedFrom = input.from;
   const to = input.to ?? input.from;
-  if (typeof from !== "string" || !isDateKey(from) || typeof to !== "string" || !isDateKey(to)) {
+  if (typeof requestedFrom !== "string" || !isDateKey(requestedFrom) || typeof to !== "string" || !isDateKey(to)) {
     return { ok: false, error: t(m, "closedDays.saveFailed", locale) };
   }
 
@@ -55,9 +55,17 @@ export async function addClosedDayAction(
   const now = new Date();
   const tz = (await readAccountTimezone(db, accountId)) ?? "UTC";
   const today = dayKey(now, tz);
-  const earliestFrom = input.restore === true ? addDays(today, -1) : today;
+  const restore = input.restore === true;
+  const earliestFrom = restore ? addDays(today, -1) : today;
 
-  if (from < earliestFrom) return { ok: false, error: t(m, "closedDays.error.past", locale) };
+  // Fix round B4 (rule 6): Undo of Remove restores a range that may already be under way, and one that
+  // started two or more days ago would be refused by 0097's trigger (starts_on >= current_date - 2).
+  // The days before yesterday are over and change nothing, so a restore re-adds only what is left:
+  // from yesterday to the range's own end. A range that ended before yesterday is still refused.
+  if (restore ? to < earliestFrom : requestedFrom < earliestFrom) {
+    return { ok: false, error: t(m, "closedDays.error.past", locale) };
+  }
+  const from = restore && requestedFrom < earliestFrom ? earliestFrom : requestedFrom;
   if (to < from) return { ok: false, error: t(m, "closedDays.error.endBeforeStart", locale) };
   if (daysBetween(from, to) > 91) return { ok: false, error: t(m, "closedDays.error.tooLong", locale) };
   if (to > addDays(today, 365)) return { ok: false, error: t(m, "closedDays.error.tooFar", locale) };
