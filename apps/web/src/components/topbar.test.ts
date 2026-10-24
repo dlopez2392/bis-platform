@@ -62,9 +62,15 @@ const src = stripComments(readFileSync(path.join(here, "topbar.tsx"), "utf8"));
 // to its right (a sibling-overlap bug `assertHeaderChildrenInBounds`,
 // phone-width.spec.ts, cannot see — it checks each child's own edges, not
 // overlap between them).
-describe("Topbar — F-107 r2: the search wrapper only shrinks below its content at sm+", () => {
-  it("min-w-0 is sm: only; width is unconstrained below `sm` and 300px at sm+ (mutation: drop `sm:` from either → FAILS)", () => {
-    expect(src).toContain('<div className="mr-auto flex items-center sm:min-w-0 sm:w-[300px]">{palette}</div>');
+describe("Topbar — F-107 r2 / minors-1b item 2: the search wrapper only shrinks to its OWN button's width at sm+", () => {
+  it("min-w-[128px] is sm: only; width is unconstrained below `sm` and 300px at sm+ (mutation: drop `sm:` from either → FAILS)", () => {
+    expect(src).toContain('<div className="mr-auto flex items-center sm:min-w-[128px] sm:w-[300px]">{palette}</div>');
+  });
+
+  // minors-1b item 2: `min-w-0` (no floor at all) let the wrapper shrink past its own 128px button,
+  // which then painted outside it and over the status indicator beside it (measured, agency, 640-900px).
+  it("the wrapper no longer carries an unconditional min-w-0 at sm+ (mutation: revert to min-w-0 → FAILS)", () => {
+    expect(src).not.toContain("sm:min-w-0");
   });
 });
 
@@ -85,6 +91,10 @@ describe("Topbar — F-107 r5: the org-switcher trigger's name is hidden via a S
   it("the element value is an object with a nested max-width media query, never a bare class string (mutation: revert to the string `\"hidden sm:block\"` → FAILS)", () => {
     expect(src).toContain(
       'organizationPreviewTextContainer__organizationSwitcherTrigger: {\n'
+      + '                maxWidth: 140,\n'
+      + '                overflow: "hidden",\n'
+      + '                textOverflow: "ellipsis",\n'
+      + '                whiteSpace: "nowrap",\n'
       + '                "@media (max-width: 639.98px)": { display: "none" },\n'
       + '              },',
     );
@@ -92,6 +102,15 @@ describe("Topbar — F-107 r5: the org-switcher trigger's name is hidden via a S
 
   it("there is no wrapper div clipping the trigger's focus ring (mutation: reintroduce `overflow-hidden` around OrganizationSwitcher → FAILS)", () => {
     expect(src).not.toMatch(/overflow-hidden[\s\S]{0,80}<OrganizationSwitcher/);
+  });
+
+  // minors-1b item 2: the org name's own text container is visible from `sm` (only the media query
+  // above hides it, below 640px) and had no width cap of its own at all, taking up to 269px there —
+  // leaving the search wrapper's own min-w nowhere to shrink into. The cap is on the SAME style key, a
+  // sibling of the existing `@media`, never a second wrapper (this file's own overflow-hidden check
+  // above still holds: a text-level ellipsis is not a clipping ancestor of the trigger's focus ring).
+  it("the org name's own text container is capped and ellipsized (mutation: drop maxWidth/overflow/textOverflow → FAILS)", () => {
+    expect(src).toMatch(/organizationPreviewTextContainer__organizationSwitcherTrigger: \{\s*maxWidth: 140,\s*overflow: "hidden",\s*textOverflow: "ellipsis",\s*whiteSpace: "nowrap",/);
   });
 });
 

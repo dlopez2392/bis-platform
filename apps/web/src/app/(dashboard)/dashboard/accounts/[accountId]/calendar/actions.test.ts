@@ -787,7 +787,7 @@ describe("keepAppointmentAction — S-47d Task 8", () => {
   it("the Spanish sentence", async () => {
     access.value = { userId: "user_1", isAgency: false, role: "technician" };
     const r = await keepAppointmentAction("acct_1", "bk_1", true, "es");
-    expect(r).toEqual({ ok: false, error: "Solo un propietario o un empleado puede mantener una cita." });
+    expect(r).toEqual({ ok: false, error: "Solo un dueño o un empleado puede mantener una cita." });
   });
 
   it("Staff may Keep (sees the whole account, same as cancel)", async () => {

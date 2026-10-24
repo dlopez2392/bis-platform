@@ -17,7 +17,7 @@
 import { NextResponse } from "next/server";
 // Type-only: erased at compile time, so it does not put `@bis/db` back at
 // module scope (see the lazy import in the handler below).
-import type { Branding } from "@bis/db";
+import type { Branding, BusinessStatusRow } from "@bis/db";
 import { buildRealtimeSessionConfig, type VoicePromptInput } from "@/lib/voice/session-config";
 import {
   WEB_DEMO_MAX_SECONDS, webDemoNotice, parseAllowedOrigins, originAllowed, verifyTicket,
@@ -33,6 +33,11 @@ export const runtime = "nodejs";
 function log(msg: string, extra: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ at: "voice/web/session", msg, ...extra }));
 }
+
+// minors-1b item 6: the phone route's own shape (api/voice/incoming/route.ts) for telling "the read
+// failed" apart from "there is no row" — a failed read must answer effective=null directly, never fold
+// into row: null and hand it to effectiveStatusOrUnknown as if nothing had gone wrong.
+const FAILED = Symbol("failed");
 
 /** Echoes the caller's own origin, never `*`: the browser will not attach
  *  credentials to a wildcard, and echoing keeps the allowlist the only place
@@ -186,9 +191,9 @@ export async function POST(req: Request) {
     });
     // S-47d (spec 5.4.3): live reads of both the switch and the closed days, same as the phone's — this
     // surface stamps nothing, so a failed read simply answers without today's status or the closed days.
-    const statusRow = await getBusinessStatusRow(db, accountId).catch((e: unknown) => {
+    const statusRow: BusinessStatusRow | null | typeof FAILED = await getBusinessStatusRow(db, accountId).catch((e: unknown) => {
       log("business-status read failed — answering without today's status", { accountId, error: String(e) });
-      return null;
+      return FAILED;
     });
     const closedDaysRows = await listClosedDaysFrom(
       db, accountId, dayKey(new Date(now.getTime() - 86_400_000), "UTC"),
@@ -209,7 +214,7 @@ export async function POST(req: Request) {
     // S17 extended (Task 10 review): a failed closed-days read is passed through — a storm or Closed today
     // still stands (the row alone decides those), but "open"/"running_late" this demo could not actually
     // confirm reads unknown, never a guessed "open".
-    const effective = effectiveStatusOrUnknown({
+    const effective = statusRow === FAILED ? null : effectiveStatusOrUnknown({
       row: statusRow, closedDays: closedDaysRows ?? [],
       hours: hoursChain(profile.business_hours, calendar.open_hours),
       timezone: acct.timezone, now,

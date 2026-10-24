@@ -938,3 +938,45 @@ it does):
   and keeps the hours chain only for what is said.
 - **F8 (resolved in 5.5.2)** A loader that read kept bookings starting within the last two days missed the
   review request (61 hours after the end) and the referral ask (85 hours): Keep is now read from each due row.
+
+## 11. Corrections after build (2026-10-24)
+
+Found during the S-47d follow-up pass (branch `fix/s47d-followups`). None change shipped behaviour —
+each corrects this spec's own words against what the build actually does.
+
+- **4.3's "safe under the running build"** is about the deploy, not about every read against these two
+  tables forever: §5.5.2's "a failed closures read holds 15 min" (and the "Fail held" bullet it
+  restates) describes a TRANSIENT read failure once 0097 is live. Before 0097 exists at all, PostgREST
+  refuses the query outright (an unknown table/column, 4.3's own point) — the booking passes fail, they
+  do not quietly fall into the 15-minute hold.
+- **S15** undersold its own shape: the idle count's words and the on-call pulse's trailing status are
+  both WRAPPED INSIDE the menu trigger (`topbar-presence.tsx`'s `asSwitch`), not drawn beside it — for
+  whoever may change the switch, the whole dot-and-words indicator IS the button that opens the menu.
+- **Undo of a range already under way** (fix round B4) is clamped to yesterday, not to the range's
+  original start date: `addClosedDayAction`'s own `restore` path re-adds only what is left of a range
+  that started before the trigger's `current_date - 2` floor, from yesterday on.
+- **A malformed `backOn`** on a storm change never refuses the change outright: `untilFor` treats
+  anything that is not a real, in-range calendar date key as "no end" and stores an open-ended storm.
+- **`ensureClosureTask`'s `task.created` event** carries `{ taskId, contactId: null }` — a closure To-do
+  is never about one customer, so the payload names none, the same shape `ensureDocumentExpiryTask`
+  already uses.
+- **Owner D13a/D13b** (follow-up only, not written up here): the switch's own change history is read
+  only from server-written `'system'` `business_status.changed` events, never a `'user'` one a client
+  could forge (`listBusinessStatusChanges`, `packages/db/src/business-status.ts`).
+- **Owner-accepted, tracked gap (minors-1b follow-up, item 1):** at 320px the agency's status trigger
+  now wraps its short form to two lines (ruling (b)), cutting the measured overflow from 33px to 6px —
+  not to zero. The 6px is chrome the ruling's two options never named (the status button's own floor is
+  the longest word, "Cerrado", which rule 3's "dot + word" forbids splitting further; the other four
+  header children — the search icon, the theme toggle, the avatar-only org switcher and the user button
+  — are fixed width). Accepted as a tracked gap rather than closed by a third, unruled change (the
+  header's own `gap-2`/`px-3` below `sm`, which would touch every phone-width screen).
+- **The Calendar page's "one query" fix undercounted (fix round, sonnet review):** the first cut spanned
+  [earliest closed-day start, latest end + 1 day) in one read — every ORDINARY booking in the gap
+  between two far-apart ranges (a holiday next week, a vacation next spring) spent a slot of the shared
+  `CLOSURE_APPOINTMENTS_LIMIT` cap, which no closure ever touched. Fixed with
+  `listClosureAppointmentsForRanges` (`packages/db/src/business-status.ts`): one `.or()` of each range's
+  own `and(gte, lt)` predicate, so a booking outside every listed range's own window is never fetched at
+  all. The Closed days card also gained the dashboard status card's own "more later" caveat
+  (`closedDays.moreAppointments`), threaded per range from the read's own total length hitting the cap —
+  the shared cap orders across every listed range, so there is no single range to blame, and every range
+  in the view carries the same `capped` value.

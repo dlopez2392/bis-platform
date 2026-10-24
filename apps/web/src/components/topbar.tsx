@@ -57,9 +57,18 @@ export function Topbar({
           not overlap BETWEEN siblings, so this would not have failed that
           check even though it was wrong. `min-w-0` is still needed at
           sm+, where the 300px desktop trigger's own `shrink-0` content
-          needs the wrapper free to shrink toward it. */}
+          needs the wrapper free to shrink toward it.
+          minors-1b item 2 (measured on the built app, agency, 640-900px):
+          `min-w-0` let the wrapper shrink PAST its own button's 128px
+          content width, down to 0-5px — the button itself (`shrink-0` from
+          ui/button.tsx) never shrank with it, so it painted outside its
+          now-tiny wrapper and over the status indicator beside it.
+          `min-w-[128px]` is the fix: the wrapper still shrinks from 300px
+          toward the button's own size, same as before, but never below
+          it — the org name's own cap just below gives that 128px room to
+          exist in. */}
       {palette ? (
-        <div className="mr-auto flex items-center sm:min-w-0 sm:w-[300px]">{palette}</div>
+        <div className="mr-auto flex items-center sm:min-w-[128px] sm:w-[300px]">{palette}</div>
       ) : null}
       {/* Task 5: DESIGN.md's "AI presence" pattern — in-account only, both
           audiences, renders nothing outside an account or with no enabled
@@ -100,13 +109,30 @@ export function Topbar({
           hides the text, Clerk's own trigger is avatar-width on its own
           (same as UserButton beside it, which has never needed a
           wrapper); nothing needs to clip it, and no wrapper div remains
-          to need `min-w-0` on. */}
+          to need `min-w-0` on.
+
+          minors-1b item 2 (measured on the built app, 640-900px, pre-existing
+          S-47d bug): visible from `sm` (the media query above hides it only
+          below 640px), the org name's OWN text container had no width cap at
+          all and took up to 269px, leaving the search wrapper's `min-w` above
+          nowhere to shrink into. `maxWidth`/`overflow`/`textOverflow` on the
+          SAME style-object key truncate it with an ellipsis instead — an
+          Emotion-supported sibling of the existing `@media` key, on the
+          chrome's own internal org label (never a tenant's brand name), the
+          same mechanism this whole element already proved works (the `@media`
+          key above, verified at runtime by phone-width.spec.ts's own
+          computed-style probe). The X button (UserButton beside it) needs no
+          matching cap: Clerk sizes it to its avatar alone, never to a name. */}
       {isAgency ? (
         <OrganizationSwitcher
           hidePersonal
           appearance={{
             elements: {
               organizationPreviewTextContainer__organizationSwitcherTrigger: {
+                maxWidth: 140,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
                 "@media (max-width: 639.98px)": { display: "none" },
               },
             },

@@ -14,7 +14,7 @@
 // which `/styleguide` renders with static props.
 import {
   getBusinessStatusRow, listClosedDaysFrom, readHoursChain, listClosureAppointments, countHeldByBooking,
-  type AccountRole, type ClosureAppointment,
+  CLOSURE_APPOINTMENTS_LIMIT, type AccountRole, type ClosureAppointment,
 } from "@bis/db";
 import { dbForRequest } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,7 +52,12 @@ async function readAffected(
     held: heldCounts.get(r.id) ?? 0, kept: r.closure_kept_at !== null,
     name: fullName(r.first_name, r.last_name),
   }));
-  return { appointments, capped: w.capped, windowTo: w.to };
+  // minors-1b item 5: "more later" is also true when the READ itself hit @bis/db's own row cap —
+  // `w.capped` alone only catches the 14-day DATE cap (S7/S22); a window that ends well inside 14 days
+  // but whose account has `CLOSURE_APPOINTMENTS_LIMIT` or more booked appointments in it is undercounted
+  // the same way, and must say so the same way.
+  const capped = w.capped || rows.length === CLOSURE_APPOINTMENTS_LIMIT;
+  return { appointments, capped, windowTo: w.to };
 }
 
 /** Rule 7: a skeleton shaped like the compact line this card settles into, not a spinner. */

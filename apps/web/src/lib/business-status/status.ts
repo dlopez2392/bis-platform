@@ -49,8 +49,9 @@ function parseKey(key: string): { y: number; m: number; d: number } {
   const [y, m, d] = key.split("-").map(Number);
   return { y: y!, m: m!, d: d! };
 }
-/** A real calendar date in the YYYY-MM-DD form (2027-02-30 is not one). */
-function isDateKey(s: string): boolean {
+/** A real calendar date in the YYYY-MM-DD form (2027-02-30 is not one). The one copy: business-status-actions.ts
+ *  and closed-days-actions.ts both used to carry their own identical `DATE_RE`/`isDateKey` (minors-1b item 9). */
+export function isDateKey(s: string): boolean {
   const mm = KEY_RE.exec(s);
   if (!mm) return false;
   return addDays(s, 0) === s;

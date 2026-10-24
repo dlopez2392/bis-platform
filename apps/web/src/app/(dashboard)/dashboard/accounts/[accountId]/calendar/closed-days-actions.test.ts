@@ -72,7 +72,7 @@ describe("addClosedDayAction — Staff refused (D1, unchanged by D8)", () => {
   it("the Spanish sentence", async () => {
     access.value = { userId: "user_1", isAgency: false, role: "staff", canManage: false };
     const r = await addClosedDayAction(ACCOUNT, { from: "2027-06-10", to: null, reason: null }, "es");
-    expect(r).toEqual({ ok: false, error: "Solo un propietario puede cambiar los días cerrados." });
+    expect(r).toEqual({ ok: false, error: "Solo un dueño puede cambiar los días cerrados." });
   });
 });
 
@@ -253,6 +253,27 @@ describe("addClosedDayAction — the closure To-do (kind: closed_day)", () => {
     const [, , fromIso, toIso] = dbMocks.listClosureAppointments.mock.calls[0]!;
     expect(fromIso).toBe("2027-06-10T05:00:00.000Z"); // 00:00 CDT June 10
     expect(toIso).toBe("2027-06-13T05:00:00.000Z"); // 00:00 CDT June 13 (ends_on + 1 day)
+  });
+
+  // minors-1b item 4: a range starting TODAY must not count an appointment that already passed earlier
+  // the same day — the window's own start is max(midnight, now), the same clamp closureListWindow
+  // (status.ts) already applies on the switch's own path. `listClosureAppointments` is a stub DB here
+  // too (business-status-actions.test.ts's own precedent): it answers only rows whose starts_at falls
+  // inside the window actually ASKED for, so a "still starts at midnight" regression would re-include
+  // the morning appointment and file the To-do this test says it must not.
+  it("added today at 15:00 local with one appointment at 09:00 today and none later: no To-do filed, and the window asked for starts at now (mutation: drop the max(windowFrom, now) clamp -> FAILS)", async () => {
+    vi.setSystemTime(new Date("2027-06-07T20:00:00.000Z")); // 15:00 CDT; "today" is still 2027-06-07
+    const MORNING_APPT: ClosureAppointment = {
+      id: "bk_am", contact_id: "c_am", starts_at: "2027-06-07T14:00:00.000Z", ends_at: "2027-06-07T14:30:00.000Z",
+      closure_kept_at: null, first_name: "Ana", last_name: "Cruz",
+    };
+    dbMocks.listClosureAppointments.mockImplementation(async (_db: unknown, _accountId: string, fromIso: string, toIso: string) =>
+      [MORNING_APPT].filter((a) => a.starts_at >= fromIso && a.starts_at < toIso));
+    const r = await addClosedDayAction(ACCOUNT, { from: "2027-06-07", to: null, reason: null }, "en");
+    expect(r).toMatchObject({ ok: true, appointments: 0, todoFiled: false });
+    expect(dbMocks.ensureClosureTask).not.toHaveBeenCalled();
+    const [, , fromIso] = dbMocks.listClosureAppointments.mock.calls[0]!;
+    expect(fromIso).toBe("2027-06-07T20:00:00.000Z"); // now, not midnight
   });
 });
 

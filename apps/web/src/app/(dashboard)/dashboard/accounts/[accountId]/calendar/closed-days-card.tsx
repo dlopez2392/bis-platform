@@ -47,6 +47,11 @@ export type ClosedDaysRangeView = {
   endsOn: string;
   reason: ClosedDayReason | null;
   appointments: ClosedDaysAppointmentView[];
+  /** Fix round (sonnet review): the page's read of EVERY listed range hit @bis/db's own row cap —
+   *  there may be more affected appointments than this range's own list shows (the shared cap orders by
+   *  starts_at across every range, so there is no single range to blame; every range therefore carries
+   *  the SAME value). */
+  capped: boolean;
 };
 
 /** `success`/`error` only — the minimal shape `sonner`'s `toast` already satisfies, same contract as
@@ -391,6 +396,14 @@ export function ClosedDaysCard({
                         </Button>
                       ) : null}
                     </div>
+                    {/* Fix round (sonnet review): the shared read hit @bis/db's own row cap — the SAME
+                        caveat the dashboard status card shows (business-status-card-view.tsx's
+                        AffectedList), worded for a list of ranges rather than one window with a known
+                        end date. Shown on every listed range, not just the open one: the cap is on the
+                        whole read, not this one range's own count. */}
+                    {range.capped ? (
+                      <p className="text-xs text-muted-foreground">{tr.text("closedDays.moreAppointments")}</p>
+                    ) : null}
                     {isOpen ? (
                       <ul id={listId} className="border-t border-[var(--line)] pt-1">
                         {range.appointments.map((appt) => (

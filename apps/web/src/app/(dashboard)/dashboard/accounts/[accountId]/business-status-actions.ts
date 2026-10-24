@@ -15,7 +15,7 @@ import { t } from "@/lib/i18n/t";
 import { fileClosureTodo } from "@/lib/business-status/closure-todo";
 import { mayChangeStatus } from "@/lib/business-status/guard";
 import {
-  addDays, coversAppointment, closureListWindow, dayKey, effectiveStatus, hoursChain, rowInForce, toWire,
+  addDays, coversAppointment, closureListWindow, dayKey, effectiveStatus, hoursChain, isDateKey, rowInForce, toWire,
   untilFor, type ClosedDay, type LateMinutes, type StatusChange, type StatusInput,
   type StoredState, type WireStatus,
 } from "@/lib/business-status/status";
@@ -31,13 +31,6 @@ export type StatusActionResult =
 
 const STATES: readonly StoredState[] = ["open", "closed_today", "running_late", "storm"];
 const LATE_MINUTES: readonly LateMinutes[] = [15, 30, 60, 120];
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** A real calendar date in the "YYYY-MM-DD" form (status.ts's own `isDateKey`, not exported — this
- *  reuses the exported `addDays` the same way: a malformed date never round-trips through it). */
-function isDateKey(s: string): boolean {
-  return DATE_RE.test(s) && addDays(s, 0) === s;
-}
 
 /** Step 1's shape check (spec §5.2): a known state, lateMinutes in {15,30,60,120}, backOn null or a real
  *  calendar date. Never trusts the compile-time `StatusChange` type alone — a server action is an

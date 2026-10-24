@@ -629,10 +629,16 @@ async function withClosedTodayInSpanish(
 }
 
 test.describe("the one switch, closed, in Spanish — phone width (S-47d fix round C1)", () => {
-  // NOT at 320px for the agency (measured 2026-10-24, S-47d fix round report): beside the agency's search
-  // icon, theme toggle, org switcher and user button the indicator has 60px there, and "● Cerrado hoy"
-  // alone is 93px, so no padding change fits it. That needs a design decision (see the fix-round report);
-  // the client, with no org switcher, is asserted at 320 below.
+  // minors-1b item 1, ruling (a) then (b): (a) is already done (F-107 r5: avatar-only below sm); (b) —
+  // business-status-menu.tsx's status trigger now wraps its short form to two lines (`shrink
+  // whitespace-normal` overriding the base Button's `shrink-0 whitespace-nowrap`) instead of overflowing.
+  // Measured on the built app: this cuts the 320px overflow from 33px ("Cerrado hoy" at 93px, 60px
+  // available) to 6px — the two-line box floors at ~66px (the longest word, "Cerrado", plus the dot;
+  // DESIGN.md's "dot + word" rule means that word cannot itself be split onto a third line) against the
+  // ~60px still available once the search icon, theme toggle, the org switcher's avatar-only chrome and
+  // the user button are laid out. Closing the remaining 6px needs a THIRD change this ruling did not
+  // cover (the header's own gap/padding below `sm`, or a further Clerk element to hide) — stopped here;
+  // 320px for the agency stays out of this assertion, same as before, with the smaller number on record.
   test("agency session: the closed topbar fits at 360 and 375px", async ({ page }) => {
     if (!existsSync("e2e/.auth/agency-fixture.json")) {
       test.skip(true, "No agency fixture at e2e/.auth/agency-fixture.json — the setup project creates it; run the full suite.");
@@ -665,6 +671,47 @@ test.describe("the one switch, closed, in Spanish — phone width (S-47d fix rou
             .toContainText("Cerrado hoy");
         }
       });
+    });
+  });
+});
+
+/**
+ * minors-1b item 2: the agency's search button painted over the status indicator at 640-900px — a
+ * pre-existing bug (not introduced by S-47d), measured on the built app with the search wrapper
+ * collapsing to 0-5px around its own 128px button while the org name alone took 269px. Both fixes
+ * (topbar.tsx's `min-w-[128px]` on the search wrapper, and a width cap on the org name's own text
+ * container) are source-level; this is the browser measurement DESIGN.md's own rule asks for — box
+ * overlap cannot be read from markup.
+ */
+test.describe("the agency's search button and the status indicator never overlap, 640-900px (minors-1b item 2)", () => {
+  test("640, 768 and 900px, agency, closed, in Spanish", async ({ page }) => {
+    if (!existsSync("e2e/.auth/agency-fixture.json")) {
+      test.skip(true, "No agency fixture at e2e/.auth/agency-fixture.json — the setup project creates it; run the full suite.");
+      return;
+    }
+    const agency = JSON.parse(readFileSync("e2e/.auth/agency-fixture.json", "utf-8")) as { clerkUserId: string; email: string };
+    await withClosedTodayInSpanish(agency, async (base) => {
+      for (const width of [640, 768, 900] as const) {
+        await page.setViewportSize({ width, height: HEIGHT });
+        await page.goto(`${base}/dashboard`);
+        await waitForHeaderSettled(page, true, true);
+        const search = page.locator("header").getByRole("button", { name: "Search" });
+        const indicator = page.locator("header").getByRole("button", { name: /^Cerrado hoy\s*, Cambiar el estado de hoy$/ });
+        await expect(search, `the search button at ${width}px`).toBeVisible();
+        await expect(indicator, `the status indicator at ${width}px`).toBeVisible();
+        const searchBox = await search.boundingBox();
+        const indicatorBox = await indicator.boundingBox();
+        expect(searchBox, `the search button has no box at ${width}px`).not.toBeNull();
+        expect(indicatorBox, `the status indicator has no box at ${width}px`).not.toBeNull();
+        const overlaps = searchBox!.x < indicatorBox!.x + indicatorBox!.width
+          && indicatorBox!.x < searchBox!.x + searchBox!.width
+          && searchBox!.y < indicatorBox!.y + indicatorBox!.height
+          && indicatorBox!.y < searchBox!.y + searchBox!.height;
+        expect(
+          overlaps,
+          `at ${width}px the search button ${JSON.stringify(searchBox)} overlaps the status indicator ${JSON.stringify(indicatorBox)}`,
+        ).toBe(false);
+      }
     });
   });
 });

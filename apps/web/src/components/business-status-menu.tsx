@@ -190,13 +190,20 @@ export function BusinessStatusMenu({
               60px at 320px wide and 100px at 360px, and its content alone is 58px ("0 calls") to 93px
               ("Cerrado hoy"), so a status trigger carries NO horizontal padding there (px-4 from sm). Its
               content is at least 44px wide in every state, so the 44px tap target holds. The card's
-              "Change" (an action trigger) is not in the topbar and keeps the button's own padding. */}
+              "Change" (an action trigger) is not in the topbar and keeps the button's own padding.
+              minors-1b item 1: at the agency's own 320px the org switcher (already avatar-only there,
+              F-107 r5) still leaves the indicator only 60px, 33px short of "Cerrado hoy" even at zero
+              padding — there is no more room (a) can give up, so (b): `whitespace-normal` overrides the
+              base Button's `whitespace-nowrap` and `shrink` overrides its `shrink-0`, so the trigger wraps
+              the short status to two lines instead of overflowing, keeping dot + word (rule 3) and
+              `min-h-11` (the tap target grows with it, never shrinks under it). The action trigger (the
+              card's "Change") keeps the base button's own nowrap/shrink-0: it is never in the topbar. */}
           <Button
             ref={triggerRef}
             type="button" variant="ghost" aria-haspopup="menu"
             aria-label={triggerKind === "action" ? tr.text("business.menu.trigger") : undefined}
             className={triggerKind === "status"
-              ? "min-h-11 rounded-[var(--radius-ctl)] px-0 focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:px-4 md:min-h-8"
+              ? "min-h-11 shrink whitespace-normal rounded-[var(--radius-ctl)] px-0 focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:px-4 md:min-h-8"
               : "min-h-11 rounded-[var(--radius-ctl)] focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8"}
           >
             {trigger}

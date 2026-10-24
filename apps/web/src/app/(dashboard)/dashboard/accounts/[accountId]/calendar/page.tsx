@@ -1,7 +1,8 @@
 import { headers } from "next/headers";
 import {
   serviceDb, getOrCreateCalendar, listCalendarBookings, getVoiceProfile,
-  listClosedDaysFrom, listClosureAppointments, countHeldByBooking,
+  listClosedDaysFrom, listClosureAppointmentsForRanges, CLOSURE_APPOINTMENTS_LIMIT, countHeldByBooking,
+  type ClosureAppointment,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
@@ -105,11 +106,39 @@ export default async function CalendarPage({
   let closedDaysView: ClosedDaysRangeView[] | null;
   try {
     const closedDays = await listClosedDaysFrom(db, accountId, today);
-    const appointmentsByRange = await Promise.all(closedDays.map((r) => listClosureAppointments(
-      db, accountId,
-      startOfDay(r.starts_on, account.timezone).toISOString(),
-      startOfDay(addDays(r.ends_on, 1), account.timezone).toISOString(),
-    )));
+    // Fix round (sonnet review, CHANGES REQUESTED): ONE query, but scoped to the ranges THEMSELVES, not
+    // the enclosing span from the earliest start to the latest end — that first cut spent the shared
+    // CLOSURE_APPOINTMENTS_LIMIT cap on every ORDINARY booking in the gap between two far-apart ranges
+    // (a holiday next week, a vacation next spring), which no closure ever touched. `
+    // listClosureAppointmentsForRanges` (packages/db) builds one `.or()` of per-range `and(gte, lt)`
+    // predicates — a booking outside every listed range's own window is never fetched at all, so it
+    // never spends a slot of the cap. Ranges never overlap (addClosedDayAction refuses an overlap), so
+    // each returned appointment's start falls inside exactly one range's own window.
+    let appointmentsByRange: ClosureAppointment[][];
+    let capped = false;
+    if (closedDays.length === 0) {
+      appointmentsByRange = [];
+    } else {
+      const ranges = closedDays.map((r) => ({
+        fromIso: startOfDay(r.starts_on, account.timezone).toISOString(),
+        toIso: startOfDay(addDays(r.ends_on, 1), account.timezone).toISOString(),
+      }));
+      const allAppointments = await listClosureAppointmentsForRanges(db, accountId, ranges);
+      // The read hit @bis/db's own row cap: there may be MORE affected appointments than this card can
+      // show, on ANY of the listed ranges (the shared cap orders by starts_at ascending across all of
+      // them, so there is no single range to blame) — the Closed days card's own "more later" caveat,
+      // same spirit as the dashboard status card's (business-status-card-view.tsx), worded for a list of
+      // ranges rather than one window ending on a known date.
+      capped = allAppointments.length === CLOSURE_APPOINTMENTS_LIMIT;
+      appointmentsByRange = ranges.map(({ fromIso, toIso }) => {
+        const from = Date.parse(fromIso);
+        const to = Date.parse(toIso);
+        return allAppointments.filter((a) => {
+          const t = new Date(a.starts_at).getTime();
+          return t >= from && t < to;
+        });
+      });
+    }
     // Fix round C8: "{n} messages waiting" on every listed row, as the dashboard card shows it — ONE read
     // for every listed booking, on this page's db (RLS-enforced), scoped to the account. Inside this same
     // try: a failed count is the card's own error state, never a row silently reading "none waiting".
@@ -118,7 +147,7 @@ export default async function CalendarPage({
       ? await countHeldByBooking(db, accountId, bookingIds)
       : new Map<string, number>();
     closedDaysView = closedDays.map((r, i) => ({
-      id: r.id, startsOn: r.starts_on, endsOn: r.ends_on, reason: r.reason,
+      id: r.id, startsOn: r.starts_on, endsOn: r.ends_on, reason: r.reason, capped,
       appointments: appointmentsByRange[i]!.map((a) => ({
         id: a.id, contactId: a.contact_id,
         contactName: `${a.first_name ?? ""} ${a.last_name ?? ""}`.trim(),

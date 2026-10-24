@@ -2414,12 +2414,12 @@ export const m = {
   "business.toast.failed": "Couldn't change today's status. Try again.",
   "business.toast.failed.es": "No se pudo cambiar el estado de hoy. Intente de nuevo.",
   "business.refuse.role": "Only an Owner can change this.",
-  "business.refuse.role.es": "Solo un propietario puede cambiar esto.",
+  "business.refuse.role.es": "Solo un dueño puede cambiar esto.",
   "business.refuse.closeOrReopen": "Only an Owner can close the business or reopen it.",
-  "business.refuse.closeOrReopen.es": "Solo un propietario puede cerrar el negocio o volver a abrirlo.",
+  "business.refuse.closeOrReopen.es": "Solo un dueño puede cerrar el negocio o volver a abrirlo.",
   // Fix round C5: Keep is refused only to whoever cannot see the whole account (a Technician); Staff may.
   "business.refuse.keep": "Only an Owner or Staff can keep an appointment.",
-  "business.refuse.keep.es": "Solo un propietario o un empleado puede mantener una cita.",
+  "business.refuse.keep.es": "Solo un dueño o un empleado puede mantener una cita.",
   "business.card.title": "Today",
   "business.card.title.es": "Hoy",
   "business.card.change": "Change",
@@ -2499,6 +2499,11 @@ export const m = {
   "closedDays.count.es": "{n} citas",
   "closedDays.countOne": "1 appointment",
   "closedDays.countOne.es": "1 cita",
+  // Fix round (sonnet review): the dashboard status card's own "more later" caveat
+  // (business.card.moreLater), worded for this card instead — the shared read cap orders across every
+  // listed range, so there is no one range's own date to name the way that key does.
+  "closedDays.moreAppointments": "There may be more appointments than shown.",
+  "closedDays.moreAppointments.es": "Puede haber más citas de las que se muestran.",
   "closedDays.added": "Closed days added.",
   "closedDays.added.es": "Días cerrados agregados.",
   "closedDays.addedTodo": "{n} appointments are on these days. A To-do lists them.",
@@ -2517,7 +2522,7 @@ export const m = {
   "closedDays.saveFailed": "Couldn't save the closed days. Try again.",
   "closedDays.saveFailed.es": "No se pudieron guardar los días cerrados. Intente de nuevo.",
   "closedDays.role": "Only an Owner can change closed days.",
-  "closedDays.role.es": "Solo un propietario puede cambiar los días cerrados.",
+  "closedDays.role.es": "Solo un dueño puede cambiar los días cerrados.",
   "closedDays.error.past": "The first day can't be in the past.",
   "closedDays.error.past.es": "El primer día no puede ser en el pasado.",
   "closedDays.error.endBeforeStart": "The last day must be on or after the first.",

@@ -249,6 +249,25 @@ describe("BusinessStatusCard — S22 (orchestrator ruling, finding 5)", () => {
       expect(html).toContain("are on the calendar.");
     } finally { vi.useRealTimers(); }
   });
+
+  // minors-1b item 5: @bis/db's listClosureAppointments is now capped at CLOSURE_APPOINTMENTS_LIMIT
+  // (200) — hitting that row cap is ALSO "more later", not only a window the 14-day date cap already
+  // caught. Closed today's own window ends at tonight's local midnight, nowhere near the 14-day cap
+  // (w.capped is false on its own, per the test just above showing no moreLater text there), so this
+  // is the row-count cap alone driving the notice.
+  it("200 appointments (the query cap) still shows moreLater, even though the window itself ends tonight, nowhere near the 14-day date cap (mutation: capped: w.capped alone -> FAILS)", async () => {
+    mockDefaults();
+    dbMocks.getBusinessStatusRow.mockResolvedValue(row({
+      state: "closed_today", until: "2027-06-08T05:00:00.000Z", set_at: "2027-06-07T14:00:00.000Z",
+    }));
+    dbMocks.listClosureAppointments.mockResolvedValue(
+      Array.from({ length: 200 }, (_, i) => appt({ id: `bk_${i}` })),
+    );
+    try {
+      const html = await render();
+      expect(html).toContain("More appointments after");
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 describe("BusinessStatusCard — fix round (C2, C4, C8, D8)", () => {

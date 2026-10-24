@@ -202,6 +202,13 @@ describe("VoiceKnowledgePage — the fix round", () => {
     expect(html).toMatch(/<dd lang="es">El precio de Banquete es \$35 por invitado\.<\/dd>/);
   });
 
+  // minors-1b item 8: the hours lines are model input (Global Constraints), same as the Closed days
+  // lines just below them in this same card, but carried no lang of their own.
+  it("each hours line is model input, marked lang=\"en\" (mutation: drop lang on the hours li -> FAILS)", async () => {
+    const html = await render("3");
+    expect(html).toMatch(/<li lang="en">Monday: 9:00 AM to 5:00 PM<\/li>/);
+  });
+
   it("the five sections are h4s under the card's h3, and the services section reads 'Services & prices' (mutation: h3 sections -> FAILS)", async () => {
     const html = await render("3");
     const h4s = [...html.matchAll(/<h4[^>]*>([^<]*)<\/h4>/g)].map((h) => h[1]);

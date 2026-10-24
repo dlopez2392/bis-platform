@@ -1814,6 +1814,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
     "closedDays.remove": [],
     "closedDays.count": ["n"],
     "closedDays.countOne": [],
+    "closedDays.moreAppointments": [],
     "closedDays.added": [],
     "closedDays.addedTodo": ["n"],
     "closedDays.addedTodoOne": [],
@@ -1852,8 +1853,8 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
   // The SET of names: a sentence may name one twice, and t() replaces every occurrence.
   const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
 
-  it("the key list itself is the 125 rows: the table's 108, the call-page table's 12, and the fix round's 5 (business.storm.description, business.refuse.keep, business.card.keepFailed, closedDays.addedTodoOne, closedDays.emptyNoPersona) (guards the loops below from vacuity)", () => {
-    expect(KEYS.length).toBe(125);
+  it("the key list itself is the 126 rows: the table's 108, the call-page table's 12, the fix round's 5 (business.storm.description, business.refuse.keep, business.card.keepFailed, closedDays.addedTodoOne, closedDays.emptyNoPersona), and the Calendar-page undercount fix round's 1 (closedDays.moreAppointments) (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(126);
   });
 
   it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
@@ -1921,9 +1922,9 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
       ["business.toast.undone", "Change undone.", "Cambio deshecho."],
       ["business.toast.changedSince", "Someone changed this since, so nothing was undone.", "Alguien lo cambió mientras tanto, así que no se deshizo nada."],
       ["business.toast.failed", "Couldn't change today's status. Try again.", "No se pudo cambiar el estado de hoy. Intente de nuevo."],
-      ["business.refuse.role", "Only an Owner can change this.", "Solo un propietario puede cambiar esto."],
-      ["business.refuse.closeOrReopen", "Only an Owner can close the business or reopen it.", "Solo un propietario puede cerrar el negocio o volver a abrirlo."],
-      ["business.refuse.keep", "Only an Owner or Staff can keep an appointment.", "Solo un propietario o un empleado puede mantener una cita."],
+      ["business.refuse.role", "Only an Owner can change this.", "Solo un dueño puede cambiar esto."],
+      ["business.refuse.closeOrReopen", "Only an Owner can close the business or reopen it.", "Solo un dueño puede cerrar el negocio o volver a abrirlo."],
+      ["business.refuse.keep", "Only an Owner or Staff can keep an appointment.", "Solo un dueño o un empleado puede mantener una cita."],
       ["business.card.title", "Today", "Hoy"],
       ["business.card.change", "Change", "Cambiar"],
       ["business.card.openToday", "Open today", "Abierto hoy"],
@@ -1963,6 +1964,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
       ["closedDays.remove", "Remove", "Quitar"],
       ["closedDays.count", "{n} appointments", "{n} citas"],
       ["closedDays.countOne", "1 appointment", "1 cita"],
+      ["closedDays.moreAppointments", "There may be more appointments than shown.", "Puede haber más citas de las que se muestran."],
       ["closedDays.added", "Closed days added.", "Días cerrados agregados."],
       ["closedDays.addedTodo", "{n} appointments are on these days. A To-do lists them.", "Hay {n} citas en estos días. Una tarea en Pendientes las lista."],
       ["closedDays.addedTodoOne", "1 appointment is on these days. A To-do lists it.", "Hay 1 cita en estos días. Una tarea en Pendientes la lista."],
@@ -1971,7 +1973,7 @@ describe("S-47d: the one switch copy, English and Spanish (plan Task 2)", () => 
       ["closedDays.emptyNoPersona", "No closed days planned. Add a holiday or a vacation, and your booking page will know you're closed.", "No hay días cerrados planeados. Agregue un día festivo o unas vacaciones, y su página de citas sabrá que está cerrado."],
       ["closedDays.error", "Couldn't load closed days.", "No se pudieron cargar los días cerrados."],
       ["closedDays.saveFailed", "Couldn't save the closed days. Try again.", "No se pudieron guardar los días cerrados. Intente de nuevo."],
-      ["closedDays.role", "Only an Owner can change closed days.", "Solo un propietario puede cambiar los días cerrados."],
+      ["closedDays.role", "Only an Owner can change closed days.", "Solo un dueño puede cambiar los días cerrados."],
       ["closedDays.error.past", "The first day can't be in the past.", "El primer día no puede ser en el pasado."],
       ["closedDays.error.endBeforeStart", "The last day must be on or after the first.", "El último día debe ser igual o posterior al primero."],
       ["closedDays.error.tooLong", "Closed days can cover at most 92 days at a time.", "Los días cerrados pueden cubrir como máximo 92 días a la vez."],
