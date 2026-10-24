@@ -692,6 +692,31 @@ describe("buildSystemPrompt — S-47c digests", () => {
   }, 30_000); // 3 x 5184 prompts: ~3.3s idle; it timed out at the 5s default once under load (Task 4 mutation run)
 });
 
+/** Every S-47c base combination × hours {absent, OPEN_H, CLOSED_H} × price list {absent, LIST}: 5184 × 3 × 2. */
+function everyS47dBaseInput(): VoicePromptInput[] {
+  const out: VoicePromptInput[] = [];
+  for (const i of everyS47cBaseInput())
+    for (const businessHours of [undefined, OPEN_H, CLOSED_H] as const)
+      for (const priceList of [undefined, LIST] as const)
+        out.push({
+          ...i,
+          ...(businessHours === undefined ? {} : { businessHours }),
+          ...(priceList === undefined ? {} : { priceList }),
+        });
+  return out;
+}
+/** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). */
+const PRE_S47D_DIGEST = "f4ef945b252ea1ee3218c79628c5592108cc37e6975f63ac9cb0abcf118015c9";
+
+describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
+  it("covers 31104 combinations (guards the digest from an empty loop)", () => {
+    expect(everyS47dBaseInput().length).toBe(31104);
+  });
+  it("with neither new key, every combination is byte-identical to 5e9c07a7", () => {
+    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47D_DIGEST);
+  }, 60_000);
+});
+
 describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
   it("open now: exactly the BUSINESS HOURS block, after the Services line, and nothing else, on every surface (72 combinations; mutation: place it after HARD LIMITS -> FAILS)", () => {
     let seen = 0;
