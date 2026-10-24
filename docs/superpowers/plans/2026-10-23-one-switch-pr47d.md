@@ -481,6 +481,9 @@ export function effectiveStatus(input: StatusInput): EffectiveStatus;           
 export function untilFor(change: StatusChange, hours: OpenHours | null, timezone: string, now: Date): Date | null;  // SD13
 export function slotClosures(input: StatusInput): SlotClosures;
 export function coversAppointment(input: StatusInput, startsAt: Date): Cover;
+/** S22 and S7 share it: the instants whose appointments the card lists and the To-do is filed for. null when
+ *  the status is open or running late. to = min(window end, now + 14 days); capped = the window runs past it. */
+export function closureListWindow(input: StatusInput): { from: Date; to: Date; capped: boolean } | null;
 export function statusCode(e: EffectiveStatus): StatusCode;
 export function toWire(e: EffectiveStatus): WireStatus;      // Dates as ISO strings, for server-action results and props
 export function fromWire(w: WireStatus): EffectiveStatus;
@@ -517,6 +520,12 @@ Rules (spec §5.1 plus SD3 and SD6):
   - Else a closed day holds `dayKey(startsAt)` → `{ kind: "closed_day", endsAt: startOfDay(addDays(range.ends_on, 1)) }`.
   - Else Closed today in force with `startsAt` in `[set_at, until)` → `{ kind: "closed_today", endsAt: new Date(until) }`, tonight's midnight.
   - Running late covers nothing.
+- **`closureListWindow`:**
+  - `from` = `now`;
+  - `to` = the earlier of the window's end and `now + 14 days`. The window's end is: Closed today → `until`; a dated storm → `until`; a closed day today → the start of the day after its last date; an open-ended storm → no end, so the 14-day cap applies.
+  - `capped` = the window ends after `now + 14 days`, or has no end.
+  - Open and Running late → null.
+  - The card lists, and the filer counts, only the appointments in `[from, to)` that `coversAppointment` covers (S7, S22).
 - **`statusCode`:** `open` → `"open"`; `running_late` → `` `running_late_${lateMinutes}` ``; every other state maps to its own name.
 
 `SlotClosures` lives in `slots.ts` (Task 5 adds it; Task 4 imports the type), because `slots.ts` is the lower module:
@@ -1970,8 +1979,8 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 | `business.toast.late` | Running late today. Booking stays open. | Con retraso hoy. Las citas siguen abiertas. |
 | `business.toast.open` | Open again. Your booking page takes bookings as usual. | Abierto de nuevo. Su página de citas recibe citas como siempre. |
 | `business.toast.persona` | {persona} says so too. | {persona} también lo dice. |
-| `business.toast.todo` | A To-do lists today's {n} appointments. | Una tarea en Pendientes lista las {n} citas de hoy. |
-| `business.toast.todoOne` | A To-do lists today's appointment. | Una tarea en Pendientes lista la cita de hoy. |
+| `business.toast.todo` | A To-do lists the {n} affected appointments. | Una tarea en Pendientes lista las {n} citas afectadas. |
+| `business.toast.todoOne` | A To-do lists the affected appointment. | Una tarea en Pendientes lista la cita afectada. |
 | `business.toast.undone` | Change undone. | Cambio deshecho. |
 | `business.toast.changedSince` | Someone changed this since, so nothing was undone. | Alguien lo cambió mientras tanto, así que no se deshizo nada. |
 | `business.toast.failed` | Couldn't change today's status. Try again. | No se pudo cambiar el estado de hoy. Intente de nuevo. |
@@ -2027,7 +2036,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 | `closedDays.error.tooLong` | Closed days can cover at most 92 days at a time. | Los días cerrados pueden cubrir como máximo 92 días a la vez. |
 | `closedDays.error.tooFar` | Closed days must end within the next 12 months. | Los días cerrados deben terminar dentro de los próximos 12 meses. |
 | `closedDays.error.overlap` | These days overlap {range}, already listed. | Estos días se cruzan con {range}, que ya está en la lista. |
-| `business.todo.status` | Contact today's customers | Comuníquese con los clientes de hoy |
+| `business.todo.status` | Contact customers affected by the closure | Comuníquese con los clientes afectados por el cierre |
 | `business.todo.closedDay` | Contact customers booked on {dates} | Comuníquese con los clientes con cita el {dates} |
 | `automations.reason.heldClosedToday` | Held: the business is closed today | En espera: el negocio está cerrado hoy |
 | `automations.reason.heldStorm` | Held: closed for a storm | En espera: cerrado por tormenta |
@@ -2054,8 +2063,8 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 - The "Undo" label is the existing `common.undo` (`messages.ts:298-299`).
 - The spec's sentences are verbatim:
-  - "Someone changed this since, so nothing was undone.", "Only an Owner can change this.", "Only an Owner can close the business or reopen it.", "Contact today's customers", "Contact customers booked on {dates}", "Keep", "Kept", "Cancel on the calendar", "No appointments today are affected.", "Couldn't load today's status.", "Couldn't load closed days.", "Status at the start", "No closed days were recorded in this version.";
-  - the To-do toast pair;
+  - "Someone changed this since, so nothing was undone.", "Only an Owner can change this.", "Only an Owner can close the business or reopen it.", "Contact customers affected by the closure" (the orchestrator's widened S7, 2026-10-23), "Contact customers booked on {dates}", "Keep", "Kept", "Cancel on the calendar", "No appointments today are affected.", "Couldn't load today's status.", "Couldn't load closed days.", "Status at the start", "No closed days were recorded in this version.";
+  - the To-do toast pair, worded for the widened S7 (no longer "today's");
   - the menu pairs;
   - the reason pairs.
 - SD19: the toasts drop the spec's first-draft example "Sofía and your booking page now say so." (persona may be absent: an account with no voice profile still has the switch; the spec's §5.6.1 now matches). They say what changed on the booking page and append `business.toast.persona` when a persona name is known. The design reviewer reads this at 7 AM.
@@ -2252,6 +2261,12 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
   - Closed today → `endsAt` = `until` (tonight's midnight, D12), never the reopening;
   - a closed day → `kind: "closed_day"` with `endsAt` = the start of the day after the range's last date (its window, D12);
   - an open-ended storm → `endsAt: null`.
+- **`closureListWindow`** (S7, S22):
+  - Closed today at 10:00 → `to` = tonight's midnight, `capped: false`;
+  - a Storm set Monday 2027-06-07 10:00 CDT with `backOn` Thursday 2027-06-10 → `to` = Thursday's first opening with `H`, `2027-06-10T13:00:00.000Z`, `capped: false`;
+  - an open-ended storm → `to` = `now + 14 days` exactly, `capped: true`;
+  - a closed day today ending in 20 days → `to` = `now + 14 days`, `capped: true`;
+  - open and Running late → null.
 - **`statusCode`** for every state and all four delays (8 literals).
 - **`effectiveStatus` open with a range starting in 14 days** → `nextClosedDay` set; in 15 days → null.
 - **`toWire`/`fromWire`** round-trip each state.
@@ -2602,7 +2617,9 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
    - Any throw → `business.toast.failed` (logged with ids only).
 7. **The event.** `emit(db, accountId, "business_status.changed", access.userId, { from: effectiveBefore.state, to: change.state, late_minutes, until }, "user")`. A failure is logged, never shown.
 8. **The To-do.** Only when `change.state` is `closed_today` or `storm`:
-   - `appts = listClosureAppointments(db, accountId, now, startOfDay(addDays(today, 1)))`, filtered to `closure_kept_at === null`;
+   - `w = closureListWindow({ row: updated, closedDays, hours, timezone: tz, now })`. It is never null here, because the new state is a closure.
+   - `appts = listClosureAppointments(db, accountId, w.from, w.to)`, filtered to rows that `coversAppointment` covers and to `closure_kept_at === null`. This is the card's window (S22), not only today (the orchestrator's widened S7, 2026-10-23).
+   - The once-per-day key is still `on: today`, whatever date the appointments are on, so a second change on the same day files none (`tasks_closure_once`, 23505 → "already filed").
    - if `appts.length > 0`: `fileClosureTodo(serviceDb(), { accountId, kind: "status", on: today, createdBy: access.userId })`;
    - `todoId` = its id only when `created`; `todoCount = appts.length`;
    - a failure is logged, never shown.
@@ -2664,7 +2681,12 @@ export async function keepAppointmentAction(accountId: string, bookingId: string
   - No update is called on a refusal (assert the mock never ran).
   - `until` = `untilFor`'s for each change (assert the patch sent).
   - The bump is called on every success.
-  - The To-do is filed only for Closed today and Storm, and only with ≥1 not-kept appointment.
+  - The To-do is filed only for Closed today and Storm, and only with ≥1 not-kept, covered appointment in `closureListWindow`'s window.
+  - **The widened S7** (orchestrator ruling, 2026-10-23). Now = Monday 2027-06-07 10:00 CDT; a Storm with `backOn: "2027-06-10"`; nobody booked on Monday; one booking on Wednesday 2027-06-09 at 09:00.
+    - The first change files exactly ONE To-do: `ensureClosureTask` is called once, with `{ kind: "status", on: "2027-06-07" }`. `todoCount` is 1, and the toast copy is `business.toast.todoOne`.
+    - A second change on the same day (Storm to Closed today, then back to Storm) files none. The mock answers `created: false` on the repeat, as the 23505 path does. No second insert happens, `todoId` stays null, and Undo deletes nothing.
+    - Mutation: today-only filing (`listClosureAppointments(now, startOfDay(addDays(today, 1)))`) → the Wednesday case FAILS. Paste the line.
+    - Also: Closed today with that same Wednesday booking files none. D12 makes Closed today's window the rest of today.
   - The undo token's `before` is open for an expired row.
   - `expectedSetAt` is passed verbatim: a fixture `"2027-06-01T12:00:00.123456+00:00"` arrives unchanged.
   - Undo with a lost compare-and-set → `changedSince`; the To-do delete is called only with the filed id.
@@ -2939,7 +2961,7 @@ export function cardEndLine(e: EffectiveStatus, timezone: string, now: Date, loc
 **The dashboard card** (`[acct]/dashboard/business-status-card.tsx`, `id="business-status"`, rendered between `PageHeader` (`page.tsx:350-353`) and `ZoneNote` (`:364`)):
 - A server component wrapped in `RecordCardBoundary` (`components/record/record-card-boundary.tsx:35-46`), with a skeleton shaped like the compact line and an error fallback (`business.card.error` + `business.card.retry` as a reload link).
 - **Its reads** (on the page's `dbForRequest()`): zone, row, closed days, hours chain. When not open (S22, the orchestrator's ruling on finding 5):
-  - `listClosureAppointments(now → min(windowEnd, now + 14 days))`, where `windowEnd` is the closure's window end:
+  - `listClosureAppointments(w.from, w.to)`, with `w = closureListWindow(...)` (Task 4). It is the same function the To-do filer uses (Task 8), so the card and the To-do agree. `windowEnd` is the closure's window end:
     - Closed today → `until`, tonight's midnight (D12);
     - a dated storm → its `until`;
     - a closed day → the start of the day after its last date;
@@ -3264,7 +3286,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | S4 closed-day range rules | Task 1 (CHECK, trigger), Task 8 (exact window in the zone) |
 | S5 write path (server creates; client updates three columns; triggers stamp) | Task 1, Task 3 (`ensureBusinessStatusRow`), Task 8 |
 | S6 `calls.business_status` codes | Task 1, Task 3, Task 4 (`statusCode`), Task 10 |
-| S7 the To-do links to its list | Task 7 |
+| S7 (widened 2026-10-23: files for any covered appointment in the card's 14-day window, "Contact customers affected by the closure") | Task 8 (the Wednesday-storm case, the once-per-day case and the today-only mutation), Task 4 (`closureListWindow`), Task 2 (the title and toasts) |
+| S7 (as first written) the To-do links to its list | Task 7 |
 | S8 a closed day files a To-do | Task 8 (`addClosedDayAction`), Task 7 |
 | S9 Keep | Task 3, Task 8 (SD9, SD10), Tasks 11–12 |
 | S10 the hold, the bump, fail held | Task 9 (SD6, SD7) |

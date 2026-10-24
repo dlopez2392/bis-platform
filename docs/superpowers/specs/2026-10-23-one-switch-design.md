@@ -45,7 +45,8 @@ Fixed by the owner (2026-10-23):
   facts stay agency-only until F-037 part 2; guardrails never.
 - **D2 Existing appointments inside a closure are kept.** Nothing is cancelled or sent automatically.
   Flipping to Closed today or Storm files ONE To-do, "Contact today's customers", listing each affected
-  booking with a link. The owner uses the existing per-booking cancel and its notice (F-048,
+  booking with a link. (Widened by the orchestrator ruling of 2026-10-23, S7: it files whenever the closure
+  covers an appointment in the card's 14-day window, titled "Contact customers affected by the closure".) The owner uses the existing per-booking cancel and its notice (F-048,
   `calendar/actions.ts`, `cancelBookingAction`).
 - **D3 Each state reverts on its own.** Closed today ends at the next opening: the business hours
   (S-47c `voice_profiles.business_hours`) if set, else the calendar's `open_hours`, else midnight in the
@@ -112,8 +113,13 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   before this build, or a failed read).
 - **S7 The To-do links to its list.** A To-do row has a title and one link and no body
   (`tasks`, 0003; `work-list.tsx`), so it cannot itself carry several links. It links to the dashboard status
-  card, which lists each affected booking with its own link (5.5.1, 5.6.2). It is filed only when at least one
-  booking is affected, at most once per account per day, and Undo of the flip removes it while it is open.
+  card, which lists each affected booking with its own link (5.5.1, 5.6.2). It is filed whenever the closure in
+  force covers at least one booked, not-kept appointment in the card's window (S22: now through the closure
+  window's end, at most 14 days ahead), not only when today has one (orchestrator ruling, 2026-10-23,
+  implementing D2 beside S22: a dated storm with nobody booked today but customers later in the week still
+  owes those calls). At most once per account per day, and Undo of the flip removes it while it is open. Its
+  title is "Contact customers affected by the closure" / "Comuníquese con los clientes afectados por el
+  cierre", since the customers need not be today's.
 - **S8 Adding a closed day that covers booked appointments files one To-do too** ("Contact customers booked
   on {dates}"), linking to the Closed days card, where that range's appointments are listed (5.5.1).
 - **S9 Keep is a per-booking mark** (`bookings.closure_kept_at`), set from the dashboard card's list of
@@ -158,7 +164,9 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   2026-10-23, implementing D2): each booked appointment the closure in force covers, from now through the
   closure window's end but at most 14 days ahead (a dated storm, a multi-day closed-day range; an open-ended
   storm shows 14 days), each with its own Keep. When the cover runs past those 14 days, one line says more
-  appointments after that date are on the calendar. The To-do still links to this card (S7).
+  appointments after that date are on the calendar. The To-do still links to this card (S7), and is filed
+  from the same window (S7, widened the same day), so the To-do and the card never disagree about who is
+  affected.
 
 ## 3. Scope
 
@@ -581,8 +589,10 @@ with the new fields absent, null, `[]`, and `businessStatus: { state: "open", ne
 #### 5.5.1 The To-do (D2, S7, S8)
 
 - **When.** `setBusinessStatusAction` to Closed today or Storm, when at least one `booked` appointment, not
-  kept, starts between now and the end of today in the account's zone: one To-do, `closure_kind 'status'`,
-  `closure_on` today's date in the zone. `addClosedDayAction` when at least one such appointment falls on the
+  kept, is covered by the new closure within the card's window (S22: from now through the closure window's
+  end, at most 14 days ahead; for Closed today that is the rest of today, D12): one To-do, `closure_kind
+  'status'`, `closure_on` today's date in the zone (the once-per-day key, whatever date the appointments are
+  on). `addClosedDayAction` when at least one such appointment falls on the
   new range: one To-do, `closure_kind 'closed_day'`, `closure_on` the range's `starts_on`.
 - **Once.** `tasks_closure_once` makes a second filing for the same account, kind and date a 23505, which
   the action treats as "already filed" (0080's and 0084's dedupe). Flipping Closed today, then Open, then
@@ -590,8 +600,8 @@ with the new fields absent, null, `[]`, and `businessStatus: { state: "open", ne
 - **What.** Inserted by the server (serviceDb, because `keep_task_links` nulls the link columns for the
   client role): `title` in the account's language (`accounts.language`, English when unset), `due_at` now,
   `contact_id` and `assigned_to` null, `created_by` the acting person's Clerk id (the provenance mark of a
-  person, DESIGN.md), the two closure columns. Titles: "Contact today's customers" / "Comuníquese con los
-  clientes de hoy"; "Contact customers booked on {dates}" / "Comuníquese con los clientes con cita el
+  person, DESIGN.md), the two closure columns. Titles: "Contact customers affected by the closure" /
+  "Comuníquese con los clientes afectados por el cierre"; "Contact customers booked on {dates}" / "Comuníquese con los clientes con cita el
   {dates}".
 - **The link.** `openTasks` (`packages/db/src/work-queue.ts`) selects the two columns; `WorkRow` gains
   `closureFocus?: { kind, on }`; `workRowHref` (`lib/documents/card-focus.ts`) returns, for `status`, the
@@ -692,7 +702,7 @@ carries bilingual copy from its first day).
   for the account replaces) and the page refreshes (`router.refresh()`), so the dashboard card agrees. The
   toast says what changed and what it means ("Closed for today. Your booking page now says so."), adds
   "Sofía says so too." when the account has a voice profile (an account without one still has the switch, so
-  the persona is never assumed; plan SD19), adds "A To-do lists today's 3 appointments." when one was filed,
+  the persona is never assumed; plan SD19), adds "A To-do lists the 3 affected appointments." when one was filed,
   and carries Undo. A refused change: an error
   toast with the reason, the old status kept.
 - Technicians, and Staff during a closure: the same words, no button. A stale tab shows the status as of its last navigation
@@ -761,8 +771,8 @@ on a date… / Reabrimos el…; Change closed days / Cambiar días cerrados); ev
 drafts: "● Cerrado hoy · abre a las 8 AM", "● Cerrado hoy · abre el lun. a las 8 AM", "● Cerrado hoy · abre
 el 28 de dic.", "● Con unos 30 min de retraso", "● Con más de una hora de retraso", "● Cerrado por tormenta",
 "● Cerrado por tormenta · abre el jue. a las 8 AM"; short: "● Cerrado hoy", "● 30 min tarde", "● 1+ h
-tarde", "● Tormenta"); the toasts (each state, "A To-do lists today's {n} appointments." / "Una tarea en
-Pendientes lista las {n} citas de hoy.", the Undo confirmations, "Someone changed this since, so nothing was
+tarde", "● Tormenta"); the toasts (each state, "A To-do lists the {n} affected appointments." / "Una tarea en
+Pendientes lista las {n} citas afectadas.", the Undo confirmations, "Someone changed this since, so nothing was
 undone." / "Alguien lo cambió mientras tanto, así que no se deshizo nada.", "Only an Owner can change this."
 / "Solo un propietario puede cambiar esto.", "Only an Owner can close the business or reopen it." / "Solo un
 propietario puede cerrar el negocio o volver a abrirlo." (D8)); the dashboard card's states, list, counts and errors; the
@@ -815,7 +825,9 @@ form, full and short, as literal test fixtures.
   (instant reply, text-back, reactivation, quote follow-up, document request) is untouched; release: the
   switch to Open plus one tick sends what is due; Keep plus one tick sends; removing a closed day plus one
   tick sends; the loader reads once per account per tick (mutation: no memo → the read count FAILS).
-- **To-do:** filed on Closed today and Storm only with an affected appointment; once per account and day
+- **To-do:** filed on Closed today and Storm only with an affected appointment in the card's window; a dated
+  storm with nobody booked today but one booking on Wednesday files exactly one To-do, and a second change the
+  same day files none (mutation: today-only filing → the storm case FAILS); once per account and day
   (23505 → "already filed"); its link (`workRowHref`) for both kinds; Undo deletes it only while open; a
   signed-in insert or update cannot set or change the closure columns (`keep_task_links`).
 - **Actions:** `mayChangeStatus` over every (role × stored state × change) cell, as a table: the agency and
