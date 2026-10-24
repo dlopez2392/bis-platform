@@ -8,8 +8,15 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 // the negative (Staff refused) and positive-control (bookings unaffected)
 // tests can drive it without re-mocking per test.
 const owner = vi.hoisted(() => ({ allowed: true, calls: [] as string[] }));
+// S-47d Task 8 ("Keep"): `access.value` lets a test drive `requireAccountAccess`'s role, the same shape
+// `tasks/actions.test.ts`'s `authFixture` uses. Every pre-existing test here keeps the old default
+// (isAgency: true), so `seesWholeAccount` still reads true for all of them unchanged.
+const access = vi.hoisted(() => ({
+  value: { userId: "user_1", isAgency: true, role: null } as
+    { userId: string; isAgency: boolean; role: "owner" | "staff" | "technician" | null },
+}));
 vi.mock("@/lib/auth", () => ({
-  requireAccountAccess: async () => ({ userId: "user_1", isAgency: true }),
+  requireAccountAccess: async () => access.value,
   requireAccountOwner: async (accountId: string) => {
     owner.calls.push(accountId);
     if (!owner.allowed) throw Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT" });
@@ -45,6 +52,8 @@ const dbMocks = vi.hoisted(() => ({
   // has something to compare against. Read through the SAME request client
   // the write below uses (`{}` from `dbForRequest`'s mock), never serviceDb.
   getOrCreateCalendar: vi.fn(),
+  // S-47d Task 8 ("Keep"): the write, the event and the hold bump.
+  setBookingClosureKept: vi.fn(), bumpHeldForAccount: vi.fn(), emit: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks,
@@ -52,10 +61,11 @@ vi.mock("@bis/db", async (importOriginal) => ({
 
 import {
   updateCalendarSettingsAction, setBookingStatusAction, undoCancelBookingAction, cancelBookingAction,
-  cancelNoticeOptionAction,
+  cancelNoticeOptionAction, keepAppointmentAction,
 } from "./actions";
 import { BookingNotStartedError, BookingNotRestorableError, SlotTakenError } from "@bis/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
 
 /** The minimum a submission needs beyond `followupBody` for the action to
@@ -81,6 +91,7 @@ beforeEach(() => {
   dbMocks.getOrCreateCalendar.mockResolvedValue({ followup_body_es: null, followup_body_es_basis: null });
   owner.allowed = true;
   owner.calls = [];
+  access.value = { userId: "user_1", isAgency: true, role: null };
 });
 
 /**
@@ -749,5 +760,69 @@ describe("undoCancelBookingAction — the notice id is bound to the proven booki
   it("no notice id: no binding read at all", async () => {
     expect(await undoCancelBookingAction("acct_1", "bk_1", V)).toEqual({ ok: true });
     expect(visible.noticeBelongsToBooking).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * S-47d Task 8: "Keep" on one affected appointment during a closure — it still happens, so its
+ * reminders and follow-up go out as usual. Anyone who may cancel on this calendar (`seesWholeAccount`:
+ * the agency, an Owner or Staff) may also Keep; a Technician may not. The write is still proven through
+ * the caller's own client first (spec §7.3), same as every other booking action in this file.
+ */
+describe("keepAppointmentAction — S-47d Task 8", () => {
+  beforeEach(() => {
+    dbMocks.setBookingClosureKept.mockReset().mockResolvedValue(true);
+    dbMocks.bumpHeldForAccount.mockReset().mockResolvedValue(0);
+    dbMocks.emit.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("a Technician is refused with the role sentence, and nothing is written (mutation: check isAgency alone, ignoring role → FAILS)", async () => {
+    access.value = { userId: "user_1", isAgency: false, role: "technician" };
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(r).toEqual({ ok: false, error: t(m, "business.refuse.role", "en") });
+    expect(dbMocks.setBookingClosureKept).not.toHaveBeenCalled();
+  });
+
+  it("the Spanish sentence", async () => {
+    access.value = { userId: "user_1", isAgency: false, role: "technician" };
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "es");
+    expect(r).toEqual({ ok: false, error: "Solo un propietario puede cambiar esto." });
+  });
+
+  it("Staff may Keep (sees the whole account, same as cancel)", async () => {
+    access.value = { userId: "user_1", isAgency: false, role: "staff" };
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(r).toEqual({ ok: true });
+  });
+
+  it("a proveBooking refusal passes through, and nothing is written (mutation: skip proveBooking → FAILS)", async () => {
+    visible.callerCanSee.mockResolvedValue(false);
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(r).toEqual({ ok: false, error: m["calendar.bookings.statusUpdateFailed"] });
+    expect(visible.callerCanSee).toHaveBeenCalledWith("bookings", "acct_1", "bk_1");
+    expect(dbMocks.setBookingClosureKept).not.toHaveBeenCalled();
+  });
+
+  it.each([[true], [false]])("writes setBookingClosureKept(accountId, bookingId, %s)", async (kept) => {
+    const r = await keepAppointmentAction("acct_1", "bk_1", kept, "en");
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.setBookingClosureKept).toHaveBeenCalledWith({}, "acct_1", "bk_1", kept);
+  });
+
+  it("a write that changes nothing (false) answers the generic failure (mutation: ignore the false → FAILS)", async () => {
+    dbMocks.setBookingClosureKept.mockResolvedValue(false);
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(r).toEqual({ ok: false, error: t(m, "business.toast.failed", "en") });
+  });
+
+  it("the bump runs on every success (mutation: drop the bump call → FAILS)", async () => {
+    const r = await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(r).toEqual({ ok: true });
+    expect(dbMocks.bumpHeldForAccount).toHaveBeenCalledWith({}, "acct_1");
+  });
+
+  it("emits booking.closure_kept as the signed-in user", async () => {
+    await keepAppointmentAction("acct_1", "bk_1", true, "en");
+    expect(dbMocks.emit).toHaveBeenCalledWith({}, "acct_1", "booking.closure_kept", "user_1", { booking_id: "bk_1", kept: true }, "user");
   });
 });

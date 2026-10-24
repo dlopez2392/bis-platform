@@ -66,8 +66,16 @@ const ALLOWED: Record<string, Reason> = {
   "app/(dashboard)/dashboard/accounts/[accountId]/billing/page.tsx": "owner-only",
   "app/(dashboard)/dashboard/accounts/[accountId]/branding/actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/branding/page.tsx": "configuration",
+  // S-47d Task 8: one business_status row per account (ensure/update/the To-do/the hold bump), guarded
+  // by requireAccountAccess + mayChangeStatus; serviceDb only for the row's own creation, the closure
+  // To-do and the bump, never the client-role update itself (dbForRequest).
+  "app/(dashboard)/dashboard/accounts/[accountId]/business-status-actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/actions.ts": "proven-target",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/cancel-notice.ts": "proven-target",
+  // S-47d Task 8: planned closed days, Owners and the agency only (canManage); serviceDb only for the
+  // closure To-do and the hold bump, never the insert/delete themselves (dbForRequest, the client-role
+  // grant 0097 gives `authenticated`).
+  "app/(dashboard)/dashboard/accounts/[accountId]/calendar/closed-days-actions.ts": "configuration",
   "app/(dashboard)/dashboard/accounts/[accountId]/calendar/page.tsx": "configuration",
   // ledgerDb after getContact on the request client found the call's contact.
   "app/(dashboard)/dashboard/accounts/[accountId]/calls/[callId]/page.tsx": "proven-target",
