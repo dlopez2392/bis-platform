@@ -28,6 +28,15 @@ type Props = {
    *  identical shape `f/[publicId]/public-form.tsx` carries in its own
    *  hidden `attribution` field. */
   attribution: string;
+  /** S-47d (task 13, spec section 5.3): what `loadClosureView` says the
+   *  switch or a planned closed day means for TODAY, already in this
+   *  page's own language — `null` when there is nothing to say (open,
+   *  running late, or the read itself failed). */
+  closureNotice: string | null;
+  /** Every date key, within this page's own horizon, that the account has
+   *  planned closed — passed straight through to `SlotPicker`'s empty
+   *  state (`emptyDayTitle`). */
+  closedDayKeys: readonly string[];
   getSlots: (dayIso: string) => Promise<{ slots: string[] } | { error: string }>;
   submit: (formData: FormData) => Promise<BookingResult>;
 };
@@ -66,7 +75,7 @@ export function calendarLink(
 }
 
 export function BookingPage({
-  locale, strings, todayKey, maxAdvanceDays, renderToken, attribution, getSlots, submit,
+  locale, strings, todayKey, maxAdvanceDays, renderToken, attribution, closureNotice, closedDayKeys, getSlots, submit,
 }: Props) {
   const intl = intlLocale(locale);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -265,9 +274,15 @@ export function BookingPage({
       <style>{BOOKING_CSS}</style>
       {steps}
 
+      {/* S-47d (task 13): closed today, a planned closed day, or a storm --
+          above the picker, inside this same branded card. `role="status"`
+          rather than "alert": this is read on arrival, not interrupting an
+          in-progress action the way the slot-taken notice below does. */}
+      {closureNotice ? <p role="status" className="bis-booking-notice">{closureNotice}</p> : null}
+
       <SlotPicker
         locale={locale} strings={strings} todayKey={todayKey} maxAdvanceDays={maxAdvanceDays}
-        bookerTimezone={bookerTimezone} getSlots={getSlots}
+        bookerTimezone={bookerTimezone} closedDayKeys={closedDayKeys} getSlots={getSlots}
         selectedSlot={selectedSlot} onPick={setSelectedSlot} onDayChange={() => setResult(null)}
         refreshKey={refreshKey}
         notice={result && !result.ok && result.slotTaken ? (

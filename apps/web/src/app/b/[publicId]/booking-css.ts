@@ -152,6 +152,21 @@ export const BOOKING_CSS = `
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
 
+/* --- S-47d: the closed-business notice ------------------------------------
+   Shown above the picker when the switch or a planned closed day is in
+   force (spec section 5.3). The SENTENCE already says "Closed" (status is
+   never color alone, DESIGN.md rule 3); --form-error is the one "this needs
+   attention" token this page already carries, already lifted to 4.5:1 at
+   source (public-form-theme.ts), so the tint is emphasis on a fact the
+   words already state, not the only signal. */
+.bis-booking-notice {
+  border: 1px solid var(--form-error, #b91c1c);
+  border-radius: var(--radius-card, 12px);
+  background: color-mix(in oklab, var(--form-error, #b91c1c) 8%, transparent);
+  color: var(--form-error, #b91c1c);
+  padding: 12px 14px; margin: 0 0 16px; font-weight: 500;
+}
+
 /* --- Empty and error ------------------------------------------------------ */
 .bis-booking-empty {
   border: 1px dashed var(--border, #d4d4d8); border-radius: var(--radius-card, 12px);
