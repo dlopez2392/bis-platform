@@ -959,6 +959,17 @@ describe("buildSystemPrompt — the TODAY line and the CLOSED DAYS block (spec 5
     expect(p).not.toContain("TODAY:");
     expect(p.replace(`\n\n${DAYS_BLOCK}`, "")).toBe(buildSystemPrompt(input, now));
   });
+  it("I-2: an upcoming closed day reaches the Right now line even when the status itself is open (mutation: closedDays forced to [] in system-prompt.ts's closures -> FAILS, says 'opens tomorrow')", () => {
+    // Thursday, June 3, 2027, 6:00 PM CDT. Friday June 4 is a holiday closed day; Monday June 7 is next open.
+    const thu6pm = new Date("2027-06-03T23:00:00Z");
+    const monFriHours: OpenHours = {
+      mon: [["08:00", "17:00"]], tue: [["08:00", "17:00"]], wed: [["08:00", "17:00"]],
+      thu: [["08:00", "17:00"]], fri: [["08:00", "17:00"]],
+    };
+    const fridayHoliday: ClosedDayLine = { starts_on: "2027-06-04", ends_on: "2027-06-04", reason: "holiday", line: "- Friday, June 4, 2027 (holiday)" };
+    const p = buildSystemPrompt(baseInput({ businessHours: monFriHours, businessStatus: S_OPEN, closedDays: [fridayHoliday] }), thu6pm);
+    expect(p.split("\n").find((l) => l.startsWith("Right now:"))).toBe("Right now: closed; opens Monday at 8:00 AM.");
+  });
   it("running late with hours: the block is S-47c's, plus the TODAY line only", () => {
     const input = baseInput({ businessHours: OPEN_H });
     expect(buildSystemPrompt({ ...input, businessStatus: S_LATE }, now).replace(`\n\n${TODAY_LATE}`, "")).toBe(buildSystemPrompt(input, now));

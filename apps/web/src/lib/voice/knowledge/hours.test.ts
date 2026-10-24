@@ -76,6 +76,9 @@ describe("openNow with closures (S-47d)", () => {
     ["an open-ended storm", { state: "storm", reopensAt: null, reopensTimeKnown: false }, TUE, "Right now: closed."],
     ["a reopening with no known time (pinned so a stray state never throws)", { state: "closed_today", reopensAt: at("2026-12-23T06:00:00Z"), reopensTimeKnown: false },
       TUE, "Right now: closed; opens tomorrow."],
+    ["I-1: the opening's zone-calendar day can differ from the UTC day (mutation: dayKey in UTC inside opensWhen -> FAILS, says 'today')",
+      { state: "closed_today", reopensAt: at("2026-12-23T14:00:00Z"), reopensTimeKnown: true }, at("2026-12-23T02:30:00Z"),
+      "Right now: closed; opens tomorrow at 8:00 AM."],
   ] as const)("%s", (_n, status, now, line) => {
     expect(openNow(H, TZ, now, { status: status as never, closedDays: [] })).toEqual({ open: false, line });
   });
@@ -90,6 +93,12 @@ describe("openNow with closures (S-47d)", () => {
     expect(openNow(hours, TZ, thu)).toEqual({ open: false, line: "Right now: closed; opens tomorrow at 8:00 AM." });
     for (const status of [OPEN_STATUS, null])
       expect(openNow(hours, TZ, thu, { status, closedDays: [fri] })).toEqual({ open: false, line: "Right now: closed; opens Saturday at 9:00 AM." });
+  });
+  it("m-1: a closed day covering today counts as closed even when the status read failed (status null), worded through effectiveStatus's own closed_day path (spec S17; pre-fix: 'Right now: open until 12:00 PM.')", () => {
+    const fri = { starts_on: "2027-06-04", ends_on: "2027-06-04", reason: "holiday" as const };
+    const fri10am = at("2027-06-04T15:00:00Z"); // Friday, June 4, 2027, 10:00 AM CDT
+    expect(openNow(H, TZ, fri10am, { status: null, closedDays: [fri] }))
+      .toEqual({ open: false, line: "Right now: closed; opens tomorrow at 9:00 AM." });
   });
   it("a closed range past a week gives the dated form on the open path too", () => {
     const hours: OpenHours = { fri: [["08:00", "18:00"]] };

@@ -2,7 +2,9 @@
 // zone through partsInZone (Intl.DateTimeFormat with an explicit timeZone), the slot engine's rule, so DST is the
 // zone's, never the server's. Pure; relative imports only.
 import { partsInZone, type OpenHours } from "../../booking/slots";
-import { dayKey, reopeningFrom, type ClosedDay, type EffectiveStatus } from "../../business-status/status";
+import {
+  dayKey, reopeningFrom, closedDayOn, startOfDay, addDays, type ClosedDay, type EffectiveStatus,
+} from "../../business-status/status";
 
 type Day = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
 const SUN_FIRST: readonly Day[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -91,12 +93,22 @@ function closedLine(opening: Date | null, timeKnown: boolean, timeZone: string, 
 
 /** Absent `closures`: S-47c's answer, byte for byte. With a closure in force (Closed today, Storm, a closed day):
  *  closed, opening at the reader's reopening. Otherwise (open, running late, or no status): the hours' answer,
- *  except that a closed-now answer names the next opening that is not on a closed day. */
+ *  except that a closed-now answer names the next opening that is not on a closed day. A null status (the
+ *  read failed, spec S17) still reads a closed day covering today as closed, worded through the same
+ *  reopeningFrom path effectiveStatus's own closed_day branch uses (status.ts), rather than a second rule. */
 export function openNow(hours: OpenHours, timeZone: string, now: Date, closures?: OpenNowClosures): OpenNow {
   if (closures) {
     const s = closures.status;
     if (s && (s.state === "closed_today" || s.state === "storm" || s.state === "closed_day")) {
       return closedLine(s.reopensAt, s.reopensTimeKnown, timeZone, now);
+    }
+    if (s === null) {
+      const todayRange = closedDayOn(dayKey(now, timeZone), closures.closedDays);
+      if (todayRange) {
+        const windowEnd = startOfDay(addDays(todayRange.ends_on, 1), timeZone);
+        const r = reopeningFrom(windowEnd, hours, timeZone, closures.closedDays);
+        return closedLine(r.at, r.timeKnown, timeZone, now);
+      }
     }
     const byHours = openNow(hours, timeZone, now);
     if (byHours.open) return byHours;
