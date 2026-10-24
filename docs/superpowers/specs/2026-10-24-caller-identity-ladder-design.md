@@ -6,7 +6,8 @@ the rest against the tree at main `449d5bf6`. The choices it makes that the deci
 S1–S29 in section 2. The owner answered the first draft's question and its three findings the same day (E6,
 E7), and the orchestrator ruled on its "needs" and on findings F4 and F5 (O1–O3). The owner answered the
 question E7 raised (Q2) the same day as E8, the one shared holding record, which is what brings migration 0098
-into this part (4.1). There are no open questions (section 11). Part e of S-47 (parallel work,
+into this part (4.1). There are no open questions (section 11). The opus plan review of 2026-10-24 and the
+orchestrator's rulings on it amended this spec in place; section 13 lists every change (R1-R15, S30). Part e of S-47 (parallel work,
 `docs/crm-features.md` §4.3 row "↳ F-116 (part) | the verification ladder by pack risk | (in S-47) 1",
 line 1344). Parts a (F-034, #279), b (F-174 part, #280–#283), c (F-037 part 1, #284) and d (F-084, #286) have
 shipped. F-116's later part, one-time codes by text, waits for A2P and decision 19 (`crm-features.md` l.1576).
@@ -86,9 +87,11 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   `phone_key` (0033, `contacts_account_phone_key`) and then filtered by that rule in code, so a phone typed
   before F-009 ("(956) 292-1696") is a candidate as it is an owner today (5.2, SD4). At most 20 are read; a
   number with more cannot be narrowed by name on a call (S6).
-- **S2 The name rule:** first and last name, case- and accent-insensitive, whitespace collapsed; a spoken
-  name matches a record when its first word is the record's first word, its words appear in the record's
-  name in order, and its last word is a real name word, not a particle (5.3). Never fuzzy.
+- **S2 The name rule** (amended, R2 ruling a): first and last name, case- and accent-insensitive, whitespace
+  collapsed. A spoken name is the record's person when the first words are equal and EITHER every spoken word
+  is on record in order and the last is not a particle, OR every word of the record's name was spoken, in
+  order. An exact full-name match wins over a partial one; a partial match that hits more than one record is
+  ambiguous (the email must pick one) (5.3). Never fuzzy.
 - **S3 The email rule:** the spoken address is normalised ("dot", "at", "arroba", "punto", spaces), must
   have an email's shape (`isValidEmail`, the video gate's rule), and is compared through `emailKey`, the
   repo's one definition of "the same mailbox", against the stored `email_key` (0034). The tool never reads
@@ -142,12 +145,14 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   rules as the confirm (5.3). Every voice write site calls it; none calls the phone-first dedupe on a shared
   number (5.10).
 - **S20 "Shared" is judged on the number being stored:** the caller ID, or the number the caller gave
-  (`spokenPhone`), whichever the write would store. Two or more contacts of this account on it is shared;
-  one or none is today's path (the sole contact on a number is that number's person, rung 1), with ONE
-  exception: a full name (two words or more) that does not match a sole contact who has a full name of their
-  own is a different person, and makes a new contact (S21) rather than landing on them. A sole "Caller"
-  record, or one with only a first name, keeps today's path, so a repeat caller's blank name is still filled
-  (decision 19's purpose).
+  (`spokenPhone`), whichever the write would store. Two or more contacts of this account on it is shared.
+  None is today's path. ONE contact (amended, R2 ruling b): a name that agrees with it (S2, or its first name
+  alone), or a sole "Caller" placeholder, is today's path, so a repeat caller's blank name is still filled
+  (decision 19's purpose); a name that does not agree never makes a record silently: `book_appointment` and
+  `capture_lead` carry a structured `forSomeoneElse`, and Sofía asks "Is this appointment for you or for
+  someone else?". `false` is that contact, whatever the name (nicknames); `true` is a new contact (S21).
+  A booking writes nothing until it is answered; a lead asks once, and a lead still unanswered after the call
+  is filed on no customer (5.10.3).
 - **S21 A name that matches nobody on a shared number makes a new contact,** named and on that number.
   That is not ambiguous: it is a new person in the household. It is made through `createContact` with
   `matchBy: "email_only"` (5.10.1), so an email on file elsewhere on the account still wins, as today, and
@@ -174,7 +179,16 @@ Spec choices the decisions left open (made in this draft; each is pinned where i
   missed-call text: a text carries no name, so E7 allows no other choice. Staff move it (5.12.5).
 - **S28 Moving a thread moves its messages,** because a conversation is one per contact
   (`conversations_account_contact_unique`, 0005), into the person's own conversation, with the calls that
-  pointed at it, in one transaction, with Undo (DESIGN.md rule 6).
+  pointed at it, in one transaction, with Undo (DESIGN.md rule 6). The Undo names the move (its
+  `conversation.moved` event, which records the ids it moved) and nothing else, so it can move back only what
+  that move moved (amended, R11).
+- **S30 Replies and CANCEL words from a shared number** (added, R3 ruling). A text from a shared number files
+  on its holding record (S27), which has no booking. A one-word confirmation answer looks for outstanding
+  confirmation asks across the REAL contacts on the number: exactly one is answered as today; more than one,
+  or none, applies nothing and files ONE To-do on the holding record, "A reply from a shared number couldn't
+  be matched to one appointment", in the account's language. A CANCEL word: exactly one real contact with an
+  upcoming appointment gets today's CANCEL To-do; more than one gets that same one To-do; none gets no To-do
+  (today's rule for a CANCEL with nothing to check). A held phrase's To-do names the number, never "Caller".
 - **S29 The holding record is not a customer:** off the contact list, its total, the export and every
   contact picker; shown in the inbox and search as its thread, labelled "Shared number {number}" (5.12.4).
 
@@ -261,20 +275,25 @@ bis-ci and renumbers if one has landed.
 
 1. `contacts.holds_shared_number boolean not null default false`: the mark. No existing column can carry it
    (S26).
-2. `contacts_holding_shape`: a holding record is exactly first name "Caller", no last name, no email, a phone.
-   This is what makes "no name or customer detail is ever written onto it" hold for every writer, staff
-   included, without touching any writer's code: an inline edit of its name or email fails the CHECK.
-3. `contacts_one_holding_per_number`: one holding record per account and number, so two missed calls
-   finishing together cannot make two (the writer retries the read on 23505, 5.12.2).
-4. `app.contacts_holding_server_only()`: only server code sets or clears the mark. A signed-in client holds
-   table-level INSERT on contacts and column-level UPDATE on the columns `schema-grants-guard.test.ts:86-89`
-   lists, which do not include the new column; the trigger is the belt for INSERT, as
-   `app.contacts_language_server_only` (0076) and `app.contacts_author_guard` (0091) are for theirs.
+2. `contacts_holding_shape`: a holding record is exactly first name "Caller", no last name, no email, and an
+   E.164 phone. Written null-safe (amended, plan P22): a CHECK passes on NULL, and `first_name = 'Caller'` was
+   NULL for a NULL first name.
+3. `contacts_one_holding_per_number`: one holding record per account and E.164 (amended, R13: not per
+   `phone_key`, which two countries' numbers can share), so two missed calls finishing together cannot make
+   two (the writer retries the read on 23505, 5.12.2).
+4. `app.contacts_holding_server_only()`: only server code sets, clears or edits a holding record. A
+   signed-in client holds table-level INSERT on contacts and column-level UPDATE on the columns
+   `schema-grants-guard.test.ts:86-89` lists, which do not include the new column; the trigger stores false on
+   a signed-in insert, and refuses (42501) a signed-in change to a holding record of anything but who it is
+   assigned to (amended, R8). So "no name or customer detail is ever written onto it" holds for every
+   signed-in writer, staff included; server code is bound by its own code (5.12.3).
 5. `public.move_holding_thread(...)`: the Move and its Undo in one transaction (S28, 5.12.5), the repo's
    pattern for an all-or-nothing write (`save_voice_knowledge`, 0095; `reserve_document_version`, 0077).
 
 ```sql
 -- 0098_shared_number_holding.sql - one "Caller" holding record per shared number (S-47e, owner decision E8)
+-- (docs/superpowers/specs/2026-10-24-caller-identity-ladder-design.md section 4.1;
+--  docs/superpowers/plans/2026-10-24-caller-identity-ladder-pr47e.md, Task 1)
 --
 -- WHY. A phone several customers share carries no name, so a missed-call text-back and the replies to it
 -- cannot be filed on any one of them (S-47e E7). E8: they live on ONE holding record per number, which no
@@ -283,40 +302,51 @@ bis-ci and renumbers if one has landed.
 -- WHAT.
 --   public.contacts.holds_shared_number boolean not null default false: the mark. Set only by server code
 --     (ensureHoldingContact, service_role); a signed-in insert stores false; no client UPDATE grant names it.
---   contacts_holding_shape: a holding record is first_name 'Caller', no last_name, no email, a phone.
---   contacts_one_holding_per_number: unique (account_id, phone_key) where holds_shared_number.
---   app.contacts_holding_server_only(): the insert/update belt for the mark (plain, not definer).
---   public.move_holding_thread(...): moves a holding thread's messages and calls to a person's conversation,
---     or back (Undo); SECURITY DEFINER, executed by service_role only, behind the app's role check.
+--   contacts_holding_shape: a holding record is first name Caller, no last name, no email, and an E.164
+--     phone. Written null-safe: a CHECK passes on NULL, so every term is true or false, never NULL.
+--   contacts_one_holding_per_number: unique (account_id, phone) where holds_shared_number. The exact E.164,
+--     not phone_key: two numbers of two countries can share a digits key, never an E.164.
+--   app.contacts_holding_server_only(): plain, not definer. For a signed-in session it stores false on
+--     insert, keeps the mark on update, and refuses (42501) any change to a holding record except who it is
+--     assigned to; server code (service_role) is not limited.
+--   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
+--     a person, recording what it moved on its conversation.moved event, or moves back exactly what one such
+--     event recorded (Undo, which names that event and nothing else). SECURITY DEFINER, executed by
+--     service_role only, behind the role check of the app.
 --
 -- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
--- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and schema-grants-guard.test.ts's
--- EXPECTED_WRITES for contacts is unchanged (no column grant names holds_shared_number). The new definer is
--- added to definer-search-path.test.ts's EXPECTED_DEFINERS (22 -> 23).
+-- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
+-- schema-grants-guard.test.ts is unchanged for contacts (no column grant names holds_shared_number). The new
+-- definer is added to EXPECTED_DEFINERS in definer-search-path.test.ts (22 -> 23).
 --
--- SEARCH PATHS. Both functions say set search_path = pg_catalog, pg_temp (0096's rule), never ''.
+-- SEARCH PATHS. Both functions say set search_path = pg_catalog, pg_temp (the 0096 rule).
 --
--- LOCKS AND COST. ADD COLUMN with a constant default is catalogue-only. The CHECK is added NOT VALID and then
--- validated (the scan holds SHARE UPDATE EXCLUSIVE, not ACCESS EXCLUSIVE); every existing row is false and
--- passes. The partial unique index is built non-concurrently (SHARE on contacts for the build; it indexes
--- no existing row). CREATE TRIGGER takes SHARE ROW EXCLUSIVE briefly.
+-- LOCKS AND COST. The file runs as one transaction. ADD COLUMN with a constant default is catalogue-only
+-- but takes ACCESS EXCLUSIVE on contacts, held to the end of the file; the CHECK validation (one scan, every
+-- existing row is false and passes) and the partial unique index build (it indexes no existing row) run
+-- under that same lock. The lock_timeout of 5s below bounds the wait to take it.
 --
 -- LOAD-BEARING. The build after this file names holds_shared_number in every contact dedupe, the contact
--- list and count, the CSV import's match index and the voice reads (spec 4.2), so it merges only after this
--- file is on production.
+-- list and count, the contact reads, the inbox reads, the CSV import match index and the voice reads, and
+-- calls move_holding_thread (plan SD list), so it merges only after this file is on production.
 --
 -- ROLLBACK (roll the app back first):
---   drop function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]);
+--   drop function public.move_holding_thread(uuid, uuid, uuid, text, bigint);
 --   drop trigger contacts_holding_server_only on public.contacts;
 --   drop function app.contacts_holding_server_only();
 --   drop index public.contacts_one_holding_per_number;
 --   alter table public.contacts drop constraint contacts_holding_shape;
 --   alter table public.contacts drop column holds_shared_number;
---     (holding records then read as ordinary "Caller" contacts, threads and all)
+--     (holding records then read as ordinary Caller contacts, threads and all)
 --
--- ASCII only, no backslash anywhere (the MCP apply rule).
+-- ASCII only, no backslash anywhere, and every dollar sign in this file is part of a dollar-quote pair.
 
-set local lock_timeout = '5s';
+-- 0. Fail fast instead of queueing behind a long lock (0094 reason: inside a do block, so it is always in
+--    the block transaction).
+do $$
+begin
+  perform pg_catalog.set_config('lock_timeout', '5s', true);
+end $$;
 
 -- 1. The mark.
 alter table public.contacts
@@ -326,15 +356,17 @@ alter table public.contacts
 alter table public.contacts
   add constraint contacts_holding_shape check (
     not holds_shared_number
-    or (first_name = 'Caller' and last_name is null and email is null and phone is not null)
+    or (first_name is not distinct from 'Caller' and last_name is null and email is null
+        and phone is not null and pg_catalog.length(phone) between 9 and 16
+        and pg_catalog.substr(phone, 1, 1) = '+' and pg_catalog.substr(phone, 2) !~ '[^0-9]')
   ) not valid;
 alter table public.contacts validate constraint contacts_holding_shape;
 
 -- 3. One per account and number.
 create unique index contacts_one_holding_per_number
-  on public.contacts (account_id, phone_key) where holds_shared_number;
+  on public.contacts (account_id, phone) where holds_shared_number;
 
--- 4. Only server code sets or clears it.
+-- 4. Only server code sets, clears or edits it.
 create function app.contacts_holding_server_only() returns trigger
 language plpgsql set search_path = pg_catalog, pg_temp as $$
 begin
@@ -342,6 +374,15 @@ begin
     if tg_op = 'INSERT' then
       new.holds_shared_number := false;
     else
+      if old.holds_shared_number
+         and (new.first_name, new.last_name, new.email, new.phone, new.phone_country_unconfirmed, new.source,
+              new.custom, new.attribution, new.dnd, new.marketing_email_opted_out_at)
+             is distinct from
+             (old.first_name, old.last_name, old.email, old.phone, old.phone_country_unconfirmed, old.source,
+              old.custom, old.attribution, old.dnd, old.marketing_email_opted_out_at) then
+        raise exception 'A shared number holding record is changed by server code only'
+          using errcode = '42501';
+      end if;
       new.holds_shared_number := old.holds_shared_number;
     end if;
   end if;
@@ -350,10 +391,10 @@ end $$;
 create trigger contacts_holding_server_only before insert or update on public.contacts
   for each row execute function app.contacts_holding_server_only();
 
--- 5. Move a holding thread to a person, or back (Undo, which names the ids it moved).
+-- 5. Move a holding thread to a person, or move back exactly what one earlier move recorded (Undo).
 create function public.move_holding_thread(
   p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text,
-  p_message_ids uuid[] default null, p_call_ids uuid[] default null)
+  p_undo_of bigint default null)
 returns jsonb
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
 declare
@@ -362,8 +403,12 @@ declare
   v_from_unread integer;
   v_from_holding boolean;
   v_to_holding boolean;
+  v_undo jsonb;
+  v_want_messages uuid[];
+  v_want_calls uuid[];
   v_messages uuid[];
   v_calls uuid[];
+  v_event bigint;
 begin
   if p_from_conversation = p_to_conversation then
     return pg_catalog.jsonb_build_object('status', 'invalid');
@@ -385,17 +430,36 @@ begin
     from public.contacts k where k.account_id = p_account_id and k.id = v_from_contact;
   select coalesce(k.holds_shared_number, false) into v_to_holding
     from public.contacts k where k.account_id = p_account_id and k.id = v_to_contact;
-  -- Exactly one side is the holding record; toward it only as an Undo, which names its messages.
+  -- Exactly one side is the holding record. A move goes away from it with no event named; an Undo goes
+  -- toward it and must name the move it undoes.
   if v_from_holding is null or v_to_holding is null
-     or v_from_holding = v_to_holding or (v_to_holding and p_message_ids is null) then
+     or v_from_holding = v_to_holding
+     or (v_to_holding and p_undo_of is null)
+     or (v_from_holding and p_undo_of is not null) then
     return pg_catalog.jsonb_build_object('status', 'invalid');
+  end if;
+
+  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo.
+  if p_undo_of is not null then
+    select e.payload into v_undo from public.events e
+     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved';
+    if v_undo is null
+       or (v_undo ->> 'undo') is distinct from 'false'
+       or (v_undo ->> 'fromConversationId') is distinct from p_to_conversation::text
+       or (v_undo ->> 'toConversationId') is distinct from p_from_conversation::text then
+      return pg_catalog.jsonb_build_object('status', 'invalid');
+    end if;
+    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_messages
+      from pg_catalog.jsonb_array_elements_text(v_undo -> 'messageIds') as t(x);
+    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_calls
+      from pg_catalog.jsonb_array_elements_text(v_undo -> 'callIds') as t(x);
   end if;
 
   with moved as (
     update public.messages m
        set conversation_id = p_to_conversation, updated_at = pg_catalog.now()
      where m.account_id = p_account_id and m.conversation_id = p_from_conversation
-       and (p_message_ids is null or m.id = any (p_message_ids))
+       and (p_undo_of is null or m.id = any (v_want_messages))
     returning m.id)
   select coalesce(pg_catalog.array_agg(id), '{}') into v_messages from moved;
 
@@ -404,7 +468,7 @@ begin
        set conversation_id = p_to_conversation,
            contact_id = case when v_to_holding then null else v_to_contact end
      where k.account_id = p_account_id and k.conversation_id = p_from_conversation
-       and (p_call_ids is null or k.id = any (p_call_ids))
+       and (p_undo_of is null or k.id = any (v_want_calls))
        and (k.contact_id is null or k.contact_id = v_from_contact)
     returning k.id)
   select coalesce(pg_catalog.array_agg(id), '{}') into v_calls from repointed;
@@ -414,7 +478,7 @@ begin
      set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
                              where m.account_id = p_account_id and m.conversation_id = c.id),
          unread_count = case
-           when p_message_ids is not null then c.unread_count
+           when p_undo_of is not null then c.unread_count
            when c.id = p_to_conversation then c.unread_count + v_from_unread
            else 0 end,
          updated_at = pg_catalog.now()
@@ -426,21 +490,23 @@ begin
             'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
             'fromContactId', v_from_contact, 'toContactId', v_to_contact,
             'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
-            'undo', p_message_ids is not null));
+            'undo', p_undo_of is not null, 'undoOf', p_undo_of,
+            'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls)))
+  returning id into v_event;
 
-  return pg_catalog.jsonb_build_object('status', 'ok',
+  return pg_catalog.jsonb_build_object('status', 'ok', 'moveId', v_event,
     'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls));
 end $$;
 
-revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[])
+revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, bigint)
   from public, anon, authenticated, service_role;
-grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) to service_role;
+grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to service_role;
 
 -- 6. Comments: each names its one writer.
 comment on column public.contacts.holds_shared_number is
-  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
-comment on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) is
-  'Moves a holding thread (contacts.holds_shared_number) to a person''s conversation with the calls that pointed at it, or back as an Undo naming its message and call ids. service_role only, behind the app''s Owner, Staff or agency check (0098).';
+  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
+comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) is
+  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';
 ```
 
 ### 4.2 LOAD-BEARING on 0098 being on production
@@ -533,12 +599,13 @@ an address with no "@", so "dottie@…" is never touched. The result must pass `
 ```
 candidates = 0                          -> (find answers found:false, as today)
 truncated (more than 20)                -> cannot_on_this_call                          (S6)
-required 1, exactly one candidate       -> confirmed(it, 1), no name needed             (today's behaviour)
+required 1, exactly one candidate,
+  and no full name given                -> confirmed(it, 1), no name needed             (today's behaviour; R1)
 required 2, no candidate has email_key  -> cannot_on_this_call                          (E2, S6)
 name has fewer than two words           -> ask_name                                     (not a try)
 required 2, email missing or malformed  -> ask_email                                    (not a try)
 required 1:
-  name matches exactly one              -> confirmed(it, 1)
+  name names exactly one                -> confirmed(it, 1)       (exact matches first, then partial: S2)
   name matches several:
     no email given, one of them has one -> ask_email                                    (S4, not a try)
     email given, picks exactly one      -> confirmed(it, 2)
@@ -592,7 +659,11 @@ not because the confirm wrote `state.contactId`.
 2. Locked → the LOCKED result (5.4.4); nothing is read.
 3. Confirmed at or above `requiredRung("read_existing")` → `findUpcomingBookingForContact` for the confirmed
    contact → `{ found: true, bookingId, startsAt, startsAtLocal }` (`withServed(..., "booking_found")`, as
-   today) or `{ found: false }`.
+   today) or `{ found: false }`. When the confirmation came from a name, the found result also carries
+   `next`: "This is the appointment of the person they confirmed. If the caller asks about a different
+   person's appointment than the one already confirmed, call confirm_identity with that person's first and last
+   name before you call find_my_booking again." (amended, R1: confirm Beto, then ask about Ana's, used to read
+   Beto's time out as Ana's).
 4. Otherwise read the candidates (a read failure → the READ FAILED result; nothing confirmed, not a try).
    None → `{ found: false }` (today's answer for a number with nobody on it). Then `decideIdentity` without a
    name: `confirmed` (one candidate, rung 1) → confirm by `caller_id` and continue as step 3;
@@ -636,7 +707,8 @@ the code compares; the model is told only the outcome.
 
 ```
 { type: "function", name: "confirm_identity",
-  description: "Confirm whose appointment the caller means, when find_my_booking asks you to. Pass the first
+  description: "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever
+    the caller asks about a different person's appointment than the one already confirmed. Pass the first
     and last name exactly as the caller said it, and the email address only when you were asked for it:
     spell the email back character by character and wait for them to confirm, then write it with the @ and .
     symbols. It checks only the people under the number they are calling from. It never tells you a name or
@@ -847,24 +919,31 @@ resolver (`textback.ts:159-184`). E7 replaces the phone pick at all four with on
 #### 5.10.0 The picker (`identity/record.ts`, pure)
 
 ```
-pickRecordOnNumber({ onNumber, truncated, name, email, confirmed }) returns one of
-  today                      0 or 1 real contacts on the number: today's code path, unchanged (S20)
-  existing(contactId)        the confirmed person, or the one contact the name (and email) picks
-  create                     the name matches nobody on the number: a new person (S21)
-  ask_name                   no name, or a name of one word
+pickRecordOnNumber({ onNumber, truncated, name, email, confirmed, forSomeoneElse }) returns one of
+  today                      no real contact, or one the name agrees with: today's code path, unchanged
+  existing(contactId)        the confirmed person, the one contact the name (and email) picks, or the one
+                             contact on the number when the caller said it is for them
+  create                     a new person (S21): the name matches nobody of several, or the caller said
+                             "for someone else" on a number with one contact
+  ask_name                   no name, or a name of one word, on a shared number
+  ask_whose                  ONE contact whose name the caller's does not agree with, not yet asked (S20)
   ambiguous                  the name fits several and no email picks one, or more than 20 on the number
 
-in this order:
-  onNumber has exactly 1 real contact, it has two name words or more,
-    and the name has two words or more and does not match it (5.3)   -> create        (S20's exception)
-  onNumber has 0 or 1 real contacts and not truncated               -> today
+in this order (amended, R2 ruling b):
+  onNumber has no real contact and not truncated                     -> today
+  onNumber has exactly 1 real contact and not truncated:
+    forSomeoneElse true                                              -> create
+    forSomeoneElse false                                             -> existing(it)
+    it is a "Caller" placeholder, no name was given, or the name
+      agrees with it (S2, or its first name alone)                   -> today
+    otherwise                                                        -> ask_whose
   truncated                                                          -> ambiguous
-  confirmed is on onNumber, and the name is absent, matches it (5.3),
-    or is that record's first word alone                             -> existing(confirmed)
+  confirmed is on onNumber, and forSomeoneElse is false, or the name
+    is absent, matches it (S2), or is that record's first word alone -> existing(confirmed)
   name absent or one word                                            -> ask_name
-  the name matches exactly one                                       -> existing(it)
-  the name matches several: the email (emailKey) picks exactly one   -> existing(it); otherwise ambiguous
-  the name matches none                                              -> create
+  the name names exactly one (exact matches first, then partial)     -> existing(it)
+  the name names several: the email (emailKey) picks exactly one     -> existing(it); otherwise ambiguous
+  the name names none                                                -> create
 ```
 
 - `onNumber` is `listContactsOnNumber` (4) for the number the write would store (S20), filtered by
@@ -920,13 +999,14 @@ their own comments) run only where their record was picked by this rule.
 The new order:
 
 1. `state.contactId` (308): an in-call booking, already picked by 5.10.1. Unchanged.
-2. NEW: `state.identity.confirmed` → that contact: the confirmed person's record (E7). A lead's fields fill
-   its blanks only when the lead's `fullName` matches it (5.3).
+2. (Amended, R2 finding 9: no confirmed-first step. The confirmation counts inside the picker, only on the
+   caller-ID number, exactly as for a booking.)
 3. A lead (313-350): the number is `e164Of(spokenPhone(fields.callbackNumber, callerNumber))`; the picker
-   with the lead's `fullName` and `email`. `existing` → that record, with the 5.10.2 fill; `create` →
-   `createContact` with `matchBy: "email_only"`; `ask_name` or `ambiguous` → null; `today` → today's code.
-4. No lead, a caller ID (352-376): on a shared caller-ID number, the picker with the last message's `name`
-   (S22, 5.10.5). `existing` → it; `create` → `createContact({ firstName, lastName, phone: callerNumber,
+   with the lead's `fullName`, `email`, `forSomeoneElse` and, on the caller-ID number, the confirmation.
+   `existing` → that record, with the 5.10.2 fill; `create` → `createContact` with `matchBy: "email_only"`;
+   `ask_name`, `ask_whose` (asked once, never answered) or `ambiguous` → null; `today` → today's code.
+4. No lead, a caller ID (352-376): on a shared caller-ID number, the picker with the confirmation and the
+   last message's `name` (S22, 5.10.5). `existing` → it; `create` → `createContact({ firstName, lastName, phone: callerNumber,
    source: "voice", matchBy: "email_only" })`; a declined name, `ask_name` or `ambiguous` → null. Any other
    number → today's "Caller" path.
 5. Null: the lead-treatment block's own `if (contactId)` (`finish-call.ts:457-472`) skips the thread. The
@@ -1005,11 +1085,14 @@ the thread.
 
 ```
 ensureHoldingContact(db, accountId, e164): Promise<{ id: string; created: boolean }>
-  1. read contacts where account_id = accountId and phone_key in (keys of e164, as listContactsOnNumber)
-     and holds_shared_number; keep the row whose phone reads as e164 (normalisePhone)
+  1. read the contact where account_id = accountId and phone = e164 and holds_shared_number (the exact
+     E.164 0098 fixes on a holding record; amended, R13)
   2. none: insert { account_id, first_name: 'Caller', ...phoneFields(e164), source: 'voice',
      holds_shared_number: true, author_kind: 'ai', author_id: null } as service_role
-     a 23505 on contacts_one_holding_per_number (two calls at once): step 1 again, once
+     a 23505 on contacts_one_holding_per_number (two calls at once): step 1 again, once; a read that then
+     finds no row throws HoldingContactUnavailable, and every caller fails CLOSED: the inbound route records
+     the consent step with no contact and files nothing (200, never a 503 retried forever), the text-back
+     sends nothing
   3. created: emit contact.created { contactId, holding: true }, actor voice / ai
   throws on any other error (each caller already has a net)
 ```
@@ -1064,7 +1147,8 @@ real contacts, 5.10.0).
   toContactId)`): checks the role, `ensureConversation` for the person on `serviceDb()`, then
   `move_holding_thread(account, holdingConversation, personConversation, actor)`. `ok` → toast "Moved to
   {name}." with Undo, and the inbox opens the person's thread. Undo calls the same function the other way,
-  naming the `messageIds` and `callIds` the move returned → "Moved back." `not_found` or `invalid` → "That
+  naming the move's `moveId` (its `conversation.moved` event) and nothing else; the function moves back only
+  the ids that event recorded that are still on the person's thread (amended, R11) → "Moved back." `not_found` or `invalid` → "That
   conversation couldn't be moved. Try again." Nothing is retried on its own.
 - **What moves:** every message of the holding thread, and every call whose `conversation_id` was the
   holding thread, which gains the person as its `contact_id`. The person's unread count gains the holding
@@ -1310,6 +1394,8 @@ does every dashboard step and writes each time in the ledger. No client account 
        If BIS's text-back is off, or its texts are held, the held text is what sits in that thread: the
        check is WHERE it was filed.
     c. danlo: reply "test" to the text. Check: the reply joins the same thread.
+       ASSUMPTION (R15, not verified): a text sent to +19565061545 reaches /api/sms/inbound (the number's
+       messaging profile points there). If the reply never appears, check that before calling it a failure.
     d. Orchestrator: in that thread, Move to... Beto Prueba. The toast says "Moved to Beto Prueba." and
        Beto's thread holds both texts and the call. Press Undo: "Moved back." Move to Beto again.
     Logs: no "contact dedupe" error; one contact.created with holding true.
@@ -1512,3 +1598,32 @@ Found while specifying E8 (2026-10-24):
   (`app/api/sms/inbound/route.ts:193-205`), the same phone-first dedupe, so "any reply lives there" needs the
   route to choose the holding record itself on a shared number (S27, 5.12.6).
 - **SD23 The title said "no migration".** It now names 0098; E1–E7 alone still need none (4).
+
+## 13. Fix round (2026-10-24, the opus plan review and the orchestrator's rulings)
+
+The plan's review returned CHANGES REQUIRED; it approved 0098 as it then stood. Every item below is applied
+in this spec and in the plan (`docs/superpowers/plans/2026-10-24-caller-identity-ladder-pr47e.md`, whose
+P1-P31 give the evidence). Where a section 7 test line above disagrees with these, the plan's test is binding.
+
+- **R1** (a different person after a confirmation; a name that confirmed the sole contact whatever it was):
+  `confirm_identity`'s description (5.4.3), the found result's `next` (5.4.2 step 3), and the decision
+  table's sole-candidate row only without a full name (5.3).
+- **R2** (Spanish names and nicknames): S2's name rule (ruling a); S20's one-contact rule with
+  `forSomeoneElse` on `book_appointment` and `capture_lead` (ruling b), and `finishCall`'s lead in the
+  booking's order (5.10.3: the picker, with the call's confirmation counted only on the caller-ID number, and
+  no confirmed-first step ahead of the lead); "guion medio", "guion" (with or without its accent), "guion bajo"
+  and "raya" in `spokenEmail` (ruling c); and `createContact`'s `matchBy` still files the new person and the
+  phone match as one `contact_duplicate_flags` pair (`phone_shared_new_person`) for the merge queue.
+- **R3** S30 (replies and CANCEL words from a shared number).
+- **R4** the inbound-text task is HIGH with mutation probes (plan).
+- **R5** the hold To-do's title on a holding record names the number, never "Caller" (S30).
+- **R6, R10, R12, R14** plan-only (a reviewer's probe that can fail; a locked call can still book, take a
+  message and move its own booking; the e2e locator rule; cite drift).
+- **R7** 0098's unreached parts gain tests (plan Task 1).
+- **R8** the trigger refuses a signed-in edit of a holding record (4.1 item 4).
+- **R11** the Undo names its move (S28, 5.12.5).
+- **R13** one holding record per account and E.164, and its fail-closed path (4.1 item 3, 5.12.2).
+- **R15** Step 8.6c's assumption is labelled.
+- **Found while fixing** (plan P22): the shape CHECK admitted a holding record with NO first name
+  (`first_name = 'Caller'` is NULL there, and a CHECK passes on NULL). The SQL in 4.1 is null-safe; proven on
+  the plan writer's replica. 0098's md5 is now `a76f898b5e362d9e0b8c71e2a0d28fff`.

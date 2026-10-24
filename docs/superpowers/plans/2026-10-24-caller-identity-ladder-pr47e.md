@@ -8,7 +8,7 @@
 - **Migration 0098** adds `contacts.holds_shared_number`, its shape CHECK, one holding record per account and number, a server-only trigger and `public.move_holding_thread(...)` (SECURITY DEFINER, service_role only).
 - **`@bis/db`** gains `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`, `moveHoldingThread`, `findConversationForContact`, `createContact`'s `matchBy: "email_only"`, and a holding-record skip in every dedupe and list read. `findUpcomingBookingForPhone` is removed.
 - **A pure identity module** (`apps/web/src/lib/voice/identity/`) holds the ladder, the name and email rules, the decision, the per-call state helpers, the fixed tool-result sentences, the record picker and the tool flows. The live registry and the corpus stub both run it.
-- **The registry** gates `find_my_booking`, `reschedule_appointment` and `cancel_appointment` on the per-call confirmation, adds `confirm_identity`, and picks the record for every voice write. `finishCall`, the text-back and the inbound-text route use the same picker and the holding record.
+- **The registry** gates `find_my_booking`, `reschedule_appointment` and `cancel_appointment` on the per-call confirmation, adds `confirm_identity`, and picks the record for every voice write; on a phone with ONE contact, a different name asks "for you or for someone else?" through a structured `forSomeoneElse`. `finishCall`, the text-back and the inbound-text route use the same picker and the holding record; a YES from a shared number confirms the household's one asked appointment or files one To-do (S30).
 - **The UI** uses existing surfaces only: the inbox list, the thread header (a Notice and a ghost "Move to…" menu with Undo), the call page's link, the record page's redirect and the palette's label.
 - **The prompt does not change** (`PRE_S47B/C/D_DIGEST` stay green untouched). Only tool schemas and tool results change.
 
@@ -33,92 +33,99 @@ Path abbreviations:
 
 ---
 
-## Plan-writer check (done 2026-10-24, before this plan was committed)
+## Plan-writer check (done 2026-10-24; re-run in the fix round)
 
-The spec's 0098 SQL (spec §4.1, lines 277-443, extracted byte for byte; md5 `c262c2ed43bedb3a0fcea77bc45fd164`) and then this plan's revision of it (Task 1 Step 4; md5 **`13f26cbe99753bfbbd8e20e7ba9ee632`**) were each applied to the plan writer's own PG18 replica on port **55490**, built by `<KIT>/replica.sh 55490 <dir> <0098 file>`:
-- `pre` = every migration through 0097 (the worktree's own `packages/db/supabase/migrations`), one `psql -1 -f` per file.
-- `post` = `pre` + the 0098 file under test.
+The 0098 SQL went through three versions on the plan writer's own PG18 replica on port **55490**, built by `<KIT>/replica.sh 55490 <dir> <0098 file>` (`pre` = every migration through 0097, one `psql -1 -f` per file; `post` = `pre` + the 0098 file under test):
+- the spec's first text (spec §4.1 at `df8882ce`, lines 277-443; md5 `c262c2ed43bedb3a0fcea77bc45fd164`);
+- the first plan's revision (md5 `13f26cbe99753bfbbd8e20e7ba9ee632`, approved by the opus plan review: md5, digest and definers reproduced, its 12 mutations failed, the rollback was clean);
+- **this fix round's text** (Task 1 Step 4; md5 **`a76f898b5e362d9e0b8c71e2a0d28fff`**; 216 lines). It answers review items 7, 8, 11 and 13, and closes one hole the fix round found (P22). The spec's §4.1 carries the same text.
 
-**Read off the replica (the revised file; every line below was re-run on it after the revision):**
-- **Client-write digest** (the query at `packages/db/src/test/proposals-drop.test.ts:93-98`): `pre` = `post` = **`52|b66203ca5d355155540b520af510d120`**, unchanged, as the task brief expected.
-- **Definers** in `public` and `app`: `pre` 22, `post` **23**. The new one: `public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])`, `prosecdef` t, `proconfig` `{"search_path=pg_catalog, pg_temp"}`, owner `postgres`. The trigger function `app.contacts_holding_server_only()`: `prosecdef` f, the same `proconfig`.
-- **Execute:** `has_function_privilege` anon f, authenticated f, service_role t. A call as authenticated and as anon: `ERROR: permission denied for function move_holding_thread`; as service_role it runs.
-- **Columns:** authenticated has no UPDATE on `contacts.holds_shared_number` and has INSERT on it (the table-level INSERT grant); anon has neither.
-- **Tests on `post`** (from `packages/db`, `SUPABASE_DB_URL=postgres://postgres@localhost:55490/post`): `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `record-provenance-schema`, `one-switch-schema`, `call-card-schema`, `document-expiry-schema`, `document-requests-schema`, `structured-facts-schema`, `trade-modules-schema`: **11 files, 342 of 343 passed.** The one failure is the pin Task 1 updates: `AssertionError: expected [ { …(2) }, … ] to have a length of 22 but got 23` ("the definers in public and app are exactly these 22…"). `schema-grants-guard.test.ts` is green, so `EXPECTED_WRITES` does not change.
-- `customer-language-schema`, `voice-schema`, `same-account-fk-schema`, `company-name-read-only-schema`, `contacts-marketing-optout-schema`, `client-groups-schema`, `contact-relationships-schema`, `ai-acts-schema`: 16 of 199 fail on `post` AND on `pre`, the identical 16 by name (`diff` of the two FAIL lists prints nothing). Every one needs `serviceDb()` or PostgREST ("Supabase service env vars missing"), which a bare replica does not have. Environment, not 0098.
-- **Behaviour probes** (`<KIT>/probe.sql`, `<KIT>/probe2.sql`, one transaction each, savepoints around each refusal):
-  - A second holding record on the same account and number, typed `(956) 555-0100` against a stored `+19565550100`: `duplicate key value violates unique constraint "contacts_one_holding_per_number"` (the key is `phone_key`, so the two shapes collide, as intended). Account B's holding record on the same number: inserted.
-  - `contacts_holding_shape` refuses a holding row with a last name, with an email, with first name `Ana`, and with no phone (four probes, one field changed each), and refuses an UPDATE that gives a holding record a last name. The exact shape inserts.
-  - `move_holding_thread`: `invalid` for the same thread twice, two person threads, and toward the holding thread with no ids; `not_found` for account B's conversation on either side and for account A's conversations asked as account B.
-  - A full move from the holding thread (2 messages, unread 2, one call with no contact) to Beto's: `{"status":"ok","callIds":[<the call>],"messageIds":[<the two>]}`; Beto's thread holds 2 messages; the call has Beto's conversation and contact; the holding thread's unread is 0 and its `last_message_at` null; Beto's unread is 2; one `conversation.moved` event, `actor_type` user, `{ undo: false, messages: 2, … }`.
-  - Beto then sends a message; the Undo with the returned ids puts exactly the two back (holding thread 2, Beto's 1), the call back on the holding thread with a null contact, both unread counts unchanged.
-  - **Finding (P1):** with the spec's SQL as written, an Undo that names its messages but passes NULL call ids repointed a call Beto had on his own thread (not one the move moved) to the holding thread with a null contact. The revision refuses it: `{"status":"invalid"}`, and that call is untouched.
-  - A signed-in Owner's INSERT with `holds_shared_number: true` stores `false`. A signed-in UPDATE that names the column is refused before the trigger: `ERROR: permission denied for table contacts` (P3).
-  - The pg_temp shadow (definer-search-path.test.ts's `armShadow`): the armed control raises `BIS-SHADOW ran as service_role`; `move_holding_thread` then answers `ok`.
-- **Rollback:** the ROLLBACK block of Task 1 Step 7, run on `create database rb template post`, leaves 0 `contacts_holding%` constraints, 0 columns, 0 of the two functions, 0 indexes; definers back to 22; the digest still `52|b66203ca…`.
-- **Bytes of the revised file:** 0 non-ASCII and 0 backslashes (node byte count; its positive control on `é\` printed `2 1`); 0 carriage returns; exactly **12** `$`; `grep -c "''"` → `0`; no apostrophe on any `--` line or inside either comment string; `grep -ciw cascade` → `0`; `grep -n "search_path"` → the header line 24 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (71, 90); 177 lines.
+**Read off the replica, on the fix round's text (every line re-run after the last change):**
+- **Client-write digest** (the query at `packages/db/src/test/proposals-drop.test.ts:93-98`): `pre` = `post` = **`52|b66203ca5d355155540b520af510d120`**, unchanged.
+- **Definers** in `public` and `app`: `pre` 22, `post` **23**. The new one: `public.move_holding_thread(uuid,uuid,uuid,text,bigint)`, `prosecdef` t, `proconfig` `{"search_path=pg_catalog, pg_temp"}`, owner `postgres`. The trigger function `app.contacts_holding_server_only()`: `prosecdef` f, the same `proconfig`.
+- **Task 1's test, copied out of this plan** into a throwaway `packages/db/src/test/zz-holding-probe.test.ts`: `pre` → `Tests  32 failed (32)`; `post` → `Tests  32 passed (32)`.
+- **Every one of Task 1 Step 6's 19 mutations**, each applied to its own database cloned from `pre` (`<KIT>/mutate3.js` writes them), turned that file red. The counts are in Step 6.
+- **`definer-search-path.test.ts`** with Task 1 Step 5's 23-entry pin applied (a temporary edit, restored by `cp` + `cmp`): `Tests  6 passed (6)` on `post`.
+- **13 schema and grant suites on `post`** (`definer-search-path` unedited, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `record-provenance-schema`, `one-switch-schema`, `call-card-schema`, `document-expiry-schema`, `document-requests-schema`, `structured-facts-schema`, `trade-modules-schema`, `customer-language-schema`, `company-name-read-only-schema`): `Test Files 1 failed | 12 passed (13)`, `Tests 1 failed | 374 passed (375)`. The one failure is the definer pin Task 1 updates ("exactly these 22"). `schema-grants-guard.test.ts` is green, so `EXPECTED_WRITES` does not change.
+- On the first revision, three more files had failures on `post` AND on `pre`, 16 cases, identical by name: `voice-schema`, `same-account-fk-schema` and `ai-acts-schema`. Every one needs `serviceDb()` or PostgREST ("Supabase service env vars missing"), which a bare replica does not have. Environment, not 0098. (`customer-language-schema` and `company-name-read-only-schema`, which the first plan listed with them, are green: review item 14.)
+- **Rollback:** the six ROLLBACK lines of the file's header, run on `create database rb template post`, leave 0 `contacts_holding%` constraints, 0 columns, 0 of the two functions, 0 indexes; definers back to 22; the digest still `52|b66203ca…`.
+- **Bytes of the fix round's file:** 0 non-ASCII and 0 backslashes (node byte count; its positive control on `é\` printed `2 1`); 0 carriage returns; exactly **12** `$` (the E.164 test is written without a `$` anchor, so every `$` is a dollar-quote); two consecutive apostrophes → `0`; no apostrophe on any `--` line or inside either comment string; `grep -ciw cascade` → `0`; one `security definer` on a code line; `grep -n "search_path"` → the header line 29 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (78, 106); 216 lines.
+- **What the first two texts got wrong, proven on the replica:**
+  - The spec's Undo guard let an Undo that named its messages but no calls repoint a household member's own call to the holding thread (P1, first round). The fix round replaces the id arrays with the move's own event (P1).
+  - **Both earlier CHECKs admitted a holding record with NO first name.** `first_name = 'Caller'` is NULL for a NULL first name, the whole term goes NULL, and a CHECK passes on NULL. An insert of `{ first_name: null, holds_shared_number: true }` succeeded on the first revision's `post` (P22).
 - **0098 is free:** `git log --all --oneline -- 'packages/db/supabase/migrations/0098*'` printed nothing after `git fetch origin` (2026-10-24); `origin/main` is `a1ccb19a`, whose latest migration is still 0097.
 - **The baseline the spec cites (§5.5):** `pnpm --filter web exec vitest run src/lib/voice/system-prompt.test.ts src/lib/voice/tools/schemas.test.ts src/lib/voice/tools/registry.test.ts` → `Test Files  3 passed (3)`, `Tests  256 passed (256)`, at `df8882ce`.
-- **The `@bis/db` barrel loads under `tsx` with no env** (A3): a throwaway `apps/web/scripts/zz-barrel-probe.ts` (`import * as db from "@bis/db"`) printed `barrel loaded function 765`, then was deleted (`git status --short` clean).
+- **The `@bis/db` barrel loads under `tsx` with no env** (A3): a throwaway `apps/web/scripts/zz-barrel-probe.ts` (`import * as db from "@bis/db"`) printed `barrel loaded function 765`, then was deleted.
 - **`normalisePhone`** (A9, P4): `"+52 1 899 922 1234"`, `"+5218999221234"`, `"899 922 1234"` and `"52 899 922 1234"` all read `+528999221234`; `"(956) 292-1696"` and `"9562921696"` read `+19562921696`.
-- **Task 1's test, copied out of this plan** into a throwaway `packages/db/src/test/zz-holding-probe.test.ts` and run on the replica: `pre` → `Tests  20 failed (20)`; `post` → `Tests  20 passed (20)`. Each of Task 1 Step 6's twelve mutations, applied to a database cloned from `pre`, turned it red (the counts are in Step 6). The probe file was then deleted (`git status --short` clean).
-- The replica was stopped afterwards (`pg_ctl stop -m fast`; port 55490 not listening).
+- **The identity module** (first round): the model's code blocks, extracted into a throwaway folder, passed a probe of every example (`Tests 6 passed (6)`), and `pnpm --filter web typecheck` exited 0 with the model's `call-state.ts`. The fix round's changes to `match.ts`, `record.ts`, `flow.ts`, `results.ts` and `state.ts` are re-proven by Task 5's and Task 7's own red-first tests; they were not re-extracted.
+- Every throwaway file was deleted (`git status --short` clean before each commit), and the replica was stopped afterwards (`pg_ctl stop -m fast`; port 55490 not listening).
 
 ---
 
 ## Spec deviations (code or replica evidence against the spec, or a gap it leaves; each with the resolution this plan uses)
 
-- **P1. The Undo must name its calls too.** Spec §4.1's guard refuses a move toward the holding thread only when `p_message_ids is null`. Evidence: the replica probe above. A forged or buggy Undo with message ids and no call ids repoints every call of the person's thread whose contact is the person.
-  - **Resolution:** the guard is `(v_to_holding and (p_message_ids is null or p_call_ids is null))`. The app always passes both arrays (empty arrays are fine: `= any('{}')` matches nothing). Task 1 pins it with its own case.
-- **P2. 0098 follows 0097's byte rules.** The spec's text has two `''` (`person''s`, `app''s`), apostrophes on seven `--` lines, `set local lock_timeout` at top level, and a LOCKS paragraph that is wrong inside one transaction (ADD COLUMN already holds ACCESS EXCLUSIVE to the end of the file, so the validate scan does not run under SHARE UPDATE EXCLUSIVE).
-  - Evidence: `0097_one_switch.sql` has 0 `''` and 0 apostrophes in comments (its plan's byte rules), and 0091/0094/0097 set `lock_timeout` inside a `do` block "so it is always in the block transaction" (`0094_trade_modules.sql:62-68`).
-  - **Resolution:** Task 1 Step 4's text: comments reworded with no possessive, the `do` block, the LOCKS paragraph corrected, the header naming this plan. No statement changes except P1.
-- **P3. A signed-in UPDATE naming the mark is refused by the grant, not the trigger.** Spec §7 asks that "a signed-in update cannot set or clear it (mutation: drop the trigger → FAILS)".
-  - Evidence: the replica: `permission denied for table contacts` (42501), because no column UPDATE grant names `holds_shared_number` (`schema-grants-guard.test.ts:86-89`). The trigger's UPDATE branch is defence in depth for a future grant.
-  - **Resolution:** the update probe expects `{ code: "42501" }`. "Drop the trigger" is caught by the INSERT probe (authenticated holds table-level INSERT, so without the trigger the row stores `true`). The UPDATE branch gets its own mutation: `grant update (holds_shared_number) on public.contacts to authenticated` → the update probe FAILS (it no longer raises) and so does `schema-grants-guard.test.ts`.
-- **P4. One more phone key.** Spec §4 keys a +52 caller by its own digits and its ten national digits. `normalisePhone` reads `"+52 1 899 922 1234"` as `+528999221234` (A9), but its stored `phone_key` is `5218999221234`: neither key.
-  - **Resolution:** `phoneKeysOf(e164)` returns the digits key, the ten national digits, and both the `52` and `521` forms of those ten digits, de-duplicated. It is a superset; the `isCallerIdNumber` filter (S1) still decides who is on the number.
-- **P5. Two of spec §7's name mutations cannot fail.** "drop rule 3 → 'García María' FAILS": "García María" already fails rule 2 (first word). "drop rule 4 → 'María de' FAILS": "de" is not a word of "María Elena García López", so rule 3 already rejects it.
-  - **Resolution:** rule 3's probe is "María López García" against "María Elena García López" (first word right, every word on record, wrong order). Rule 4's probe is "María de" against a record "María de la Cruz" (first word right, a subsequence, the last word a particle). Both are the ONLY rule that rejects their fixture. The spec's examples stay as plain fixtures.
-- **P6. "Refuses once" needs memory.** Spec §5.10.5: `take_message` "refuses once". `CallState` has nothing that remembers the refusal, so a model that calls again without a name would be refused forever and the message lost.
-  - **Resolution:** the identity state gains a fourth field, `messageNameAsked: boolean`, set by the refusal. A second call with no name records the message.
-- **P7. A confirmation of the right person at too low a rung.** Spec §5.4.2's refusals list "nothing confirmed" and "a different contact". A rung-1 confirmation of the booking's own contact on an insurance call (rung 2 required) is neither.
-  - **Resolution:** it answers NOT CONFIRMED YET (call `find_my_booking` first), which then asks for the name and email. Only a confirmation of a DIFFERENT contact answers "isn't one they have confirmed is theirs".
-- **P8. More LOAD-BEARING sites than spec §4.2 lists.** The inbox's three reads (`listConversations`, `getConversationSummary`, `searchConversations`, `packages/db/src/messaging.ts:633`, `:763`, `:888`) embed `holds_shared_number` and `phone` for the label; `getContact` and `listContacts` read `COLS` (`contacts.ts:69-70`), which gains the column for the record page's redirect; `findConversationForContact` is new.
-  - **Resolution:** no scope change; the merge already waits for 0098 on production. The PR body names them.
-- **P9. The label needs the number.** Spec §5.12.4: `ConversationSummary` gains `holdsSharedNumber`. The label is "Shared number {number}".
-  - **Resolution:** it also gains `sharedNumber: string | null`, the holding record's phone, null on every other thread.
-- **P10. One flow, two callers.** Spec §5.11 asks the corpus stub to run "the SAME pure functions the live tools use". The live tool's decisions sit between reads.
-  - **Resolution:** `…/identity/flow.ts` holds the pure steps (`findStep`, `confirmStep`, `ownsStep`, `messageNameStep`); the registry does the reads and calls them; the stub feeds them fixture reads.
-- **P11. The parity test gets its own file.** `corpus-lib.test.ts` runs every module real. The parity test needs `@bis/db` mocked under `runTool`.
-  - **Resolution:** `apps/web/src/lib/voice/modules/corpus-parity.test.ts` (new). And `corpus-lib.test.ts:437`'s pinned regex for the stub call changes in the same task, because the call now carries the per-item session.
-- **P12. One e2e spec.** Spec §7 says "no e2e (phone calls are tested by real calls)". The inbox Move is not a phone path, and the binding process rule for this PR asks for one e2e spec, run locally against a production build before the final review.
-  - **Resolution:** Task 16, the Move and its Undo on the per-run fixture account.
-- **P13. The work-list mutation needs a fixture that can fail.** Spec §7: "mutation: test callId before closureFocus → the closure case FAILS". A closure To-do never has a `call_id`, so that order swap changes nothing on a real row.
-  - **Resolution:** two precedence probes on the pure function: a closure row that also carries a `callId` (closure wins), and a callback To-do with a contact and a call (the contact wins; mutation: test `callId` before `contactId` → FAILS).
-- **P14. Main moved, and Owner is "dueño" in Spanish now.** `a1ccb19a` (#287) changed `business.refuse.*.es` and `closedDays.role.es` from "propietario" to "dueño" (`git diff 449d5bf6 origin/main -- apps/web/src/lib/messages.ts`).
-  - **Resolution:** Task 0 rebases; Task 2's one role sentence uses "dueño", mirroring `business.refuse.keep.es` ("Solo un dueño o un empleado puede mantener una cita.").
-- **P15. The text-back resolver is a wrapper, not a mode.** Spec §5.10.4: `resolveContactId` gains a `forTextback` mode.
-  - **Resolution:** `resolveTextbackContact(state, ctx, callId)` calls `resolveContactId` and, on its null on a shared caller-ID number, returns the holding record. Same behaviour, and `resolveContactId` keeps one return type.
-- **P16. The text-back's contact types widen.** `TextbackRequest.resolveContact` (`textback.ts:75`) returns `Promise<string | null>`; `contactForCallerId` (`:159-184`) returns `Promise<string>`.
-  - **Resolution:** both return `ResolvedTextbackContact = string | { id: string; holding: true } | null` (`contactForCallerId` never null). A plain string is a real contact, so `textback.test.ts:162`'s `async () => "ct_9"` still type-checks.
-- **P17. `findUpcomingBookingForPhone` leaves with its last caller.** Spec §4 removes it with the reads.
-  - **Resolution:** Task 3 adds the new reads; Task 6, which moves `find_my_booking` off the old one, deletes it and its test, so both typechecks stay green at every commit.
-- **P18. A holding call has no resend button.** `TextbackResend` needs `call.contact_id` (`[acct]/calls/[callId]/page.tsx:436-441`), which a holding call does not have (E8, 5.10.4).
-  - **Resolution:** out of scope; noted for the owner. The failure badge still shows; staff reply from the holding thread.
-- **P19. A STOP from a shared number files its consent To-do on the holding record.** `recordInboundConsent` receives the filing contact (`…/inbound/route.ts:253-254`).
-  - **Resolution:** accepted (the To-do opens the holding record, which redirects to its thread); noted for the owner. The ledger itself is keyed by the phone address, unchanged (spec §5.12.5).
-- **P20. The call page's link for a holding call opens the thread.** Today's conversation link goes to the inbox list (`[acct]/calls/[callId]/page.tsx:244-251`).
-  - **Resolution:** a call with a `conversation_id` and no `contact_id` links to `conversations?c=<id>` labelled `call.holding.openTexts`. Every other call is unchanged.
-- **P21. The palette's label is English.** `api/accounts/[accountId]/search/route.ts` builds its labels with no locale (`UNNAMED`, `OUTCOMES[…].label`).
-  - **Resolution:** the holding label there is `holdingLabel(number, "en")`, matching the route's other labels.
+The fix round's review items are cited as R1–R15 (the opus plan review of 2026-10-24) and its orchestrator rulings as the "ruling" of R2 and R3. The spec carries every change in the same commit (its §13).
+
+- **P1. An Undo names its move, and moves back only what that move recorded** (R11; first round: the spec's guard let a call-less Undo repoint a housemate's calls).
+  - **Resolution:** `move_holding_thread(p_account_id, p_from_conversation, p_to_conversation, p_actor, p_undo_of bigint default null)`. A move records the ids it moved on its `conversation.moved` event (`messageIds`, `callIds`) and returns `moveId`, that event's id. An Undo passes `p_undo_of`; the function reads that event of THIS account and refuses (`invalid`) unless it is a move (not an Undo) between the same two threads reversed, then moves back only those ids still on the person's thread. Nothing the browser sends can name a row. Task 1 proves the forged cases; Task 11's Undo token carries only `moveId` and the two thread ids.
+- **P2. 0098 follows 0097's byte rules.** The spec's first text had two `''` (`person''s`, `app''s`), apostrophes on seven `--` lines, `set local lock_timeout` at top level, and a LOCKS paragraph that is wrong inside one transaction (ADD COLUMN already holds ACCESS EXCLUSIVE to the end of the file).
+  - Evidence: `0097_one_switch.sql` has 0 `''` and 0 apostrophes in comments, and 0091/0094/0097 set `lock_timeout` inside a `do` block (`0094_trade_modules.sql:62-68`).
+  - **Resolution:** Task 1 Step 4's text.
+- **P3. A signed-in UPDATE naming the mark is refused by the grant, not the trigger.** Evidence: `permission denied for table contacts` (42501), because no column UPDATE grant names `holds_shared_number` (`schema-grants-guard.test.ts:86-89`).
+  - **Resolution:** the update probe expects `{ code: "42501" }`. "Drop the trigger" is caught by the INSERT probe and the edit probes (R8). The trigger's `new.holds_shared_number := old…` line is defence in depth for a future grant: `grant update (holds_shared_number) … to authenticated` → the update probe FAILS, and so does `schema-grants-guard.test.ts` (mutation m07).
+- **P4. One more phone key.** `normalisePhone` reads `"+52 1 899 922 1234"` as `+528999221234` (A9), but its stored `phone_key` is `5218999221234`.
+  - **Resolution:** `phoneKeysOf(e164)` returns the digits key, the ten national digits, and both the `52` and `521` forms; `isCallerIdNumber` (S1) still decides who is on the number.
+- **P5. Two of spec §7's name mutations cannot fail.** "García María" already fails rule 2; "María de" is not a subsequence of "María Elena García López".
+  - **Resolution:** rule 3's probe is "María López García" against "María Elena García López"; rule 4's is "María de" against "María de la Cruz". Each is rejected by its rule alone.
+- **P6. "Refuses once" needs memory.** Spec §5.10.5's `take_message` "refuses once".
+  - **Resolution:** `IdentityState.messageNameAsked`. (`leadWhoseAsked`, P27, is its twin for a lead.)
+- **P7. A confirmation of the right person at too low a rung** answers NOT CONFIRMED YET; only a confirmation of a DIFFERENT contact answers "isn't one they have confirmed is theirs".
+- **P8. More LOAD-BEARING sites than spec §4.2 lists:** the inbox's three reads (`packages/db/src/messaging.ts:644`, `:767`, `:913`), `COLS` (`contacts.ts:69-70`), `findConversationForContact`. No scope change; the PR body names them.
+- **P9. The label needs the number:** `ConversationSummary` gains `holdsSharedNumber` and `sharedNumber`.
+- **P10. One flow, two callers:** `…/identity/flow.ts` (and the lead/booking picker in `record.ts`) hold the pure steps; the registry and the corpus stub feed them reads.
+- **P11. The parity test gets its own file** (`corpus-parity.test.ts`), and `corpus-lib.test.ts:437`'s pinned regex changes with the session argument.
+- **P12. One e2e spec** (Task 16): the inbox Move is not a phone path, and the binding process rule asks for one, run against a production build before the final review.
+- **P13. The work-list mutation needs a fixture that can fail:** two precedence probes on the pure function.
+- **P14. Main moved, and Owner is "dueño" in Spanish now** (`a1ccb19a`, #287). Task 0 rebases; Task 2 uses "dueño".
+- **P15. The text-back resolver is a wrapper** (`resolveTextbackContact`), not a mode.
+- **P16. The text-back's contact types widen** to `ResolvedTextbackContact`.
+- **P17. `findUpcomingBookingForPhone` leaves with its last caller** (Task 6).
+- **P18. A holding call has no resend button** (`[acct]/calls/[callId]/page.tsx:436-441` needs a contact). Out of scope; noted for the owner.
+- **P19. A consent To-do from a shared number names the number, never "Caller"** (R5). `holdTodo` and `cancelTodo` build their titles from `contactLabel` (`apps/web/src/lib/consent/inbound.ts:123-127`), which would read "Caller may have asked to stop texts…" on a holding record.
+  - **Resolution:** on the holding path the hold To-do's title is `todo.sharedNumber.hold` ("A text from the shared number {number} may have asked to stop texts: “{excerpt}”. Texts to that number are on hold.") and the CANCEL To-do follows S30 (P30). Both on the holding record, in the account's language. The ledger itself is keyed by the phone address, unchanged.
+- **P20. The call page's link for a holding call opens the thread** (`conversations?c=<id>`, `call.holding.openTexts`).
+- **P21. The palette's label is English** (`holdingLabel(number, "en")`), matching the route's other labels.
+- **P22. The shape CHECK is written null-safe.** Evidence: the replica, above. A CHECK passes when its expression is NULL, and `first_name = 'Caller'` is NULL for a NULL first name.
+  - **Resolution:** `first_name is not distinct from 'Caller'`, and `phone is not null` with a plain E.164 test (length 9–16, a leading `+`, digits after it). Mutation m02 (`first_name = 'Caller'`) → the "no first name" case FAILS.
+- **P23. One holding record per account and E.164, not per `phone_key`** (R13). Two numbers of two countries can share a digits key: `+1 322 123 4567` and Belgium's `+32 2 123 4567` both key `3221234567`. With the index on `phone_key`, the second number's `ensureHoldingContact` got 23505, re-read by its own E.164, found nothing, and threw, so the inbound route answered 503 to every retry.
+  - **Resolution:** `contacts_one_holding_per_number` is unique `(account_id, phone)`, and the CHECK fixes a holding record's phone to E.164, so the two can never collide. `ensureHoldingContact` reads by the exact phone. If a 23505 is ever followed by a read that finds no row (a delete in between), it throws `HoldingContactUnavailable`; the inbound route then records the consent step with no contact, logs the account id, and answers 200 with nothing filed (the alert-phone path's shape, `…/inbound/route.ts:164-175`), never 503 forever; the text-back logs and sends nothing. Mutation m04 (back to `phone_key`) → the two-countries case FAILS.
+- **P24. Staff cannot edit a holding record** (R8). The spec's §4.1 said "no name or customer detail is ever written onto it … for every writer, staff included", but the CHECK binds only the name, the email and the phone's shape; a signed-in session could still change its phone, source, custom fields, `dnd` and the rest.
+  - **Resolution:** the trigger refuses (42501, "A shared number holding record is changed by server code only") any signed-in change to a holding record's `first_name`, `last_name`, `email`, `phone`, `phone_country_unconfirmed`, `source`, `custom`, `attribution`, `dnd` or `marketing_email_opted_out_at` (every client-updatable column except `assigned_to` and `updated_at`, `schema-grants-guard.test.ts:86-89`). Server code (service_role) is not limited. Mutation m06 → the four edit cases FAIL.
+- **P25. A different person after a confirmation** (R1). Confirm Beto, then ask about Ana's appointment: `find_my_booking` reads the confirmation it holds and answers Beto's time as if it were Ana's. And on a number with one contact, `decideIdentity`'s first rows confirmed the sole contact whatever name `confirm_identity` was given.
+  - **Resolution (tool text and code only; the prompt digests stay untouched):**
+    - `confirm_identity`'s description now opens: "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed."
+    - A found result whose confirmation came from a name (`by` `name` or `name_email`) carries `FOUND_BY_NAME_NEXT`: "This is the appointment of the person they confirmed. If the caller asks about a different person's appointment than the one already confirmed, call confirm_identity with that person's first and last name before you call find_my_booking again."
+    - Spec §5.3's sole-candidate row applies only when no full name is given: `confirm_identity` with a name on a one-contact number confirms only when the name matches.
+    - Tests: the Beto-then-Ana case, and a wrong name on a one-contact number is a miss.
+- **P26. The name rule (R2, ruling a).** The spec's rule (the spoken words a subsequence of the record's) duplicated "María García López" against a sole "María García", and locked out a son "José Garza" whose father "José Luis Garza" shares the number.
+  - **Resolution:** `nameMatch(spoken, record)` is `"exact"` when the words are the same, in order; `"partial"` when the first words are equal and EITHER every spoken word is on record in order (its last word not a particle, rules 3 and 4) OR every word of the record's name was spoken, in order; else null. Both names need two words or more (rule 1). `nameHits` takes the exact hits when there are any, else the partial ones. A partial match that hits more than one candidate is ambiguous: with an email given it must pick one, otherwise `ask_email` when any of them has one, else a miss. So "José Garza" is the son (exact), "José Luis Garza" the father, and "María García López" is the sole "María García" (partial).
+- **P27. A name that does not match the ONE contact on a number asks, never creates silently** (R2, ruling b; finding 9).
+  - **Resolution:** `book_appointment` and `capture_lead` gain a structured `forSomeoneElse: boolean`. On a number with exactly one real contact: `true` → a new contact (`create`); `false` → that contact, whatever the name (nicknames: "Daniel" for "Dan", "Beto" for "Roberto"); absent and the name agrees with the contact (P26's rule, a first name alone counting when its first word is the contact's) or the contact is a "Caller" placeholder → today's path; absent and the name does not agree → `ask_whose`, whose result asks "Is this appointment for you or for someone else?" in English and Spanish. `book_appointment` writes nothing until answered. `capture_lead` asks ONCE (`leadWhoseAsked`) and then records the lead; `finishCall` then files a lead still unanswered on no customer (the same order as the booking's: the picker, with the call's confirmation counted only on the caller-ID number). This replaces S20's "a full name that does not match a sole contact makes a new contact".
+- **P28. Spanish dash words** (R2, ruling c): `spokenEmail` maps "guion bajo" → `_`, "guion medio" → `-`, "guion" (with or without its accent) → `-`, "raya" → `-`, and still "dash"/"hyphen" → `-`, "underscore" → `_`. Each is pinned by a test.
+- **P29. A new person on a shared number is still offered to the merge queue** (R2). `createContact` with `matchBy: "email_only"` skipped the phone branch entirely, so "Beto" made next to an existing "Roberto" was never flagged.
+  - **Resolution:** with `matchBy`, the phone lookup still runs (the holding record skipped), never as the winner; after the insert, the new contact and the first phone match are filed as one `contact_duplicate_flags` pair, reason `phone_shared_new_person` (the table's only CHECK is the pair's order). The number stays shared until staff merge the two, which is what the flag is for.
+- **P30. Replies and CANCEL words from a shared number (R3, ruling; spec S30).** `applyConfirmationReply` (`packages/db/src/automations.ts:938-996`) finds the booking by `contact_id`, so once a shared number's texts file on its holding record a household member's "YES" never confirms their appointment; `cancelTodo` (`apps/web/src/lib/consent/inbound.ts:130-139`) likewise looks for the holding record's own (non-existent) next booking.
+  - **Resolution, on the holding path only:**
+    - A recognised one-word answer (`matchConfirmationReply`) looks for outstanding confirmation asks across the REAL contacts on the number (`listOutstandingConfirmAsks`, Task 10). Exactly one → `applyConfirmationReply` for that contact, as today. More than one, or none → nothing is applied, and ONE To-do is filed on the holding record: `todo.sharedNumber.reply`, "A reply from a shared number couldn't be matched to one appointment", in the account's language.
+    - A CANCEL word: the real contacts with an upcoming booked appointment (`nextBookedStart` each). Exactly one → today's CANCEL To-do for THAT contact, with their name and date. More than one → the same `todo.sharedNumber.reply` To-do on the holding record. None → no To-do, today's rule for a CANCEL with nothing to check (`inbound.ts:131-132`); said in S30.
+- **P31. Task 10 is HIGH and carries mutation probes** (R4): (a) and (b) plus the reviewer's own, like the other HIGH tasks.
 - **Confirmed, not deviations:**
   - Every registry, finish-call, textback, phone-number, sip-headers, telnyx-request, card-focus, corpus-lib, contacts, voice and route cite in the spec reads as the spec says at `df8882ce` (re-read for this plan).
-  - The 0098 SQL itself works as the spec designed it, apart from P1.
   - `isCallerIdNumber(stored, number)` (`phone-number.ts:63-67`) is a plain normalised compare, so it filters candidates for any number (spec §4).
   - `ensureCallbackTask` (`voice.ts:695-727`) answers a second insert for the same call with the first row (`created: false`), so the identity To-do needs no new dedupe.
   - `tasks_call_once` already exists; no new link kind.
   - `contacts.ts:343` already queries `.in("phone_key", …)`, so the candidate read's filter shape is proven over PostgREST.
+  - No same-account foreign key ties `messages` or `conversations` to their account (only `bookings` and `opportunities`, `0050_same_account_fks.sql:98-110`), which is why Task 1 can build the cross-account rows its account-filter mutations need.
 
 ---
 
@@ -135,6 +142,15 @@ The spec's 0098 SQL (spec §4.1, lines 277-443, extracted byte for byte; md5 `c2
 
   **Recommendation:** approve. The role sentence mirrors `business.refuse.keep` word for word in both languages.
 
+- **Q2 (non-blocking, the fix round's two To-do titles; P19, P30).** The orchestrator's ruling gave the English of the first; the rest are the plan's drafts:
+
+  | Key | English | Spanish (usted) |
+  |---|---|---|
+  | `todo.sharedNumber.reply` | A reply from a shared number couldn't be matched to one appointment | Una respuesta de un número compartido no se pudo asociar con una sola cita |
+  | `todo.sharedNumber.hold` | A text from the shared number {number} may have asked to stop texts: “{excerpt}”. Texts to that number are on hold. | Un mensaje del número compartido {number} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes a ese número están en pausa. |
+
+  **Recommendation:** approve. The hold sentence follows `todo.consent.hold.en`/`.es` (`messages.ts:932-933`) with the number in place of the name. Both are rendered in the ACCOUNT's language (ruling R3); today's consent To-dos stay English (`inbound.ts:134`, `:144` read the `.en` keys), which this PR does not change.
+
 No other open question. Two behaviours the owner may want to know about are in "Notes for the owner" at the end.
 
 ---
@@ -150,10 +166,10 @@ No other open question. Two behaviours the owner may want to know about are in "
 | 4 | `@bis/db` contacts: `matchBy`, every dedupe's holding skip, the lists and count, `COLS`, the import's match index; the inbox reads' holding fields and `findConversationForContact` | **HIGH** | bis-db-schema (opus) | opus bis-reviewer, own worktree and replica + PostgREST |
 | 5 | The identity module (ladder, match, state, results, candidates, flow) and `CallState.identity` | MEDIUM | bis-voice | one sonnet bis-reviewer, own worktree |
 | 6 | The gate: `find_my_booking`, `confirm_identity`, `reschedule`/`cancel` ownership, the schemas, `ToolContext.tradeModule`; `findUpcomingBookingForPhone` removed | **HIGH** | bis-voice (opus) | opus bis-reviewer, own worktree, mutation probes |
-| 7 | The record rule in the call: the picker, `book_appointment`'s contact choice and fill, `take_message`'s name | **HIGH** | bis-voice (opus) | opus bis-reviewer, own worktree, mutation probes |
+| 7 | The record rule in the call: the picker, `book_appointment`'s contact choice and fill, `forSomeoneElse` on a one-contact number, `capture_lead`'s ask, `take_message`'s name | **HIGH** | bis-voice (opus) | opus bis-reviewer, own worktree, mutation probes |
 | 8 | The record rule after the call: `resolveContactId`, the text-back's holding record, the adopt rule, `contactForCallerId` | **HIGH** | bis-voice (opus) | opus bis-reviewer, own worktree, mutation probes |
 | 9 | The identity To-do in `finishCall`; `workRowHref`'s call link | MEDIUM | bis-voice | one sonnet bis-reviewer, own worktree |
-| 10 | Inbound texts from a shared number file on the holding record | **HIGH** | bis-comms (opus) | opus bis-reviewer, own worktree |
+| 10 | Inbound texts from a shared number: the holding filing, its fail-closed path, confirmation replies and CANCEL words across the household (S30), the shared hold To-do | **HIGH** | bis-comms (opus) | opus bis-reviewer in its own detached worktree, mutation probes (a), (b), (c) and its own; re-review on any change |
 | 11 | The inbox Move and its Undo: two server actions and their role check | MEDIUM | bis-comms | one sonnet bis-reviewer, own worktree |
 | 12 | The UI: inbox label, thread Notice and Move menu, call-page link, record-page redirect, palette label; the i18n baselines | LOW | bis-frontend | none |
 | 13 | The SIP attestation log line and the shared value rule | LOW | bis-voice | none |
@@ -176,7 +192,7 @@ No other open question. Two behaviours the owner may want to know about are in "
 - **Wave C2:** Task 11, after Tasks 2 and 4: `…/convos/actions.ts`, `…/convos/actions.test.ts`.
 - **Wave D:**
   - Task 6, after Tasks 5 and 13 (both touch nothing of each other, but Task 6 edits `…/incoming/route.ts` one line after Task 13's): `…/tools/registry.ts`, `…/tools/schemas.ts`, `…/tools/registry.test.ts`, `…/tools/schemas.test.ts`, `…/incoming/route.ts`, `packages/db/src/voice.ts` and `voice.test.ts` (the removal only).
-  - Task 10, after Task 5: `…/inbound/route.ts`, `…/inbound/route.test.ts`, `…/inbound/route.consent.test.ts`.
+  - Task 10, after Tasks 2, 4 and 5: `…/inbound/route.ts`, `…/inbound/route.test.ts`, `…/inbound/route.consent.test.ts`, `apps/web/src/lib/consent/inbound.ts` (+ `inbound.test.ts`), `packages/db/src/automations.ts` (one new export), `packages/db/src/index.ts:119` (one name; Tasks 3 and 4 own other lines and are committed), `packages/db/src/test/automations.test.ts` (one new `describe`).
   - Task 12, after Tasks 2, 4 and 11: `…/convos/{page,conversation-list,message-thread}.tsx`, `…/convos/holding-move.tsx` (new), `…/convos/holding-move-handlers.ts` (new, + test), `[acct]/calls/[callId]/page.tsx`, `[acct]/contacts/[contactId]/page.tsx`, `apps/web/src/app/api/accounts/[accountId]/search/route.ts`, `apps/web/src/lib/contacts/holding-label.ts` (new, + test), their tests, the two i18n baselines.
 - **Wave E:** Task 7, after Task 6: `…/identity/record.ts` (new, + test), `…/tools/registry.ts`, `…/tools/schemas.ts`, `…/tools/registry.test.ts`, `…/tools/schemas.test.ts`.
 - **Wave F** (parallel, after Task 7):
@@ -212,13 +228,15 @@ No other open question. Two behaviours the owner may want to know about are in "
 | `…/incoming/route.ts:1266-1271` | 6 | `tradeModule` on the tool context |
 | `…/tools/registry.test.ts`, `…/tools/schemas.test.ts` | 6, 7 | |
 | `…/identity/record.ts` (+ test) | 7 | new, pure |
-| `…/tools/registry.ts:339-347` (take_message), `:437-476` (the book contact) | 7 | |
-| `…/tools/schemas.ts:32-34` | 7 | `take_message.name`, `nameDeclined` |
+| `…/tools/registry.ts:331-337` (capture_lead), `:339-347` (take_message), `:437-476` (the book contact) | 7 | |
+| `…/tools/schemas.ts:10-12` (book), `:29-31` (capture_lead), `:32-34` (take_message) | 7 | `forSomeoneElse` ×2, `take_message.name`, `nameDeclined` |
 | `apps/web/src/lib/voice/finish-call.ts:292-379`, `:632-660` (+ `finish-call.test.ts`) | 8 | resolver, text-back, adopt |
 | `apps/web/src/lib/voice/textback.ts:64-75`, `:126-136` (`TextbackOutcome`), `:154-184`, `:215-325` (+ `textback.test.ts`) | 8 | holding record |
 | `apps/web/src/lib/voice/finish-call.ts:798-835` (+ `finish-call.test.ts`) | 9 | the identity To-do |
 | `apps/web/src/lib/documents/card-focus.ts:23-42` (+ `card-focus.test.ts`) | 9 | the call link |
-| `…/inbound/route.ts:193-218` (+ `route.test.ts`, `route.consent.test.ts`) | 10 | holding filing |
+| `…/inbound/route.ts:193-218`, `:235-242` (+ `route.test.ts`, `route.consent.test.ts`) | 10 | holding filing, its fail-closed path, the household reply (S30) |
+| `apps/web/src/lib/consent/inbound.ts:94-150` (+ `inbound.test.ts`) | 10 | `sharedNumber` on the input; the shared hold and CANCEL To-dos |
+| `packages/db/src/automations.ts` (after `applyConfirmationReply`, `:938-996`), `packages/db/src/index.ts:119` (+ `automations.test.ts`) | 10 | `listOutstandingConfirmAsks` |
 | `…/convos/actions.ts` (+ `actions.test.ts`) | 11 | two actions |
 | `…/convos/page.tsx:255-256`, `:369-385`, `conversation-list.tsx:52-58`, `message-thread.tsx:24-115`, new `holding-move.tsx`, `holding-move-handlers.ts` | 12 | |
 | `[acct]/calls/[callId]/page.tsx:232-262` | 12 | `Open the texts` |
@@ -247,19 +265,18 @@ No other open question. Two behaviours the owner may want to know about are in "
 | Object | Name and rule |
 |---|---|
 | Column | `public.contacts.holds_shared_number boolean not null default false` |
-| CHECK | `contacts_holding_shape`: `not holds_shared_number or (first_name = 'Caller' and last_name is null and email is null and phone is not null)`, added NOT VALID then validated |
-| Index | `contacts_one_holding_per_number`: unique `(account_id, phone_key) where holds_shared_number` |
-| Trigger | `contacts_holding_server_only` BEFORE INSERT OR UPDATE FOR EACH ROW → `app.contacts_holding_server_only()` (plain plpgsql, not definer): for `current_user = 'authenticated'`, INSERT stores `false`, UPDATE keeps `old` |
-| Function | `public.move_holding_thread(p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text, p_message_ids uuid[] default null, p_call_ids uuid[] default null) returns jsonb`, SECURITY DEFINER, `set search_path = pg_catalog, pg_temp`, EXECUTE to service_role only |
-| Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side without BOTH id arrays, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"ok","messageIds":[…],"callIds":[…]}` |
-| Event | `conversation.moved`, `actor_type` `user`, `actor_id` = `p_actor`, payload `{ fromConversationId, toConversationId, fromContactId, toContactId, messages, undo }` |
+| CHECK | `contacts_holding_shape`: `not holds_shared_number or (first_name is not distinct from 'Caller' and last_name is null and email is null and phone is not null and length(phone) between 9 and 16 and substr(phone, 1, 1) = '+' and substr(phone, 2) !~ '[^0-9]')`, null-safe (P22), added NOT VALID then validated |
+| Index | `contacts_one_holding_per_number`: unique `(account_id, phone) where holds_shared_number` (the exact E.164, P23) |
+| Trigger | `contacts_holding_server_only` BEFORE INSERT OR UPDATE FOR EACH ROW → `app.contacts_holding_server_only()` (plain plpgsql, not definer). For `current_user = 'authenticated'`: INSERT stores `false`; UPDATE of a holding record that changes any of `first_name, last_name, email, phone, phone_country_unconfirmed, source, custom, attribution, dnd, marketing_email_opted_out_at` raises 42501 "A shared number holding record is changed by server code only" (P24); every UPDATE keeps `old.holds_shared_number` |
+| Function | `public.move_holding_thread(p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text, p_undo_of bigint default null) returns jsonb`, SECURITY DEFINER, `set search_path = pg_catalog, pg_temp`, EXECUTE to service_role only |
+| Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side with no `p_undo_of`; away from it with one; a `p_undo_of` that is not a move of this account between the same two threads reversed, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"ok","moveId":<bigint>,"messageIds":[…],"callIds":[…]}` |
+| Event | `conversation.moved`, `actor_type` `user`, `actor_id` = `p_actor`, payload `{ fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId` |
 
 ### `@bis/db` (Task 3) — `packages/db/src/voice.ts`
 
 ```ts
-// New imports at the top of voice.ts (contacts.ts imports nothing from voice.ts, so there is no cycle):
+// New import at the top of voice.ts (contacts.ts imports nothing from voice.ts, so there is no cycle):
 import { phoneDigits, phoneFields } from "./contacts";
-import { normalisePhone } from "./phone";
 
 /** S-47e (spec 4, 5.2): one contact on a number, as the identity check and the record picker read it. The raw
  *  stored email is never selected (spec E2, S3): only its key. */
@@ -316,21 +333,33 @@ export async function findUpcomingBookingForContact(
 }
 
 /**
+ * Thrown when the number's holding record can be neither found nor made: a 23505 on
+ * contacts_one_holding_per_number followed by a read that finds no row (it was deleted in between). Callers fail
+ * CLOSED (plan P23): the inbound route records the consent step with no contact and files nothing (200, never a
+ * 503 Telnyx would retry forever); the text-back sends nothing. Its message names no number.
+ */
+export class HoldingContactUnavailable extends Error {
+  constructor(accountId: string) {
+    super(`the shared number's holding record could not be read or made (account ${accountId})`);
+    this.name = "HoldingContactUnavailable";
+  }
+}
+
+/**
  * The ONE holding record of this account and number (0098, spec 5.12.2), made when there is none. Never through
  * createContact, whose phone match would return a household member. service_role only (0098's trigger stores
- * false for a signed-in insert). Two calls at once: the loser's insert is 23505 on
- * contacts_one_holding_per_number, and it reads again, once. No contact_created act is recorded (spec 5.12.1).
+ * false for a signed-in insert). Keyed by the exact E.164 (0098's index and CHECK, plan P23). Two calls at once:
+ * the loser's insert is 23505, and it reads again, once. No contact_created act is recorded (spec 5.12.1).
  * Throws on any other error; every caller has a net.
  */
 export async function ensureHoldingContact(
   db: SupabaseClient, accountId: string, e164: string,
 ): Promise<{ id: string; created: boolean }> {
   const find = async (): Promise<string | null> => {
-    const { data, error } = await db.from("contacts").select("id, phone")
-      .eq("account_id", accountId).in("phone_key", phoneKeysOf(e164)).eq("holds_shared_number", true);
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("phone", e164).eq("holds_shared_number", true).maybeSingle();
     if (error) throw new Error(`ensureHoldingContact read failed: ${error.message}`);
-    const rows = (data ?? []) as { id: string; phone: string | null }[];
-    return rows.find((r) => normalisePhone(r.phone)?.e164 === e164)?.id ?? null;
+    return (data as { id: string } | null)?.id ?? null;
   };
   const existing = await find();
   if (existing) return { id: existing, created: false };
@@ -341,7 +370,7 @@ export async function ensureHoldingContact(
   if (error?.code === "23505") {
     const again = await find();
     if (again) return { id: again, created: false };
-    throw new Error("ensureHoldingContact: the number has a holding record that could not be read");
+    throw new HoldingContactUnavailable(accountId);
   }
   if (error || !data) throw new Error(`ensureHoldingContact failed: ${error?.message ?? "no row"}`);
   const id = (data as { id: string }).id;
@@ -354,27 +383,28 @@ export async function ensureHoldingContact(
 }
 
 export type HoldingMove =
-  | { status: "ok"; messageIds: string[]; callIds: string[] }
+  | { status: "ok"; moveId: number; messageIds: string[]; callIds: string[] }
   | { status: "invalid" | "not_found" };
 
 /**
  * 0098's move_holding_thread through PostgREST, on the SERVICE client (the caller has checked the role, spec
- * 5.12.5). A move names no ids; its Undo names BOTH arrays the move returned (plan P1), never only one.
- * Throws on a transport error or an answer the function never gives.
+ * 5.12.5). A move names no event; its Undo names the move's own `moveId` and nothing else (plan P1): the
+ * function moves back only the ids that move recorded. Throws on a transport error or an answer the function
+ * never gives.
  */
 export async function moveHoldingThread(
   db: SupabaseClient, accountId: string,
-  input: { from: string; to: string; actor: string; undo?: { messageIds: string[]; callIds: string[] } },
+  input: { from: string; to: string; actor: string; undoOf?: number },
 ): Promise<HoldingMove> {
   const { data, error } = await db.rpc("move_holding_thread", {
     p_account_id: accountId, p_from_conversation: input.from, p_to_conversation: input.to, p_actor: input.actor,
-    p_message_ids: input.undo ? input.undo.messageIds : null, p_call_ids: input.undo ? input.undo.callIds : null,
+    p_undo_of: input.undoOf ?? null,
   });
   if (error) throw new Error(`moveHoldingThread failed: ${error.message}`);
-  const r = (data ?? null) as { status?: unknown; messageIds?: unknown; callIds?: unknown } | null;
-  if (r?.status === "ok") {
+  const r = (data ?? null) as { status?: unknown; moveId?: unknown; messageIds?: unknown; callIds?: unknown } | null;
+  if (r?.status === "ok" && typeof r.moveId === "number") {
     return {
-      status: "ok",
+      status: "ok", moveId: r.moveId,
       messageIds: Array.isArray(r.messageIds) ? r.messageIds.map(String) : [],
       callIds: Array.isArray(r.callIds) ? r.callIds.map(String) : [],
     };
@@ -390,22 +420,42 @@ export async function moveHoldingThread(
 
 ```ts
 // contacts.ts, CreateContactInput (:33-42) gains, after `author`:
-  /** S-47e (E7, spec 5.10.1): "email_only" dedupes on the email alone, never by phone: no phone match, no
-   *  legacy-key read, no country twin. Sofía passes it when a name on a shared number makes a new person.
-   *  Read only by createContact (as assignedTo and author are); toRow never sees it. Absent = today's dedupe. */
+  /** S-47e (E7, spec 5.10.1; plan P29): "email_only" dedupes on the email alone: a phone match never makes this
+   *  write land on an existing contact (no phone winner, no legacy-key read, no country twin). The direct phone
+   *  read still runs, and its first match is filed for the merge queue with the new contact (reason
+   *  phone_shared_new_person), so a nickname made into a second person ("Beto" beside "Roberto") is found later.
+   *  Sofía passes it when a name on a shared number makes a new person. Read only by createContact (as
+   *  assignedTo and author are); toRow never sees it. Absent = today's dedupe. */
   matchBy?: "email_only";
 
-// findDuplicate (:261-263) gains a fifth parameter, and its phone branch is skipped with it:
+// findDuplicate (:261-263) gains a fifth parameter. The email block (:266-272) is unchanged. In the phone block
+// (:274-351), the direct read (:276-277) still runs and both of its reads gain the holding skip; with
+// emailOnly, the legacy-key fallback (:323-350) is skipped:
 async function findDuplicate(
   db: SupabaseClient, accountId: string, email?: string, phone?: string,
   opts: { emailOnly?: boolean } = {},
 ): Promise<DuplicateMatch> {
-  // …the email block (:266-272) unchanged…
-  const pKey = phone && !opts.emailOnly ? phoneKeyOf(phone) : "";
-  // :276-277 and :342-343 each gain .eq("holds_shared_number", false) right after .eq("account_id", accountId)
+// :276-277 becomes:
+    const { data, error } = await db.from("contacts").select("id")
+      .eq("account_id", accountId).eq("holds_shared_number", false).eq("phone_key", pKey).limit(1);
+// :325 and :328 each gain `!opts.emailOnly &&` as their first condition:
+    if (!opts.emailOnly && !result.phoneMatch && /^52\d{10}$/.test(pKey)) {
+    } else if (!opts.emailOnly && !result.phoneMatch && /^\d{10}$/.test(pKey) && phone === `+1${pKey}`) {
+// :342-343 becomes:
+      const { data: bare, error: bareErr } = await db.from("contacts").select("id, phone")
+        .eq("account_id", accountId).eq("holds_shared_number", false).in("phone_key", legacyKeys).limit(10);
 
-// createContact (:439):
-  const match = await findDuplicate(db, accountId, email || undefined, phone, { emailOnly: input.matchBy === "email_only" });
+// createContact (:439-440):
+  const emailOnly = input.matchBy === "email_only";
+  const match = await findDuplicate(db, accountId, email || undefined, phone, { emailOnly });
+  const winner = emailOnly ? match.emailMatch : (match.emailMatch ?? match.phoneMatch);
+// Its `conflict` flag (:445-464) is unchanged: an email match AND a different phone match is still filed.
+// After the insert's emit (:489-490), before the country-twin flag:
+  if (emailOnly && match.phoneMatch !== null) {
+    await flagDuplicatePair(flagDb, accountId, data.id, match.phoneMatch, "phone_shared_new_person");
+  }
+// The final return (:493) becomes `flagged: twinFlagged || (emailOnly && match.phoneMatch !== null)`.
+
 // flagDuplicatesAfterWrite, the PHONE branch only (:413-414): .eq("holds_shared_number", false) after .eq("account_id", accountId)
 // flagMatchesOf (:512-513): .eq("holds_shared_number", false) after .eq("account_id", accountId)
 // listContacts (:891) and countContacts (:994-995): .eq("holds_shared_number", false) after .eq("account_id", accountId)
@@ -420,7 +470,7 @@ async function findDuplicate(
   holdsSharedNumber: boolean;
   /** The holding record's phone, for the "Shared number {number}" label; null on every other thread (plan P9). */
   sharedNumber: string | null;
-// The three embeds (listConversations :647 both forms, getConversationSummary :767, searchConversations :922)
+// The three embeds (listConversations :644 both forms, getConversationSummary :767, searchConversations :913)
 // gain ", phone, holds_shared_number" inside contacts(…), and each of the three mappers sets:
 //   holdsSharedNumber: r.contacts?.holds_shared_number === true,
 //   sharedNumber: r.contacts?.holds_shared_number === true ? (r.contacts?.phone ?? null) : null,
@@ -435,12 +485,17 @@ export async function findConversationForContact(
   return (data as { id: string } | null)?.id ?? null;
 }
 ```
-`packages/db/src/index.ts`'s messaging export block (`:51-58`) gains `findConversationForContact` (Task 4 owns that one token; Task 3 owns `:25`'s new line; they are different lines).
+`packages/db/src/index.ts`'s messaging export block (`:51-58`) gains `findConversationForContact` (Task 4 owns that one token; Task 3 owns `:25`'s new line; Task 10 owns one name at `:119`; they are different lines).
 
 ### The identity module (Task 5) — `…/identity/` (pure; relative imports, plus `@bis/db` values `emailKey` and `listContactsOnNumber` only)
 
-`call-state.ts` (`:12`, `:64-113`):
+`call-state.ts` (`:11`, `:12`, `:64-113`):
 ```ts
+export type CapturedLead = {
+  fields: Record<string, string>;
+  /** S-47e (plan P27): the caller's answer to "for you or for someone else?"; absent when not asked or not answered. */
+  forSomeoneElse?: boolean;
+};
 export type TakenMessage = {
   body: string; callbackNumber?: string; at: string;
   /** S-47e (spec 5.10.5): the first and last name the caller gave when take_message asked for it. */
@@ -458,11 +513,13 @@ export type IdentityState = {
   locked: null | "misses" | "cannot";
   /** take_message has asked for a name once on this call (plan P6); the next call records the message. */
   messageNameAsked: boolean;
+  /** capture_lead has asked "for you or for someone else?" once on this call (plan P27); the next call records the lead. */
+  leadWhoseAsked: boolean;
 };
 // CallState gains, after `callerItemIds`:
   /** S-47e: the per-call identity (spec 5.4.1). Lives here because ToolContext is fixed per call (SD3). */
   identity: IdentityState;
-// emptyCallState() gains: identity: { confirmed: null, misses: 0, locked: null, messageNameAsked: false },
+// emptyCallState() gains: identity: { confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false },
 ```
 
 `ladder.ts`:
@@ -494,8 +551,8 @@ export function requiredRung(action: IdentityAction, tradeModule: TradeModuleId 
 
 `match.ts`:
 ```ts
-// S-47e (spec 5.3): the name and email rules and the decision. The code compares; the model is told only the
-// outcome (spec E2). Never fuzzy. Pure.
+// S-47e (spec 5.3; plan P26, P28): the name and email rules and the decision. The code compares; the model is
+// told only the outcome (spec E2). Never fuzzy. Pure.
 import { emailKey } from "@bis/db";
 import { isValidEmail } from "../../forms/guards";
 
@@ -517,22 +574,50 @@ export function nameWords(text: string | null | undefined): string[] {
     .trim().split(" ").filter((w) => w.length > 0);
 }
 
-/** Spec 5.3's four rules, in order. */
-export function nameMatches(spoken: readonly string[], record: readonly string[]): boolean {
-  if (spoken.length < 2 || record.length < 2) return false;                 // 1
-  if (spoken[0] !== record[0]) return false;                                // 2
-  if (PARTICLES.has(spoken[spoken.length - 1]!)) return false;              // 4
-  let i = 0;                                                                // 3: a subsequence, in order
-  for (const w of record) {
-    if (w === spoken[i]) i += 1;
-    if (i === spoken.length) return true;
+/** Every word of `a` appears in `b`, in the same order (words of `b` may be skipped). */
+function inOrder(a: readonly string[], b: readonly string[]): boolean {
+  let i = 0;
+  for (const w of b) {
+    if (w === a[i]) i += 1;
+    if (i === a.length) return true;
   }
-  return false;
+  return a.length === 0;
 }
 
+/**
+ * How a spoken name relates to one record's (plan P26, the orchestrator's ruling on R2):
+ * - "exact": the same words, in the same order;
+ * - "partial": the first words are equal, and EITHER every spoken word is on record in order and the spoken
+ *   name does not end on a particle (spec 5.3 rules 3 and 4: "María García" for "María Elena García López"), OR
+ *   every word of the record's name was spoken, in order ("María García López" for "María García");
+ * - null otherwise. Both names need two words or more (rule 1): a first name alone, or a "Caller" placeholder,
+ *   is never confirmed by name.
+ */
+export function nameMatch(spoken: readonly string[], record: readonly string[]): "exact" | "partial" | null {
+  if (spoken.length < 2 || record.length < 2) return null;
+  if (spoken[0] !== record[0]) return null;
+  if (spoken.length === record.length && spoken.every((w, i) => w === record[i])) return "exact";
+  const shorter = !PARTICLES.has(spoken[spoken.length - 1]!) && inOrder(spoken, record);
+  return shorter || inOrder(record, spoken) ? "partial" : null;
+}
+
+export function nameMatches(spoken: readonly string[], record: readonly string[]): boolean {
+  return nameMatch(spoken, record) !== null;
+}
+
+/** The candidates a spoken name names: the exact matches when there are any, else the partial ones. */
+export function nameHits<T extends Candidate>(spoken: readonly string[], candidates: readonly T[]): T[] {
+  const exact = candidates.filter((c) => nameMatch(spoken, c.words) === "exact");
+  return exact.length > 0 ? exact : candidates.filter((c) => nameMatch(spoken, c.words) === "partial");
+}
+
+/** Whole words only, and only in an address said with no "@" (plan P28). */
 const EMAIL_WORDS: Readonly<Record<string, string>> = {
-  at: "@", arroba: "@", dot: ".", punto: ".", underscore: "_", dash: "-", hyphen: "-", guion: "-", plus: "+", mas: "+",
+  at: "@", arroba: "@", dot: ".", punto: ".", underscore: "_", dash: "-", hyphen: "-", guion: "-", raya: "-",
+  plus: "+", mas: "+",
 };
+/** Two-word forms, read before the one-word ones ("guion bajo" before "guion"). */
+const EMAIL_PAIRS: Readonly<Record<string, string>> = { "guion bajo": "_", "guion medio": "-" };
 
 /** The spoken address as an email, or null when it does not have an email's shape (spec S3). */
 export function spokenEmail(text: string | null | undefined): string | null {
@@ -544,8 +629,9 @@ export function spokenEmail(text: string | null | undefined): string | null {
     const words = s.trim().split(/\s+/).filter((w) => w.length > 0);
     const parts: string[] = [];
     for (let i = 0; i < words.length; i += 1) {
+      const pair = `${words[i]} ${words[i + 1] ?? ""}`;
+      if (Object.hasOwn(EMAIL_PAIRS, pair)) { parts.push(EMAIL_PAIRS[pair]!); i += 1; continue; }
       const w = words[i]!;
-      if (w === "guion" && words[i + 1] === "bajo") { parts.push("_"); i += 1; continue; }
       parts.push(Object.hasOwn(EMAIL_WORDS, w) ? EMAIL_WORDS[w]! : w);
     }
     out = parts.join("");
@@ -563,7 +649,11 @@ export function candidateOf(row: { id: string; first_name: string | null; last_n
   return { id: row.id, words: nameWords(`${row.first_name ?? ""} ${row.last_name ?? ""}`), emailKey: row.email_key };
 }
 
-/** Spec 5.3's table, top to bottom. `fullName` absent is find_my_booking's first four rows only. */
+/**
+ * Spec 5.3's table, top to bottom, as amended (plan P25, P26). `fullName` absent is find_my_booking's case: the
+ * sole-candidate row confirms by caller ID ONLY when no name was given, so a name given to confirm_identity on a
+ * one-contact number must match it.
+ */
 export function decideIdentity(input: {
   candidates: readonly Candidate[]; truncated: boolean; required: 1 | 2;
   fullName?: string | null; email?: string | null;
@@ -571,15 +661,15 @@ export function decideIdentity(input: {
   const { candidates, truncated, required } = input;
   if (candidates.length === 0 && !truncated) return { kind: "none" };
   if (truncated) return { kind: "cannot_on_this_call" };
-  if (required === 1 && candidates.length === 1) {
+  const spoken = nameWords(input.fullName);
+  if (required === 1 && candidates.length === 1 && spoken.length === 0) {
     return { kind: "confirmed", contactId: candidates[0]!.id, rung: 1, by: "caller_id" };
   }
   if (required === 2 && !candidates.some((c) => c.emailKey !== null)) return { kind: "cannot_on_this_call" };
-  const spoken = nameWords(input.fullName);
   if (spoken.length < 2) return { kind: "ask_name" };
   const key = input.email == null ? null : spokenEmailKey(input.email);
   if (required === 2 && key === null) return { kind: "ask_email" };
-  const byName = candidates.filter((c) => nameMatches(spoken, c.words));
+  const byName = nameHits(spoken, candidates);
   if (required === 1) {
     if (byName.length === 1) return { kind: "confirmed", contactId: byName[0]!.id, rung: 1, by: "name" };
     if (byName.length > 1) {
@@ -618,6 +708,9 @@ export function withLocked(state: CallState, why: "misses" | "cannot"): CallStat
 }
 export function withMessageNameAsked(state: CallState): CallState {
   return state.identity.messageNameAsked ? state : { ...state, identity: { ...state.identity, messageNameAsked: true } };
+}
+export function withLeadWhoseAsked(state: CallState): CallState {
+  return state.identity.leadWhoseAsked ? state : { ...state, identity: { ...state.identity, leadWhoseAsked: true } };
 }
 export function isLocked(state: CallState): boolean {
   return state.identity.locked !== null;
@@ -683,6 +776,19 @@ export const BOOK_AMBIGUOUS: ToolResult = {
   ok: false,
   error: "This appointment can't be booked under that name on this call. First call capture_lead with their name and what they needed, then take_message, so the team can book it.",
 };
+/** book_appointment on a number with ONE contact whose name the caller's does not match (plan P27). */
+export const BOOK_ASK_WHOSE: ToolResult = {
+  ok: false,
+  error: `Not booked yet. Ask: "Is this appointment for you or for someone else?" In Spanish: "¿La cita es para usted o para otra persona?" Then call book_appointment again with forSomeoneElse: false if it is for them, or true if it is for someone else.`,
+};
+/** capture_lead, the same question, asked once (plan P27). */
+export const LEAD_ASK_WHOSE: ToolResult = {
+  ok: false,
+  error: `Not recorded yet. Ask: "Is this for you or for someone else?" In Spanish: "¿Es para usted o para otra persona?" Then call capture_lead again with forSomeoneElse: false if it is for them, or true if it is for someone else.`,
+};
+/** Added to find_my_booking's found result when the confirmation came from a name (plan P25). */
+export const FOUND_BY_NAME_NEXT =
+  "This is the appointment of the person they confirmed. If the caller asks about a different person's appointment than the one already confirmed, call confirm_identity with that person's first and last name before you call find_my_booking again.";
 
 /** After a "cannot" lock every later refusal says CANNOT, so she never says "those details" to someone who gave none. */
 export function lockedResult(why: "misses" | "cannot"): ToolResult {
@@ -745,7 +851,8 @@ import {
 export type CandidateRead = { ok: true; candidates: readonly Candidate[]; truncated: boolean } | { ok: false };
 /** `event` is the spec 5.9 log line's tail, or null when nothing worth a line happened. */
 export type Step = { state: CallState; result: ToolResult; event: string | null };
-export type FindStep = ({ kind: "answer" } & Step) | { kind: "lookup"; state: CallState; contactId: string; event: string | null };
+export type FindStep = ({ kind: "answer" } & Step)
+  | { kind: "lookup"; state: CallState; contactId: string; by: "caller_id" | "name" | "name_email"; event: string | null };
 
 /** No action requires rung 0 or rung 3 for an existing appointment (ladder.ts); 0 reads as 1, the stricter. */
 function need(required: Rung): 1 | 2 | 3 {
@@ -768,11 +875,11 @@ export function findStep(state: CallState, required: Rung, read: CandidateRead |
   const r = need(required);
   if (r === 3) return { kind: "answer", state: withLocked(state, "cannot"), result: CANNOT, event: "locked (cannot)" };
   const c = state.identity.confirmed;
-  if (c !== null && c.rung >= r) return { kind: "lookup", state, contactId: c.contactId, event: null };
+  if (c !== null && c.rung >= r) return { kind: "lookup", state, contactId: c.contactId, by: c.by, event: null };
   if (read === null || !read.ok) return { kind: "answer", state, result: readFailed(next), event: "read failed" };
   const d = decideIdentity({ candidates: read.candidates, truncated: read.truncated, required: r });
   if (d.kind === "none") return { kind: "answer", state, result: { found: false }, event: null };
-  if (d.kind === "confirmed") return { kind: "lookup", state: withConfirmed(state, d), contactId: d.contactId, event: confirmedEvent(d) };
+  if (d.kind === "confirmed") return { kind: "lookup", state: withConfirmed(state, d), contactId: d.contactId, by: d.by, event: confirmedEvent(d) };
   if (d.kind === "cannot_on_this_call") return { kind: "answer", state: withLocked(state, "cannot"), result: CANNOT, event: "locked (cannot)" };
   return { kind: "answer", state, result: r === 2 ? ASK_NAME_AND_EMAIL : ASK_NAME, event: null };
 }
@@ -845,14 +952,29 @@ export function messageNameStep(state: CallState, read: CandidateRead): Step | n
 ### The record picker (Task 7) — `…/identity/record.ts`
 
 ```ts
-// S-47e (E7, spec 5.10.0, S19-S21): which contact a voice write lands on, on the number it would store. The
-// SAME name and email rules as the confirm (match.ts). Never fuzzy; never a contact the caller did not name or
-// confirm. Pure.
-import { nameWords, nameMatches, spokenEmailKey, type Candidate } from "./match";
+// S-47e (E7, spec 5.10.0, S19-S21; plan P26, P27): which contact a voice write lands on, on the number it would
+// store. The SAME name and email rules as the confirm (match.ts). Never fuzzy; never a contact the caller did not
+// name, confirm or say was them. Pure.
+import type { CallState } from "../call-state";
+import { nameWords, nameMatch, nameHits, spokenEmailKey, type Candidate } from "./match";
+import { withLeadWhoseAsked } from "./state";
+import { LEAD_ASK_WHOSE, type ToolResult } from "./results";
 
 export type RecordPick =
   | { kind: "today" } | { kind: "existing"; contactId: string } | { kind: "create" }
-  | { kind: "ask_name" } | { kind: "ambiguous" };
+  | { kind: "ask_name" } | { kind: "ask_whose" } | { kind: "ambiguous" };
+
+/** A "Caller" placeholder, or a record with no name at all: today's path fills its blanks (decision 19). */
+function isPlaceholder(words: readonly string[]): boolean {
+  return words.length === 0 || (words.length === 1 && words[0] === "caller");
+}
+
+/** A name agrees with the ONE contact on a number when P26's rule matches, or when either side is a first name
+ *  alone and the first words are equal ("Ana" for "Ana Prueba", "Dan Lopez" for a record of "Dan"). */
+function agreesWithSole(spoken: readonly string[], words: readonly string[]): boolean {
+  if (spoken.length === 0 || spoken[0] !== words[0]) return false;
+  return spoken.length === 1 || words.length === 1 || nameMatch(spoken, words) !== null;
+}
 
 export function pickRecordOnNumber(input: {
   /** realCandidates of the number being stored (holding records already out). */
@@ -862,21 +984,27 @@ export function pickRecordOnNumber(input: {
   email: string | null | undefined;
   /** state.identity.confirmed?.contactId, ONLY when the number being stored is the caller ID; else null. */
   confirmedId: string | null;
+  /** The caller's own answer to "Is this for you or for someone else?" (plan P27); undefined when not asked. */
+  forSomeoneElse?: boolean;
 }): RecordPick {
   const { onNumber, truncated } = input;
   const spoken = nameWords(input.name);
-  const sole = onNumber.length === 1 ? onNumber[0]! : null;
-  if (!truncated && sole && sole.words.length >= 2 && spoken.length >= 2 && !nameMatches(spoken, sole.words)) {
-    return { kind: "create" };                                                  // S20's exception
+  if (!truncated && onNumber.length === 0) return { kind: "today" };
+  if (!truncated && onNumber.length === 1) {
+    const sole = onNumber[0]!;
+    if (input.forSomeoneElse === true) return { kind: "create" };
+    if (input.forSomeoneElse === false) return { kind: "existing", contactId: sole.id };
+    if (isPlaceholder(sole.words) || spoken.length === 0 || agreesWithSole(spoken, sole.words)) return { kind: "today" };
+    return { kind: "ask_whose" };
   }
-  if (!truncated && onNumber.length <= 1) return { kind: "today" };
   if (truncated) return { kind: "ambiguous" };
   const c = input.confirmedId === null ? undefined : onNumber.find((x) => x.id === input.confirmedId);
-  if (c && (spoken.length === 0 || nameMatches(spoken, c.words) || (spoken.length === 1 && spoken[0] === c.words[0]))) {
+  if (c && (input.forSomeoneElse === false || spoken.length === 0 || nameMatch(spoken, c.words) !== null
+    || (spoken.length === 1 && spoken[0] === c.words[0]))) {
     return { kind: "existing", contactId: c.id };
   }
   if (spoken.length < 2) return { kind: "ask_name" };
-  const byName = onNumber.filter((x) => nameMatches(spoken, x.words));
+  const byName = nameHits(spoken, onNumber);
   if (byName.length === 1) return { kind: "existing", contactId: byName[0]!.id };
   if (byName.length > 1) {
     const key = input.email == null ? null : spokenEmailKey(input.email);
@@ -884,6 +1012,21 @@ export function pickRecordOnNumber(input: {
     return picked.length === 1 ? { kind: "existing", contactId: picked[0]!.id } : { kind: "ambiguous" };
   }
   return { kind: "create" };
+}
+
+/** capture_lead asks "for you or for someone else?" once per call, and only when the lead has a name and a number
+ *  and the caller has not already answered (plan P27). */
+export function leadNeedsWhoseCheck(state: CallState, fullName: string | undefined, forSomeoneElse: boolean | undefined): boolean {
+  return !state.identity.leadWhoseAsked && forSomeoneElse === undefined && nameWords(fullName).length > 0;
+}
+
+/** The ask, or null to record the lead (a failed read records it: a lead is never lost on our outage). */
+export function leadWhoseStep(
+  state: CallState, read: { ok: true; candidates: readonly Candidate[]; truncated: boolean } | { ok: false }, fullName: string | undefined,
+): { state: CallState; result: ToolResult } | null {
+  if (!read.ok) return null;
+  const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name: fullName, email: null, confirmedId: null });
+  return pick.kind === "ask_whose" ? { state: withLeadWhoseAsked(state), result: LEAD_ASK_WHOSE } : null;
 }
 ```
 
@@ -903,7 +1046,7 @@ export type ResolvedTextbackContact = string | { id: string; holding: true } | n
 ### The inbox Move (Task 11) — `…/convos/actions.ts`
 
 ```ts
-export type HoldingMoveUndo = { fromConversationId: string; toConversationId: string; messageIds: string[]; callIds: string[] };
+export type HoldingMoveUndo = { moveId: number; fromConversationId: string; toConversationId: string };
 export type MoveHoldingResult =
   | { ok: true; toConversationId: string; name: string; undo: HoldingMoveUndo }
   | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" };
@@ -945,6 +1088,8 @@ export function sipAttestation(eventData: unknown): string;   // "none" when not
 | `conversation.holding.findNone` (Q1) | No customers match. | Ningún cliente coincide. |
 | `conversation.holding.findFailed` (Q1) | Couldn't search customers. Try again. | No se pudo buscar clientes. Inténtelo de nuevo. |
 | `conversation.holding.moveRole` (Q1) | Only an Owner or Staff can move these texts. | Solo un dueño o un empleado puede mover estos mensajes. |
+| `todo.sharedNumber.reply` (Q2, P30) | A reply from a shared number couldn't be matched to one appointment | Una respuesta de un número compartido no se pudo asociar con una sola cita |
+| `todo.sharedNumber.hold` (Q2, P19) | A text from the shared number {number} may have asked to stop texts: “{excerpt}”. Texts to that number are on hold. | Un mensaje del número compartido {number} quizá pidió dejar de recibir mensajes: “{excerpt}”. Los mensajes a ese número están en pausa. |
 
 And the changed pair (S16), each gaining a closing sentence:
 - `voice.tradeRules.insurance_pcHint`: "{persona} takes quote requests for a licensed agent to call back, and never gives prices, says anyone is covered or discusses a policy. Before reading, moving or cancelling an appointment, {persona} asks for the full name and the email on file."
@@ -1014,7 +1159,8 @@ And the changed pair (S16), each gaining a closing sentence:
   - No apostrophe inside a `--` comment or inside a `comment on … is '…'` string, so no possessives.
   - No `begin;`/`commit;` wrapper. `lock_timeout` is set inside the first `do` block (`0091_ai_acts.sql:45-51` gives the reason: on PostgreSQL 17 a bare SET LOCAL as a later statement of a multi-statement string is not guaranteed to be inside a transaction block).
   - Every function 0098 creates writes `set search_path = pg_catalog, pg_temp`. Exactly one `security definer` on a code line (`move_holding_thread`), so `EXPECTED_DEFINERS` gains exactly that one entry.
-  - The md5 of the committed file is `13f26cbe99753bfbbd8e20e7ba9ee632` when copied byte for byte (LF line ends, one trailing newline, 177 lines).
+  - The md5 of the committed file is `a76f898b5e362d9e0b8c71e2a0d28fff` when copied byte for byte (LF line ends, one trailing newline, 216 lines).
+  - The E.164 test in the CHECK is written without a `$` anchor (length, a leading `+`, no non-digit after it), so every `$` stays a dollar-quote.
 - **plpgsql NULL guard** (memory "plpgsql NULL guard"): `app.contacts_holding_server_only()` keeps `coalesce(current_user = 'authenticated', false)`; `move_holding_thread` tests `v_from_holding is null or v_to_holding is null` before comparing them.
 - **Tests must be able to fail** (memories "Test vacuity", "Vacuous test shapes"):
   - The implementer runs each named mutation, pastes the failing assertion line, and reverts by `cp` + `cmp`. A mutation counts as caught only if the WHOLE FILE goes red, never under one `-t` filter (a `-t` that matches no test name skips silently).
@@ -1029,7 +1175,7 @@ And the changed pair (S16), each gaining a closing sentence:
   1. **Tests that MOCK a module the task changes.** A spread-real factory (`vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal()), ...mocks }))`) runs the REAL new function against the test's fake client unless the test overrides it: every such file whose module under test calls a new function gets the function in its `dbMocks` with a default (for `listContactsOnNumber`, `{ rows: [], truncated: false }`), or its existing assertions start failing for an unrelated reason.
   2. **Catalogue prefix-count pins:** `apps/web/src/lib/consent/copy.test.ts:42` and `:111`. Neither regex matches a key this PR adds (`contact\.phoneCountry`, `contact\.messages`, `contact\.texts`, `sms\.consentReply`, `todo\.consent`, …), read 2026-10-24; Task 2 runs the file to prove it.
   3. **Pinned select literals:** `packages/db/src/test/tasks-call-id-read.test.ts` (pins `openTasks`'s select; this PR does not touch it); `contacts.test.ts:895-901` (scans `contacts.ts` for `.not("phone", "is", null)` and `async function findDuplicate`, both still true after Task 4); no test pins `COLS`, `contacts(first_name, last_name, language)` or `"id, email, phone"` (grep, 2026-10-24).
-  4. **Bare `vi.mock("@bis/db", () => ({` factories** for a new import a module under test CALLS (A8). Read 2026-10-24: `…/inbound/route.test.ts:28` (bare, `() => dbMocks`; Task 10 adds `listContactsOnNumber`, `ensureHoldingContact`); `…/convos/actions.test.ts:141` (bare; Task 11 adds `moveHoldingThread`, plus `ensureConversation` and `getContact` if absent); `[acct]/contacts/[contactId]/page.test.ts:100` (bare; Task 12's new case adds `findConversationForContact`; the existing cases never reach it); the six `…/convos/page*.test.ts` (bare; Task 12's page calls `listContactsOnNumber` only on a holding thread, so only its new case adds it); `[acct]/calls/[callId]/page.test.ts:84` (bare; no new function). The spread-real files that need defaults: `…/tools/registry.test.ts:36-39`, `lib/voice/finish-call.test.ts:26`, `lib/voice/textback.test.ts:20`, `…/inbound/route.consent.test.ts:19`. `lib/automations/passes/release-held.test.ts:9` reaches `prepareTextback` with a payload contact only, so it needs no default; run it to prove it.
+  4. **Bare `vi.mock("@bis/db", () => ({` factories** for a new import a module under test CALLS (A8). Read 2026-10-24: `…/inbound/route.test.ts:28` (bare, `() => dbMocks`; Task 10 adds `listContactsOnNumber`, `ensureHoldingContact`, `HoldingContactUnavailable`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage`); `…/convos/actions.test.ts:141` (bare; Task 11 adds `moveHoldingThread`, plus `ensureConversation` and `getContact` if absent); `[acct]/contacts/[contactId]/page.test.ts:100` (bare; Task 12's new case adds `findConversationForContact`; the existing cases never reach it); the six `…/convos/page*.test.ts` (bare; Task 12's page calls `listContactsOnNumber` only on a holding thread, so only its new case adds it); `[acct]/calls/[callId]/page.test.ts:84` (bare; no new function). The spread-real files that need defaults: `…/tools/registry.test.ts:36-39`, `lib/voice/finish-call.test.ts:26`, `lib/voice/textback.test.ts:20`, `…/inbound/route.consent.test.ts:19`, `apps/web/src/lib/consent/inbound.test.ts:7`. `lib/automations/passes/release-held.test.ts:9` reaches `prepareTextback` with a payload contact only, so it needs no default; run it to prove it.
   5. **e2e locators a renamed control could hit:** no existing control is renamed. The thread header's name line changes ONLY on a holding thread; `apps/web/e2e/messaging.spec.ts` and `contacts*.spec.ts` never create one. Task 12 greps `getByText`/`getByRole` in `apps/web/e2e` for any string it changes and lists the hits (expected: none).
   6. **`[acct]/in-account-service-reads.test.ts`** for any new value-level `serviceDb`/`ledgerDb` under `[acct]`, `app/api/accounts` or `lib`: `…/convos/actions.ts` is already `proven-target` (`:127`); `…/identity/*.ts` and `lib/contacts/holding-label.ts` use `serviceDb` as a type only; `[acct]/contacts/[contactId]/page.tsx` already imports `serviceDb` (`:3`) and is listed. Every task touching those trees runs the file.
 - **Affected tests, never the full suite locally** (memory "Agent test scope"):
@@ -1081,7 +1227,7 @@ And the changed pair (S16), each gaining a closing sentence:
   1. `select version, name from supabase_migrations.schema_migrations order by version desc limit 1;` → name `one_switch` on both.
   2. The client-write digest (the query at `proposals-drop.test.ts:93-98`), bis-ci only → `52|b66203ca5d355155540b520af510d120` (A2).
   3. `select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where p.prosecdef and n.nspname in ('public', 'app');` → `22` on both.
-  4. `select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'contacts' and column_name = 'holds_shared_number';` → `0`, and `select to_regprocedure('public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])');` → NULL, on both.
+  4. `select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'contacts' and column_name = 'holds_shared_number';` → `0`, and `select to_regprocedure('public.move_holding_thread(uuid,uuid,uuid,text,bigint)');` → NULL, on both.
   5. Production only (A6): `select count(*) from public.contacts;`.
   6. Production only, for the owner (how many numbers start asking names on merge): `select count(*) from (select account_id, phone_key from public.contacts where phone_key is not null group by 1, 2 having count(*) >= 2) s;` and the same with `>= 21`.
 - [ ] **STOP** if read 1, 2 or 3 differs, or read 4 is non-zero anywhere, or read 5 exceeds 1,000,000 (A6).
@@ -1111,7 +1257,7 @@ And the changed pair (S16), each gaining a closing sentence:
 ```ts
 import { describe, it, expect } from "vitest";
 import type { Client } from "pg";
-import { withRollback, actAs, actAsMember, actAsOwner } from "./db";
+import { withRollback, actAsMember, actAsOwner } from "./db";
 import { testPhoneNumber } from "./fixtures";
 
 /**
@@ -1127,6 +1273,7 @@ const RUN = Math.random().toString(36).slice(2, 10);
 const PHONE = "+19565550142";
 type Acct = { accountId: string; orgId: string };
 type Refusal = { code?: string; constraint?: string; message: string } | null;
+type Over = { first_name?: string | null; last_name?: string | null; email?: string | null; phone?: string | null };
 
 async function seedAccount(c: Client, label: string): Promise<Acct> {
   await actAsOwner(c);
@@ -1138,7 +1285,7 @@ async function seedAccount(c: Client, label: string): Promise<Acct> {
   return { accountId: account!.id, orgId };
 }
 
-async function holdingRow(c: Client, accountId: string, over: { first_name?: string; last_name?: string | null; email?: string | null; phone?: string | null } = {}) {
+async function holdingRow(c: Client, accountId: string, over: Over = {}) {
   const r = { first_name: "Caller", last_name: null, email: null, phone: PHONE, ...over };
   return c.query<{ id: string }>(
     `insert into public.contacts (account_id, first_name, last_name, email, phone, holds_shared_number, author_kind)
@@ -1153,7 +1300,7 @@ async function person(c: Client, accountId: string, first: string, last: string,
   return r!.id;
 }
 
-/** Runs one statement inside its own savepoint: null when it succeeds, else the error's code and constraint. */
+/** Runs one statement inside its own savepoint: null when it succeeds, else the error's code, constraint and message. */
 async function refusal(c: Client, sql: string, params: unknown[] = []): Promise<Refusal> {
   await c.query("savepoint probe");
   try {
@@ -1192,17 +1339,17 @@ async function call(c: Client, accountId: string, phoneNumberId: string, convers
     [accountId, phoneNumberId, conversationId, contactId]);
   return r!.id;
 }
-async function move(c: Client, accountId: string, from: string, to: string, ids?: { messages: string[] | null; calls: string[] | null }) {
+type Moved = { status: string; moveId?: number; messageIds?: string[]; callIds?: string[] };
+async function move(c: Client, accountId: string, from: string, to: string, undoOf: number | null = null): Promise<Moved> {
   await c.query("set local role service_role");
-  const { rows: [r] } = await c.query<{ r: Record<string, unknown> }>(
-    "select public.move_holding_thread($1, $2, $3, 'user_staff', $4::uuid[], $5::uuid[]) as r",
-    [accountId, from, to, ids?.messages ?? null, ids?.calls ?? null]);
+  const { rows: [r] } = await c.query<{ r: Moved }>(
+    "select public.move_holding_thread($1, $2, $3, 'user_staff', $4::bigint) as r", [accountId, from, to, undoOf]);
   await c.query("reset role");
   return r!.r;
 }
 
-/** One account A with a holding thread (2 messages, unread 2, one call with no contact), Ana (1 message, unread 1,
- *  one call of her own) and Beto (an empty thread), all on PHONE; account B with its own holding thread. */
+/** Account A: a holding thread (2 messages, unread 2, one call with no contact), Ana (1 message, unread 1, a call of
+ *  her own) and Beto (an empty thread), all on PHONE. Account B: its own holding thread on the same number. */
 async function household(c: Client) {
   const a = await seedAccount(c, "a");
   const b = await seedAccount(c, "b");
@@ -1220,7 +1367,7 @@ async function household(c: Client) {
   const pn = await phoneNumber(c, a.accountId);
   const holdingCall = await call(c, a.accountId, pn, hc, null);
   const anaCall = await call(c, a.accountId, pn, ac, ana);
-  return { a, b, holding: h!.id, ana, beto, hc, ac, bc, hbc, m1, m2, holdingCall, anaCall };
+  return { a, b, holding: h!.id, holdingB: hb!.id, ana, beto, hc, ac, bc, hbc, m1, m2, pn, holdingCall, anaCall };
 }
 
 describe("0098 shape", () => {
@@ -1236,11 +1383,11 @@ describe("0098 shape", () => {
       const { rows: [k] } = await c.query(
         "select pg_get_constraintdef(oid) as def, convalidated from pg_constraint where conname = 'contacts_holding_shape'");
       expect(k).toEqual({
-        def: "CHECK (((NOT holds_shared_number) OR ((first_name = 'Caller'::text) AND (last_name IS NULL) AND (email IS NULL) AND (phone IS NOT NULL))))",
+        def: "CHECK (((NOT holds_shared_number) OR ((NOT (first_name IS DISTINCT FROM 'Caller'::text)) AND (last_name IS NULL) AND (email IS NULL) AND (phone IS NOT NULL) AND ((length(phone) >= 9) AND (length(phone) <= 16)) AND (substr(phone, 1, 1) = '+'::text) AND (substr(phone, 2) !~ '[^0-9]'::text))))",
         convalidated: true,
       });
       const { rows: [i] } = await c.query("select indexdef from pg_indexes where indexname = 'contacts_one_holding_per_number'");
-      expect(i!.indexdef).toBe("CREATE UNIQUE INDEX contacts_one_holding_per_number ON public.contacts USING btree (account_id, phone_key) WHERE holds_shared_number");
+      expect(i!.indexdef).toBe("CREATE UNIQUE INDEX contacts_one_holding_per_number ON public.contacts USING btree (account_id, phone) WHERE holds_shared_number");
       const { rows: [t] } = await c.query("select pg_get_triggerdef(oid) as def from pg_trigger where tgname = 'contacts_holding_server_only'");
       expect(t!.def).toBe("CREATE TRIGGER contacts_holding_server_only BEFORE INSERT OR UPDATE ON public.contacts FOR EACH ROW EXECUTE FUNCTION app.contacts_holding_server_only()");
     }));
@@ -1252,7 +1399,7 @@ describe("0098 shape", () => {
         from pg_proc p where p.proname in ('contacts_holding_server_only', 'move_holding_thread') order by 1`);
       expect(rows).toEqual([
         { sig: "app.contacts_holding_server_only()", prosecdef: false, proconfig: ["search_path=pg_catalog, pg_temp"], owner: "postgres" },
-        { sig: "move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])", prosecdef: true, proconfig: ["search_path=pg_catalog, pg_temp"], owner: "postgres" },
+        { sig: "move_holding_thread(uuid,uuid,uuid,text,bigint)", prosecdef: true, proconfig: ["search_path=pg_catalog, pg_temp"], owner: "postgres" },
       ]);
     }));
 
@@ -1260,9 +1407,9 @@ describe("0098 shape", () => {
     withRollback(async (c) => {
       const { rows: [r] } = await c.query(`select
           col_description('public.contacts'::regclass, (select attnum from pg_attribute where attrelid = 'public.contacts'::regclass and attname = 'holds_shared_number')) as col,
-          obj_description('public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])'::regprocedure, 'pg_proc') as fn`);
-      expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).");
-      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, or back as an Undo naming the message ids and the call ids it moved. service_role only, behind the Owner, Staff or agency check of the app (0098).");
+          obj_description('public.move_holding_thread(uuid,uuid,uuid,text,bigint)'::regprocedure, 'pg_proc') as fn`);
+      expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).");
+      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).");
     }));
 });
 
@@ -1281,44 +1428,51 @@ describe("0098 the holding record", () => {
     ["a last name", { last_name: "Prueba" }],
     ["an email", { email: "ana@example.com" }],
     ["another first name", { first_name: "Ana" }],
+    ["no first name (a CHECK passes on NULL, so the term is null-safe)", { first_name: null }],
     ["no phone", { phone: null }],
+    ["a phone typed, not E.164", { phone: "(956) 555-0142" }],
+    ["a phone too short for E.164", { phone: "+1956555" }],
   ] as const)("refuses a holding record with %s (contacts_holding_shape, 23514; mutation: drop the CHECK -> FAILS)", (_label, over) =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "refuse");
       await c.query("savepoint probe");
-      const err = await holdingRow(c, a.accountId, over).then(() => null, (e: { code?: string; constraint?: string }) => e);
+      const err = await holdingRow(c, a.accountId, over as Over).then(() => null, (e: { code?: string; constraint?: string }) => e);
       await c.query("rollback to savepoint probe");
       expect(err).toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
     }));
 
-  it("an edit that gives the holding record a last name fails the CHECK", () =>
-    withRollback(async (c) => {
-      const a = await seedAccount(c, "edit");
-      const { rows: [h] } = await holdingRow(c, a.accountId);
-      expect(await refusal(c, "update public.contacts set last_name = 'Lopez' where id = $1", [h!.id]))
-        .toMatchObject({ code: "23514", constraint: "contacts_holding_shape" });
-    }));
-
-  it("one holding record per account and number, the typed shape included; account B gets its own on the same number (mutation: the index on phone_key alone -> FAILS)", () =>
+  it("one holding record per account and E.164; account B gets its own on the same number (mutation: the index on phone alone -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "one");
       const b = await seedAccount(c, "other");
       await holdingRow(c, a.accountId);
       expect(await refusal(c,
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', '(956) 555-0142', true, 'ai')",
-        [a.accountId])).toMatchObject({ code: "23505", constraint: "contacts_one_holding_per_number" });
+        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai')",
+        [a.accountId, PHONE])).toMatchObject({ code: "23505", constraint: "contacts_one_holding_per_number" });
       expect(await refusal(c,
         "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai')",
         [b.accountId, PHONE])).toBeNull();
       // Two people and the holding record share the number: the index binds the holding record only.
       await person(c, a.accountId, "Ana", "Prueba");
       await person(c, a.accountId, "Beto", "Prueba");
-      const { rows: [n] } = await c.query("select count(*)::int as n from public.contacts where account_id = $1 and phone_key = '9565550142'", [a.accountId]);
+      const { rows: [n] } = await c.query("select count(*)::int as n from public.contacts where account_id = $1 and phone = $2", [a.accountId, PHONE]);
       expect(n!.n).toBe(3);
+    }));
+
+  it("two numbers of two countries that share a digits key each get their own holding record (plan item 13; mutation: the index on (account_id, phone_key) -> FAILS)", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "keys");
+      // +1 322 123 4567 keys 3221234567; +32 2 123 4567 (Belgium) is ten digits and keys the same.
+      await holdingRow(c, a.accountId, { phone: "+13221234567" });
+      expect(await refusal(c,
+        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', '+3221234567', true, 'ai')",
+        [a.accountId])).toBeNull();
+      const { rows } = await c.query("select phone_key from public.contacts where account_id = $1 order by phone", [a.accountId]);
+      expect(rows).toEqual([{ phone_key: "3221234567" }, { phone_key: "3221234567" }]);
     }));
 });
 
-describe("0098 only server code sets the mark", () => {
+describe("0098 only server code sets or edits the mark", () => {
   it("a signed-in Owner's insert with holds_shared_number true stores false (mutation: drop the trigger -> FAILS)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "client-insert");
@@ -1343,26 +1497,58 @@ describe("0098 only server code sets the mark", () => {
       expect(rows).toEqual([{ holds_shared_number: false }]);
     }));
 
-  it("service_role may set it (the server path ensureHoldingContact takes)", () =>
+  it.each([
+    ["phone", "phone = '+19565550199'"],
+    ["source", "source = 'staff note'"],
+    ["custom", "custom = '{\"x\":1}'::jsonb"],
+    ["phone_country_unconfirmed", "phone_country_unconfirmed = true"],
+  ] as const)("a signed-in Owner cannot change a holding record's %s (plan item 8; mutation: drop the trigger's refusal -> FAILS)", (_col, set) =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "client-edit");
+      const { rows: [h] } = await holdingRow(c, a.accountId);
+      await actAsMember(c, a.accountId, a.orgId, "owner");
+      expect(await refusal(c, `update public.contacts set ${set} where id = $1`, [h!.id]))
+        .toMatchObject({ code: "42501", message: "A shared number holding record is changed by server code only" });
+    }));
+
+  it("a signed-in Owner may still assign the holding record and touch updated_at, and edit an ordinary contact's phone", () =>
+    withRollback(async (c) => {
+      const a = await seedAccount(c, "client-assign");
+      const { rows: [h] } = await holdingRow(c, a.accountId);
+      const ana = await person(c, a.accountId, "Ana", "Prueba");
+      const sub = await actAsMember(c, a.accountId, a.orgId, "owner");
+      await actAsOwner(c);
+      const { rows: [u] } = await c.query<{ id: string }>("select id from public.users where clerk_user_id = $1", [sub]);
+      await c.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ org_id: a.orgId, sub })]);
+      await c.query("set local role authenticated");
+      expect(await refusal(c, "update public.contacts set assigned_to = $2, updated_at = now() where id = $1", [h!.id, u!.id])).toBeNull();
+      expect(await refusal(c, "update public.contacts set phone = '+19565550199' where id = $1", [ana])).toBeNull();
+      await actAsOwner(c);
+      const { rows } = await c.query("select id, assigned_to, phone from public.contacts where id = any($1) order by phone", [[h!.id, ana]]);
+      expect(rows).toEqual([{ id: h!.id, assigned_to: u!.id, phone: PHONE }, { id: ana, assigned_to: null, phone: "+19565550199" }]);
+    }));
+
+  it("service_role may set the mark and change the record (the server path ensureHoldingContact takes)", () =>
     withRollback(async (c) => {
       const a = await seedAccount(c, "server");
       await c.query("set local role service_role");
-      await c.query(
-        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai')",
+      const { rows: [h] } = await c.query<{ id: string }>(
+        "insert into public.contacts (account_id, first_name, phone, holds_shared_number, author_kind) values ($1, 'Caller', $2, true, 'ai') returning id",
         [a.accountId, PHONE]);
+      await c.query("update public.contacts set source = 'voice' where id = $1", [h!.id]);
       await c.query("reset role");
-      const { rows } = await c.query("select holds_shared_number from public.contacts where account_id = $1", [a.accountId]);
-      expect(rows).toEqual([{ holds_shared_number: true }]);
+      const { rows } = await c.query("select holds_shared_number, source from public.contacts where account_id = $1", [a.accountId]);
+      expect(rows).toEqual([{ holds_shared_number: true, source: "voice" }]);
     }));
 });
 
 describe("0098 move_holding_thread", () => {
-  it("a whole move takes every message and call of the holding thread to the person, carries the unread count and records the event", () =>
+  it("a whole move takes every message and call of the holding thread to the person, carries the unread count, and records the ids on its event", () =>
     withRollback(async (c) => {
       const s = await household(c);
       const r = await move(c, s.a.accountId, s.hc, s.bc);
-      expect(r).toEqual({ status: "ok", messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
-      expect((r.messageIds as string[]).length).toBe(2);
+      expect(r).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
+      expect(r.messageIds!.length).toBe(2);
       const { rows: msgs } = await c.query("select conversation_id from public.messages where id = any($1)", [[s.m1, s.m2]]);
       expect(msgs).toEqual([{ conversation_id: s.bc }, { conversation_id: s.bc }]);
       const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.holdingCall]);
@@ -1372,19 +1558,47 @@ describe("0098 move_holding_thread", () => {
         [[s.hc, s.bc]]);
       expect(convs).toEqual([{ id: s.hc, unread_count: 0, empty: true }, { id: s.bc, unread_count: 2, empty: false }]);
       const { rows: events } = await c.query(
-        "select actor_type, actor_id, payload from public.events where account_id = $1 and type = 'conversation.moved'", [s.a.accountId]);
-      expect(events).toEqual([{ actor_type: "user", actor_id: "user_staff", payload: {
-        fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2, undo: false,
+        "select id::int as id, actor_type, actor_id, payload from public.events where account_id = $1 and type = 'conversation.moved'", [s.a.accountId]);
+      expect(events).toEqual([{ id: r.moveId, actor_type: "user", actor_id: "user_staff", payload: {
+        fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2,
+        undo: false, undoOf: null, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
       } }]);
     }));
 
-  it("Undo with the returned ids puts exactly those back; a message the person sent since stays (mutation: drop the p_message_ids filter from the messages update -> FAILS)", () =>
+  it("a call on the holding thread that names another contact is not repointed (mutation: drop the calls contact guard -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const stray = await call(c, s.a.accountId, s.pn, s.hc, s.ana);
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
+      expect(r.callIds).toEqual([s.holdingCall]);
+      const { rows: [row] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [stray]);
+      expect(row).toEqual({ conversation_id: s.hc, contact_id: s.ana });
+    }));
+
+  it("a message carrying another account's id is never moved (mutation: drop m.account_id = p_account_id from the messages update -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const foreign = await message(c, s.b.accountId, s.hc, "foreign", 30);
+      await move(c, s.a.accountId, s.hc, s.bc);
+      const { rows: [row] } = await c.query("select conversation_id from public.messages where id = $1", [foreign]);
+      expect(row).toEqual({ conversation_id: s.hc });
+    }));
+
+  it("a conversation of A whose contact is B's holding record is not a holding thread for A (mutation: drop k.account_id = p_account_id from the contacts reads -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const crossed = await conversation(c, s.a.accountId, s.holdingB, 0);
+      await message(c, s.a.accountId, crossed, "crossed", 10);
+      expect(await move(c, s.a.accountId, crossed, s.bc)).toEqual({ status: "invalid" });
+    }));
+
+  it("Undo names the move: exactly what it moved goes back, a message the person sent since stays, the event says undo (mutation: drop the m.id = any (v_want_messages) filter -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await household(c);
       const r = await move(c, s.a.accountId, s.hc, s.bc);
       const later = await message(c, s.a.accountId, s.bc, "later", 1);
-      const u = await move(c, s.a.accountId, s.bc, s.hc, { messages: r.messageIds as string[], calls: r.callIds as string[] });
-      expect(u).toEqual({ status: "ok", messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
+      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
+      expect(u).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall] });
       const { rows: [counts] } = await c.query(`select
           (select count(*)::int from public.messages where conversation_id = $1) as holding,
           (select count(*)::int from public.messages where conversation_id = $2) as beto,
@@ -1394,19 +1608,45 @@ describe("0098 move_holding_thread", () => {
       expect(callRow).toEqual({ conversation_id: s.hc, contact_id: null });
       const { rows: convs } = await c.query("select id, unread_count from public.conversations where id = any($1) order by unread_count", [[s.hc, s.bc]]);
       expect(convs).toEqual([{ id: s.hc, unread_count: 0 }, { id: s.bc, unread_count: 2 }]);
+      const { rows: [ev] } = await c.query("select payload->'undo' as undo, (payload->>'undoOf')::int as of from public.events where id = $1", [u.moveId]);
+      expect(ev).toEqual({ undo: true, of: r.moveId });
     }));
 
-  it("invalid: the same thread, two person threads, two holding threads, and toward the holding thread without BOTH id arrays (plan P1: Ana's own call is untouched)", () =>
+  it("a forged Undo moves nothing it did not move: another move's event, an Undo's own event, another account's event, a reversed pair (item 11; mutation: skip the event's from/to check -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await household(c);
       const { rows: [h2] } = await holdingRow(c, s.a.accountId, { phone: "+19565550143" });
       const h2c = await conversation(c, s.a.accountId, h2!.id, 0);
+      await message(c, s.a.accountId, h2c, "other number", 5);
+      const toAna = await move(c, s.a.accountId, h2c, s.ac);            // a move between OTHER threads
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
+      const u = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
+      await move(c, s.a.accountId, s.hc, s.bc);                          // moved again: the threads are full again
+      // An event of account B that names A's two threads (B cannot make one through the function; forged here).
+      const { rows: [bEvent] } = await c.query<{ id: number }>(
+        `insert into public.events (account_id, type, actor_type, actor_id, payload)
+         values ($1, 'conversation.moved', 'user', 'x', jsonb_build_object('undo', false, 'fromConversationId', $2::text,
+                 'toConversationId', $3::text, 'messageIds', '[]'::jsonb, 'callIds', '[]'::jsonb)) returning id::int as id`,
+        [s.b.accountId, s.hc, s.bc]);
+      expect(await move(c, s.a.accountId, s.bc, s.hc, toAna.moveId!)).toEqual({ status: "invalid" });
+      expect(await move(c, s.a.accountId, s.bc, s.hc, u.moveId!)).toEqual({ status: "invalid" });
+      expect(await move(c, s.a.accountId, s.bc, s.hc, bEvent!.id)).toEqual({ status: "invalid" });
+      expect(await move(c, s.a.accountId, s.ac, s.hc, r.moveId!)).toEqual({ status: "invalid" });
+      const { rows: [n] } = await c.query("select count(*)::int as n from public.messages where conversation_id = $1", [s.bc]);
+      expect(n!.n).toBe(2);
+    }));
+
+  it("invalid: the same thread, two person threads, two holding threads, toward the holding thread with no move named, away from it with one", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const { rows: [h2] } = await holdingRow(c, s.a.accountId, { phone: "+19565550143" });
+      const h2c = await conversation(c, s.a.accountId, h2!.id, 0);
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
       expect(await move(c, s.a.accountId, s.hc, s.hc)).toEqual({ status: "invalid" });
       expect(await move(c, s.a.accountId, s.ac, s.bc)).toEqual({ status: "invalid" });
       expect(await move(c, s.a.accountId, s.hc, h2c)).toEqual({ status: "invalid" });
       expect(await move(c, s.a.accountId, s.ac, s.hc)).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.ac, s.hc, { messages: [], calls: null })).toEqual({ status: "invalid" });
-      expect(await move(c, s.a.accountId, s.ac, s.hc, { messages: null, calls: [] })).toEqual({ status: "invalid" });
+      expect(await move(c, s.a.accountId, s.hc, s.ac, r.moveId!)).toEqual({ status: "invalid" });
       const { rows: [callRow] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [s.anaCall]);
       expect(callRow).toEqual({ conversation_id: s.ac, contact_id: s.ana });
     }));
@@ -1432,9 +1672,9 @@ describe("0098 move_holding_thread", () => {
         await c.query("rollback to savepoint probe");
         expect(err, role).toMatchObject({ code: "42501" });
       }
-      const { rows } = await c.query(`select has_function_privilege('service_role', 'public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])', 'execute') as svc,
-        has_function_privilege('authenticated', 'public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])', 'execute') as auth,
-        has_function_privilege('anon', 'public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])', 'execute') as anon`);
+      const { rows } = await c.query(`select has_function_privilege('service_role', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as svc,
+        has_function_privilege('authenticated', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as auth,
+        has_function_privilege('anon', 'public.move_holding_thread(uuid,uuid,uuid,text,bigint)', 'execute') as anon`);
       expect(rows).toEqual([{ svc: true, auth: false, anon: false }]);
     }));
 
@@ -1455,11 +1695,9 @@ describe("0098 move_holding_thread", () => {
 });
 ```
 
-`actAs` is imported for symmetry with the other schema suites; delete the import if eslint flags it unused.
+- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  32 failed (32)` (`column "holds_shared_number" … does not exist`, or a null def), as on the plan writer's replica. Paste the summary line.
 
-- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: every case FAILS (`column "holds_shared_number" … does not exist`, or a null def). Paste the summary line.
-
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. Copy this text byte for byte; the plan writer's copy (`<KIT>/0098_shared_number_holding.reviewed.sql`) has md5 `13f26cbe99753bfbbd8e20e7ba9ee632`:
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. Copy this text byte for byte; the plan writer's copy (`<KIT>/0098_shared_number_holding.reviewed.sql`, the fix round's text) has md5 `a76f898b5e362d9e0b8c71e2a0d28fff`:
 
 ```sql
 -- 0098_shared_number_holding.sql - one "Caller" holding record per shared number (S-47e, owner decision E8)
@@ -1473,12 +1711,17 @@ describe("0098 move_holding_thread", () => {
 -- WHAT.
 --   public.contacts.holds_shared_number boolean not null default false: the mark. Set only by server code
 --     (ensureHoldingContact, service_role); a signed-in insert stores false; no client UPDATE grant names it.
---   contacts_holding_shape: a holding record is first name Caller, no last name, no email, a phone.
---   contacts_one_holding_per_number: unique (account_id, phone_key) where holds_shared_number.
---   app.contacts_holding_server_only(): the insert and update belt for the mark (plain, not definer).
+--   contacts_holding_shape: a holding record is first name Caller, no last name, no email, and an E.164
+--     phone. Written null-safe: a CHECK passes on NULL, so every term is true or false, never NULL.
+--   contacts_one_holding_per_number: unique (account_id, phone) where holds_shared_number. The exact E.164,
+--     not phone_key: two numbers of two countries can share a digits key, never an E.164.
+--   app.contacts_holding_server_only(): plain, not definer. For a signed-in session it stores false on
+--     insert, keeps the mark on update, and refuses (42501) any change to a holding record except who it is
+--     assigned to; server code (service_role) is not limited.
 --   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
---     a person, or back (Undo, which must name both the message ids and the call ids it moved); SECURITY
---     DEFINER, executed by service_role only, behind the role check of the app.
+--     a person, recording what it moved on its conversation.moved event, or moves back exactly what one such
+--     event recorded (Undo, which names that event and nothing else). SECURITY DEFINER, executed by
+--     service_role only, behind the role check of the app.
 --
 -- GRANTS. No table-level privilege changes: the client-write digest (proposals-drop.test.ts,
 -- 52|b66203ca5d355155540b520af510d120 after 0097) is unchanged, and EXPECTED_WRITES in
@@ -1497,7 +1740,7 @@ describe("0098 move_holding_thread", () => {
 -- calls move_holding_thread (plan SD list), so it merges only after this file is on production.
 --
 -- ROLLBACK (roll the app back first):
---   drop function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]);
+--   drop function public.move_holding_thread(uuid, uuid, uuid, text, bigint);
 --   drop trigger contacts_holding_server_only on public.contacts;
 --   drop function app.contacts_holding_server_only();
 --   drop index public.contacts_one_holding_per_number;
@@ -1522,15 +1765,17 @@ alter table public.contacts
 alter table public.contacts
   add constraint contacts_holding_shape check (
     not holds_shared_number
-    or (first_name = 'Caller' and last_name is null and email is null and phone is not null)
+    or (first_name is not distinct from 'Caller' and last_name is null and email is null
+        and phone is not null and pg_catalog.length(phone) between 9 and 16
+        and pg_catalog.substr(phone, 1, 1) = '+' and pg_catalog.substr(phone, 2) !~ '[^0-9]')
   ) not valid;
 alter table public.contacts validate constraint contacts_holding_shape;
 
 -- 3. One per account and number.
 create unique index contacts_one_holding_per_number
-  on public.contacts (account_id, phone_key) where holds_shared_number;
+  on public.contacts (account_id, phone) where holds_shared_number;
 
--- 4. Only server code sets or clears it.
+-- 4. Only server code sets, clears or edits it.
 create function app.contacts_holding_server_only() returns trigger
 language plpgsql set search_path = pg_catalog, pg_temp as $$
 begin
@@ -1538,6 +1783,15 @@ begin
     if tg_op = 'INSERT' then
       new.holds_shared_number := false;
     else
+      if old.holds_shared_number
+         and (new.first_name, new.last_name, new.email, new.phone, new.phone_country_unconfirmed, new.source,
+              new.custom, new.attribution, new.dnd, new.marketing_email_opted_out_at)
+             is distinct from
+             (old.first_name, old.last_name, old.email, old.phone, old.phone_country_unconfirmed, old.source,
+              old.custom, old.attribution, old.dnd, old.marketing_email_opted_out_at) then
+        raise exception 'A shared number holding record is changed by server code only'
+          using errcode = '42501';
+      end if;
       new.holds_shared_number := old.holds_shared_number;
     end if;
   end if;
@@ -1546,10 +1800,10 @@ end $$;
 create trigger contacts_holding_server_only before insert or update on public.contacts
   for each row execute function app.contacts_holding_server_only();
 
--- 5. Move a holding thread to a person, or back (Undo, which names the ids it moved).
+-- 5. Move a holding thread to a person, or move back exactly what one earlier move recorded (Undo).
 create function public.move_holding_thread(
   p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text,
-  p_message_ids uuid[] default null, p_call_ids uuid[] default null)
+  p_undo_of bigint default null)
 returns jsonb
 language plpgsql security definer set search_path = pg_catalog, pg_temp as $$
 declare
@@ -1558,8 +1812,12 @@ declare
   v_from_unread integer;
   v_from_holding boolean;
   v_to_holding boolean;
+  v_undo jsonb;
+  v_want_messages uuid[];
+  v_want_calls uuid[];
   v_messages uuid[];
   v_calls uuid[];
+  v_event bigint;
 begin
   if p_from_conversation = p_to_conversation then
     return pg_catalog.jsonb_build_object('status', 'invalid');
@@ -1581,19 +1839,36 @@ begin
     from public.contacts k where k.account_id = p_account_id and k.id = v_from_contact;
   select coalesce(k.holds_shared_number, false) into v_to_holding
     from public.contacts k where k.account_id = p_account_id and k.id = v_to_contact;
-  -- Exactly one side is the holding record. Toward it only as an Undo, which names its messages AND its
-  -- calls: an Undo with no call ids would otherwise repoint every call of the person thread.
+  -- Exactly one side is the holding record. A move goes away from it with no event named; an Undo goes
+  -- toward it and must name the move it undoes.
   if v_from_holding is null or v_to_holding is null
      or v_from_holding = v_to_holding
-     or (v_to_holding and (p_message_ids is null or p_call_ids is null)) then
+     or (v_to_holding and p_undo_of is null)
+     or (v_from_holding and p_undo_of is not null) then
     return pg_catalog.jsonb_build_object('status', 'invalid');
+  end if;
+
+  -- An Undo moves back only the ids that move recorded, between the same two threads, never an Undo.
+  if p_undo_of is not null then
+    select e.payload into v_undo from public.events e
+     where e.id = p_undo_of and e.account_id = p_account_id and e.type = 'conversation.moved';
+    if v_undo is null
+       or (v_undo ->> 'undo') is distinct from 'false'
+       or (v_undo ->> 'fromConversationId') is distinct from p_to_conversation::text
+       or (v_undo ->> 'toConversationId') is distinct from p_from_conversation::text then
+      return pg_catalog.jsonb_build_object('status', 'invalid');
+    end if;
+    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_messages
+      from pg_catalog.jsonb_array_elements_text(v_undo -> 'messageIds') as t(x);
+    select coalesce(pg_catalog.array_agg(t.x::uuid), '{}') into v_want_calls
+      from pg_catalog.jsonb_array_elements_text(v_undo -> 'callIds') as t(x);
   end if;
 
   with moved as (
     update public.messages m
        set conversation_id = p_to_conversation, updated_at = pg_catalog.now()
      where m.account_id = p_account_id and m.conversation_id = p_from_conversation
-       and (p_message_ids is null or m.id = any (p_message_ids))
+       and (p_undo_of is null or m.id = any (v_want_messages))
     returning m.id)
   select coalesce(pg_catalog.array_agg(id), '{}') into v_messages from moved;
 
@@ -1602,7 +1877,7 @@ begin
        set conversation_id = p_to_conversation,
            contact_id = case when v_to_holding then null else v_to_contact end
      where k.account_id = p_account_id and k.conversation_id = p_from_conversation
-       and (p_call_ids is null or k.id = any (p_call_ids))
+       and (p_undo_of is null or k.id = any (v_want_calls))
        and (k.contact_id is null or k.contact_id = v_from_contact)
     returning k.id)
   select coalesce(pg_catalog.array_agg(id), '{}') into v_calls from repointed;
@@ -1612,7 +1887,7 @@ begin
      set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
                              where m.account_id = p_account_id and m.conversation_id = c.id),
          unread_count = case
-           when p_message_ids is not null then c.unread_count
+           when p_undo_of is not null then c.unread_count
            when c.id = p_to_conversation then c.unread_count + v_from_unread
            else 0 end,
          updated_at = pg_catalog.now()
@@ -1624,49 +1899,59 @@ begin
             'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
             'fromContactId', v_from_contact, 'toContactId', v_to_contact,
             'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
-            'undo', p_message_ids is not null));
+            'undo', p_undo_of is not null, 'undoOf', p_undo_of,
+            'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls)))
+  returning id into v_event;
 
-  return pg_catalog.jsonb_build_object('status', 'ok',
+  return pg_catalog.jsonb_build_object('status', 'ok', 'moveId', v_event,
     'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls));
 end $$;
 
-revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[])
+revoke all on function public.move_holding_thread(uuid, uuid, uuid, text, bigint)
   from public, anon, authenticated, service_role;
-grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) to service_role;
+grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to service_role;
 
 -- 6. Comments: each names its one writer.
 comment on column public.contacts.holds_shared_number is
-  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
-comment on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) is
-  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, or back as an Undo naming the message ids and the call ids it moved. service_role only, behind the Owner, Staff or agency check of the app (0098).';
+  'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). No booking, lead, name or customer detail is written onto it (contacts_holding_shape, and every writer skips it).';
+comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) is
+  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; or, given that event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';
 ```
 
 - [ ] **Step 5: `EXPECTED_DEFINERS` 22 → 23, in this commit** (`definer-search-path.test.ts`'s own rule, `:20`):
   - `:25`: "The 22 SECURITY DEFINER functions in public and app at 0096" → "The 23 SECURITY DEFINER functions in public and app at 0098".
-  - Between `:47` (`"public.mark_document_version_ready(…)"`) and `:48` (`"public.record_event(…)"`), one line: `  "public.move_holding_thread(uuid,uuid,uuid,text,uuid[],uuid[])": PG_CATALOG_PG_TEMP,`.
+  - Between `:47` (`"public.mark_document_version_ready(…)"`) and `:48` (`"public.record_event(…)"`), one line: `  "public.move_holding_thread(uuid,uuid,uuid,text,bigint)": PG_CATALOG_PG_TEMP,`.
   - `:62` "exactly these 22" → "exactly these 23"; `:67` `toHaveLength(22)` → `toHaveLength(23)`; `:76` `toBeGreaterThanOrEqual(22)` → `toBeGreaterThanOrEqual(23)`.
-  - Re-build the kit with the committed file as its third argument. Run on `post`, from `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/post; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/record-provenance-schema.test.ts src/test/one-switch-schema.test.ts src/test/customer-language-schema.test.ts src/test/company-name-read-only-schema.test.ts` → all green except what needs PostgREST (the plan writer's run: `customer-language-schema` and `company-name-read-only-schema` were green; read the count and say which, if any, are the environment's). All withRollback-only otherwise.
-  - Read the run counts. If the defs or the comments differ on your replica, STOP and report.
+  - The plan writer applied exactly these five edits to a temporary copy: `Tests  6 passed (6)` on `post`.
+  - Re-build the kit with the committed file as its third argument. Run on `post`, from `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/post; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/record-provenance-schema.test.ts src/test/one-switch-schema.test.ts src/test/customer-language-schema.test.ts src/test/company-name-read-only-schema.test.ts` → all green (all nine are withRollback-only; the plan writer's run of the last seven, unedited, was green).
+  - If the defs or the comments differ on your replica, STOP and report.
 
-- [ ] **Step 6: Run each mutation.** For each: write the mutated copy, `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `definer-search-path.test.ts` or `schema-grants-guard.test.ts` where named), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The plan writer ran all twelve on 55490 (`<KIT>/mutate.js` writes them; NOTE: it uses `split().join()`, never `String.replace` with a replacement holding `$$`, which turns `$$` into `$`). Its counts are in brackets; more reds than a line names are fine, fewer is a finding.
-  1. Drop `contacts_holding_shape` (both statements) → the four `refuses a holding record with …` cases, the edit case and the pin case FAIL [6 failed | 14 passed].
-  2. `on public.contacts (phone_key) where holds_shared_number` → "…account B gets its own on the same number…" and the pin case FAIL, and so does every `move_holding_thread` case, whose `household()` seeds a holding record on both accounts [8 failed].
-  3. Drop the `create trigger contacts_holding_server_only …` statement → "a signed-in Owner's insert … stores false" and the pin case FAIL [2 failed].
-  4. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed | 24 passed of 26].
-  5. In the move's guard, drop `or (v_to_holding and (p_message_ids is null or p_call_ids is null))` → the `invalid` case FAILS [1 failed].
-  6. Narrow it back to the spec's `or (v_to_holding and p_message_ids is null)` → the `invalid` case FAILS on `{ messages: [], calls: null }` [1 failed]. This is P1's own proof: paste the line.
-  7. In the messages update, drop `and (p_message_ids is null or m.id = any (p_message_ids))` → the Undo case FAILS (`later` moves too) [1 failed].
-  8. Drop `c.account_id = p_account_id and` from BOTH `select c.contact_id …` reads → the `not_found` case FAILS [1 failed].
-  9. Append `grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, uuid[], uuid[]) to authenticated;` → "only service_role may execute it" FAILS [1 failed].
-  10. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed | 23 passed of 26]. The shadow case STAYED GREEN in the plan writer's run: only the pins catch this one. Say whether yours did too.
-  11. Delete `comment on function public.move_holding_thread …` → the comments case FAILS [1 failed].
-  12. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case FAILS, and so does the Undo case, whose unread pin reads the moved count [2 failed].
+- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<KIT>/mutate3.js <file> <dir>` writes all 19 with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The plan writer's counts are in brackets (out of 32, or 38 with the second file); more reds than a line names are fine, fewer is a finding.
+  - m01. Drop `contacts_holding_shape` (both statements) → the seven `refuses a holding record with …` cases and the pin case FAIL [8 failed].
+  - m02. `first_name = 'Caller'` (not null-safe, P22) → "…with no first name…" and the pin case FAIL [2 failed].
+  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [12 failed].
+  - m04. The index on `(account_id, phone_key)` (P23) → "two numbers of two countries…" and the pin case FAIL [2 failed].
+  - m05. Drop the `create trigger contacts_holding_server_only …` statement → the signed-in insert case, the four edit cases and the pin case FAIL [6 failed].
+  - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the four "cannot change a holding record's …" cases FAIL [4 failed].
+  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 38].
+  - m08. Drop `or (v_to_holding and p_undo_of is null)` → the `invalid` case FAILS [1 failed].
+  - m09. Drop the event's `fromConversationId`/`toConversationId` checks → the forged-Undo case FAILS [1 failed].
+  - m10. Drop `and (p_undo_of is null or m.id = any (v_want_messages))` → the Undo case FAILS (`later` moves too) [1 failed].
+  - m11. Drop `c.account_id = p_account_id and` from BOTH `select c.contact_id …` reads → the `not_found` case FAILS [1 failed].
+  - m12. Append `grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to authenticated;` → "only service_role may execute it" FAILS [1 failed].
+  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 38]. The shadow case STAYED GREEN in the plan writer's run: only the pins catch this one. Say whether yours did too.
+  - m14. Delete `comment on function public.move_holding_thread …` → the comments case FAILS [1 failed].
+  - m15. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case and the Undo case FAIL [2 failed].
+  - m16. Drop the calls contact guard `and (k.contact_id is null or k.contact_id = v_from_contact)` → "a call on the holding thread that names another contact…" FAILS [1 failed] (R7).
+  - m17. Drop `m.account_id = p_account_id and` from the messages update → "a message carrying another account's id…" FAILS [1 failed] (R7).
+  - m18. Drop `k.account_id = p_account_id and` from BOTH contacts reads → "a conversation of A whose contact is B's holding record…" FAILS [1 failed] (R7).
+  - m19. `'undo', false` always in the event → the Undo case FAILS on the event's `undo` [1 failed] (R7).
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the six ROLLBACK lines of the file's header in order (they ran on the plan writer's replica). Then: `select count(*) from pg_constraint where conname like 'contacts_holding%'` → `0`; `select count(*) from information_schema.columns where table_name = 'contacts' and column_name = 'holds_shared_number'` → `0`; the two functions gone; the definer count back to 22; the client-write digest `52|b66203ca…`. Drop `rb`.
   - On `post`, the client-write digest → `52|b66203ca5d355155540b520af510d120`.
-  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 24 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines; `wc -l f` → `177`.
-  - Record `md5sum` of the file. It equals `13f26cbe99753bfbbd8e20e7ba9ee632` if nothing changed. If it differs, say what changed and why.
+  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 29 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (78, 106); `wc -l f` → `216`.
+  - Record `md5sum` of the file. It equals `a76f898b5e362d9e0b8c71e2a0d28fff` if nothing changed. If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green; eslint on the test file).
 
@@ -1679,11 +1964,11 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Verify (the affected-test rule):** (1) no web mock reaches 0098; (2) none; (3) none; (4) none; (5) none; (6) none. The db suites above, on the replica.
 
-**Acceptance:** every case green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
+**Acceptance:** all 32 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree, with its own kit on 55493.
 - It applies 0098 to a fresh `pre` copy through `psql -1` only, and reads every def itself.
-- It re-runs mutations 2, 3, 5, 6, 8 and 10, plus three of its own: `grant select on public.contacts to anon` (does anything here catch it? `server-only-writes-grants.test.ts` or `schema-grants-guard.test.ts` should; say which); `first_name = 'caller'` in the CHECK (the shape pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
+- It re-runs m02, m04, m06, m08, m09, m10, m16 and m18, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
 - It checks the bytes and the md5, and that no comment string or `--` line holds an apostrophe.
 - It confirms `definer-search-path.test.ts` is green on `post` with exactly one new entry, and that `schema-grants-guard.test.ts` and `proposals-drop.test.ts` were NOT edited.
 - A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
@@ -1693,13 +1978,13 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 ## Task 2 (LOW): Every new copy key, English and Spanish (bis-frontend)
 
 **Brief.**
-- Add the 13 keys of "The model, Copy keys" to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key, after the S-47d block's last key (`"voice.knowledge.noClosedDaysRecorded.es"`, `:2573` at `a1ccb19a`; re-read after the rebase), under one comment line: `// S-47e: identity checks (the To-do) and the shared number's holding thread (label, Notice, Move, the call page). Usted.`
+- Add the 15 keys of "The model, Copy keys" to `apps/web/src/lib/messages.ts`, each `.es` twin on the line after its key, after the S-47d block's last key (`"voice.knowledge.noClosedDaysRecorded.es"`, `:2573` at `a1ccb19a`; re-read after the rebase), under one comment line: `// S-47e: identity checks (the To-do), the shared number's holding thread (label, Notice, Move, the call page) and its two To-dos. Usted.` The two `todo.sharedNumber.*` keys must NOT start `todo.consent.` (`lib/consent/copy.test.ts:111` counts that prefix: 80).
 - Replace the `voice.tradeRules.insurance_pcHint` pair (`:2056-2057`) with the two sentences of "The model, Copy keys" (S16), and the S-47b describe's pinned pair (`messages.test.ts:1409-1411` at `df8882ce`) with the same two literals. `voice-settings.test.ts:39` and `:826` read the key through `m[…]` and need no edit; run them.
 - Append ONE `describe("S-47e: identity and shared-number copy, English and Spanish (plan Task 2)")` to `apps/web/src/lib/messages.test.ts`, in the shape of the S-47d describe (`messages.test.ts:1723-…`). It contains:
-  - a literal `EXPECTED_PARAMS` over the 13 keys, with its length asserted as **13** (the table's rows, counted off this plan: one `voice`, one `contact`, ten `conversation`, one `call`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, every other `[]`;
+  - a literal `EXPECTED_PARAMS` over the 15 keys, with its length asserted as **15** (the table's rows, counted off this plan: one `voice`, one `contact`, ten `conversation`, one `call`, two `todo`; recount it yourself before you trust it): `voice.todo.identity` `[]`, `contact.holding.label` `["number"]`, `conversation.holding.notice` `["number"]`, `conversation.holding.moved` `["name"]`, `todo.sharedNumber.hold` `["excerpt", "number"]` (sorted), every other `[]`;
   - every key and twin present and different;
   - params identical across the twin;
-  - every sentence pinned as a typed literal pair (all 13 rows, both columns, word for word);
+  - every sentence pinned as a typed literal pair (all 15 rows, both columns, word for word);
   - usted (the S-47b regex);
   - no typed "Sofía";
   - no plumbing word (`holds_shared_number|holding record|RPC|null|conversation_id`);
@@ -1722,7 +2007,7 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Interfaces:**
 - Consumes: 0098 (Task 1).
-- Produces: `NumberContactRow`, `CONTACTS_ON_NUMBER_LIMIT`, `phoneKeysOf`, `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`, `HoldingMove`, `moveHoldingThread` (exact code in "The model, `@bis/db` (Task 3)"), and `emailKey` from the barrel. Tasks 5, 6, 8, 10, 11 and 16 call them.
+- Produces: `NumberContactRow`, `CONTACTS_ON_NUMBER_LIMIT`, `phoneKeysOf`, `listContactsOnNumber`, `findUpcomingBookingForContact`, `HoldingContactUnavailable`, `ensureHoldingContact`, `HoldingMove`, `moveHoldingThread` (exact code in "The model, `@bis/db` (Task 3)"), and `emailKey` from the barrel. Tasks 5, 6, 8, 10, 11 and 16 call them.
 - `findUpcomingBookingForPhone` STAYS until Task 6 (P17).
 
 - [ ] **Step 1: Build your kit** on 55494/55495/55496 with PostgREST (`replica.sh 55494 <dir> <WT>/packages/db/supabase/migrations/0098_shared_number_holding.sql`, then `pgrst.sh 55494 55495 55496 <dir>`).
@@ -1858,6 +2143,16 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
+  it("two numbers that share a digits key get two holding records (P23: +1 322 123 4567 and +32 2 123 4567; mutation: read by phone_key -> FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      const us = await ensureHoldingContact(db, accountId, "+13221234567");
+      const be = await ensureHoldingContact(db, accountId, "+3221234567");
+      expect(be.id).not.toBe(us.id);
+      expect(be.created).toBe(true);
+      expect(await ensureHoldingContact(db, accountId, "+3221234567")).toEqual({ id: be.id, created: false });
+    });
+  });
+
   it("ensureHoldingContact never returns account B's holding record for account A (mutation: drop .eq(\"account_id\", …) from its read -> FAILS)", async () => {
     await withTestAccount(async (dbA, accountA) => {
       await withTestAccount(async (dbB, accountB) => {
@@ -1878,7 +2173,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("moveHoldingThread moves through PostgREST and its Undo names both arrays; another account's thread is not_found", async () => {
+  it("moveHoldingThread moves through PostgREST and its Undo names the move; another account's thread is not_found", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (dbB, accountB) => {
         await person(db, accountId, "Ana", "Prueba", "+19565550169");
@@ -1888,11 +2183,14 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
         const bc = await ensureConversation(db, accountId, beto.id, "user_test");
         const msg = await createMessage(db, accountId, { conversationId: hc.id, channel: "sms", direction: "inbound", body: "test", status: "delivered" }, "sms-inbound", "system");
         const moved = await moveHoldingThread(db, accountId, { from: hc.id, to: bc.id, actor: "user_test" });
-        expect(moved).toEqual({ status: "ok", messageIds: [msg.id], callIds: [] });
+        expect(moved).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [] });
+        if (moved.status !== "ok") throw new Error("unreachable");
         const { data: m } = await db.from("messages").select("conversation_id").eq("id", msg.id).single();
         expect(m).toEqual({ conversation_id: bc.id });
-        expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test", undo: { messageIds: [msg.id], callIds: [] } }))
-          .toEqual({ status: "ok", messageIds: [msg.id], callIds: [] });
+        expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test", undoOf: moved.moveId }))
+          .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [] });
+        // An Undo that names no move is refused by the function (P1), never a silent no-op.
+        expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test" })).toEqual({ status: "invalid" });
         const holdingB = await ensureHoldingContact(dbB, accountB, "+19565550169");
         const hbc = await ensureConversation(dbB, accountB, holdingB.id, "voice", "ai");
         expect(await moveHoldingThread(db, accountId, { from: hbc.id, to: bc.id, actor: "user_test" })).toEqual({ status: "not_found" });
@@ -1908,12 +2206,12 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   `:3`'s `import { createContact } from "../contacts";` becomes `import { createContact, updateContact } from "../contacts";`. `ensureConversation` and `createMessage` (`:4`) and `getOrCreateCalendar`, `createBooking`, `setBookingStatus` (`:5`) are already imported; `SupabaseClient` comes from `@supabase/supabase-js` as a type import.
 - [ ] **Step 3: Run to verify they fail.** `source <dir>/env-run.sh; cd packages/db; node node_modules/vitest/vitest.mjs run src/test/voice.test.ts` → the new cases FAIL (`listContactsOnNumber is not a function` or a missing export). Before implementing, one throwaway probe proves the spec's SD4: `findUpcomingBookingForPhone(db, accountId, "+19565550160", …)` returns `null` for a booking of the LEGACY Beto above. Paste it in the report; do not commit the probe.
 - [ ] **Step 4: Implement** the model's code exactly (`voice.ts`, then the barrel line `export { emailKey } from "./contacts";` after `index.ts:25`).
-- [ ] **Step 5: Run to verify they pass**, then run the mutations named in the cases (drop the 521 key; each `.eq("account_id", …)` in `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`'s read; `ensureHoldingContact` without its `find()` before the insert; the barrel line). Paste each failing line, revert, `cmp`.
+- [ ] **Step 5: Run to verify they pass**, then run the mutations named in the cases (drop the 521 key; each `.eq("account_id", …)` in `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`'s read; `ensureHoldingContact` without its `find()` before the insert; its read by `phoneKeysOf` instead of the exact phone, which the two-countries case catches; the barrel line). Paste each failing line, revert, `cmp`.
 - [ ] **Step 6: Commit** `db: who is on a number (by its phone key, holding records flagged), one contact's next booking, and the shared number's one holding record and its move (S-47e)`, naming `voice.ts`, `index.ts`, `voice.test.ts`. Stop your kit.
 
 **Verify (the affected-test rule):** (1) none yet (nothing calls the new functions until Task 5); (2) none; (3) none; (4) none yet; (5) none; (6) none. Both typechecks; eslint on the two source files; `voice.test.ts` and `voice-schema.test.ts` on your replica + PostgREST.
 
-**Review (HIGH, opus, own worktree and kit on 55497–55499):** re-runs every account mutation above itself; checks that no read selects `email`; that `ensureHoldingContact` never calls `createContact`; that a 23505 from any OTHER unique index would not be mistaken for the holding race (read `contacts`' unique indexes on the replica and say which exist); and that `moveHoldingThread` cannot be called with one Undo array and not the other (the type forbids it).
+**Review (HIGH, opus, own worktree and kit on 55497–55499):** re-runs every account mutation above itself; checks that no read selects `email`; that `ensureHoldingContact` never calls `createContact`; that a 23505 from any OTHER unique index would not be mistaken for the holding race (read `contacts`' unique indexes on the replica and say which exist); and that an Undo can name nothing but a `moveId` (the type allows nothing else, and the function reads the ids from the move's own event, P1).
 
 ---
 
@@ -1935,7 +2233,8 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   - **`matchBy: "email_only"` (contacts.test.ts):**
     - With it, a contact with the same phone and no email match is NOT returned: a second `createContact({ firstName: "Beto", lastName: "Prueba", phone: P, matchBy: "email_only" })` after Ana's on P answers `existing: false` with a new id; re-read: two rows on P.
     - An email match still returns its contact: Ana with `ana@example.com` on P, then `{ firstName: "A", email: "ANA+x@example.com", phone: "+19565550199", matchBy: "email_only" }` → `{ id: ana, existing: true }`.
-    - No `contact_duplicate_flags` row on that path (re-read the table for both ids → 0), and no country-twin read: Ana stored `+19565550170`, then `matchBy` with `+529565550170` → a new contact AND no `phone_country_twin` flag (without `matchBy` the same pair files one: assert that too, so the case can fail).
+    - The new person and the phone match are filed for the merge queue as ONE pair, reason `phone_shared_new_person` (P29; re-read `contact_duplicate_flags`: one row, the two ids sorted; mutation: drop the flag → FAILS), and `flagged` is true.
+    - No country-twin read on that path: Ana stored `+19565550170`, then `matchBy` with `+529565550170` → a new contact, no `phone_country_twin` flag and no `phone_shared_new_person` flag either: `+529565550170` keys `529565550170`, so the direct read misses Ana, and only the legacy read (skipped with `matchBy`) would have found her. Without `matchBy` the same pair files `phone_country_twin`: assert that too, so the case can fail.
     - Absent, every existing dedupe test passes unedited (run the file; paste the summary).
     - Second account: account B's contact with the same email is never returned for account A (mutation: drop `.eq("account_id", accountId)` from the EMAIL branch at `:268-269` → FAILS).
   - **The holding skip (contacts.test.ts):** on a number with Ana and the holding record (`ensureHoldingContact`):
@@ -1978,7 +2277,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 
 **Interfaces:** exactly "The model, The identity module (Task 5)". Produces every export there for Tasks 6, 7, 8, 10 and 14.
 
-**The plan writer's check (2026-10-24):** the six code blocks of "The model" (these five files plus Task 7's `record.ts`) were extracted into a throwaway `apps/web/src/lib/voice/zzid/` with `emailKey` imported from `packages/db/src/contacts` by relative path, and run against a probe test covering every example below: `Test Files 1 passed (1)`, `Tests 6 passed (6)`. With the model's `call-state.ts` change applied, `pnpm --filter web typecheck` exited 0. Both were then removed (`cp` + `cmp` restored `call-state.ts`; `git status --short` clean).
+**The plan writer's check (2026-10-24, first round):** the six code blocks of "The model" (these five files plus Task 7's `record.ts`) were extracted into a throwaway `apps/web/src/lib/voice/zzid/` and run against a probe of every example: `Tests 6 passed (6)`; with the model's `call-state.ts`, `pnpm --filter web typecheck` exited 0; both were removed (`cp` + `cmp` restored `call-state.ts`). The fix round changed `match.ts` (P25, P26, P28), `results.ts`, `state.ts`, `flow.ts`'s lookup and `record.ts` (P27) without re-running that probe: the cases below, red first, are their proof.
 
 - [ ] **Step 1: Write the failing tests.** Literal fixtures, literal expectations; each named mutation must turn the WHOLE file red.
   - `ladder.test.ts`:
@@ -1992,18 +2291,20 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     - Rule 4's own probe (P5): against the record "María" / "de la Cruz", `"María de"` does not match and `"María Cruz"` does (mutation: drop rule 4 → `"María de"` FAILS).
     - The voice-created split: the record "María García" / "López" (first name "María García", `registry.ts:444-446`'s split) is matched by `"María López"`.
     - A one-word record ("Dan" / null) and a "Caller" placeholder never match `"Caller Prueba"` or `"Dan Lopez"` (rule 1).
-    - `spokenEmail`: `"ana dot garcia at gmail dot com"` → `"ana.garcia@gmail.com"`; `"ana punto garcia arroba gmail punto com"` → the same; `"A N A @ x . com"` → `"ana@x.com"`; `"ana guion bajo garcia arroba gmail punto com"` → `"ana_garcia@gmail.com"`; `"ana guión bajo b arroba x punto com"` → `"ana_b@x.com"`; `"ana plus bis at gmail dot com"` and `"ana más bis arroba gmail punto com"` → `"ana+bis@gmail.com"`; `"dottie@x.com"` → `"dottie@x.com"` (an address with "@" is never word-mapped); `"ana at gmail"` → `null`.
+    - `nameMatch` kinds (P26): `"María Elena García López"` against itself → `"exact"`; `"María García"` against it → `"partial"`; `"María García López"` against the record "María" / "García" → `"partial"` (every record word spoken; mutation: drop the record-in-spoken direction → FAILS).
+    - `nameHits` prefers exact (P26): father "José Luis" / "Garza" and son "José" / "Garza": `"José Garza"` → `[son]`; `"José Luis Garza"` → `[father]` (mutation: exact and partial pooled → `"José Garza"` hits both, FAILS); two partial hits ("Ana Prueba" against "Ana María Prueba" and "Ana Lucía Prueba") → both.
+    - `spokenEmail`: `"ana dot garcia at gmail dot com"` → `"ana.garcia@gmail.com"`; `"ana punto garcia arroba gmail punto com"` → the same; `"A N A @ x . com"` → `"ana@x.com"`; `"ana guion bajo garcia arroba gmail punto com"` → `"ana_garcia@gmail.com"`; `"ana guión bajo b arroba x punto com"` → `"ana_b@x.com"`; `"ana plus bis at gmail dot com"` and `"ana más bis arroba gmail punto com"` → `"ana+bis@gmail.com"`; the dash words (P28), each its own case: `"ana guion medio b arroba x punto com"` → `"ana-b@x.com"`, `"ana guión b arroba x punto com"` → `"ana-b@x.com"`, `"ana guion bajo b arroba x punto com"` → `"ana_b@x.com"` (mutation: read "guion" before the pairs → `"ana-bajob@x.com"`, FAILS), `"ana raya b arroba x punto com"` → `"ana-b@x.com"`; `"dottie@x.com"` → `"dottie@x.com"` (an address with "@" is never word-mapped); `"ana at gmail"` → `null`.
     - `spokenEmailKey("Ana+bis@Gmail.com")` → `"ana@gmail.com"`; and it equals `emailKey` from `@bis/db` on five literal addresses (parity: the one rule, never a copy).
-    - `decideIdentity`, every row of spec §5.3's table, with candidates Ana (`"ana@x.com"`), Beto (no email): none (`[]` → `{ kind: "none" }`); truncated → cannot; rung 1 one candidate → confirmed caller_id; rung 2 no email anywhere → cannot; one-word name → ask_name; rung 2 no email given → ask_email; rung 2 malformed email (`"ana at x"`) → ask_email; rung 1 name picks one → confirmed rung 1 by name; rung 1 name matches none → miss; the same-name pair (two "Ana Prueba", emails `ana@x.com`, `ana2@x.com`): no email → ask_email, `"ana2@x.com"` → confirmed `a2` rung 2 by name_email, `"zed@x.com"` → miss; two "Ana Prueba" with NO email → miss; rung 2 name and email match exactly one → confirmed rung 2; rung 2 two records matching name AND email → miss (S4).
-  - `state.test.ts`: `withMiss` once → `misses: 1, locked: null`; twice → `locked: "misses"` (mutation: `MAX_MISSES` 3 → FAILS); `withLocked(…, "cannot")` then `withLocked(…, "misses")` keeps `"cannot"`; `confirmedFor` true at the rung and above, false for another contact, false for rung 2 asked of a rung-1 confirmation, false for rung 3; `withMessageNameAsked` sets the flag; every helper returns a NEW state and leaves the old one unchanged.
+    - `decideIdentity`, every row of spec §5.3's table as amended, with candidates Ana (`"ana@x.com"`), Beto (no email): none (`[]` → `{ kind: "none" }`); truncated → cannot; rung 1 one candidate and NO name → confirmed caller_id; rung 1 one candidate (Ana) and `"Carla Prueba"` → miss (P25; mutation: the sole row ignores the name → FAILS); rung 1 one candidate and `"Ana Prueba"` → confirmed by name; rung 1 one candidate and `"Ana"` → ask_name; rung 2 no email anywhere → cannot; one-word name → ask_name; rung 2 no email given → ask_email; rung 2 malformed email (`"ana at x"`) → ask_email; rung 1 name picks one → confirmed rung 1 by name; rung 1 name matches none → miss; the same-name pair (two "Ana Prueba", emails `ana@x.com`, `ana2@x.com`): no email → ask_email, `"ana2@x.com"` → confirmed `a2` rung 2 by name_email, `"zed@x.com"` → miss; two "Ana Prueba" with NO email → miss; rung 2 name and email match exactly one → confirmed rung 2; rung 2 two records matching name AND email → miss (S4).
+  - `state.test.ts`: `withLeadWhoseAsked` sets `leadWhoseAsked` and leaves the rest; `withMiss` once → `misses: 1, locked: null`; twice → `locked: "misses"` (mutation: `MAX_MISSES` 3 → FAILS); `withLocked(…, "cannot")` then `withLocked(…, "misses")` keeps `"cannot"`; `confirmedFor` true at the rung and above, false for another contact, false for rung 2 asked of a rung-1 confirmation, false for rung 3; `withMessageNameAsked` sets the flag; every helper returns a NEW state and leaves the old one unchanged.
   - `results.test.ts`: every constant and builder of `results.ts` deep-equal to the object typed out AGAIN in the test (copy the strings from "The model"; the test file must not import them to build its expectation). The three builders with `next = "offer to take a message with take_message"`. No string value in any result holds a `{word}` template marker (`/\{[A-Za-z]+\}/`) or "Sofía".
   - `candidates.test.ts`: `realCandidates` over five literal rows on `+19562921696`: an E.164 contact (in), a legacy `"(956) 292-1696"` contact (in), the holding record (out; mutation: drop `!r.holds_shared_number` → FAILS), a `"+529562921696"` contact (out: another number with the same ten digits; mutation: drop the `isCallerIdNumber` filter → FAILS), a `null` phone (out). `isShared`: 1 real → false; 2 → true; 1 real and truncated → true. `readCandidates` (with `@bis/db` mocked spread-real and `listContactsOnNumber` overridden) passes ITS OWN `accountId` and `e164` through (call it with `"a2"`; mutation: a fixed id → FAILS).
   - `flow.test.ts` (states built from `emptyCallState()`; `next` = `"NEXT"`):
-    - `findStep`: two candidates rung 1 → `ASK_NAME`, state unchanged, no event; rung 2 with an email on file → `ASK_NAME_AND_EMAIL`; one candidate rung 1 → `lookup` of it, event `"confirmed rung 1 by caller-id"`, state confirmed by `caller_id`; truncated → `CANNOT`, locked `"cannot"`, event `"locked (cannot)"`; read failed → `readFailed("NEXT")`, event `"read failed"`, misses 0; confirmed at the rung → `lookup` with NO read needed (`findNeedsRead` false); confirmed at rung 1 on an insurance call → `findNeedsRead` true and `ASK_NAME_AND_EMAIL`; locked → `LOCKED` (misses) or `CANNOT` (cannot).
+    - `findStep`: two candidates rung 1 → `ASK_NAME`, state unchanged, no event; rung 2 with an email on file → `ASK_NAME_AND_EMAIL`; one candidate rung 1 → `lookup` of it with `by: "caller_id"`, event `"confirmed rung 1 by caller-id"`, state confirmed by `caller_id`; a state confirmed by name → `lookup` with `by: "name"` (the registry adds `FOUND_BY_NAME_NEXT` on it); truncated → `CANNOT`, locked `"cannot"`, event `"locked (cannot)"`; read failed → `readFailed("NEXT")`, event `"read failed"`, misses 0; confirmed at the rung → `lookup` with NO read needed (`findNeedsRead` false); confirmed at rung 1 on an insurance call → `findNeedsRead` true and `ASK_NAME_AND_EMAIL`; locked → `LOCKED` (misses) or `CANNOT` (cannot).
     - `confirmStep`: Beto by name → `CONFIRMED`, event `"confirmed rung 1 by name"`; then Ana → confirmed REPLACED by Ana (S7); `"Carla Prueba"` → `MISS`, event `"miss 1"`, then again → `LOCKED`, event `"locked (misses)"`; a name miss and an email miss on an insurance call are `toEqual` each other AND the typed-out MISS object (E5); `"Ana"` → `ASK_NAME_AGAIN`, misses 0; rung 2 with no email → `ASK_EMAIL`, misses 0; read failed → `readFailed`, misses 0 (S5); no candidate at all → a miss (counts as a try).
     - `ownsStep`: a booking made on this call → owned even with nothing confirmed and no caller ID; locked → `lockedResult`; confirmed this contact, rung met, phone is the caller ID (typed `"(956) 292-1696"` included) → owned; phone no longer the caller ID → `NOT_CONFIRMED_YET`; nothing confirmed → `NOT_CONFIRMED_YET`; confirmed this contact at rung 1, rung 2 required → `NOT_CONFIRMED_YET` (P7); confirmed ANOTHER contact → `notTheirs("NEXT")`.
     - `messageNeedsNameCheck` / `messageNameStep`: no caller ID → false; confirmed → false; `name: "Ana Prueba"` → false; `nameDeclined: true` → false; already asked → false; otherwise true. Two real candidates → the refusal, with `messageNameAsked` set; one → null; truncated → the refusal; a failed read → null.
-  - `call-state.test.ts`: `emptyCallState().identity` toEqual `{ confirmed: null, misses: 0, locked: null, messageNameAsked: false }`, and two calls return two different objects.
+  - `call-state.test.ts`: `emptyCallState().identity` toEqual `{ confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false }`, and two calls return two different objects.
 - [ ] **Step 2: Run to verify they fail** (`pnpm --filter web exec vitest run src/lib/voice/identity src/lib/voice/call-state.test.ts` → missing modules). Paste the summary line.
 - [ ] **Step 3: Implement** the model's code exactly.
 - [ ] **Step 4: Run to verify they pass**, then each named mutation (paste, revert, `cmp`).
@@ -2058,7 +2359,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
 - [ ] **Step 2: Write the new failing tests** (append to `registry.test.ts`):
 
 ```ts
-import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, readFailed } from "../identity/results";
+import { ASK_NAME, ASK_NAME_AND_EMAIL, ASK_EMAIL, CONFIRMED, MISS, LOCKED, CANNOT, NOT_CONFIRMED_YET, FOUND_BY_NAME_NEXT, readFailed } from "../identity/results";
 // (results.test.ts pins every one of these word for word; here they say WHICH answer the tool gave.)
 
 describe("S-47e: whose appointment it is (plan Task 6)", () => {
@@ -2089,15 +2390,30 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     expect(state.identity).toEqual({ confirmed: null, misses: 0, locked: null, messageNameAsked: false });
   });
 
-  it("confirm Beto, then find: the lookup is Beto's only; confirming Ana afterwards replaces him (S7)", async () => {
+  it("confirm Beto, then find: the lookup is Beto's only, and the found result says to confirm anyone else first; confirming Ana afterwards replaces him (S7, P25)", async () => {
     on(ANA, BETO);
     const c1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Beto Prueba" });
     expect(c1.result).toEqual(CONFIRMED);
-    await runTool(c1.state, ctx, "find_my_booking", {});
+    const f1 = await runTool(c1.state, ctx, "find_my_booking", {});
+    expect(f1.result).toMatchObject({ found: true, bookingId: "b9", next: FOUND_BY_NAME_NEXT });
     expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct2"]);
     const c2 = await runTool(c1.state, ctx, "confirm_identity", { fullName: "Ana Prueba" });
     await runTool(c2.state, ctx, "find_my_booking", {});
     expect(dbMocks.findUpcomingBookingForContact.mock.calls.map((c) => c[2])).toEqual(["ct2", "ct1"]);
+  });
+
+  it("a found result confirmed by the caller ID alone (one contact) carries no note", async () => {
+    on(ANA);
+    const { result } = await runTool(emptyCallState(), ctx, "find_my_booking", {});
+    expect(result).toMatchObject({ found: true });
+    expect(result).not.toHaveProperty("next");
+  });
+
+  it("a name that is not the one contact on the number confirms nobody (P25; mutation: the sole-candidate row ignores the name -> FAILS)", async () => {
+    on(ANA);
+    const { state, result } = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    expect(result).toEqual(MISS);
+    expect(state.identity.confirmed).toBeNull();
   });
 
   it("two misses lock; a third confirm_identity makes no read (mutation: no lock -> FAILS)", async () => {
@@ -2124,6 +2440,31 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
     dbMocks.createMessage.mockResolvedValue({ id: "m1" });
     expect((await runTool(madeHere, ctx, "cancel_appointment", { bookingId: "b1" })).result).toEqual({ ok: true });
+  });
+
+  it("a locked call can still book, take a message, and move the booking it made (spec 7, S18; R10)", async () => {
+    on(ANA, BETO);
+    const m1 = await runTool(emptyCallState(), ctx, "confirm_identity", { fullName: "Carla Prueba" });
+    const locked = (await runTool(m1.state, ctx, "confirm_identity", { fullName: "Carla Prueba" })).state;
+    expect(locked.identity.locked).toBe("misses");
+    const slot = { startsAt: new Date("2027-06-02T14:00:00Z"), endsAt: new Date("2027-06-02T15:00:00Z") };
+    const later = { startsAt: new Date("2027-06-02T16:00:00Z"), endsAt: new Date("2027-06-02T17:00:00Z") };
+    computeAllSlotsMock.mockResolvedValue([slot, later]);
+    dbMocks.createContact.mockResolvedValue({ id: "ct1", existing: true });
+    dbMocks.getContact.mockResolvedValue({ id: "ct1", first_name: "Ana", last_name: "Prueba", email: null, phone: "+19562921696" });
+    dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
+    dbMocks.createBooking.mockResolvedValueOnce({ id: "bk1", cancelToken: "t1" }).mockResolvedValueOnce({ id: "bk2", cancelToken: "t2" });
+    const booked = await runTool(locked, ctx, "book_appointment", { startsAt: slot.startsAt.toISOString(), name: "Ana Prueba", emailDeclined: true });
+    expect(booked.result).toMatchObject({ ok: true, bookingId: "bk1" });
+    const msg = await runTool(booked.state, ctx, "take_message", { body: "Please call me", name: "Ana Prueba" });
+    expect(msg.result).toEqual({ ok: true });
+    dbMocks.getBookingById.mockResolvedValue({ id: "bk1", contact_id: "ct1", calendar_id: "cal1", starts_at: slot.startsAt.toISOString(), ends_at: slot.endsAt.toISOString(), status: "booked" });
+    dbMocks.setBookingStatus.mockResolvedValue({ updatedAt: "2027-05-31T09:00:00.000Z" });
+    dbMocks.ensureConversation.mockResolvedValue({ id: "cv1", created: false });
+    dbMocks.createMessage.mockResolvedValue({ id: "m1" });
+    const moved = await runTool(msg.state, ctx, "reschedule_appointment", { bookingId: "bk1", startsAt: later.startsAt.toISOString() });
+    expect(moved.result).toMatchObject({ ok: true, bookingId: "bk2" });
+    expect(moved.state.identity.locked).toBe("misses");
   });
 
   it("a failed candidate read is READ FAILED and not a try", async () => {
@@ -2204,7 +2545,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
   And in `schemas.test.ts`, one `describe("S-47e: confirm_identity (plan Task 6)")`:
   - `confirm_identity` is in `toolSchemas("full", mt, false)` for all three meeting types and in `"manage"`, and NOT in `"none"`;
   - its `parameters` is `{ type: "object", properties: { fullName: { type: "string", description: "First and last name, as the caller said it." }, email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." } }, required: ["fullName"] }` (deep-equal, typed out);
-  - its description is the literal of "The model" Step 4 below (typed out) and matches `/never suggest, guess or spell/`;
+  - its description is the literal of Step 4 below (typed out) and matches `/never suggest, guess or spell/` and `/whenever the caller asks about a different person's appointment than the one already confirmed/` (P25);
   - `find_my_booking`'s description is `"Find the caller's upcoming booking by the number they are calling from. It cannot look up any other number. If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again."` (typed out; the existing `:73-81` pins stay green);
   - the existing "video variant touches ONLY book_appointment" case (`:37-45`) stays green with the new tool in the list.
 - [ ] **Step 3: Run to verify they fail** (`pnpm --filter web exec vitest run src/lib/voice/tools`) and paste the summary.
@@ -2216,7 +2557,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     import { readCandidates } from "../identity/candidates";
     import { findNeedsRead, findStep, confirmStep, ownsStep, type CandidateRead } from "../identity/flow";
     import { isLocked } from "../identity/state";
-    import { lockedResult, noCallerId, type ToolResult } from "../identity/results";
+    import { lockedResult, noCallerId, FOUND_BY_NAME_NEXT, type ToolResult } from "../identity/results";
     ```
   - `ToolName` gains `| "confirm_identity"`. `MANAGE_TOOLS` gains `"confirm_identity"`. `ToolContext` gains, after `handoffTarget`:
     ```ts
@@ -2273,6 +2614,8 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       return { state: withServed(step.state, "booking_found"), result: {
         found: true, ...hit,
         startsAtLocal: formatWhen(new Date(hit.startsAt), ctx.timezone),
+        // P25: a confirmation that came from a name says to confirm anyone else before looking again.
+        ...(step.by === "caller_id" ? {} : { next: FOUND_BY_NAME_NEXT }),
       } };
     ```
   - The new case, right after `find_my_booking`:
@@ -2292,13 +2635,13 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     ```ts
       // S-47e (spec 5.4.3): on the session exactly where find_my_booking is (modes full and manage).
       { type: "function", name: "confirm_identity",
-        description: "Confirm whose appointment the caller means, when find_my_booking asks you to. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.",
+        description: "Confirm whose appointment the caller means, when find_my_booking asks you to and whenever the caller asks about a different person's appointment than the one already confirmed. Pass the first and last name exactly as the caller said it, and the email address only when you were asked for it: spell the email back character by character and wait for them to confirm, then write it with the @ and . symbols. It checks only the people under the number they are calling from. It never tells you a name or an email, and you must never suggest, guess or spell one for them.",
         parameters: { type: "object", properties: { fullName: { type: "string", description: "First and last name, as the caller said it." }, email: { type: "string", description: "Only when asked for. The address as confirmed, with @ and . symbols." } }, required: ["fullName"] } },
     ```
     and `find_my_booking`'s description gains `" If it asks you to confirm who they are, ask for exactly what it says, call confirm_identity, then call find_my_booking again."` at its end.
   - `…/incoming/route.ts:1266-1271`: `callRowId, handoffTarget,` → `callRowId, handoffTarget,\n      tradeModule: tradeStamp?.module ?? null,` (`tradeStamp` is `:1174`).
   - P17: delete `findUpcomingBookingForPhone` (`voice.ts:932-947`) and, in `voice.test.ts`, its import (`:14`) and its test (`:197-217`).
-- [ ] **Step 5: Run to verify they pass**, then each named mutation: (a) `ownsStep` call replaced by today's `bookedThisCall || isCallerIdNumber(contact?.phone, ctx.callerNumber)` → the S9 case FAILS; (b) `requiredRung("change_existing", null)` (the rung ignored) → the P7 case FAILS; (c) `confirmStep` called with no `isLocked` check and `withMiss` never locking (edit `state.ts` `MAX_MISSES` to 99 for the probe) → the lock case FAILS; (d) `readCandidates(ctx.db, "a1", …)` → the second-account case FAILS; (e) put `name: c.words.join(" ")` into `ASK_NAME`'s builder (probe in `results.ts`) → the "nothing of theirs" case FAILS. Paste each, revert, `cmp`.
+- [ ] **Step 5: Run to verify they pass**, then each named mutation: (a) `ownsStep` call replaced by today's `bookedThisCall || isCallerIdNumber(contact?.phone, ctx.callerNumber)` → the S9 case FAILS; (b) `requiredRung("change_existing", null)` (the rung ignored) → the P7 case FAILS; (c) `confirmStep` called with no `isLocked` check and `withMiss` never locking (edit `state.ts` `MAX_MISSES` to 99 for the probe) → the lock case FAILS; (d) `readCandidates(ctx.db, "a1", …)` → the second-account case FAILS; (e) put `name: c.words.join(" ")` into `ASK_NAME`'s builder (probe in `results.ts`) → the "nothing of theirs" case FAILS; (f) drop `&& spoken.length === 0` from `decideIdentity`'s sole-candidate row → the "a name that is not the one contact" case FAILS; (g) always add `FOUND_BY_NAME_NEXT` → the caller-ID-alone case FAILS. Paste each, revert, `cmp`.
 - [ ] **Step 6: Commit** `voice: on a shared phone Sofía asks whose appointment it is before she reads, moves or cancels one; an insurance pack asks for the email too; two misses end the look-up (S-47e)`, naming every path.
 
 **Verify (the affected-test rule):**
@@ -2313,47 +2656,83 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 
 ---
 
-## Task 7 (HIGH): The record rule in the call — the picker, `book_appointment`, `take_message` (bis-voice, opus)
+## Task 7 (HIGH): The record rule in the call — the picker, `book_appointment`, `capture_lead`, `take_message` (bis-voice, opus)
 
 **Dispatch gate:** Task 6 committed.
 
 **Files:**
 - Create: `…/identity/record.ts` (+ `record.test.ts`).
-- Modify: `…/tools/registry.ts` (`:339-347` `take_message`; `:437-476` the booking's contact), `…/tools/schemas.ts:32-34` (`take_message`).
+- Modify: `…/tools/registry.ts` (`:331-337` `capture_lead`; `:339-347` `take_message`; `:437-476` the booking's contact), `…/tools/schemas.ts` (`:10-12` `book_appointment`, `:29-31` `capture_lead`, `:32-34` `take_message`). (`CapturedLead.forSomeoneElse` and `leadWhoseAsked` are Task 5's, in its `call-state.ts` model.)
 - Test: `…/tools/registry.test.ts`, `…/tools/schemas.test.ts`.
 
 **Interfaces:**
-- Consumes: Task 5's `readCandidates`, `isShared`, `messageNeedsNameCheck`, `messageNameStep`, `messageName`, `BOOK_ASK_NAME`, `BOOK_AMBIGUOUS`, `MESSAGE_ASK_NAME`; Task 4's `matchBy`.
-- Produces: `pickRecordOnNumber`, `RecordPick` (exact code in "The model, The record picker (Task 7)"). Tasks 8 and 14 call it.
+- Consumes: Task 5's `readCandidates`, `isShared`, `messageNeedsNameCheck`, `messageNameStep`, `messageName`, `withLeadWhoseAsked`, `BOOK_ASK_NAME`, `BOOK_AMBIGUOUS`, `BOOK_ASK_WHOSE`, `LEAD_ASK_WHOSE`, `MESSAGE_ASK_NAME`, `nameWords`, `nameMatch`, `nameHits`; Task 4's `matchBy`.
+- Produces: `pickRecordOnNumber`, `RecordPick`, `leadNeedsWhoseCheck`, `leadWhoseStep` (exact code in "The model, The record picker (Task 7)"). Tasks 8 and 14 call them.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `record.test.ts`, every row of spec §5.10.0's order with literal candidates (`cand(id, first, last, emailKey)` built with `candidateOf`):
-    - S20's exception: a sole "Dan" / "Lopez" and the name "Ana Prueba" → `create`; a sole "Caller" / null and "Ana Prueba" → `today`; a sole "Dan" / null (first name only) and "Ana Prueba" → `today`; a sole "Dan Lopez" and "Dan Lopez" → `today`; no one on the number → `today`.
+  - `record.test.ts`, every row of spec §5.10.0's order as amended (P27), literal candidates (`cand(id, first, last, emailKey)` built with `candidateOf`):
+    - Nobody on the number → `today`.
+    - ONE contact, no `forSomeoneElse`: a sole "Caller" / null and "Ana Prueba" → `today`; a sole "Dan" / "Lopez" and "Dan Lopez" → `today`; "Dan" alone → `today`; a sole "María" / "García" and "María García López" → `today` (P26: every record word spoken; this was the duplicate the review found); a sole "Dan" / null (first name only) and "Dan Lopez" → `today`; a sole "Dan" / "Lopez" and "Daniel Lopez" → `ask_whose` (mutation: today's S20 `create` → FAILS); a sole "Roberto" / "Prueba" and "Beto Prueba" → `ask_whose`; no name at all → `today`.
+    - ONE contact with `forSomeoneElse`: `true` → `create` (even when the name agrees: "José Garza" booking for a son beside a sole "José Luis Garza"); `false` → `existing` of the sole contact whatever the name ("Daniel Lopez" for "Dan Lopez"; mutation: ignore `false` → `ask_whose`, FAILS).
     - Truncated → `ambiguous` (even with a matching name).
-    - Confirmed `a` on the number: name absent → `existing a`; `"Ana"` alone → `existing a`; `"Ana Prueba"` → `existing a`; `"Beto Prueba"` → `existing b` (the name wins over the confirmation when it names someone else on the number).
-    - A `confirmedId` that is not among `onNumber` (someone else's id): ignored; with no name → `ask_name`. (Whether a confirmation is passed at all is the CALLER's rule, "only on the caller-ID number"; the registry case below with a recited number proves it.)
-    - One-word name, nobody confirmed → `ask_name`; `"Beto Prueba"` among Dan, Ana, Beto → `existing b`; `"Carla Prueba"` → `create`.
+    - Several, confirmed `a` on the number: name absent → `existing a`; `"Ana"` alone → `existing a`; `"Ana Prueba"` → `existing a`; `forSomeoneElse: false` with any name → `existing a`; `"Beto Prueba"` → `existing b` (the name wins when it names someone else on the number).
+    - A `confirmedId` that is not among `onNumber`: ignored; with no name → `ask_name`. (Whether a confirmation is passed at all is the CALLER's rule, "only on the caller-ID number"; the registry case below with a recited number proves it.)
+    - Several, nobody confirmed: one word → `ask_name`; `"Beto Prueba"` among Dan, Ana, Beto → `existing b`; `"Carla Prueba"` → `create`; father "José Luis Garza" and son "José Garza", no emails: `"José Garza"` → `existing` son, `"José Luis Garza"` → `existing` father (P26; mutation: pool exact and partial → `ambiguous`, FAILS).
     - The same-name pair (`"Ana Prueba"` twice, emails `ana@x.com`, `k2`): no email → `ambiguous`; `"ana@x.com"` → `existing a1`; `"zed@x.com"` → `ambiguous`.
+    - `leadNeedsWhoseCheck`: already asked → false; `forSomeoneElse` given → false; no name → false; otherwise true. `leadWhoseStep`: a sole "Dan Lopez" and "Ana Prueba" → `LEAD_ASK_WHOSE` with `leadWhoseAsked` set; a sole "Ana Prueba" and "Ana Prueba" → null; two contacts → null (a shared number's lead is picked by name after the call); a failed read → null.
   - `registry.test.ts`, one `describe("S-47e: the booking lands on the person named (plan Task 7)")` (its `beforeEach` sets one free slot and `createBooking` → `{ id: "bk1", cancelToken: "t" }`, as the `book_appointment` describe at `:300-310` does; read it):
     - On a shared caller-ID number (`listContactsOnNumber` → Ana ct1, Beto ct2), `"Beto Prueba"` with `emailDeclined: true` books onto ct2 and calls `createContact` NOT at all (red first against today's code: today it calls `createContact` and books onto whatever it returns); the same with `email: "beto@example.com"` → still ct2, and `fillContactBlanksReport` is called once on ct2 with `{ firstName: "Beto", lastName: "Prueba", email: "beto@example.com" }`.
     - `"Carla Prueba"` makes a new contact: `createContact` called with `({}, "a1", { firstName: "Carla", lastName: "Prueba", phone: "+19562921696", email: undefined, source: "voice", matchBy: "email_only" }, "voice", "ai")`, the booking on its id, one `contact_created` act; when that call answers `existing: true` (the email dedupe reached someone), NO `fillContactBlanksReport` and no `contact_created` (mutation: today's `created.existing && isCallerIdNumber(...)` fill → FAILS, with `getContact` answering the caller ID's phone).
-    - `"Beto"` alone → `BOOK_ASK_NAME`, and neither `createContact` nor `createBooking` is called.
+    - ONE contact on the number (Dan Lopez, ct1): `"Daniel Lopez"` → `BOOK_ASK_WHOSE` and nothing written (no `createContact`, no `createBooking`; red first: today it books onto ct1 through the phone dedupe); then `forSomeoneElse: false` → booked onto ct1, no `createContact`; `forSomeoneElse: true` with `"Ana Prueba"` → `createContact` with `matchBy: "email_only"`.
+    - `"Beto"` alone on a shared number → `BOOK_ASK_NAME`, and neither `createContact` nor `createBooking` is called.
     - Two "Ana Prueba" with no email (`rows` Ana ct1 and Ana ct3) and `"Ana Prueba"` → `BOOK_AMBIGUOUS`, nothing written.
     - S23, a shared number: book `"Ana Prueba"` (→ ct1), then on the SAME state book `"Beto Prueba"` → ct2 (mutation: reuse `state.contactId` before the picker → FAILS).
-    - S23, a number with nobody on it before the call: `listContactsOnNumber` answers `{ rows: [], … }` the first time (today's path: `createContact` → `{ id: "ct5", existing: false }`) and `{ rows: [Ana ct5], … }` the second; the second booking `"Beto Prueba"` → `createContact` with `matchBy: "email_only"` (S20's exception), not ct5 (mutation: reuse `state.contactId` → FAILS).
+    - S23, a number with nobody on it before the call: `listContactsOnNumber` answers `{ rows: [], … }` the first time (today's path: `createContact` → `{ id: "ct5", existing: false }`) and `{ rows: [Ana ct5], … }` after; the second booking `"Beto Prueba"` → `BOOK_ASK_WHOSE`, nothing written; again with `forSomeoneElse: true` → `createContact` with `matchBy: "email_only"`, not ct5 (mutation: reuse `state.contactId` → FAILS).
     - A confirmed person booking under their first name alone: state `withConfirmed(…, { contactId: "ct1", rung: 1, by: "name" })`, Ana and Beto on the number, `"Ana"` → booked onto ct1.
     - A recited number (`phone: "956 555 0199"`, not the caller ID) with Ana and Beto on THAT number and ct1 confirmed on the caller ID: `"Ana"` → `BOOK_ASK_NAME` (the confirmation counts only on the caller-ID number; mutation: pass the confirmation for any number → FAILS).
-    - A non-shared number: every existing `book_appointment` test passes UNEDITED (the default `rows: []` in `beforeEach`).
+    - A number with no contact: every existing `book_appointment` test passes UNEDITED (the default `rows: []` in `beforeEach`).
     - A failed number read: `listContactsOnNumber` rejects → `runTool` rejects (call-events' net answers "tool failed"), and nothing was written.
+  - `registry.test.ts`, `describe("S-47e: capture_lead asks whose it is, once (plan Task 7)")`:
+    - ONE contact (Dan Lopez) and a lead `{ fullName: "Ana Prueba", need: "quote" }` → `LEAD_ASK_WHOSE`, `state.leads` empty, `leadWhoseAsked` true; the same call again → recorded with no `forSomeoneElse` (mutation: drop the once-only flag → FAILS); a call with `forSomeoneElse: true` → recorded with `forSomeoneElse: true`, no read.
+    - A lead whose name agrees, a shared number, no contact at all, no name, and a failed read → recorded at once.
   - `registry.test.ts`, `describe("S-47e: take_message asks for a name on a shared number (plan Task 7)")`:
     - Shared, nothing confirmed, no name: `MESSAGE_ASK_NAME`, `state.messages` empty, `state.identity.messageNameAsked` true; the SAME call again with no name → recorded (P6; mutation: drop the `messageNameAsked` check → FAILS).
     - With `name: "Ana Prueba"` → recorded with `name: "Ana Prueba"`, no read; with `nameDeclined: true` → recorded with `nameDeclined: true`.
     - One real contact on the number → recorded, no refusal; a confirmed caller → recorded, `listContactsOnNumber` not called; a failed read → recorded (logged by call row).
-  - `schemas.test.ts`: `take_message`'s `parameters` deep-equal `{ type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." } }, required: ["body"] }`.
+  - `schemas.test.ts`:
+    - `take_message`'s `parameters` deep-equal `{ type: "object", properties: { body: { type: "string" }, callbackNumber: { type: "string", description: "Digits as spoken; no country code unless the caller said one." }, name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." } }, required: ["body"] }`.
+    - `book_appointment` (all three meeting types, the video variant included) has `forSomeoneElse: { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }`, and `required` stays `["startsAt", "name"]`.
+    - `capture_lead` has `forSomeoneElse: { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }` beside `fields`, and `required` stays `["fields"]`.
+    - The existing "video variant touches ONLY book_appointment" case (`:37-45`) stays green.
 - [ ] **Step 2: Run to verify they fail**; paste the summary.
 - [ ] **Step 3: Implement.**
   - `record.ts`: the model's code exactly.
-  - `registry.ts` imports gain `import { pickRecordOnNumber, type RecordPick } from "../identity/record";`, `readCandidates` (Task 6 already imports it from `../identity/candidates`), `import { messageNeedsNameCheck, messageNameStep, messageName } from "../identity/flow";` and `BOOK_ASK_NAME, BOOK_AMBIGUOUS` from `../identity/results`.
+  - `registry.ts` imports gain `import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep, type RecordPick } from "../identity/record";`, `readCandidates` (Task 6 already imports it from `../identity/candidates`), `import { messageNeedsNameCheck, messageNameStep, messageName } from "../identity/flow";` and `BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE` from `../identity/results`.
+  - `capture_lead` (`:331-337`):
+    ```ts
+    case "capture_lead": {
+      // S-47b v3: a placeholder value is never stored (placeholders.ts, on every account); a placeholder
+      // name is no name, so the no-name path applies. The corpus stub runs this same function.
+      const { fields, result } = capturePhoneLead(args?.fields, ctx.callerNumber);
+      if (result.ok !== true) return { state, result };
+      const forSomeoneElse = typeof args?.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined;
+      // S-47e (plan P27): a lead whose name is not the ONE contact on its number asks, once, whose it is.
+      if (leadNeedsWhoseCheck(state, fields.fullName, forSomeoneElse)) {
+        const number = e164Of(spokenPhone(fields.callbackNumber, ctx.callerNumber) ?? "");
+        if (number) {
+          let read: CandidateRead = { ok: false };
+          try {
+            read = { ok: true, ...(await readCandidates(ctx.db, ctx.accountId, number)) };
+          } catch (e) {
+            console.error(`voice capture_lead ${ctx.callRowId ?? "(no row)"}: number read failed, lead recorded: ${String(e)}`);
+          }
+          const ask = leadWhoseStep(state, read, fields.fullName);
+          if (ask) return { state: ask.state, result: ask.result };
+        }
+      }
+      return { state: withLead(state, { fields, ...(forSomeoneElse === undefined ? {} : { forSomeoneElse }) }), result };
+    }
+    ```
   - `take_message` (`:339-347`):
     ```ts
     case "take_message": {
@@ -2397,9 +2776,11 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       if (number) {
         const { candidates, truncated } = await readCandidates(ctx.db, ctx.accountId, number);
         pick = pickRecordOnNumber({ onNumber: candidates, truncated, name, email,
-          confirmedId: onCallerId ? state.identity.confirmed?.contactId ?? null : null });
+          confirmedId: onCallerId ? state.identity.confirmed?.contactId ?? null : null,
+          forSomeoneElse: typeof args?.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined });
       }
       if (pick.kind === "ask_name") return { state, result: BOOK_ASK_NAME };
+      if (pick.kind === "ask_whose") return { state, result: BOOK_ASK_WHOSE };
       if (pick.kind === "ambiguous") return { state, result: BOOK_AMBIGUOUS };
       let contactId: string | null;
       if (pick.kind === "existing") {
@@ -2459,16 +2840,17 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       }
     ```
     The `else` branch keeps today's `:447-475` statements exactly (move them, do not retype them; `git diff -w` shows only the indentation and the three moved declarations). After it, `contactId` is non-null on every path; the rest of the case (`:478-573`) is unchanged.
+  - `schemas.ts:10-12`: `book_appointment`'s properties gain `forSomeoneElse: { type: "boolean", description: "Only after you asked whether the appointment is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }` (the video variant spreads these properties, `:66-69`, so it carries it too). `schemas.ts:29-31`: `capture_lead`'s properties gain `forSomeoneElse: { type: "boolean", description: "Only after you asked whether this is for the caller or for someone else: false if it is for the caller, true if it is for someone else." }`.
   - `schemas.ts:32-34`: `take_message`'s properties gain `name: { type: "string", description: "The caller's first and last name, when you were asked for it." }, nameDeclined: { type: "boolean", description: "true ONLY after you asked for their name and they would not give it." }`; `required` stays `["body"]`; its description stays `"Leave a message for a human callback."`.
 - [ ] **Step 4: Run to verify they pass**, then each named mutation; paste, revert, `cmp`.
-- [ ] **Step 5: Commit** `voice: on a shared phone every booking, and a message's name, lands on the person the caller names, never on whichever record shares the number (S-47e E7)`, naming every path.
+- [ ] **Step 5: Commit** `voice: on a shared phone every booking, lead and message lands on the person the caller names; on a phone with one contact, a different name asks whether it is for someone else (S-47e E7)`, naming every path.
 
 **Verify (the affected-test rule):**
 1. Mocks: `registry.test.ts` (its `beforeEach` default `rows: []` keeps every existing booking test on today's path; run the whole file and paste its summary).
 2–6. None beyond Task 6's list; run `call-events.test.ts`, `lifecycle.test.ts`, `system-prompt.test.ts`, `corpus-lib.test.ts`, `session-config.test.ts`.
 - Typecheck; eslint.
 
-**Review (HIGH, opus, own worktree):** re-runs the S23 mutations and the fill mutation; reads that the `today` branch is today's code byte for byte (`git diff -w`); checks that a booking with NO number (caller ID withheld, none said) never reads; and that `pickRecordOnNumber` is never handed a confirmation for a recited number.
+**Review (HIGH, opus, own worktree):** re-runs the S23 mutations, the fill mutation and the `forSomeoneElse: false` mutation; reads that the `today` branch is today's code byte for byte (`git diff -w`); checks that a booking with NO number (caller ID withheld, none said) never reads; that `pickRecordOnNumber` is never handed a confirmation for a recited number; that a one-contact number never gains a contact silently (every `create` on it passed `forSomeoneElse: true`); and that `capture_lead` cannot loop (it asks once).
 
 ---
 
@@ -2481,18 +2863,23 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - Test: `apps/web/src/lib/voice/finish-call.test.ts`, `apps/web/src/lib/voice/textback.test.ts`.
 
 **Interfaces:**
-- Consumes: `readCandidates`, `isShared` (Task 5); `pickRecordOnNumber` (Task 7); `nameWords`, `nameMatches` (Task 5); `ensureHoldingContact` (Task 3); `matchBy` (Task 4); `TakenMessage.name/nameDeclined`, `CallState.identity` (Task 5).
+- Consumes: `readCandidates`, `isShared` (Task 5); `pickRecordOnNumber` (Task 7); `ensureHoldingContact`, `HoldingContactUnavailable` (Task 3); `matchBy` (Task 4); `TakenMessage.name/nameDeclined`, `CallState.identity` (Task 5).
 - Produces: `ResolvedTextbackContact` and `TextbackOutcome.holding` ("The model, The text-back contact (Task 8)").
 
 - [ ] **Step 1: The mocks first.** Both files' `dbMocks` (`finish-call.test.ts:3-25`, `textback.test.ts:3-19`) gain `listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),`, and both `beforeEach` blocks (after their `mockReset` loop) gain `dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false }); dbMocks.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });`. With these alone, both files are green on today's code (no existing test changes; paste both summaries).
 - [ ] **Step 2: Write the failing tests** (finish-call.test.ts, one `describe("S-47e: the record after the call (plan Task 8)")`; the household fixture rows are `{ id: "ct1", first_name: "Ana", last_name: "Prueba", phone: "+19562921696", email_key: null, holds_shared_number: false }` and `ct2` Beto Prueba on the same number):
-  - **The confirmed person's record (5.10.3 step 2):** state `withConfirmed(caller(), { contactId: "ct7", rung: 1, by: "name" })` + a lead `{ fullName: "Ana Prueba", email: "ana@example.com", need: "quote" }`, `getContact` → `{ first_name: "Ana", last_name: "Prueba", … }`: the message thread is ct7's (`ensureConversation` called with `({}, "a1", "ct7", "voice", "ai")`), `createContact` is NOT called, `fillContactBlanksReport` IS called on ct7 with `{ firstName: "Ana", lastName: "Prueba", email: "ana@example.com" }`. The same with a lead named "Beto Prueba" → still ct7, and NO fill (mutation: drop the name check → FAILS).
+  - **The confirmed person, in the booking's order (5.10.3; R2 finding 9):** Ana (ct7) and Beto (ct2) on the caller ID, state `withConfirmed(caller(), { contactId: "ct7", rung: 1, by: "name" })`:
+    - a lead `{ fullName: "Ana Prueba", email: "ana@example.com", need: "quote" }` → ct7's thread (`ensureConversation` called with `({}, "a1", "ct7", "voice", "ai")`), no `createContact`, and `fillContactBlanksReport` on ct7 with `{ firstName: "Ana", lastName: "Prueba", email: "ana@example.com" }`;
+    - a lead named "Beto Prueba" → ct2, as `book_appointment` would book it (mutation: a confirmed-first shortcut ahead of the lead → ct7, FAILS);
+    - a message with no name → ct7 (the confirmation picks).
+  - **A lead on a number with ONE contact (P27):** Dan Lopez (ct1) alone on the caller ID, a lead "Ana Prueba": with no `forSomeoneElse` (capture_lead asked once and the caller never answered) → NO contact, no conversation, no message, while the alert and the To-do are written (mutation: today's phone dedupe → ct1, FAILS); with `forSomeoneElse: true` → `createContact` with `matchBy: "email_only"`; with `forSomeoneElse: false` → ct1, with the fill.
   - **A lead on a shared number:** Ana and Beto on the caller ID, lead "Beto Prueba" → ct2, no `createContact`, one fill on ct2; lead "Carla Prueba" → `createContact` with `matchBy: "email_only"` and the lead's phone; two "Ana Prueba" and a lead "Ana Prueba" (no email) → NO contact, NO conversation, NO message; `finishCallRow`'s `contactId` undefined; the staff alert (`emailRefs.send`) still sent; the callback To-do still filed with `contactId: null`.
   - **A message on a shared number (S22):** `withMessage(caller(), { body: "Call me", at: "t", name: "Beto Prueba" })` → ct2's thread; `{ …, nameDeclined: true }` → no contact, no conversation, no message row, while `finishCallRow`, `setCallCard`, the alert and `ensureCallbackTask` are all still called; no name and no `nameDeclined` (the model ignored the ask) → the same as declined.
   - **The create path never fills (5.10.2; mutation at this site: today's `created.existing && isCallerIdNumber(...)` fill → FAILS):** lead "Carla Prueba" with `createContact` answering `{ id: "ct8", existing: true }` and `getContact` answering the caller ID's phone → `fillContactBlanksReport` NOT called.
   - **A non-shared number is today's path:** every existing finish-call test passes unedited (Step 1 proved it).
   - **The text-back (E8, S25):** `textbackCtx`, an abandoned caller (`caller()`), Ana and Beto on the caller ID, nothing confirmed: `ensureHoldingContact` called with `({}, "a1", "+19562921696")`; `ensureConversation` called with `"ct_hold"`; `createContact` NOT called (red first against today's code, which phone-picks a household member); `finishCallRow`'s patch has `contactId: undefined` and `conversationId` = the holding conversation (`"cv1"` from the mock); `generateProposals` receives `contactId: null` (mutation: adopt every text-back contact at `:654` → FAILS).
   - **A confirmed caller's text-back** goes to the confirmed person, not the holding record (`ensureHoldingContact` not called).
+  - **The holding record unavailable (P23):** `ensureHoldingContact` rejects with `new HoldingContactUnavailable("a1")` → no message row, no `deliverTextback`, one `text-back failed` log line naming the call row and no number, and `finishCall` still writes the row and returns.
   - textback.test.ts, `describe("S-47e: a shared number's text-back (plan Task 8)")`:
     - `prepareTextback(DB, "a1", request({ contactId: null }))` with Ana and Beto on the number → `outcome.holding` true, `outcome.contactId` `"ct_hold"`, `createContact` and `fillContactBlanksReport` NOT called (red first).
     - One contact on the number → today's `contactForCallerId` (`createContact` with `{ firstName: "Caller", phone, source: "voice" }`), `outcome.holding` false.
@@ -2504,7 +2891,6 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     ```ts
     import { readCandidates, isShared } from "./identity/candidates";
     import { pickRecordOnNumber } from "./identity/record";
-    import { nameWords, nameMatches } from "./identity/match";
     import type { ResolvedTextbackContact } from "./textback";
     ```
     and `:22` becomes `import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";`.
@@ -2516,27 +2902,10 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       const acts: NewAiAct[] = [];
       const lead = state.leads[0];
 
-      // 5.10.3 step 2: the confirmed person. A lead's fields fill their blanks only when its name is theirs.
-      const confirmed = state.identity.confirmed;
-      if (confirmed) {
-        if (lead) {
-          const fields = lead.fields ?? {};
-          try {
-            const row = (await getContact(ctx.db, ctx.accountId, confirmed.contactId)) as
-              { first_name?: string | null; last_name?: string | null } | null;
-            if (row && nameMatches(nameWords(fields.fullName), nameWords(`${row.first_name ?? ""} ${row.last_name ?? ""}`))) {
-              const { firstName, lastName } = splitFullName(fields.fullName ?? "");
-              const filled = await fillContactBlanksReport(ctx.db, ctx.accountId, confirmed.contactId,
-                { firstName: firstName || undefined, lastName, email: fields.email }, ACTOR_ID, ACTOR_TYPE);
-              acts.push(...fieldFillActs(source, confirmed.contactId, filled));
-            }
-          } catch (e) {
-            console.error(`finishCall fillContactBlanks failed for ${confirmed.contactId}: ${String(e)}`);
-          }
-          await recordActs(ctx.db, ctx.accountId, acts);
-        }
-        return confirmed.contactId;
-      }
+      // The call's confirmation counts only for the caller-ID number (5.10.0), and no step runs ahead of the
+      // lead or the message: the same order as book_appointment's (R2 finding 9). The confirmed person with no
+      // lead and no message name is the message path's `existing`, below.
+      const confirmedId = state.identity.confirmed?.contactId ?? null;
 
       if (lead) {
         const fields = lead.fields ?? {};
@@ -2547,8 +2916,10 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
         if (number) {
           // 5.10.3 step 3: the lead's name picks its record on the number it would store.
           const { candidates, truncated } = await readCandidates(ctx.db, ctx.accountId, number);
-          const pick = pickRecordOnNumber({ onNumber: candidates, truncated, name: fields.fullName, email: fields.email, confirmedId: null });
-          if (pick.kind === "ask_name" || pick.kind === "ambiguous") return null;
+          const pick = pickRecordOnNumber({ onNumber: candidates, truncated, name: fields.fullName, email: fields.email,
+            confirmedId: number === ctx.callerNumber ? confirmedId : null, forSomeoneElse: lead.forSomeoneElse });
+          // ask_whose here means capture_lead asked once and the caller never answered: nothing ambiguous is written.
+          if (pick.kind === "ask_name" || pick.kind === "ambiguous" || pick.kind === "ask_whose") return null;
           if (pick.kind === "existing") {
             if (number === ctx.callerNumber) {
               try {
@@ -2614,13 +2985,13 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
       if (ctx.callerNumber) {
         const read = await readCandidates(ctx.db, ctx.accountId, ctx.callerNumber);
         if (isShared(read)) {
-          // 5.10.3 step 4 (S22): the last message's name picks; declined, absent or ambiguous is nobody's.
+          // 5.10.3 step 4 (S22): the confirmed person, or the last message's name; declined, absent or ambiguous is nobody's.
           const msg = state.messages[state.messages.length - 1];
-          if (!msg?.name || msg.nameDeclined) return null;
-          const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name: msg.name, email: null, confirmedId: null });
+          const name = msg && !msg.nameDeclined ? msg.name : undefined;
+          const pick = pickRecordOnNumber({ onNumber: read.candidates, truncated: read.truncated, name, email: null, confirmedId });
           if (pick.kind === "existing") return pick.contactId;
           if (pick.kind !== "create") return null;
-          const { firstName, lastName } = splitFullName(msg.name);
+          const { firstName, lastName } = splitFullName(name!);
           const created = await createContact(ctx.db, ctx.accountId,
             { firstName, lastName, phone: ctx.callerNumber, source: "voice", matchBy: "email_only" }, ACTOR_ID, ACTOR_TYPE);
           if (!created.existing) {
@@ -2777,45 +3148,187 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 
 ---
 
-## Task 10 (HIGH): Inbound texts from a shared number file on the holding record (bis-comms, opus)
+## Task 10 (HIGH): Inbound texts from a shared number (bis-comms, opus)
 
-**Dispatch gate:** Task 5 committed (and Task 3).
+**Dispatch gate:** Tasks 2, 4 and 5 committed (and Task 3).
 
 **Files:**
-- Modify: `…/inbound/route.ts` (`:36-41` the `@bis/db` import; `:193-205` the filing).
-- Test: `…/inbound/route.test.ts`, `…/inbound/route.consent.test.ts`.
+- Modify: `…/inbound/route.ts` (`:36-41` the `@bis/db` import; `:193-218` the filing; `:235-242` the confirmation answer; `:253-254` the consent step's input), `apps/web/src/lib/consent/inbound.ts` (`:94-109` `InboundConsentInput`; `:123-148` `contactLabel`, `cancelTodo`, `holdTodo`; one new export), `packages/db/src/automations.ts` (one new export after `applyConfirmationReply`, `:938-996`), `packages/db/src/index.ts:119` (one name in the existing `matchConfirmationReply, applyConfirmationReply,` line).
+- Test: `…/inbound/route.test.ts`, `…/inbound/route.consent.test.ts`, `apps/web/src/lib/consent/inbound.test.ts`, `packages/db/src/test/automations.test.ts` (one new `describe`).
 
-**Interfaces:** consumes `ensureHoldingContact` (Task 3), `readCandidates`, `isShared` (Task 5).
+**Interfaces:**
+- Consumes: `ensureHoldingContact`, `HoldingContactUnavailable`, `listContactsOnNumber` (Task 3); `readCandidates`, `isShared`, `realCandidates` (Task 5); `todo.sharedNumber.reply`, `todo.sharedNumber.hold` (Task 2); today's `matchConfirmationReply`, `applyConfirmationReply`, `nextBookedStart`, `ensureConsentTask`, `addTask`, `getAccountLanguage`.
+- Produces:
+  ```ts
+  // packages/db/src/automations.ts
+  /** S-47e (S30): the outstanding confirmation asks among these contacts, the same predicates as
+   *  applyConfirmationReply (booked, future, asked, unanswered), at most 2 (the caller asks "exactly one?").
+   *  [] for [] without a request. Throws on error. */
+  export async function listOutstandingConfirmAsks(
+    db: SupabaseClient, accountId: string, contactIds: readonly string[], now: Date,
+  ): Promise<{ bookingId: string; contactId: string }[]>;
+  // apps/web/src/lib/consent/inbound.ts
+  /** InboundConsentInput gains: the real contacts of a shared number whose text filed on its holding record,
+   *  or null on every other filing. */
+  sharedNumber: { realContactIds: string[] } | null;
+  /** S-47e (S30): the one To-do for a reply from a shared number no single appointment answers. */
+  export async function fileSharedReplyTodo(db: SupabaseClient, accountId: string, holdingContactId: string, now: Date): Promise<void>;
+  ```
 
-- [ ] **Step 1: The mocks.** `route.test.ts`'s bare `dbMocks` (`:5-26`) gains `listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(),` with defaults in its `beforeEach` (`{ rows: [], truncated: false }`, `{ id: "ct_hold", created: true }`); `route.consent.test.ts`'s spread-real `db` (`:19`) gains the same two with the same defaults. Both files green on today's code with only this change (paste both).
-- [ ] **Step 2: Write the failing tests** (route.test.ts unless named):
-  - A text from a number with Ana and Beto on it files on the holding thread: `ensureHoldingContact` called with `(db, "<the route's own accountId>", "<fromNumber>")`, `ensureConversation` with `"ct_hold"`, `createContact` NOT called (red first: today it phone-picks).
-  - From a number with one contact → `createContact` as today, `ensureHoldingContact` not called.
-  - In `route.consent.test.ts`, which already drives the route end to end (`(await POST(signed(payload))).status`, `:123-145`): a failed number read on the first filing → `503` and no message row written; a failed `ensureHoldingContact` on the first filing → the same.
-  - A stop word from the shared number is still recorded against the ADDRESS (`appendConsentEventGuarded` called with `address: fromNumber`; read `route.consent.test.ts` for the call shape) and the To-do it may file names `"ct_hold"` (P19; assert what the code does, and say so in a comment).
-  - No `fromNumber` → no read.
+- [ ] **Step 1: The mocks.** `route.test.ts`'s bare `dbMocks` (`:5-26`) gains `listContactsOnNumber`, `ensureHoldingContact`, `listOutstandingConfirmAsks`, `addTask`, `getAccountLanguage`, `HoldingContactUnavailable` (the real class: `HoldingContactUnavailable: (await vi.importActual<typeof import("@bis/db")>("@bis/db")).HoldingContactUnavailable` inside a `vi.hoisted` async, or a local `class HoldingContactUnavailable extends Error {}` the route's `instanceof` cannot see: use the real one) with defaults in its `beforeEach` (`{ rows: [], truncated: false }`, `{ id: "ct_hold", created: true }`, `[]`, `{ id: "t1" }`, `null`); `route.consent.test.ts`'s spread-real `db` (`:19`) and `inbound.test.ts`'s (`:7`) gain the same functions with the same defaults. All three files green on today's code with only this change (paste the three summaries).
+- [ ] **Step 2: Write the failing tests.**
+  - `automations.test.ts` (PostgREST, `withTestAccount`, seeded through `createContact`, `createBooking` and the ask's own writer, `stampAppointmentConfirmAsked(db, bookingId)` (`packages/db/src/automations.ts:826`), never a hand-shaped row): two household members each with an asked, unanswered, future, booked appointment → both returned; one answered (`applyConfirmationReply`) → only the other; a cancelled one and a past one → not returned; `[]` → `[]`; account B's member with an outstanding ask, asked for with account A's id and B's contact id → `[]` (mutation: drop `.eq("account_id", …)` → FAILS).
+  - `route.test.ts`, the holding filing:
+    - A text from a number with Ana and Beto on it files on the holding thread: `ensureHoldingContact` called with `(db, "<the route's own accountId>", "<fromNumber>")`, `ensureConversation` with `"ct_hold"`, `createContact` NOT called (red first: today it phone-picks).
+    - From a number with one contact → `createContact` as today, `ensureHoldingContact` not called.
+    - No `fromNumber` → no read.
+    - `ensureHoldingContact` rejects with `HoldingContactUnavailable` on the first filing (P23) → answer `200`, no message row, no `createContact`, one log line with the account id and no number, and the consent step still runs for a STOP with `contactId: null` (the alert-phone path's shape, `…/inbound/route.ts:164-175`; mutation: let it reach the `FilingFailed` catch → `503`, FAILS).
+  - `route.consent.test.ts` (it drives the route end to end, `(await POST(signed(payload))).status`, `:123-145`): a failed number read on the first filing → `503` and no message row; a failed `ensureHoldingContact` (an ordinary `Error`) → the same `503`; a stop word from the shared number is recorded against the ADDRESS, with `contactId` the holding record.
+  - `route.test.ts`, the household reply (S30; the text `"Sí"`, which `matchConfirmationReply` reads as yes):
+    - Ana has the one outstanding ask → `applyConfirmationReply` called with `(db, accountId, "<Ana's id>", "Sí", <now>)`, no To-do (red first: today it is called with the holding id).
+    - Ana and Beto both have one → `applyConfirmationReply` NOT called, `addTask` called once with `(db, accountId, { contactId: "ct_hold", title: "A reply from a shared number couldn't be matched to one appointment", dueAt: <now ISO> }, "sms-inbound", "system")`; with `getAccountLanguage` → `"es"` the title is `"Una respuesta de un número compartido no se pudo asociar con una sola cita"`.
+    - Nobody has one → not applied, the same one To-do (the ruling's "none").
+    - `listOutstandingConfirmAsks` is asked with exactly the REAL contacts on the number (the holding record and a `+52` twin with the same ten digits left out) and the route's own account id (mutation: the holding id → FAILS; mutation: a literal account id → FAILS).
+    - A text that is not a one-word answer ("hola") → no read of asks, no To-do.
+    - A retried delivery (`firstFiling` false) → nothing applied, no To-do.
+    - A one-contact number → today's `applyConfirmationReply(db, accountId, <that contact>, …)`, no ask read.
+  - `inbound.test.ts`, the consent To-dos on the holding path (`sharedNumber: { realContactIds: [...] }`, `contactId: "ct_hold"`, address `+19565550142`):
+    - A held phrase → `ensureConsentTask` with `contactId: "ct_hold"` and the title `"A text from the shared number (956) 555-0142 may have asked to stop texts: “<excerpt>”. Texts to that number are on hold."` (R5; never "Caller may have asked…"; mutation: today's `contactLabel` title → FAILS); Spanish with `getAccountLanguage` → `"es"`.
+    - A CANCEL word, exactly one real contact (Ana) with an upcoming booking → `ensureConsentTask` with Ana's id and today's English title naming Ana and her date (red first: today it reads the holding record's next booking, finds none, files nothing).
+    - A CANCEL word, two real contacts with upcoming bookings → ONE `ensureConsentTask` on `"ct_hold"` titled `"A reply from a shared number couldn't be matched to one appointment"`.
+    - A CANCEL word, nobody with an upcoming booking → no To-do (S30's choice, today's rule).
+    - `sharedNumber: null` → every existing case unchanged (they pass unedited).
 - [ ] **Step 3: Run to verify they fail.**
-- [ ] **Step 4: Implement.** `ensureHoldingContact` joins the `@bis/db` import at `:36-41`; `import { readCandidates, isShared } from "@/lib/voice/identity/candidates";`. The filing block (`:201-204`) becomes:
+- [ ] **Step 4: Implement.**
+  - `automations.ts`, after `applyConfirmationReply`:
     ```ts
+    export async function listOutstandingConfirmAsks(
+      db: SupabaseClient, accountId: string, contactIds: readonly string[], now: Date,
+    ): Promise<{ bookingId: string; contactId: string }[]> {
+      if (contactIds.length === 0) return [];
+      const { data, error } = await db.from("bookings")
+        .select("id, contact_id")
+        .eq("account_id", accountId).in("contact_id", [...contactIds])
+        .eq("status", "booked").not("confirm_asked_at", "is", null).is("confirm_reply", null)
+        .gt("starts_at", now.toISOString())
+        .order("confirm_asked_at", { ascending: false }).limit(2);
+      if (error) throw new Error(`listOutstandingConfirmAsks failed: ${error.message}`);
+      return ((data ?? []) as { id: string; contact_id: string }[]).map((r) => ({ bookingId: r.id, contactId: r.contact_id }));
+    }
+    ```
+    and `index.ts:119`'s `matchConfirmationReply, applyConfirmationReply,` becomes `matchConfirmationReply, applyConfirmationReply, listOutstandingConfirmAsks,`.
+  - `inbound.ts`: `InboundConsentInput` gains `sharedNumber` (the Produces block's doc); imports gain `addTask`, `getAccountLanguage` from `@bis/db`, `t` from `@/lib/i18n/t`, `formatPhone` from `@/lib/document-requests/customer-state`, `type Locale` from `@/lib/i18n/locale`. Then:
+    ```ts
+    async function accountLocale(db: SupabaseClient, accountId: string): Promise<Locale> {
+      return (await getAccountLanguage(db, accountId)) === "es" ? "es" : "en";
+    }
+
+    /** S-47e (S30, P30): the one To-do for a reply from a shared number that no single appointment answers. */
+    export async function fileSharedReplyTodo(db: SupabaseClient, accountId: string, holdingContactId: string, now: Date): Promise<void> {
+      const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, accountId));
+      await addTask(db, accountId, { contactId: holdingContactId, title, dueAt: now.toISOString() }, ACTOR, "system");
+    }
+    ```
+    `cancelTodo` (`:130-139`) gains, as its first lines:
+    ```ts
+      // S-47e (S30): on a shared number the holding record has no booking; the household's do.
+      if (i.sharedNumber) {
+        const upcoming = (await Promise.all(i.sharedNumber.realContactIds.map(async (id) =>
+          ({ id, startsAt: await nextBookedStart(db, i.accountId, id, i.now.toISOString()) }))))
+          .filter((x): x is { id: string; startsAt: string } => x.startsAt !== null);
+        if (upcoming.length === 0) return;
+        if (upcoming.length > 1) {
+          const title = t(m, "todo.sharedNumber.reply", await accountLocale(db, i.accountId));
+          await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+          return;
+        }
+        return cancelTodo(db, { ...i, contactId: upcoming[0]!.id, sharedNumber: null }, eventId, word);
+      }
+    ```
+    `holdTodo` (`:142-148`) gains, as its first lines:
+    ```ts
+      if (i.sharedNumber) {
+        const title = t(m, "todo.sharedNumber.hold", await accountLocale(db, i.accountId),
+          { number: formatPhone(i.address), excerpt: excerptOf(i.text, TODO_EXCERPT) });
+        await ensureConsentTask(db, i.accountId, { contactId: i.contactId as string, consentEventId: eventId, title, dueAt: i.now.toISOString() }, ACTOR, "system");
+        return;
+      }
+    ```
+    Every other caller of `InboundConsentInput` passes `sharedNumber: null` (the typecheck lists them: the alert-phone path at `route.ts:171` and any test literal).
+  - `route.ts`: `ensureHoldingContact`, `HoldingContactUnavailable`, `listOutstandingConfirmAsks`, `matchConfirmationReply` join the `@bis/db` import at `:36-41`; `import { readCandidates, isShared } from "@/lib/voice/identity/candidates";` and `fileSharedReplyTodo` joins the `@/lib/consent/inbound` import. The filing (`:199-218`) becomes:
+    ```ts
+      let contact: Awaited<ReturnType<typeof createContact>>;
+      let conversation: Awaited<ReturnType<typeof ensureConversation>>;
+      let shared: { realContactIds: string[] } | null = null;
       try {
         // S-47e (E8, S27): a text from a number several customers share carries no name, so it files on the
         // number's ONE holding record, never on a household member by phone. Staff move it. A failed read on
         // the first filing is FilingFailed (503), like every other step here.
-        const holdingId = fromNumber && isShared(await readCandidates(db, accountId, fromNumber))
-          ? (await ensureHoldingContact(db, accountId, fromNumber)).id
-          : null;
-        contact = holdingId
-          ? { id: holdingId, existing: true, flagged: false }
-          : await createContact(db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE);
+        const read = fromNumber ? await readCandidates(db, accountId, fromNumber) : null;
+        if (read && fromNumber && isShared(read)) {
+          shared = { realContactIds: read.candidates.map((c) => c.id) };
+          contact = { id: (await ensureHoldingContact(db, accountId, fromNumber)).id, existing: true, flagged: false };
+        } else {
+          contact = await createContact(db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE);
+        }
         conversation = await ensureConversation(db, accountId, contact.id, ACTOR_ID, ACTOR_TYPE);
+        if (firstFiling) {
+          // …the createMessage call, unchanged…
+        }
+      } catch (e) {
+        // P23: the holding record can be neither read nor made. Fail CLOSED, never a 503 Telnyx retries forever:
+        // the consent step runs with no contact (the alert-phone path's shape) and nothing is filed.
+        if (e instanceof HoldingContactUnavailable && fromNumber) {
+          if (consent.kind === "stop" || consent.kind === "start") {
+            await recordInboundConsent(db, { ...base, address: fromNumber, contactId: null, firstFiling: true, sharedNumber: null }, consent,
+              (reply) => defer(() => sendConsentReply(db, { accountId, to: fromNumber, contactId: null, conversationId: null, reply })));
+          }
+          log("inbound text from a shared number not filed: its holding record could not be read or made", accountId);
+          return;
+        }
+        if (firstFiling) throw new FilingFailed(e);
+        throw e;
+      }
     ```
-    (the rest of the `try` unchanged). The route's source scan (`route.test.ts:377-383`) stays green: no forbidden import.
-- [ ] **Step 5: Run to verify they pass**, then mutations: (a) `isShared` replaced by `false` → the shared case FAILS; (b) the account id replaced by a literal in `readCandidates(...)` → the account assertion FAILS. Paste, revert, `cmp`.
-- [ ] **Step 6: Commit** `sms: a text from a phone several customers share files on that number's one holding thread, never on whichever customer the phone matched (S-47e E8)`.
+    The confirmation answer (`:235-242`) becomes:
+    ```ts
+        if (consent.kind === "none" || consent.kind === "telnyx_only") {
+          try {
+            if (shared) {
+              // S-47e (S30): the household's one outstanding ask, or one To-do when there is not exactly one.
+              if (matchConfirmationReply(text)) {
+                const now = new Date();
+                const asks = await listOutstandingConfirmAsks(db, accountId, shared.realContactIds, now);
+                if (asks.length === 1) {
+                  const answer = await applyConfirmationReply(db, accountId, asks[0]!.contactId, text, now);
+                  if (answer) log("recorded an appointment confirmation reply", accountId, asks[0]!.contactId, answer);
+                } else {
+                  await fileSharedReplyTodo(db, accountId, contact.id, now);
+                  log("a reply from a shared number matched no single appointment; To-do filed", accountId);
+                }
+              }
+            } else {
+              const answer = await applyConfirmationReply(db, accountId, contact.id, text, new Date());
+              if (answer) log("recorded an appointment confirmation reply", accountId, contact.id, answer);
+            }
+          } catch (e) {
+            log("could not record a confirmation reply — the customer's message is filed regardless", accountId, loggableError(e));
+          }
+        }
+    ```
+    (the existing `log("recorded an appointment confirmation reply", …)` line is LOAD-BEARING, `route.ts:232-233`: it stays word for word.) And the consent step (`:253`) passes `sharedNumber: shared`.
+- [ ] **Step 5: Run to verify they pass**, then the mutations (each must turn the WHOLE file red; paste, revert, `cmp`):
+  - (a) `isShared` replaced by `false` in the filing → the shared case FAILS;
+  - (b) the account id replaced by a literal in `readCandidates(...)` → the account assertion FAILS;
+  - (c) `listOutstandingConfirmAsks` called with `[contact.id]` (the holding id) → the "Ana has the one outstanding ask" case FAILS;
+  - (d) `asks.length === 1` → `asks.length >= 1` → the two-asks case FAILS;
+  - (e) the `HoldingContactUnavailable` branch removed → the fail-closed case FAILS (503);
+  - (f) `holdTodo`'s shared branch removed → the R5 title case FAILS.
+- [ ] **Step 6: Commit** `sms: a text from a phone several customers share files on that number's one holding thread; a YES confirms the household's one asked appointment or files one To-do, and the consent To-dos name the number (S-47e E8, S30)`.
 
-**Verify (the affected-test rule):** (1) `route.test.ts`, `route.consent.test.ts` (Step 1); (2) none; (3) none; (4) `route.test.ts:28` bare (Step 1); (5) `grep -rln "sms/inbound" apps/web/e2e` → read each hit (expected none); (6) none (the route is outside the scanned trees). `lib/consent/scans.test.ts` (it scans every web source for consent writers; run it). Typecheck; eslint.
+**Verify (the affected-test rule):** (1) `route.test.ts`, `route.consent.test.ts`, `inbound.test.ts` (Step 1); `apps/web/src/lib/consent/*.test.ts` that build an `InboundConsentInput` (the typecheck lists them); (2) `copy.test.ts:42`, `:111` (the `todo.sharedNumber.*` keys match neither; run it); (3) none; (4) `route.test.ts:28` bare (Step 1); (5) `grep -rln "sms/inbound" apps/web/e2e` → read each hit (expected none); (6) none (the route and `lib/consent/inbound.ts` take the client they are given). `lib/consent/scans.test.ts` (it scans every web source for consent writers; run it). On a replica + PostgREST: `packages/db/src/test/automations.test.ts`. Both typechecks; eslint.
 
-**Review (HIGH, opus, own worktree):** confirms a retried delivery (`firstFiling` false) cannot file on a different record than the first delivery did (it reads the same number; say what happens if a housemate was added between the two deliveries); the holding contact never reaches `applyConfirmationReply` with a booking (it has none: say why that holds); and the 503 path writes nothing.
+**Review (HIGH, opus, own worktree):** re-runs (a), (b), (c) and (e), plus its own: (g) `nextBookedStart` asked for the holding id in `cancelTodo`'s shared branch (the one-contact CANCEL case must FAIL). It also confirms: a retried delivery (`firstFiling` false) cannot file on a different record than the first did (it reads the same number; say what happens if a housemate was added between the two deliveries); the holding contact never reaches `applyConfirmationReply`; the fail-closed path writes nothing and answers 200; and that a reply is never applied to an ask of a contact who is not on the number (the read takes only `realContactIds`).
 
 ---
 
@@ -2830,10 +3343,10 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 
 - [ ] **Step 1: Write the failing tests** (the file's bare factory `:141` gains `moveHoldingThread`, and `ensureConversation`/`getContact` if absent; read its `@/lib/auth` mock for how a role is set per test):
   - A Technician (`role: "technician"`, `isAgency: false`) is refused `{ ok: false, error: "conversation.holding.moveRole" }` and nothing is called.
-  - An Owner's move: `callerCanSee("conversations", "a1", conv)` true, `getContact` → Beto (`holds_shared_number: false`), `ensureConversation(serviceDb(), "a1", "ct2", userId, "user")` → `bc`, `moveHoldingThread` → `{ status: "ok", messageIds: ["m1"], callIds: ["k1"] }` → `{ ok: true, toConversationId: "bc", name: "Beto Prueba", undo: { fromConversationId: conv, toConversationId: "bc", messageIds: ["m1"], callIds: ["k1"] } }`; `moveHoldingThread` called with `(service, "a1", { from: conv, to: "bc", actor: userId })` (no `undo`).
+  - An Owner's move: `callerCanSee("conversations", "a1", conv)` true, `getContact` → Beto (`holds_shared_number: false`), `ensureConversation(serviceDb(), "a1", "ct2", userId, "user")` → `bc`, `moveHoldingThread` → `{ status: "ok", moveId: 41, messageIds: ["m1"], callIds: ["k1"] }` → `{ ok: true, toConversationId: "bc", name: "Beto Prueba", undo: { moveId: 41, fromConversationId: conv, toConversationId: "bc" } }` (no id list leaves the server, P1); `moveHoldingThread` called with `(service, "a1", { from: conv, to: "bc", actor: userId })` (no `undo`).
   - Staff and the agency may move; a Technician may not (two more cases).
   - A target that is itself a holding record, a target `getContact` cannot see (null), a conversation `callerCanSee` denies, a non-UUID id, and `moveHoldingThread` answering `invalid` or `not_found` → `{ ok: false, error: "conversation.holding.moveFailed" }`.
-  - Undo: `undoMoveHoldingThreadAction("a1", undo)` calls `moveHoldingThread(service, "a1", { from: "bc", to: conv, actor: userId, undo: { messageIds: ["m1"], callIds: ["k1"] } })` and answers `{ ok: true, conversationId: conv }`; an `undo` with a non-UUID message id, or arrays longer than 1000, is refused `moveFailed` without a call.
+  - Undo: `undoMoveHoldingThreadAction("a1", undo)` calls `moveHoldingThread(service, "a1", { from: "bc", to: conv, actor: userId, undoOf: 41 })` and answers `{ ok: true, conversationId: conv }`; an `undo` whose `moveId` is not a positive safe integer, or whose thread ids are not UUIDs, is refused `moveFailed` without a call; a forged `moveId` is the function's to refuse (`invalid` → `moveFailed`).
   - Second account: every call carries the action's own `accountId` (call with `"a2"`; mutation: a literal account id → FAILS).
 - [ ] **Step 2: Run to verify they fail.**
 - [ ] **Step 3: Implement** (append to `actions.ts`; its imports gain `moveHoldingThread`, `type HoldingMove` from `@bis/db`, `seesWholeAccount` from `@/lib/auth-role`, `isUuid` from `@/lib/assign/action-guards`, `contactDisplayName` from `@/lib/format`):
@@ -2841,7 +3354,9 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     // S-47e (E8, spec 5.12.5): staff move a shared number's holding thread to the right person, with Undo.
     // Owners, Staff and the agency (the people who reply in the inbox), never a Technician. The SQL function
     // (0098) checks the account and the holding side again; this proves what the caller may see first.
-    export type HoldingMoveUndo = { fromConversationId: string; toConversationId: string; messageIds: string[]; callIds: string[] };
+    /** The Undo token: the move's own event and its two threads. The function reads the moved ids from that event
+     *  (0098, plan P1), so nothing a browser sends can name a row. */
+    export type HoldingMoveUndo = { moveId: number; fromConversationId: string; toConversationId: string };
     export type MoveHoldingResult =
       | { ok: true; toConversationId: string; name: string; undo: HoldingMoveUndo }
       | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" };
@@ -2868,7 +3383,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
         return {
           ok: true, toConversationId: target.id,
           name: contactDisplayName({ first_name: person.first_name, last_name: person.last_name }),
-          undo: { fromConversationId: conversationId, toConversationId: target.id, messageIds: moved.messageIds, callIds: moved.callIds },
+          undo: { moveId: moved.moveId, fromConversationId: conversationId, toConversationId: target.id },
         };
       } catch (e) {
         console.error(`moveHoldingThreadAction (account ${accountId}): ${e instanceof Error ? e.message : String(e)}`);
@@ -2881,13 +3396,11 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     ): Promise<{ ok: true; conversationId: string } | { ok: false; error: "conversation.holding.moveRole" | "conversation.holding.moveFailed" }> {
       const access = await requireAccountAccess(accountId);
       if (!seesWholeAccount(access)) return MOVE_ROLE;
-      const ids = [undo?.fromConversationId, undo?.toConversationId];
-      const lists = [undo?.messageIds, undo?.callIds];
-      if (!ids.every(isUuid) || !lists.every((l) => Array.isArray(l) && l.length <= 1000 && l.every(isUuid))) return MOVE_FAILED;
+      if (!isUuid(undo?.fromConversationId) || !isUuid(undo?.toConversationId)
+        || !Number.isSafeInteger(undo?.moveId) || undo.moveId <= 0) return MOVE_FAILED;
       try {
         const moved = await moveHoldingThread(serviceDb(), accountId, {
-          from: undo.toConversationId, to: undo.fromConversationId, actor: access.userId,
-          undo: { messageIds: undo.messageIds, callIds: undo.callIds },
+          from: undo.toConversationId, to: undo.fromConversationId, actor: access.userId, undoOf: undo.moveId,
         });
         if (moved.status !== "ok") return MOVE_FAILED;
         revalidatePath(`/dashboard/accounts/${accountId}/conversations`);
@@ -2903,7 +3416,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 
 **Verify (the affected-test rule):** (1) `actions.test.ts`; (2) none; (3) none; (4) `actions.test.ts:141` bare (Step 1); (5) none; (6) `[acct]/in-account-service-reads.test.ts` (the file is already `proven-target`, `:127`; run it, green unedited). Typecheck; eslint.
 
-**Review (MEDIUM, sonnet):** the role check runs before any read; an Undo built in a browser cannot move another account's rows (the function's `account_id` filters) nor a person's whole thread (both arrays are required, P1); errors are message keys the client localises, never raw text.
+**Review (MEDIUM, sonnet):** the role check runs before any read; an Undo built in a browser cannot move another account's rows (the function's `account_id` filters) nor any row the named move did not move (the ids come from its event, P1); errors are message keys the client localises, never raw text.
 
 ---
 
@@ -3083,8 +3596,8 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     );
   }
   ```
-- **`…/convos/message-thread.tsx`** (server component): a new optional prop `holding?: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null`. The header (`:110-112`) becomes a row with the name and, when `holding?.canMove`, `<HoldingMove accountId={accountId} conversationId={conversationId} holdingContactId={holding.holdingContactId} people={holding.people} locale={locale} />`; under it, when `holding`, `<Notice tone="warn" className="mt-2 text-foreground" lang={locale}>{tr.text("conversation.holding.notice", { number: formatPhone(holding.number) })}</Notice>` (`formatPhone` from `@/lib/document-requests/customer-state`). Nothing else in the thread changes.
-- **`…/convos/conversation-list.tsx`:** a new optional prop `locale?: Locale` (default `"en"`); the row's `name` (`:52-55`) becomes `conversation.holdsSharedNumber ? holdingLabel(conversation.sharedNumber, locale) : contactDisplayName({…})`.
+- **`…/convos/message-thread.tsx`** (server component): a new optional prop `holding?: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null`. The header (`:110-112`) becomes a row with the name (its `<p>` gains `data-thread-name=""`, for Task 16's locator) and, when `holding?.canMove`, `<HoldingMove accountId={accountId} conversationId={conversationId} holdingContactId={holding.holdingContactId} people={holding.people} locale={locale} />`; under it, when `holding`, `<Notice tone="warn" className="mt-2 text-foreground" lang={locale}>{tr.text("conversation.holding.notice", { number: formatPhone(holding.number) })}</Notice>` (`formatPhone` from `@/lib/document-requests/customer-state`). Nothing else in the thread changes.
+- **`…/convos/conversation-list.tsx`:** a new optional prop `locale?: Locale` (default `"en"`); each row's `<Link>` gains `data-conversation-row={conversation.id}` (Task 16's locator); the row's `name` (`:52-55`) becomes `conversation.holdsSharedNumber ? holdingLabel(conversation.sharedNumber, locale) : contactDisplayName({…})`.
 - **`…/convos/page.tsx`:** passes `locale` to `ConversationList`; when `active?.holdsSharedNumber`, reads the people on the number on the REQUEST client and builds the holding view, best-effort (a failed read leaves `people: []`; "Find another customer" still works), and passes `contactName={holdingLabel(active.sharedNumber, locale)}` instead of the contact's name:
   ```ts
   // S-47e (E8, spec 5.12.4-5): a shared number's holding thread names its number, says why, and offers Move to
@@ -3201,6 +3714,8 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     import { requiredRung } from "../identity/ladder";
     import { candidateOf, type Candidate } from "../identity/match";
     import { findNeedsRead, findStep, confirmStep, ownsStep, messageNeedsNameCheck, messageNameStep, type CandidateRead } from "../identity/flow";
+    import { pickRecordOnNumber, leadNeedsWhoseCheck, leadWhoseStep } from "../identity/record";
+    import { BOOK_ASK_NAME, BOOK_AMBIGUOUS, BOOK_ASK_WHOSE } from "../identity/results";
     import { formatWhen as stubWhen } from "../../booking/time";
 
     /** O2, S24: the stub's per-item memory: the identity state and the bookings this item made. */
@@ -3257,6 +3772,17 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
           const ask = messageNameStep(s.state, read);
           if (ask) { s.state = ask.state; return { ...ask.result }; }
         }
+        // P27: the same "for you or for someone else?" a live lead asks, once.
+        if (name === "capture_lead") {
+          const { fields, result } = capturePhoneLead(args.fields, s.callerNumber);
+          if (result.ok !== true) return result;
+          const fse = typeof args.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined;
+          if (leadNeedsWhoseCheck(s.state, fields.fullName, fse)) {
+            const ask = leadWhoseStep(s.state, read, fields.fullName);
+            if (ask) { s.state = ask.state; return { ...ask.result }; }
+          }
+          return result;
+        }
       }
     ```
     (`noCallerId` joins the imports from `../identity/results`; `withBooking` from `../call-state`.) The existing `book_appointment` branch (`corpus-lib.ts:200-203`) becomes, so a booking the item makes can be moved or cancelled on it (rung 0, S18):
@@ -3266,6 +3792,17 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
           if (!who) return withDroppedNote({ ok: false, error: "name required" }, dropped, "phone");
           if (ctx.session) {
             const s2 = ctx.session;
+            // P27: the live picker's refusals, over the fixture's contacts on the caller ID (a recited number is
+            // not modelled: the stub books it).
+            if (s2.callerNumber && !String(args.phone ?? "").trim()) {
+              const pick = pickRecordOnNumber({ onNumber: s2.candidates, truncated: false, name: who,
+                email: typeof args.email === "string" ? args.email : null,
+                confirmedId: s2.state.identity.confirmed?.contactId ?? null,
+                forSomeoneElse: typeof args.forSomeoneElse === "boolean" ? args.forSomeoneElse : undefined });
+              if (pick.kind === "ask_name") return { ...BOOK_ASK_NAME };
+              if (pick.kind === "ambiguous") return { ...BOOK_AMBIGUOUS };
+              if (pick.kind === "ask_whose") return { ...BOOK_ASK_WHOSE };
+            }
             const id = `stub-made-${++s2.made}`;
             s2.bookings.set(id, "this-call");
             s2.state = withBooking(s2.state, { id, contactName: who, startsAt: String(args.startsAt ?? ""), endsAt: String(args.startsAt ?? "") });
@@ -3275,7 +3812,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     ```
 - **`apps/web/scripts/sofia-corpus.ts:214`:** `const session = newStubSession(f, item, moduleId!);` then `const stub: Stub = (name, a, said) => stubToolResult(name, a, { medium: item.medium, timezone: f.timezone, said, session });` (`newStubSession` joins the `corpus-lib` import at `:22-27`).
 - **`corpus-lib.test.ts:437`** (the pinned regex, P11): `/stubToolResult\(name, a, \{ medium: item\.medium, timezone: f\.timezone, said \}\)/` → `/stubToolResult\(name, a, \{ medium: item\.medium, timezone: f\.timezone, said, session \}\)/`, plus `expect(src).toMatch(/const session = newStubSession\(f, item, moduleId!\);/)`. `:438`'s count of 2 stays.
-- **`corpus-lib.test.ts`**, new cases: with no `contactsOnNumber`, `find_my_booking` → `{ found: false }`; a `cancel_appointment` of an unknown id → `{ ok: false, error: "no such booking — use find_my_booking first" }`; a cancel of `STUB_BOOKING.bookingId` before any confirmation (two contacts on the number) → the NOT CONFIRMED YET object (mutation: today's `{ ok: true }` for every unmirrored tool → FAILS); a booking the item made can be cancelled with no confirmation; without a `session` every existing stub case answers as before (they pass unedited); every existing fixture still parses (read `modules/corpus/fixtures` and `parseFixture` each).
+- **`corpus-lib.test.ts`**, new cases: with no `contactsOnNumber`, `find_my_booking` → `{ found: false }`; a `cancel_appointment` of an unknown id → `{ ok: false, error: "no such booking — use find_my_booking first" }`; a cancel of `STUB_BOOKING.bookingId` before any confirmation (two contacts on the number) → the NOT CONFIRMED YET object (mutation: today's `{ ok: true }` for every unmirrored tool → FAILS); a booking the item made can be cancelled with no confirmation; a booking and a lead for "Ana Prueba" on a fixture with ONE contact ("Dan Lopez") get the `BOOK_ASK_WHOSE` and `LEAD_ASK_WHOSE` objects, and pass with `forSomeoneElse: true`; without a `session` every existing stub case answers as before (they pass unedited); every existing fixture still parses (read `modules/corpus/fixtures` and `parseFixture` each).
 - **`apps/web/src/lib/voice/modules/corpus-parity.test.ts`** (new; P11): `@bis/db` mocked spread-real with `listContactsOnNumber` (the fixture's two contacts as rows on the fixture's number), `findUpcomingBookingForContact` (→ `STUB_BOOKING`), `getBookingById` (→ `STUB_BOOKING`'s row, `contact_id` the confirmed id), `getContact` (→ that contact with the fixture number), `setBookingStatus`, `insertAiActs`, `ensureConversation`, `createMessage`, `incrementUnreadCount`, `readEmailSuppression`, `isAccountOutboundSuppressed`, `serviceDb` (the registry test's own list, `registry.test.ts:14-35`). One fixture (Ana Prueba, Beto Prueba on `+19565550142`); one `ToolContext` built like `registry.test.ts:79-91` with that number and `tradeModule: "events"`; then the same sequence through `stubToolResult` (with a fresh session) and through `runTool` (threading its state), requiring `toEqual` at every step: `find_my_booking` (ASK NAME) → `confirm_identity { fullName: "Carla Prueba" }` (MISS) → `confirm_identity { fullName: "Beto Prueba" }` (CONFIRMED) → `find_my_booking` (found, `startsAtLocal` in the fixture zone) → `cancel_appointment { bookingId: STUB_BOOKING.bookingId }` (`{ ok: true }`); and on a fresh pair, `take_message { body: "Call me" }` (the name ask) then again (`{ ok: true }`); and on a third fresh pair, `reschedule_appointment { bookingId: "stub-booking-1", startsAt: "2027-06-04T15:00:00.000Z" }` before any confirmation (NOT CONFIRMED YET on both sides: the live `getBookingById` mock answers the row, and the stub's session holds the fixed booking from its start). The steps' count asserted first (5 + 2 + 1).
 - Run `src/lib/voice/modules` (all of it), `system-prompt.test.ts`; typecheck; eslint. No corpus run (spec §3).
 - Commit `voice: the corpus stub follows the identity ladder with the live tools' own steps, so a corpus run cannot pass it vacuously (S-47e O2)`.
@@ -3287,7 +3824,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 ## Task 15 (LOW): The runbook's Step 8 (bis-platform)
 
 **Brief.**
-- In `docs/runbooks/voice-setup.md`, insert after "## Step 7 — Booking leg" (`:461-486`) and before "## Video meetings (Daily.co)" (`:487`) the text of spec §8 "The text of Step 8", byte for byte (spec lines 1266-1330, inside its code fence; copy the fence's CONTENT, not the fence).
+- In `docs/runbooks/voice-setup.md`, insert after "## Step 7 — Booking leg" (`:461-486`) and before "## Video meetings (Daily.co)" (`:487`) the text of spec §8 "The text of Step 8", byte for byte (the fenced block under "The text of Step 8 (the plan pins it):" in spec §8, as amended in the fix round: its 8.6c carries the R15 assumption; copy the fence's CONTENT, not the fence).
 - `:795-796`'s paragraph gains one sentence at its end: "Since the identity-checks release, record the result in Step 8.7."
 - Check: `node -e` diff of the inserted block against the spec's fenced block prints nothing; the runbook's own links still resolve (`grep -n "Step 8" docs/runbooks/voice-setup.md` lists the heading and the press-1 sentence).
 - Commit `docs(voice): runbook Step 8, the real test calls for the identity checks and the shared number's holding thread (S-47e O1, O3)`.
@@ -3301,6 +3838,12 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 **Brief.** Create `apps/web/e2e/shared-number.spec.ts` (P12). Shape: `apps/web/e2e/one-switch.spec.ts:1-75` (the env loading, `readFixture`, `test.use({ storageState: "e2e/.auth/client-state.json" })`, `test.describe.configure({ mode: "serial", timeout: 60_000 })`).
 - **Account:** the per-run fixture account only (`e2e/.auth/client-fixture.json`; skip the file with a reason when absent). Never `Test Client One`.
 - **`beforeAll`** (service client, real writers only): a number unique to the run, `+1956555` + four digits from `Date.now()`; Ana and Beto through `createContact({ firstName, lastName: "Prueba", phone, matchBy: "email_only" })`; the holding record through `ensureHoldingContact`; its thread through `ensureConversation` and one inbound text through `createMessage({ channel: "sms", direction: "inbound", body: "test <run tag>", status: "delivered" })`.
+- **Locators (R12):** never a bare `getByText("Beto Prueba")` or `getByText("Shared number …")`: after the Move the same words are in the toast, the thread header and the inbox row at once, and Playwright's strict mode fails on two matches. Scope every locator by role or by attribute:
+  - the thread header: `page.locator("[data-thread-name]")`;
+  - the inbox row: `page.locator(`[data-conversation-row="${holdingConversationId}"]`)`;
+  - the menu: `page.getByRole("button", { name: m["conversation.holding.move"] })`, then `page.getByRole("menuitem", { name: "Beto Prueba", exact: true })`;
+  - the toast: `page.locator("[data-sonner-toast]").filter({ hasText: "Moved to Beto Prueba." })`, and its Undo `.getByRole("button", { name: m["common.undo"] })`;
+  - every literal is the catalogue's (`m[…]`, with `{number}`/`{name}` filled), never retyped.
 - **Test 1, Move and Undo:** open `/dashboard/accounts/<id>/conversations?c=<holding conversation>`; the thread header reads `Shared number (956) 555-<digits>` and the Notice reads the English sentence with that number; the inbox row reads the same label; click "Move to…" (`[data-holding-move]`), then "Beto Prueba"; the toast reads "Moved to Beto Prueba."; the URL's `c` is Beto's conversation and the thread shows the moved text; click the toast's "Undo" within 10 s; the toast reads "Moved back."; poll the service client until the message's `conversation_id` is the holding thread again.
 - **Test 2, the holding record is not a customer:** `/dashboard/accounts/<id>/contacts?q=<the run's digits>` lists Ana and Beto and no "Caller" row; `/dashboard/accounts/<id>/contacts/<holding id>` lands on the holding thread (`?c=`).
 - **`afterAll`** (always, best-effort: the per-run fixture account is itself removed by `auth.teardown.ts`): delete the three contacts' messages and conversations, then `deleteContacts(svc, accountId, [ana, beto, holding], { conversationsDb: svc })` (`packages/db/src/contacts.ts:1193-1202`), then re-read that none remains; collect problems and throw at the end (`ai-disclosure.spec.ts:146-202`'s shape).
@@ -3315,7 +3858,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with its kit on 55506/55507/55508 (PostgREST up).
   - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S29) and this plan (P1–P21).
   - Run every touched test file by path and both typechecks. On `post`: `shared-number-holding-schema`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `voice`, `contacts`, `contact-import`, `messaging`.
-  - Re-check 0098's md5 against Task 1's (`13f26cbe99753bfbbd8e20e7ba9ee632`, or the reviewed one if Task 1 changed it).
+  - Re-check 0098's md5 against Task 1's (`a76f898b5e362d9e0b8c71e2a0d28fff`, or the reviewed one if Task 1 changed it).
   - Three probes of its own: a byte-identity probe of the prompt (`system-prompt.test.ts`'s three digests, plus a `buildSystemPrompt` diff of one input at `a1ccb19a` against HEAD → no difference); a read/act split (find confirms one contact but `findUpcomingBookingForContact` is called for another: make `findStep` return the first candidate and see what fails); a picker/writer split (`book_appointment` picks `existing` but `createBooking` receives `state.contactId`).
   - **Hunt:**
     - a path where a household member's appointment is read, moved or cancelled without that person's name (or name and email on insurance) on THIS call;
@@ -3326,7 +3869,12 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
     - any writer, dedupe, list, count, export, picker or import match that can return a holding record (E8, spec §5.12.3);
     - a holding record that gains a name or an email by any path, staff included;
     - a holding thread whose call row gets a contact, or whose contact reaches `generateProposals`;
-    - an Undo that can move more than the move moved (P1), or a Move a Technician can run;
+    - an Undo that can move more than the move moved, or anything a move between two OTHER threads moved (P1), or a Move a Technician can run;
+    - a signed-in edit that changes a holding record (P24), or a holding record with no first name or a non-E.164 phone (P22, P23);
+    - a found result after a name confirmation without `FOUND_BY_NAME_NEXT`, or a name on a one-contact number that confirms the contact without matching it (P25);
+    - a one-contact number that gains a contact without `forSomeoneElse: true`, or a nickname ("Daniel" for "Dan") that lands nowhere after `false` (P27);
+    - a household member's YES applied to another member's appointment, or a reply To-do filed twice for one text (S30);
+    - a 503 that Telnyx would retry forever (P23);
     - the identity To-do filed twice, on a customer, in the caller's language, or for a transferred call or a recording;
     - a `''` or an apostrophe in 0098; a definer without `pg_temp` last;
     - a test that cannot fail (a guard a comment satisfies; a loop that never ran; an assertion built by the function under test; a `-t` filter that matches nothing).
@@ -3398,7 +3946,11 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 - **On merge, every number with two or more contacts starts asking whose appointment it is** (Task 0's read 6 gives the count on production). A number with one contact is today's behaviour: its caller hears that contact's appointment without giving a name (rung 1 is the caller ID, E4, spec §5.3's table), even if they name someone else.
 - **A holding call has no resend button** for a failed text-back (P18): the button needs a contact, and the call deliberately has none. The failure badge still shows; staff reply from the holding thread.
 - **A STOP texted from a shared number files its consent To-do on the holding record** (P19). The ledger itself is keyed by the phone number, so the stop applies to everyone on it, as today.
-- **The spec's Undo was one guard short** (P1): an Undo naming messages but no calls would have moved a household member's own calls to the holding thread. The migration refuses it; proven on the replica.
+- **The spec's Undo was one guard short** (P1): an Undo naming messages but no calls would have moved a household member's own calls to the holding thread. The Undo now names its move and nothing else; proven on the replica.
+- **The holding record's shape check admitted a record with no first name** (P22, found while fixing). Fixed in 0098 before anything was applied anywhere.
+- **On a phone with one contact, a booking or lead for a different name now asks "Is this for you or for someone else?"** (P27). A nickname ("Daniel" for "Dan") then lands on the contact once the caller says it is them.
+- **A new person made on a shared number is filed in the duplicates table with the contact it shares the phone with** (P29), so a nickname that became a second record can be merged once a merge screen exists (none reads the table yet).
+- **The two shared-number To-dos are in the account's language** (Q2); today's consent To-dos stay English.
 - **Q1:** four staff-facing strings the spec did not draft are pinned as the plan's drafts (the Move's search and its role refusal). Change any by answering Q1; the fix round applies it.
 - **No corpus run** (spec §3; the modules are paused). The stub now follows the ladder, so the next run cannot pass it by accident (O2).
 
@@ -3421,12 +3973,12 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | O2 the corpus stub follows the ladder | Task 14 |
 | O3 F5 into Step 8 | Task 15 (8.7) |
 | S1 candidates by `phone_key` + `isCallerIdNumber`, at most 20 | Task 3 (`listContactsOnNumber`, P4), Task 5 (`realCandidates`) |
-| S2 the name rule | Task 5 (`nameWords`, `nameMatches`; P5) |
-| S3 the email rule | Task 5 (`spokenEmail`, `spokenEmailKey`) |
+| S2 the name rule (amended, R2 ruling a) | Task 5 (`nameWords`, `nameMatch`, `nameHits`; P5, P26) |
+| S3 the email rule | Task 5 (`spokenEmail`, `spokenEmailKey`; the dash words, P28) |
 | S4 same-name pairs | Task 5 (decision table cases) |
 | S5 what a try is | Task 5 (`confirmStep`), Task 6 (read-failed case) |
 | S6 cannot on this call | Task 5, Task 6 (insurance no-email case) |
-| S7 one confirmed contact at a time | Task 5, Task 6 |
+| S7 one confirmed contact at a time; a different person is confirmed first (R1) | Task 5, Task 6 (P25) |
 | S8 confirm returns no appointment | Task 5 (`CONFIRMED`), Task 6 |
 | S9 move/cancel need the confirmation (SD9) | Task 6 (`ownsStep`, the S9 case; P7) |
 | S10 the call's one To-do | Task 9 |
@@ -3439,15 +3991,16 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | S17 `findUpcomingBookingForPhone` removed | Task 6 (P17) |
 | S18 a locked call can still book, message, and change its own booking | Task 6 (the locked case) |
 | S19 one picker for every write | Task 7 (`record.ts`), Task 8 |
-| S20 "shared" judged on the stored number; the sole-contact exception | Task 7 (`pickRecordOnNumber`), Task 8 |
-| S21 a new name makes a new contact (`matchBy`) | Task 4, Task 7, Task 8 |
+| S20 "shared" judged on the stored number; one contact asks whose it is (amended, R2 ruling b) | Task 7 (`pickRecordOnNumber`, `forSomeoneElse`, `capture_lead`), Task 8 (the lead in the booking's order); P27 |
+| S21 a new name makes a new contact (`matchBy`, still flagged for the merge queue) | Task 4 (P29), Task 7, Task 8 |
 | S22 `take_message` asks for a name | Task 5 (`messageNameStep`, P6), Task 7, Task 8 |
 | S23 a second booking is picked again | Task 7 (both S23 cases) |
 | S24 the stub follows the ladder | Task 14 (P10, P11) |
 | S25 the text-back on an unconfirmed shared number | Task 8 |
 | S26 the mark is a new server-only column | Task 1 |
 | S27 every inbound text from a shared number files on the holding record | Task 10 |
-| S28 Move moves messages and calls, with Undo | Task 1 (`move_holding_thread`, P1), Task 3, Task 11, Task 12 |
+| S28 Move moves messages and calls, with an Undo bound to its move (amended, R11) | Task 1 (`move_holding_thread`, P1), Task 3, Task 11, Task 12 |
+| S30 replies and CANCEL words from a shared number (added, R3) | Task 10 (P30), Task 2 (`todo.sharedNumber.*`) |
 | S29 the holding record is not a customer | Task 4 (lists, counts, import), Task 12 (label, redirect, palette) |
 | §4 data, §4.1 0098, its grants and rollback | Task 1 (Plan-writer check, P1–P3) |
 | §4.2 load-bearing | P8; Task 18 steps 4, 6 |
@@ -3460,7 +4013,8 @@ Each step reads its own evidence. Nothing is inferred from an earlier run.
 | §5.10 the record rule | Tasks 4, 7, 8 |
 | §5.11 the corpus stub | Task 14 |
 | §5.12 the holding record | Tasks 1, 3, 4, 8, 10, 11, 12 |
-| §6 copy | Task 2 (+ Q1) |
+| §6 copy | Task 2 (+ Q1, Q2) |
+| §13 fix round (R1-R15) | P1, P19, P22-P31; every task they name |
 | §7 tests | Tasks 1, 3–14, 16 (P12) |
 | §8 rollout, Step 8 | Task 15, Task 18 |
 | §9 tiers | Tiers table (the binding process rule's tiers; spec §9's MEDIUM `listContacts`/`countContacts` ride in HIGH Task 4 because they share `contacts.ts` with the dedupe) |
