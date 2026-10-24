@@ -228,6 +228,15 @@ they re-resolve against the accent each element inherits.
   embed and direct link.
 - **AI presence:** topbar indicator — "● Sofía · on a call" (pulse) /
   "✓ N calls handled this week" (idle).
+  **Amended 2026-10-24 (S-47d, the one switch; owner D7):** when the
+  business is not open, the account's status replaces the idle count for
+  everyone, as dot + word (Open `--good`, Running late `--warn`, every
+  closed state `--crit`), the full form only where it fits and the short
+  form ("Closed today", "30 min late", "Storm") everywhere else; during a
+  call the pulse stays and the status follows it. For whoever may change
+  the status the indicator — Open included — is the switch's own menu
+  button, and its accessible name includes the status words. An account
+  with no enabled voice profile shows "● Open" to those people only.
 - **The module contract (added 2026-10):** a new module's UI arrives through
   existing surfaces only — a card on the record, one entry in an existing
   list, a place in the one box, one settings section, its work routed to the
