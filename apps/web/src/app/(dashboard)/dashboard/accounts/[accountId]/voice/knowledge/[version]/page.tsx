@@ -239,7 +239,7 @@ export default async function VoiceKnowledgePage({
             <h4 className={headingClass}>{tr.text("voice.knowledge.hours")}</h4>
             {state.hoursLines ? (
               <ul className="space-y-0.5 text-sm text-muted-foreground">
-                {state.hoursLines.map((line, i) => <li key={i}>{line}</li>)}
+                {state.hoursLines.map((line, i) => <li key={i} lang="en">{line}</li>)}
               </ul>
             ) : (
               <p className="text-sm text-muted-foreground">{tr.text("voice.knowledge.noHours")}</p>
