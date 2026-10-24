@@ -301,8 +301,14 @@ test("the storm date dialog opens after the menu closes, and Esc returns focus t
   await page.goto(`/dashboard/accounts/${accountId}/dashboard`);
   const trigger = page.locator("header").getByRole("button", { name: m["business.menu.trigger"] });
   await trigger.click();
-  await page.getByRole("menuitem", { name: m["business.menu.storm"] }).click();
-  await page.getByRole("menuitemradio", { name: m["business.menu.stormBackOn"] }).click();
+  // By keyboard, the menu's own arrow-key path (spec 5.6.1: "arrow keys move"): a pointer jump from the
+  // Storm row to its sub-menu leaves Radix's pointer grace area, so the sub-menu closes under a click.
+  await page.getByRole("menuitem", { name: m["business.menu.storm"] }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("menuitemradio", { name: m["business.menu.stormOpenEnded"] })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitemradio", { name: m["business.menu.stormBackOn"] })).toBeFocused();
+  await page.keyboard.press("Enter");
 
   const dialog = page.getByRole("dialog", { name: m["business.storm.title"] });
   await expect(dialog).toBeVisible();

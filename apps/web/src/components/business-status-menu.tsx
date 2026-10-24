@@ -186,13 +186,18 @@ export function BusinessStatusMenu({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          {/* Fix round C1: px-2 below sm (the agency topbar at 360-375px has ~272px for everything),
-              the 44px tap target kept. */}
+          {/* Fix round C1, measured on the built app: below sm the agency's topbar leaves a status trigger
+              60px at 320px wide and 100px at 360px, and its content alone is 58px ("0 calls") to 93px
+              ("Cerrado hoy"), so a status trigger carries NO horizontal padding there (px-4 from sm). Its
+              content is at least 44px wide in every state, so the 44px tap target holds. The card's
+              "Change" (an action trigger) is not in the topbar and keeps the button's own padding. */}
           <Button
             ref={triggerRef}
             type="button" variant="ghost" aria-haspopup="menu"
             aria-label={triggerKind === "action" ? tr.text("business.menu.trigger") : undefined}
-            className="min-h-11 rounded-[var(--radius-ctl)] px-2 focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:px-4 md:min-h-8"
+            className={triggerKind === "status"
+              ? "min-h-11 rounded-[var(--radius-ctl)] px-0 focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:px-4 md:min-h-8"
+              : "min-h-11 rounded-[var(--radius-ctl)] focus-visible:ring-[3px] focus-visible:ring-ring/50 md:min-h-8"}
           >
             {trigger}
             {triggerKind === "status" ? <span className="sr-only">{`, ${tr.text("business.menu.trigger")}`}</span> : null}

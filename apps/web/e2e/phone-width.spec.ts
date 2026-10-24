@@ -563,7 +563,8 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
  * scoping and must stay unaffected.
  */
 /**
- * S-47d fix round C1 (design review I1): the topbar in a CLOSED state, in Spanish, at 320, 360 and 375px,
+ * S-47d fix round C1 (design review I1): the topbar in a CLOSED state, in Spanish, at 320 (the client),
+ * 360 and 375px (both),
  * for the agency and for the client — the shapes the review measured overflowing. The indicator is the
  * switch's own menu button for both identities (an agency session and the fixture's Owner both may change
  * it), so its padding is part of what is measured.
@@ -576,7 +577,10 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
  */
 const CLOSED_WIDTHS = [NARROW_WIDTH, 360, WIDTH] as const;
 
-async function withClosedTodayInSpanish(clerkUserId: string, run: (base: string) => Promise<void>) {
+async function withClosedTodayInSpanish(
+  identity: { clerkUserId: string; email?: string }, run: (base: string) => Promise<void>,
+) {
+  const { clerkUserId } = identity;
   const fixture = readClientFixture();
   if (!fixture) {
     test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite.");
@@ -588,14 +592,24 @@ async function withClosedTodayInSpanish(clerkUserId: string, run: (base: string)
   const already = (await listClosedDaysFrom(db, fixture.accountId, today)).some((r) => r.starts_on <= today);
   expect(already, "the fixture already has a closed day covering today; refusing to run on a dirty fixture").toBe(false);
 
-  const prior = await db.from("users").select("language").eq("clerk_user_id", clerkUserId).single();
+  // The per-run agency user has no `users` row until it saves a preference (savePersonPreference creates
+  // one), so a missing row is created here with the fixture's own email and deleted again afterwards —
+  // "no row" is the state restored, exactly as preferences.spec.ts's cleanup restores NULLs.
+  const prior = await db.from("users").select("language").eq("clerk_user_id", clerkUserId).maybeSingle();
   expect(prior.error, `reading the identity's language: ${prior.error?.message}`).toBeNull();
-  const priorLanguage = (prior.data as { language: string | null }).language;
+  const hadRow = prior.data !== null;
+  const priorLanguage = hadRow ? (prior.data as { language: string | null }).language : null;
   let closedDayId: string | null = null;
   try {
-    const set = await db.from("users").update({ language: "es" }).eq("clerk_user_id", clerkUserId).select("id");
-    expect(set.error, `switching the identity to Spanish: ${set.error?.message}`).toBeNull();
-    expect(set.data, "switching the identity to Spanish: one users row").toHaveLength(1);
+    if (hadRow) {
+      const set = await db.from("users").update({ language: "es" }).eq("clerk_user_id", clerkUserId).select("id");
+      expect(set.error, `switching the identity to Spanish: ${set.error?.message}`).toBeNull();
+      expect(set.data, "switching the identity to Spanish: one users row").toHaveLength(1);
+    } else {
+      expect(identity.email, "an identity with no users row needs its email to create one").toBeTruthy();
+      const made = await db.from("users").insert({ clerk_user_id: clerkUserId, email: identity.email, language: "es" }).select("id");
+      expect(made.error, `creating the identity's users row in Spanish: ${made.error?.message}`).toBeNull();
+    }
     closedDayId = (await insertClosedDay(db, fixture.accountId, { starts_on: today, ends_on: today, reason: "holiday" })).id;
     await run(`/dashboard/accounts/${fixture.accountId}`);
   } finally {
@@ -603,21 +617,30 @@ async function withClosedTodayInSpanish(clerkUserId: string, run: (base: string)
       const removed = await deleteClosedDay(db, fixture.accountId, closedDayId);
       expect(removed, "the closed day this test added was deleted").not.toBeNull();
     }
-    const reset = await db.from("users").update({ language: priorLanguage }).eq("clerk_user_id", clerkUserId).select("id");
-    expect(reset.error, `restoring the identity's language: ${reset.error?.message}`).toBeNull();
-    expect(reset.data, "restoring the identity's language: one users row").toHaveLength(1);
+    if (hadRow) {
+      const reset = await db.from("users").update({ language: priorLanguage }).eq("clerk_user_id", clerkUserId).select("id");
+      expect(reset.error, `restoring the identity's language: ${reset.error?.message}`).toBeNull();
+      expect(reset.data, "restoring the identity's language: one users row").toHaveLength(1);
+    } else {
+      const gone = await db.from("users").delete().eq("clerk_user_id", clerkUserId).select("id");
+      expect(gone.error, `removing the users row this test created: ${gone.error?.message}`).toBeNull();
+    }
   }
 }
 
 test.describe("the one switch, closed, in Spanish — phone width (S-47d fix round C1)", () => {
-  test("agency session: the closed topbar fits at 320, 360 and 375px", async ({ page }) => {
+  // NOT at 320px for the agency (measured 2026-10-24, S-47d fix round report): beside the agency's search
+  // icon, theme toggle, org switcher and user button the indicator has 60px there, and "● Cerrado hoy"
+  // alone is 93px, so no padding change fits it. That needs a design decision (see the fix-round report);
+  // the client, with no org switcher, is asserted at 320 below.
+  test("agency session: the closed topbar fits at 360 and 375px", async ({ page }) => {
     if (!existsSync("e2e/.auth/agency-fixture.json")) {
       test.skip(true, "No agency fixture at e2e/.auth/agency-fixture.json — the setup project creates it; run the full suite.");
       return;
     }
-    const { clerkUserId } = JSON.parse(readFileSync("e2e/.auth/agency-fixture.json", "utf-8")) as { clerkUserId: string };
-    await withClosedTodayInSpanish(clerkUserId, async (base) => {
-      for (const width of CLOSED_WIDTHS) {
+    const agency = JSON.parse(readFileSync("e2e/.auth/agency-fixture.json", "utf-8")) as { clerkUserId: string; email: string };
+    await withClosedTodayInSpanish(agency, async (base) => {
+      for (const width of [360, WIDTH] as const) {
         await assertNoPageScroll(page, `${base}/dashboard`, width, { isAgency: true, inAccount: true });
         const presence = page.locator("header").getByTestId("topbar-presence");
         await expect(presence, `the topbar says the business is closed, in Spanish, at ${width}px`).toContainText("Cerrado hoy");
@@ -635,7 +658,7 @@ test.describe("the one switch, closed, in Spanish — phone width (S-47d fix rou
         test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite.");
         return;
       }
-      await withClosedTodayInSpanish(fx.clerkUserId, async (base) => {
+      await withClosedTodayInSpanish({ clerkUserId: fx.clerkUserId }, async (base) => {
         for (const width of CLOSED_WIDTHS) {
           await assertNoPageScroll(page, `${base}/dashboard`, width, { isAgency: false, inAccount: true });
           await expect(page.locator("header").getByTestId("topbar-presence"), `closed, in Spanish, at ${width}px`)

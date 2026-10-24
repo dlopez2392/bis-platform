@@ -149,10 +149,24 @@ describe("BusinessStatusMenu — the closed (default) render: what renderToStati
     expect(html).toContain('<span class="sr-only">, Cambiar el estado de hoy</span>');
   });
 
-  it("the trigger is px-2 below sm and keeps its 44px tap target (fix round C1; mutation: drop px-2 -> FAILS)", () => {
+  // Fix round C1, measured on the built app (agency, Spanish, 2026-10-24): beside the agency's search icon
+  // (32px), theme toggle (36), org switcher (56) and user button (28) with four 8px gaps, the indicator has
+  // 60px at 320px wide and 100px at 360px. The idle "0 calls" content is 58px and "Cerrado hoy" 93px, so
+  // ANY horizontal padding on a status trigger below sm overflows (px-2: 14-18px at 320, 9px at 360). Every
+  // state's content is at least 44px wide, so the 44px tap target holds with none.
+  it("a status trigger has no horizontal padding below sm, px-4 from sm, and keeps its 44px tap target (mutation: px-2 below sm -> FAILS)", () => {
     const html = render({ canChange: "all" });
-    expect(html).toMatch(/class="[^"]*\bpx-2\b[^"]*\bsm:px-4\b/);
+    expect(html).toMatch(/class="[^"]*\bpx-0\b[^"]*\bsm:px-4\b/);
+    expect(html).not.toMatch(/\bpx-2\b/);
     expect(html).toMatch(/class="[^"]*\bmin-h-11\b/);
+  });
+
+  it("the card's action trigger keeps the button's own padding (the topbar budget is not the card's)", () => {
+    const html = renderToStaticMarkup(createElement(BusinessStatusMenu, {
+      accountId: "a1", status: status({ canChange: "all" }), locale: "en", pseudo: false, trigger: "Change", triggerKind: "action",
+    }));
+    expect(html).not.toMatch(/(^|[\s"])(px-0|px-2|sm:px-4)(?=[\s"])/);
+    expect(html).toMatch(/[\s"]px-4[\s"]/);
   });
 
   it("\"late_only\": the SAME trigger shape — canChange, not the menu's own content, decides whether a button renders", () => {
