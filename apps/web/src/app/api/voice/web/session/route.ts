@@ -26,6 +26,7 @@ import {
 } from "@/lib/voice/web-demo";
 import { clientIp, hashIp } from "@/lib/forms/guards";
 import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
+import { effectiveStatus, hoursChain, dayKey } from "@/lib/business-status/status";
 
 export const runtime = "nodejs";
 
@@ -102,6 +103,7 @@ export async function POST(req: Request) {
   const {
     serviceDb, getPhoneNumberByE164, getVoiceProfile, getOrCreateCalendar, brandDisplayName,
     recordWebSession, countWebSessionsByIp, countWebSessionsForAccount, listVoiceServices,
+    getBusinessStatusRow, listClosedDaysFrom,
   } = await import("@bis/db");
 
   let sessionConfig: ReturnType<typeof buildRealtimeSessionConfig>;
@@ -177,15 +179,38 @@ export async function POST(req: Request) {
 
     // S-47c (spec 5.5): the demo reads the LIVE hours and price list and records nothing (no snapshot, no stamp).
     // A failed list read is the phone's failed read (SD9): no list, and prices closed (C20).
+    const now = new Date();
     const rows = await listVoiceServices(db, accountId).catch((e: unknown) => {
       log("knowledge: services read failed — answering without the price list", { accountId, error: String(e) });
       return null;
     });
-    const live = knowledgeFromLive({ profile, timezone: acct.timezone, services: rows });
+    // S-47d (spec 5.4.3): live reads of both the switch and the closed days, same as the phone's — this
+    // surface stamps nothing, so a failed read simply answers without today's status or the closed days.
+    const statusRow = await getBusinessStatusRow(db, accountId).catch((e: unknown) => {
+      log("business-status read failed — answering without today's status", { accountId, error: String(e) });
+      return null;
+    });
+    const closedDaysRows = await listClosedDaysFrom(
+      db, accountId, dayKey(new Date(now.getTime() - 86_400_000), "UTC"),
+    ).catch((e: unknown) => {
+      log("closed-days read failed — answering without the closed days", { accountId, error: String(e) });
+      return null;
+    });
+    const live = knowledgeFromLive({
+      profile, timezone: acct.timezone, services: rows,
+      closedDays: closedDaysRows, today: dayKey(now, acct.timezone),
+    });
     if (rows !== null && live.listUnavailable) {
       log("knowledge: a stored service could not be rendered — answering without the price list", { accountId });
     }
     const pk = promptKnowledge(live.payload);
+    // The calendar is already read above (`calendar`, step before this block) — no second read here, unlike
+    // the chat's conditional one (SD4): the demo always has it.
+    const effective = effectiveStatus({
+      row: statusRow, closedDays: closedDaysRows ?? [],
+      hours: hoursChain(profile.business_hours, calendar.open_hours),
+      timezone: acct.timezone, now,
+    });
 
     // `replyToEmail: null` — this route sends no mail and never selects the
     // column; `brandDisplayName` reads `brandName` and nothing else.
@@ -213,9 +238,10 @@ export async function POST(req: Request) {
       tradeModule: profile.trade_module,
       businessHours: pk.businessHours, priceList: pk.priceList,
       priceListUnavailable: live.listUnavailable, // C20
+      businessStatus: effective, closedDays: pk.closedDays,
     };
 
-    const base = buildRealtimeSessionConfig(promptInput, new Date());
+    const base = buildRealtimeSessionConfig(promptInput, now);
     const appOrigin = process.env.APP_ORIGIN ?? "https://app.bis-rgv.com";
     sessionConfig = {
       ...base,

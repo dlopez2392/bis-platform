@@ -86,7 +86,8 @@ import {
   serviceDb, getPhoneNumberByE164, getVoiceProfile, countCallsSince, countCallsByCallerSince,
   countCallerHistorySince, startCallRow, getOrCreateCalendar, deleteCallRow,
   getTransferPhone, listPhoneNumbersForAccount, listVoiceServices, ensureKnowledgeSnapshot,
-  type Branding,
+  getBusinessStatusRow, listClosedDaysFrom,
+  type Branding, type BusinessStatusRow, type ClosedDayRow,
 } from "@bis/db";
 import {
   extractCallerNumber, extractCalledNumber, extractHandoffToken, extractSipSignature, sipHeaderNames,
@@ -109,6 +110,7 @@ import { openingGreeting } from "@/lib/voice/greeting";
 import { decideDisclosure } from "@/lib/voice/disclosure";
 import { tradeModuleStamp } from "@/lib/voice/modules";
 import { knowledgeFromLive, promptKnowledge } from "@/lib/voice/knowledge/payload";
+import { effectiveStatus, hoursChain, statusCode, dayKey } from "@/lib/business-status/status";
 import { loggableError } from "@/lib/loggable-error";
 import type { Locale } from "@/lib/i18n/locale";
 
@@ -118,6 +120,12 @@ export const maxDuration = 800;
 function log(...args: unknown[]) {
   console.log("[voice/incoming]", ...args);
 }
+
+// S-47d (spec 5.4.3, S17): distinguishes "the read failed" from a real answer that happens to be null/empty —
+// `getBusinessStatusRow`'s own null means no row (reads as open) and `listClosedDaysFrom`'s own [] means none
+// planned, and BOTH are real successes that still get stamped and told to the caller. Only a genuine failure
+// takes this branch, and only it leaves the call unstamped and silent about today.
+const FAILED = Symbol("failed");
 
 // The `ACCOUNT_BRAND_COLS` shape from `packages/db/src/booking.ts:286` is not
 // exported — that accessor is `listDueReminders`'s private implementation
@@ -1061,6 +1069,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         return null;
       },
     );
+    // S-47d (spec 5.4.3): the switch and the planned closed days, started here beside the price list so they
+    // add no extra wait of their own (fail-open to FAILED, never to a guessed status). `fromDate` is yesterday
+    // in UTC, not the account's zone (not resolved yet) — the same one-day slack Task 9's cron loader reads
+    // with, so a range ending "yesterday" in some other timezone is never missed for the account's own today.
+    // Explicit `.then<…>` type args, not inferred: a unique-symbol return threaded through `.then`'s generic
+    // callback parameter otherwise widens to plain `symbol`, and every `=== FAILED` narrowing below stops
+    // excluding it from the other branch.
+    const statusP = getBusinessStatusRow(db, accountId).then<BusinessStatusRow | null, typeof FAILED>(
+      (row) => row,
+      (e: unknown) => {
+        log("business-status read failed — answering without today's status", { callId, accountId, error: loggableError(e) });
+        return FAILED;
+      },
+    );
+    const closedP = listClosedDaysFrom(db, accountId, dayKey(new Date(now.getTime() - 86_400_000), "UTC")).then<ClosedDayRow[], typeof FAILED>(
+      (rows) => rows,
+      (e: unknown) => {
+        log("closed-days read failed — answering without the closed days", { callId, accountId, error: loggableError(e) });
+        return FAILED;
+      },
+    );
 
     // --- Step 9: account/branding context + the tenant's booking calendar -
     const accountRow = await loadAccountContext(db, accountId);
@@ -1069,12 +1098,24 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // ONE payload: it is what ensure_knowledge_snapshot records AND what builds the prompt below, so the call's
     // stamp and its prompt cannot disagree (spec 5.5, C4). The snapshot RPC runs while step 9b's reads do (SD18);
     // like servicesP, its handler is attached on creation and it never rejects.
-    const services = await servicesP;
-    const knowledge = knowledgeFromLive({ profile, timezone: accountRow.timezone, services });
+    const [services, status, closed] = await Promise.all([servicesP, statusP, closedP]);
+    const knowledge = knowledgeFromLive({
+      profile, timezone: accountRow.timezone, services,
+      closedDays: closed === FAILED ? null : closed,
+      today: dayKey(now, accountRow.timezone),
+    });
     if (services !== null && knowledge.listUnavailable) {
       // The read succeeded but a stored row could not render: the same posture as a failed read (SD9, C20).
       log("knowledge: a stored service could not be rendered — answering without the price list", { callId, accountId });
     }
+    // S-47d (spec 5.4.3, S17): computed ONCE, used for both the stamp below and the prompt's TODAY line, so the
+    // two can never disagree. A failed status read (FAILED, never a guessed "open") is the one branch that
+    // answers with no stamp and no TODAY line at all.
+    const effective = status === FAILED ? null : effectiveStatus({
+      row: status, closedDays: closed === FAILED ? [] : closed,
+      hours: hoursChain(profile.business_hours, calendar.open_hours),
+      timezone: accountRow.timezone, now,
+    });
     const versionP: Promise<number | null> = knowledge.recordable
       ? ensureKnowledgeSnapshot(db, accountId, knowledge.payload).then(
         (v) => v,
@@ -1151,6 +1192,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
           : { disclosure: { disclosed: disclosure.disclose, setting: disclosure.setting } }),
         ...(tradeStamp === null ? {} : { tradeModule: tradeStamp }),
         ...(knowledgeVersion === null ? {} : { knowledgeVersion }),
+        ...(effective ? { businessStatus: statusCode(effective) } : {}),
       });
       callRowId = row.id;
     } catch (e) {
@@ -1193,6 +1235,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       businessHours: pk.businessHours, priceList: pk.priceList,
       // C20: the list could not be read, so no amount may be quoted this call.
       priceListUnavailable: knowledge.listUnavailable,
+      // S-47d: the SAME effective status and closed-days lines stamped above, so the call's row and its
+      // prompt can never disagree.
+      businessStatus: effective, closedDays: pk.closedDays,
     };
     const sessionConfig = buildRealtimeSessionConfig(promptInput, now);
 

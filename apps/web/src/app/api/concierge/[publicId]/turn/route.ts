@@ -58,6 +58,7 @@ import { tradeModuleStamp } from "@/lib/voice/modules";
 import {
   knowledgeFromLive, parseKnowledgePayload, promptKnowledge, type KnowledgePayload,
 } from "@/lib/voice/knowledge/payload";
+import { effectiveStatus, hoursChain, dayKey } from "@/lib/business-status/status";
 import {
   CAPTURE_LEAD_TOOL, parseCaptureLead, budgetNotice,
 } from "@/lib/concierge/prompt";
@@ -192,6 +193,7 @@ export async function POST(
     countConciergeConversationsByIp, countConciergeConversationsForAccount,
     brandDisplayName, recordAutomationLog, syncWebchatTurns,
     listVoiceServices, ensureKnowledgeSnapshot, getKnowledgeSnapshot,
+    getBusinessStatusRow, listClosedDaysFrom, getCalendarForAccount,
   } = await import("@bis/db");
 
   const ipHash = hashIp(clientIp(req.headers));
@@ -385,7 +387,19 @@ export async function POST(
         log("knowledge: services read failed — answering without the price list", { accountId: profile.account_id, error: String(e) });
         return null;
       });
-      const live = knowledgeFromLive({ profile, timezone, services: servicesRows });
+      // S-47d (spec 5.4.3, S20): the closed days, read live for this chat's start — turn 2+ instead reads
+      // them from the stamped snapshot (the branch below) so one chat does not disagree with itself about
+      // what it was told. Fail-open to null (closedDaysUnavailable), the same posture as the services read.
+      const closedDaysRows = await listClosedDaysFrom(
+        db, profile.account_id, dayKey(new Date(Date.now() - 86_400_000), "UTC"),
+      ).catch((e: unknown) => {
+        log("knowledge: closed-days read failed — answering without the closed days", { accountId: profile.account_id, error: String(e) });
+        return null;
+      });
+      const live = knowledgeFromLive({
+        profile, timezone, services: servicesRows,
+        closedDays: closedDaysRows, today: dayKey(new Date(), timezone),
+      });
       if (servicesRows !== null && live.listUnavailable) {
         log("knowledge: a stored service could not be rendered — answering without the price list", { accountId: profile.account_id });
       }
@@ -468,7 +482,18 @@ export async function POST(
           log("knowledge: services read failed — answering without the price list", { conversationId, error: String(e) });
           return null;
         });
-        const liveNow = knowledgeFromLive({ profile, timezone, services: rows });
+        // S-47d: this chat has no usable stamp at all, so it reads the closed days live too, exactly as
+        // turn 1 does above — never listClosedDaysFrom for a STAMPED chat (its snapshot already holds them).
+        const closedDaysRows = await listClosedDaysFrom(
+          db, profile.account_id, dayKey(new Date(Date.now() - 86_400_000), "UTC"),
+        ).catch((e: unknown) => {
+          log("knowledge: closed-days read failed — answering without the closed days", { conversationId, error: String(e) });
+          return null;
+        });
+        const liveNow = knowledgeFromLive({
+          profile, timezone, services: rows,
+          closedDays: closedDaysRows, today: dayKey(new Date(), timezone),
+        });
         knowledge = liveNow.payload;
         listUnavailable = liveNow.listUnavailable; // C20; a stamped snapshot always had its list
       }
@@ -491,6 +516,32 @@ export async function POST(
     // S-47c: the facts, the Services text, the hours, the list and the zone all come from `knowledge` (the stamped
     // snapshot, or this request's live read on turn 1 and on an unstamped chat).
     const pk = promptKnowledge(knowledge);
+    // S-47d (spec 5.4.3, S20, SD4): today's status, read on EVERY turn — unlike the closed days (which ride the
+    // stamped snapshot once a chat has one), the switch itself can change between turns on one chat, and nothing
+    // here is ever stamped on the conversation. The calendar read runs alongside it, ONLY when this turn's
+    // payload carries no business hours (SD4): the chain needs an hours source to name a reopening, and a
+    // payload that already has hours costs this turn no extra round trip.
+    const statusP = getBusinessStatusRow(db, profile.account_id).catch((e: unknown) => {
+      log("business-status read failed — this turn answers without today's status", { conversationId, accountId: profile.account_id, error: String(e) });
+      return null;
+    });
+    const calendarP = knowledge.business_hours === null
+      ? getCalendarForAccount(db, profile.account_id).catch((e: unknown) => {
+        log("calendar read failed — today's status answers with no known hours", { conversationId, accountId: profile.account_id, error: String(e) });
+        return null;
+      })
+      : Promise.resolve(null);
+    const [statusRow, calendarRow] = await Promise.all([statusP, calendarP]);
+    // Named distinctly from the `now` ISO timestamp recorded with the transcript below (line ~790): that one
+    // marks when THIS reply was written, this one is the instant today's status and the prompt's Right now
+    // line are both computed from, and the two must never be confused for each other.
+    const turnNow = new Date();
+    // SD13: `knowledge.timezone`, the SAME zone the prompt's date line and Right now line read below.
+    const effective = effectiveStatus({
+      row: statusRow, closedDays: knowledge.closed_days,
+      hours: hoursChain(knowledge.business_hours, calendarRow?.open_hours ?? null),
+      timezone: knowledge.timezone, now: turnNow,
+    });
     const system = buildSystemPrompt({
       personaName: profile.persona_name, businessName,
       facts: pk.facts, services: pk.services,
@@ -517,13 +568,16 @@ export async function POST(
       tradeModule: conversation.trade_module,
       businessHours: pk.businessHours, priceList: pk.priceList,
       priceListUnavailable: listUnavailable, // C20
+      // S-47d: the SAME effective status computed above, and the closed-days lines from this turn's own
+      // knowledge — nothing here is ever stamped on the conversation.
+      businessStatus: effective, closedDays: pk.closedDays,
       // `buildSystemPrompt` itself resolves the one tool this surface has,
       // and never advertises take_message/log_transcript on the web — see
       // its `onWeb` branches. No append needed here (review of commit
       // 129b43f, Important 2: the old `WEB_TOOL_NOTICE` append recreated the
       // exact contradiction it existed to forbid, because it ran AFTER a
       // base prompt that still told the model to take a message).
-    }, new Date())
+    }, turnNow)
       // `remaining` counts the reply being WRITTEN (Important 3): `claimed`
       // is the POST-increment count, 1…CONCIERGE_MAX_TURNS, so on the final
       // permitted turn `claimed === CONCIERGE_MAX_TURNS` and this reply IS

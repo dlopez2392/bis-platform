@@ -22,9 +22,10 @@ export type KnowledgePayload = {
 /** At most this many upcoming closed ranges enter a payload (spec 4.2). */
 export const MAX_PAYLOAD_CLOSED_DAYS = 20;
 const CLOSED_DAY_REASONS: readonly unknown[] = ["holiday", "vacation", "other"];
-/** Both or neither (S-47d): a caller that has read the closed days passes them with the account's today. A caller
- *  that passes neither builds an empty list (the pre-S-47d callers, until plan Task 10 wires the reads). */
-type ClosedDaysInput = { closedDays: readonly ClosedDay[]; today: string } | { closedDays?: undefined; today?: undefined };
+/** S-47d (plan Task 10): REQUIRED on every caller, so none can forget it — every surface now reads the switch
+ *  and the closed days together. `closedDays` is the account's full set (possibly []); it is `knowledgeFromLive`
+ *  that turns a FAILED read into [] here, never this function. */
+type ClosedDaysInput = { closedDays: readonly ClosedDay[]; today: string };
 
 /** Ranges ending on or after `today`, soonest first (starts_on, then ends_on), at most 20, each by its fields with
  *  the line she reads: never a row's id, account or author. */
@@ -74,7 +75,7 @@ export function buildKnowledgePayload(input: {
       unit_en: s.unit_en, unit_es: s.unit_es,
       sentence_en: priceSentence(s, "en"), sentence_es: priceSentence(s, "es"),
     })),
-    closed_days: input.closedDays === undefined ? [] : upcomingClosedDays(input.closedDays, input.today),
+    closed_days: upcomingClosedDays(input.closedDays, input.today),
     renderer_version: KNOWLEDGE_RENDERER_VERSION,
   };
 }
@@ -189,14 +190,17 @@ export function knowledgeFromLive(input: {
   profile: { facts: string; services: string; business_hours?: unknown };
   timezone: string;
   services: readonly ServiceInput[] | null;
-} & ({ closedDays: readonly ClosedDay[] | null; today: string } | { closedDays?: undefined; today?: undefined })): {
+  /** S-47d (plan Task 10): REQUIRED on every caller — null means the closed-days read FAILED, never "none planned"
+   *  ([] says that). `today` is always needed to filter them, whichever way the read went. */
+  closedDays: readonly ClosedDay[] | null;
+  today: string;
+}): {
   payload: KnowledgePayload; recordable: boolean; listUnavailable: boolean; closedDaysUnavailable: boolean;
 } {
   // S-47d (spec 4.2): closedDays null is a FAILED read, C20's rule applied to the closed days: no CLOSED DAYS block
   // and not recordable, so a snapshot never claims "no closed days" when they were unknown.
   const closedDaysUnavailable = input.closedDays === null;
-  const days: ClosedDaysInput = input.closedDays === undefined || input.closedDays === null
-    ? {} : { closedDays: input.closedDays, today: input.today };
+  const days: ClosedDaysInput = { closedDays: input.closedDays ?? [], today: input.today };
   const base = {
     facts: input.profile.facts, servicesText: input.profile.services,
     timezone: input.timezone, businessHours: input.profile.business_hours, ...days,

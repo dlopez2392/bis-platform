@@ -3,8 +3,11 @@ import { buildKnowledgePayload, parseKnowledgePayload, knowledgeFromLive, prompt
 
 const SVC = { name_en: "Haircut", name_es: "Corte", description_en: "Wash and cut.", description_es: null,
   price_kind: "fixed" as const, amount_cents: 2500, amount_max_cents: null, unit_en: null, unit_es: null };
+// S-47d (plan Task 10): closedDays and today are now required on every call — [] / an arbitrary date for the
+// tests above this file's own "schema 2" describe block, which overrides both per case.
 const INPUT = { facts: "We fix roofs.", servicesText: "Roofs", timezone: "America/Chicago",
-  businessHours: { tue: [["13:00", "18:00"], ["08:00", "12:00"]] }, services: [SVC, { ...SVC, name_en: "Shave", name_es: null, price_kind: "free" as const, amount_cents: null }] };
+  businessHours: { tue: [["13:00", "18:00"], ["08:00", "12:00"]] }, services: [SVC, { ...SVC, name_en: "Shave", name_es: null, price_kind: "free" as const, amount_cents: null }],
+  closedDays: [], today: "2026-01-01" };
 
 describe("buildKnowledgePayload (spec 4.2)", () => {
   it("is exactly the spec's object: fixed keys, positions 1..n, both sentences, spans sorted, no row id (mutation: drop renderer_version -> FAILS)", () => {
@@ -74,24 +77,24 @@ describe("parseKnowledgePayload", () => {
 describe("knowledgeFromLive (spec 5.5; SD9)", () => {
   const profile = { facts: "We fix roofs.", services: "Roofs", business_hours: { tue: [["08:00", "12:00"]] } };
   it("rows read: the payload carries them, is recordable, and the list is available", () => {
-    const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: [SVC] });
+    const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: [SVC], closedDays: [], today: "2026-01-01" });
     expect([r.recordable, r.listUnavailable]).toEqual([true, false]);
     expect(r.payload.services.map((s) => s.sentence_en)).toEqual(["The price for Haircut is $25."]);
   });
   it("the services read failed (null): free text and hours kept, no list, NOT recordable, list unavailable (C20; mutation: recordable true -> FAILS)", () => {
-    const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: null });
+    const r = knowledgeFromLive({ profile, timezone: "America/Chicago", services: null, closedDays: [], today: "2026-01-01" });
     expect(r).toMatchObject({ recordable: false, listUnavailable: true, payload: { facts: "We fix roofs.", services: [], business_hours: { tue: [["08:00", "12:00"]] } } });
   });
   it("a row that cannot render (bad data) is treated as a failed read, never a throw", () => {
     const bad = { ...SVC, price_kind: "per_unit" as const, unit_en: "hour", unit_es: null };
-    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [bad] })).toMatchObject({ recordable: false, listUnavailable: true, payload: { services: [] } });
+    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [bad], closedDays: [], today: "2026-01-01" })).toMatchObject({ recordable: false, listUnavailable: true, payload: { services: [] } });
   });
   it("an EMPTY list read is not a failure: recordable, list available (C20: today's price line; mutation: treat [] as a failed read -> FAILS)", () => {
-    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [] })).toMatchObject({ recordable: true, listUnavailable: false });
+    expect(knowledgeFromLive({ profile, timezone: "America/Chicago", services: [], closedDays: [], today: "2026-01-01" })).toMatchObject({ recordable: true, listUnavailable: false });
   });
   it("a stored row's id, account and created_at never enter the payload", () => {
     const row = { ...SVC, id: "11111111-1111-1111-1111-111111111111", account_id: "acc", position: 9, created_at: "2027-01-01T00:00:00Z" };
-    const s = knowledgeFromLive({ profile, timezone: "America/Chicago", services: [row] }).payload.services[0]!;
+    const s = knowledgeFromLive({ profile, timezone: "America/Chicago", services: [row], closedDays: [], today: "2026-01-01" }).payload.services[0]!;
     expect(Object.keys(s).sort()).toEqual(["amount_cents", "amount_max_cents", "description_en", "description_es", "name_en", "name_es",
       "position", "price_kind", "sentence_en", "sentence_es", "unit_en", "unit_es"]);
     expect(s.position).toBe(1);

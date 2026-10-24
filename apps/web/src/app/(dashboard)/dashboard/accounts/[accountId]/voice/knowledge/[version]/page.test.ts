@@ -73,6 +73,8 @@ const PAYLOAD = buildKnowledgePayload({
       price_kind: "per_unit", amount_cents: 3500, amount_max_cents: null, unit_en: "guest", unit_es: "invitado",
     },
   ],
+  // S-47d (plan Task 10): required on every buildKnowledgePayload call; this snapshot has none planned.
+  closedDays: [], today: "2026-01-01",
 });
 
 const SNAPSHOT: KnowledgeSnapshotRow = {

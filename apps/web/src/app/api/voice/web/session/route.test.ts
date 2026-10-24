@@ -17,6 +17,9 @@ const countWebSessionsForAccountMock = vi.hoisted(() => vi.fn());
 // records nothing.
 const listVoiceServicesMock = vi.hoisted(() => vi.fn());
 const ensureKnowledgeSnapshotMock = vi.hoisted(() => vi.fn());
+// S-47d: the switch and the planned closed days, live reads for the demo (no stamp).
+const getBusinessStatusRowMock = vi.hoisted(() => vi.fn());
+const listClosedDaysFromMock = vi.hoisted(() => vi.fn());
 const dbQuerySpy = vi.hoisted(() => ({ fromCalls: [] as string[], eqCalls: [] as [string, unknown][] }));
 
 /** The agency's INTERNAL label deliberately differs from `brand_name` and
@@ -63,6 +66,8 @@ vi.mock("@bis/db", async (importOriginal) => {
     countWebSessionsForAccount: (...a: unknown[]) => countWebSessionsForAccountMock(...a),
     listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
     ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
+    getBusinessStatusRow: (...a: unknown[]) => getBusinessStatusRowMock(...a),
+    listClosedDaysFrom: (...a: unknown[]) => listClosedDaysFromMock(...a),
   };
 });
 
@@ -134,6 +139,9 @@ beforeEach(() => {
   countWebSessionsForAccountMock.mockReset().mockResolvedValue(0);
   listVoiceServicesMock.mockReset().mockResolvedValue([]);
   ensureKnowledgeSnapshotMock.mockReset().mockResolvedValue(5);
+  // S-47d: a successful read with no row (open) and no closed days by default.
+  getBusinessStatusRowMock.mockReset().mockResolvedValue(null);
+  listClosedDaysFromMock.mockReset().mockResolvedValue([]);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 });
@@ -302,5 +310,42 @@ describe("POST /api/voice/web/session — what Sofía knows (S-47c)", () => {
     expect(instructions()).not.toContain("SERVICES AND PRICES");
     expect(instructions()).toContain(CLOSED);
     expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/voice/web/session — today's status and the closed days (S-47d, spec 5.4.3)", () => {
+  const instructions = () => {
+    const [, init] = fetchMock.mock.calls[0]! as [string, { body: string }];
+    return (JSON.parse(String(init.body)) as { session: { instructions: string } }).session.instructions;
+  };
+
+  it("a Closed today row reaches the demo's TODAY line — live reads, nothing stamped", async () => {
+    getBusinessStatusRowMock.mockResolvedValue({
+      account_id: "acct1", state: "closed_today" as const, late_minutes: null,
+      until: "2099-01-01T00:00:00.000000Z", set_by: "owner_1", set_at: "2026-10-01T00:00:00.000000Z",
+    });
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(getBusinessStatusRowMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+    expect(instructions()).toContain("TODAY: The business is closed today. It opens again");
+    // The demo records and stamps nothing (unlike the phone and the chat).
+    expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("the closed days reach the demo's CLOSED DAYS block, read live", async () => {
+    listClosedDaysFromMock.mockResolvedValue([
+      { id: "cd1", account_id: "acct1", starts_on: "2026-12-24", ends_on: "2026-12-25", reason: "holiday", created_by: "owner_1", created_at: "2026-10-01T00:00:00Z" },
+    ]);
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(listClosedDaysFromMock).toHaveBeenCalledWith(expect.anything(), "acct1", expect.any(String));
+    expect(instructions()).toContain("- Thursday, December 24 to Friday, December 25, 2026 (holiday)");
+  });
+
+  it("a status read that throws still mints the session, with no TODAY line", async () => {
+    getBusinessStatusRowMock.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(instructions()).not.toContain("TODAY:");
   });
 });

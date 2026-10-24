@@ -24,6 +24,12 @@ const dbFns = vi.hoisted(() => ({
   listVoiceServices: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
   ensureKnowledgeSnapshot: vi.fn<(...a: unknown[]) => Promise<number>>(async () => 5),
   getKnowledgeSnapshot: vi.fn(),
+  // S-47d: the switch, the planned closed days and the calendar's hours (SD4). The real implementations
+  // are spread in through `importOriginal` below; without an override here EVERY call would run against
+  // the mocked `serviceDb()` stub above, which has no `.maybeSingle()` or `.order()` and would throw.
+  getBusinessStatusRow: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
+  listClosedDaysFrom: vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []),
+  getCalendarForAccount: vi.fn<(...a: unknown[]) => Promise<unknown>>(async () => null),
 }));
 const enrichMock = vi.hoisted(() => vi.fn());
 
@@ -279,6 +285,11 @@ beforeEach(() => {
   // S-47c: a successful empty list read and version 5, so every new chat is stamped.
   dbFns.listVoiceServices.mockResolvedValue([]);
   dbFns.ensureKnowledgeSnapshot.mockResolvedValue(5);
+  // S-47d: a successful read with no row (open) and no closed days — the real default for an account that
+  // has never touched the switch, so most tests here never think about it at all.
+  dbFns.getBusinessStatusRow.mockResolvedValue(null);
+  dbFns.listClosedDaysFrom.mockResolvedValue([]);
+  dbFns.getCalendarForAccount.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -1612,5 +1623,72 @@ describe("POST /api/concierge/[publicId]/turn — what Sofía knows (S-47c)", ()
     const res = await firstTurn();
     expect(res.status).toBe(200);
     expect("knowledgeVersion" in (dbFns.createConciergeConversation.mock.calls[0]![1] as object)).toBe(false);
+  });
+});
+
+describe("POST /api/concierge/[publicId]/turn — today's status and the closed days (S-47d, spec 5.4.3, S20, SD4)", () => {
+  const STORM_ROW = {
+    account_id: "a1", state: "storm" as const, late_minutes: null, until: null,
+    set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+  };
+  const XMAS_LINE = {
+    starts_on: "2026-12-24", ends_on: "2026-12-25", reason: "holiday" as const,
+    line: "- Thursday, December 24 to Friday, December 25, 2026 (holiday)",
+  };
+  const SNAP2 = {
+    schema: 2 as const, facts: "Snapshot facts.", services_text: "Snapshot services", timezone: "America/Chicago",
+    business_hours: null, hours_lines: null, renderer_version: 2, services: [], closed_days: [XMAS_LINE],
+  };
+
+  it("the status read runs on EVERY turn — once on turn 1, once more on a later turn (mutation: read it only on turn 1 -> FAILS)", async () => {
+    await firstTurn();
+    await laterTurn();
+    expect(dbFns.getBusinessStatusRow).toHaveBeenCalledTimes(2);
+    expect(dbFns.getBusinessStatusRow).toHaveBeenCalledWith(expect.anything(), "a1");
+  });
+
+  it("a stamped turn's closed days come from the SNAPSHOT — listClosedDaysFrom is never called for it", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: 3 });
+    dbFns.getKnowledgeSnapshot.mockResolvedValue({ id: "k", account_id: "a1", version: 3, payload: SNAP2, created_at: "x", created_by: "system" });
+    await laterTurn();
+    expect(dbFns.listClosedDaysFrom).not.toHaveBeenCalled();
+    expect(sentToModel().messages[0]!.content).toContain(
+      "CLOSED DAYS (the business is closed all day on these dates, and no time on them can be booked):",
+    );
+    expect(sentToModel().messages[0]!.content).toContain("- Thursday, December 24 to Friday, December 25, 2026 (holiday)");
+  });
+
+  it("an unstamped later turn reads the closed days live, the same way turn 1 does", async () => {
+    dbFns.getConciergeConversation.mockResolvedValue({ ...CONVERSATION, knowledge_version: null });
+    dbFns.listClosedDaysFrom.mockResolvedValue([{ id: "cd1", account_id: "a1", starts_on: "2026-12-24", ends_on: "2026-12-25", reason: "holiday", created_by: "owner_1", created_at: "2026-10-01T00:00:00Z" }]);
+    await laterTurn();
+    expect(dbFns.listClosedDaysFrom).toHaveBeenCalledWith(expect.anything(), "a1", expect.any(String));
+    expect(sentToModel().messages[0]!.content).toContain("- Thursday, December 24 to Friday, December 25, 2026 (holiday)");
+  });
+
+  it("a storm status still sends exactly the capture_lead tool, unchanged in every state (D10)", async () => {
+    dbFns.getBusinessStatusRow.mockResolvedValue(STORM_ROW);
+    await firstTurn();
+    expect(sentToModel().tools.map((t) => t.function.name)).toEqual(["capture_lead"]);
+    expect(sentToModel().messages[0]!.content).toContain("TODAY: The business is closed because of a storm, until further notice.");
+  });
+
+  it("the calendar read runs only when this turn's payload carries no business hours (SD4; mutation: always read it -> FAILS)", async () => {
+    // PROFILE.business_hours is null, so turn 1's live payload has none.
+    await firstTurn();
+    expect(dbFns.getCalendarForAccount).toHaveBeenCalledTimes(1);
+    expect(dbFns.getCalendarForAccount).toHaveBeenCalledWith(expect.anything(), "a1");
+
+    dbFns.getCalendarForAccount.mockClear();
+    dbFns.getVoiceProfileByPublicId.mockResolvedValue({ ...PROFILE, business_hours: { tue: [["08:00", "18:00"]] } });
+    await firstTurn();
+    expect(dbFns.getCalendarForAccount).not.toHaveBeenCalled();
+  });
+
+  it("a status read that throws leaves the turn answering with no TODAY line, never a 503", async () => {
+    dbFns.getBusinessStatusRow.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
+    const res = await firstTurn();
+    expect(res.status).toBe(200);
+    expect(sentToModel().messages[0]!.content).not.toContain("TODAY:");
   });
 });
