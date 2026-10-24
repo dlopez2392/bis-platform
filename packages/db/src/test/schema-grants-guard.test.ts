@@ -69,11 +69,13 @@ const EXPECTED_WRITES: Record<string, string[]> = {
   ]),
   "authenticated agencies": IUD,
   "authenticated blueprints": IUD,
+  "authenticated business_status": update(["late_minutes", "state", "until"]).sort(),
   "authenticated calendars": update([
     "buffer_minutes", "enabled", "followup_body", "followup_body_es", "followup_body_es_basis", "followup_enabled",
     "max_advance_days", "meeting_type", "min_notice_hours", "notify_emails", "open_hours", "slot_duration_minutes", "updated_at",
   ]).sort(),
   "authenticated checklist_items": IUD,
+  "authenticated closed_days": ["DELETE", "INSERT(account_id)", "INSERT(ends_on)", "INSERT(reason)", "INSERT(starts_on)"],
   "authenticated contact_duplicate_flags": IUD,
   "authenticated contact_relationships": insertDeleteAndUpdate([
     "contact_can_pick_up", "contact_form", "contact_is_emergency", "related_can_pick_up", "related_form",

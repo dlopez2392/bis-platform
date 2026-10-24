@@ -86,6 +86,8 @@ describe("0090: proposals is untouched (spec 4.6)", () => {
   // is the one below, read off bis-ci on 2026-10-19; call_proposals held no client write since 0053, so
   // dropping it leaves the value as it was. A LATER migration that changes the client write surface
   // updates this literal in the same commit as schema-grants-guard.test.ts's EXPECTED_WRITES.
+  // 0097 (S-47d) adds one table-level client write, authenticated DELETE on closed_days (the column-level
+  // grants on business_status and closed_days do not count here): 51 → 52, read off bis-ci after 0097.
   it("the client-write digest is unchanged (mutation: grant insert on public.proposals to authenticated in 0090 -> FAILS)", () =>
     withRollback(async (c) => {
       const { rows } = await c.query(
@@ -95,6 +97,6 @@ describe("0090: proposals is untouched (spec 4.6)", () => {
             cross join (values ('anon'), ('authenticated')) v(r)
             cross join (values ('INSERT'), ('UPDATE'), ('DELETE')) w(p)
             where n.nspname = 'public' and c.relkind = 'r' and has_table_privilege(r, c.oid, p)) s`);
-      expect(rows[0]!.digest).toBe("51|0dd3e2d7e19f3f3649a893cfd9967d94");
+      expect(rows[0]!.digest).toBe("52|b66203ca5d355155540b520af510d120");
     }));
 });
