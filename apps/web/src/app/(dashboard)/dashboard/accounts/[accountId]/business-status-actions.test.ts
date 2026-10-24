@@ -139,7 +139,7 @@ describe("setBusinessStatusAction — Staff refused closing or reopening (spec �
   it("the Spanish sentence, with locale: \"es\"", async () => {
     setAccess({ isAgency: false, role: "staff", canManage: false });
     const r = await setBusinessStatusAction(ACCOUNT, CHANGE_CLOSED_TODAY, "es");
-    expect(r).toEqual({ ok: false, error: "Solo un propietario puede cerrar el negocio o volver a abrirlo." });
+    expect(r).toEqual({ ok: false, error: "Solo un dueño puede cerrar el negocio o volver a abrirlo." });
   });
 });
 
@@ -156,7 +156,7 @@ describe("setBusinessStatusAction — a Technician refused with the role sentenc
   it("the Spanish sentence", async () => {
     setAccess({ isAgency: false, role: "technician", canManage: false });
     const r = await setBusinessStatusAction(ACCOUNT, CHANGE_OPEN, "es");
-    expect(r).toEqual({ ok: false, error: "Solo un propietario puede cambiar esto." });
+    expect(r).toEqual({ ok: false, error: "Solo un dueño puede cambiar esto." });
   });
 });
 

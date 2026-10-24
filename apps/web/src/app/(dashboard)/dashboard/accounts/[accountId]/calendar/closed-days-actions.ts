@@ -13,14 +13,8 @@ import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { fileClosureTodo } from "@/lib/business-status/closure-todo";
-import { addDays, dayKey, startOfDay } from "@/lib/business-status/status";
+import { addDays, dayKey, isDateKey, startOfDay } from "@/lib/business-status/status";
 import { formatClosedDayRange } from "@/lib/business-status/range-format";
-
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-function isDateKey(s: string): boolean {
-  return DATE_RE.test(s) && addDays(s, 0) === s;
-}
 
 /** Inclusive calendar-day span between two date keys (`b` minus `a`, in whole days) — the shape 0097's
  *  own `closed_days_range_check` uses (`ends_on - starts_on <= 91`). */
@@ -97,9 +91,15 @@ export async function addClosedDayAction(
     console.error(`addClosedDayAction: event emit failed for account ${accountId}: ${String(e)}`);
   }
 
+  // minors-1b item 4: a range starting TODAY begins its window at midnight (`startOfDay`), which still
+  // includes whatever already happened earlier today — counted and filed as "affected" even though
+  // those appointments are already over. `closureListWindow` (status.ts) avoids exactly this for the
+  // switch's own path by starting at `now`; this path starts at max(windowFrom, now) the same way, for
+  // both the count returned to the caller and the decision to file the To-do below.
   const windowFrom = startOfDay(inserted.starts_on, tz);
   const windowTo = startOfDay(addDays(inserted.ends_on, 1), tz);
-  const appts = (await listClosureAppointments(db, accountId, windowFrom.toISOString(), windowTo.toISOString()))
+  const countFrom = windowFrom.getTime() > now.getTime() ? windowFrom : now;
+  const appts = (await listClosureAppointments(db, accountId, countFrom.toISOString(), windowTo.toISOString()))
     .filter((a) => a.closure_kept_at === null);
 
   let todoFiled = false;

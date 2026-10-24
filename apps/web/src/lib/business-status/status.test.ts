@@ -315,11 +315,12 @@ describe("zones whose midnight is the DST gap, and Santiago's fall-back", () => 
     { zone: "Asia/Beirut", now: "2027-03-27T13:00:00.000Z", day: "2027-03-28", start: "2027-03-27T22:00:00.000Z" },
     { zone: "America/Santiago", now: "2027-04-03T18:00:00.000Z", day: "2027-04-04", start: "2027-04-04T04:00:00.000Z" },
   ] as const;
-  it("covers the four rows of the plan's table", () => {
-    expect(ROWS.map((r) => `${r.zone} ${r.day}`)).toEqual([
-      "America/Havana 2027-03-14", "America/Santiago 2026-09-06", "Asia/Beirut 2027-03-28", "America/Santiago 2027-04-04",
-    ]);
-  });
+  // minors-1b item 9: the "covers the four rows of the plan's table" assertion that used to sit here
+  // mapped ROWS (this file's own fixture, defined two lines up) to a string and compared it to another
+  // hand-typed list of the SAME four strings — no production code runs in computing either side, so no
+  // mutation to status.ts could ever have failed it. The real, fallible coverage of these four rows is
+  // the loop below: each iteration calls dayKey/startOfDay/untilFor/reopeningFrom against a typed-literal
+  // expected value.
   for (const r of ROWS) {
     it(`${r.zone} ${r.day}: start of day, both midnights and the no-hours reopening`, () => {
       const now = d(r.now);

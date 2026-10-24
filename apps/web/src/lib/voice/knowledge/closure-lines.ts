@@ -23,11 +23,13 @@ export function reopeningPhrase(reopensAt: Date, timeKnown: boolean, timezone: s
   return timeKnown ? `${day} at ${clockAt(reopensAt, timezone)}` : day;
 }
 
-const LATE_WORDS: Record<15 | 30 | 60 | 120, [behind: string, late: string]> = {
-  15: ["about 15 minutes", "about 15 minutes"],
-  30: ["about 30 minutes", "about 30 minutes"],
-  60: ["about an hour", "about an hour"],
-  120: ["more than an hour", "more than an hour"],
+// minors-1b item 9: one string per value, not a [behind, late] pair that was always the same string
+// twice — collapsing it changes no prompt text (PRE_S47D_DIGEST/S47C/S47B stay byte-identical).
+const LATE_WORDS: Record<15 | 30 | 60 | 120, string> = {
+  15: "about 15 minutes",
+  30: "about 30 minutes",
+  60: "about an hour",
+  120: "more than an hour",
 };
 const REASON_WORDS = { holiday: " for a holiday", vacation: " for vacation", other: "" } as const;
 
@@ -43,8 +45,8 @@ export function todayLine(s: EffectiveStatus, timezone: string, now: Date): stri
         ? "TODAY: The business is closed because of a storm, until further notice."
         : `TODAY: The business is closed because of a storm. It opens again ${reopeningPhrase(s.reopensAt, s.reopensTimeKnown, timezone, now)}.`;
     case "running_late": {
-      const [behind, late] = LATE_WORDS[s.lateMinutes];
-      return `TODAY: The team is running ${behind} behind today. If someone asks about a visit or appointment today, tell them it may start ${late} late.`;
+      const late = LATE_WORDS[s.lateMinutes];
+      return `TODAY: The team is running ${late} behind today. If someone asks about a visit or appointment today, tell them it may start ${late} late.`;
     }
     case "closed_day":
       return `TODAY: The business is closed all day today${s.reason ? REASON_WORDS[s.reason] : ""}. It opens again ${reopeningPhrase(s.reopensAt, s.reopensTimeKnown, timezone, now)}.`;

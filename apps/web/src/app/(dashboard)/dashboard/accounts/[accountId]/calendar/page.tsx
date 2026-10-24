@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import {
   serviceDb, getOrCreateCalendar, listCalendarBookings, getVoiceProfile,
-  listClosedDaysFrom, listClosureAppointments, countHeldByBooking,
+  listClosedDaysFrom, listClosureAppointments, countHeldByBooking, type ClosureAppointment,
 } from "@bis/db";
 import { BackToSetup } from "@/components/back-to-setup";
 import { PageHeader } from "@/components/page-header";
@@ -105,11 +105,32 @@ export default async function CalendarPage({
   let closedDaysView: ClosedDaysRangeView[] | null;
   try {
     const closedDays = await listClosedDaysFrom(db, accountId, today);
-    const appointmentsByRange = await Promise.all(closedDays.map((r) => listClosureAppointments(
-      db, accountId,
-      startOfDay(r.starts_on, account.timezone).toISOString(),
-      startOfDay(addDays(r.ends_on, 1), account.timezone).toISOString(),
-    )));
+    // minors-1b item 5: ONE query over the union of every listed range's own window (up to 100 ranges,
+    // listClosedDaysFrom's own cap), not one per range — each range's own slice is then taken from that
+    // single result in code. Ranges never overlap (addClosedDayAction refuses an overlap), so an
+    // appointment's start falls inside at most one range's own [from, to); a start in the GAP between two
+    // non-adjacent ranges matches neither and is correctly dropped. Known tradeoff, not yet surfaced in
+    // this card: `listClosureAppointments`'s own CLOSURE_APPOINTMENTS_LIMIT orders by starts_at ascending,
+    // so a wide union whose EARLY ranges alone exceed the cap could starve a LATER range's count — the
+    // dashboard status card's own "more later" notice (business-status-card.tsx) does not read this card.
+    let appointmentsByRange: ClosureAppointment[][];
+    if (closedDays.length === 0) {
+      appointmentsByRange = [];
+    } else {
+      const minStart = closedDays.reduce((min, r) => (r.starts_on < min ? r.starts_on : min), closedDays[0]!.starts_on);
+      const maxEnd = closedDays.reduce((max, r) => (r.ends_on > max ? r.ends_on : max), closedDays[0]!.ends_on);
+      const unionFrom = startOfDay(minStart, account.timezone);
+      const unionTo = startOfDay(addDays(maxEnd, 1), account.timezone);
+      const allAppointments = await listClosureAppointments(db, accountId, unionFrom.toISOString(), unionTo.toISOString());
+      appointmentsByRange = closedDays.map((r) => {
+        const from = startOfDay(r.starts_on, account.timezone).getTime();
+        const to = startOfDay(addDays(r.ends_on, 1), account.timezone).getTime();
+        return allAppointments.filter((a) => {
+          const t = new Date(a.starts_at).getTime();
+          return t >= from && t < to;
+        });
+      });
+    }
     // Fix round C8: "{n} messages waiting" on every listed row, as the dashboard card shows it — ONE read
     // for every listed booking, on this page's db (RLS-enforced), scoped to the account. Inside this same
     // try: a failed count is the card's own error state, never a row silently reading "none waiting".
