@@ -14,6 +14,7 @@ vi.mock("@/lib/vercel/web-analytics", async (importOriginal) => ({
 
 import { AUTOMATION_TICK_CAP } from "../caps";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { siteTrafficPass } from "./site-traffic";
 
 // 2026-09-07T09:30Z: 04:30 in Chicago (past 03:00), 02:30 in Los Angeles (not yet).
@@ -31,7 +32,7 @@ const DAY = { visitors: 10, pageviews: 20, pages: [{ value: "/", visitors: 10, p
   devices: [{ value: "mobile", visitors: 7, pageviews: 14 }] };
 const ctx = (): PassContext => ({
   db: {} as never, now: TICK, origin: "https://app.example.com",
-  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
+  email: { isFake: true, send: vi.fn() }, sms: vi.fn(), closures: NO_CLOSURES,
 });
 const EMPTY = { synced: 0, daysSynced: 0, failed: 0, skippedNotYet: 0, skippedUpToDate: 0, skippedCap: 0, unresolvableTimezone: 0 };
 

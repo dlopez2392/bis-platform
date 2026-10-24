@@ -68,6 +68,7 @@ import { runPasses } from "./harness";
 import { PASSES } from "./registry";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "./context";
+import { NO_CLOSURES } from "./closures";
 import { sendInstantReply, type InstantReplyInput } from "./instant-reply";
 
 const INTERNAL_LABEL = "Rio Roofing — trial";
@@ -83,20 +84,20 @@ const REMINDER_ROW: DueReminder = {
   bookingId: "bk_rem", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-10T14:00:00.000Z", bookerTimezone: null,
   cancelToken: "tok", calendarPublicId: "cal", contactEmail: "a@example.com", contactName: "A",
   accountTimezone: "America/New_York", branding, fromEmail: null, meetingUrl: null, late: false,
-  language: "en", contactPhone: null,
+  language: "en", contactPhone: null, closureKeptAt: null,
 };
 const FOLLOWUP_ROW: DueFollowup = {
   bookingId: "bk_fu", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-08T21:00:00.000Z", endsAt: "2026-09-08T22:00:00.000Z",
   contactEmail: "b@example.com", contactName: "B",
   accountTimezone: "America/New_York", branding, fromEmail: null, replyToEmail: null, followupBody: "",
-  language: "en", followupBodyEs: null,
+  language: "en", followupBodyEs: null, closureKeptAt: null,
 };
 /** Part B's confirmation ask — 47h past TICK, the near edge of its window. */
 const CONFIRM_ROW: DueAppointmentConfirm = {
   bookingId: "bk_ac", accountId: "acct_1", startsAt: "2026-09-11T13:00:00.000Z", bookerTimezone: null,
   contactId: "ct_6", contactPhone: "9565550104", brandName: BRAND,
   accountTimezone: "America/New_York", body: "",
-  language: "en", bodyEs: null,
+  language: "en", bodyEs: null, closureKeptAt: null,
 };
 
 /** Part B's referral ask — the ladder's third rung, one strictly-later local
@@ -104,6 +105,7 @@ const CONFIRM_ROW: DueAppointmentConfirm = {
  *  follow-up, Tuesday's review request, this Wednesday morning). */
 const REFERRAL_ROW: DueReferralAsk = {
   bookingId: "bk_ra", accountId: "acct_1",
+  startsAt: "2026-09-06T21:00:00.000Z", closureKeptAt: null,   // the hour before endsAt
   endsAt: "2026-09-06T22:00:00.000Z", completedAt: null,
   followupSentAt: "2026-09-07T12:30:00.000Z", reviewRequestedAt: "2026-09-08T13:05:00.000Z",
   smsFailedAt: null, reviewRequestEnabled: true,
@@ -252,7 +254,7 @@ describe("the sentinel: the internal label never reaches a customer, through ANY
     const smsSend = vi.fn(async () => ({ providerMessageId: "s" }));
     const ctx: PassContext = {
       db: {} as never, now: TICK, origin: "https://app.example.com",
-      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }),
+      email: { isFake: true, send: emailSend }, sms: fakeSmsGate({ send: smsSend }), closures: NO_CLOSURES,
     };
 
     const results = await runPasses(PASSES, ctx);

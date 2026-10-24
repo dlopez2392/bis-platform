@@ -91,6 +91,8 @@ export async function processReviewRequests(
     const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "review_request",
       channel: config.channel, smsKind: "automation.review_request", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+      // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+      appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
     };
 
     // RULE 0, before the gate, same as the follow-up pass: no resolvable

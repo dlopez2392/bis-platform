@@ -177,6 +177,11 @@ vi.mock("@bis/db", () => ({
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
   listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
   ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
+  // S-47d: the switch and the planned closed days (step 8b). Absent, every call here throws the same way
+  // the S-47c note above describes — a success with no row/no days, so every test stays the "open, nothing
+  // planned" shape none of them is about.
+  getBusinessStatusRow: vi.fn().mockResolvedValue(null),
+  listClosedDaysFrom: vi.fn().mockResolvedValue([]),
   markHandoffRequested: vi.fn().mockResolvedValue(undefined),
   getOrCreateCalendar: vi.fn().mockResolvedValue({
     id: "cal1", account_id: "acct1", public_id: "cal_pub1", enabled: true,

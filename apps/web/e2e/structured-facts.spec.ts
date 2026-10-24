@@ -159,6 +159,8 @@ test.afterAll(async () => {
     const payload = buildKnowledgePayload({
       facts: profile.facts, servicesText: profile.services, timezone,
       businessHours: priorBusinessHours, services: priorServiceInputs,
+      // S-47d (plan Task 10): required on every call; this restore never touched closed days, so none here.
+      closedDays: [], today: "2026-01-01",
     });
     const r = await saveVoiceKnowledge(db, accountId, {
       actor: ACTOR,

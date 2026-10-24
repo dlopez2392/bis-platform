@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import {
   getCall, listFailedOutboundSms, listProposalsForCall, listPeopleNames, getContact, getCallCard, getVoiceProfile,
-  type FailedOutboundSms, type CallCard, type TradeModuleSetting,
+  type FailedOutboundSms, type CallCard, type TradeModuleSetting, type BusinessStatusCode,
 } from "@bis/db";
 import { SuggestionSection, type SuggestionSectionData } from "@/components/proposals/suggestion-section";
 import {
@@ -56,6 +56,19 @@ import { CARD, CARD_HEAD } from "./card";
 /** S-47b section 5.7: the call-page line's module names, typed so a typo'd key is a type error. */
 const TRADE_MODULE_NAME_KEY: Record<TradeModuleSetting, MessageKey> = {
   insurance_pc: "calls.detail.tradeModule.insurance_pc", events: "calls.detail.tradeModule.events",
+};
+
+/** S-47d (plan Task 14): the catalogue key per code the call started under, typed so a typo'd key is a
+ *  type error, the same discipline TRADE_MODULE_NAME_KEY above uses. */
+const BUSINESS_STATUS_KEY: Record<BusinessStatusCode, MessageKey> = {
+  open: "calls.detail.businessStatus.open",
+  closed_today: "calls.detail.businessStatus.closed_today",
+  running_late_15: "calls.detail.businessStatus.running_late_15",
+  running_late_30: "calls.detail.businessStatus.running_late_30",
+  running_late_60: "calls.detail.businessStatus.running_late_60",
+  running_late_120: "calls.detail.businessStatus.running_late_120",
+  storm: "calls.detail.businessStatus.storm",
+  closed_day: "calls.detail.businessStatus.closed_day",
 };
 
 export const dynamic = "force-dynamic";
@@ -283,6 +296,21 @@ export default async function CallDetailPage({
                 {call.language}
               </dd>
             </div>
+
+            {/* S-47d (plan Task 14): the status the call started under, to EVERYONE who can see the call
+                (S19) — unlike the trade-rules and Knowledge items that follow, this is NOT isAgency-gated:
+                a client is entitled to know their own business was closed, late or storm-shut when
+                {persona} answered. Fix round C7 (design review I8): the visible-label shape the
+                trade-rules item below uses — "Status at the start: Closed for a storm" — never a hidden label
+                over an uppercase badge, which read as a present-tense fact on a page about a past call. */}
+            {call.business_status !== null ? (
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5" lang={tr.locale}>
+                <dt className="whitespace-nowrap">{tr.text("calls.detail.businessStatus")}</dt>
+                <dd className="font-medium text-foreground" data-business-status="">
+                  {tr.text(BUSINESS_STATUS_KEY[call.business_status])}
+                </dd>
+              </div>
+            ) : null}
 
             {/* S-47b section 5.7: which trade rules this call ran under. AGENCY ONLY (spec section 3; SD3):
                 this page is shared with clients, and the module is not theirs to see. Absent when the call

@@ -200,7 +200,7 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // reads "Register A2P 10DLC brand and campaign" for a company with no
     // campaign to send on, which is the exact false-true this phase exists to
     // stop. Refused with copy that names what is missing, not a generic error.
-    await page.getByLabel("Status").click();
+    await page.getByLabel("Status", { exact: true }).click();
     await page.getByRole("option", { name: "Approved" }).click();
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(/Both the brand ID and campaign ID are needed/)).toBeVisible();
@@ -215,7 +215,7 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // the first real use of this panel, NOT by this suite — the earlier
     // version of this block reloaded here, which is exactly what hid it.
     // a2p-panel.tsx uses onSubmit rather than `action` because of this.
-    await expect(page.getByLabel("Status")).toContainText("Approved");
+    await expect(page.getByLabel("Status", { exact: true })).toContainText("Approved");
 
     // And the operator's typing survives a refusal too — same reset, same
     // cause. Both fields were empty for the refusal, so fill them now.
@@ -257,7 +257,7 @@ test("a blueprint captured from one company applies to a new one", async ({ page
     // And it goes BACKWARDS — new behaviour for this list, and the reason the
     // item cannot be a manual tick: a rejected registration must not keep
     // reading as done for a client who cannot legally text.
-    await page.getByLabel("Status").click();
+    await page.getByLabel("Status", { exact: true }).click();
     await page.getByRole("option", { name: "Rejected" }).click();
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText("A2P registration updated")).toBeVisible();

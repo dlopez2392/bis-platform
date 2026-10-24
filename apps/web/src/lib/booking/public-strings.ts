@@ -18,6 +18,13 @@ const STRINGS = {
   en: {
     noSlots: "No times available this day.",
     noSlotsHint: "Try another day above.",
+    // S-47d (spec §5.3): the closed-business notices this page shows instead
+    // of the picker, when the business is closed today, closed for a storm,
+    // or closed on the day a visitor opened a direct link for.
+    closedTodayNotice: "Closed today. Please pick another day.",
+    stormNotice: "We're closed for now. Please check back soon.",
+    stormUntilNotice: "Closed until {date}. Please pick a day from then on.",
+    closedDay: "Closed this day.",
     today: "Today",
     morning: "Morning",
     afternoon: "Afternoon",
@@ -137,6 +144,12 @@ const STRINGS = {
   es: {
     noSlots: "No hay horarios disponibles este día.",
     noSlotsHint: "Prueba con otro día de arriba.",
+    // Fix round C6: the booking page speaks tú, like the rest of this table (booking, chat and email
+    // follow their own register; the app is usted).
+    closedTodayNotice: "Cerrado hoy. Elige otro día.",
+    stormNotice: "Por ahora estamos cerrados. Vuelve a consultar pronto.",
+    stormUntilNotice: "Cerrado hasta el {date}. Elige un día a partir de esa fecha.",
+    closedDay: "Cerrado este día.",
     today: "Hoy",
     morning: "Mañana",
     afternoon: "Tarde",

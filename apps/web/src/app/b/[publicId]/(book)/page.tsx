@@ -12,7 +12,7 @@ import "@/styles/public-brand.css";
 import { BookingPage } from "../booking-page";
 import { getSlotsAction, submitBookingAction } from "../actions";
 import {
-  loadCalendar, loadCalendarSafe, isCalendarLive, loadCalendarBranding as loadBranding, UNBRANDED,
+  loadCalendar, loadCalendarSafe, isCalendarLive, loadCalendarBranding as loadBranding, loadClosureView, UNBRANDED,
 } from "../data";
 
 export const dynamic = "force-dynamic";
@@ -125,7 +125,19 @@ export default async function PublicBookingPage({
   }
   const attribution = new URLSearchParams(parseAttribution(flat)).toString();
 
-  const today = partsInZone(new Date(), timezone);
+  // The SAME instant both below: the picker's own "today" (`todayKey`) and
+  // the closure notice/closed-day keys this read computes have to agree on
+  // what "now" is, or a request straddling local midnight could show a
+  // notice for one day while the strip opens on another.
+  const now = new Date();
+  // S-47d (task 13, spec section 5.3): what the switch or a planned closed
+  // day says about TODAY, and which of the picker's own days are closed
+  // outright. A failed read already fails closed on its own (`loadClosureView`'s
+  // own doc comment) — never thrown here, since the slot engine (not this
+  // notice) is what keeps a closed time off the grid.
+  const closure = await loadClosureView(calendar.account_id, timezone, now, calendar.max_advance_days, locale);
+
+  const today = partsInZone(now, timezone);
   const todayKey = `${today.y}-${pad(today.m)}-${pad(today.d)}`;
 
   return (
@@ -150,6 +162,8 @@ export default async function PublicBookingPage({
         maxAdvanceDays={calendar.max_advance_days}
         renderToken={issueRenderToken(publicId)}
         attribution={attribution}
+        closureNotice={closure.notice}
+        closedDayKeys={closure.closedDayKeys}
         getSlots={getSlotsAction.bind(null, publicId, locale)}
         submit={submitBookingAction.bind(null, publicId)}
       />

@@ -10,6 +10,7 @@ const senderMock = vi.hoisted(() => ({ resolveSmsSender: vi.fn() }));
 vi.mock("@/lib/sms/sender", () => ({ resolveSmsSender: (...a: unknown[]) => senderMock.resolveSmsSender(...a) }));
 
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader } from "../closures";
 import { remindersPass, releaseReminder } from "./reminders";
 import { EmailNotSent } from "@/lib/consent/email-gate";
 
@@ -26,7 +27,7 @@ function row(overrides: Partial<DueReminder> = {}): DueReminder {
     accountTimezone: "America/Chicago",
     branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
     fromEmail: null, meetingUrl: null, late: false,
-    language: "en", contactPhone: null,
+    language: "en", contactPhone: null, closureKeptAt: null,
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function ctx(now: Date): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: async () => { throw new Error("the email reminder never texts"); },
+    closures: NO_CLOSURES,
   };
 }
 const logCalls = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
@@ -309,5 +311,36 @@ describe("S-09 PR 2 (C16, Q3): a late reminder's deadline depends on whether a t
     dbMocks.getDueReminderById.mockResolvedValue({ due: lateRow({ contactPhone: "+19565550111" }) });
     expect(await releaseReminder(ctx(new Date("2026-09-22T13:40:00Z")), held())).toBe("skipped");
     expect(emailSend).not.toHaveBeenCalled();
+  });
+});
+
+/** S-47d: the loader a tick builds, without a database: an open-ended storm on acct_1 since 2026-09-21T13:00:00.000Z, every other
+ *  account open. Never NO_CLOSURES, which reads open for everyone and so could not show a hold. */
+const stormOnAcct1 = (): ClosureLoader => async (accountId) => ({
+  ok: true,
+  input: {
+    row: accountId === "acct_1" ? { state: "storm", late_minutes: null, until: null, set_at: "2026-09-21T13:00:00.000Z" } : null,
+    closedDays: [], hours: null, timezone: "America/Chicago",
+  },
+  windows: accountId === "acct_1" ? [{ start: new Date("2026-09-21T13:00:00.000Z"), end: null }] : [],
+});
+
+describe("the closure hold (S-47d, spec 5.5.2)", () => {
+  it("a covered appointment is held with the closure reason (S-47d), until its deadline: not sent, not stamped (mutation: drop appointmentAt from subjectFor FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row()]);
+    expect(await remindersPass.run({ ...ctx(NOON), closures: stormOnAcct1() })).toEqual({ sent: 0, failed: 0, unstamped: 0, held: 1, blocked: 0 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(dbMocks.stampReminderSent).not.toHaveBeenCalled();
+    expect(logCalls()).toEqual([expect.objectContaining({
+      source: "reminders", subjectKey: "booking:bk_1", status: "held",
+      heldUntil: "2026-09-22T20:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("a kept appointment sends (mutation: drop kept from subjectFor FAILS)", async () => {
+    dbMocks.listDueReminders.mockResolvedValue([row({ closureKeptAt: "2026-09-21T16:00:00.000Z" })]);
+    expect(await remindersPass.run({ ...ctx(NOON), closures: stormOnAcct1() })).toEqual({ sent: 1, failed: 0, unstamped: 0, held: 0, blocked: 0 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_1");
   });
 });

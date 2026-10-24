@@ -198,6 +198,11 @@ vi.mock("@bis/db", async () => {
   listPendingScans: async () => { throw new Error("route.test: scanner not configured"); },
   oldestPendingScanAt: async () => { throw new Error("route.test: scanner not configured"); },
   recordDocumentScan: async () => { throw new Error("route.test: scanner not configured"); },
+  // S-47d (spec 5.5.2): every booking send asks the per-tick closures loader for its account. No account is
+  // closed in this suite: no status row, no closed days, so every exact body below is unchanged.
+  loadClosureSnapshot: async () => ({ timezone: "UTC", row: null, closedDays: [], hours: { businessHours: null, calendarHours: null } }),
+  // S-47d D13b: the closure history (the switch's change log), read beside the snapshot. No change logged here.
+  listBusinessStatusChanges: async () => [],
   };
 });
 

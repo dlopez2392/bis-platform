@@ -65,6 +65,11 @@ const listPhoneNumbersForAccountMock = vi.hoisted(() => vi.fn());
 // export throws inside the route's fail-open catches, and every call would silently run unstamped.
 const listVoiceServicesMock = vi.hoisted(() => vi.fn());
 const ensureKnowledgeSnapshotMock = vi.hoisted(() => vi.fn());
+// S-47d: the switch and the planned closed days (step 8b). Listed for the same reason as the two above — an
+// unlisted export here is `undefined`, and calling it throws SYNCHRONOUSLY (before the route's own `.then`
+// handler even attaches), which the route's outer catch turns into a silent, unaccepted call.
+const getBusinessStatusRowMock = vi.hoisted(() => vi.fn());
+const listClosedDaysFromMock = vi.hoisted(() => vi.fn());
 // Records the route's own inline `accounts` select so a test can assert the
 // query actually hit `accounts` filtered by the resolved account id, not
 // just that SOME `.select().eq().single()` chain was called — a mock that
@@ -130,6 +135,8 @@ vi.mock("@bis/db", () => ({
   listPhoneNumbersForAccount: (...a: unknown[]) => listPhoneNumbersForAccountMock(...a),
   listVoiceServices: (...a: unknown[]) => listVoiceServicesMock(...a),
   ensureKnowledgeSnapshot: (...a: unknown[]) => ensureKnowledgeSnapshotMock(...a),
+  getBusinessStatusRow: (...a: unknown[]) => getBusinessStatusRowMock(...a),
+  listClosedDaysFrom: (...a: unknown[]) => listClosedDaysFromMock(...a),
 }));
 
 import { POST } from "./route";
@@ -208,6 +215,10 @@ beforeEach(() => {
   // S-47c: a successful read with no rows, and version 5, so every answered call is stamped.
   listVoiceServicesMock.mockReset().mockResolvedValue([]);
   ensureKnowledgeSnapshotMock.mockReset().mockResolvedValue(5);
+  // S-47d: a successful read with no row (reads as open) and no closed days — the real default for an
+  // account that has never touched the switch, so most tests here never think about it at all.
+  getBusinessStatusRowMock.mockReset().mockResolvedValue(null);
+  listClosedDaysFromMock.mockReset().mockResolvedValue([]);
   dbQuerySpy.fromCalls.length = 0;
   dbQuerySpy.eqCalls.length = 0;
 
@@ -600,7 +611,7 @@ describe("POST /api/voice/incoming — happy path", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(
-      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 },
+      expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" },
     );
     expect(getOrCreateCalendarMock).toHaveBeenCalledWith(expect.anything(), "acct1", "voice", "ai");
   });
@@ -896,7 +907,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
   it("off (no setting on the row): no stamp named and the old identity line — the existing shape assertion still holds", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(OLD);
     expect(randomIntMock).not.toHaveBeenCalled();
   });
@@ -906,7 +917,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" }, knowledgeVersion: 5 });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: true, setting: "on" }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(DISCLOSED);
   });
 
@@ -917,7 +928,7 @@ describe("POST /api/voice/incoming — saying she is an AI (S-47a)", () => {
     await POST(req());
     expect(randomIntMock).toHaveBeenCalledWith(2);
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" }, knowledgeVersion: 5 });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", disclosure: { disclosed: false, setting: "trial" }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(OLD);
   });
 
@@ -973,7 +984,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
   it("no module: the row is written exactly as before and the prompt carries no trade rules (mutation: always pass tradeModule, even null -> FAILS)", async () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -982,7 +993,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
     expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1",
-      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5 });
+      { phoneNumberId: "pn1", callerE164: "+19562921696", tradeModule: { module: "events", version: 7 }, knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).toContain(EVT);
     expect(acceptedInstructions()).not.toContain(INS);
   });
@@ -1003,7 +1014,7 @@ describe("POST /api/voice/incoming — trade rules (S-47b)", () => {
     getVoiceProfileMock.mockResolvedValue({ ...PROFILE_ROW, trade_module: "law" });
     unwrapMock.mockResolvedValue(callIncomingEvent());
     await POST(req());
-    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5 });
+    expect(startCallRowMock).toHaveBeenCalledWith(expect.anything(), "acct1", { phoneNumberId: "pn1", callerE164: "+19562921696", knowledgeVersion: 5, businessStatus: "open" });
     expect(acceptedInstructions()).not.toContain("TRADE RULES —");
   });
 
@@ -1090,5 +1101,145 @@ describe("POST /api/voice/incoming — what Sofía knows (S-47c)", () => {
     expect(await res.json()).toEqual({ ok: true, declined: "per-account" });
     expect(listVoiceServicesMock).not.toHaveBeenCalled();
     expect(ensureKnowledgeSnapshotMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/voice/incoming — today's status and the closed days (S-47d, spec 5.4.3, S17)", () => {
+  const acceptedInstructions = () => {
+    const [, init] = fetchMock.mock.calls[0]!;
+    return (JSON.parse(String((init as { body: string }).body)) as { instructions: string }).instructions;
+  };
+  const STORM_ROW = {
+    account_id: "acct1", state: "storm" as const, late_minutes: null, until: null,
+    set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+  };
+  const XMAS_ROW = {
+    id: "cd1", account_id: "acct1", starts_on: "2026-12-24", ends_on: "2026-12-25",
+    reason: "holiday" as const, created_by: "owner_1", created_at: "2026-10-01T00:00:00Z",
+  };
+
+  it("the stamp is statusCode of the SAME effective status the TODAY line is built from (a storm row)", async () => {
+    getBusinessStatusRowMock.mockResolvedValue(STORM_ROW);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ businessStatus: "storm" });
+    expect(acceptedInstructions()).toContain("TODAY: The business is closed because of a storm, until further notice.");
+  });
+
+  it("the stamp and the TODAY line read the SAME instant, at a boundary where a second clock read would disagree (mutation: stamp from a second effectiveStatus call at now+1h -> FAILS)", async () => {
+    // A row 30 minutes from expiry: at the real `now` it is still in force (closed_today), but a SECOND
+    // effectiveStatus call computed one hour later would read it as expired (open) — the two must come from
+    // the one `now` the route reads once, or the stamp and the TODAY line disagree.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-24T18:00:00.000Z"));
+    getBusinessStatusRowMock.mockResolvedValue({
+      account_id: "acct1", state: "closed_today" as const, late_minutes: null,
+      until: "2026-10-24T18:30:00.000Z", set_by: "owner_1", set_at: "2026-10-24T12:00:00.000000Z",
+    });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    vi.useRealTimers();
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ businessStatus: "closed_today" });
+    expect(acceptedInstructions()).toContain("TODAY: The business is closed today. It opens again tomorrow.");
+  });
+
+  it("the clock moving DURING the reads cannot split the stamp from the prompt: a second `new Date()` after the reads reads the row as expired (fix round B3; mutation: recompute effective for the prompt with now: new Date() -> FAILS)", async () => {
+    // The test above freezes time, so a second clock read in the route returns the SAME instant and a
+    // recompute with `now: new Date()` would stay green there. Here each mocked read moves the clock one
+    // hour on as it answers, the way a slow read does in production: any `new Date()` the route takes AFTER
+    // the reads is 19:00, when this row (until 18:30) has expired. Only the one `now` read before them
+    // still sees it in force, so the stamp and the TODAY line both say closed today only if both use it.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-24T18:00:00.000Z"));
+    const later = new Date("2026-10-24T19:00:00.000Z");
+    getBusinessStatusRowMock.mockImplementation(async () => {
+      vi.setSystemTime(later);
+      return {
+        account_id: "acct1", state: "closed_today" as const, late_minutes: null,
+        until: "2026-10-24T18:30:00.000Z", set_by: "owner_1", set_at: "2026-10-24T12:00:00.000000Z",
+      };
+    });
+    listClosedDaysFromMock.mockImplementation(async () => {
+      vi.setSystemTime(later);
+      return [];
+    });
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    try {
+      await POST(req());
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ businessStatus: "closed_today" });
+    expect(acceptedInstructions()).toContain("TODAY: The business is closed today. It opens again tomorrow.");
+  });
+
+  it("a status read that throws leaves startCallRow with no businessStatus and the prompt with no TODAY line — the call is still answered (S17)", async () => {
+    getBusinessStatusRowMock.mockRejectedValue(new Error("getBusinessStatusRow failed: boom"));
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    const res = await POST(req());
+    expect(await res.json()).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect("businessStatus" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
+    expect(acceptedInstructions()).not.toContain("TODAY:");
+  });
+
+  it("the closed days reach the SAME payload the call is stamped with, as the literal line she reads", async () => {
+    listClosedDaysFromMock.mockResolvedValue([XMAS_ROW]);
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    const [, , payload] = ensureKnowledgeSnapshotMock.mock.calls[0]! as [unknown, string, { closed_days: { line: string }[] }];
+    expect(payload.closed_days[0]!.line).toBe("- Thursday, December 24 to Friday, December 25, 2026 (holiday)");
+    expect(acceptedInstructions()).toContain(
+      "CLOSED DAYS (the business is closed all day on these dates, and no time on them can be booked):",
+    );
+    expect(acceptedInstructions()).toContain("- Thursday, December 24 to Friday, December 25, 2026 (holiday)");
+  });
+
+  it("every new read is for the route's own resolved account, never a hardcoded or different one", async () => {
+    unwrapMock.mockResolvedValue(callIncomingEvent());
+    await POST(req());
+    expect(getBusinessStatusRowMock).toHaveBeenCalledWith(expect.anything(), "acct1");
+    expect(listClosedDaysFromMock.mock.calls[0]![1]).toBe("acct1");
+  });
+
+  // Task 10 review (orchestrator ruling, S17 extended): the status row read can succeed while the closed
+  // days read fails — [] is not "none planned", it is "unknown", and a day actually inside an unseen closed
+  // range must never read as open. (mutation: drop the unknown branch -> FAILS, see below)
+  describe("a closed-days read that fails while the status row reads open (S17 extended)", () => {
+    it("is unknown, never a guessed open: no businessStatus stamp, no TODAY line, the call is still answered", async () => {
+      // The default status read (beforeEach) is a successful `null` row — open.
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      unwrapMock.mockResolvedValue(callIncomingEvent());
+      const res = await POST(req());
+      expect(await res.json()).toEqual({ ok: true });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect("businessStatus" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
+      expect(acceptedInstructions()).not.toContain("TODAY:");
+    });
+
+    // "open" has no TODAY line either way (guessed or unknown), so a running_late row is the case that also
+    // proves it in the PROMPT TEXT, not only the stamp: running_late's own TODAY line is a real string, and
+    // it does not depend on closedDays at all for its STATE — exactly why it must still become unknown (a
+    // closed day this call could not see would have outranked it, S11), unlike closed_today/storm below.
+    it("the same is true of a running_late row: no stamp, no TODAY line (mutation: drop the unknown branch -> FAILS)", async () => {
+      getBusinessStatusRowMock.mockResolvedValue({
+        account_id: "acct1", state: "running_late" as const, late_minutes: 15,
+        until: "2099-01-01T00:00:00.000000Z", set_by: "owner_1", set_at: "2026-10-23T12:00:00.000000Z",
+      });
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      unwrapMock.mockResolvedValue(callIncomingEvent());
+      await POST(req());
+      expect("businessStatus" in (startCallRowMock.mock.calls[0]![2] as object)).toBe(false);
+      expect(acceptedInstructions()).not.toContain("TODAY:");
+    });
+
+    it("a storm row stands on its own: the stamp and the TODAY line survive a failed closed-days read", async () => {
+      getBusinessStatusRowMock.mockResolvedValue(STORM_ROW);
+      listClosedDaysFromMock.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      unwrapMock.mockResolvedValue(callIncomingEvent());
+      await POST(req());
+      expect(startCallRowMock.mock.calls[0]![2]).toMatchObject({ businessStatus: "storm" });
+      expect(acceptedInstructions()).toContain("TODAY: The business is closed because of a storm, until further notice.");
+    });
   });
 });

@@ -74,6 +74,9 @@ export type CreateBookingInput = {
 
 export type DueReminder = {
   bookingId: string; accountId: string; contactId: string; startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   bookerTimezone: string | null; cancelToken: string; calendarPublicId: string;
   contactEmail: string | null; contactName: string;
   accountTimezone: string;
@@ -102,6 +105,9 @@ export type DueReminder = {
 
 export type DueFollowup = {
   bookingId: string; accountId: string; contactId: string; startsAt: string;
+  /** 0097 (S-47d, SD20): when the appointment was kept through a closure; null when nobody kept it. Read from
+   *  this row, by-id re-reads included, so a release sees a fresh Keep however old the appointment is. */
+  closureKeptAt: string | null;
   /** The meeting's `ends_at`. Previously the query FILTERED on this column
    *  without selecting it; the send-time gate in the cron route
    *  (`shouldSendFollowupNow`) needs the actual instant, because "the next
@@ -1345,13 +1351,14 @@ export function ownAccountEmbedsOnly<T>(
   });
 }
 
-const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url,
+const REMINDER_SELECT = `id, account_id, contact_id, starts_at, created_at, booker_timezone, cancel_token, meeting_url, closure_kept_at,
              calendars(account_id, public_id), contacts(account_id, first_name, last_name, email, phone, language)`;
 
 function toDueReminder(r: any, info: AccountBrandInfo): DueReminder {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
   return {
     bookingId: r.id, accountId: r.account_id, contactId: r.contact_id, startsAt: r.starts_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     bookerTimezone: r.booker_timezone ?? null, cancelToken: r.cancel_token,
     calendarPublicId: r.calendars?.public_id, contactEmail: r.contacts?.email ?? null,
     contactName: contactName || "Unknown", accountTimezone: info.accountTimezone,
@@ -1480,12 +1487,13 @@ export async function stampReminderSent(db: SupabaseClient, bookingId: string): 
  * memory, so without that column the ~12 ticks inside one morning band would
  * each send.
  */
-const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts(account_id, first_name, last_name, email, language)`;
+const FOLLOWUP_SELECT = `id, account_id, contact_id, starts_at, ends_at, closure_kept_at, calendars!inner(account_id, followup_body, followup_body_es, followup_enabled), contacts(account_id, first_name, last_name, email, language)`;
 
 function toDueFollowup(r: any, info: AccountBrandInfo): DueFollowup {
   const contactName = [r.contacts?.first_name, r.contacts?.last_name].filter(Boolean).join(" ").trim();
   return {
     bookingId: r.id, accountId: r.account_id, contactId: r.contact_id, startsAt: r.starts_at, endsAt: r.ends_at,
+    closureKeptAt: r.closure_kept_at ?? null,
     contactEmail: r.contacts?.email ?? null, contactName: contactName || "Unknown",
     accountTimezone: info.accountTimezone, branding: info.branding,
     fromEmail: info.fromEmail, replyToEmail: info.replyToEmail, followupBody: r.calendars?.followup_body ?? "",

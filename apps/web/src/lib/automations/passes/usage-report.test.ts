@@ -15,6 +15,7 @@ import type { BilledUsageAccount, UsageRow } from "@bis/db";
 import { FakeGateway } from "@/lib/billing/fake-gateway";
 import { USAGE_REPORT_BUDGET_MS, USAGE_REPORT_TICK_CAP, METER_EVENT_WORST_CASE_MS } from "../caps";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { usageReportPass } from "./usage-report";
 
 const TICK = new Date("2026-09-25T15:00:00.000Z");
@@ -32,7 +33,7 @@ const SECS = 1790344800;   // 2026-09-25T14:00:00Z in seconds
 
 const ctx = (): PassContext => ({
   db: {} as never, now: TICK, origin: "https://app.example.com",
-  email: { isFake: true, send: vi.fn() }, sms: vi.fn(),
+  email: { isFake: true, send: vi.fn() }, sms: vi.fn(), closures: NO_CLOSURES,
 });
 const EMPTY = {
   reported: 0, alreadyAtStripe: 0, unstamped: 0, alreadyStamped: 0, failed: 0, expired: 0, staleAccounts: 0,

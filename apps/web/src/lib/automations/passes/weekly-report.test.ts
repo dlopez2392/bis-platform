@@ -14,6 +14,7 @@ import { lastWeekMonday } from "@/lib/reports/weekly-window";
 import type { WeeklyNumbers } from "@/lib/reports/weekly-metrics";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { WEEKLY_REPORT_TICK_CAP, WEEKLY_REPORT_BUDGET_MS } from "../caps";
 import { weeklyClientReportPass } from "./weekly-report";
 
@@ -52,6 +53,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: ORIGIN,
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+    closures: NO_CLOSURES,
   };
 }
 

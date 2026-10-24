@@ -30,6 +30,7 @@ import { buildSuggestionView } from "@/lib/proposals/view";
 import { makeTr } from "@/lib/record/copy";
 import { SuggestionDemo } from "./suggestion-demo";
 import { WorkTrayDemo } from "./work-tray-demo";
+import { BusinessStatusDemo } from "./business-status-demo";
 import { LogStatusPill } from "../accounts/[accountId]/activity/log-status-pill";
 import { CONFIRM_REPLY_TREATMENTS } from "../accounts/[accountId]/calendar/confirm-reply";
 import { DotPill } from "@/components/dot-pill";
@@ -466,6 +467,16 @@ export default async function StyleguidePage({
             rail-states.tsx for what that cost before it was one. */}
         <Section title="Status states (setup rail)" file="…/setup/setup-rail.tsx">
           <RailStates />
+        </Section>
+
+        {/* S-47d fix round D12: the one switch — its menu trigger (the topbar's status words, English and
+            Spanish, and Open) and the dashboard status card open, closed with its affected rows (held,
+            kept, nameless), running late (Staff's two-item menu), storm with none affected, and failed. */}
+        <Section
+          title={m["business.menu.trigger"]}
+          file="components/business-status-menu.tsx · …/dashboard/{business-status-card-view,affected-appointment-row,business-status-card-error}.tsx"
+        >
+          <BusinessStatusDemo />
         </Section>
 
         {/* The one component on this page that does NOT belong to the

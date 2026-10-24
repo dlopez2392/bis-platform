@@ -3,10 +3,12 @@
 // actions call serviceDb() behind their agency check); this file only ever names its TYPE.
 import {
   getVoiceProfile, listVoiceServices, readAccountTimezone, getLatestKnowledgeVersion, saveVoiceKnowledge,
+  listClosedDaysFrom,
   type KnowledgeParts, type serviceDb,
 } from "@bis/db";
 import { buildKnowledgePayload } from "./payload";
 import { keepStoredInsurancePrices } from "./validate";
+import { dayKey } from "../../business-status/status";
 
 type Db = ReturnType<typeof serviceDb>;
 export type SaveOutcome = { ok: true; version: number } | { ok: false; reason: "stale" | "no_profile" | "invalid" | "failed" };
@@ -28,6 +30,11 @@ export async function saveKnowledgeParts(db: Db, accountId: string, actor: strin
         readAccountTimezone(db, accountId), getLatestKnowledgeVersion(db, accountId),
       ]);
       if (!profile || !timezone) return { ok: false, reason: "no_profile" };
+      // S-47d: read fresh every attempt, same as the other four — a stale `closed_days` recorded here is a
+      // snapshot the NEXT call would contradict, so a failed read FAILS the save (the outer catch below)
+      // rather than recording one with none planned.
+      const today = dayKey(new Date(), timezone);
+      const closedDays = await listClosedDaysFrom(db, accountId, today);
       // C13, C21: on insurance a services part keeps a price only on an unchanged row of the list read in THIS
       // attempt; every other priced row is saved as after_visit. Built from the caller's `parts` every attempt.
       const sent: KnowledgeParts = parts.services && profile.trade_module === "insurance_pc"
@@ -39,6 +46,7 @@ export async function saveKnowledgeParts(db: Db, accountId: string, actor: strin
         timezone,
         businessHours: "business_hours" in sent ? sent.business_hours : profile.business_hours,
         services: sent.services ?? rows,
+        closedDays, today,
       });
       const r = await saveVoiceKnowledge(db, accountId, { actor, parts: sent, payload, baseVersion });
       if (r.status === "ok") return { ok: true, version: r.version };

@@ -21,6 +21,7 @@ import { AUTOMATION_DAILY_CAP, REACTIVATION_DAILY_CAP } from "../caps";
 import { STAMP_RETRY_DELAYS_MS } from "@/lib/booking/stamp-retry";
 import { m } from "@/lib/messages";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { reactivationPass, releaseReactivation } from "./reactivation";
 import { EmailNotSent } from "@/lib/consent/email-gate";
 
@@ -80,6 +81,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: smsFactory as unknown as PassContext["sms"],
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = {

@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 import { expiryTaskKey } from "@bis/db";
 import { openExpiryTasks, documentsExpiryPass, EXPIRY_TASKS_PER_RUN, EXPIRY_CANDIDATES_PER_RUN, EXPIRY_BUDGET_MS, EXPIRY_HEAL_PER_RUN } from "./documents-expiry";
+import { NO_CLOSURES } from "../closures";
 
 /** S-07 3a (spec 3.2, 6): who opens a To-do, once, where, titled and due how, and what a bad document or a slow run does. */
 const NOW = new Date("2026-11-01T03:00:00Z");   // Chicago's day is Oct 31, Berlin's Nov 1
@@ -157,7 +158,7 @@ describe("the registered pass", () => {
   it("is documentsExpiry, runs on the tick's client and instant; nothing due is one read, the heal, and zero counters (mutations: read the keys with no candidates, or run on a client or instant other than the tick's -> FAILS)", async () => {
     db.listExpiringDocuments.mockResolvedValue([]);
     expect(documentsExpiryPass.key).toBe("documentsExpiry");
-    const c = await documentsExpiryPass.run({ db: FAKE_DB, now: NOW, origin: "https://x", email: {} as never, sms: {} as never });
+    const c = await documentsExpiryPass.run({ db: FAKE_DB, now: NOW, origin: "https://x", email: {} as never, sms: {} as never, closures: NO_CLOSURES });
     expect(c).toEqual(ZERO);
     // The tick's client, and the range read off the tick's instant (NOW's UTC day is 2026-11-01: from - 1, to + 31).
     expect(db.listExpiringDocuments).toHaveBeenCalledTimes(1);

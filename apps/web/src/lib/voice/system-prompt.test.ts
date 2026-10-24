@@ -6,6 +6,8 @@ import { TRADE_MODULES } from "./modules";
 import { buildRealtimeSessionConfig } from "./session-config";
 import type { OpenHours } from "../booking/slots";
 import type { RenderedService } from "./knowledge/payload";
+import type { ClosedDayLine } from "./knowledge/closure-lines";
+import type { EffectiveStatus } from "../business-status/status";
 
 const base = {
   personaName: "Sofía", businessName: "Rio Roofing",
@@ -692,6 +694,31 @@ describe("buildSystemPrompt — S-47c digests", () => {
   }, 30_000); // 3 x 5184 prompts: ~3.3s idle; it timed out at the 5s default once under load (Task 4 mutation run)
 });
 
+/** Every S-47c base combination × hours {absent, OPEN_H, CLOSED_H} × price list {absent, LIST}: 5184 × 3 × 2. */
+function everyS47dBaseInput(): VoicePromptInput[] {
+  const out: VoicePromptInput[] = [];
+  for (const i of everyS47cBaseInput())
+    for (const businessHours of [undefined, OPEN_H, CLOSED_H] as const)
+      for (const priceList of [undefined, LIST] as const)
+        out.push({
+          ...i,
+          ...(businessHours === undefined ? {} : { businessHours }),
+          ...(priceList === undefined ? {} : { priceList }),
+        });
+  return out;
+}
+/** sha256 over all 31,104 prompts at main 5e9c07a7, BEFORE S-47d touched system-prompt.ts or hours.ts (964a46bd changed none of the prompt's files, so it reads the same there). */
+const PRE_S47D_DIGEST = "f4ef945b252ea1ee3218c79628c5592108cc37e6975f63ac9cb0abcf118015c9";
+
+describe("buildSystemPrompt — no closure is byte-identical to before S-47d (spec 5.4.4)", () => {
+  it("covers 31104 combinations (guards the digest from an empty loop)", () => {
+    expect(everyS47dBaseInput().length).toBe(31104);
+  });
+  it("with neither new key, every combination is byte-identical to 5e9c07a7", () => {
+    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt(i, now)))).toBe(PRE_S47D_DIGEST);
+  }, 60_000);
+});
+
 describe("buildSystemPrompt — hours (S-47c spec 5.2)", () => {
   it("open now: exactly the BUSINESS HOURS block, after the Services line, and nothing else, on every surface (72 combinations; mutation: place it after HARD LIMITS -> FAILS)", () => {
     let seen = 0;
@@ -865,5 +892,188 @@ describe("buildSystemPrompt — the price list (S-47c spec 5.2, 5.4)", () => {
     const p = buildSystemPrompt(baseInput({ tradeModule: "insurance_pc", priceListUnavailable: true }), now);
     expect(p).toContain(TODAY_PRICE);
     expect(p).not.toContain(CLOSED_PRICE);
+  });
+});
+
+// S-47d (spec 5.4, 5.4.1, 5.4.2, 5.4.4): the switch and the closed days in the prompt. Every line a typed-out literal.
+// now = Tuesday, June 1, 2027, 10:00 AM CDT; Wednesday June 2 8:00 AM CDT = 13:00Z.
+const S_OPEN: EffectiveStatus = { state: "open", nextClosedDay: null };
+const S_CLOSED_TODAY: EffectiveStatus = { state: "closed_today", reopensAt: new Date("2027-06-02T13:00:00Z"), reopensTimeKnown: true };
+const S_STORM_OPEN: EffectiveStatus = { state: "storm", reopensAt: null, reopensTimeKnown: false };
+const S_STORM_DATED: EffectiveStatus = { state: "storm", reopensAt: new Date("2027-06-03T13:00:00Z"), reopensTimeKnown: true };
+const S_CLOSED_DAY: EffectiveStatus = { state: "closed_day", reason: "holiday", startsOn: "2027-06-01", endsOn: "2027-06-01", reopensAt: new Date("2027-06-02T13:00:00Z"), reopensTimeKnown: true };
+const S_LATE: EffectiveStatus = { state: "running_late", lateMinutes: 30, endsAt: new Date("2027-06-02T05:00:00Z") };
+const CLOSURES = [["closed today", S_CLOSED_TODAY], ["open-ended storm", S_STORM_OPEN], ["dated storm", S_STORM_DATED], ["closed day", S_CLOSED_DAY]] as const;
+const TODAY_CLOSED = "TODAY: The business is closed today. It opens again tomorrow at 8:00 AM.";
+const TODAY_STORM_OPEN = "TODAY: The business is closed because of a storm, until further notice.";
+const TODAY_STORM_DATED = "TODAY: The business is closed because of a storm. It opens again on Thursday at 8:00 AM.";
+const TODAY_CLOSED_DAY = "TODAY: The business is closed all day today for a holiday. It opens again tomorrow at 8:00 AM.";
+const TODAY_LATE = "TODAY: The team is running about 30 minutes behind today. If someone asks about a visit or appointment today, tell them it may start about 30 minutes late.";
+const DAYS: ClosedDayLine[] = [
+  { starts_on: "2027-07-05", ends_on: "2027-07-05", reason: "holiday", line: "- Monday, July 5, 2027 (holiday)" },
+  { starts_on: "2027-12-27", ends_on: "2028-01-01", reason: "vacation", line: "- Monday, December 27, 2027 to Saturday, January 1, 2028 (vacation)" },
+];
+const DAYS_BLOCK = "CLOSED DAYS (the business is closed all day on these dates, and no time on them can be booked):\n- Monday, July 5, 2027 (holiday)\n- Monday, December 27, 2027 to Saturday, January 1, 2028 (vacation)";
+const SEE_TODAY_PHONE_HEAD = "AFTER HOURS — The business is closed right now (see TODAY above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above";
+const BOOK_CLAUSE = ", and book a time that check_availability returns";
+const WEB_TODAY = "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.";
+const DEMO_TODAY = "AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.";
+
+describe("buildSystemPrompt — S-47d byte identity (spec 5.4.4)", () => {
+  it("null, [] and an open status are byte-identical too, across all 31104 (mutations: an unconditional \"\" before the TODAY slot -> FAILS; treat [] as closed days -> FAILS)", () => {
+    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, businessStatus: null, closedDays: null }, now)))).toBe(PRE_S47D_DIGEST);
+    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, closedDays: [] }, now)))).toBe(PRE_S47D_DIGEST);
+    expect(digestOf(everyS47dBaseInput().map((i) => buildSystemPrompt({ ...i, businessStatus: S_OPEN, closedDays: [] }, now)))).toBe(PRE_S47D_DIGEST);
+  }, 180_000);
+  it("an open status alone adds nothing even where the closure path would word the opening differently: a DST-gap opening (mutation: closures built for an open status with no closed days -> FAILS)", () => {
+    // Sunday, March 14, 2027, 1:30 AM CST: the 2:30 AM opening falls in the spring-forward gap. S-47c says the
+    // span's own words; the closure path's reopening would say the first minute after the gap.
+    const gapNow = new Date("2027-03-14T07:30:00Z");
+    const input = baseInput({ businessHours: { sun: [["02:30", "04:00"]] } });
+    const plain = buildSystemPrompt(input, gapNow);
+    expect(plain).toContain("Right now: closed; opens today at 2:30 AM.");
+    expect(buildSystemPrompt({ ...input, businessStatus: S_OPEN }, gapNow)).toBe(plain);
+    expect(buildSystemPrompt({ ...input, businessStatus: S_OPEN, closedDays: [] }, gapNow)).toBe(plain);
+  });
+});
+
+describe("buildSystemPrompt — the TODAY line and the CLOSED DAYS block (spec 5.4, 5.4.1)", () => {
+  it.each([
+    ["closed today", S_CLOSED_TODAY, TODAY_CLOSED], ["open-ended storm", S_STORM_OPEN, TODAY_STORM_OPEN],
+    ["dated storm", S_STORM_DATED, TODAY_STORM_DATED], ["closed day", S_CLOSED_DAY, TODAY_CLOSED_DAY], ["running late", S_LATE, TODAY_LATE],
+  ] as const)("%s: its TODAY line, once", (_n, s, line) => {
+    const p = buildSystemPrompt(baseInput({ businessStatus: s }), now);
+    expect(p.split("\n").filter((l) => l.startsWith("TODAY:"))).toEqual([line]);
+  });
+  it("with hours: after the BUSINESS HOURS block's Right now line, then CLOSED DAYS, then SERVICES AND PRICES", () => {
+    const p = buildSystemPrompt(baseInput({ businessHours: OPEN_H, priceList: LIST, businessStatus: S_CLOSED_TODAY, closedDays: DAYS }), now);
+    expect(p).toContain(`Sunday: closed\nRight now: closed; opens tomorrow at 8:00 AM.\n\n${TODAY_CLOSED}\n\n${DAYS_BLOCK}\n\nSERVICES AND PRICES`);
+  });
+  it("without hours: after the Services line; and before HARD LIMITS with no list", () => {
+    const p = buildSystemPrompt(baseInput({ businessStatus: S_STORM_OPEN, closedDays: DAYS }), now);
+    expect(p).toContain(`Services: Roof repair, full replacement, inspections\n\n${TODAY_STORM_OPEN}\n\n${DAYS_BLOCK}\n\nHARD LIMITS:`);
+  });
+  it("closed days alone (open): the block and nothing else (mutation: drop closedDaysBlock -> FAILS)", () => {
+    const input = baseInput({ businessStatus: S_OPEN });
+    const p = buildSystemPrompt({ ...input, closedDays: DAYS }, now);
+    expect(p).not.toContain("TODAY:");
+    expect(p.replace(`\n\n${DAYS_BLOCK}`, "")).toBe(buildSystemPrompt(input, now));
+  });
+  it("I-2: an upcoming closed day reaches the Right now line even when the status itself is open (mutation: closedDays forced to [] in system-prompt.ts's closures -> FAILS, says 'opens tomorrow')", () => {
+    // Thursday, June 3, 2027, 6:00 PM CDT. Friday June 4 is a holiday closed day; Monday June 7 is next open.
+    const thu6pm = new Date("2027-06-03T23:00:00Z");
+    const monFriHours: OpenHours = {
+      mon: [["08:00", "17:00"]], tue: [["08:00", "17:00"]], wed: [["08:00", "17:00"]],
+      thu: [["08:00", "17:00"]], fri: [["08:00", "17:00"]],
+    };
+    const fridayHoliday: ClosedDayLine = { starts_on: "2027-06-04", ends_on: "2027-06-04", reason: "holiday", line: "- Friday, June 4, 2027 (holiday)" };
+    const p = buildSystemPrompt(baseInput({ businessHours: monFriHours, businessStatus: S_OPEN, closedDays: [fridayHoliday] }), thu6pm);
+    expect(p.split("\n").find((l) => l.startsWith("Right now:"))).toBe("Right now: closed; opens Monday at 8:00 AM.");
+  });
+  it("running late with hours: the block is S-47c's, plus the TODAY line only", () => {
+    const input = baseInput({ businessHours: OPEN_H });
+    expect(buildSystemPrompt({ ...input, businessStatus: S_LATE }, now).replace(`\n\n${TODAY_LATE}`, "")).toBe(buildSystemPrompt(input, now));
+  });
+});
+
+describe("buildSystemPrompt — closed now with a closure (spec 5.4.2; C14, C19)", () => {
+  const PHONE = baseInput({ handoffAvailable: true, callerNumber: null, bookingEnabled: true, afterHours: "hours_then_message" });
+  const SITES = [
+    "then offer to take a message if they would rather talk to a person. Never claim to be human.",
+    "if they ask, offer to take a message instead.",
+    "If either refuses, apologize and offer to take a message.",
+    "and offer to take a message, or suggest they call back from that phone.",
+  ];
+  it("every closed state, with and without hours: the four offer sites read 'offer to take a message' and the TOOLS line is the closed one (16 combinations)", () => {
+    let seen = 0;
+    for (const [name, s] of CLOSURES)
+      for (const businessHours of [undefined, OPEN_H])
+        for (const medium of [undefined, "phone"] as const) {
+          const p = buildSystemPrompt({ ...PHONE, businessStatus: s, ...(businessHours ? { businessHours } : {}), ...(medium ? { medium } : {}) }, now);
+          for (const site of SITES) expect(p, `${name} ${site}`).toContain(site);
+          expect(p, name).toContain(TOOL_CLOSED);
+          expect(p, name).not.toContain(TOOL_TODAY);
+          expect(p, name).not.toContain(PUT_THROUGH);
+          seen += 1;
+        }
+    expect(seen).toBe(16);
+  });
+  it("transfer_to_human stays on the session in a closure (toolSchemas unchanged)", () => {
+    for (const [, s] of CLOSURES) {
+      const tools = buildRealtimeSessionConfig({ ...PHONE, businessStatus: s }, now).tools as Array<{ name: string }>;
+      expect(tools.map((t) => t.name)).toContain("transfer_to_human");
+      expect(tools).toEqual(buildRealtimeSessionConfig(PHONE, now).tools);
+    }
+  });
+  it("the trade module block is byte-identical closed and open (C12)", () => {
+    for (const tradeModule of ["insurance_pc", "events"] as const) {
+      const block = (p: string) => p.slice(p.indexOf("TRADE RULES —"), p.indexOf("\n\nTOOLS"));
+      const closed = buildSystemPrompt({ ...PHONE, tradeModule, businessStatus: S_STORM_DATED }, now);
+      expect(block(closed).length).toBeGreaterThan(100);
+      expect(block(closed)).toBe(block(buildSystemPrompt({ ...PHONE, tradeModule }, now)));
+      expect(closed).toContain(TOOL_CLOSED_URGENT);
+    }
+  });
+  it("running late never closes (mutation: closedNow true for Running late -> FAILS)", () => {
+    for (const businessHours of [undefined, OPEN_H]) {
+      const p = buildSystemPrompt({ ...PHONE, businessStatus: S_LATE, ...(businessHours ? { businessHours } : {}) }, now);
+      expect(p).toContain(TOOL_TODAY);
+      expect(p).toContain(PUT_THROUGH);
+      expect(p).not.toContain("AFTER HOURS");
+    }
+  });
+  it("C19: Always take a message keeps today's offers and TOOLS line in every closure, and its MESSAGES ONLY line", () => {
+    for (const [, s] of CLOSURES) {
+      const input = { ...PHONE, afterHours: "message_only" as const };
+      const p = buildSystemPrompt({ ...input, businessStatus: s }, now);
+      expect(p).toContain(TOOL_TODAY);
+      expect(p).toContain(PUT_THROUGH);
+      expect(lastLine(p)).toBe(lastLine(buildSystemPrompt(input, now)));
+    }
+  });
+});
+
+describe("buildSystemPrompt — AFTER HOURS with a closure (spec 5.4.2; SD16, S13, D10)", () => {
+  it("phone, no hours: the (see TODAY above) line; with hours: (see Right now above) (mutation: ignore see -> FAILS)", () => {
+    const noHours = lastLine(buildSystemPrompt(baseInput({ businessStatus: S_CLOSED_TODAY }), now))!;
+    expect(noHours).toBe(`${SEE_TODAY_PHONE_HEAD}${BOOK_CLAUSE}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.`);
+    const withHours = buildSystemPrompt(baseInput({ businessStatus: S_CLOSED_TODAY, businessHours: OPEN_H }), now);
+    expect(lastLine(withHours)).toBe("AFTER HOURS — The business is closed right now (see Right now above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens.");
+    expect(withHours).not.toContain("(see TODAY above)");
+  });
+  it("an open-ended storm's phone line has no booking clause, with or without hours; a dated storm keeps it (mutation: canBook kept true -> FAILS)", () => {
+    for (const businessHours of [undefined, OPEN_H]) {
+      const h = businessHours ? { businessHours } : {};
+      expect(lastLine(buildSystemPrompt(baseInput({ businessStatus: S_STORM_OPEN, ...h }), now))).not.toContain(BOOK_CLAUSE);
+      expect(lastLine(buildSystemPrompt(baseInput({ businessStatus: S_STORM_OPEN, ...h }), now))).toContain("AFTER HOURS — The business is closed right now");
+      expect(lastLine(buildSystemPrompt(baseInput({ businessStatus: S_STORM_DATED, ...h }), now))).toContain(BOOK_CLAUSE);
+    }
+    expect(lastLine(buildSystemPrompt(baseInput({ businessStatus: S_STORM_OPEN }), now))).toBe(
+      `${SEE_TODAY_PHONE_HEAD}. For anything that needs someone on the team, take a message and say the team will call them back once it opens.`);
+  });
+  it("web chat and voice demo, no hours: the (see TODAY above) lines under both settings; with hours, the Right now ones", () => {
+    for (const afterHours of ["hours_then_message", "message_only"] as const) {
+      for (const [, s] of CLOSURES) {
+        expect(lastLine(buildSystemPrompt(baseInput({ medium: "web", afterHours, businessStatus: s }), now))).toBe(WEB_TODAY);
+        expect(lastLine(buildSystemPrompt(baseInput({ medium: "web_voice", afterHours, businessStatus: s }), now))).toBe(DEMO_TODAY);
+      }
+      expect(lastLine(buildSystemPrompt(baseInput({ medium: "web", afterHours, businessStatus: S_CLOSED_TODAY, businessHours: OPEN_H }), now)))
+        .toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
+      expect(lastLine(buildSystemPrompt(baseInput({ medium: "web_voice", afterHours, businessStatus: S_CLOSED_TODAY, businessHours: OPEN_H }), now)))
+        .toBe("AFTER HOURS — The business is closed right now (see Right now above); say so briefly and take a message; do not attempt anything else.");
+    }
+  });
+  it("web and demo under Always take a message, running late, no hours: today's conditional line", () => {
+    expect(lastLine(buildSystemPrompt(baseInput({ medium: "web", afterHours: "message_only", businessStatus: S_LATE }), now)))
+      .toBe("AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
+  });
+  it("D10: a storm leaves the web chat's lead capture: its AFTER HOURS line names capture_lead, its capture_lead TOOLS line stays, and the session's tools are unchanged", () => {
+    for (const afterHours of ["hours_then_message", "message_only"] as const) {
+      const input = baseInput({ medium: "web", afterHours });
+      const p = buildSystemPrompt({ ...input, businessStatus: S_STORM_OPEN }, now);
+      expect(lastLine(p)).toBe(WEB_TODAY);
+      expect(p).toContain("- capture_lead(fullName, email, phone, need) — record who the visitor is and what they need. Call it as soon as you have their name AND either an email address or a phone number.");
+      expect(buildRealtimeSessionConfig({ ...input, businessStatus: S_STORM_OPEN }, now).tools).toEqual(buildRealtimeSessionConfig(input, now).tools);
+    }
   });
 });

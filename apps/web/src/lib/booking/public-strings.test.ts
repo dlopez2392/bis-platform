@@ -50,6 +50,22 @@ describe("bookingStrings", () => {
     }
   });
 
+  // S-47d (spec §5.3): the four closed-business notices, pinned as typed
+  // literals in both languages (mutation: change one word -> FAILS).
+  it("pins the closed-business notices, both languages", () => {
+    const pairs: Array<[keyof ReturnType<typeof bookingStrings>, string, string]> = [
+      ["closedTodayNotice", "Closed today. Please pick another day.", "Cerrado hoy. Elige otro día."],
+      ["stormNotice", "We're closed for now. Please check back soon.", "Por ahora estamos cerrados. Vuelve a consultar pronto."],
+      ["stormUntilNotice", "Closed until {date}. Please pick a day from then on.", "Cerrado hasta el {date}. Elige un día a partir de esa fecha."],
+      ["closedDay", "Closed this day.", "Cerrado este día."],
+    ];
+    const en = bookingStrings("en");
+    const es = bookingStrings("es");
+    for (const [key, enVal, esVal] of pairs) {
+      expect([en[key], es[key]], key).toEqual([enVal, esVal]);
+    }
+  });
+
   // Same rule `messages.test.ts` pins for the dashboard catalogue: a stranger
   // must never read an internal roadmap label.
   it("cites no internal roadmap label", () => {

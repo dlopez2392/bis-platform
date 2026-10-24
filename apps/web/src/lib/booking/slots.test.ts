@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { computeSlots, bookableRange, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range } from "./slots";
+import { computeSlots, bookableRange, zonedTimeToUtc, partsInZone, normalizeOpenHours, type SlotConfig, type OpenHours, type Range, type SlotClosures } from "./slots";
+import { hoursChain, slotClosures, untilFor, type StatusInput, type StatusRowInput } from "../business-status/status";
 
 const CFG: SlotConfig = {
   timezone: "America/Chicago", slotDurationMinutes: 60, bufferMinutes: 0,
@@ -399,6 +400,183 @@ describe("bookableRange — the one submit-time predicate", () => {
       const offered = computeSlots(c, booked, now);
       expect(offered.length).toBeGreaterThan(0);
       for (const s of offered) expect(bookableRange(c, booked, now, s.startsAt)).toEqual(s);
+    }
+  });
+});
+
+/**
+ * S-47d: closures. Every fixture is built by the real writers (`untilFor` for the stored `until`,
+ * `slotClosures` for the engine's input), so a status-side mistake (a reopening-based window) shows up here
+ * as a wrong slot, not only as a wrong field in status.test.ts. The zone is America/Chicago; the calendar is
+ * open Monday to Friday 08:00-17:00 and Saturday 09:00-13:00, while the account's business hours are Monday
+ * to Friday only (the two-hours-sources shape D12 exists for). Every instant is CDT (UTC-5).
+ */
+describe("closures (S-47d)", () => {
+  const CHI = "America/Chicago";
+  const BIZ: OpenHours = {
+    mon: [["08:00", "17:00"]], tue: [["08:00", "17:00"]], wed: [["08:00", "17:00"]],
+    thu: [["08:00", "17:00"]], fri: [["08:00", "17:00"]],
+  };
+  const CAL: OpenHours = { ...BIZ, sat: [["09:00", "13:00"]] };
+  const C: SlotConfig = { timezone: CHI, slotDurationMinutes: 60, bufferMinutes: 0, minNoticeHours: 0, maxAdvanceDays: 7, openHours: CAL };
+  const chain = hoursChain(BIZ, CAL);
+  const WED = new Date("2027-06-02T15:00:00.000Z"); // Wednesday 10:00 CDT
+  const FRI = new Date("2027-06-04T15:00:00.000Z"); // Friday 10:00 CDT
+  const SAT9 = "2027-06-05T14:00:00.000Z";          // Saturday 09:00 CDT
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const label = (r: Range) => {
+    const p = partsInZone(r.startsAt, CHI);
+    return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.hh)}:${pad(p.mi)}`;
+  };
+  const hoursOf = (key: string, from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `${key} ${pad(from + i)}:00`);
+  const row = (state: StatusRowInput["state"], late_minutes: number | null, until: Date | null, setAt: Date): StatusRowInput =>
+    ({ state, late_minutes, until: until ? until.toISOString() : null, set_at: setAt.toISOString() });
+  const closuresFor = (over: Partial<StatusInput> & { now: Date }): SlotClosures =>
+    slotClosures({ row: null, closedDays: [], hours: chain, timezone: CHI, ...over });
+
+  type Fixture = { name: string; cfg: SlotConfig; now: Date; closures: SlotClosures; dropped: string[] };
+  const fixtures: Fixture[] = [
+    {
+      name: "a closed day (Thursday) drops that day only",
+      cfg: C, now: WED,
+      closures: closuresFor({ now: WED, closedDays: [{ starts_on: "2027-06-03", ends_on: "2027-06-03", reason: "holiday" }] }),
+      dropped: hoursOf("2027-06-03", 8, 16),
+    },
+    {
+      name: "Closed today (set Wednesday 10:00) drops the rest of today and nothing after midnight (D12)",
+      cfg: C, now: WED,
+      closures: closuresFor({ now: WED, row: row("closed_today", null, untilFor({ state: "closed_today" }, chain, CHI, WED), WED) }),
+      dropped: hoursOf("2027-06-02", 10, 16),
+    },
+    {
+      name: "an open-ended storm drops every slot",
+      cfg: C, now: WED,
+      closures: closuresFor({ now: WED, row: row("storm", null, null, WED) }),
+      dropped: [
+        ...hoursOf("2027-06-02", 10, 16), ...hoursOf("2027-06-03", 8, 16), ...hoursOf("2027-06-04", 8, 16),
+        ...hoursOf("2027-06-05", 9, 12), ...hoursOf("2027-06-07", 8, 16), ...hoursOf("2027-06-08", 8, 16),
+        ...hoursOf("2027-06-09", 8, 16),
+      ],
+    },
+    {
+      name: "Running late 30 (Wednesday 10:00) drops only today's slots starting within 30 minutes; 10:30 itself stays",
+      cfg: { ...C, slotDurationMinutes: 15, maxAdvanceDays: 1 }, now: WED,
+      closures: closuresFor({ now: WED, row: row("running_late", 30, untilFor({ state: "running_late", lateMinutes: 30 }, chain, CHI, WED), WED) }),
+      dropped: ["2027-06-02 10:00", "2027-06-02 10:15"],
+    },
+    {
+      name: "a storm set Wednesday and back on Saturday drops Wednesday to Friday and keeps Saturday (orchestrator ruling)",
+      cfg: C, now: WED,
+      closures: closuresFor({ now: WED, row: row("storm", null, untilFor({ state: "storm", backOn: "2027-06-05" }, chain, CHI, WED), WED) }),
+      dropped: [...hoursOf("2027-06-02", 10, 16), ...hoursOf("2027-06-03", 8, 16), ...hoursOf("2027-06-04", 8, 16)],
+    },
+    {
+      name: "D12's Saturday case: Closed today set Friday 10:00 drops Friday only and keeps Saturday",
+      cfg: C, now: FRI,
+      closures: closuresFor({ now: FRI, row: row("closed_today", null, untilFor({ state: "closed_today" }, chain, CHI, FRI), FRI) }),
+      dropped: hoursOf("2027-06-04", 10, 16),
+    },
+  ];
+
+  const split = (f: Fixture) => {
+    const base = computeSlots(f.cfg, [], f.now);
+    const offered = computeSlots({ ...f.cfg, closures: f.closures }, [], f.now);
+    const kept = new Set(offered.map((r) => r.startsAt.getTime()));
+    return { base, offered, dropped: base.filter((r) => !kept.has(r.startsAt.getTime())) };
+  };
+
+  it("the fixtures' windows are the D12 ones (pinned, so a fixture cannot drift into a vacuous one)", () => {
+    expect(untilFor({ state: "closed_today" }, chain, CHI, WED)?.toISOString()).toBe("2027-06-03T05:00:00.000Z");
+    expect(untilFor({ state: "closed_today" }, chain, CHI, FRI)?.toISOString()).toBe("2027-06-05T05:00:00.000Z");
+    expect(untilFor({ state: "storm", backOn: "2027-06-05" }, chain, CHI, WED)?.toISOString()).toBe("2027-06-05T05:00:00.000Z");
+    expect(chain).toEqual(BIZ);
+  });
+
+  for (const f of fixtures) {
+    it(`${f.name}: exactly these slots, nothing else`, () => {
+      const { base, offered, dropped } = split(f);
+      expect(base.length).toBeGreaterThan(0);
+      expect(dropped.map(label)).toEqual(f.dropped);
+      expect(offered.length).toBe(base.length - f.dropped.length);
+    });
+  }
+
+  it("bookableRange refuses every dropped start and accepts every other start with its original range", () => {
+    let refused = 0;
+    let accepted = 0;
+    for (const f of fixtures) {
+      const { base, dropped } = split(f);
+      const out = new Set(dropped.map((r) => r.startsAt.getTime()));
+      for (const s of base) {
+        const got = bookableRange({ ...f.cfg, closures: f.closures }, [], f.now, s.startsAt);
+        if (out.has(s.startsAt.getTime())) { expect(got, `${f.name}: ${label(s)}`).toBeNull(); refused++; }
+        else { expect(got, `${f.name}: ${label(s)}`).toEqual(s); accepted++; }
+      }
+    }
+    expect(refused).toBe(fixtures.reduce((n, f) => n + f.dropped.length, 0));
+    expect(accepted).toBeGreaterThan(0);
+  });
+
+  it("the invariant: every slot computeSlots offers under a closure passes bookableRange under the same closure", () => {
+    let checked = 0;
+    for (const f of fixtures) {
+      const c = { ...f.cfg, closures: f.closures };
+      for (const s of computeSlots(c, [], f.now)) { expect(bookableRange(c, [], f.now, s.startsAt)).toEqual(s); checked++; }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a storm back on Saturday: Saturday 09:00 is offered and bookableRange accepts it (mutation: a reopening-based until, Monday 08:00, FAILS)", () => {
+    const f = fixtures[4]!;
+    const c = { ...f.cfg, closures: f.closures };
+    expect(computeSlots(c, [], WED).map((r) => r.startsAt.toISOString())).toContain(SAT9);
+    expect(bookableRange(c, [], WED, new Date(SAT9))).toEqual({ startsAt: new Date(SAT9), endsAt: new Date("2027-06-05T15:00:00.000Z") });
+  });
+
+  it("D12's Saturday case: Saturday 09:00 is offered and bookableRange accepts it (mutation: blockedBefore = the reopening, Monday 08:00, FAILS)", () => {
+    const f = fixtures[5]!;
+    const c = { ...f.cfg, closures: f.closures };
+    expect(computeSlots(c, [], FRI).map((r) => r.startsAt.toISOString())).toContain(SAT9);
+    expect(bookableRange(c, [], FRI, new Date(SAT9))).toEqual({ startsAt: new Date(SAT9), endsAt: new Date("2027-06-05T15:00:00.000Z") });
+  });
+
+  it("Running late 120 at 23:00 never reaches past midnight: tomorrow's 00:00 and 00:30 stay (spec §5.3)", () => {
+    const now = new Date("2027-06-03T04:00:00.000Z"); // Wednesday 23:00 CDT
+    const cfg: SlotConfig = { ...C, slotDurationMinutes: 30, maxAdvanceDays: 1, openHours: { thu: [["00:00", "02:00"]] } };
+    const closures = closuresFor({ now, row: row("running_late", 120, untilFor({ state: "running_late", lateMinutes: 120 }, chain, CHI, now), now) });
+    expect(closures.lateBefore?.toISOString()).toBe("2027-06-03T05:00:00.000Z");
+    expect(computeSlots({ ...cfg, closures }, [], now).map(label))
+      .toEqual(["2027-06-03 00:00", "2027-06-03 00:30", "2027-06-03 01:00", "2027-06-03 01:30"]);
+    expect(bookableRange({ ...cfg, closures }, [], now, new Date("2027-06-03T05:00:00.000Z"))).not.toBeNull();
+  });
+
+  it("a closed day is the ACCOUNT's date, not UTC's: Wednesday 19:00 CDT (Thursday in UTC) stays, Thursday 19:00 CDT goes (mutation: a UTC date key, FAILS)", () => {
+    const cfg: SlotConfig = { ...C, maxAdvanceDays: 2, openHours: { wed: [["18:00", "22:00"]], thu: [["18:00", "22:00"]] } };
+    const closures = closuresFor({ now: WED, closedDays: [{ starts_on: "2027-06-03", ends_on: "2027-06-03", reason: null }] });
+    expect(computeSlots({ ...cfg, closures }, [], WED).map(label))
+      .toEqual(["2027-06-02 18:00", "2027-06-02 19:00", "2027-06-02 20:00", "2027-06-02 21:00"]);
+    expect(bookableRange({ ...cfg, closures }, [], WED, new Date("2027-06-03T00:00:00.000Z"))).not.toBeNull(); // Wed 19:00 CDT
+    expect(bookableRange(cfg, [], WED, new Date("2027-06-04T00:00:00.000Z"))).not.toBeNull();             // Thu 19:00 CDT, the control
+    expect(bookableRange({ ...cfg, closures }, [], WED, new Date("2027-06-04T00:00:00.000Z"))).toBeNull();
+  });
+
+  it("an empty closure changes nothing", () => {
+    const none: SlotClosures = { closedDayKeys: new Set(), blockedBefore: null, blockAll: false, lateBefore: null };
+    expect(computeSlots({ ...C, closures: none }, [], WED)).toEqual(computeSlots(C, [], WED));
+  });
+
+  it("an unreadable window fails CLOSED: an Invalid Date blockedBefore or lateBefore offers nothing and books nothing", () => {
+    const sat9 = new Date(SAT9);
+    expect(bookableRange(C, [], WED, sat9)).not.toBeNull(); // the control
+    const bad: SlotClosures[] = [
+      { closedDayKeys: new Set(), blockedBefore: new Date(NaN), blockAll: false, lateBefore: null },
+      { closedDayKeys: new Set(), blockedBefore: null, blockAll: false, lateBefore: new Date(NaN) },
+    ];
+    for (const b of bad) {
+      expect(computeSlots({ ...C, closures: b }, [], WED)).toEqual([]);
+      expect(bookableRange({ ...C, closures: b }, [], WED, sat9)).toBeNull();
     }
   });
 });

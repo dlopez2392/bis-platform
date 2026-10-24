@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const db = vi.hoisted(() => ({
   getVoiceProfile: vi.fn(), listVoiceServices: vi.fn(), readAccountTimezone: vi.fn(),
   getLatestKnowledgeVersion: vi.fn(), saveVoiceKnowledge: vi.fn(),
+  listClosedDaysFrom: vi.fn(),
 }));
 vi.mock("@bis/db", () => db);
 
@@ -28,6 +29,8 @@ beforeEach(() => {
   db.readAccountTimezone.mockResolvedValue("America/Chicago");
   db.getLatestKnowledgeVersion.mockResolvedValue(4);
   db.saveVoiceKnowledge.mockResolvedValue({ status: "ok", version: 5 });
+  // S-47d: no closed days planned, the default for an account that has never touched the switch.
+  db.listClosedDaysFrom.mockResolvedValue([]);
 });
 
 type Sent = { actor: string; parts: Record<string, unknown>; payload: Record<string, unknown>; baseVersion: number };
@@ -198,9 +201,32 @@ describe("saveKnowledgeParts (spec 4.1, 5.7; SD10)", () => {
 
   it("second account: every read and the RPC name the given account and no other (mutation: a fixed id -> FAILS)", async () => {
     await saveKnowledgeParts(CLIENT, "acc-two", "user_1", { facts: "x" });
-    for (const f of [db.getVoiceProfile, db.listVoiceServices, db.readAccountTimezone, db.getLatestKnowledgeVersion, db.saveVoiceKnowledge]) {
+    for (const f of [db.getVoiceProfile, db.listVoiceServices, db.readAccountTimezone, db.getLatestKnowledgeVersion, db.saveVoiceKnowledge, db.listClosedDaysFrom]) {
       expect(f.mock.calls.map((c) => c[1])).toEqual(["acc-two"]);
       expect(f.mock.calls.map((c) => c[0])).toEqual([CLIENT]);
     }
+  });
+
+  describe("closed days (S-47d)", () => {
+    const XMAS = { id: "cd1", account_id: "acc", starts_on: "2026-12-24", ends_on: "2026-12-25",
+      reason: "holiday" as const, created_by: "owner_1", created_at: "2026-10-01T00:00:00Z" };
+
+    it("the closed days read reaches the payload, each by the line she reads (mutation: omit closedDays from buildKnowledgePayload -> FAILS)", async () => {
+      db.listClosedDaysFrom.mockResolvedValue([XMAS]);
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { facts: "x" })).toEqual({ ok: true, version: 5 });
+      expect(sent().payload.closed_days).toEqual([
+        { starts_on: "2026-12-24", ends_on: "2026-12-25", reason: "holiday", line: "- Thursday, December 24 to Friday, December 25, 2026 (holiday)" },
+      ]);
+    });
+
+    it("a failed closed-days read FAILS the save — it never records a payload with none planned that the next call would contradict (mutation: ignore the throw -> FAILS)", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      db.listClosedDaysFrom.mockRejectedValue(new Error("listClosedDaysFrom failed: boom"));
+      expect(await saveKnowledgeParts(CLIENT, "acc", "user_1", { facts: "x" })).toEqual({ ok: false, reason: "failed" });
+      expect(db.saveVoiceKnowledge).not.toHaveBeenCalled();
+      const logged = err.mock.calls.flat().join(" ");
+      err.mockRestore();
+      expect(logged).toContain("listClosedDaysFrom failed");
+    });
   });
 });

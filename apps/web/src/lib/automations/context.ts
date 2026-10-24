@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@bis/db";
 import type { GatedEmail } from "@/lib/consent/email-gate";
 import type { SmsSender } from "@/lib/consent/gate";
+import type { ClosureLoader } from "./closures";
 
 /**
  * What every pass is handed for one cron tick.
@@ -38,6 +39,11 @@ export type PassContext = {
    *  make, never the tick. There is no quiet-hours setting any more: the
    *  hours are fixed (lib/consent/hours.ts). */
   sms: SmsSender;
+  /** S-47d (spec 5.5.2): the business status of an account, read once per account per tick (closures.ts
+   *  closureLoader, built in buildPassContext on this tick's client). holdOrSend asks it for the SUBJECT's
+   *  own account whenever the subject carries `appointmentAt`, so a closure that covers the appointment
+   *  holds the send. Required here; optional on HoldContext, where its absence holds (SD7). */
+  closures: ClosureLoader;
 };
 
 /** Per-pass counters, reported verbatim in the cron's JSON under the pass key. */

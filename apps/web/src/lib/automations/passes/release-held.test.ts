@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AutomationLogRow } from "@bis/db";
 
-const dbMocks = vi.hoisted(() => ({ listReleasableHolds: vi.fn(), recordAutomationLog: vi.fn() }));
+const dbMocks = vi.hoisted(() => ({
+  listReleasableHolds: vi.fn(), recordAutomationLog: vi.fn(),
+  // S-47d: the REAL releaseReminder runs in the closure cases below; these are the reads and writes it makes.
+  getDueReminderById: vi.fn(), getAutomationLogEntry: vi.fn(), stampReminderSent: vi.fn(), getAutomation: vi.fn(),
+}));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...dbMocks }));
 const releasers = vi.hoisted(() => ({
   reminders: vi.fn(), followups: vi.fn(), review: vi.fn(), noShow: vi.fn(), sms: vi.fn(), instant: vi.fn(),
@@ -17,6 +21,8 @@ vi.mock("./quote-followup", () => ({ releaseQuoteFollowup: (...a: unknown[]) => 
 
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES, type ClosureLoader, type ClosureState } from "../closures";
+import type { DueReminder } from "@bis/db";
 import { releaseHeldPass, RELEASERS, RELEASE_BATCH, RELEASE_BUDGET_MS } from "./release-held";
 
 const NOW = new Date("2026-09-22T13:00:00Z");
@@ -27,6 +33,7 @@ const row = (source: AutomationLogRow["source"], key: string): AutomationLogRow 
 const ctx: PassContext = {
   db: {} as never, now: NOW, origin: "https://app.example.com",
   email: { isFake: true, send: async () => ({ providerMessageId: "e" }) }, sms: fakeSmsGate(),
+  closures: NO_CLOSURES,
 };
 
 beforeEach(() => {
@@ -157,4 +164,89 @@ describe("releaseHeldPass — the wall-clock budget", () => {
     expect(await releaseHeldPass.run(ctx)).toEqual({ examined: 2, sent: 2, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 });
   });
 
+});
+
+describe("releaseHeldPass — a closure hold is re-checked on release (S-47d, spec 5.5.2)", () => {
+  // The REAL releaseReminder behind the mocked module, so a release re-enters holdOrSend with the same subject.
+  // NOW is 08:00 CDT, inside the sending hours, so only the closure can hold.
+  const emailSend = vi.fn(async () => ({ providerMessageId: "e" }));
+  const tick = (closures: ClosureLoader): PassContext => ({ ...ctx, email: { isFake: true, send: emailSend }, closures });
+  const STORM: ClosureState = {
+    ok: true, input: {
+      row: { state: "storm", late_minutes: null, until: null, set_at: "2026-09-21T13:00:00.000Z" },
+      closedDays: [], hours: null, timezone: "America/Chicago",
+    },
+    windows: [{ start: new Date("2026-09-21T13:00:00.000Z"), end: null }],
+  };
+  const CLOSED_DAY: ClosureState = {
+    ok: true, input: { row: null, closedDays: [{ starts_on: "2026-09-22", ends_on: "2026-09-22", reason: "holiday" }], hours: null, timezone: "America/Chicago" },
+    windows: [],
+  };
+  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" }, windows: [] };
+  const loaderOf = (st: ClosureState) => vi.fn<ClosureLoader>(async () => st);
+  const due = (over: Partial<DueReminder> = {}): DueReminder => ({
+    bookingId: "bk_1", accountId: "acct_1", contactId: "ct_1", startsAt: "2026-09-22T20:00:00.000Z",
+    bookerTimezone: null, cancelToken: "tok_1", calendarPublicId: "cal_pub",
+    contactEmail: "maria@example.com", contactName: "Maria Garcia", accountTimezone: "America/Chicago",
+    branding: { brandName: "Rio Roofing", brandLogoPath: null, brandColor: null, brandNeutral: null, brandCorners: null, brandType: null, brandMode: null, replyToEmail: null },
+    fromEmail: null, meetingUrl: null, late: false, language: "en", contactPhone: null, closureKeptAt: null,
+    ...over,
+  });
+  // held_until = NOW: what bumpHeldForAccount writes when the switch changes, a booking is kept or a closed day
+  // is removed, so the row is due on the very next tick.
+  const heldReminder: AutomationLogRow = {
+    id: "log_r", account_id: "acct_1", source: "reminders", channel: "email", contact_id: "ct_1",
+    subject_key: "booking:bk_1", status: "held", reason: "Held: closed for a storm", held_until: NOW.toISOString(),
+    payload: {}, occurred_at: "2026-09-21T13:05:00.000Z",
+  };
+  const COUNTS = { examined: 1, sent: 0, held: 0, skipped: 0, failed: 0, errored: 0, deferred: 0 };
+  const logged = () => dbMocks.recordAutomationLog.mock.calls.map((c) => c[1]);
+
+  beforeEach(async () => {
+    const real = await vi.importActual<typeof import("./reminders")>("./reminders");
+    releasers.reminders.mockImplementation(real.releaseReminder);
+    dbMocks.listReleasableHolds.mockResolvedValue([heldReminder]);
+    dbMocks.getDueReminderById.mockResolvedValue({ due: due() });
+    dbMocks.getAutomationLogEntry.mockResolvedValue({ status: "held", held_until: "2026-09-22T20:00:00.000Z" });
+    dbMocks.stampReminderSent.mockResolvedValue(undefined);
+    dbMocks.getAutomation.mockResolvedValue(null);
+    emailSend.mockClear();
+  });
+
+  it("still covered: the release re-holds it with the closure reason and sends nothing (the control for the cases below)", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+    expect(await releaseHeldPass.run(tick(loaderOf(STORM)))).toEqual({ ...COUNTS, held: 1 });
+    expect(emailSend).not.toHaveBeenCalled();
+    expect(logged()).toEqual([expect.objectContaining({
+      source: "reminders", subjectKey: "booking:bk_1", status: "held",
+      heldUntil: "2026-09-22T20:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("the switch back to Open plus one tick sends: the bumped row is released, re-checked and sent, then stamped", async () => {
+    const loader = loaderOf(OPEN);
+    expect(await releaseHeldPass.run(tick(loader))).toEqual({ ...COUNTS, sent: 1 });
+    expect(dbMocks.listReleasableHolds).toHaveBeenCalledWith(expect.anything(), NOW.toISOString(), RELEASE_BATCH);
+    expect(loader.mock.calls).toEqual([["acct_1"]]);
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_1");
+    expect(logged()).toEqual([expect.objectContaining({ subjectKey: "booking:bk_1", status: "sent" })]);
+  });
+
+  it("Keep plus one tick sends under the same storm: the re-read due row carries closure_kept_at", async () => {
+    dbMocks.getDueReminderById.mockResolvedValue({ due: due({ closureKeptAt: "2026-09-22T12:50:00.000Z" }) });
+    expect(await releaseHeldPass.run(tick(loaderOf(STORM)))).toEqual({ ...COUNTS, sent: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+    expect(dbMocks.stampReminderSent).toHaveBeenCalledWith(expect.anything(), "bk_1");
+  });
+
+  it("a removed closed day plus one tick sends; while the day is still listed it re-holds with the closed-day reason", async () => {
+    dbMocks.getAutomationLogEntry.mockResolvedValue(null);
+    expect(await releaseHeldPass.run(tick(loaderOf(CLOSED_DAY)))).toEqual({ ...COUNTS, held: 1 });
+    expect(logged()).toEqual([expect.objectContaining({ status: "held", reason: "Held: the business is closed that day" })]);
+    expect(emailSend).not.toHaveBeenCalled();
+    dbMocks.recordAutomationLog.mockClear();
+    expect(await releaseHeldPass.run(tick(loaderOf(OPEN)))).toEqual({ ...COUNTS, sent: 1 });
+    expect(emailSend).toHaveBeenCalledTimes(1);
+  });
 });

@@ -87,6 +87,8 @@ export async function processNoShowNudges(
     const subject: SmsHoldSubject = {
       accountId: row.accountId, accountTimezone: row.accountTimezone, source: "no_show_nudge",
       channel: config.channel, smsKind: "automation.no_show_nudge", subjectKey: `booking:${row.bookingId}`, contactId: row.contactId,
+      // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+      appointmentAt: new Date(row.startsAt), kept: row.closureKeptAt !== null,
     };
 
     if (resolveAccountZone(row.accountTimezone) === null) {

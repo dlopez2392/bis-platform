@@ -120,6 +120,19 @@ export function groupSlots(slots: string[], timeZone: string): { part: PartOfDay
 
 type Fetched = { key: string; slots: string[] | null; error: string | null };
 
+/**
+ * S-47d (task 13, spec section 5.3): which empty-state title to show under
+ * the week strip -- the account's own "Closed this day." when the selected
+ * day falls inside its planned closed days, else the ordinary "no times"
+ * line. Pure, like `partOfDay`/`groupSlots` above, so this decision is
+ * tested without rendering the picker.
+ */
+export function emptyDayTitle(
+  strings: BookingStrings, selectedDay: string, closedDayKeys: readonly string[] | undefined,
+): string {
+  return closedDayKeys?.includes(selectedDay) ? strings.closedDay : strings.noSlots;
+}
+
 type Props = {
   locale: PublicLocale;
   strings: BookingStrings;
@@ -129,6 +142,11 @@ type Props = {
   /** `bookerTimezone` from `useBookerTimezone()`, owned by the page so the
    *  card that restates the pick formats in the same zone. */
   bookerTimezone: string | null;
+  /** S-47d (task 13): every date key, within this page's own horizon, that
+   *  the account has planned closed. Changes only the empty state's TITLE
+   *  (`emptyDayTitle`) -- the slot engine already refuses the day's times on
+   *  its own account; this is purely what the empty state says about it. */
+  closedDayKeys?: readonly string[];
   getSlots: (dayIso: string) => Promise<{ slots: string[] } | { error: string }>;
   selectedSlot: string | null;
   /** A slot tapped; `null` when a day change drops the pick. */
@@ -144,7 +162,7 @@ type Props = {
 };
 
 export function SlotPicker({
-  locale, strings, todayKey, maxAdvanceDays, bookerTimezone, getSlots,
+  locale, strings, todayKey, maxAdvanceDays, bookerTimezone, closedDayKeys, getSlots,
   selectedSlot, onPick, onDayChange, refreshKey, notice, children,
 }: Props) {
   const intl = intlLocale(locale);
@@ -290,7 +308,7 @@ export function SlotPicker({
             /* An empty day says what to do next, which is the only useful
                thing an empty state can do here. */
             <div className="bis-booking-empty">
-              <p className="bis-booking-empty-title">{strings.noSlots}</p>
+              <p className="bis-booking-empty-title">{emptyDayTitle(strings, selectedDay, closedDayKeys)}</p>
               <p className="bis-booking-empty-hint">{strings.noSlotsHint}</p>
             </div>
           )}

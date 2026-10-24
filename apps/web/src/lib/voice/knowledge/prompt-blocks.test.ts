@@ -124,3 +124,28 @@ describe("servicesBlock (spec 5.2; SD7, SD8)", () => {
     for (const s of ["$", "The price for", "El precio de", "SERVICES AND PRICES"]) expect(lines.join("\n")).not.toContain(s);
   });
 });
+
+// S-47d (spec 5.4.2; SD16): the closure-without-hours lines, and the hours block passing the closures through.
+describe("prompt-blocks — S-47d", () => {
+  it("the web chat's and the voice demo's (see TODAY above) lines, word for word", async () => {
+    const m = await import("./prompt-blocks");
+    expect(m.AFTER_HOURS_CLOSED_WEB_TODAY).toBe("AFTER HOURS — The business is closed right now (see TODAY above); say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up.");
+    expect(m.AFTER_HOURS_CLOSED_WEB_VOICE_TODAY).toBe("AFTER HOURS — The business is closed right now (see TODAY above); say so briefly and take a message; do not attempt anything else.");
+  });
+  it("the phone line with see: \"TODAY\" changes only the parenthesis; \"Right now\" and absent are byte-identical (mutation: ignore see -> FAILS)", () => {
+    const o = { canBook: true, handoffAvailable: true, hasTradeRules: false };
+    expect(afterHoursClosedPhoneLine({ ...o, see: "TODAY" })).toBe(
+      "AFTER HOURS — The business is closed right now (see TODAY above). If it matters to what they need, say so and say when it opens. You can still answer questions from what you know above, and book a time that check_availability returns. For anything that needs someone on the team, take a message and say the team will call them back once it opens. If they ask for a person, you can still put them through.");
+    expect(afterHoursClosedPhoneLine({ ...o, see: "Right now" })).toBe(afterHoursClosedPhoneLine(o));
+    expect(afterHoursClosedPhoneLine(o)).toContain("(see Right now above)");
+  });
+  it("businessHoursBlock passes the closures to the Right now line (mutation: drop the fourth argument -> FAILS)", () => {
+    const hours = { tue: [["08:00", "18:00"]] as [string, string][] };
+    const now = new Date("2027-06-01T15:00:00Z"); // Tuesday 10:00 AM CDT, open by the hours
+    const status = { state: "closed_today" as const, reopensAt: new Date("2027-06-08T13:00:00Z"), reopensTimeKnown: true };
+    const b = businessHoursBlock(hours, "America/Chicago", now, { status, closedDays: [] });
+    expect(b.open).toBe(false);
+    expect(b.lines.at(-1)).toBe("Right now: closed; opens next Tuesday at 8:00 AM.");
+    expect(businessHoursBlock(hours, "America/Chicago", now).lines.at(-1)).toBe("Right now: open until 6:00 PM.");
+  });
+});

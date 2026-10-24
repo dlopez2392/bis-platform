@@ -11,9 +11,11 @@ import { bookingMode } from "./booking-mode";
 import { tradeModuleBlock } from "./modules";
 import {
   businessHoursBlock, servicesBlock, LIST_PRICE_LINE, CLOSED_PRICE_LINE, AFTER_HOURS_CLOSED_WEB,
-  AFTER_HOURS_CLOSED_WEB_VOICE, afterHoursClosedPhoneLine, transferToolLineClosed,
+  AFTER_HOURS_CLOSED_WEB_VOICE, AFTER_HOURS_CLOSED_WEB_TODAY, AFTER_HOURS_CLOSED_WEB_VOICE_TODAY,
+  afterHoursClosedPhoneLine, transferToolLineClosed,
 } from "./knowledge/prompt-blocks";
 import { hasOpenDay } from "./knowledge/hours";
+import { closedDaysBlock, todayLine } from "./knowledge/closure-lines";
 
 export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // `bookingMode` (booking-mode.ts) — the same answer the session's tool
@@ -42,8 +44,19 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
   // is the PHONE under "Follow business hours" with the hours saying closed right now (C19); while it holds, the
   // offers of a person become "offer to take a message" and the TOOLS line says not to offer a transfer, while
   // transfer_to_human stays on the session (toolSchemas is unchanged) for a caller who asks or an URGENT path.
-  const hoursBlock = hasOpenDay(input.businessHours) ? businessHoursBlock(input.businessHours, input.timezone, now) : null;
-  const closedNow = onPhone && hoursBlock !== null && !hoursBlock.open && input.afterHours === "hours_then_message";
+  // S-47d (spec 5.4.2): `closures` reaches the Right now line only when there is something to count (a status that
+  // is not open, or upcoming closed days); undefined keeps every path byte-identical (PRE_S47D_DIGEST). `closure` is
+  // a closed state in force (Closed today, Storm, a closed day); Running late is not one and never sets closedNow.
+  // Under "Always take a message" closedNow stays false (C19).
+  const businessStatus = input.businessStatus ?? null;
+  const closures = (businessStatus && businessStatus.state !== "open") || (input.closedDays && input.closedDays.length > 0)
+    ? { status: businessStatus, closedDays: input.closedDays ?? [] } : undefined;
+  const hoursBlock = hasOpenDay(input.businessHours) ? businessHoursBlock(input.businessHours, input.timezone, now, closures) : null;
+  const closure = businessStatus?.state === "closed_today" || businessStatus?.state === "storm" || businessStatus?.state === "closed_day";
+  const closedNow = onPhone && input.afterHours === "hours_then_message" && (hoursBlock ? !hoursBlock.open : closure);
+  // S13: an open-ended storm offers no slot at all, so its AFTER HOURS line never invites a booking.
+  const openEndedStorm = businessStatus?.state === "storm" && businessStatus.reopensAt === null;
+  const today = businessStatus ? todayLine(businessStatus, input.timezone, now) : null;
   const priceList = input.priceList && input.priceList.length > 0 ? input.priceList : null;
   const insurance = input.tradeModule === "insurance_pc";
 
@@ -147,6 +160,9 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     input.services ? `Services: ${input.services}` : "",
     // S-47c (spec 5.2): the hours, then the list, inside WHAT YOU KNOW. Neither present: no lines at all.
     ...(hoursBlock ? hoursBlock.lines : []),
+    // S-47d (spec 5.4): the TODAY line, then the CLOSED DAYS block, each its own paragraph; none gives no lines.
+    ...(today ? ["", today] : []),
+    ...closedDaysBlock(input.closedDays),
     ...servicesBlock(priceList ?? [], insurance),
     "",
     "HARD LIMITS:",
@@ -300,16 +316,25 @@ export function buildSystemPrompt(input: VoicePromptInput, now: Date): string {
     ].join(" ");
     if (onPhone) lines.push("", always);
     // Web chat and demo: today's conditional line when there are no structured hours; with hours, the definite
-    // line when closed and nothing when open (S-47c, spec 5.2).
-    else if (!hoursBlock) lines.push("", onWeb
-      ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
-      : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.");
+    // line when closed and nothing when open (S-47c, spec 5.2). S-47d: a closure with no hours is the definite line
+    // pointing at TODAY.
+    else if (!hoursBlock) lines.push("", closure
+      ? (onWeb ? AFTER_HOURS_CLOSED_WEB_TODAY : AFTER_HOURS_CLOSED_WEB_VOICE_TODAY)
+      : onWeb
+        ? "AFTER HOURS — If the business is closed right now, say so briefly, and use capture_lead to get their name and a way to reach them so the team can follow up."
+        : "AFTER HOURS — If the business is closed right now, say so briefly and take a message; do not attempt anything else.");
     else if (!hoursBlock.open) lines.push("", onWeb ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_VOICE);
-  } else if (hoursBlock && !hoursBlock.open) {
+  } else if ((hoursBlock && !hoursBlock.open) || (!hoursBlock && closure)) {
     // S-47c: "Follow business hours, then take a message", closed now: the setting finally has hours to follow.
+    // S-47d (spec 5.4.2): a closure with no hours takes the same branch, its lines pointing at TODAY.
     lines.push("", onPhone
-      ? afterHoursClosedPhoneLine({ canBook: booking, handoffAvailable: input.handoffAvailable === true, hasTradeRules: tradeBlock.length > 0 })
-      : onWeb ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_VOICE);
+      ? afterHoursClosedPhoneLine({
+        canBook: booking && !openEndedStorm, handoffAvailable: input.handoffAvailable === true,
+        hasTradeRules: tradeBlock.length > 0, see: hoursBlock ? "Right now" : "TODAY",
+      })
+      : onWeb
+        ? (hoursBlock ? AFTER_HOURS_CLOSED_WEB : AFTER_HOURS_CLOSED_WEB_TODAY)
+        : (hoursBlock ? AFTER_HOURS_CLOSED_WEB_VOICE : AFTER_HOURS_CLOSED_WEB_VOICE_TODAY));
   }
 
   return lines.filter((l) => l !== null && l !== undefined).join("\n");

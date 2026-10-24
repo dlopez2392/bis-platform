@@ -15,7 +15,7 @@ import { loggableError } from "@/lib/loggable-error";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
 import { makeTr, type Tr } from "@/lib/record/copy";
 import { cn } from "@/lib/utils";
-import { parseKnowledgePayload, type KnowledgeService } from "@/lib/voice/knowledge/payload";
+import { parseKnowledgePayload, type KnowledgePayload, type KnowledgeService } from "@/lib/voice/knowledge/payload";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +132,11 @@ export default async function VoiceKnowledgePage({
     /** True only when `?call=` names a call of THIS account, stamped with THIS version, whose own
      *  trade module is `insurance_pc` (spec 5.4, C13) — never derived from the payload itself. */
     insuranceCall: boolean;
+    /** S-47d (plan Task 14): schema 1 (stored before S-47d) never recorded closed days at all and
+     *  reads differently from a schema-2 snapshot that simply had none planned — so both the schema
+     *  and the lines travel, never only the (possibly empty) array. */
+    schema: KnowledgePayload["schema"];
+    closedDays: KnowledgePayload["closed_days"];
   };
   try {
     const [snapshot, latest, profile, call] = await Promise.all([
@@ -181,6 +186,8 @@ export default async function VoiceKnowledgePage({
             sentence_en: s.sentence_en, sentence_es: s.sentence_es,
           })),
           insuranceCall,
+          schema: payload.schema,
+          closedDays: payload.closed_days,
         };
       }
     }
@@ -269,6 +276,24 @@ export default async function VoiceKnowledgePage({
               </ul>
             ) : (
               <p className="text-sm text-muted-foreground">{tr.text("voice.knowledge.noPrices")}</p>
+            )}
+          </section>
+
+          {/* S-47d (plan Task 14): what Sofía knew about planned closed days. Schema 1 (stored before
+              S-47d) never recorded this at all — a different fact from a schema-2 snapshot that simply
+              had none planned — so the two read different copy; neither is the array of lines, which
+              is model input (Global Constraints) and marked `lang="en"` line by line, inside this
+              Spanish-capable page too. */}
+          <section className="space-y-1">
+            <h4 className={headingClass}>{tr.text("voice.knowledge.closedDays")}</h4>
+            {state.schema === 1 ? (
+              <p className="text-sm text-muted-foreground">{tr.text("voice.knowledge.noClosedDaysRecorded")}</p>
+            ) : state.closedDays.length > 0 ? (
+              <ul className="space-y-0.5 text-sm text-muted-foreground">
+                {state.closedDays.map((d, i) => <li key={i} lang="en">{d.line}</li>)}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">{tr.text("voice.knowledge.noClosedDays")}</p>
             )}
           </section>
         </CardContent>

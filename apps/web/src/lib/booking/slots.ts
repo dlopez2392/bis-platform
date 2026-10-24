@@ -11,7 +11,10 @@ export type OpenHours = Partial<Record<"sun" | "mon" | "tue" | "wed" | "thu" | "
 export type SlotConfig = {
   timezone: string; slotDurationMinutes: number; bufferMinutes: number;
   minNoticeHours: number; maxAdvanceDays: number; openHours: OpenHours;
+  /** S-47d: the account's closures (business-status/status.ts `slotClosures`). Absent changes nothing. */
+  closures?: SlotClosures;
 };
+export type SlotClosures = { closedDayKeys: ReadonlySet<string>; blockedBefore: Date | null; blockAll: boolean; lateBefore: Date | null };
 /** Both `startsAt`/`endsAt` are real `Date`s here, but the accessors that
  *  produce a `Range` from a DB row hand back ISO STRINGS — converting a row
  *  into a `Range` (`new Date(row.starts_at)` etc.) is the CALLER's job, not
@@ -237,6 +240,22 @@ function endsByClose(candEnd: Date, cal: { m: number; d: number }, toMinutes: nu
   return endMinutes <= toMinutes;
 }
 
+/** S-47d spec §5.3: THE closure rule, the one predicate both `computeSlots` (the slot is dropped) and
+ *  `bookableRange` (null) run, so the picker and the submit cannot disagree. True when every slot is blocked
+ *  (an open-ended storm), the start is before the stored window's end (Closed today's midnight, a dated
+ *  storm's back-on midnight) or inside today's delay, or the start's account-zone date is a closed day.
+ *  An unreadable window (an Invalid Date) fails CLOSED: `!(t >= NaN)` is true. The cheap comparisons run
+ *  first, so an account with no closed days pays no zone conversion per candidate. */
+export function closedOut(start: Date, c: SlotClosures, timezone: string): boolean {
+  if (c.blockAll) return true;
+  const t = start.getTime();
+  if (c.blockedBefore && !(t >= c.blockedBefore.getTime())) return true;
+  if (c.lateBefore && !(t >= c.lateBefore.getTime())) return true;
+  if (c.closedDayKeys.size === 0) return false;
+  const p = partsInZone(start, timezone);
+  return c.closedDayKeys.has(`${String(p.y).padStart(4, "0")}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`);
+}
+
 /** Whether `[startMs, endMs)` runs into any booked range with the buffer on
  *  BOTH sides (spec §4), and the latest `end + buffer` among those it runs
  *  into (-Infinity when none). An unresolvable (non-finite) booked range
@@ -309,6 +328,7 @@ export function computeSlots(config: SlotConfig, booked: Range[], now: Date): Ra
           const candEnd = new Date(candStart.getTime() + durationMs);
           if (candStart.getTime() < earliestStartMs) continue;
           if (candEnd.getTime() > horizonEndMs) continue;
+          if (config.closures && closedOut(candStart, config.closures, timezone)) continue;
           if (!endsByClose(candEnd, cal, toMinutes, timezone)) continue;
 
           const { conflicts, clearAt } = conflictScan(candStart.getTime(), candEnd.getTime(), booked, bufferMs);
@@ -435,6 +455,7 @@ export function bookableRange(config: SlotConfig, booked: Range[], now: Date, st
     if (!Number.isFinite(t) || t % 60_000 !== 0) return null;
     const end = t + durationMs;
     if (t < earliestStartMs || end > horizonEndMs) return null;
+    if (config.closures && closedOut(startsAt, config.closures, timezone)) return null;
 
     const p = partsInZone(startsAt, timezone);
     const cal = { y: p.y, m: p.m, d: p.d };

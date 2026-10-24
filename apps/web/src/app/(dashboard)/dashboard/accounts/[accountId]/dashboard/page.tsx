@@ -35,6 +35,11 @@ import { CallsChartCard } from "./calls-chart-card";
 import { ActivityCard } from "./activity-card";
 import { ChecklistRow } from "./checklist-row";
 import { WorkRowCard } from "./work-row";
+// S-47d Task 11 (spec §5.6.2): the one switch's status, in its own boundary. The boundary itself is
+// `BusinessStatusCardBoundary` (Task 15 finding), not `RecordCardBoundary` directly — its `fallback`
+// prop is a function, which cannot cross the Server→Client boundary from this Server Component.
+import { BusinessStatusCard, BusinessStatusCardSkeleton } from "./business-status-card";
+import { BusinessStatusCardBoundary } from "./business-status-card-boundary";
 
 // The activity card curates a small set of known event types out of a much
 // noisier raw ledger (CRM housekeeping, setup plumbing, …) — see
@@ -67,7 +72,9 @@ export default async function AccountDashboardPage({
   // do before anything is read. It also gives the role for rendering: the
   // activation checklist is the agency's onboarding worklist about the
   // client, not client data (spec §6.1).
-  const [{ isAgency }, prefs] = await Promise.all([requireNotTechnician(accountId), getPersonPrefs()]);
+  // `role` (S-47d Task 11): the business-status card's own `canChangeFor` guard needs it; every
+  // other read on this page already ran fine without it, so this is purely additive.
+  const [{ isAgency, role }, prefs] = await Promise.all([requireNotTechnician(accountId), getPersonPrefs()]);
   const db = await dbForRequest();
 
   const now = new Date();
@@ -357,6 +364,17 @@ export default async function AccountDashboardPage({
             ungated, and a row that vanished at zero would read as a broken
             feature (work-row.tsx's own doc comment, spec §4.3), so this
             renders at every count including zero. */}
+        {/* S-47d Task 11 (spec §5.6.2): its own fault-isolated boundary — a
+            failed read is its OWN error state, never the page's (rule 5
+            extended to the card), which is why this card alone among the
+            dashboard's cards does its own `dbForRequest()` read rather than
+            joining the Promise.all below. */}
+        <BusinessStatusCardBoundary locale={locale} pseudo={pseudo} skeleton={<BusinessStatusCardSkeleton />}>
+          <BusinessStatusCard
+            accountId={accountId} timezone={timezone} locale={locale} pseudo={pseudo}
+            isAgency={isAgency} role={role} personaName={voiceProfile?.persona_name ?? null}
+          />
+        </BusinessStatusCardBoundary>
         {/* Above the KPI tiles, because it qualifies BOTH the row caption
             right below it ("Last 7 days" is seven of WHOSE days) and the
             work row that follows, which `bucketWork` measures against those

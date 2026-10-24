@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { test, expect, type Page } from "./fixtures/test";
 import { buildNavGroups } from "../src/lib/nav-groups";
 import { readClientFixture } from "./support";
-import { serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile, getVoiceProfile, addTask } from "@bis/db";
+import {
+  serviceDb, setClientAccess, listContacts, listForms, upsertVoiceProfile, getVoiceProfile, addTask,
+  insertClosedDay, deleteClosedDay, readAccountTimezone, listClosedDaysFrom,
+} from "@bis/db";
+import { dayKey } from "../src/lib/business-status/status";
 
 /**
  * F-107 (rider part): "at phone width the sidebar opens collapsed, its
@@ -558,6 +562,113 @@ test.describe("in-account agency-only routes, agency session on the SAME fixture
  * separate `organizationPreviewTextContainer` instances that carry no such
  * scoping and must stay unaffected.
  */
+/**
+ * S-47d fix round C1 (design review I1): the topbar in a CLOSED state, in Spanish, at 320 (the client),
+ * 360 and 375px (both),
+ * for the agency and for the client — the shapes the review measured overflowing. The indicator is the
+ * switch's own menu button for both identities (an agency session and the fixture's Owner both may change
+ * it), so its padding is part of what is measured.
+ *
+ * The closed state is a planned closed day covering the account's own today, inserted by service_role
+ * (0097 grants it INSERT and DELETE on `closed_days`; it holds no UPDATE on `business_status`, so the
+ * switch itself is never touched) and deleted in `finally`. Spanish is the identity's own `users.language`
+ * (contact-language.spec.ts's precedent), restored in `finally` to what it was. Both write only this run's
+ * fixture account and this run's own two identities, never Test Client One. Read-only otherwise.
+ */
+const CLOSED_WIDTHS = [NARROW_WIDTH, 360, WIDTH] as const;
+
+async function withClosedTodayInSpanish(
+  identity: { clerkUserId: string; email?: string }, run: (base: string) => Promise<void>,
+) {
+  const { clerkUserId } = identity;
+  const fixture = readClientFixture();
+  if (!fixture) {
+    test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite.");
+    return;
+  }
+  const db = serviceDb();
+  const tz = (await readAccountTimezone(db, fixture.accountId)) ?? "America/Chicago";
+  const today = dayKey(new Date(), tz);
+  const already = (await listClosedDaysFrom(db, fixture.accountId, today)).some((r) => r.starts_on <= today);
+  expect(already, "the fixture already has a closed day covering today; refusing to run on a dirty fixture").toBe(false);
+
+  // The per-run agency user has no `users` row until it saves a preference (savePersonPreference creates
+  // one), so a missing row is created here with the fixture's own email and deleted again afterwards —
+  // "no row" is the state restored, exactly as preferences.spec.ts's cleanup restores NULLs.
+  const prior = await db.from("users").select("language").eq("clerk_user_id", clerkUserId).maybeSingle();
+  expect(prior.error, `reading the identity's language: ${prior.error?.message}`).toBeNull();
+  const hadRow = prior.data !== null;
+  const priorLanguage = hadRow ? (prior.data as { language: string | null }).language : null;
+  let closedDayId: string | null = null;
+  try {
+    if (hadRow) {
+      const set = await db.from("users").update({ language: "es" }).eq("clerk_user_id", clerkUserId).select("id");
+      expect(set.error, `switching the identity to Spanish: ${set.error?.message}`).toBeNull();
+      expect(set.data, "switching the identity to Spanish: one users row").toHaveLength(1);
+    } else {
+      expect(identity.email, "an identity with no users row needs its email to create one").toBeTruthy();
+      const made = await db.from("users").insert({ clerk_user_id: clerkUserId, email: identity.email, language: "es" }).select("id");
+      expect(made.error, `creating the identity's users row in Spanish: ${made.error?.message}`).toBeNull();
+    }
+    closedDayId = (await insertClosedDay(db, fixture.accountId, { starts_on: today, ends_on: today, reason: "holiday" })).id;
+    await run(`/dashboard/accounts/${fixture.accountId}`);
+  } finally {
+    if (closedDayId) {
+      const removed = await deleteClosedDay(db, fixture.accountId, closedDayId);
+      expect(removed, "the closed day this test added was deleted").not.toBeNull();
+    }
+    if (hadRow) {
+      const reset = await db.from("users").update({ language: priorLanguage }).eq("clerk_user_id", clerkUserId).select("id");
+      expect(reset.error, `restoring the identity's language: ${reset.error?.message}`).toBeNull();
+      expect(reset.data, "restoring the identity's language: one users row").toHaveLength(1);
+    } else {
+      const gone = await db.from("users").delete().eq("clerk_user_id", clerkUserId).select("id");
+      expect(gone.error, `removing the users row this test created: ${gone.error?.message}`).toBeNull();
+    }
+  }
+}
+
+test.describe("the one switch, closed, in Spanish — phone width (S-47d fix round C1)", () => {
+  // NOT at 320px for the agency (measured 2026-10-24, S-47d fix round report): beside the agency's search
+  // icon, theme toggle, org switcher and user button the indicator has 60px there, and "● Cerrado hoy"
+  // alone is 93px, so no padding change fits it. That needs a design decision (see the fix-round report);
+  // the client, with no org switcher, is asserted at 320 below.
+  test("agency session: the closed topbar fits at 360 and 375px", async ({ page }) => {
+    if (!existsSync("e2e/.auth/agency-fixture.json")) {
+      test.skip(true, "No agency fixture at e2e/.auth/agency-fixture.json — the setup project creates it; run the full suite.");
+      return;
+    }
+    const agency = JSON.parse(readFileSync("e2e/.auth/agency-fixture.json", "utf-8")) as { clerkUserId: string; email: string };
+    await withClosedTodayInSpanish(agency, async (base) => {
+      for (const width of [360, WIDTH] as const) {
+        await assertNoPageScroll(page, `${base}/dashboard`, width, { isAgency: true, inAccount: true });
+        const presence = page.locator("header").getByTestId("topbar-presence");
+        await expect(presence, `the topbar says the business is closed, in Spanish, at ${width}px`).toContainText("Cerrado hoy");
+        await expect(page.locator("header").getByRole("button", { name: /^Cerrado hoy\s*, Cambiar el estado de hoy$/ })).toBeVisible();
+      }
+    });
+  });
+
+  test.describe("client session", () => {
+    test.use({ storageState: CLIENT_AUTH_FILE });
+
+    test("the fixture's Owner: the closed topbar fits at 320, 360 and 375px", async ({ page }) => {
+      const fx = clientFixture();
+      if (!fx) {
+        test.skip(true, "No client fixture at e2e/.auth/client-fixture.json — the setup project creates it; run the full suite.");
+        return;
+      }
+      await withClosedTodayInSpanish({ clerkUserId: fx.clerkUserId }, async (base) => {
+        for (const width of CLOSED_WIDTHS) {
+          await assertNoPageScroll(page, `${base}/dashboard`, width, { isAgency: false, inAccount: true });
+          await expect(page.locator("header").getByTestId("topbar-presence"), `closed, in Spanish, at ${width}px`)
+            .toContainText("Cerrado hoy");
+        }
+      });
+    });
+  });
+});
+
 test.describe("org-switcher trigger text — F-107 r5 computed-style probe", () => {
   test("the org name is display:none at phone width, NOT none at desktop width, and the popover opens within the phone viewport", async ({ page }) => {
     await page.setViewportSize({ width: WIDTH, height: HEIGHT });

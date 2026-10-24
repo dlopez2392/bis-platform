@@ -77,6 +77,8 @@ function subjectFor(r: DueAppointmentConfirm): SmsHoldSubject {
     source: "appointment_confirm", channel: "sms", smsKind: "automation.appointment_confirm",
     subjectKey: `booking:${r.bookingId}`, contactId: r.contactId,
     deadline: appointmentConfirmDeadline(new Date(r.startsAt)),
+    // S-47d (spec 5.5.2, SD20): a closure covering this appointment holds the send unless the owner kept it.
+    appointmentAt: new Date(r.startsAt), kept: r.closureKeptAt !== null,
   };
 }
 

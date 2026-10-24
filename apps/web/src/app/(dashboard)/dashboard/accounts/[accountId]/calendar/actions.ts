@@ -7,13 +7,16 @@ import {
   serviceDb, updateCalendarSettings, getOrCreateCalendar, nextSpanishBox,
   setBookingStatus, undoOperatorCancel,
   discardQueuedNotice, noticeMessageStatus,
+  setBookingClosureKept, bumpHeldForAccount, emit,
   BookingNotStartedError, BookingNotRestorableError, SlotTakenError,
   type BookingStatus, type CalendarSettingsPatch,
 } from "@bis/db";
 import { requireAccountAccess, requireAccountOwner } from "@/lib/auth";
+import { seesWholeAccount } from "@/lib/auth-role";
 import { callerCanSee, noticeBelongsToBooking } from "@/lib/auth/visible";
 import { dbForRequest } from "@/lib/db";
 import { m } from "@/lib/messages";
+import { t } from "@/lib/i18n/t";
 import { DEFAULT_FOLLOWUP_BODY, defaultFollowupBody } from "@/lib/email/templates/followup";
 import { AUTOMATION_BODY_MAX_LENGTH } from "@/lib/automations/caps";
 import { originFrom } from "@/lib/email/origin";
@@ -348,6 +351,48 @@ export async function cancelBookingAction(
 
   revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
   return result;
+}
+
+/**
+ * S-47d Task 8: "Keep" on one appointment the closure card lists as affected — it still happens, so its
+ * reminders and follow-up go out as usual (`closures.ts`'s `closureVerdict` reads `closure_kept_at`
+ * before it reads the closure at all, SD20). `seesWholeAccount` admits the agency, an Owner or Staff —
+ * the same audience as the booking actions above; a Technician is refused. The write is still proven
+ * through the caller's own client first (spec §7.3, `proveBooking`, as every booking action in this
+ * file does), then runs on serviceDb() (bookings carry no client-role UPDATE grant at all, 0022).
+ */
+export async function keepAppointmentAction(
+  accountId: string, bookingId: string, kept: boolean, locale: "en" | "es",
+): Promise<ActionResult> {
+  const access = await requireAccountAccess(accountId);
+  if (!seesWholeAccount(access)) return { ok: false, error: t(m, "business.refuse.keep", locale) };
+  const refused = await proveBooking("keepAppointmentAction", accountId, bookingId);
+  if (refused) return refused;
+
+  let changed: boolean;
+  try {
+    changed = await setBookingClosureKept(serviceDb(), accountId, bookingId, kept);
+  } catch (e) {
+    console.error(`keepAppointmentAction: write failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+    return { ok: false, error: t(m, "business.card.keepFailed", locale) };
+  }
+  if (!changed) return { ok: false, error: t(m, "business.card.keepFailed", locale) };
+
+  try {
+    const db = await dbForRequest();
+    await emit(db, accountId, "booking.closure_kept", access.userId, { booking_id: bookingId, kept }, "user");
+  } catch (e) {
+    console.error(`keepAppointmentAction: event emit failed for booking ${bookingId} (account ${accountId}): ${String(e)}`);
+  }
+
+  try {
+    await bumpHeldForAccount(serviceDb(), accountId);
+  } catch (e) {
+    console.error(`keepAppointmentAction: bump failed for account ${accountId}: ${String(e)}`);
+  }
+
+  revalidatePath(`/dashboard/accounts/${accountId}/calendar`);
+  return { ok: true };
 }
 
 /**

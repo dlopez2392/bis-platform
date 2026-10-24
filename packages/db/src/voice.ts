@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { emit, type ActorType } from "./events";
 import { sanitizeSearchTerm } from "./search-term";
 import { withTimelinePage, forContacts, type TimelineCursor } from "./timeline-cursor";
+import type { BusinessStatusCode } from "./business-status";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -333,6 +334,11 @@ export async function setForwardCalls(
  * `knowledgeVersion` (0095, S-47c) is the snapshot this call's prompt was built from (`ensure_knowledge_snapshot`
  * at call start). Named only when given, for the same deployment-ordering reason as the token, the disclosure and
  * the trade-module stamps; 0095's composite key refuses a version this account does not hold.
+ *
+ * `businessStatus` (0097, S-47d) is the switch's code this call started under (what the receptionist was told:
+ * open, closed today, running late by how much, storm, or a closed day). Named only when given, for the same
+ * deployment-ordering reason as the token and the other stamps; 0097's `calls_business_status_check` refuses any
+ * other code.
  */
 export async function startCallRow(
   db: SupabaseClient, accountId: string,
@@ -341,6 +347,7 @@ export async function startCallRow(
     disclosure?: { disclosed: boolean; setting: "trial" | "on" };
     tradeModule?: { module: TradeModuleSetting; version: number };
     knowledgeVersion?: number;
+    businessStatus?: BusinessStatusCode;
   },
 ): Promise<{ id: string }> {
   const { data, error } = await db.from("calls")
@@ -354,6 +361,7 @@ export async function startCallRow(
         ? {}
         : { trade_module: input.tradeModule.module, trade_module_version: input.tradeModule.version }),
       ...(input.knowledgeVersion === undefined ? {} : { knowledge_version: input.knowledgeVersion }),
+      ...(input.businessStatus === undefined ? {} : { business_status: input.businessStatus }),
     })
     .select("id").single();
   if (error || !data) throw new Error(`startCallRow failed: ${error?.message}`);
@@ -1013,6 +1021,8 @@ export type CallDetailRow = CallListRow & {
   trade_module: TradeModuleSetting | null; trade_module_version: number | null;
   /** 0095. The knowledge snapshot this call started under; null before 0095 or when it could not be recorded. */
   knowledge_version: number | null;
+  /** 0097. The switch's code this call started under; null before 0097 or when the call was not stamped. */
+  business_status: BusinessStatusCode | null;
 };
 
 const CALL_LIST_COLS =
@@ -1020,8 +1030,9 @@ const CALL_LIST_COLS =
   "conversation_id, contact:contacts(first_name, last_name)";
 // trade_module, trade_module_version (0094): LOAD-BEARING, so 0094 must be on a project before this build reads it.
 // knowledge_version (0095): LOAD-BEARING the same way; the call page reads it for the "What Sofía knew" link.
+// business_status (0097): LOAD-BEARING the same way; the call page reads it for the status the call started under.
 const CALL_DETAIL_COLS =
-  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version, knowledge_version";
+  CALL_LIST_COLS + ", turn_count, transcript, summary, booking_id, trade_module, trade_module_version, knowledge_version, business_status";
 
 export async function listCalls(
   db: SupabaseClient, accountId: string, opts: { limit?: number; before?: string } = {},

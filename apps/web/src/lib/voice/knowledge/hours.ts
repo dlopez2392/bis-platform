@@ -2,6 +2,9 @@
 // zone through partsInZone (Intl.DateTimeFormat with an explicit timeZone), the slot engine's rule, so DST is the
 // zone's, never the server's. Pure; relative imports only.
 import { partsInZone, type OpenHours } from "../../booking/slots";
+import {
+  dayKey, reopeningFrom, closedDayOn, startOfDay, addDays, type ClosedDay, type EffectiveStatus,
+} from "../../business-status/status";
 
 type Day = "sun" | "mon" | "tue" | "wed" | "thu" | "fri" | "sat";
 const SUN_FIRST: readonly Day[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
@@ -18,6 +21,34 @@ export function clockTime(hhmm: string): string {
   const h = Number(hhmm.slice(0, 2));
   const m = hhmm.slice(3, 5);
   return `${h % 12 === 0 ? 12 : h % 12}:${m} ${h < 12 ? "AM" : "PM"}`;
+}
+
+// S-47d (spec 5.4.1, S12): the date words the closure lines say. Fixed English arrays, never Intl, so a server
+// locale can never change a word she is told.
+const MONTH_NAME = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+  "November", "December"] as const;
+const keyParts = (key: string) => key.split("-").map(Number) as [number, number, number];
+
+/** "Thursday" for "2026-12-24" (a calendar date key, no zone). */
+export function weekdayNameOf(key: string): string {
+  const [y, m, d] = keyParts(key);
+  return DAY_NAME[SUN_FIRST[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]!];
+}
+/** "December 24" for "2026-12-24". */
+export function monthDayOf(key: string): string {
+  const [, m, d] = keyParts(key);
+  return `${MONTH_NAME[m - 1]!} ${d}`;
+}
+/** Calendar days from key `a` to key `b` (negative when b is earlier). */
+export function daysBetweenKeys(a: string, b: string): number {
+  const [ay, am, ad] = keyParts(a);
+  const [by, bm, bd] = keyParts(b);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}
+/** The wall clock of `instant` in `timeZone`, in clockTime's words: "8:00 AM". */
+export function clockAt(instant: Date, timeZone: string): string {
+  const p = partsInZone(instant, timeZone);
+  return clockTime(`${String(p.hh).padStart(2, "0")}:${String(p.mi).padStart(2, "0")}`);
 }
 
 /** A day's spans, sorted by start (the stored value is sorted already; a copied calendar value may not be). */
@@ -40,8 +71,50 @@ export function hoursLines(hours: OpenHours): string[] {
 }
 
 export type OpenNow = { open: boolean; line: string };
+/** S-47d (spec 5.4.2): what openNow counts besides the weekly hours. `status` null reads as open. */
+export type OpenNowClosures = { status: EffectiveStatus | null; closedDays: readonly ClosedDay[] };
 
-export function openNow(hours: OpenHours, timeZone: string, now: Date): OpenNow {
+/** S-47c's "opens {when}" words, by zone days to the opening: today / tomorrow / {Weekday} / next {Weekday} at
+ *  exactly seven (SD15), and "on {Weekday}, {Month} {d}" beyond seven (S12, S-47d). */
+function opensWhen(opening: Date, timeZone: string, now: Date): string {
+  const key = dayKey(opening, timeZone);
+  const dd = daysBetweenKeys(dayKey(now, timeZone), key);
+  if (dd <= 0) return "today";
+  if (dd === 1) return "tomorrow";
+  if (dd < 7) return weekdayNameOf(key);
+  if (dd === 7) return `next ${weekdayNameOf(key)}`;
+  return `on ${weekdayNameOf(key)}, ${monthDayOf(key)}`;
+}
+function closedLine(opening: Date | null, timeKnown: boolean, timeZone: string, now: Date): OpenNow {
+  if (opening === null) return { open: false, line: "Right now: closed." };
+  const when = opensWhen(opening, timeZone, now);
+  return { open: false, line: `Right now: closed; opens ${when}${timeKnown ? ` at ${clockAt(opening, timeZone)}` : ""}.` };
+}
+
+/** Absent `closures`: S-47c's answer, byte for byte. With a closure in force (Closed today, Storm, a closed day):
+ *  closed, opening at the reader's reopening. Otherwise (open, running late, or no status): the hours' answer,
+ *  except that a closed-now answer names the next opening that is not on a closed day. A null status (the
+ *  read failed, spec S17) still reads a closed day covering today as closed, worded through the same
+ *  reopeningFrom path effectiveStatus's own closed_day branch uses (status.ts), rather than a second rule. */
+export function openNow(hours: OpenHours, timeZone: string, now: Date, closures?: OpenNowClosures): OpenNow {
+  if (closures) {
+    const s = closures.status;
+    if (s && (s.state === "closed_today" || s.state === "storm" || s.state === "closed_day")) {
+      return closedLine(s.reopensAt, s.reopensTimeKnown, timeZone, now);
+    }
+    if (s === null) {
+      const todayRange = closedDayOn(dayKey(now, timeZone), closures.closedDays);
+      if (todayRange) {
+        const windowEnd = startOfDay(addDays(todayRange.ends_on, 1), timeZone);
+        const r = reopeningFrom(windowEnd, hours, timeZone, closures.closedDays);
+        return closedLine(r.at, r.timeKnown, timeZone, now);
+      }
+    }
+    const byHours = openNow(hours, timeZone, now);
+    if (byHours.open) return byHours;
+    const next = reopeningFrom(now, hours, timeZone, closures.closedDays);
+    return next.timeKnown ? closedLine(next.at, true, timeZone, now) : { open: false, line: "Right now: closed." };
+  }
   const p = partsInZone(now, timeZone);
   const today = SUN_FIRST.indexOf(p.weekday);
   const t = p.hh * 60 + p.mi;

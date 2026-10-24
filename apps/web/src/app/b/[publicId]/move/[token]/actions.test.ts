@@ -57,6 +57,9 @@ vi.mock("@bis/db", async (importOriginal) => {
     createMessage: m.createMessage,
     incrementUnreadCount: m.incrementUnreadCount,
     countRecentBookings: m.countRecentBookings,
+    // S-47d: availability.ts reads the account's closures; an open account, never the real reader on {}.
+    getBusinessStatusRow: async () => null,
+    listClosedDaysFrom: async () => [],
   };
 });
 vi.mock("./data", async (importOriginal) => {

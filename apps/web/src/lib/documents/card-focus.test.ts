@@ -24,6 +24,19 @@ describe("workRowHref", () => {
   });
 });
 
+describe("workRowHref: the closure To-do's link (S-47d Task 7)", () => {
+  it("status links to the dashboard's status card; closed_day links to the calendar's closed days, by its own date, as literals (mutation: swap the two anchors -> FAILS)", () => {
+    expect(workRowHref(A, { contactId: null, closureFocus: { kind: "status", on: "2026-12-24" } }))
+      .toBe("/dashboard/accounts/acct1/dashboard#business-status");
+    expect(workRowHref(A, { contactId: null, closureFocus: { kind: "closed_day", on: "2026-12-24" } }))
+      .toBe("/dashboard/accounts/acct1/calendar?closedDay=2026-12-24#closed-days");
+  });
+  it("a closure row with a contactId still links to the closure, not the customer (mutation: check closureFocus after contactId -> FAILS)", () => {
+    expect(workRowHref(A, { contactId: "c1", closureFocus: { kind: "status", on: "2026-12-24" } }))
+      .toBe("/dashboard/accounts/acct1/dashboard#business-status");
+  });
+});
+
 describe("cardFocusFrom", () => {
   it("reads back exactly what workRowHref wrote (mutation: rename either parameter on one side -> FAILS)", () => {
     const href = workRowHref(A, { contactId: "c1", documentFocus: { documentId: DOC, category: "warranty", groupId: null } })!;

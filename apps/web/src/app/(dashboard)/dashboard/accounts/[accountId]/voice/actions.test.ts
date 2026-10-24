@@ -19,6 +19,8 @@ const dbMocks = vi.hoisted(() => ({
   // S-47c: the knowledge save path (saveKnowledgeParts) reads these and calls the snapshot RPC.
   saveVoiceKnowledge: vi.fn(), listVoiceServices: vi.fn(),
   getLatestKnowledgeVersion: vi.fn(), readAccountTimezone: vi.fn(),
+  // S-47d: every knowledge save also snapshots the planned closed days.
+  listClosedDaysFrom: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({
   ...(await importOriginal<object>()), ...dbMocks, serviceDb: () => ({}),
@@ -84,6 +86,7 @@ beforeEach(() => {
   dbMocks.getLatestKnowledgeVersion.mockResolvedValue(0);
   dbMocks.listVoiceServices.mockResolvedValue([]);
   dbMocks.saveVoiceKnowledge.mockResolvedValue({ status: "ok", version: 1 });
+  dbMocks.listClosedDaysFrom.mockResolvedValue([]);
   guardFixture.isAgency = true;
 });
 

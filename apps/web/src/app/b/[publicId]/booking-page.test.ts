@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { successCopy, calendarLink } from "./booking-page";
-import { partOfDay, groupSlots } from "./slot-picker";
+import { partOfDay, groupSlots, emptyDayTitle } from "./slot-picker";
 import { bookingStrings } from "@/lib/booking/public-strings";
 
 /**
@@ -30,6 +30,37 @@ describe("partOfDay", () => {
   it("puts midnight and noon on the right side of their boundaries", () => {
     expect(partOfDay("2026-09-08T05:00:00Z", CHICAGO)).toBe("morning"); // 00:00 local
     expect(partOfDay("2026-09-08T16:59:00Z", CHICAGO)).toBe("morning"); // 11:59 local
+  });
+});
+
+/**
+ * S-47d (task 13, spec section 5.3): the picker's empty state says the day
+ * is a closed one -- not merely slot-free -- when it is in the account's
+ * planned closed days, within both languages.
+ */
+describe("emptyDayTitle", () => {
+  for (const locale of ["en", "es"] as const) {
+    const s = bookingStrings(locale);
+
+    it(`${locale}: the literal closedDay line for a day in closedDayKeys`, () => {
+      expect(emptyDayTitle(s, "2026-06-02", ["2026-06-01", "2026-06-02"])).toBe(s.closedDay);
+    });
+
+    // MUTATION: `return strings.closedDay;` unconditionally -- this FAILS,
+    // since every ordinary slot-free day would read "Closed this day."
+    it(`${locale}: the ordinary noSlots line for a day NOT in closedDayKeys`, () => {
+      expect(emptyDayTitle(s, "2026-06-03", ["2026-06-01", "2026-06-02"])).toBe(s.noSlots);
+      expect(emptyDayTitle(s, "2026-06-03", ["2026-06-01", "2026-06-02"])).not.toBe(s.closedDay);
+    });
+
+    it(`${locale}: an absent closedDayKeys list never crashes and reads as ordinary`, () => {
+      expect(emptyDayTitle(s, "2026-06-03", undefined)).toBe(s.noSlots);
+    });
+  }
+
+  it("the two lines are typed-out literals, distinct in both languages", () => {
+    expect(bookingStrings("en").closedDay).toBe("Closed this day.");
+    expect(bookingStrings("es").closedDay).toBe("Cerrado este día.");
   });
 });
 

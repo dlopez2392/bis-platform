@@ -16,6 +16,8 @@ vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>
 import { holdOrSend, writeHeld, logSkipped, REASONS, subjectOf, verdict, type HoldSubject } from "./hold-or-send";
 import { SmsBlocked, SmsDeferred, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
 import { EmailNotSent, sendEmailOrThrow } from "@/lib/consent/email-gate";
+import { CLOSURE_REASONS, type ClosureLoader, type ClosureState } from "./closures";
+import { m } from "@/lib/messages";
 
 const NIGHT = new Date("2026-09-22T04:00:00Z");   // 23:00 CDT, Mon Sept 21
 const NOON = new Date("2026-09-21T17:00:00Z");    // 12:00 CDT, Mon Sept 21
@@ -264,5 +266,133 @@ describe("holdOrSend: the EMAIL gate's answers (consent PR-3, plan G10)", () => 
       throw new EmailNotSent({ kind: "failed", stage: "provider", error: "rejected" });
     })).rejects.toThrow("rejected");
     expect(logged()).toEqual([expect.objectContaining({ status: "failed" })]);
+  });
+});
+
+describe("closures (S-47d, spec 5.5.2)", () => {
+  // A storm thrown Monday morning with no back-on date, for acct_A only; every other account reads open.
+  const STORM_A: ClosureState = {
+    ok: true,
+    input: {
+      row: { state: "storm", late_minutes: null, until: null, set_at: "2026-09-21T13:00:00.000Z" },
+      closedDays: [], hours: null, timezone: "America/Chicago",
+    },
+    windows: [{ start: new Date("2026-09-21T13:00:00.000Z"), end: null }],
+  };
+  const OPEN: ClosureState = { ok: true, input: { row: null, closedDays: [], hours: null, timezone: "America/Chicago" }, windows: [] };
+  const stormForA = () => vi.fn<ClosureLoader>(async (accountId) => (accountId === "acct_A" ? STORM_A : OPEN));
+  const APPT = new Date("2026-09-22T20:00:00.000Z");   // 15:00 CDT Tue, inside the storm's open window
+  const booking = (over: Partial<HoldSubject> = {}) => subject({ accountId: "acct_A", appointmentAt: APPT, deadline: APPT, ...over });
+  const withLoader = (now: Date, closures: ClosureLoader) => ({ db: {} as never, now, closures });
+
+  it("a covered appointment is held with the storm reason and held_until = its deadline; the send never runs", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NOON, stormForA()), booking(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      accountId: "acct_A", status: "held", heldUntil: "2026-09-22T20:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+    expect(REASONS.heldStorm).toBe("Held: closed for a storm");
+  });
+
+  it("a covered appointment whose deadline has passed is skipped with the closed reason, never sent", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NOON, stormForA()), booking({ deadline: NOON }), send)).toBe("skipped");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      status: "skipped", reason: "Not sent: the business was closed for this appointment",
+    })]);
+    expect(REASONS.skippedClosed).toBe("Not sent: the business was closed for this appointment");
+  });
+
+  it("SD7: no loader on the context holds for LEDGER_RETRY_MS with the couldn't-check reason, never a send", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(ctx(NOON), booking(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      status: "held", heldUntil: new Date(NOON.getTime() + LEDGER_RETRY_MS).toISOString(),
+      reason: "Held: couldn't check whether the business is open",
+    })]);
+    expect(REASONS.heldClosureUnknown).toBe("Held: couldn't check whether the business is open");
+  });
+
+  it("a subject WITHOUT appointmentAt (instant reply, text-back, reactivation, quote follow-up, document request) never asks the loader, and the hours path runs as before", async () => {
+    const loader = stormForA();
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NOON, loader), subject({ accountId: "acct_A" }), send)).toBe("sent");
+    expect(loader).toHaveBeenCalledTimes(0);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await holdOrSend(withLoader(NIGHT, loader), subject({ accountId: "acct_A" }), send)).toBe("held");
+    expect(loader).toHaveBeenCalledTimes(0);
+    expect(logWrites()[1]).toEqual(expect.objectContaining({ status: "held", reason: "Held until 8:00 AM — quiet hours" }));
+  });
+
+  it("the closure check runs BEFORE the sending hours: inside quiet hours a covered appointment is held with the CLOSURE reason (mutation: check after the opening FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NIGHT, stormForA()), booking(), send)).toBe("held");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      status: "held", heldUntil: "2026-09-22T20:00:00.000Z", reason: "Held: closed for a storm",
+    })]);
+  });
+
+  it("the loader is asked for the SUBJECT's own account: B sends under A's storm, A is held (mutation: a fixed or another subject's id FAILS)", async () => {
+    const loader = stormForA();
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NOON, loader), booking({ accountId: "acct_B" }), send)).toBe("sent");
+    expect(loader.mock.calls).toEqual([["acct_B"]]);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(await holdOrSend(withLoader(NOON, loader), booking({ accountId: "acct_A" }), send)).toBe("held");
+    expect(loader.mock.calls).toEqual([["acct_B"], ["acct_A"]]);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("a kept appointment sends under its own account's storm (mutation: ignore `kept` FAILS)", async () => {
+    const send = vi.fn(async () => {});
+    expect(await holdOrSend(withLoader(NOON, stormForA()), booking({ kept: true }), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(logWrites()).toEqual([expect.objectContaining({ status: "sent" })]);
+  });
+
+  it("D13a: the subject's skipIfWasClosed reaches the verdict: an ended closed day skips the follow-up and lets any other send go (mutation: drop the pass-through FAILS)", async () => {
+    const yesterday = new Date("2026-09-20T17:00:00.000Z");     // Sun 12:00 CDT; NOON is Mon
+    const endedDay = vi.fn<ClosureLoader>(async () => ({
+      ok: true, input: { row: null, closedDays: [{ starts_on: "2026-09-20", ends_on: "2026-09-20", reason: null }], hours: null, timezone: "America/Chicago" },
+      windows: [],
+    }));
+    const send = vi.fn(async () => {});
+    const after = booking({ source: "followups", channel: "email", smsKind: undefined, appointmentAt: yesterday, deadline: undefined, skipIfWasClosed: true });
+    expect(await holdOrSend(withLoader(NOON, endedDay), after, send)).toBe("skipped");
+    expect(send).not.toHaveBeenCalled();
+    expect(logWrites()).toEqual([expect.objectContaining({
+      source: "followups", status: "skipped", reason: "Not sent: the business was closed for this appointment",
+    })]);
+    expect(await holdOrSend(withLoader(NOON, endedDay), booking({ appointmentAt: yesterday, deadline: undefined }), send)).toBe("sent");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("REASONS carries the five closure reasons written once in closures.ts (review M3)", () => {
+    expect({
+      heldClosedToday: REASONS.heldClosedToday, heldStorm: REASONS.heldStorm, heldClosedDay: REASONS.heldClosedDay,
+      heldClosureUnknown: REASONS.heldClosureUnknown, skippedClosed: REASONS.skippedClosed,
+    }).toEqual(CLOSURE_REASONS);
+  });
+
+  it("the five closure reasons are the catalogue's, each with its Spanish twin", () => {
+    expect([REASONS.heldClosedToday, REASONS.heldStorm, REASONS.heldClosedDay, REASONS.heldClosureUnknown, REASONS.skippedClosed]).toEqual([
+      "Held: the business is closed today",
+      "Held: closed for a storm",
+      "Held: the business is closed that day",
+      "Held: couldn't check whether the business is open",
+      "Not sent: the business was closed for this appointment",
+    ]);
+    const keys = ["heldClosedToday", "heldStorm", "heldClosedDay", "heldClosureUnknown", "skippedClosed"] as const;
+    expect(keys.map((k) => m[`automations.reason.${k}.es`])).toEqual([
+      "En espera: el negocio está cerrado hoy",
+      "En espera: cerrado por tormenta",
+      "En espera: el negocio está cerrado ese día",
+      "En espera: no se pudo comprobar si el negocio está abierto",
+      "No se envió: el negocio estaba cerrado para esta cita",
+    ]);
   });
 });

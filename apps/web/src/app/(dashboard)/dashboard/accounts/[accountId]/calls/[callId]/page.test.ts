@@ -155,6 +155,7 @@ const CALL: CallDetailRow = {
   trade_module: null,
   trade_module_version: null,
   knowledge_version: null,
+  business_status: null,
 };
 
 const FAILED_TEXTBACK = {
@@ -795,6 +796,72 @@ describe("CallDetailPage — the call card", () => {
     getVoiceProfileMock.mockResolvedValue({ persona_name: "  " });
     expect(text(await render(CALL))).toContain("Sofía · AI");
     err.mockRestore();
+  });
+});
+
+/**
+ * S-47d (spec; plan Task 14): the status the call started under, shown to EVERYONE who can see the
+ * call (S19) — unlike the trade-rules and Knowledge items beside it in this same <dl>, this one is NOT
+ * agency-only, because a client is entitled to know their own business was closed, late or storm-shut
+ * when Sofía answered. Same bound-shape helpers as the trade-rules describe below.
+ */
+describe("CallDetailPage — the business status line (S-47d)", () => {
+  beforeEach(() => {
+    authFixture.isAgency = true;
+  });
+
+  /** The <dd>'s own text, decoded the way `renderedText` decodes any other copy assertion in this file. */
+  const businessStatusText = (html: string): string | null => {
+    const match = /<dd[^>]*data-business-status=""[^>]*>([^<]*)<\/dd>/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+  /** The <dt> immediately before the business-status <dd>, same bound shape as tradeRulesLabel below. */
+  const businessStatusLabel = (html: string): string | null => {
+    const match = /<dt[^>]*>([^<]*)<\/dt><dd[^>]*data-business-status=""/.exec(html);
+    return match ? renderedText(match[1]!) : null;
+  };
+
+  it("shows a CLIENT the status the call started under (S19; mutation: gate it on isAgency -> FAILS)", async () => {
+    authFixture.isAgency = false;
+    const html = await render({ ...CALL, business_status: "storm" });
+    expect(businessStatusLabel(html)).toBe("Status at the start");
+    expect(businessStatusText(html)).toBe("Closed for a storm");
+  });
+
+  // Fix round C7 (design review I8): an sr-only label with an uppercase badge read as a present-tense fact
+  // ("CLOSED FOR A STORM") on a page about a past call. The label is visible, the trade-rules shape.
+  it("the label is VISIBLE, the trade-rules item's own shape, and the value is no 4px badge (mutation: restore the sr-only dt or the badge -> FAILS)", async () => {
+    const html = await render({ ...CALL, business_status: "storm" });
+    const item = /<div[^>]*>(<dt[^>]*>[^<]*<\/dt><dd[^>]*data-business-status=""[^>]*>[^<]*<\/dd>)<\/div>/.exec(html);
+    expect(item).not.toBeNull();
+    expect(item![0]).toMatch(/^<div class="flex flex-wrap items-baseline gap-x-1\.5 gap-y-0\.5"/);
+    expect(item![1]).toMatch(/^<dt class="whitespace-nowrap">/);
+    expect(item![1]).not.toMatch(/sr-only|uppercase|\brounded\b/);
+    expect(item![1]).toMatch(/<dd class="font-medium text-foreground" data-business-status="">/);
+  });
+
+  it("renders no business-status item for an unstamped call", async () => {
+    const html = await render(CALL);
+    expect(html).not.toContain("data-business-status");
+    expect(renderedText(html)).not.toContain("Status at the start");
+  });
+
+  it("reads in Spanish under the QA override (mutation: hardcode the English key -> FAILS)", async () => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try {
+      getCallMock.mockResolvedValue({ ...CALL, business_status: "storm" });
+      listFailedOutboundSmsMock.mockResolvedValue([]);
+      listProposalsForCallMock.mockResolvedValue([]);
+      const html = await CallDetailPage({
+        params: Promise.resolve({ accountId: "acct1", callId: "call1" }),
+        searchParams: Promise.resolve({ locale: "es" }),
+      }).then(renderToStaticMarkup);
+      expect(businessStatusLabel(html)).toBe("Estado al empezar");
+      expect(businessStatusText(html)).toBe("Cerrado por tormenta");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

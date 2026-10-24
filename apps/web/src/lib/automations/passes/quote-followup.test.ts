@@ -20,6 +20,7 @@ import { AUTOMATION_TICK_CAP, AUTOMATION_DAILY_CAP } from "../caps";
 import { defaultQuoteFollowupBody } from "../quote-followup-copy";
 import { fakeSmsGate } from "@/lib/consent/fake-gate";
 import type { PassContext } from "../context";
+import { NO_CLOSURES } from "../closures";
 import { quoteFollowupPass, releaseQuoteFollowup } from "./quote-followup";
 import { EmailNotSent } from "@/lib/consent/email-gate";
 
@@ -72,6 +73,7 @@ function ctx(now: Date = TICK): PassContext {
     db: {} as never, now, origin: "https://app.example.com",
     email: { isFake: true, send: (...a: unknown[]) => emailSend(...a) },
     sms: fakeSmsGate({ send: (m) => smsSend(m) }),
+    closures: NO_CLOSURES,
   };
 }
 const EMPTY = {

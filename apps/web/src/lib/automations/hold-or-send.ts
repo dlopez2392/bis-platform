@@ -9,6 +9,7 @@ import { formatInstantClock } from "./quiet-hours";
 import { SmsDeferred, SmsBlocked, LEDGER_RETRY_MS, type AutomationBlockReason } from "./send-sms";
 import { EmailNotSent, type EmailBlockReason } from "@/lib/consent/email-gate";
 import type { PassContext } from "./context";
+import { closureVerdict, CLOSURE_REASONS, type ClosureState } from "./closures";
 import { m } from "@/lib/messages";
 
 /**
@@ -16,6 +17,11 @@ import { m } from "@/lib/messages";
  * automation log (automation engine part C; consent chain spec §4.1 item 4).
  *
  *   holdOrSend(ctx, subject, send)
+ *     a closure covers  → S-47d (spec 5.5.2), FIRST and only for a subject with
+ *     the appointment     `appointmentAt` (the seven booking recipes): held until
+ *                         the closure's window ends or the deadline, skipped once
+ *                         the deadline has passed, held LEDGER_RETRY_MS when the
+ *                         status cannot be read (closures.ts closureVerdict).
  *     outside the hours → write (or re-write) the held row, held_until = the
  *                         instant they open, return "held". The pass does NOT
  *                         stamp; the release pass brings the subject back.
@@ -49,7 +55,7 @@ import { m } from "@/lib/messages";
  * `{ kind: "failed" }`, which enrich.ts records into the submission's
  * `processing_error`.
  */
-export type HoldContext = Pick<PassContext, "db" | "now">;
+export type HoldContext = Pick<PassContext, "db" | "now"> & Partial<Pick<PassContext, "closures">>;
 
 export type LogSubject = {
   accountId: string;
@@ -74,6 +80,20 @@ export type HoldSubject = LogSubject & {
    *  text waits for 09:00, and for noon on Sunday). holdOrSend throws
    *  without it rather than guess the weaker rule. */
   smsKind?: AutomationSmsKind;
+  /** S-47d (spec 5.5.2): the appointment this send is about, set ONLY by the seven booking recipes from the
+   *  due row's `starts_at`. With it, a closure that covers the appointment holds or skips the send before
+   *  the sending hours are read. Absent (every other sender) changes nothing and reads no status. */
+  appointmentAt?: Date;
+  /** S-47d (SD20): the due row's own Keep (`closure_kept_at` is not null): the owner said this appointment
+   *  is happening, so no closure holds it, however old it is. Read only with `appointmentAt`. */
+  kept?: boolean;
+  /** S-47d, owner rulings D13a and D13b (2026-10-24): set by the AUTOMATIC follow-up alone. Once a closure
+   *  that covered the appointment has ended, on its own or by a switch to Open or Running late (the history
+   *  closures.ts rebuilds from the switch's change log), the send is skipped rather than sent, unless the
+   *  appointment was kept. Every other recipe leaves it unset: the review request, referral ask and no-show
+   *  nudge follow a staff mark that is proof of what happened, and an ended closure lets them send (SD6), as it
+   *  does the before-appointment recipes. Read only with `appointmentAt`. */
+  skipIfWasClosed?: true;
 };
 
 /** A subject that texts. Its `smsKind` is the ONE literal that decides both
@@ -90,6 +110,10 @@ export const REASONS = {
   /** Review R2-I4: the consent state could not be read, so the send waits
    *  LEDGER_RETRY_MS and the release pass tries again. */
   ledgerRetry: m["automations.reason.ledgerRetry"],
+  /** S-47d (spec 5.5.2): heldClosedToday, heldStorm, heldClosedDay (a closure covers the appointment),
+   *  heldClosureUnknown (the status could not be read) and skippedClosed (the deadline passed, or, D13, an
+   *  after-appointment send for a closure that has ended). Written once, in closures.ts (review M3). */
+  ...CLOSURE_REASONS,
   /** The email gate's two outages (consent PR-3): each a LEDGER_RETRY_MS
    *  re-hold, never a skip, so the email goes once the outage ends. */
   emailLedgerRetry: m["automations.reason.emailLedgerRetry"],
@@ -296,6 +320,17 @@ export async function holdOrSend(
     );
   }
   const zone = hoursZone(s.accountTimezone);
+  if (s.appointmentAt) {
+    // S-47d (spec 5.5.2): a closure that covers this appointment holds it, before the sending-hours check.
+    // The SUBJECT's own account, never another: the loader is per account (fix-round item 6).
+    const state: ClosureState = ctx.closures ? await ctx.closures(s.accountId) : { ok: false };
+    const v = closureVerdict(state, {
+      appointmentAt: s.appointmentAt, kept: s.kept === true, deadline: s.deadline,
+      skipIfWasClosed: s.skipIfWasClosed === true,
+    }, ctx.now);
+    if (v.kind === "skipped") { await logSkipped(ctx, s, v.reason); return "skipped"; }
+    if (v.kind === "held") { await writeHeld(ctx, s, v.until, zone, v.reason); return "held"; }
+  }
   const opening = nextOpening(hoursRuleOf(s), ctx.now, zone);
   if (expiresBeforeOpening(opening, s.deadline)) {
     await logSkipped(ctx, s, REASONS.windowAfterDeadline);
