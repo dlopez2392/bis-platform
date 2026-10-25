@@ -11,7 +11,7 @@ import { voiceCallAlertEmail } from "@/lib/email/templates/voice";
 import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAlertSms } from "@/lib/sms/alerts";
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { readCandidates, isShared } from "./identity/candidates";
-import { pickRecordOnNumber } from "./identity/record";
+import { pickRecordOnNumber, sameNameAsRecord } from "./identity/record";
 import type { ResolvedTextbackContact } from "./textback";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
@@ -292,12 +292,22 @@ async function resolveOpenOpportunity(
   }
 }
 
+/** S-47e (Task 8 review M1): the name the record below is chosen by: the lead's, or with no lead the last
+ *  message's when the caller did not decline it. Undefined when none was given. */
+function nameSaidAfter(state: CallState): string | undefined {
+  const lead = state.leads[0];
+  if (lead) return lead.fields?.fullName;
+  const msg = state.messages[state.messages.length - 1];
+  return msg && !msg.nameDeclined ? msg.name : undefined;
+}
+
 /**
  * Resolves who this call is about, creating a contact only when the state
  * genuinely has nobody yet.
  *
  * `state.contactId` wins outright — set by an in-call booking or an explicit
- * lookup, it is never second-guessed here. Absent that, a captured lead's
+ * lookup, it is second-guessed only when the lead or the message names someone
+ * else (S-47e, below). Absent that, a captured lead's
  * fields build a real contact (name split, phone as said via `spokenPhone`,
  * source "voice"). Absent even a lead, a caller ID still deserves a contact record
  * for the message that follows — that gets the minimal shape, `firstName:
@@ -310,9 +320,20 @@ async function resolveOpenOpportunity(
  * S-47e (E7, spec 5.10.3): on a number several contacts share, the confirmed person, the one the lead's or the
  * message's name picks, a new person the name makes, or NOBODY: never whichever record the phone dedupe finds.
  * A read failure throws to the lead-treatment leg's catch, which writes nothing.
+ *
+ * S-47e (spec 5.10.3 step 1; Task 8 review M1): `state.contactId` is also set by a booking that lost its slot
+ * (SlotTakenError), so "this is Ana, take a message" after booking Beto would land on Beto. The call's record
+ * therefore yields when the lead's name (or, with no lead, the last message's name) does not agree with its
+ * stored name (sameNameAsRecord, the booking's own rule), and the resolution below runs. No name keeps it.
  */
 async function resolveContactId(state: CallState, ctx: FinishContext, callId: string | null): Promise<string | null> {
-  if (state.contactId) return state.contactId;
+  if (state.contactId) {
+    const said = nameSaidAfter(state);
+    if (!said?.trim()) return state.contactId;
+    const record = (await getContact(ctx.db, ctx.accountId, state.contactId)) as
+      { first_name: string | null; last_name: string | null } | null;
+    if (sameNameAsRecord(said, record)) return state.contactId;
+  }
   const source = voiceSource(callId);
   const acts: NewAiAct[] = [];
   const lead = state.leads[0];
@@ -333,7 +354,8 @@ async function resolveContactId(state: CallState, ctx: FinishContext, callId: st
       const { candidates, truncated } = await readCandidates(ctx.db, ctx.accountId, number);
       const pick = pickRecordOnNumber({ onNumber: candidates, truncated, name: fields.fullName, email: fields.email,
         confirmedId: number === ctx.callerNumber ? confirmedId : null, forSomeoneElse: lead.forSomeoneElse });
-      // ask_whose here means capture_lead asked once and the caller never answered: nothing ambiguous is written.
+      // ask_whose here means capture_lead asked once and the caller never answered, OR its in-call read failed
+      // and it recorded the lead without asking (leadWhoseStep): either way nothing ambiguous is written.
       if (pick.kind === "ask_name" || pick.kind === "ambiguous" || pick.kind === "ask_whose") return null;
       if (pick.kind === "existing") {
         if (number === ctx.callerNumber) {

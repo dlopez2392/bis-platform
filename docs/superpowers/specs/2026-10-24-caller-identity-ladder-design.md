@@ -802,19 +802,26 @@ their own comments) run only where their record was picked by this rule.
 
 The new order:
 
-1. `state.contactId` (308): an in-call booking, already picked by 5.10.1. Unchanged.
+1. `state.contactId` (308): an in-call booking, already picked by 5.10.1. Amended (Task 8 review M1, orchestrator
+   ruling): that id is also set by a booking that lost its slot (`SlotTakenError`), so it YIELDS when the lead's
+   `fullName` (or, with no lead, the last message's `name`, unless declined) does not agree with that record's
+   stored name by `sameNameAsRecord` (`identity/record.ts`, the booking's own rule); resolution then continues at
+   step 3. No name given keeps it. "Booked Beto, then 'this is Ana, take a message'" files on Ana, never Beto.
 2. (Amended, R2 finding 9: no confirmed-first step. The confirmation counts inside the picker, only on the
    caller-ID number, exactly as for a booking.)
 3. A lead (313-350): the number is `e164Of(spokenPhone(fields.callbackNumber, callerNumber))`; the picker
    with the lead's `fullName`, `email`, `forSomeoneElse` and, on the caller-ID number, the confirmation.
    `existing` → that record, with the 5.10.2 fill; `create` → `createContact` with `matchBy: "email_only"`;
-   `ask_name`, `ask_whose` (asked once, never answered) or `ambiguous` → null; `today` → today's code.
+   `ask_name`, `ask_whose` (asked once and never answered, or never asked because `capture_lead`'s in-call
+   read failed) or `ambiguous` → null; `today` → today's code.
    Known limit (P27): a lead whose `capture_lead` was answered with LEAD ASK WHOSE and never called again is
    not in the state at all, so it is lost with the call (the call row, transcript and staff alert remain).
 4. No lead, a caller ID (352-376): on a shared caller-ID number, the picker with the confirmation and the
    last message's `name` (S22, 5.10.5). `existing` → it; `create` → `createContact({ firstName, lastName, phone: callerNumber,
    source: "voice", matchBy: "email_only" })`; a declined name, `ask_name` or `ambiguous` → null. Any other
    number → today's "Caller" path.
+   Known limit (Task 8 review M2): a message on a number with ONE contact still files on that contact by phone
+   (today's path), whatever name the message carries.
 5. Null: the lead-treatment block's own `if (contactId)` (`finish-call.ts:457-472`) skips the thread. The
    call row's `contact_id` stays null; the call card, the staff alert and the To-do are unaffected. The
    message is on the call, in no customer's thread.
@@ -828,9 +835,10 @@ must have a contact (`conversations.contact_id not null`, 0005:14), so the text 
 E8 decides which:
 
 - `finishCall`'s resolver (5.10.3) on a shared, unconfirmed, unnamed call returns the HOLDING record for
-  the text-back's use only: `resolveContactId` gains a `forTextback` mode (passed at `finish-call.ts:639`)
-  whose null case is `ensureHoldingContact(callerNumber)` (5.12.2) on a shared caller-ID number. The lead
-  leg's own call keeps null, so the thread of 5.10.3 point 5 is still no customer's.
+  the text-back's use only: a wrapper, `resolveTextbackContact` (plan P15, passed at `finish-call.ts:639`),
+  calls `resolveContactId` unchanged and, when it answers null on a shared caller-ID number, answers
+  `{ id, holding: true }` from `ensureHoldingContact(callerNumber, "voice")` (5.12.2). `resolveContactId` has
+  no mode; the lead leg's own call keeps null, so the thread of 5.10.3 point 5 is still no customer's.
 - `contactForCallerId` (`textback.ts:159-184`) reads `listContactsOnNumber` first: shared →
   `ensureHoldingContact`; one contact or none → today's code. Its phone-only fill (175-180) never runs on a
   holding record.

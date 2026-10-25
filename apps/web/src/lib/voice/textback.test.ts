@@ -507,10 +507,16 @@ describe("S-47e: a shared number's text-back (plan Task 8)", () => {
     dbMocks.createContact.mockResolvedValue({ id: "ct_new", existing: false });
     dbMocks.fillContactBlanksReport.mockResolvedValue({ fields: [], flagged: false, prior: {}, written: {} });
     dbMocks.insertAiActs.mockResolvedValue(undefined);
+    // Rows answer ONLY for account a1 and the caller ID (Task 8 review I2): a read of another account sees nobody.
+    dbMocks.listContactsOnNumber.mockImplementation(async (_db: unknown, accountId: string, e164: string) =>
+      ({ rows: accountId === "a1" && e164 === "+19562921696" ? onIt : [], truncated: false }));
+    onIt = [];
   });
+  let onIt: ReturnType<typeof person>[] = [];
+  const onCallerId = (...rows: ReturnType<typeof person>[]) => { onIt = rows; };
 
   it("two customers on the number: the text files on its ONE holding record, made by voice, and nobody is phone-picked or filled", async () => {
-    dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba")], truncated: false });
+    onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
     const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
     expect(outcome.holding).toBe(true);
     expect(outcome.contactId).toBe("ct_hold");
@@ -521,7 +527,7 @@ describe("S-47e: a shared number's text-back (plan Task 8)", () => {
   });
 
   it("one customer on the number: today's Caller contact, not the holding record", async () => {
-    dbMocks.listContactsOnNumber.mockResolvedValue({ rows: [person("ct1", "Ana", "Prueba")], truncated: false });
+    onCallerId(person("ct1", "Ana", "Prueba"));
     const outcome = await prepareTextback(DB, "a1", request({ contactId: null }));
     expect(dbMocks.createContact).toHaveBeenCalledWith(DB, "a1", { firstName: "Caller", phone: "+19562921696", source: "voice" }, "voice", "ai");
     expect(dbMocks.ensureHoldingContact).not.toHaveBeenCalled();

@@ -2147,10 +2147,18 @@ describe("finishCall — Sofía's acts (item 8c)", () => {
 
 describe("S-47e: the record after the call (plan Task 8)", () => {
   const caller = () => withTranscript(emptyCallState(), { role: "caller", text: "Hi, I need a quote.", at: "t" });
-  const person = (id: string, first: string, last: string) =>
-    ({ id, first_name: first, last_name: last, phone: "+19562921696", email_key: null, holds_shared_number: false });
-  const onCallerId = (...rows: ReturnType<typeof person>[]) =>
-    dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+  const person = (id: string, first: string, last: string, phone = "+19562921696") =>
+    ({ id, first_name: first, last_name: last, phone, email_key: null, holds_shared_number: false });
+  // Rows answer ONLY for account a1 and the number asked (Task 8 review I1, I2): a read of another account, or
+  // of another number, sees nobody, so a hard-coded account or the wrong number changes what is written.
+  let byNumber: Record<string, ReturnType<typeof person>[]> = {};
+  beforeEach(() => {
+    byNumber = {};
+    dbMocks.listContactsOnNumber.mockImplementation(async (_db: unknown, accountId: string, e164: string) =>
+      ({ rows: accountId === "a1" ? byNumber[e164] ?? [] : [], truncated: false }));
+  });
+  const onNumber = (e164: string, ...rows: ReturnType<typeof person>[]) => { byNumber[e164] = rows; };
+  const onCallerId = (...rows: ReturnType<typeof person>[]) => onNumber("+19562921696", ...rows);
   const confirmedAna = () => withConfirmed(caller(), { contactId: "ct7", rung: 1, by: "name" });
   const patch = () => dbMocks.finishCallRow.mock.calls[0]![3] as { contactId?: string; conversationId?: string };
   const silence = () => vi.spyOn(console, "error").mockImplementation(() => {});
@@ -2271,6 +2279,66 @@ describe("S-47e: the record after the call (plan Task 8)", () => {
       expect(dbMocks.setCallCard).toHaveBeenCalledTimes(1);
       expect(emailRefs.send).toHaveBeenCalledTimes(1);
       expect(dbMocks.ensureCallbackTask).toHaveBeenCalledWith({}, "a1", expect.objectContaining({ contactId: null }), "voice", "ai");
+    });
+  });
+
+  describe("a lead is matched on its OWN callback number (Task 8 review I1; mutation O1: read ctx.callerNumber ?? number → FAILS)", () => {
+    const CALLBACK = "+19565550199";
+    it("the caller ID has only Carla; Ana and Beto share the callback number: a lead for Ana Prueba lands on Ana, with no fill (not the caller ID)", async () => {
+      onCallerId(person("ct9", "Carla", "Prueba"));
+      onNumber(CALLBACK, person("ct1", "Ana", "Prueba", CALLBACK), person("ct2", "Beto", "Prueba", CALLBACK));
+      await finishCall(withLead(caller(), { fields: { fullName: "Ana Prueba", callbackNumber: "956-555-0199", need: "quote" } }), ctx, meta);
+      expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", CALLBACK);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.createContact).not.toHaveBeenCalled();
+      expect(dbMocks.fillContactBlanksReport).not.toHaveBeenCalled();
+    });
+
+    it("a lone Dan on the caller ID, and an Ana lead whose callback number has nobody on it: today's path, on the number as said", async () => {
+      onCallerId(person("ct1", "Dan", "Lopez"));
+      dbMocks.createContact.mockResolvedValue({ id: "ct_new", existing: false });
+      await finishCall(withLead(caller(), { fields: { fullName: "Ana Prueba", callbackNumber: "956-555-0199", need: "quote" } }), ctx, meta);
+      expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith({}, "a1", CALLBACK);
+      expect(dbMocks.createContact).toHaveBeenCalledTimes(1);
+      const input = dbMocks.createContact.mock.calls[0]![2] as Record<string, unknown>;
+      expect(input).toMatchObject({ firstName: "Ana", lastName: "Prueba", phone: "956-555-0199", source: "voice" });
+      expect(input).not.toHaveProperty("matchBy");
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct_new", "voice", "ai");
+    });
+  });
+
+  describe("the call's own record yields to a name that is not its own (Task 8 review M1, spec 5.10.3 step 1; mutation: the unconditional state.contactId shortcut → FAILS)", () => {
+    const stored: Record<string, { id: string; first_name: string; last_name: string }> = {
+      ct1: { id: "ct1", first_name: "Ana", last_name: "Prueba" },
+      ct2: { id: "ct2", first_name: "Beto", last_name: "Prueba" },
+    };
+    beforeEach(() => {
+      onCallerId(person("ct1", "Ana", "Prueba"), person("ct2", "Beto", "Prueba"));
+      dbMocks.getContact.mockImplementation(async (_db: unknown, _a: string, id: string) => stored[id] ?? null);
+    });
+    // A booking for Beto (or one that lost its slot, SlotTakenError) leaves state.contactId on Beto.
+    const afterBetosBooking = (s: ReturnType<typeof caller>) => ({ ...s, contactId: "ct2" });
+
+    it("booked Beto, then \"this is Ana, take a message\": the message lands on Ana, not Beto", async () => {
+      await finishCall(afterBetosBooking(withMessage(caller(), { body: "Call me", at: "t", name: "Ana Prueba" })), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+    });
+
+    it("booked Beto, then a lead for Ana: the lead lands on Ana", async () => {
+      await finishCall(afterBetosBooking(withLead(caller(), { fields: { fullName: "Ana Prueba", need: "quote" } })), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct1", "voice", "ai");
+      expect(dbMocks.ensureConversation).not.toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+    });
+
+    it.each([
+      ["Beto's own name", { body: "Call me", at: "t", name: "Beto Prueba" }],
+      ["no name", { body: "Call me", at: "t" }],
+      ["a declined name", { body: "Call me", at: "t", name: "Ana Prueba", nameDeclined: true }],
+    ])("booked Beto, then a message with %s: the call's record keeps it, and the number is not read", async (_l, msg) => {
+      await finishCall(afterBetosBooking(withMessage(caller(), msg)), ctx, meta);
+      expect(dbMocks.ensureConversation).toHaveBeenCalledWith({}, "a1", "ct2", "voice", "ai");
+      expect(dbMocks.listContactsOnNumber).not.toHaveBeenCalled();
     });
   });
 
