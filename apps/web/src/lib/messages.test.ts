@@ -2027,6 +2027,7 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
     "conversation.holding.moved": ["name"],
     "conversation.holding.movedBack": [],
     "conversation.holding.moveFailed": [],
+    "conversation.holding.moveEmpty": [],
     "call.holding.openTexts": [],
     "conversation.holding.findLabel": [],
     "conversation.holding.findNone": [],
@@ -2039,8 +2040,8 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
   // The SET of names: a sentence may name one twice, and t() replaces every occurrence.
   const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
 
-  it("the key list itself is the plan's 15 rows: one voice, one contact, ten conversation, one call, two todo (guards the loops below from vacuity)", () => {
-    expect(KEYS.length).toBe(15);
+  it("the key list itself is the plan's 16 rows: one voice, one contact, eleven conversation, one call, two todo (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(16);
   });
 
   it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
@@ -2066,6 +2067,7 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
       ["conversation.holding.moved", "Moved to {name}.", "Se movió a {name}."],
       ["conversation.holding.movedBack", "Moved back.", "Se regresó."],
       ["conversation.holding.moveFailed", "That conversation couldn't be moved. Try again.", "No se pudo mover la conversación. Inténtelo de nuevo."],
+      ["conversation.holding.moveEmpty", "These texts were already moved.", "Estos mensajes ya se movieron."],
       ["call.holding.openTexts", "Open the texts", "Abrir los mensajes"],
       ["conversation.holding.findLabel", "Search customers by name or phone", "Buscar clientes por nombre o teléfono"],
       ["conversation.holding.findNone", "No customers match.", "Ningún cliente coincide."],

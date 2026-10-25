@@ -2588,6 +2588,8 @@ export const m = {
   "conversation.holding.movedBack.es": "Se regresó.",
   "conversation.holding.moveFailed": "That conversation couldn't be moved. Try again.",
   "conversation.holding.moveFailed.es": "No se pudo mover la conversación. Inténtelo de nuevo.",
+  "conversation.holding.moveEmpty": "These texts were already moved.",
+  "conversation.holding.moveEmpty.es": "Estos mensajes ya se movieron.",
   "call.holding.openTexts": "Open the texts",
   "call.holding.openTexts.es": "Abrir los mensajes",
   "conversation.holding.findLabel": "Search customers by name or phone",
