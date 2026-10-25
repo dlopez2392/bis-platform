@@ -15,6 +15,9 @@ const db = vi.hoisted(() => ({
   applyConfirmationReply: vi.fn(), updateMessageStatusByProviderId: vi.fn(),
   appendConsentEventGuarded: vi.fn(), ensureConsentTask: vi.fn(), nextBookedStart: vi.fn(),
   readAccountTimezone: vi.fn(), getContact: vi.fn(), completeTasksForConsentEvents: vi.fn(), readConsentHistory: vi.fn(),
+  // S-47e (Task 10): the shared number's holding filing and the household reply (S30).
+  listContactsOnNumber: vi.fn(), ensureHoldingContact: vi.fn(), listOutstandingConfirmAsks: vi.fn(),
+  addTask: vi.fn(), getAccountLanguage: vi.fn(),
 }));
 vi.mock("@bis/db", async (importOriginal) => ({ ...(await importOriginal<object>()), ...db }));
 const sendReply = vi.hoisted(() => vi.fn());
@@ -26,6 +29,7 @@ vi.mock("next/server", async (importOriginal) => {
 });
 
 import { POST } from "./route";
+import { HoldingContactUnavailable } from "@bis/db";
 // Heartbeats are mocked out so the `after()` recorders below keep counting
 // only this route's own work (lib/ops/stamp.ts).
 const stampMock = vi.hoisted(() => vi.fn());
@@ -71,6 +75,11 @@ beforeEach(() => {
   db.getContact.mockResolvedValue({ id: "ct_1", first_name: "Ana", last_name: null });
   db.completeTasksForConsentEvents.mockResolvedValue([]);
   db.readConsentHistory.mockResolvedValue([]);
+  db.listContactsOnNumber.mockResolvedValue({ rows: [], truncated: false });
+  db.ensureHoldingContact.mockResolvedValue({ id: "ct_hold", created: true });
+  db.listOutstandingConfirmAsks.mockResolvedValue([]);
+  db.addTask.mockResolvedValue({ id: "t1" });
+  db.getAccountLanguage.mockResolvedValue(null);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -283,5 +292,41 @@ describe("what answers 503 (plan G2)", () => {
     db.serviceDb.mockImplementation(() => { throw new Error("Supabase service env vars missing"); });
     expect((await POST(text("STOP"))).status).toBe(503);
     expect((await POST(text("hi"))).status).toBe(200);
+  });
+});
+
+describe("a text from a number several customers share files on its holding record, fail closed (S-47e E8, P23)", () => {
+  const person = (id: string, first: string) =>
+    ({ id, first_name: first, last_name: "Ruiz", phone: CUSTOMER, email_key: null, holds_shared_number: false });
+  const household = () => db.listContactsOnNumber.mockResolvedValue({ rows: [person("ct_ana", "Ana"), person("ct_beto", "Beto")], truncated: false });
+
+  it("a failed read of who is on the number, on the first filing, answers 503 and files no message (mutation: catch the read and file on the phone match → FAILS)", async () => {
+    db.listContactsOnNumber.mockRejectedValue(new Error("listContactsOnNumber failed: timeout"));
+    const payload = { id: "msg_read", to: [{ phone_number: OUR_NUMBER }], from: { phone_number: CUSTOMER }, text: "see you Tuesday" };
+    expect((await POST(signed(payload))).status).toBe(503);
+    expect(db.createContact).not.toHaveBeenCalled();
+    expect(db.createMessage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an ordinary Error", () => new Error("ensureHoldingContact failed: timeout")],
+    ["a HoldingContactUnavailable", () => new HoldingContactUnavailable("acct_1")],
+  ])("%s from ensureHoldingContact answers 503 and files nothing, so Telnyx retries (P23, re-review R5; mutation (e): answer it 200 → FAILS)", async (_name, err) => {
+    household();
+    db.ensureHoldingContact.mockRejectedValue(err());
+    const payload = { id: "msg_hold", to: [{ phone_number: OUR_NUMBER }], from: { phone_number: CUSTOMER }, text: "see you Tuesday" };
+    expect((await POST(signed(payload))).status).toBe(503);
+    expect(db.createContact).not.toHaveBeenCalled();
+    expect(db.ensureConversation).not.toHaveBeenCalled();
+    expect(db.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("a STOP from the shared number is recorded against the ADDRESS, with the holding record as its contact", async () => {
+    household();
+    expect((await POST(text("STOP"))).status).toBe(200);
+    expect(db.ensureHoldingContact).toHaveBeenCalledWith({}, "acct_1", CUSTOMER);
+    expect(db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "revoked")![1])
+      .toMatchObject({ address: CUSTOMER, contactId: "ct_hold", channel: "sms" });
+    expect(db.createContact).not.toHaveBeenCalled();
   });
 });

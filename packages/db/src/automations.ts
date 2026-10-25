@@ -991,6 +991,25 @@ export async function applyConfirmationReply(
   return written ? answer : null;
 }
 
+/**
+ * S-47e (S30): the outstanding confirmation asks among these contacts, the same predicates as
+ * applyConfirmationReply (booked, future, asked, unanswered), at most 2 (the caller asks "exactly one?").
+ * [] for [] without a request. Throws on error.
+ */
+export async function listOutstandingConfirmAsks(
+  db: SupabaseClient, accountId: string, contactIds: readonly string[], now: Date,
+): Promise<{ bookingId: string; contactId: string }[]> {
+  if (contactIds.length === 0) return [];
+  const { data, error } = await db.from("bookings")
+    .select("id, contact_id")
+    .eq("account_id", accountId).in("contact_id", [...contactIds])
+    .eq("status", "booked").not("confirm_asked_at", "is", null).is("confirm_reply", null)
+    .gt("starts_at", now.toISOString())
+    .order("confirm_asked_at", { ascending: false }).limit(2);
+  if (error) throw new Error(`listOutstandingConfirmAsks failed: ${error.message}`);
+  return ((data ?? []) as { id: string; contact_id: string }[]).map((r) => ({ bookingId: r.id, contactId: r.contact_id }));
+}
+
 // ---------------------------------------------------------------------------
 // Recipe: referral ask — the completed-job ladder's third rung (part B)
 // ---------------------------------------------------------------------------
