@@ -13,6 +13,7 @@ import { makeTr } from "@/lib/record/copy";
 import { Notice } from "@/components/ui/notice";
 import { formatPhone } from "@/lib/document-requests/customer-state";
 import { HoldingMove } from "./holding-move";
+import { holdingLabelParts } from "@/lib/contacts/holding-label";
 // Fix round 1 (UI review, critical): `readInboundMeta` moved to the plain `./inbound-meta`
 // module. This file is a SERVER component — `inbound-notice.tsx` is `"use client"`, and
 // calling a non-component export of a client module from server code throws at runtime
@@ -48,6 +49,7 @@ export function MessageThread({
   forwardedNames,
   personaName,
   holding,
+  pseudo = false,
 }: {
   messages: Message[];
   contactName: string;
@@ -100,8 +102,14 @@ export function MessageThread({
    *  Move to the people on the number, for those who may reply in the inbox. Absent on every other
    *  thread. */
   holding?: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null;
+  /** The QA pseudo-locale (requestPseudoMode), for the holding Notice and Move (T17 design review M-6). */
+  pseudo?: boolean;
 }) {
-  const tr = makeTr(locale);
+  const tr = makeTr(locale, pseudo);
+  // S-47e (T17 design review I-1, M-5): a holding thread's label is in the reader's language and its number never
+  // splits; the header row wraps so the Move button can drop below at 360px. Every other thread's header is
+  // unchanged byte for byte (message-thread.test.ts).
+  const held = holding ? holdingLabelParts(holding.number, locale) : null;
   const firstChatRows = firstWebchatRows(messages);
   const statusWord = (s: string) => (Object.hasOwn(STATUS_KEY, s) ? t(m, STATUS_KEY[s]!, locale) : s);
   return (
@@ -116,17 +124,24 @@ export function MessageThread({
     // long list itself, which is why the bubbles stay flat.
     <div className="flex flex-col rounded-xl border border-border bg-card glass lg:max-h-[calc(100vh-173px)]">
       <div className="border-b border-[var(--row-line)] px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <p data-thread-name="" className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
+        <div className={held ? "flex flex-wrap items-center justify-between gap-2" : "flex items-center justify-between gap-2"}>
+          {held ? (
+            <p data-thread-name="" lang={locale} className="min-w-0 text-[13.5px] font-semibold text-card-foreground">
+              {`${held.words} `}<span className="whitespace-nowrap">{held.number}</span>
+            </p>
+          ) : (
+            <p data-thread-name="" className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
+          )}
           {holding?.canMove ? (
             <HoldingMove
               accountId={accountId} conversationId={conversationId} holdingContactId={holding.holdingContactId}
-              people={holding.people} locale={locale}
+              people={holding.people} locale={locale} pseudo={pseudo}
             />
           ) : null}
         </div>
         {holding ? (
-          <Notice tone="warn" className="mt-2 text-foreground" lang={locale}>
+          // M-1: a standing explanation, not an alert.
+          <Notice tone="warn" role="note" className="mt-2 text-foreground" lang={locale}>
             {tr.text("conversation.holding.notice", { number: formatPhone(holding.number) })}
           </Notice>
         ) : null}

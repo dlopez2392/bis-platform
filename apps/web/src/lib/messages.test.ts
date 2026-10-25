@@ -2031,6 +2031,8 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
     "call.holding.openTexts": [],
     "conversation.holding.findLabel": [],
     "conversation.holding.findNone": [],
+    "conversation.holding.findHint": [],
+    "conversation.holding.findCustomer": [],
     "conversation.holding.findFailed": [],
     "conversation.holding.moveRole": [],
     "todo.sharedNumber.reply": [],
@@ -2040,8 +2042,8 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
   // The SET of names: a sentence may name one twice, and t() replaces every occurrence.
   const paramsOf = (s: string) => [...new Set([...s.matchAll(/\{(\w+)\}/g)].map((mm) => mm[1]!))].sort();
 
-  it("the key list itself is the plan's 16 rows: one voice, one contact, eleven conversation, one call, two todo (guards the loops below from vacuity)", () => {
-    expect(KEYS.length).toBe(16);
+  it("the key list itself is the plan's 16 rows plus the design review's two (T17 M-4, M-7): one voice, one contact, thirteen conversation, one call, two todo (guards the loops below from vacuity)", () => {
+    expect(KEYS.length).toBe(18);
   });
 
   it("every key exists with its Spanish twin, and none matches its twin (mutation: drop one .es line -> FAILS)", () => {
@@ -2061,16 +2063,18 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
     const pairs: Array<[string, string, string]> = [
       ["voice.todo.identity", "Someone asked about an appointment and couldn't confirm who they are", "Alguien preguntó por una cita y no pudo confirmar quién es"],
       ["contact.holding.label", "Shared number {number}", "Número compartido {number}"],
-      ["conversation.holding.notice", "These texts came from {number}, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person.", "Estos mensajes llegaron del {number}, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a la persona correcta."],
+      ["conversation.holding.notice", "These texts came from {number}, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person.", "Estos mensajes llegaron desde el {number}, un teléfono que usa más de un cliente, así que todavía no están en el registro de ningún cliente. Muévalos a la persona correcta."],
       ["conversation.holding.move", "Move to…", "Mover a…"],
       ["conversation.holding.moveOther", "Find another customer", "Buscar otro cliente"],
-      ["conversation.holding.moved", "Moved to {name}.", "Se movió a {name}."],
-      ["conversation.holding.movedBack", "Moved back.", "Se regresó."],
+      ["conversation.holding.moved", "Moved to {name}.", "Los mensajes se movieron a {name}."],
+      ["conversation.holding.movedBack", "Moved back.", "Los mensajes se regresaron."],
       ["conversation.holding.moveFailed", "That conversation couldn't be moved. Try again.", "No se pudo mover la conversación. Inténtelo de nuevo."],
       ["conversation.holding.moveEmpty", "These texts were already moved.", "Estos mensajes ya se movieron."],
       ["call.holding.openTexts", "Open the texts", "Abrir los mensajes"],
       ["conversation.holding.findLabel", "Search customers by name or phone", "Buscar clientes por nombre o teléfono"],
-      ["conversation.holding.findNone", "No customers match.", "Ningún cliente coincide."],
+      ["conversation.holding.findNone", "No one found. Add them on Contacts first, then move these texts.", "No se encontró a nadie. Agréguelo primero en Contactos y luego mueva estos mensajes."],
+      ["conversation.holding.findHint", "Pick who these texts belong to. They move as soon as you choose, and you can undo.", "Elija a quién pertenecen estos mensajes. Se mueven en cuanto elige, y puede deshacerlo."],
+      ["conversation.holding.findCustomer", "Find a customer", "Buscar un cliente"],
       ["conversation.holding.findFailed", "Couldn't search customers. Try again.", "No se pudo buscar clientes. Inténtelo de nuevo."],
       ["conversation.holding.moveRole", "Only an Owner or Staff can move these texts.", "Solo un dueño o un empleado puede mover estos mensajes."],
       ["todo.sharedNumber.reply", "A reply from a shared number couldn't be matched to one appointment", "Una respuesta de un número compartido no se pudo asociar con una sola cita"],
@@ -2095,5 +2099,10 @@ describe("S-47e: identity and shared-number copy, English and Spanish (plan Task
     const cat = m as Record<string, string>;
     expect(cat["conversation.holding.moveRole.es"]).toMatch(/dueño/);
     expect(cat["conversation.holding.moveRole.es"]).not.toMatch(/propietario/);
+  });
+
+  it("the Spanish Notice never says \"asignar\" or \"archivados\" (T17 design review M-8)", () => {
+    const cat = m as Record<string, string>;
+    expect(cat["conversation.holding.notice.es"]).not.toMatch(/asign|archivad/i);
   });
 });

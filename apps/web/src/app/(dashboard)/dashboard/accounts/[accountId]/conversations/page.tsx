@@ -22,7 +22,7 @@ import { requireAccountAccess } from "@/lib/auth";
 import { withWho } from "@/lib/assign/who";
 import { loadAssignView } from "@/lib/assign/view";
 import { getPersonPrefs } from "@/lib/preferences/person-prefs";
-import { requestLocale } from "@/lib/i18n/request-locale";
+import { requestLocale, requestPseudoMode } from "@/lib/i18n/request-locale";
 import { t } from "@/lib/i18n/t";
 import type { Locale } from "@/lib/i18n/locale";
 import { ledgerDb } from "@/lib/consent/ledger-db";
@@ -98,10 +98,10 @@ export default async function ConversationsPage({
   searchParams,
 }: {
   params: Promise<{ accountId: string }>;
-  searchParams: Promise<{ c?: string; before?: string; who?: string; view?: string }>;
+  searchParams: Promise<{ c?: string; before?: string; who?: string; view?: string; locale?: string }>;
 }) {
   const { accountId } = await params;
-  const { c, before, who: rawWho, view } = await searchParams;
+  const { c, before, who: rawWho, view, locale: localeParam } = await searchParams;
   const heldView = view === "held";
   const access = await requireAccountAccess(accountId);
   const db = await dbForRequest();
@@ -131,7 +131,9 @@ export default async function ConversationsPage({
   const zone = await renderZone(accountRow?.timezone);
   // A named variable, not an inline literal: request-locale-callers.test.ts scans each call's braces.
   const accountLanguage = { language: accountRow?.language ?? null };
-  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language });
+  // T17 design review M-6: ?locale= (the QA override, off on every Vercel deployment) as the call page reads it.
+  const locale = requestLocale({ account: accountLanguage, isOperator: access.isAgency, userLanguage: prefs.language }, { locale: localeParam });
+  const pseudo = requestPseudoMode({ locale: localeParam });
   const base = `/dashboard/accounts/${accountId}/conversations`;
 
   // Task 12: the "Needs a look" filter pill, beside Mine/Unassigned — read
@@ -339,7 +341,8 @@ export default async function ConversationsPage({
     try {
       const { rows } = await listContactsOnNumber(db, accountId, number);
       people = rows.filter((r) => !r.holds_shared_number && isCallerIdNumber(r.phone, number))
-        .map((r) => ({ id: r.id, name: contactDisplayName({ first_name: r.first_name, last_name: r.last_name }) }));
+        // T17 design review M-3: an unnamed person reads "no name" in the reader's language.
+        .map((r) => ({ id: r.id, name: [r.first_name, r.last_name].filter(Boolean).join(" ") || t(m, "contact.noName", locale) }));
     } catch (e) {
       console.error(`conversations: account ${accountId} holding people read failed: ${loggableError(e)}`);
     }
@@ -400,6 +403,7 @@ export default async function ConversationsPage({
               forwardedNames={forwardedNames}
               personaName={personaName}
               holding={holding}
+              pseudo={pseudo}
               contactName={active.holdsSharedNumber
                 ? holdingLabel(active.sharedNumber, locale)
                 : contactDisplayName({

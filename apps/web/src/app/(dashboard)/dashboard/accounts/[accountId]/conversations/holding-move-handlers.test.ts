@@ -80,7 +80,7 @@ describe("moveAndToast", () => {
     const toast = fakeToast();
     await moveAndToast({ move: async () => OK, undo: vi.fn(), toast, tr: makeTr("es"), open: vi.fn() });
     expect(toast.success).toHaveBeenCalledWith(
-      "Se movió a Beto Prueba.",
+      "Los mensajes se movieron a Beto Prueba.",
       { action: { label: "Deshacer", onClick: expect.any(Function) }, duration: 10_000 },
     );
     const toast2 = fakeToast();
@@ -118,9 +118,9 @@ describe("undoAndToast", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
-  it("Spanish: Se regresó. (mutation: hard-code English -> FAILS)", async () => {
+  it("Spanish: Los mensajes se regresaron. (mutation: hard-code English -> FAILS)", async () => {
     const toast = fakeToast();
     await undoAndToast({ move: vi.fn(), undo: async () => ({ ok: true, conversationId: "conv1" }), toast, tr: makeTr("es"), open: vi.fn() }, UNDO);
-    expect(toast.success).toHaveBeenCalledWith("Se regresó.");
+    expect(toast.success).toHaveBeenCalledWith("Los mensajes se regresaron.");
   });
 });

@@ -86,13 +86,18 @@ describe("ConversationList names a shared number's holding thread (S-47e Task 12
 
   it("renders 'Shared number (956) 555-0142', never 'Caller' (mutation: fall back to contactDisplayName always -> FAILS)", () => {
     const html = render({ conversations: [HOLDING_ROW] });
-    expect(html).toContain("Shared number (956) 555-0142");
+    expect(html.replace(/<[^>]+>/g, "")).toContain("Shared number (956) 555-0142");
     expect(html).not.toContain("Caller");
   });
 
-  it("in Spanish (mutation: hard-code English -> FAILS)", () => {
+  it("in Spanish, marked Spanish (mutation: hard-code English -> FAILS; mutation: no lang on the row's name -> FAILS)", () => {
     const html = render({ conversations: [HOLDING_ROW], locale: "es" });
-    expect(html).toContain("Número compartido (956) 555-0142");
+    expect(html).toContain('<span lang="es" class="min-w-0 truncate">Número compartido</span>');
+  });
+
+  it("the number is never cut: the words truncate, the formatted number keeps its width (T17 design review I-3; mutation: one truncated span -> FAILS)", () => {
+    const html = render({ conversations: [HOLDING_ROW] });
+    expect(html).toContain('<span lang="en" class="min-w-0 truncate">Shared number</span> <span class="shrink-0 tabular-nums">(956) 555-0142</span>');
   });
 
   it("an ordinary row still names the contact, and carries data-conversation-row (mutation: drop the hook -> FAILS)", () => {

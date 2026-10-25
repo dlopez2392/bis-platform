@@ -76,8 +76,8 @@ const { default: ConversationsPage } = await import("./page");
 const { renderToStaticMarkup } = await import("react-dom/server");
 const { renderedText } = await import("@/lib/rendered-text");
 
-function route(c?: string) {
-  return { params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ c }) };
+function route(c?: string, locale?: string) {
+  return { params: Promise.resolve({ accountId: "acct1" }), searchParams: Promise.resolve({ c, locale }) };
 }
 
 beforeEach(() => {
@@ -126,7 +126,41 @@ describe("ConversationsPage reads the people on a holding thread's number (S-47e
 
   it("the thread's own HEADER name is the holding label, never 'Caller' (mutation: use contactDisplayName always -> FAILS)", async () => {
     const html = await ConversationsPage(route("convoH")).then(renderToStaticMarkup);
-    expect(html).toMatch(/<p data-thread-name="" class="[^"]*">Shared number \(956\) 555-0142<\/p>/);
+    expect(html).toMatch(/<p data-thread-name="" lang="en" class="[^"]*">Shared number <span class="whitespace-nowrap">\(956\) 555-0142<\/span><\/p>/);
     expect(html).not.toMatch(/<p data-thread-name="" class="[^"]*">Caller<\/p>/);
+  });
+});
+
+/** T17 design review M-6 (and M-3): the inbox reads ?locale= like the call page does, so the QA override and the
+ *  pseudo-locale reach the holding thread; an unnamed person on the number reads in the reader's language. */
+describe("ConversationsPage honours ?locale= on the holding thread (QA override)", () => {
+  const qa = async <T,>(run: () => Promise<T>): Promise<T> => {
+    vi.stubEnv("BIS_I18N_QA", "1");
+    vi.stubEnv("VERCEL", "");
+    try { return await run(); } finally { vi.unstubAllEnvs(); }
+  };
+  const moveProps = (html: string) => JSON.parse(html.match(/data-holding-move-props="([^"]*)"/)![1]!.replace(/&quot;/g, '"'));
+
+  it("?locale=es: the header, the Notice and an unnamed person in Spanish (mutation: requestLocale without the search params -> English, FAILS; mutation: contactDisplayName for the people -> \"(no name)\", FAILS)", async () => {
+    onNumber.rows = [
+      { id: "ct3", first_name: null, last_name: null, phone: "+19565550142", email_key: null, holds_shared_number: false },
+    ];
+    const html = await qa(() => ConversationsPage(route("convoH", "es")).then(renderToStaticMarkup));
+    expect(html).toContain('<p data-thread-name="" lang="es"');
+    expect(renderedText(html)).toContain("Estos mensajes llegaron desde el (956) 555-0142");
+    const props = moveProps(html);
+    expect(props.people).toEqual([{ id: "ct3", name: "(sin nombre)" }]);
+    expect(props.locale).toBe("es");
+  });
+
+  it("?locale=pseudo hands the pseudo flag to the thread and the Move (mutation: drop requestPseudoMode -> FAILS)", async () => {
+    const html = await qa(() => ConversationsPage(route("convoH", "pseudo")).then(renderToStaticMarkup));
+    expect(moveProps(html).pseudo).toBe(true);
+    expect(renderedText(html)).not.toContain("These texts came from (956) 555-0142");
+  });
+
+  it("without the QA override ?locale=es changes nothing (control)", async () => {
+    const html = await ConversationsPage(route("convoH", "es")).then(renderToStaticMarkup);
+    expect(html).toContain('<p data-thread-name="" lang="en"');
   });
 });

@@ -10,34 +10,78 @@
 // early return calls no setState at all. Restructured to that proven idiom; the externally observable
 // behaviour (debounce 250ms, skeleton while searching, "no customers match"/"couldn't search" states,
 // moving a contact) is unchanged.
-import { useEffect, useState } from "react";
+//
+// T17 design review: the portaled menu carries lang (I-1); the empty search says how to go on (I-4); the
+// skeleton is shaped like the results (M-2); a hit shows its phone beside a truncating name and "no name" in the
+// reader's language (M-3); the dialog has a description (M-4); "Find a customer" when nobody else is on the number
+// (M-7); closing the dialog hands focus back to "Move to…" (M-9). The results are their own component so they
+// render in a test.
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { makeTr } from "@/lib/record/copy";
-import { contactDisplayName } from "@/lib/format";
+import { makeTr, type Tr } from "@/lib/record/copy";
 import type { Locale } from "@/lib/i18n/locale";
+import type { MessageKey } from "@/lib/messages";
+import { formatPhone } from "@/lib/document-requests/customer-state";
 import { moveHoldingThreadAction, undoMoveHoldingThreadAction } from "./actions";
 import { searchRelatableContactsAction, type RelatableHit } from "../contacts/relationship-actions";
 import { moveAndToast } from "./holding-move-handlers";
 
 type Answer = { term: string; hits: RelatableHit[] | "failed" };
 
-export function HoldingMove({ accountId, conversationId, holdingContactId, people, locale }: {
+/** "Find another customer" beside the people on the number; "Find a customer" when there are none (M-7). */
+export function moveOtherKey(peopleCount: number): MessageKey {
+  return peopleCount > 0 ? "conversation.holding.moveOther" : "conversation.holding.findCustomer";
+}
+
+/** What the search shows: rows of skeleton while it runs, its failure, nobody, or the people found. */
+export function HoldingFindResults({ pending, failed, hits, busy, onPick, tr }: {
+  pending: boolean; failed: boolean; hits: RelatableHit[] | null; busy: boolean;
+  onPick: (contactId: string) => void; tr: Tr;
+}) {
+  if (pending) {
+    return (
+      <div className="space-y-1">
+        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-9 w-full rounded-[var(--radius-ctl)]" />)}
+      </div>
+    );
+  }
+  if (failed) return <p role="alert" className="text-sm text-[var(--crit)]">{tr.text("conversation.holding.findFailed")}</p>;
+  if (hits === null) return null;
+  if (hits.length === 0) return <p className="text-sm text-muted-foreground">{tr.text("conversation.holding.findNone")}</p>;
+  return (
+    <ul className="space-y-1">
+      {hits.map((h) => (
+        <li key={h.id}>
+          <Button variant="ghost" className="w-full min-w-0 justify-start" disabled={busy} onClick={() => onPick(h.id)}>
+            <span className="min-w-0 truncate">{[h.firstName, h.lastName].filter(Boolean).join(" ") || tr.text("contact.noName")}</span>
+            {h.phone ? <span className="shrink-0 tabular-nums text-muted-foreground">{formatPhone(h.phone)}</span> : null}
+          </Button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function HoldingMove({ accountId, conversationId, holdingContactId, people, locale, pseudo = false }: {
   accountId: string; conversationId: string; holdingContactId: string;
   /** The real contacts on the number, by name (holding records already out). */
   people: { id: string; name: string }[];
   locale: Locale;
+  /** The QA pseudo-locale (requestPseudoMode). */
+  pseudo?: boolean;
 }) {
-  const tr = makeTr(locale);
+  const tr = makeTr(locale, pseudo);
   const router = useRouter();
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const [busy, setBusy] = useState(false);
   const [finding, setFinding] = useState(false);
   const [term, setTerm] = useState("");
@@ -76,21 +120,29 @@ export function HoldingMove({ accountId, conversationId, holdingContactId, peopl
     <div lang={locale}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" disabled={busy} data-holding-move="">
+          <Button
+            ref={triggerRef} variant="ghost" size="sm" disabled={busy} data-holding-move=""
+          >
             {tr.text("conversation.holding.move")}
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        {/* Portaled: the wrapper's lang does not reach it (I-1). */}
+        <DropdownMenuContent align="end" lang={locale}>
           {people.map((p) => (
-            <DropdownMenuItem key={p.id} onSelect={() => { void moveTo(p.id); }}>{p.name}</DropdownMenuItem>
+            <DropdownMenuItem key={p.id} onSelect={() => { void moveTo(p.id); }}>
+              <span className="min-w-0 truncate">{p.name}</span>
+            </DropdownMenuItem>
           ))}
           {people.length > 0 ? <DropdownMenuSeparator /> : null}
-          <DropdownMenuItem onSelect={() => setFinding(true)}>{tr.text("conversation.holding.moveOther")}</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setFinding(true)}>{tr.text(moveOtherKey(people.length))}</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog open={finding} onOpenChange={(o) => { setFinding(o); if (!o) { setTerm(""); setAnswer(null); } }}>
-        <DialogContent lang={locale}>
-          <DialogHeader><DialogTitle>{tr.text("conversation.holding.moveOther")}</DialogTitle></DialogHeader>
+        <DialogContent lang={locale} onCloseAutoFocus={(e) => { e.preventDefault(); triggerRef.current?.focus(); }}>
+          <DialogHeader>
+            <DialogTitle>{tr.text(moveOtherKey(people.length))}</DialogTitle>
+            <DialogDescription>{tr.text("conversation.holding.findHint")}</DialogDescription>
+          </DialogHeader>
           <Label htmlFor="holding-find">{tr.text("conversation.holding.findLabel")}</Label>
           <Input
             id="holding-find" value={term} autoComplete="off"
@@ -100,21 +152,10 @@ export function HoldingMove({ accountId, conversationId, holdingContactId, peopl
               setSearching([...v.trim()].length >= 2);
             }}
           />
-          {searching && !tooShort ? <Skeleton className="h-8 w-full" />
-            : failed ? <p role="alert" className="text-sm text-[var(--crit)]">{tr.text("conversation.holding.findFailed")}</p>
-            : hits === null ? null
-            : hits.length === 0 ? <p className="text-sm text-muted-foreground">{tr.text("conversation.holding.findNone")}</p>
-            : (
-              <ul className="space-y-1">
-                {hits.map((h) => (
-                  <li key={h.id}>
-                    <Button variant="ghost" className="w-full justify-start" disabled={busy} onClick={() => { void moveTo(h.id); }}>
-                      {contactDisplayName({ first_name: h.firstName, last_name: h.lastName })}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
+          <HoldingFindResults
+            pending={searching && !tooShort} failed={failed} hits={hits} busy={busy}
+            onPick={(id) => { void moveTo(id); }} tr={tr}
+          />
         </DialogContent>
       </Dialog>
     </div>

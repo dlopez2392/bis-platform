@@ -397,7 +397,12 @@ describe("MessageThread's holding Notice and Move (S-47e Task 12)", () => {
 
   it("names the holding label with data-thread-name, and the Notice in English (mutation: drop the Notice -> FAILS)", () => {
     const html = renderHolding({ number: "+19565550142", canMove: true, holdingContactId: "hc1", people: [] });
-    expect(html).toContain('<p data-thread-name="" class="text-[13.5px] font-semibold text-card-foreground">Shared number (956) 555-0142</p>');
+    // T17 design review I-1, M-5: the label carries the reader's lang; the number never splits; the row wraps
+    // (the Move button drops below at 360px) and the label may shrink.
+    expect(html).toContain('<div class="flex flex-wrap items-center justify-between gap-2"><p data-thread-name="" lang="en" class="min-w-0 text-[13.5px] font-semibold text-card-foreground">Shared number <span class="whitespace-nowrap">(956) 555-0142</span></p>');
+    // M-1: a standing explanation is a note, not an alert (mutation: keep role="alert" -> FAILS).
+    expect(html).toMatch(/<div role="note" data-slot="notice"/);
+    expect(html).not.toContain('role="alert"');
     expect(renderedText(html)).toContain(
       "These texts came from (956) 555-0142, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person.",
     );
@@ -406,8 +411,10 @@ describe("MessageThread's holding Notice and Move (S-47e Task 12)", () => {
   it("Spanish, word for word (mutation: hard-code English -> FAILS)", () => {
     const html = renderHolding({ number: "+19565550142", canMove: true, holdingContactId: "hc1", people: [] }, "es");
     expect(renderedText(html)).toContain(
-      "Estos mensajes llegaron del (956) 555-0142, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a la persona correcta.",
+      "Estos mensajes llegaron desde el (956) 555-0142, un teléfono que usa más de un cliente, así que todavía no están en el registro de ningún cliente. Muévalos a la persona correcta.",
     );
+    // I-1: the Spanish label is marked Spanish (mutation: no lang on the label -> FAILS).
+    expect(html).toContain('<p data-thread-name="" lang="es" class="min-w-0 text-[13.5px] font-semibold text-card-foreground">Número compartido <span class="whitespace-nowrap">(956) 555-0142</span></p>');
   });
 
   it("canMove renders the Move button; canMove:false renders the Notice with no Move button (mutation: ignore canMove -> FAILS)", () => {
