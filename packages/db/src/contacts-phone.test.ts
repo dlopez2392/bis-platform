@@ -111,6 +111,10 @@ function rowMatches(row: Row, filters: [string, unknown][]): boolean {
 }
 
 function memoryDb(contacts: Row[]) {
+  // 0098's holds_shared_number is NOT NULL DEFAULT false on a real database, and both dedupe phone reads filter
+  // `.eq("holds_shared_number", false)` (T17 review I2): a seeded or inserted row without the column carries the
+  // default, exactly as Postgres would store it. A test that seeds `holds_shared_number: true` keeps it.
+  for (const r of contacts) if (!("holds_shared_number" in r)) r.holds_shared_number = false;
   const tables: { contacts: Row[]; contact_duplicate_flags: Row[]; events: Row[]; tags: Row[] } & Record<string, Row[]> =
     { contacts, contact_duplicate_flags: [], events: [], tags: [] };
   let nextId = 1;
@@ -138,7 +142,10 @@ function memoryDb(contacts: Row[]) {
         },
         insert: (row: Row) => {
           const stored: Row = { ...row, id: `new-${nextId++}` };
-          if (table === "contacts") stored.phone_key = stored.phone ? phoneDigits(String(stored.phone)) : null;
+          if (table === "contacts") {
+            stored.phone_key = stored.phone ? phoneDigits(String(stored.phone)) : null;
+            if (!("holds_shared_number" in stored)) stored.holds_shared_number = false;
+          }
           tables[table]!.push(stored);
           const done = Promise.resolve({ data: null, error: null });
           return Object.assign(done, { select: () => ({ single: () => Promise.resolve({ data: { id: stored.id }, error: null }) }) });
@@ -520,7 +527,7 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
         if (call === 2) {
           return {
             select: () => ({
-              eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }),
+              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "53300", message: "too many connections" } }) }) }) }) }),
             }),
           };
         }
@@ -545,7 +552,7 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
         if (call === 2) {
           return {
             select: () => ({
-              eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) }) }) }),
+              eq: () => ({ eq: () => ({ eq: () => ({ neq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: "42P01", message: "a customer's private detail that must never be logged" } }) }) }) }) }),
             }),
           };
         }
@@ -582,5 +589,24 @@ describe("setContactPhoneCountry: fails closed on the twin check without ever un
     expect(call).toBe(1); // the flag insert really was attempted
     expect(errSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
+  });
+});
+
+describe("a shared number's holding record is never a phone match (0098, spec 5.12.3; T17 review I2)", () => {
+  const holding = { id: "c-hold", account_id: "a1", phone: "+528999221234", phone_key: "528999221234", holds_shared_number: true };
+
+  it("the direct phone read skips it: the same number makes a new contact, never the holding record (mutation: drop `.eq(\"holds_shared_number\", false)` from the direct read → the holding record is returned as existing, FAILS)", async () => {
+    const m = memoryDb([{ ...holding }]);
+    const result = await createContact(m.db, "a1", { phone: "899 922 1234" }, "user_test");
+    expect(result).toMatchObject({ existing: false, flagged: false });
+    expect(result.id).not.toBe("c-hold");
+    expect(m.tables.contacts).toHaveLength(2);
+  });
+
+  it("the legacy-key read skips it too: it is never a country twin (mutation: drop `.eq(\"holds_shared_number\", false)` from the legacy read → the pair is queued for the merge tool, FAILS)", async () => {
+    const m = memoryDb([{ ...holding }]);
+    const result = await createContact(m.db, "a1", { phone: "+18999221234" }, "user_test");
+    expect(result).toMatchObject({ existing: false, flagged: false });
+    expect(m.tables.contact_duplicate_flags).toEqual([]);
   });
 });
