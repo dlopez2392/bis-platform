@@ -5,6 +5,7 @@ import { withTimelinePage, forContacts, type TimelineCursor } from "./timeline-c
 import type { BusinessStatusCode } from "./business-status";
 // S-47e: contacts.ts imports nothing from voice.ts, so there is no cycle.
 import { phoneDigits, phoneFields } from "./contacts";
+import { contactAuthor } from "./provenance";
 
 export type PhoneNumberStatus = "provisioned" | "testing" | "live" | "released";
 export type PhoneNumberRow = {
@@ -795,6 +796,13 @@ export class HoldingContactUnavailable extends Error {
   }
 }
 
+/** Who made a shared number's holding record: a call Sofía took, or a text the customer sent. */
+export type HoldingWriter = "voice" | "sms";
+const HOLDING_WRITERS: Record<HoldingWriter, { source: string; actorId: string; actorType: ActorType }> = {
+  voice: { source: "voice", actorId: "voice", actorType: "ai" },
+  sms: { source: "sms", actorId: "sms-inbound", actorType: "system" },
+};
+
 /**
  * The ONE holding record of this account and number (0098, spec 5.12.2), made when there is none. Never through
  * createContact, whose phone match would return a household member. service_role only (0098's trigger stores
@@ -805,10 +813,17 @@ export class HoldingContactUnavailable extends Error {
  * The read is by the phone AS STORED (phoneFields), never the raw argument: a caller ID in the old Mexican
  * mobile form ("+5218999221234") is stored as "+528999221234", so a read by the raw text would miss the row it
  * made, and every later call would hit 23505, miss again and throw (a 503 Telnyx retries forever).
+ *
+ * `writer` is who made the record, so its provenance is true (DESIGN.md's closed author set): a call Sofía took
+ * ("voice": source voice, author ai, the event by voice/ai), or a text the customer sent ("sms": source sms,
+ * author customer, the event by the inbound SMS route's own system actor, as createContact records it there).
+ * A record found again is never re-stamped by a later writer.
  */
 export async function ensureHoldingContact(
-  db: SupabaseClient, accountId: string, e164: string,
+  db: SupabaseClient, accountId: string, e164: string, writer: HoldingWriter = "voice",
 ): Promise<{ id: string; created: boolean }> {
+  const by = HOLDING_WRITERS[writer];
+  const author = contactAuthor(by.actorType, by.actorId);
   const fields = phoneFields(e164);
   const phone = fields.phone;
   if (phone === null) throw new Error("ensureHoldingContact: no phone");
@@ -821,8 +836,8 @@ export async function ensureHoldingContact(
   const existing = await find();
   if (existing) return { id: existing, created: false };
   const { data, error } = await db.from("contacts").insert({
-    account_id: accountId, first_name: "Caller", ...fields, source: "voice",
-    holds_shared_number: true, author_kind: "ai", author_id: null,
+    account_id: accountId, first_name: "Caller", ...fields, source: by.source,
+    holds_shared_number: true, author_kind: author.authorKind, author_id: author.authorId,
   }).select("id, holds_shared_number").single();
   if (error?.code === "23505") {
     const again = await find();
@@ -838,7 +853,7 @@ export async function ensureHoldingContact(
   }
   const id = made.id;
   try {
-    await emit(db, accountId, "contact.created", "voice", { contactId: id, holding: true }, "ai");
+    await emit(db, accountId, "contact.created", by.actorId, { contactId: id, holding: true }, by.actorType);
   } catch (e) {
     console.error(`ensureHoldingContact: holding record ${id} written, but its contact.created emit failed: ${String(e)}`);
   }

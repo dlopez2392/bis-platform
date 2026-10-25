@@ -321,10 +321,42 @@ describe("a text from a number several customers share files on its holding reco
     expect(db.createMessage).not.toHaveBeenCalled();
   });
 
+  describe("the real consent step is told the number is shared (fix round item 1; mutation: pass sharedNumber: null → FAILS)", () => {
+    const HOUSEHOLD = "+19565550142";
+    const onHousehold = () => {
+      db.listContactsOnNumber.mockResolvedValue({ rows: [
+        { ...person("ct_ana", "Ana"), phone: HOUSEHOLD }, { ...person("ct_beto", "Beto"), phone: HOUSEHOLD },
+      ], truncated: false });
+      db.getContact.mockImplementation(async (_d: unknown, _a: string, id: string) =>
+        ({ id, first_name: id === "ct_ana" ? "Ana" : id === "ct_beto" ? "Beto" : "Caller", last_name: id === "ct_hold" ? null : "Ruiz" }));
+    };
+
+    it("a held phrase from the household's number files the hold To-do naming the NUMBER, on the holding record", async () => {
+      onHousehold();
+      expect((await POST(text("please stop texting me", { from: { phone_number: HOUSEHOLD } }))).status).toBe(200);
+      expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+      const [, acct, todo] = db.ensureConsentTask.mock.calls[0]!;
+      expect(acct).toBe("acct_1");
+      expect(todo).toMatchObject({ contactId: "ct_hold", consentEventId: "ev_held" });
+      expect(todo.title).toContain("(956) 555-0142");
+      expect(todo.title).not.toContain("Caller");
+    });
+
+    it("a CANCEL when only Beto has an upcoming appointment asks about Beto's appointment", async () => {
+      onHousehold();
+      db.nextBookedStart.mockImplementation(async (_d: unknown, _a: string, id: string) => id === "ct_beto" ? "2026-10-10T15:00:00Z" : null);
+      expect((await POST(text("Cancel", { from: { phone_number: HOUSEHOLD } }))).status).toBe(200);
+      expect(db.ensureConsentTask).toHaveBeenCalledTimes(1);
+      const [, , todo] = db.ensureConsentTask.mock.calls[0]!;
+      expect(todo).toMatchObject({ contactId: "ct_beto", consentEventId: "ev_revoked" });
+      expect(todo.title).toContain("Beto Ruiz");
+    });
+  });
+
   it("a STOP from the shared number is recorded against the ADDRESS, with the holding record as its contact", async () => {
     household();
     expect((await POST(text("STOP"))).status).toBe(200);
-    expect(db.ensureHoldingContact).toHaveBeenCalledWith({}, "acct_1", CUSTOMER);
+    expect(db.ensureHoldingContact).toHaveBeenCalledWith({}, "acct_1", CUSTOMER, "sms");
     expect(db.appendConsentEventGuarded.mock.calls.find((c) => c[1].action === "revoked")![1])
       .toMatchObject({ address: CUSTOMER, contactId: "ct_hold", channel: "sms" });
     expect(db.createContact).not.toHaveBeenCalled();

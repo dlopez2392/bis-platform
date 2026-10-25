@@ -200,6 +200,8 @@ async function handleInbound(
   let contact: Awaited<ReturnType<typeof createContact>>;
   let conversation: Awaited<ReturnType<typeof ensureConversation>>;
   let shared: { realContactIds: string[] } | null = null;
+  /** More people on the number than one read returns (spec S6): an ask among those read may not be the only one. */
+  let sharedTruncated = false;
   try {
     // S-47e (E8, S27): a text from a number several customers share carries no name, so it files on the
     // number's ONE holding record, never on a household member by phone. Staff move it. A failed read on
@@ -207,7 +209,8 @@ async function handleInbound(
     const read = fromNumber ? await readCandidates(db, accountId, fromNumber) : null;
     if (read && fromNumber && isShared(read)) {
       shared = { realContactIds: read.candidates.map((c) => c.id) };
-      contact = { id: (await ensureHoldingContact(db, accountId, fromNumber)).id, existing: true, flagged: false };
+      sharedTruncated = read.truncated;
+      contact = { id: (await ensureHoldingContact(db, accountId, fromNumber, "sms")).id, existing: true, flagged: false };
     } else {
       contact = await createContact(
         db, accountId, { phone: fromNumber ?? undefined }, ACTOR_ID, ACTOR_TYPE,
@@ -249,8 +252,9 @@ async function handleInbound(
         if (shared) {
           // S-47e (S30): the household's one outstanding ask, or one To-do when there is not exactly one.
           if (matchConfirmationReply(text)) {
-            const now = new Date();
-            const asks = await listOutstandingConfirmAsks(db, accountId, shared.realContactIds, now);
+            const now = base.now;
+            // Truncated: no read of asks, because exactly one among those read is not exactly one on the number.
+            const asks = sharedTruncated ? [] : await listOutstandingConfirmAsks(db, accountId, shared.realContactIds, now);
             if (asks.length === 1) {
               const answer = await applyConfirmationReply(db, accountId, asks[0]!.contactId, text, now);
               if (answer) log("recorded an appointment confirmation reply", accountId, asks[0]!.contactId, answer);

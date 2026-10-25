@@ -1208,16 +1208,35 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   it("ensureHoldingContact makes the exact shape once, by Sofía, then reuses it; one contact.created with holding true", async () => {
     await withTestAccount(async (db, accountId) => {
       await person(db, accountId, "Ana", "Prueba", "+19565550165");
-      const first = await ensureHoldingContact(db, accountId, "+19565550165");
-      const again = await ensureHoldingContact(db, accountId, "+19565550165");
+      const first = await ensureHoldingContact(db, accountId, "+19565550165", "voice");
+      const again = await ensureHoldingContact(db, accountId, "+19565550165", "voice");
       expect(first.created).toBe(true);
       expect(again).toEqual({ id: first.id, created: false });
       const { data: row } = await db.from("contacts")
         .select("first_name, last_name, email, phone, source, holds_shared_number, author_kind, author_id").eq("id", first.id).single();
       expect(row).toEqual({ first_name: "Caller", last_name: null, email: null, phone: "+19565550165", source: "voice",
         holds_shared_number: true, author_kind: "ai", author_id: null });
-      const { data: events } = await db.from("events").select("payload").eq("account_id", accountId).eq("type", "contact.created");
-      expect((events ?? []).filter((e: { payload: { holding?: boolean } }) => e.payload.holding === true)).toHaveLength(1);
+      const { data: events } = await db.from("events").select("payload, actor_type, actor_id").eq("account_id", accountId).eq("type", "contact.created");
+      const holdingEvents = (events ?? []).filter((e: { payload: { holding?: boolean } }) => e.payload.holding === true);
+      expect(holdingEvents).toHaveLength(1);
+      expect(holdingEvents[0]).toMatchObject({ actor_type: "ai", actor_id: "voice" });
+    });
+  });
+
+  it("a holding record a TEXT made says so: source sms, made by the customer, and its contact.created is the SMS route's own system actor, never Sofía (Task 10 fix round; DESIGN.md provenance; mutation: ignore the writer → FAILS)", async () => {
+    await withTestAccount(async (db, accountId) => {
+      await person(db, accountId, "Ana", "Prueba", "+19565550173");
+      const made = await ensureHoldingContact(db, accountId, "+19565550173", "sms");
+      expect(made.created).toBe(true);
+      const { data: row } = await db.from("contacts")
+        .select("first_name, source, holds_shared_number, author_kind, author_id").eq("id", made.id).single();
+      expect(row).toEqual({ first_name: "Caller", source: "sms", holds_shared_number: true, author_kind: "customer", author_id: null });
+      const { data: events } = await db.from("events").select("payload, actor_type, actor_id").eq("account_id", accountId).eq("type", "contact.created");
+      const holdingEvents = (events ?? []).filter((e: { payload: { holding?: boolean } }) => e.payload.holding === true);
+      expect(holdingEvents).toHaveLength(1);
+      expect(holdingEvents[0]).toMatchObject({ actor_type: "system", actor_id: "sms-inbound", payload: { contactId: made.id, holding: true } });
+      // A later voice call on the same number finds the same record; it is never re-stamped.
+      expect(await ensureHoldingContact(db, accountId, "+19565550173", "voice")).toEqual({ id: made.id, created: false });
     });
   });
 

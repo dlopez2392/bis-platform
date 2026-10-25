@@ -484,11 +484,11 @@ const BETO = row("ct_beto", "Beto", THEIR_NUMBER);
 const HOLDING_ROW = row("ct_hold", "Caller", THEIR_NUMBER, true);
 const MX_TWIN = row("ct_mx", "Mexico", "+529565550107");
 
-function aNumberWith(rows: object[]) {
+function aNumberWith(rows: object[], truncated = false) {
   dbMocks.getPhoneNumberByE164.mockResolvedValue({
     id: "pn_9", account_id: SHARED_ACCT, e164: OUR_NUMBER, telnyx_id: null, status: "live",
   });
-  dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated: false });
+  dbMocks.listContactsOnNumber.mockResolvedValue({ rows, truncated });
   dbMocks.createContact.mockResolvedValue({ id: "contact_1", existing: true, flagged: false });
   dbMocks.ensureConversation.mockResolvedValue({ id: "conv_hold", created: false });
   dbMocks.createMessage.mockResolvedValue({ id: "msg_1" });
@@ -503,7 +503,8 @@ describe("a text from a number several customers share (S-47e E8)", () => {
     const res = await POST(inbound("can you come Tuesday?"));
     expect(res.status).toBe(200);
     expect(dbMocks.listContactsOnNumber).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, THEIR_NUMBER);
-    expect(dbMocks.ensureHoldingContact).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, THEIR_NUMBER);
+    // "sms": the holding record says a text made it, never Sofía (fix round item 5).
+    expect(dbMocks.ensureHoldingContact).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, THEIR_NUMBER, "sms");
     expect(dbMocks.ensureConversation).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, "ct_hold", "sms-inbound", "system");
     expect(dbMocks.createContact).not.toHaveBeenCalled();
     expect(dbMocks.createMessage.mock.calls[0]![2]).toMatchObject({ conversationId: "conv_hold", direction: "inbound" });
@@ -537,6 +538,25 @@ describe("a one-word answer from a shared number (S-47e S30)", () => {
     expect(dbMocks.applyConfirmationReply).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, "ct_ana", "Sí", expect.any(Date));
     expect(dbMocks.applyConfirmationReply.mock.calls[0]![4]).toBe(askedAt());   // one "now" for the read and the write
     expect(dbMocks.addTask).not.toHaveBeenCalled();
+  });
+
+  it("Beto, not the first on the number, has the one ask: HIS appointment is answered (fix round item 2; mutation: shared.realContactIds[0] → FAILS)", async () => {
+    aNumberWith([HOLDING_ROW, ANA, BETO]);
+    dbMocks.listOutstandingConfirmAsks.mockImplementation(async (_d: unknown, _a: string, ids: readonly string[]) =>
+      ids.includes("ct_beto") ? [{ bookingId: "bk_beto", contactId: "ct_beto" }] : []);
+    await POST(inbound("Sí"));
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledTimes(1);
+    expect(dbMocks.applyConfirmationReply).toHaveBeenCalledWith(expect.anything(), SHARED_ACCT, "ct_beto", "Sí", expect.any(Date));
+    expect(dbMocks.addTask).not.toHaveBeenCalled();
+  });
+
+  it("more people on the number than one read returns: nothing is applied, even with one ask among those read, and the one To-do is filed (fix round item 3; mutation: drop the truncated guard → FAILS)", async () => {
+    aNumberWith([HOLDING_ROW, ANA, BETO], true);
+    dbMocks.listOutstandingConfirmAsks.mockResolvedValue([{ bookingId: "bk_ana", contactId: "ct_ana" }]);
+    await POST(inbound("Sí"));
+    expect(dbMocks.applyConfirmationReply).not.toHaveBeenCalled();
+    expect(dbMocks.addTask).toHaveBeenCalledTimes(1);
+    expect(dbMocks.addTask.mock.calls[0]![2]).toMatchObject({ contactId: "ct_hold", title: REPLY_TODO_EN });
   });
 
   it("Ana and Beto both have one: nothing is applied and ONE To-do is filed on the holding record (mutation (d): asks.length >= 1 FAILS)", async () => {
