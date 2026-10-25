@@ -4,8 +4,12 @@ import { MessagesSquare } from "lucide-react";
 import {
   listConversations, getConversationSummary, listMessages, getContact,
   listHeldInboundEmails, countHeldInboundEmails, getInboundSettings, listPeopleNames, getVoiceProfile,
+  listContactsOnNumber,
   type SupabaseClient,
 } from "@bis/db";
+import { isCallerIdNumber } from "@/lib/voice/phone-number";
+import { seesWholeAccount } from "@/lib/auth-role";
+import { holdingLabel } from "@/lib/contacts/holding-label";
 import { PageHeader } from "@/components/page-header";
 import { EmptyState } from "@/components/empty-state";
 import { WhoFilter } from "@/components/assign/who-filter";
@@ -326,6 +330,22 @@ export default async function ConversationsPage({
   // S-06 part 3 (spec §6): the composer's facts and its first channel, decided HERE. getContact on the
   // REQUEST client proves the customer is the viewer's (0068); only then are the two recipient states read
   // on the ledger client — the record page's order (contacts/[contactId]/page.tsx:84-121).
+  // S-47e (E8, spec 5.12.4-5): a shared number's holding thread names its number, says why, and offers
+  // Move to the people on the number (the request client's own RLS) for those who may reply in the inbox.
+  let holding: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null = null;
+  if (active?.holdsSharedNumber && active.sharedNumber) {
+    const number = active.sharedNumber;
+    let people: { id: string; name: string }[] = [];
+    try {
+      const { rows } = await listContactsOnNumber(db, accountId, number);
+      people = rows.filter((r) => !r.holds_shared_number && isCallerIdNumber(r.phone, number))
+        .map((r) => ({ id: r.id, name: contactDisplayName({ first_name: r.first_name, last_name: r.last_name }) }));
+    } catch (e) {
+      console.error(`conversations: account ${accountId} holding people read failed: ${loggableError(e)}`);
+    }
+    holding = { number, canMove: seesWholeAccount(access), holdingContactId: active.contactId, people };
+  }
+
   const composerFacts = active
     ? await loadInboxComposer({
       contact: () => getContact(db, accountId, active.contactId),
@@ -356,6 +376,7 @@ export default async function ConversationsPage({
             before={currentBefore}
             timezone={zone.zone}
             who={assign.who}
+            locale={locale}
           />
         </div>
         {active ? (
@@ -378,10 +399,13 @@ export default async function ConversationsPage({
               emailViews={emailViews}
               forwardedNames={forwardedNames}
               personaName={personaName}
-              contactName={contactDisplayName({
-                first_name: active.contactFirstName,
-                last_name: active.contactLastName,
-              })}
+              holding={holding}
+              contactName={active.holdsSharedNumber
+                ? holdingLabel(active.sharedNumber, locale)
+                : contactDisplayName({
+                  first_name: active.contactFirstName,
+                  last_name: active.contactLastName,
+                })}
               composer={composerFacts ? (
                 // key: a different thread is a different composer; its tab is that thread's server
                 // answer, never the last thread's (useState keeps its first value across re-renders).

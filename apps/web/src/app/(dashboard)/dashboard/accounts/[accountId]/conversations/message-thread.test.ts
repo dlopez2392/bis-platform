@@ -20,7 +20,11 @@ function currentReplyView(eventId: string): EmailView {
 // is never imported into vitest without a vi.mock for it).
 vi.mock("sonner", () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 vi.mock("./inbound-actions", () => ({ undoReplyStopAction: vi.fn(), stopEmailsFromReplyAction: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {}, push: () => {} }) }));
+// S-47e Task 12: HoldingMove ("./holding-move", pulled in transitively like InboundNotice above) binds
+// two "use server" modules it never calls in a static render — mocked for the same reason.
+vi.mock("./actions", () => ({ moveHoldingThreadAction: vi.fn(), undoMoveHoldingThreadAction: vi.fn() }));
+vi.mock("../contacts/relationship-actions", () => ({ searchRelatableContactsAction: vi.fn() }));
 
 const { MessageThread } = await import("./message-thread");
 
@@ -375,5 +379,75 @@ describe("a bubble never widens the thread at phone width (CI e2e phone-width.sp
     const body = html.match(/<p lang=""[^>]*class="([^"]*)">https:\/\/example\.com\/another/)?.[1] ?? "";
     expect(subject.split(" ")).toContain("break-words");
     expect(body.split(" ")).toContain("break-words");
+  });
+});
+
+/**
+ * S-47e Task 12: the Notice and the "Move to…" menu, only for a holding thread. `contactName` already
+ * carries the holding label (the PAGE computes it via `holdingLabel`); this component just shows it.
+ */
+describe("MessageThread's holding Notice and Move (S-47e Task 12)", () => {
+  const renderHolding = (
+    holding: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null,
+    locale: "en" | "es" = "en",
+  ) => renderToStaticMarkup(createElement(MessageThread, {
+    messages: [message("sent", null)] as never, contactName: "Shared number (956) 555-0142", composer: null,
+    timezone: "UTC", contactLanguage: null, ...THREAD_PROPS, locale, holding,
+  }));
+
+  it("names the holding label with data-thread-name, and the Notice in English (mutation: drop the Notice -> FAILS)", () => {
+    const html = renderHolding({ number: "+19565550142", canMove: true, holdingContactId: "hc1", people: [] });
+    expect(html).toContain('<p data-thread-name="" class="text-[13.5px] font-semibold text-card-foreground">Shared number (956) 555-0142</p>');
+    expect(renderedText(html)).toContain(
+      "These texts came from (956) 555-0142, a phone more than one customer uses, so they aren't filed under anyone yet. Move them to the right person.",
+    );
+  });
+
+  it("Spanish, word for word (mutation: hard-code English -> FAILS)", () => {
+    const html = renderHolding({ number: "+19565550142", canMove: true, holdingContactId: "hc1", people: [] }, "es");
+    expect(renderedText(html)).toContain(
+      "Estos mensajes llegaron del (956) 555-0142, un teléfono que usa más de un cliente, así que todavía no están archivados con nadie. Muévalos a la persona correcta.",
+    );
+  });
+
+  it("canMove renders the Move button; canMove:false renders the Notice with no Move button (mutation: ignore canMove -> FAILS)", () => {
+    const yes = renderHolding({ number: "+19565550142", canMove: true, holdingContactId: "hc1", people: [] });
+    expect(yes).toContain('data-holding-move=""');
+    const no = renderHolding({ number: "+19565550142", canMove: false, holdingContactId: "hc1", people: [] });
+    expect(no).not.toContain('data-holding-move=""');
+    expect(no).toContain("These texts came from");
+  });
+
+  it("no holding prop at all: no Notice, no Move button (control)", () => {
+    const html = renderHolding(null);
+    expect(html).not.toContain('data-holding-move=""');
+    expect(html).not.toContain("These texts came from");
+  });
+});
+
+/**
+ * S-47e Task 12: a non-holding thread's header changes ONLY by the new `data-thread-name` attribute and
+ * its wrapping row (Task 16's e2e locator needs the attribute on every thread, holding or not) — the
+ * baseline below was captured by running THIS file's own `html()` helper against message-thread.tsx
+ * BEFORE this task's edit, so a stray change anywhere else in the render (an accidental Notice, a moved
+ * bubble) fails this byte comparison, not merely a toContain substring.
+ */
+describe("MessageThread's header for a non-holding thread is unchanged byte-for-byte apart from the known header substitution", () => {
+  const BEFORE_WHOLE =
+    '<div class="flex flex-col rounded-xl border border-border bg-card glass lg:max-h-[calc(100vh-173px)]">'
+    + '<div class="border-b border-[var(--row-line)] px-4 py-3">'
+    + '<p class="text-[13.5px] font-semibold text-card-foreground">Ada</p></div>'
+    + '<div class="flex-1 space-y-3 overflow-y-auto px-4 py-4">'
+    + '<div class="max-w-[75%] rounded-[var(--radius-ctl)] px-3 py-2 ml-auto bg-[var(--accent-dim)]">'
+    + '<p class="whitespace-pre-wrap break-words text-sm text-card-foreground">hi</p>'
+    + '<p lang="en" class="mt-1 break-words text-xs text-muted-foreground">Oct 5, 2026, 10:00 AM · Sent</p>'
+    + '</div></div><div class="border-t border-[var(--row-line)] p-4"></div></div>';
+  const OLD_HEADER = '<div class="border-b border-[var(--row-line)] px-4 py-3"><p class="text-[13.5px] font-semibold text-card-foreground">Ada</p></div>';
+  const NEW_HEADER = '<div class="border-b border-[var(--row-line)] px-4 py-3"><div class="flex items-center justify-between gap-2"><p data-thread-name="" class="text-[13.5px] font-semibold text-card-foreground">Ada</p></div></div>';
+
+  it("substituting the NEW header back for the OLD one reproduces the pre-edit baseline byte for byte (mutation: render the Notice/Move unconditionally -> FAILS; mutation: change an unrelated bubble class -> FAILS)", () => {
+    const after = html("sent", null);
+    expect(after).toContain(NEW_HEADER);
+    expect(after.replace(NEW_HEADER, OLD_HEADER)).toBe(BEFORE_WHOLE);
   });
 });

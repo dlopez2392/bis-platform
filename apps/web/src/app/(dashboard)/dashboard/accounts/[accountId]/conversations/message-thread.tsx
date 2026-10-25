@@ -10,6 +10,9 @@ import { m, type MessageKey } from "@/lib/messages";
 import { t } from "@/lib/i18n/t";
 import { authorLabel } from "@/lib/record/author-mark";
 import { makeTr } from "@/lib/record/copy";
+import { Notice } from "@/components/ui/notice";
+import { formatPhone } from "@/lib/document-requests/customer-state";
+import { HoldingMove } from "./holding-move";
 // Fix round 1 (UI review, critical): `readInboundMeta` moved to the plain `./inbound-meta`
 // module. This file is a SERVER component — `inbound-notice.tsx` is `"use client"`, and
 // calling a non-component export of a client module from server code throws at runtime
@@ -44,6 +47,7 @@ export function MessageThread({
   emailViews,
   forwardedNames,
   personaName,
+  holding,
 }: {
   messages: Message[];
   contactName: string;
@@ -92,6 +96,10 @@ export function MessageThread({
   forwardedNames: ReadonlyMap<string, string>;
   /** S-06 part 3 (spec §5): the receptionist's name on her web chat bubbles, read by page.tsx only when the thread holds one; null or absent reads "Sofía" (authorLabel's own fallback). */
   personaName?: string | null;
+  /** S-47e (E8, spec 5.12.4-5): a shared number's holding thread names its number, says why, and offers
+   *  Move to the people on the number, for those who may reply in the inbox. Absent on every other
+   *  thread. */
+  holding?: { number: string; canMove: boolean; holdingContactId: string; people: { id: string; name: string }[] } | null;
 }) {
   const tr = makeTr(locale);
   const firstChatRows = firstWebchatRows(messages);
@@ -108,7 +116,20 @@ export function MessageThread({
     // long list itself, which is why the bubbles stay flat.
     <div className="flex flex-col rounded-xl border border-border bg-card glass lg:max-h-[calc(100vh-173px)]">
       <div className="border-b border-[var(--row-line)] px-4 py-3">
-        <p className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p data-thread-name="" className="text-[13.5px] font-semibold text-card-foreground">{contactName}</p>
+          {holding?.canMove ? (
+            <HoldingMove
+              accountId={accountId} conversationId={conversationId} holdingContactId={holding.holdingContactId}
+              people={holding.people} locale={locale}
+            />
+          ) : null}
+        </div>
+        {holding ? (
+          <Notice tone="warn" className="mt-2 text-foreground" lang={locale}>
+            {tr.text("conversation.holding.notice", { number: formatPhone(holding.number) })}
+          </Notice>
+        ) : null}
       </div>
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {messages.map((message) => {

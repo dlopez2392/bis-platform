@@ -157,12 +157,27 @@ describe("account search route", () => {
     expect(body.calls[0].at).toBe("2026-09-01T10:00:00+00:00");
 
     expect(body.conversations[0].href).toBe("/dashboard/accounts/a1/conversations?c=v1");
+    expect(body.conversations[0].label).toBe("Rosa Trevino");
     expect(body.conversations[0].sublabel).toBe("cedar fence");
     // A conversation hit carries NO date on purpose. `sublabel` is the MATCHED
     // message but `lastMessageAt` is the thread's NEWEST one, so pairing them
     // would caption a line from March with today's date. Pinned, because
     // "restore the date" is an inviting one-character change.
     expect(body.conversations[0].at).toBeNull();
+  });
+
+  it("S-47e Task 12 (P21): a shared number's holding thread labels 'Shared number (956) 555-0142', never 'Caller' (mutation: fall back to joinName always -> FAILS)", async () => {
+    access.mockResolvedValue({ userId: "u1", isAgency: true });
+    dbMocks.searchConversations.mockResolvedValue([
+      {
+        id: "vH", contactId: "ctH", contactFirstName: "Caller", contactLastName: null,
+        lastMessageAt: "2026-09-01T10:00:00+00:00", lastMessagePreview: "hi",
+        unreadCount: 0, holdsSharedNumber: true, sharedNumber: "+19565550142",
+      },
+    ]);
+    const body = await (await GET(req("rosa"), ctx())).json();
+    expect(body.conversations[0].label).toBe("Shared number (956) 555-0142");
+    expect(body.conversations[0].label).not.toBe("Caller");
   });
 
   it("falls back to the raw outcome rather than throwing on an unknown enum value", async () => {

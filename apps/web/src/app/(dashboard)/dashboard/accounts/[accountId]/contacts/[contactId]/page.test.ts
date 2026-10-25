@@ -97,10 +97,15 @@ const ensureReplyTokenMock = vi.fn(async (..._a: unknown[]): Promise<{ conversat
 // regression that calls it on view is caught by its spy rather than by a missing export.
 const readReplyTokenMock = vi.fn(async (..._a: unknown[]): Promise<{ token: string } | null> =>
   ({ token: "0123456789abcdef01234567" }));
+// S-47e Task 12 (spec 5.12.4): the holding record's redirect target. Never reached for an ordinary
+// contact — asserted by its own spy, the same idiom as the 404 test just above reads for every other
+// source this page could start before `getContact` had proven the contact.
+const findConversationForContactMock = vi.fn(async (..._a: unknown[]): Promise<string | null> => null);
 vi.mock("@bis/db", () => ({
   getInboundSettings: (...a: unknown[]) => getInboundSettingsMock(...a),
   ensureReplyToken: (...a: unknown[]) => ensureReplyTokenMock(...a),
   readReplyToken: (...a: unknown[]) => readReplyTokenMock(...a),
+  findConversationForContact: (...a: unknown[]) => findConversationForContactMock(...a),
   serviceDb: () => SERVICE,
   listContactTimelinePage: (...a: unknown[]) => listContactTimelinePageMock(...a),
   listPeopleNames: (...a: unknown[]) => listPeopleNamesMock(...a),
@@ -208,8 +213,15 @@ const ledgerDbMock = vi.hoisted(() => vi.fn(() => LEDGER));
 vi.mock("@/lib/consent/ledger-db", () => ({ ledgerDb: () => ledgerDbMock() }));
 
 const NOT_FOUND = new Error("NEXT_NOT_FOUND");
+/** `next/navigation`'s own redirect throws NEXT_REDIRECT carrying the destination (same stand-in shape
+ *  as NOT_FOUND above); a test reads the destination off the thrown error's message. */
+class RedirectError extends Error {
+  constructor(public readonly destination: string) { super(`NEXT_REDIRECT;${destination}`); }
+}
+const redirectMock = vi.fn((url: string) => { throw new RedirectError(url); });
 vi.mock("next/navigation", () => ({
   notFound: () => { throw NOT_FOUND; },
+  redirect: (url: string) => redirectMock(url),
   useRouter: () => ({ refresh: () => {}, push: () => {}, replace: () => {} }),
   usePathname: () => "/dashboard/accounts/acct1/contacts/ct1",
   useSearchParams: () => new URLSearchParams(),
@@ -298,6 +310,49 @@ describe("ContactDetailPage: the Email row's read, in the account's zone (consen
     expect(emailRowProps).not.toHaveBeenCalled();
     // S-03 part 1: none of the record page's own reads run for a contact the caller cannot see.
     expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
+  });
+
+  /**
+   * S-47e Task 12 (spec 5.12.4): a shared number's holding record is not a customer — its page IS its
+   * thread. The redirect is LOAD-BEARING: it is what keeps a note, a tag, a document or a relationship
+   * off the holding record, because those writes are guarded only in the UI, never by RLS or 0098's own
+   * trigger. It must fire before any of the page's own reads (same discipline as the 404 case above).
+   */
+  it("a holding contact redirects to its own thread, before any other read on this page (mutation: read first, redirect second -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, holds_shared_number: true });
+    findConversationForContactMock.mockResolvedValue("cv9");
+    const reads = {
+      contactFacts: contactFactsMock, contactNextUp: contactNextUpMock, listContactPlaces: listContactPlacesMock,
+      listContactTimelinePage: listContactTimelinePageMock, listPeopleNames: listPeopleNamesMock, getVoiceProfile: getVoiceProfileMock,
+      listContactOpportunities: listContactOpportunitiesMock, resolveSmsSender: resolveSmsSenderMock,
+      getPersonPrefs: prefsMock, listContactTags: listContactTagsMock, listCustomFields: listCustomFieldsMock,
+      getInboundSettings: getInboundSettingsMock, ensureReplyToken: ensureReplyTokenMock, readReplyToken: readReplyTokenMock,
+      listPendingProposalsForContact: listPendingProposalsForContactMock,
+    };
+    for (const r of Object.values(reads)) r.mockClear();
+    redirectMock.mockClear();
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/accounts/acct1/conversations?c=cv9");
+    expect(findConversationForContactMock).toHaveBeenCalledWith(expect.anything(), "acct1", "ct1");
+    expect(renderZone).not.toHaveBeenCalled();
+    // None of the page's own cards read for a holding record either — same proof as the 404 case.
+    expect(Object.entries(reads).filter(([, r]) => r.mock.calls.length > 0).map(([k]) => k)).toEqual([]);
+  });
+
+  it("a holding contact with no thread yet redirects to the bare inbox, no `?c=` (mutation: always append ?c= -> FAILS)", async () => {
+    getContactMock.mockResolvedValue({ ...CONTACT, holds_shared_number: true });
+    findConversationForContactMock.mockResolvedValue(null);
+    await expect(render()).rejects.toThrow(/NEXT_REDIRECT/);
+    expect(redirectMock).toHaveBeenCalledWith("/dashboard/accounts/acct1/conversations");
+  });
+
+  it("an ordinary contact never calls findConversationForContact or redirect (control; mutation: redirect unconditionally -> FAILS)", async () => {
+    getContactMock.mockResolvedValue(CONTACT);
+    findConversationForContactMock.mockClear();
+    redirectMock.mockClear();
+    await render();
+    expect(findConversationForContactMock).not.toHaveBeenCalled();
+    expect(redirectMock).not.toHaveBeenCalled();
   });
 
   it("an unset contact on a Spanish account names the account's language (S-09 PR 2; mutation: pass accountLanguage: undefined always -> FAILS)", async () => {

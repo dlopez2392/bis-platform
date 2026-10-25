@@ -240,14 +240,24 @@ export default async function CallDetailPage({
       : null,
     // The conversations LIST, not a per-thread route — there is none. Linking
     // to `/conversations/<id>` would 404 on a page whose job is to be
-    // trustworthy.
+    // trustworthy. S-47e (plan P20): a call that opened a shared number's
+    // HOLDING thread names no contact (0098's hold fires before any contact
+    // is ever matched) — that thread is never "someone's conversation" in
+    // the list sense, so the link opens it directly instead.
     call.conversation_id
-      ? {
-          key: "conversation",
-          href: `${base}/conversations`,
-          label: m["calls.detail.viewConversation"],
-          Icon: MessagesSquare,
-        }
+      ? call.contact_id
+        ? {
+            key: "conversation",
+            href: `${base}/conversations`,
+            label: m["calls.detail.viewConversation"],
+            Icon: MessagesSquare,
+          }
+        : {
+            key: "conversation",
+            href: `${base}/conversations?c=${call.conversation_id}`,
+            label: m["call.holding.openTexts"],
+            Icon: MessagesSquare,
+          }
       : null,
     // Likewise the calendar rather than a booking route.
     call.booking_id

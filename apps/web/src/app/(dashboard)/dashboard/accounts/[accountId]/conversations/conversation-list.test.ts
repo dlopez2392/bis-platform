@@ -12,7 +12,7 @@ import { ConversationList } from "./conversation-list";
  */
 function render(over: {
   olderHref?: string; newerHref?: string; before?: string;
-  conversations?: unknown[]; timezone?: string;
+  conversations?: unknown[]; timezone?: string; locale?: "en" | "es";
 } = {}): string {
   return renderToStaticMarkup(createElement(ConversationList, {
     conversations: [],
@@ -72,6 +72,36 @@ describe("ConversationList's pager (D-019)", () => {
  * in", pinned to one that disagrees with the account's own zone so the test
  * fails the same way on any machine (or CI).
  */
+/**
+ * S-47e Task 12 (spec 5.12.4): a shared number's holding thread names its number instead of "Caller" —
+ * never the fixture's own "Caller" first name, which 0098 itself stores for the record. Each row also
+ * gains a `data-conversation-row` hook for Task 16's e2e locator.
+ */
+describe("ConversationList names a shared number's holding thread (S-47e Task 12)", () => {
+  const HOLDING_ROW = {
+    id: "convoH", contactId: "ctH", contactFirstName: "Caller", contactLastName: null,
+    lastMessageAt: "2026-10-08T10:00:00Z", lastMessagePreview: "hi", unreadCount: 0,
+    holdsSharedNumber: true, sharedNumber: "+19565550142",
+  };
+
+  it("renders 'Shared number (956) 555-0142', never 'Caller' (mutation: fall back to contactDisplayName always -> FAILS)", () => {
+    const html = render({ conversations: [HOLDING_ROW] });
+    expect(html).toContain("Shared number (956) 555-0142");
+    expect(html).not.toContain("Caller");
+  });
+
+  it("in Spanish (mutation: hard-code English -> FAILS)", () => {
+    const html = render({ conversations: [HOLDING_ROW], locale: "es" });
+    expect(html).toContain("Número compartido (956) 555-0142");
+  });
+
+  it("an ordinary row still names the contact, and carries data-conversation-row (mutation: drop the hook -> FAILS)", () => {
+    const html = render({ conversations: [ROW] });
+    expect(html).toContain("Ada Lovelace");
+    expect(html).toContain(`data-conversation-row="${ROW.id}"`);
+  });
+});
+
 describe("ConversationList's row timestamp renders in the ACCOUNT's zone, not the runtime's", () => {
   afterEach(() => {
     vi.unstubAllEnvs();

@@ -7,6 +7,8 @@ import { contactDisplayName, formatDateTimeInZone } from "@/lib/format";
 import { m } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 import type { Who } from "@/lib/assign/who";
+import type { Locale } from "@/lib/i18n/locale";
+import { holdingLabel } from "@/lib/contacts/holding-label";
 
 export function ConversationList({
   conversations,
@@ -17,6 +19,7 @@ export function ConversationList({
   before,
   timezone,
   who = "all",
+  locale = "en",
 }: {
   conversations: ConversationSummary[];
   base: string;
@@ -42,15 +45,20 @@ export function ConversationList({
   /** F-085 part 1: the Mine / Unassigned filter in view, carried on every
    *  row's link for the same reason `before` is. */
   who?: Who;
+  /** S-47e (E8, spec 5.12.4): a shared number's holding row names its number, never the fixture's own
+   *  "Caller" first name — defaults to English for every other caller of this list. */
+  locale?: Locale;
 }) {
   return (
     <div className="space-y-3">
       <ListPanel as="nav" className="flex flex-col">
         {conversations.map((conversation) => {
-          const name = contactDisplayName({
-            first_name: conversation.contactFirstName,
-            last_name: conversation.contactLastName,
-          });
+          const name = conversation.holdsSharedNumber
+            ? holdingLabel(conversation.sharedNumber, locale)
+            : contactDisplayName({
+              first_name: conversation.contactFirstName,
+              last_name: conversation.contactLastName,
+            });
           const rowParams = new URLSearchParams();
           if (before) rowParams.set("before", before);
           if (who !== "all") rowParams.set("who", who);
@@ -59,6 +67,7 @@ export function ConversationList({
             <Link
               key={conversation.id}
               href={`${base}?${rowParams}`}
+              data-conversation-row={conversation.id}
               className={cn(
                 "flex flex-col gap-0.5 px-3 py-2.5 text-sm transition-colors hover:bg-[var(--surface-3)]",
                 LIST_ROW,
