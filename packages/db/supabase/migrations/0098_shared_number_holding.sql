@@ -22,7 +22,9 @@
 --   public.move_holding_thread(...): moves the messages and calls of a holding thread to the conversation of
 --     a person, recording what it moved on its own conversation.moved event (actor_type system, actor_id and
 --     payload by the person, payload writer move_holding_thread), or moves back exactly what one such event
---     recorded (Undo, which names that event and nothing else). An event a client wrote through record_event
+--     recorded (Undo, which names that event and nothing else). The unread count goes with the texts: a
+--     move records what it handed over, and its Undo hands that back, at most what the person thread still
+--     has unread, and nothing when it moves nothing. An event a client wrote through record_event
 --     is actor_type user (0053), so it can never be undone from. A move that finds nothing to move (a second
 --     move of the same thread, or a stale tab) answers empty and writes nothing. SECURITY DEFINER, executed
 --     by service_role only, behind the role check of the app.
@@ -123,6 +125,7 @@ declare
   v_messages uuid[];
   v_calls uuid[];
   v_event bigint;
+  v_hand integer;
 begin
   if p_from_conversation = p_to_conversation then
     return pg_catalog.jsonb_build_object('status', 'invalid');
@@ -196,14 +199,23 @@ begin
     return pg_catalog.jsonb_build_object('status', 'empty');
   end if;
 
-  -- A whole move carries the unread count with it; an Undo leaves both counts as they are.
+  -- The unread count goes with the texts. A move hands over all the holding thread has, and records it; an
+  -- Undo hands back what that move recorded, at most what the person thread still has unread (some may have
+  -- been read since), and nothing when it moved nothing (a second Undo of one move).
+  if p_undo_of is null then
+    v_hand := coalesce(v_from_unread, 0);
+  elsif pg_catalog.cardinality(v_messages) = 0 and pg_catalog.cardinality(v_calls) = 0 then
+    v_hand := 0;
+  else
+    v_hand := least(greatest(coalesce((v_undo ->> 'unread')::integer, 0), 0), coalesce(v_from_unread, 0));
+  end if;
+
+  -- The thread the texts leave gives up v_hand unread, the thread they reach gains it.
   update public.conversations c
      set last_message_at = (select pg_catalog.max(m.created_at) from public.messages m
                              where m.account_id = p_account_id and m.conversation_id = c.id),
-         unread_count = case
-           when p_undo_of is not null then c.unread_count
-           when c.id = p_to_conversation then c.unread_count + v_from_unread
-           else 0 end,
+         unread_count = case when c.id = p_to_conversation then c.unread_count + v_hand
+                             else c.unread_count - v_hand end,
          updated_at = pg_catalog.now()
    where c.account_id = p_account_id and c.id in (p_from_conversation, p_to_conversation);
 
@@ -214,7 +226,7 @@ begin
             'fromConversationId', p_from_conversation, 'toConversationId', p_to_conversation,
             'fromContactId', v_from_contact, 'toContactId', v_to_contact,
             'messages', coalesce(pg_catalog.array_length(v_messages, 1), 0),
-            'undo', p_undo_of is not null, 'undoOf', p_undo_of,
+            'undo', p_undo_of is not null, 'undoOf', p_undo_of, 'unread', v_hand,
             'messageIds', pg_catalog.to_jsonb(v_messages), 'callIds', pg_catalog.to_jsonb(v_calls)))
   returning id into v_event;
 
@@ -230,4 +242,4 @@ grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, big
 comment on column public.contacts.holds_shared_number is
   'True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). Whoever writes it, it carries no name but Caller, no email and no business name (contacts_holding_shape); no booking or lead is filed on it (every writer skips it).';
 comment on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) is
-  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).';
+  'Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it and its unread count, recording the moved ids and that count on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread, with that unread count up to what the person thread still has unread (none when it moves nothing). service_role only, behind the Owner, Staff or agency check of the app (0098).';

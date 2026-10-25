@@ -295,7 +295,7 @@ bis-ci and renumbers if one has landed.
    that finds nothing left to move answers `empty` and writes no event (P32).
 
 **The text** is the committed file, `packages/db/supabase/migrations/0098_shared_number_holding.sql` (md5
-`6a3f65120e8fe0eb1d84129e597caaa3`, 233 lines; the plan's Task 1 and its review fix round, P32). This section no
+`fbee986eb08d1502eed552f4c1eed5a0`, 245 lines; the plan's Task 1, its review fix round and the unread hand-back, P32). This section no
 longer carries a copy: the copy here drifted from the file twice (the 9-to-16 phone length, and the Undo
 flag check the plan's amendment 1 deleted).
 
@@ -946,7 +946,9 @@ real contacts, 5.10.0).
   conversation couldn't be moved. Try again." Nothing is retried on its own.
 - **What moves:** every message of the holding thread, and every call whose `conversation_id` was the
   holding thread, which gains the person as its `contact_id`. The person's unread count gains the holding
-  thread's. The holding record stays, empty, for the number's next missed call or text.
+  thread's, and the move's event records how many (`unread`). An Undo hands that many back, at most what the
+  person's thread still has unread, and none when it moves nothing, so a second Undo of the same move hands back
+  nothing (amended, plan P32). The holding record stays, empty, for the number's next missed call or text.
 - **What does not move:** the consent ledger and the send gate are keyed by the phone address, not the
   contact, so a stop sent from that number keeps applying to every contact on it, as it does today.
 
@@ -1092,7 +1094,8 @@ Unit, route and db; no e2e (phone calls are tested by real calls, section 8).
   filter → the count FAILS); every existing contacts test passes unedited.
 - **`move_holding_thread` (HIGH, db):** a full move takes every message and every call of the holding thread
   to the person's conversation, sets those calls' contact, adds the unread count and zeroes the holding one,
-  and records `conversation.moved`; a second move of the same thread answers `empty` and writes no event (P32); Undo with the returned ids puts exactly those back (a message the person
+  and records `conversation.moved`; a second move of the same thread answers `empty` and writes no event (P32); an Undo hands back the unread the
+  move carried, capped at the person's own, and a second Undo of it hands back none (P32); Undo with the returned ids puts exactly those back (a message the person
   sent after the move stays with them; mutation: Undo without ids → FAILS); `invalid` for two holding
   threads, two person threads, the same thread twice, and a move toward the holding thread without ids;
   `not_found` for a conversation of ANOTHER account, on either side (second account; mutation: drop the
@@ -1443,3 +1446,10 @@ P1-P31 give the evidence). Where a section 7 test line above disagrees with thes
 - Before it, the plan's amendment 1 deleted the Undo flag check (an Undo of an Undo is refused by the direction
   guard alone), and amendment 2 set the phone length to 8 to 16.
 - 4.1 points at the committed file instead of carrying a copy. 0098's md5 is now `6a3f65120e8fe0eb1d84129e597caaa3` (233 lines).
+
+**Unread hand-back (2026-10-24, the orchestrator's ruling after the review approved `1d9cffd8`):**
+
+- An Undo no longer leaves a stale unread badge: a move records the unread count it handed over, and its Undo
+  hands that back, capped at the person's thread, none when it moves nothing (5.12.5).
+- A later timeline reader of `conversation.moved` skips an Undo event that moved nothing (plan P32).
+- 0098's md5 is now `fbee986eb08d1502eed552f4c1eed5a0` (245 lines).

@@ -152,7 +152,7 @@ describe("0098 shape", () => {
           col_description('public.contacts'::regclass, (select attnum from pg_attribute where attrelid = 'public.contacts'::regclass and attname = 'holds_shared_number')) as col,
           obj_description('public.move_holding_thread(uuid,uuid,uuid,text,bigint)'::regprocedure, 'pg_proc') as fn`);
       expect(r!.col).toBe("True for the one holding record of a phone several customers share (0098, S-47e E8): it holds the missed-call texts and texts from that number until staff move them to a person. Set only by ensureHoldingContact as service_role; a signed-in insert stores false, and a signed-in session may change nothing on such a record but who it is assigned to (app.contacts_holding_server_only). Whoever writes it, it carries no name but Caller, no email and no business name (contacts_holding_shape); no booking or lead is filed on it (every writer skips it).");
-      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it, recording the moved ids on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread. service_role only, behind the Owner, Staff or agency check of the app (0098).");
+      expect(r!.fn).toBe("Moves a holding thread (contacts.holds_shared_number) to the conversation of a person, with the calls that pointed at it and its unread count, recording the moved ids and that count on its conversation.moved event; a move that finds nothing to move answers empty and writes no event. Or, given such an event as p_undo_of, moves back only those ids that are still on the person thread, with that unread count up to what the person thread still has unread (none when it moves nothing). service_role only, behind the Owner, Staff or agency check of the app (0098).");
     }));
 });
 
@@ -359,7 +359,7 @@ describe("0098 move_holding_thread", () => {
       expect(events).toEqual([{ id: r.moveId, actor_type: "system", actor_id: "user_staff", payload: {
         writer: "move_holding_thread", by: "user_staff",
         fromConversationId: s.hc, toConversationId: s.bc, fromContactId: s.holding, toContactId: s.beto, messages: 2,
-        undo: false, undoOf: null, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
+        undo: false, undoOf: null, unread: 2, messageIds: expect.arrayContaining([s.m1, s.m2]), callIds: [s.holdingCall],
       } }]);
     }));
 
@@ -439,7 +439,7 @@ describe("0098 move_holding_thread", () => {
       expect(await move(c, s.a.accountId, crossed, s.bc)).toEqual({ status: "invalid" });
     }));
 
-  it("Undo names the move: exactly what it moved goes back, a message and a call the person made since stay, the event says undo (mutations: drop the m.id or the k.id filter -> FAILS)", () =>
+  it("Undo names the move: exactly what it moved goes back with the unread it carried, a message and a call the person made since stay, the event says undo (mutations: drop the m.id or the k.id filter -> FAILS)", () =>
     withRollback(async (c) => {
       const s = await household(c);
       const r = await move(c, s.a.accountId, s.hc, s.bc);
@@ -459,9 +459,53 @@ describe("0098 move_holding_thread", () => {
       const { rows: [own] } = await c.query("select conversation_id, contact_id from public.calls where id = $1", [betosOwn]);
       expect(own).toEqual({ conversation_id: s.bc, contact_id: s.beto });
       const { rows: convs } = await c.query("select id, unread_count from public.conversations where id = any($1) order by unread_count", [[s.hc, s.bc]]);
-      expect(convs).toEqual([{ id: s.hc, unread_count: 0 }, { id: s.bc, unread_count: 2 }]);
+      // The Undo hands back the 2 unread the move carried: Beto had none of his own (mutation: an Undo hands back nothing -> FAILS).
+      expect(convs).toEqual([{ id: s.bc, unread_count: 0 }, { id: s.hc, unread_count: 2 }]);
       const { rows: [ev] } = await c.query("select payload->'undo' as undo, (payload->>'undoOf')::int as of from public.events where id = $1", [u.moveId]);
       expect(ev).toEqual({ undo: true, of: r.moveId });
+    }));
+
+  /** The unread count of each thread, and the `unread` each named event recorded. */
+  async function unread(c: Client, ids: string[]): Promise<Record<string, number>> {
+    const { rows } = await c.query<{ id: string; unread_count: number }>(
+      "select id, unread_count from public.conversations where id = any($1)", [ids]);
+    return Object.fromEntries(rows.map((r) => [r.id, r.unread_count]));
+  }
+  async function handed(c: Client, eventId: number): Promise<number | null> {
+    const { rows: [e] } = await c.query<{ n: number | null }>("select (payload->>'unread')::int as n from public.events where id = $1", [eventId]);
+    return e!.n;
+  }
+
+  it("an Undo hands back the unread the move carried, and the person keeps their own (mutations: an Undo hands back nothing, or the move records no unread -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);                                      // holding unread 2, Ana unread 1 of her own
+      const r = await move(c, s.a.accountId, s.hc, s.ac);
+      expect(await unread(c, [s.hc, s.ac])).toEqual({ [s.hc]: 0, [s.ac]: 3 });
+      const u = await move(c, s.a.accountId, s.ac, s.hc, r.moveId!);
+      expect(await unread(c, [s.hc, s.ac])).toEqual({ [s.hc]: 2, [s.ac]: 1 });
+      expect([await handed(c, r.moveId!), await handed(c, u.moveId!)]).toEqual([2, 2]);
+    }));
+
+  it("an Undo after the person read some hands back no more than they still have unread (mutation: drop the cap -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const r = await move(c, s.a.accountId, s.hc, s.ac);               // Ana 1 + 2 = 3
+      await c.query("update public.conversations set unread_count = 1 where id = $1", [s.ac]);   // she read two
+      const u = await move(c, s.a.accountId, s.ac, s.hc, r.moveId!);
+      expect(await unread(c, [s.hc, s.ac])).toEqual({ [s.hc]: 1, [s.ac]: 0 });
+      expect(await handed(c, u.moveId!)).toBe(1);
+    }));
+
+  it("a second Undo of the same move moves nothing and hands back no unread, even when the person has new unread (mutation: hand back on an Undo that moved nothing -> FAILS)", () =>
+    withRollback(async (c) => {
+      const s = await household(c);
+      const r = await move(c, s.a.accountId, s.hc, s.bc);
+      await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);               // holding 2, Beto 0
+      await c.query("update public.conversations set unread_count = 1 where id = $1", [s.bc]);   // a new text for Beto
+      const again = await move(c, s.a.accountId, s.bc, s.hc, r.moveId!);
+      expect(again).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [], callIds: [] });
+      expect(await unread(c, [s.hc, s.bc])).toEqual({ [s.hc]: 2, [s.bc]: 1 });
+      expect(await handed(c, again.moveId!)).toBe(0);
     }));
 
   it("a forged Undo moves nothing it did not move: another move's event, an Undo's own event, another account's event, a reversed pair (item 11; mutation: skip the event's from/to check -> FAILS)", () =>

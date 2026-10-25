@@ -40,7 +40,7 @@ The 0098 SQL went through three versions on the plan writer's own PG18 replica o
 - the first plan's revision (md5 `13f26cbe99753bfbbd8e20e7ba9ee632`, approved by the opus plan review: md5, digest and definers reproduced, its 12 mutations failed, the rollback was clean);
 - the first fix round's text (md5 `a76f898b5e362d9e0b8c71e2a0d28fff`, 216 lines; the re-review reproduced its md5, digest, definers, 32/32 and 19 mutations);
 - **the second fix round's text** (Task 1 Step 4; md5 **`ae8371757c516d581810b713e86d7cb0`**; 221 lines). It answers the first review's items 7, 8, 11 and 13, closes the hole the first fix round found (P22), and the re-review's item 1 (P1: an Undo accepts only the function's own event). The spec's §4.1 carries the same text.
-- **Task 1 changed the text after this check** (the orchestrator's amendments 1 and 2, then the Task 1 review's fix round, P32): md5 `6a3f65120e8fe0eb1d84129e597caaa3`, 233 lines, a 49-case test, 32 mutations, each red, on the Task 1 implementer's replica (port 55492). The counts below are the plan writer's, on the 221-line text.
+- **Task 1 changed the text after this check** (the orchestrator's amendments 1 and 2, then the Task 1 review's fix round and the unread hand-back, P32): md5 `fbee986eb08d1502eed552f4c1eed5a0`, 245 lines, a 52-case test, 36 mutations, each red, on the Task 1 implementer's replica (port 55492). The counts below are the plan writer's, on the 221-line text.
 
 **Read off the replica, on the second fix round's text (every line re-run after the last change):**
 - **Client-write digest** (the query at `packages/db/src/test/proposals-drop.test.ts:93-98`): `pre` = `post` = **`52|b66203ca5d355155540b520af510d120`**, unchanged.
@@ -128,7 +128,9 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
   - **Resolution:** `contacts_holding_shape` gains `company_name is null`, so that group write fails 23514 for every writer. (`contacts_company_name_derived` already re-derives any `company_name` an insert or update names, so the group write is the one shape that can carry one, and the test probes exactly that, with a person as its control.)
   - A forward move that finds nothing left to move (a concurrent second move, or a stale tab) answers `{"status":"empty"}`, changes no count and writes no event, so no toast claims a move and no Undo can name one. Task 3 maps it, Task 11 answers `conversation.holding.moveEmpty` (a Task 2 follow-up key) and Task 12's handler toasts it. An Undo never answers `empty`.
   - The E.164 bounds are pinned at both edges (8 and 16 characters admitted, 7 and 17 refused), and the Undo's `e.type` check has its own probe.
-  - 0098 is md5 `6a3f65120e8fe0eb1d84129e597caaa3` (233 lines); Task 1's test has 49 cases.
+  - **The unread count goes back with an Undo** (the orchestrator's ruling after the review approved `1d9cffd8`): a move records on its event the unread count it handed over (`unread`); its Undo hands that back, at most what the person's thread still has unread (some may have been read since; `conversations.unread_count` has no CHECK, so the cap is what keeps it from going negative), and nothing when it moves nothing. So a second Undo of the same move answers `{"status":"ok","messageIds":[],"callIds":[]}`, hands back 0 and still writes its event.
+  - **For any later reader of `events` that renders a move on a timeline (re-review Minor 2):** skip an Undo event that moved nothing (`undo` true, `messageIds` and `callIds` both empty); it is a second press of Undo, not news.
+  - 0098 is md5 `fbee986eb08d1502eed552f4c1eed5a0` (245 lines); Task 1's test has 52 cases.
 - **Confirmed, not deviations:**
   - Every registry, finish-call, textback, phone-number, sip-headers, telnyx-request, card-focus, corpus-lib, contacts, voice and route cite in the spec reads as the spec says at `df8882ce` (re-read for this plan).
   - `isCallerIdNumber(stored, number)` (`phone-number.ts:63-67`) is a plain normalised compare, so it filters candidates for any number (spec §4).
@@ -280,7 +282,7 @@ No other open question. Two behaviours the owner may want to know about are in "
 | Trigger | `contacts_holding_server_only` BEFORE INSERT OR UPDATE FOR EACH ROW → `app.contacts_holding_server_only()` (plain plpgsql, not definer). For `current_user = 'authenticated'`: INSERT stores `false`; UPDATE of a holding record that changes any of `first_name, last_name, email, phone, phone_country_unconfirmed, source, custom, attribution, dnd, marketing_email_opted_out_at` raises 42501 "A shared number holding record is changed by server code only" (P24); every UPDATE keeps `old.holds_shared_number` |
 | Function | `public.move_holding_thread(p_account_id uuid, p_from_conversation uuid, p_to_conversation uuid, p_actor text, p_undo_of bigint default null) returns jsonb`, SECURITY DEFINER, `set search_path = pg_catalog, pg_temp`, EXECUTE to service_role only |
 | Answers | `{"status":"invalid"}` (same conversation twice; not exactly one side holding; toward the holding side with no `p_undo_of`; away from it with one; a `p_undo_of` that is not a move of this account between the same two threads reversed, P1), `{"status":"not_found"}` (either conversation not on this account), `{"status":"empty"}` (a move with no `p_undo_of` that found no message and no call left to move: no count changes and no event is written, P32), `{"status":"ok","moveId":<bigint>,"messageIds":[…],"callIds":[…]}` |
-| Event | `conversation.moved`, written by the function itself: `actor_type` `system`, `actor_id` = `p_actor` (the person), payload `{ writer: "move_holding_thread", by: <the person>, fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, messageIds, callIds }`; its `id` is the answer's `moveId`; an `empty` move writes none. An Undo accepts only such an event (P1) |
+| Event | `conversation.moved`, written by the function itself: `actor_type` `system`, `actor_id` = `p_actor` (the person), payload `{ writer: "move_holding_thread", by: <the person>, fromConversationId, toConversationId, fromContactId, toContactId, messages, undo, undoOf, unread, messageIds, callIds }`, where `unread` is the unread count the move handed over (an Undo: the count it handed back, capped at the person thread's, 0 when it moved nothing; P32); its `id` is the answer's `moveId`; an `empty` move writes none. An Undo accepts only such an event (P1) |
 
 ### `@bis/db` (Task 3) — `packages/db/src/voice.ts`
 
@@ -1170,7 +1172,7 @@ And the changed pair (S16), each gaining a closing sentence:
   - No apostrophe inside a `--` comment or inside a `comment on … is '…'` string, so no possessives.
   - No `begin;`/`commit;` wrapper. `lock_timeout` is set inside the first `do` block (`0091_ai_acts.sql:45-51` gives the reason: on PostgreSQL 17 a bare SET LOCAL as a later statement of a multi-statement string is not guaranteed to be inside a transaction block).
   - Every function 0098 creates writes `set search_path = pg_catalog, pg_temp`. Exactly one `security definer` on a code line (`move_holding_thread`), so `EXPECTED_DEFINERS` gains exactly that one entry.
-  - The md5 of the committed file is `6a3f65120e8fe0eb1d84129e597caaa3` (LF line ends, one trailing newline, 233 lines), after Task 1's amendments and its review fix round (P32). The plan writer's reviewed text was `ae8371757c516d581810b713e86d7cb0` (221 lines).
+  - The md5 of the committed file is `fbee986eb08d1502eed552f4c1eed5a0` (LF line ends, one trailing newline, 245 lines), after Task 1's amendments and its review fix round (P32). The plan writer's reviewed text was `ae8371757c516d581810b713e86d7cb0` (221 lines).
   - The E.164 test in the CHECK is written without a `$` anchor (length, a leading `+`, no non-digit after it), so every `$` stays a dollar-quote.
 - **plpgsql NULL guard** (memory "plpgsql NULL guard"): `app.contacts_holding_server_only()` keeps `coalesce(current_user = 'authenticated', false)`; `move_holding_thread` tests `v_from_holding is null or v_to_holding is null` before comparing them.
 - **Tests must be able to fail** (memories "Test vacuity", "Vacuous test shapes"):
@@ -1263,11 +1265,11 @@ And the changed pair (S16), each gaining a closing sentence:
 
 - [ ] **Step 1: Build the kit** (Global constraints) on 55492. The migration is not written yet, so the first build's third argument is a copy of the plan writer's file: `cp <KIT>/0098_shared_number_holding.reviewed.sql <SCRATCH>/t1-kit/0098.sql`, then `bash <SCRATCH>/t1-kit/replica.sh 55492 <SCRATCH>/t1-kit/r <SCRATCH>/t1-kit/0098.sql`. Show `diff <KIT>/replica.sh <SCRATCH>/t1-kit/replica.sh` (no difference). Confirm `pre`'s client-write digest equals Task 0's bis-ci value (`52|b66203ca…`) and `pre` has 22 definers. Steps 3 and 6 use `pre` only; Step 5 rebuilds with the committed file.
 
-- [ ] **Step 2: Write the failing schema test** `packages/db/src/test/shared-number-holding-schema.test.ts`. DONE (Task 1, then its review fix round, P32): the committed file is the text, 49 cases. This plan no longer carries a copy, because the copy drifted from the file; read the file at the branch head.
+- [ ] **Step 2: Write the failing schema test** `packages/db/src/test/shared-number-holding-schema.test.ts`. DONE (Task 1, then its review fix round, P32): the committed file is the text, 52 cases. This plan no longer carries a copy, because the copy drifted from the file; read the file at the branch head.
 
-- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  49 failed (49)` (`column "holds_shared_number" … does not exist`, or a null def), as on the Task 1 implementer's replica after the review fix round (P32; the plan writer's 42-case file read 42 of 42). Paste the summary line.
+- [ ] **Step 3: Run on `pre` to verify it fails.** From `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/pre; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts`. Expected: `Tests  52 failed (52)` (`column "holds_shared_number" … does not exist`, or a null def), as on the Task 1 implementer's replica after the review fix round (P32; the plan writer's 42-case file read 42 of 42). Paste the summary line.
 
-- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. DONE: the committed file is the text, md5 `6a3f65120e8fe0eb1d84129e597caaa3` (233 lines). The plan writer's reviewed copy was `ae8371757c516d581810b713e86d7cb0`; amendments 1 and 2 and the review fix round (P32) changed it. This plan no longer carries a copy.
+- [ ] **Step 4: Write the migration** `packages/db/supabase/migrations/0098_shared_number_holding.sql`. DONE: the committed file is the text, md5 `fbee986eb08d1502eed552f4c1eed5a0` (245 lines). The plan writer's reviewed copy was `ae8371757c516d581810b713e86d7cb0`; amendments 1 and 2 and the review fix round (P32) changed it. This plan no longer carries a copy.
 
 - [ ] **Step 5: `EXPECTED_DEFINERS` 22 → 23, in this commit** (`definer-search-path.test.ts`'s own rule, `:20`):
   - `:25`: "The 22 SECURITY DEFINER functions in public and app at 0096" → "The 23 SECURITY DEFINER functions in public and app at 0098".
@@ -1277,22 +1279,22 @@ And the changed pair (S16), each gaining a closing sentence:
   - Re-build the kit with the committed file as its third argument. Run on `post`, from `packages/db`: `export SUPABASE_DB_URL=postgres://postgres@localhost:55492/post; node node_modules/vitest/vitest.mjs run src/test/shared-number-holding-schema.test.ts src/test/definer-search-path.test.ts src/test/schema-grants-guard.test.ts src/test/proposals-drop.test.ts src/test/server-only-writes-grants.test.ts src/test/record-provenance-schema.test.ts src/test/one-switch-schema.test.ts src/test/customer-language-schema.test.ts src/test/company-name-read-only-schema.test.ts` → all green (all nine are withRollback-only; the plan writer's run of the last seven, unedited, was green).
   - If the defs or the comments differ on your replica, STOP and report.
 
-- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<SCRATCH>/s47e/t1-kit/mutate5.js <file> <dir>` writes all 31, m06b is written beside them, all with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The counts in brackets are the Task 1 implementer's after the review fix round (out of 49, or 55 with the second file); more reds than a line names are fine, fewer is a finding.
-  - m01. Drop `contacts_holding_shape` (both statements) → the eight `refuses a holding record with …` cases, the business-name case and the pin case FAIL [10 failed of 49].
+- [ ] **Step 6: Run each mutation.** For each: write the mutated copy (`<SCRATCH>/s47e/t1-kit/mutate5.js <file> <dir>` writes all 31, m06b is written beside them, all with `split().join()`, never `String.replace`, whose replacement string turns `$$` into `$`), `create database mut template pre` (+ `alter database mut set timezone to 'UTC'`), `psql -1 -f` the copy into `mut`, run `shared-number-holding-schema.test.ts` against `mut` (plus `schema-grants-guard.test.ts` for m07 and `definer-search-path.test.ts` for m13), paste the failing assertion lines, drop `mut`. Never edit the committed file for a probe. The counts in brackets are the Task 1 implementer's after the review fix round (out of 52, or 58 with the second file); more reds than a line names are fine, fewer is a finding.
+  - m01. Drop `contacts_holding_shape` (both statements) → the eight `refuses a holding record with …` cases, the business-name case and the pin case FAIL [10 failed of 52].
   - m02. `first_name = 'Caller'` (not null-safe, P22) → "…with no first name…" and the pin case FAIL [2 failed].
-  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [18 failed].
+  - m03. The index on `(phone)` alone → "…account B gets its own on the same number…", the pin case, and every `move_holding_thread` case (`household()` seeds a holding record on both accounts) FAIL [21 failed].
   - m04. The index on `(account_id, phone_key)` (P23) → "two numbers of two countries…" and the pin case FAIL [2 failed].
   - m05. Drop the `create trigger contacts_holding_server_only …` statement → the signed-in insert case, the ten edit cases and the pin case FAIL [12 failed].
   - m06. Drop the edit refusal (keep `new.holds_shared_number := old…`) → the ten "cannot change a holding record's …" cases and the column-coverage case FAIL [11 failed]. m06b: drop `source` from both tuples → the `source` case and the column-coverage case FAIL [2 failed].
-  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 55].
+  - m07. Append `grant update (holds_shared_number) on public.contacts to authenticated;` → "a signed-in update that names the mark is refused…" FAILS, and `schema-grants-guard.test.ts`'s "gives anon nothing and authenticated exactly the allow-listed writes" FAILS [2 failed of 58].
   - m08. Drop `or (v_to_holding and p_undo_of is null)` → the `invalid` case FAILS [1 failed].
   - m09. Drop the event's `fromConversationId`/`toConversationId` checks → the forged-Undo case FAILS [1 failed].
   - m10. Drop `and (p_undo_of is null or m.id = any (v_want_messages))` → the Undo case (`later` moves too) and the texts-only Undo FAIL [2 failed].
   - m11. Drop `c.account_id = p_account_id and` from BOTH `select c.contact_id …` reads → the `not_found` case FAILS [1 failed].
   - m12. Append `grant execute on function public.move_holding_thread(uuid, uuid, uuid, text, bigint) to authenticated;` → "only service_role may execute it" FAILS [1 failed].
-  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 55]. The shadow case stays GREEN: only the pins catch this one.
+  - m13. `set search_path = public` on `move_holding_thread` → the settings pin FAILS, and so do both definer cases of `definer-search-path.test.ts` [3 failed of 58]. The shadow case stays GREEN: only the pins catch this one.
   - m14. Delete `comment on function public.move_holding_thread …` → the comments case FAILS [1 failed].
-  - m15. Never carry the unread count (`when c.id = p_to_conversation then c.unread_count`) → the whole-move case, the Undo case and the empty case FAIL [3 failed].
+  - m15. A move hands over no unread (`v_hand := 0` for a move) → the whole-move case, the empty case and the two hand-back cases FAIL [4 failed].
   - m16. Drop the calls contact guard `and (k.contact_id is null or k.contact_id = v_from_contact)` → "a call on the holding thread that names another contact…" FAILS [1 failed] (R7).
   - m17. Drop `m.account_id = p_account_id and` from the messages update → "a message carrying another account's id…" FAILS [1 failed] (R7).
   - m18. Drop `k.account_id = p_account_id and` from BOTH contacts reads → "a conversation of A whose contact is B's holding record…" FAILS [1 failed] (R7).
@@ -1300,21 +1302,25 @@ And the changed pair (S16), each gaining a closing sentence:
   - m20. Drop the direction guard `or (v_from_holding and p_undo_of is not null)` → "an Undo cannot itself be undone…" FAILS [1 failed]. Amendment 1 deleted the Undo flag check, which no call could reach (on the 221-line text, dropping either guard alone stayed green), so the direction guard is the one guard and it fails alone.
   - m21. Drop `and e.actor_type = 'system' and (e.payload ->> 'writer') = 'move_holding_thread'` → both record_event cases (Technician, Owner) FAIL [2 failed] (re-review R1).
   - m22. Drop `and (p_undo_of is null or k.id = any (v_want_calls))` → the Undo case on Beto's own call and the call-only Undo FAIL [2 failed] (re-review R2).
-  - m23. Write the event as `'user'` → the whole-move pin, the Undo case, the Undo-of-an-Undo case and the one-sided case FAIL [4 failed].
+  - m23. Write the event as `'user'` → the whole-move pin, the Undo case, the Undo-of-an-Undo case, the one-sided case and the hand-back cases FAIL [7 failed]: the function can no longer undo from its own event.
   - m24. `between 9 and 16` → the 8-character case and the pin FAIL [2 failed] (amendment 2).
   - m25. `between 7 and 16` → the 7-character refusal and the pin FAIL [2 failed].
   - m26. Drop `and company_name is null` → the business-name case and the pin FAIL [2 failed] (P32).
   - m27. Drop the `empty` answer → "a second move of the same thread … answers empty and writes no event" FAILS [1 failed] (P32).
-  - m27b. `or` for `and` between the two emptiness tests → "texts with no call, and a call with no text, are each a move…" FAILS [1 failed] (P32).
+  - m27b. `or` for `and` between the two emptiness tests → "texts with no call, and a call with no text, are each a move…" and the second-Undo case FAIL [2 failed] (P32).
   - m28. `between 8 and 15` → the 16-character case and the pin FAIL [2 failed] (P32).
   - m29. `between 8 and 17` → the 17-character refusal and the pin FAIL [2 failed] (P32).
   - m30. Drop `and e.type = 'conversation.moved'` → "an Undo naming a system event of another type…" FAILS [1 failed] (P32).
+  - m31. An Undo hands back nothing (`v_hand := 0` in the Undo branch) → the Undo case, the two hand-back cases and the second-Undo case FAIL [4 failed] (P32).
+  - m32. Drop the cap (`least(…, v_from_unread)`) → "an Undo after the person read some…" FAILS: the person thread reads -1 [1 failed] (P32).
+  - m33. Hand back on an Undo that moved nothing (drop the `elsif … then v_hand := 0`) → "a second Undo of the same move…" FAILS [1 failed] (P32).
+  - m34. The event records no `unread` → the whole-move pin and every hand-back case FAIL [5 failed] (P32).
 
 - [ ] **Step 7: Rollback, digest and bytes.**
   - On a throwaway `create database rb template post`, run the six ROLLBACK lines of the file's header in order (they ran on the plan writer's replica). Then: `select count(*) from pg_constraint where conname like 'contacts_holding%'` → `0`; `select count(*) from information_schema.columns where table_name = 'contacts' and column_name = 'holds_shared_number'` → `0`; the two functions gone; the definer count back to 22; the client-write digest `52|b66203ca…`. Drop `rb`.
   - On `post`, the client-write digest → `52|b66203ca5d355155540b520af510d120`.
-  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 35 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (85, 113); `wc -l f` → `233`.
-  - Record `md5sum` of the file. It equals `6a3f65120e8fe0eb1d84129e597caaa3` (P32). If it differs, say what changed and why.
+  - Bytes: the node byte count → `0 0` (with its `2 1` control); `grep -o '\$' f | wc -l` → `12`; `grep -ciw cascade f` → `0`; the two-apostrophe count → `0`; `grep -c "^ *--.*'" f` → `0`; `grep -n "search_path" f` → line 37 and the two `language plpgsql … set search_path = pg_catalog, pg_temp as` lines (87, 115); `wc -l f` → `245`.
+  - Record `md5sum` of the file. It equals `fbee986eb08d1502eed552f4c1eed5a0` (P32). If it differs, say what changed and why.
 
 - [ ] **Step 8: Commit** (both typechecks green; eslint on the test file).
 
@@ -1327,11 +1333,11 @@ Claude-Session: https://claude.ai/code/session_013RThMy9QC8x7FZ94Lxib9p" -- pack
 
 **Verify (the affected-test rule):** (1) no web mock reaches 0098; (2) none; (3) none; (4) none; (5) none; (6) none. The db suites above, on the replica.
 
-**Acceptance:** all 49 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
+**Acceptance:** all 52 cases green on `post` and red on `pre`; every mutation fails by name; the digest unchanged; the rollback leaves nothing; the bytes pass; the md5 in the report.
 
 **Review (HIGH):** an opus bis-reviewer in its own detached worktree, with its own kit on 55493.
 - It applies 0098 to a fresh `pre` copy through `psql -1` only, and reads every def itself.
-- It re-runs m02, m04, m06, m08, m09, m10, m16, m18, m20 (the direction guard alone, amendment 1), m21, m22, m26, m27, m27b and m30, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
+- It re-runs m02, m04, m06, m08, m09, m10, m16, m18, m20 (the direction guard alone, amendment 1), m21, m22, m26, m27, m27b, m30, m31, m32 and m33, plus three of its own: `grant insert on public.contacts to anon` (R6: anon already holds SELECT, so a SELECT grant cannot fail; on the plan writer's replica this one turned `schema-grants-guard.test.ts`'s "gives anon nothing…" and `proposals-drop.test.ts`'s digest case red, `Tests 2 failed | 40 passed (42)`); `first_name is not distinct from 'caller'` (lowercase) in the CHECK (the pin and the exact-shape case must catch it); and removing `order by c.id for update` (nothing in a single-session test can catch a deadlock; say so, and read the lock order by eye).
 - It checks the bytes and the md5, and that no comment string or `--` line holds an apostrophe.
 - It confirms `definer-search-path.test.ts` is green on `post` with exactly one new entry, and that `schema-grants-guard.test.ts` and `proposals-drop.test.ts` were NOT edited.
 - A re-review follows any change. The md5 that reaches bis-ci is the reviewed one.
@@ -3220,7 +3226,7 @@ describe("S-47e: whose appointment it is (plan Task 6)", () => {
 - [ ] **bis-reviewer, opus, fresh context**, on `git diff <rebased spec commit>...HEAD`, in its own detached worktree, with its kit on 55506/55507/55508 (PostgREST up).
   - Read spec §§2 and 4–9 (E1–E8, O1–O3, S1–S29) and this plan (P1–P21).
   - Run every touched test file by path and both typechecks. On `post`: `shared-number-holding-schema`, `definer-search-path`, `schema-grants-guard`, `proposals-drop`, `server-only-writes-grants`, `voice`, `contacts`, `contact-import`, `messaging`.
-  - Re-check 0098's md5 against Task 1's (`6a3f65120e8fe0eb1d84129e597caaa3` after its review fix round, P32, or the re-reviewed one if it changed again).
+  - Re-check 0098's md5 against Task 1's (`fbee986eb08d1502eed552f4c1eed5a0` after its review fix round, P32, or the re-reviewed one if it changed again).
   - Three probes of its own: a byte-identity probe of the prompt (`system-prompt.test.ts`'s three digests, plus a `buildSystemPrompt` diff of one input at `a1ccb19a` against HEAD → no difference); a read/act split (find confirms one contact but `findUpcomingBookingForContact` is called for another: make `findStep` return the first candidate and see what fails); a picker/writer split (`book_appointment` picks `existing` but `createBooking` receives `state.contactId`).
   - **Hunt:**
     - a path where a household member's appointment is read, moved or cancelled without that person's name (or name and email on insurance) on THIS call;
