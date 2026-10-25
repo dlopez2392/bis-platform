@@ -484,6 +484,76 @@ page but is no longer the recommended path for taking a client live.
 
 ---
 
+## Step 8 — Identity checks (shared numbers and the insurance check)
+
+Run once after the identity-checks release, on BIS's OWN account: its number +19565061545 (status
+testing) is the only one that takes a real call. danlo places the calls from his mobile; the orchestrator
+does every dashboard step and writes each time in the ledger. No client account is touched.
+
+8.1 Setup (orchestrator). On BIS's account, Contacts: note every contact whose phone is danlo's mobile
+    (normally "Dan Lopez"). Make no new contacts by hand: the calls below make them.
+
+8.2 Call 1, bookings on a shared number (danlo). Ask to book "for Ana Prueba", decline the email; then, on
+    the same call, ask to book one "for Beto Prueba", decline the email. Hang up.
+    Check (orchestrator): Contacts shows Ana Prueba and Beto Prueba, each with danlo's mobile and her or his
+    own booking; Dan Lopez gained no booking and no changed field.
+    Logs: no "contact dedupe" error.
+
+8.3 Call 2, whose appointment (danlo). Ask "when is my appointment?". She asks whose name it is under and
+    says no name herself. Say "Beto Prueba": she gives Beto's time, and only Beto's. Then ask about
+    "Ana Prueba's": Ana's time.
+    Logs: voice identity <call>: confirmed rung 1 by name (twice).
+
+8.4 Call 3, two misses (danlo). Ask about an appointment and give "Carla Prueba" twice. Both times she says
+    she couldn't find it under those details; after the second she offers to take a message. Decline the
+    name when she asks for it, leave the message, hang up.
+    Check (orchestrator): To do shows "Someone asked about an appointment and couldn't confirm who they
+    are", marked "Sofía · AI"; opening it opens the call; the call's card has the message. No customer's
+    thread got the message.
+    Logs: miss 1, locked (misses).
+
+8.5 Call 4, the insurance check (owner decision E6).
+    a. Orchestrator: on Ana Prueba's record, set her email to ana.prueba@example.com (an edit sends nothing).
+    b. Orchestrator, just before the call: Voice page, Trade rules: Insurance (property & casualty), Save.
+       Write the time. Do NOT open or save the Services & prices card while insurance is on.
+    c. danlo: ask about "my appointment". She asks for the full name and the email on file. Give
+       "Ana Prueba" and spell ana.prueba@example.com: she reads it back, then gives Ana's time.
+       Then ask about "Beto Prueba's" with any email: she couldn't find it under those details.
+       Logs: confirmed rung 2 by name-email, then miss 1.
+    d. Orchestrator, straight after the call: Trade rules: None, Save. Write the time. Every call between
+       the two times ran under the insurance rules.
+
+8.6 Call 5, the shared number's missed-call text (owner decision E8).
+    a. danlo: call, say "hello?" once after the greeting, and hang up (a caller who spoke and was not
+       served is a missed call; total silence reads as spam and gets no text).
+    b. Check (orchestrator): Conversations shows a thread named "Shared number" and danlo's number, holding
+       the missed-call text. Contacts does not list it. Dan Lopez, Ana Prueba and Beto Prueba got nothing.
+       If BIS's text-back is off, or its texts are held, the held text is what sits in that thread: the
+       check is WHERE it was filed.
+    c. danlo: reply "test" to the text. Check: the reply joins the same thread.
+       ASSUMPTION (R15, not verified): a text sent to +19565061545 reaches /api/sms/inbound (the number's
+       messaging profile points there). If the reply never appears, check that before calling it a failure.
+    d. Orchestrator: in that thread, Move to... Beto Prueba. The toast says "Moved to Beto Prueba." and
+       Beto's thread holds both texts and the call. Press Undo: "Moved back." Move to Beto again.
+    Logs: no "contact dedupe" error; one contact.created with holding true.
+
+8.7 The carrier's caller-ID attestation (folds in the "While you are in the logs" check of the press-1
+    section). For each call above, copy into the ledger:
+    - the [voice/incoming] "incoming call" line's attestation field, and
+    - the "texml form fields:" line's attestation: part.
+    "none" on every call is a result too: write it down.
+
+8.8 Clean up (orchestrator). Cancel the two test bookings on the Calendar page, delete Ana Prueba and Beto
+    Prueba through Contacts, and mark the test To-dos done. The empty holding record stays: it is not
+    listed, and the number's next missed call reuses it.
+
+If it fails: a booking or a time for the wrong person, a name said by Sofía before the caller said one, a
+To-do missing after 8.4, or a text filed on Dan Lopez, Ana or Beto in 8.6 is a failed release. Roll back
+by reverting the release (the app only; migration 0098 stays). A holding record then reads to the old build
+as an ordinary "Caller" contact on that number, with its thread.
+
+---
+
 ## Video meetings (Daily.co)
 
 Optional, per-company, off by default in the sense that it's entirely
@@ -793,7 +863,8 @@ fallback drill and `VOICE_FORWARD_TO` are never asked. Anything unexpected on th
 - Turned-away calls do not appear on the Calls screen yet; they are in the logs only.
 
 **While you are in the logs:** each `texml form fields:` line lists the field names the carrier sent
-with the call. Record whether a caller-ID attestation field is among them.
+with the call. Record whether a caller-ID attestation field is among them. Since the
+identity-checks release, record the result in Step 8.7.
 
 ## Troubleshooting quick-reference
 
