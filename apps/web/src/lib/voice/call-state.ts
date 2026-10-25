@@ -8,8 +8,31 @@ export type MirroredBooking = {
   id: string; contactName: string; startsAt: string; endsAt: string;
   status?: "booked" | "cancelled";
 };
-export type CapturedLead = { fields: Record<string, string> };
-export type TakenMessage = { body: string; callbackNumber?: string; at: string };
+export type CapturedLead = {
+  fields: Record<string, string>;
+  /** S-47e (plan P27): the caller's answer to "for you or for someone else?"; absent when not asked or not answered. */
+  forSomeoneElse?: boolean;
+};
+export type TakenMessage = {
+  body: string; callbackNumber?: string; at: string;
+  /** S-47e (spec 5.10.5): the first and last name the caller gave when take_message asked for it. */
+  name?: string;
+  /** S-47e: asked, and they would not say. The message then stays on the call, in no customer's thread. */
+  nameDeclined?: boolean;
+};
+
+/** S-47e (spec 5.4.1): who this call has confirmed. Ids and counters only: never a name, email or number. */
+export type IdentityConfirmed = { contactId: string; rung: 1 | 2; by: "caller_id" | "name" | "name_email" };
+export type IdentityState = {
+  confirmed: IdentityConfirmed | null;
+  /** Tries that confirmed nobody (spec S5). The second locks. */
+  misses: number;
+  locked: null | "misses" | "cannot";
+  /** take_message has asked for a name once on this call (plan P6); the next call records the message. */
+  messageNameAsked: boolean;
+  /** capture_lead has asked "for you or for someone else?" once on this call (plan P27); the next call records the lead. */
+  leadWhoseAsked: boolean;
+};
 
 /**
  * A tool outcome that means the receptionist actually DID something for this
@@ -103,12 +126,15 @@ export interface CallState {
    */
   callerItemIds: string[];
   summary?: string;
+  /** S-47e: the per-call identity (spec 5.4.1). Lives here because ToolContext is fixed per call (SD3). */
+  identity: IdentityState;
 }
 
 export function emptyCallState(): CallState {
   return {
     contactId: null, bookings: [], leads: [], messages: [], transcript: [],
     served: [], recordedCaller: false, pendingCallerTurn: null, callerItemIds: [],
+    identity: { confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false },
   };
 }
 

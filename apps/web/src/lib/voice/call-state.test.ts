@@ -187,6 +187,15 @@ describe("pendingCallerTurn — the growing prefix of the caller's in-flight tur
   });
 });
 
+describe("identity — the per-call confirmation state (S-47e)", () => {
+  it("emptyCallState starts with no confirmation, no misses, unlocked, nothing asked, and two calls get two different objects", () => {
+    expect(emptyCallState().identity).toEqual({
+      confirmed: null, misses: 0, locked: null, messageNameAsked: false, leadWhoseAsked: false,
+    });
+    expect(emptyCallState().identity).not.toBe(emptyCallState().identity);
+  });
+});
+
 describe("callerSpoke — the billing signal for voice minutes", () => {
   it("is true only when a CALLER turn carries words: Sofía's greeting alone, or a blank caller turn, is not the caller speaking; a robocall's recorded words are (mutation: return transcript.length > 0 → FAILS; drop .trim() → FAILS)", () => {
     expect(callerSpoke(emptyCallState())).toBe(false);
