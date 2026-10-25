@@ -12,6 +12,7 @@ import { composeCallAlertSms, prepareAlertSms, deliverAlertSms, type PendingAler
 import { prepareTextback, deliverTextback, type PendingTextback } from "./textback";
 import { readCandidates, isShared } from "./identity/candidates";
 import { pickRecordOnNumber, sameNameAsRecord } from "./identity/record";
+import { identityTodoTitle } from "./identity/todo";
 import type { ResolvedTextbackContact } from "./textback";
 import { recordActs, fieldFillActs, voiceSource } from "@/lib/ai-acts/record";
 import type { NewAiAct } from "@bis/db/ai-act-rules";
@@ -21,8 +22,6 @@ import { voiceMinutes, recordUsageSafely } from "@/lib/billing/usage";
 import { detectSpokenLanguage, clearCallerLanguage } from "./language";
 import { generateSummary } from "./summary-service";
 import { resolveLocale, type Locale } from "@/lib/i18n/locale";
-import { t } from "@/lib/i18n/t";
-import { m } from "@/lib/messages";
 import { summaryFactLine } from "./summarize";
 import { e164Of, isCallerIdNumber, spokenPhone } from "./phone-number";
 import {
@@ -940,7 +939,7 @@ export async function finishCall(
         callId: meta.callRowId,
         contactId: identityTodo ? null : contactId,
         title: identityTodo
-          ? t(m, "voice.todo.identity", resolveLocale(undefined, ctx.accountLanguage ?? null))
+          ? identityTodoTitle(resolveLocale(undefined, ctx.accountLanguage ?? null))
           : callbackLine!,
         dueAt: meta.endedAt.toISOString(),
       }, ACTOR_ID, ACTOR_TYPE);
