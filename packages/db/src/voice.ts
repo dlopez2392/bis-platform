@@ -823,14 +823,20 @@ export async function ensureHoldingContact(
   const { data, error } = await db.from("contacts").insert({
     account_id: accountId, first_name: "Caller", ...fields, source: "voice",
     holds_shared_number: true, author_kind: "ai", author_id: null,
-  }).select("id").single();
+  }).select("id, holds_shared_number").single();
   if (error?.code === "23505") {
     const again = await find();
     if (again) return { id: again, created: false };
     throw new HoldingContactUnavailable(accountId);
   }
   if (error || !data) throw new Error(`ensureHoldingContact failed: ${error?.message ?? "no row"}`);
-  const id = (data as { id: string }).id;
+  const made = data as { id: string; holds_shared_number: boolean };
+  // 0098's trigger stores false for a signed-in insert: the row is then an ordinary "Caller" contact, never the
+  // number's holding record, and must not be handed back as one (service_role only, see above).
+  if (made.holds_shared_number !== true) {
+    throw new Error(`ensureHoldingContact: contact ${made.id} was stored without the holding mark (not the service client)`);
+  }
+  const id = made.id;
   try {
     await emit(db, accountId, "contact.created", "voice", { contactId: id, holding: true }, "ai");
   } catch (e) {

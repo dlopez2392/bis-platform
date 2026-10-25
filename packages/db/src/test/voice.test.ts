@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { createHmac } from "node:crypto";
 import { withTestAccount, testPhoneNumber } from "./fixtures";
 import { createContact, updateContact } from "../contacts";
 import { ensureConversation, createMessage } from "../messaging";
@@ -26,6 +27,8 @@ import {
 } from "../voice";
 import { emailKey as barrelEmailKey } from "../index";
 import { ensureKnowledgeSnapshot } from "../voice-knowledge";
+import { userDb } from "../user-client";
+import { serviceDb } from "../service";
 
 /**
  * Every `e164` in this file comes from `testPhoneNumber()`, never from a
@@ -1115,29 +1118,33 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     await updateContact(db, accountId, id, { phone }, "user_test");
     return { id };
   }
-  /** A pre-F-009 row (no writer stores this shape any more): the service client's own insert, said so here. */
-  async function legacy(db: SupabaseClient, accountId: string, firstName: string, phone: string): Promise<string> {
-    const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone })
+  /** A pre-F-009 row (no writer stores this shape any more): the service client's own insert, said so here.
+   *  `createdAt` back-dates it, as a row that old really is: the only way to make the OLDER row the one
+   *  inserted SECOND, so "oldest first" is not just insertion order. */
+  async function legacy(db: SupabaseClient, accountId: string, firstName: string, phone: string, createdAt?: string): Promise<string> {
+    const { data, error } = await db.from("contacts").insert({ account_id: accountId, first_name: firstName, last_name: "Prueba", phone,
+      ...(createdAt === undefined ? {} : { created_at: createdAt }) })
       .select("id").single();
     if (error || !data) throw new Error(error?.message);
     return (data as { id: string }).id;
   }
 
-  it("phoneKeysOf: a US number's digits key; a Mexican number's own key, its ten digits and its 521 form (plan P4)", () => {
+  it("phoneKeysOf: a US number's digits key; a Mexican number's own key, its ten digits and its 521 form, from either input form (plan P4; mutation: drop the 521 input branch -> FAILS)", () => {
     expect(phoneKeysOf("+19565550160")).toEqual(["9565550160"]);
     expect(phoneKeysOf("+528999221234")).toEqual(["528999221234", "8999221234", "5218999221234"]);
+    expect(phoneKeysOf("+5218999221234")).toEqual(["5218999221234", "8999221234", "528999221234"]);
   });
 
-  it("finds an E.164 phone and a legacy typed one, oldest first, with email_key and never the raw email", async () => {
+  it("finds an E.164 phone and a legacy typed one, oldest first (a back-dated row inserted second leads), with email_key and never the raw email (mutation: drop the created_at order -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const ana = await person(db, accountId, "Ana", "Prueba", "+19565550160", "Ana+bis@Example.com");
-      const beto = await legacy(db, accountId, "Beto", "(956) 555-0160");
+      const beto = await legacy(db, accountId, "Beto", "(956) 555-0160", "2020-01-01T00:00:00Z");
       const { rows, truncated } = await listContactsOnNumber(db, accountId, "+19565550160");
       expect(truncated).toBe(false);
-      expect(rows.map((r) => r.id)).toEqual([ana.id, beto]);
-      expect(Object.keys(rows[0]!).sort()).toEqual(["email_key", "first_name", "holds_shared_number", "id", "last_name", "phone"]);
-      expect(rows[0]).toMatchObject({ first_name: "Ana", last_name: "Prueba", email_key: "ana@example.com", holds_shared_number: false });
-      expect(rows[1]).toMatchObject({ phone: "(956) 555-0160", email_key: null });
+      expect(rows.map((r) => r.id)).toEqual([beto, ana.id]);
+      expect(Object.keys(rows[1]!).sort()).toEqual(["email_key", "first_name", "holds_shared_number", "id", "last_name", "phone"]);
+      expect(rows[1]).toMatchObject({ first_name: "Ana", last_name: "Prueba", email_key: "ana@example.com", holds_shared_number: false });
+      expect(rows[0]).toMatchObject({ phone: "(956) 555-0160", email_key: null });
     });
   });
 
@@ -1174,7 +1181,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("findUpcomingBookingForContact: that ONE contact's soonest booked future booking; past, cancelled and a housemate's are skipped", async () => {
+  it("findUpcomingBookingForContact: that ONE contact's soonest booked future booking, ahead of a later one made first; past, cancelled and a housemate's are skipped (mutation: drop the starts_at order -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const cal = await getOrCreateCalendar(db, accountId, "user_test");
       const ana = await person(db, accountId, "Ana", "Prueba", "+19565550163");
@@ -1185,6 +1192,8 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
       const cancelled = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana.id, ...at("2027-05-02") }, "user_test");
       await setBookingStatus(db, accountId, cancelled.id, "cancelled", "user_test");
       await createBooking(db, accountId, { calendarId: cal.id, contactId: beto.id, ...at("2027-05-03") }, "user_test");
+      // Ana's LATER booking goes in first, so a read without the starts_at order meets it before her soonest.
+      await createBooking(db, accountId, { calendarId: cal.id, contactId: ana.id, ...at("2027-05-06") }, "user_test");
       const anas = await createBooking(db, accountId, { calendarId: cal.id, contactId: ana.id, ...at("2027-05-04") }, "user_test");
       expect(await findUpcomingBookingForContact(db, accountId, ana.id, now.toISOString()))
         .toEqual({ bookingId: anas.id, startsAt: expect.stringMatching(/^2027-05-04T15:00:00/) });
@@ -1203,7 +1212,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("ensureHoldingContact makes the exact shape once, by Sofía, then reuses it; one contact.created with holding true (mutation: insert every time -> FAILS)", async () => {
+  it("ensureHoldingContact makes the exact shape once, by Sofía, then reuses it; one contact.created with holding true", async () => {
     await withTestAccount(async (db, accountId) => {
       await person(db, accountId, "Ana", "Prueba", "+19565550165");
       const first = await ensureHoldingContact(db, accountId, "+19565550165");
@@ -1219,7 +1228,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("two ensureHoldingContact calls at once make ONE row", async () => {
+  it("two ensureHoldingContact calls at once make ONE row (mutation: no re-read after the 23505 -> the loser throws, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const [x, y] = await Promise.all([
         ensureHoldingContact(db, accountId, "+19565550166"), ensureHoldingContact(db, accountId, "+19565550166"),
@@ -1273,7 +1282,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("moveHoldingThread moves through PostgREST and its Undo names the move; another account's thread is not_found", async () => {
+  it("moveHoldingThread moves the texts and the call through PostgREST and its Undo names the move; another account's thread is not_found (mutation: callIds: [] in the mapping -> FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       await withTestAccount(async (dbB, accountB) => {
         await person(db, accountId, "Ana", "Prueba", "+19565550169");
@@ -1282,13 +1291,21 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
         const hc = await ensureConversation(db, accountId, holding.id, "voice", "ai");
         const bc = await ensureConversation(db, accountId, beto.id, "user_test");
         const msg = await createMessage(db, accountId, { conversationId: hc.id, channel: "sms", direction: "inbound", body: "test", status: "delivered" }, "sms-inbound", "system");
+        // The missed call the text-back answered: filed on the holding record and its thread, as finishCall files one.
+        const n = await assignPhoneNumber(db, accountId, { e164: testPhoneNumber() }, "user_test");
+        const call = await startCallRow(db, accountId, { phoneNumberId: n.id, callerE164: "+19565550169" });
+        await finishCallRow(db, accountId, call.id, { outcome: "abandoned", endedAt: new Date(), durationSecs: 5, turnCount: 0,
+          transcript: [], summary: "", language: "en", contactId: holding.id, conversationId: hc.id });
+        const callRow = async () => (await db.from("calls").select("conversation_id, contact_id").eq("id", call.id).single()).data;
         const moved = await moveHoldingThread(db, accountId, { from: hc.id, to: bc.id, actor: "user_test" });
-        expect(moved).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [] });
+        expect(moved).toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [call.id] });
         if (moved.status !== "ok") throw new Error("unreachable");
         const { data: m } = await db.from("messages").select("conversation_id").eq("id", msg.id).single();
         expect(m).toEqual({ conversation_id: bc.id });
+        expect(await callRow()).toEqual({ conversation_id: bc.id, contact_id: beto.id });
         expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test", undoOf: moved.moveId }))
-          .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [] });
+          .toEqual({ status: "ok", moveId: expect.any(Number), messageIds: [msg.id], callIds: [call.id] });
+        expect(await callRow()).toEqual({ conversation_id: hc.id, contact_id: null });
         // An Undo that names no move is refused by the function (P1), never a silent no-op.
         expect(await moveHoldingThread(db, accountId, { from: bc.id, to: hc.id, actor: "user_test" })).toEqual({ status: "invalid" });
         const holdingB = await ensureHoldingContact(dbB, accountB, "+19565550169");
@@ -1322,6 +1339,62 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
       const { data: m } = await db.from("messages").select("conversation_id").eq("id", msg.id).single();
       expect(m).toEqual({ conversation_id: hc.id });
     });
+  });
+
+  it("ensureHoldingContact throws, and records nothing, when the row it made came back without the holding mark (M6; the stub stands for the one way that happens, a signed-in insert, which 0098's trigger stores false; mutation: drop the mark check -> FAILS)", async () => {
+    // A stub, said so: it answers the read with no row and the insert with the row a signed-in session gets
+    // back. It records every table and function the code reaches, so "records nothing" is checked, not assumed.
+    const reached: string[] = [];
+    const answer = (result: unknown) => {
+      const q: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "insert"]) q[m] = () => q;
+      q.maybeSingle = async () => ({ data: null, error: null });
+      q.single = async () => result;
+      return q;
+    };
+    const stub = {
+      from: (table: string) => { reached.push(`from:${table}`); return answer({ data: { id: "c-stub", holds_shared_number: false }, error: null }); },
+      rpc: async (fn: string) => { reached.push(`rpc:${fn}`); return { data: null, error: null }; },
+    } as unknown as SupabaseClient;
+    await expect(ensureHoldingContact(stub, "acct-stub", "+19565550172"))
+      .rejects.toThrow("ensureHoldingContact: contact c-stub was stored without the holding mark (not the service client)");
+    expect(reached).toEqual(["from:contacts", "from:contacts"]);
+  });
+
+  // The same guard through PostgREST with a signed Owner token. It needs the replica's JWT secret, which only a
+  // local run has (the ai-acts-schema pattern): without it the case is SKIPPED, and a skip is not a pass. The
+  // always-run stub case above holds the guard in CI.
+  const REPLICA_SECRET = process.env.BIS_REPLICA_JWT_SECRET;
+  const signJwt = (payload: Record<string, unknown>, secret: string): string => {
+    const b64 = (b: Buffer) => b.toString("base64url");
+    const head = b64(Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })));
+    const body = b64(Buffer.from(JSON.stringify(payload)));
+    return `${head}.${body}.${b64(createHmac("sha256", secret).update(`${head}.${body}`).digest())}`;
+  };
+  it.skipIf(!REPLICA_SECRET)("a signed-in Owner's ensureHoldingContact throws: the trigger stored false, so the ordinary Caller row it made is never handed back as the number's holding record, and no contact.created is written (M6, through PostgREST; mutation: drop the mark check -> FAILS)", async () => {
+    const sub = `u_t3_owner_${Math.random().toString(36).slice(2, 10)}`;
+    const svc = serviceDb();
+    const u = await svc.from("users").insert({ clerk_user_id: sub, email: `${sub}@example.com` }).select("id").single();
+    if (u.error) throw new Error(u.error.message);
+    try {
+      await withTestAccount(async (db, accountId) => {
+        const { data: acct, error } = await db.from("accounts").update({ client_access_enabled: true }).eq("id", accountId)
+          .select("clerk_org_id").single();
+        if (error) throw new Error(error.message);
+        const mem = await db.from("memberships").insert({ user_id: (u.data as { id: string }).id, scope: "account", account_id: accountId, role: "owner" });
+        if (mem.error) throw new Error(mem.error.message);
+        const token = signJwt({ role: "authenticated", org_id: (acct as { clerk_org_id: string }).clerk_org_id, sub,
+          exp: Math.floor(Date.now() / 1000) + 600 }, REPLICA_SECRET!);
+        await expect(ensureHoldingContact(userDb(token), accountId, "+19565550171")).rejects.toThrow("was stored without the holding mark");
+        const { data: rows } = await db.from("contacts").select("first_name, phone, holds_shared_number").eq("account_id", accountId);
+        expect(rows).toEqual([{ first_name: "Caller", phone: "+19565550171", holds_shared_number: false }]);
+        const { data: created } = await db.from("events").select("id").eq("account_id", accountId).eq("type", "contact.created");
+        expect(created).toEqual([]);
+      });
+    } finally {
+      const { error } = await svc.from("users").delete().eq("clerk_user_id", sub);
+      if (error) throw new Error(`users cleanup failed: ${error.message}`);
+    }
   });
 
   it("the barrel exports emailKey, the twin of 0034's email_key (spec O1; mutation: drop the index.ts line -> FAILS)", () => {

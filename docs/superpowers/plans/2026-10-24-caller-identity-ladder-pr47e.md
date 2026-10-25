@@ -80,6 +80,7 @@ The fix round's review items are cited as R1–R15 (the opus plan review of 2026
   - **Resolution:** the update probe expects `{ code: "42501" }`. "Drop the trigger" is caught by the INSERT probe and the edit probes (R8). The trigger's `new.holds_shared_number := old…` line is defence in depth for a future grant: `grant update (holds_shared_number) … to authenticated` → the update probe FAILS, and so does `schema-grants-guard.test.ts` (mutation m07).
 - **P4. One more phone key.** `normalisePhone` reads `"+52 1 899 922 1234"` as `+528999221234` (A9), but its stored `phone_key` is `5218999221234`.
   - **Resolution:** `phoneKeysOf(e164)` returns the digits key, the ten national digits, and both the `52` and `521` forms; `isCallerIdNumber` (S1) still decides who is on the number.
+  - **Not keyed (Task 3 review, accepted gap):** a legacy row typed with a Mexican trunk prefix (`044`/`045` mobile, `01` long distance) or an international prefix (`00`, `011`) keys its digits WITH that prefix (`0448999221234`, `011528999221234`), so `phoneKeysOf` does not find it. `findDuplicate` (`contacts.ts`) has the same gap, since it also keys only the digits, the bare ten and the `52`/`521` forms, so the identity check is no worse than dedupe. No writer stores those shapes since F-009 (`phoneFields` normalises them); closing the gap for both is a separate change to `phone_key`, out of scope here.
 - **P5. Two of spec §7's name mutations cannot fail.** "García María" already fails rule 2; "María de" is not a subsequence of "María Elena García López".
   - **Resolution:** rule 3's probe is "María López García" against "María Elena García López"; rule 4's is "María de" against "María de la Cruz". Each is rejected by its rule alone.
 - **P6. "Refuses once" needs memory.** Spec §5.10.5's `take_message` "refuses once".
@@ -1485,7 +1486,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("ensureHoldingContact makes the exact shape once, by Sofía, then reuses it; one contact.created with holding true (mutation: insert every time -> FAILS)", async () => {
+  it("ensureHoldingContact makes the exact shape once, by Sofía, then reuses it; one contact.created with holding true", async () => {
     await withTestAccount(async (db, accountId) => {
       await person(db, accountId, "Ana", "Prueba", "+19565550165");
       const first = await ensureHoldingContact(db, accountId, "+19565550165");
@@ -1501,7 +1502,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
     });
   });
 
-  it("two ensureHoldingContact calls at once make ONE row", async () => {
+  it("two ensureHoldingContact calls at once make ONE row (mutation: no re-read after the 23505 -> the loser throws, FAILS)", async () => {
     await withTestAccount(async (db, accountId) => {
       const [x, y] = await Promise.all([
         ensureHoldingContact(db, accountId, "+19565550166"), ensureHoldingContact(db, accountId, "+19565550166"),
@@ -1577,7 +1578,7 @@ describe("S-47e: who is on a number, one contact's next booking, the holding rec
   `:3`'s `import { createContact } from "../contacts";` becomes `import { createContact, updateContact } from "../contacts";`. `ensureConversation` and `createMessage` (`:4`) and `getOrCreateCalendar`, `createBooking`, `setBookingStatus` (`:5`) are already imported; `SupabaseClient` comes from `@supabase/supabase-js` as a type import.
 - [ ] **Step 3: Run to verify they fail.** `source <dir>/env-run.sh; cd packages/db; node node_modules/vitest/vitest.mjs run src/test/voice.test.ts` → the new cases FAIL (`listContactsOnNumber is not a function` or a missing export). Before implementing, one throwaway probe proves the spec's SD4: `findUpcomingBookingForPhone(db, accountId, "+19565550160", …)` returns `null` for a booking of the LEGACY Beto above. Paste it in the report; do not commit the probe.
 - [ ] **Step 4: Implement** the model's code exactly (`voice.ts`, then the barrel line `export { emailKey } from "./contacts";` after `index.ts:25`).
-- [ ] **Step 5: Run to verify they pass**, then run the mutations named in the cases (drop the 521 key; each `.eq("account_id", …)` in `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`'s read; `ensureHoldingContact` without its `find()` before the insert; its read by `phoneKeysOf` instead of the exact phone, which the two-countries case catches; the barrel line). Paste each failing line, revert, `cmp`.
+- [ ] **Step 5: Run to verify they pass**, then run the mutations named in the cases (drop the 521 key; each `.eq("account_id", …)` in `listContactsOnNumber`, `findUpcomingBookingForContact`, `ensureHoldingContact`'s read; `ensureHoldingContact` with no re-read after the 23505, which the two-calls-at-once case catches (m5b; the Task 3 run showed that dropping the `find()` before the insert cannot fail, because the unique index and the 23505 re-read return the same `{ id, created: false }`); its read by `phoneKeysOf` instead of the exact phone, which the two-countries case catches; the barrel line). Paste each failing line, revert, `cmp`.
 - [ ] **Step 6: Commit** `db: who is on a number (by its phone key, holding records flagged), one contact's next booking, and the shared number's one holding record and its move (S-47e)`, naming `voice.ts`, `index.ts`, `voice.test.ts`. Stop your kit.
 
 **Verify (the affected-test rule):** (1) none yet (nothing calls the new functions until Task 5); (2) none; (3) none; (4) none yet; (5) none; (6) none. Both typechecks; eslint on the two source files; `voice.test.ts` and `voice-schema.test.ts` on your replica + PostgREST.
