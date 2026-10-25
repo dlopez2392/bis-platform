@@ -22,11 +22,22 @@ const dbMocks = vi.hoisted(() => ({
   sumOpenOpportunities: vi.fn(),
 }));
 const contactsAnswer = vi.hoisted(() => ({ current: { count: 3 as number | null, error: null as { message: string } | null } }));
+/** Every filter the contacts count asked for (T17 review M8). */
+const contactFilters = vi.hoisted(() => [] as [string, unknown][]);
 vi.mock("@bis/db", () => ({
   serviceDb: () => ({
     from: (table: string) => {
       if (table === "contacts") {
-        return { select: async () => contactsAnswer.current };
+        // A thenable chain: the count may be filtered (.eq) before it is awaited.
+        return {
+          select: () => {
+            const q = {
+              eq: (k: string, v: unknown) => { contactFilters.push([k, v]); return q; },
+              then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(contactsAnswer.current).then(res, rej),
+            };
+            return q;
+          },
+        };
       }
       throw new Error(`unexpected table in agency dashboard page.test.ts mock: ${table}`);
     },
@@ -40,6 +51,7 @@ const { default: DashboardPage } = await import("./page");
 function resetFixtures() {
   for (const fn of Object.values(dbMocks)) fn.mockReset();
   contactsAnswer.current = { count: 3, error: null };
+  contactFilters.length = 0;
   dbMocks.listAccounts.mockResolvedValue([]);
   dbMocks.sumOpenOpportunities.mockResolvedValue({ count: 0, value: 0 });
 }
@@ -74,6 +86,11 @@ describe("Agency home DashboardPage — open opportunities and pipeline value (F
 
 describe("Agency home DashboardPage — total contacts", () => {
   beforeEach(resetFixtures);
+
+  it("the total skips a shared number's holding records: they are not customers (S-47e S29; T17 review M8; mutation: drop the filter -> FAILS)", async () => {
+    await DashboardPage();
+    expect(contactFilters).toEqual([["holds_shared_number", false]]);
+  });
 
   it("renders the exact count the contacts read returned", async () => {
     contactsAnswer.current = { count: 41, error: null };
